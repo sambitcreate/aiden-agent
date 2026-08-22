@@ -142,3 +142,9 @@ This audit found no additional locally actionable missing product surface. The r
 - Mobile-specific privacy-policy publication, visible support contact, owner publication of the drafted age/privacy answers, final physical-device screenshots, review phone/environment, remaining metadata approval, external TestFlight/Beta App Review, and public-release decisions.
 
 Phase 12 and the overall plan must remain active until those gates are completed or deliberately re-scoped by the owner.
+
+## First-class iOS pairing choices — 2026-08-22
+
+The iOS pairing landing page now mirrors Aiden Agent's complete Add Device choice set: recommended QR for either Mac-selected endpoint, Nearby Mac + Setup Code for local Wi-Fi, Private Address + Setup Code for Tailscale, and an advanced full-payload paste fallback. The native contract test verifies that every method remains represented with the correct Local Network/Tailscale identity; the registered source gate also requires the canonical `.local:49220/api/aiden/v1` and `.tailnet.ts.net/api/aiden/v1` examples and rejects the prior segmented method picker.
+
+Validation passed with `npm run test:aiden-remote` (216 production Remote Access tests with one explicit skip, plus seven transport proofs), `npm run test:ios-release` (20 Ruby tests/42 assertions and 24 Node tests), `npm run test`, `npm run type-check`, `npm run lint`, `npm run build`, and the generic unsigned iPhoneOS test build. The complete Apple Development-signed XCTest target also passed on the connected physical iPhone 13 Pro, including `testPairingMethodsMirrorEveryMacConnectionChoice`; only explicit live-environment tests without an injected pairing payload skipped. No simulator or iPhone 16 Pro Max was used.
