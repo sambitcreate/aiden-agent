@@ -21,6 +21,14 @@ final class AidenRemoteLiveActivityManager {
         defaults.bool(forKey: Self.responseExcerptPreferenceKey)
     }
 
+    static func matches(
+        _ attributes: AgentRunActivityAttributes,
+        instanceID: String,
+        streamID: String
+    ) -> Bool {
+        attributes.instanceID == instanceID && attributes.streamID == streamID
+    }
+
     func start(instanceID: String, chatID: String, title: String, streamID: String) async {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let startedAt = Date()
@@ -37,7 +45,7 @@ final class AidenRemoteLiveActivityManager {
             startedAt: startedAt
         )
 
-        if let existing = activity(streamID: streamID) {
+        if let existing = activity(instanceID: instanceID, streamID: streamID) {
             currentActivity = existing
             stateByActivityID[existing.id] = state
             await existing.update(content(for: state))
@@ -57,10 +65,10 @@ final class AidenRemoteLiveActivityManager {
         }
     }
 
-    func updateStatus(streamID: String, state: AidenStreamState) async {
+    func updateStatus(instanceID: String, streamID: String, state: AidenStreamState) async {
         switch state {
         case .queued, .reconciling:
-            await update(streamID: streamID) {
+            await update(instanceID: instanceID, streamID: streamID) {
                 AgentRunActivityStateReducer.initialState(
                     sessionID: $0.sessionID,
                     sessionTitle: $0.sessionTitle,
@@ -68,22 +76,22 @@ final class AidenRemoteLiveActivityManager {
                 )
             }
         case .running:
-            await update(streamID: streamID) {
+            await update(instanceID: instanceID, streamID: streamID) {
                 AgentRunActivityStateReducer.responding(state: $0)
             }
         case .waitingForApproval:
-            await approvalRequired(streamID: streamID)
+            await approvalRequired(instanceID: instanceID, streamID: streamID)
         case .done:
-            await finish(streamID: streamID, status: .complete, message: String(localized: "Response complete"))
+            await finish(instanceID: instanceID, streamID: streamID, status: .complete, message: String(localized: "Response complete"))
         case .error, .interrupted:
-            await finish(streamID: streamID, status: .failed, message: String(localized: "Response failed"))
+            await finish(instanceID: instanceID, streamID: streamID, status: .failed, message: String(localized: "Response failed"))
         case .cancelled:
-            await finish(streamID: streamID, status: .cancelled, message: String(localized: "Response cancelled"))
+            await finish(instanceID: instanceID, streamID: streamID, status: .cancelled, message: String(localized: "Response cancelled"))
         }
     }
 
-    func appendResponse(_ text: String, streamID: String) async {
-        await update(streamID: streamID) { state in
+    func appendResponse(_ text: String, instanceID: String, streamID: String) async {
+        await update(instanceID: instanceID, streamID: streamID) { state in
             let updated = AgentRunActivityStateReducer.appendingToken(
                 includesResponseExcerpts ? text : " ",
                 to: state
@@ -94,32 +102,32 @@ final class AidenRemoteLiveActivityManager {
         }
     }
 
-    func reasoning(streamID: String) async {
-        await update(streamID: streamID) {
+    func reasoning(instanceID: String, streamID: String) async {
+        await update(instanceID: instanceID, streamID: streamID) {
             AgentRunActivityStateReducer.reasoning("", state: $0)
         }
     }
 
-    func toolStarted(name: String?, streamID: String) async {
-        await update(streamID: streamID) {
+    func toolStarted(name: String?, instanceID: String, streamID: String) async {
+        await update(instanceID: instanceID, streamID: streamID) {
             AgentRunActivityStateReducer.toolStarted(name: name, state: $0)
         }
     }
 
-    func toolFinished(streamID: String) async {
-        await update(streamID: streamID) {
+    func toolFinished(instanceID: String, streamID: String) async {
+        await update(instanceID: instanceID, streamID: streamID) {
             AgentRunActivityStateReducer.toolCompleted(state: $0)
         }
     }
 
-    func approvalRequired(streamID: String) async {
-        await update(streamID: streamID) {
+    func approvalRequired(instanceID: String, streamID: String) async {
+        await update(instanceID: instanceID, streamID: streamID) {
             AgentRunActivityStateReducer.waitingForApproval(state: $0)
         }
     }
 
-    func markStale(streamID: String) async {
-        await update(streamID: streamID) {
+    func markStale(instanceID: String, streamID: String) async {
+        await update(instanceID: instanceID, streamID: streamID) {
             AgentRunActivityStateReducer.stale(state: $0)
         }
     }
@@ -148,12 +156,13 @@ final class AidenRemoteLiveActivityManager {
     }
 
     func finish(
+        instanceID: String,
         streamID: String,
         status: AgentRunActivityStatus,
         message: String,
         errorSummary: String? = nil
     ) async {
-        guard let activity = activity(streamID: streamID) else { return }
+        guard let activity = activity(instanceID: instanceID, streamID: streamID) else { return }
         let state = AgentRunActivityStateReducer.final(
             status: status,
             activity: message,
@@ -171,8 +180,14 @@ final class AidenRemoteLiveActivityManager {
 
     /// Reconciles activities persisted by iOS after relaunch against the pinned,
     /// authenticated Aiden client. An unreachable server leaves state stale.
-    func reconcile(client: AidenRemoteClient) async {
-        for activity in Activity<AgentRunActivityAttributes>.activities where isLive(activity) {
+    func reconcile(
+        instanceID: String,
+        client: AidenRemoteClient,
+        isCurrent: @MainActor () -> Bool
+    ) async {
+        for activity in Activity<AgentRunActivityAttributes>.activities
+        where activity.attributes.instanceID == instanceID && isLive(activity) {
+            guard isCurrent() else { return }
             guard let streamID = activity.attributes.streamID else {
                 await activity.end(nil, dismissalPolicy: .immediate)
                 stateByActivityID[activity.id] = nil
@@ -183,9 +198,11 @@ final class AidenRemoteLiveActivityManager {
             }
             do {
                 let status = try await client.streamStatus(id: streamID)
+                guard isCurrent() else { return }
                 currentActivity = activity
-                await updateStatus(streamID: streamID, state: status.state)
+                await updateStatus(instanceID: instanceID, streamID: streamID, state: status.state)
             } catch {
+                guard isCurrent() else { return }
                 let state = AgentRunActivityStateReducer.stale(state: state(for: activity))
                 stateByActivityID[activity.id] = state
                 await activity.update(content(for: state))
@@ -194,10 +211,11 @@ final class AidenRemoteLiveActivityManager {
     }
 
     private func update(
+        instanceID: String,
         streamID: String,
         transform: (AgentRunActivityAttributes.ContentState) -> AgentRunActivityAttributes.ContentState
     ) async {
-        guard let activity = activity(streamID: streamID), isLive(activity) else { return }
+        guard let activity = activity(instanceID: instanceID, streamID: streamID), isLive(activity) else { return }
         currentActivity = activity
         var state = transform(state(for: activity))
         if !includesResponseExcerpts, !state.responseExcerpt.isEmpty {
@@ -216,14 +234,14 @@ final class AidenRemoteLiveActivityManager {
         return state
     }
 
-    private func activity(streamID: String) -> Activity<AgentRunActivityAttributes>? {
+    private func activity(instanceID: String, streamID: String) -> Activity<AgentRunActivityAttributes>? {
         if let currentActivity,
-           currentActivity.attributes.streamID == streamID,
+           Self.matches(currentActivity.attributes, instanceID: instanceID, streamID: streamID),
            isLive(currentActivity) {
             return currentActivity
         }
         return Activity<AgentRunActivityAttributes>.activities.first {
-            $0.attributes.streamID == streamID && isLive($0)
+            Self.matches($0.attributes, instanceID: instanceID, streamID: streamID) && isLive($0)
         }
     }
 
