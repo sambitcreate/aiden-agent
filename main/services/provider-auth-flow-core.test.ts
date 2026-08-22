@@ -210,6 +210,31 @@ test("browser flow forwards only prompts/events and opens the validated auth URL
   assert.equal(messages(owner, "providers:auth:error").length, 0);
 });
 
+test("a committed credential reports catalog refresh failure as a nonfatal warning", async () => {
+  const owner = new FakeOwner(1);
+  const providerBackend: ProviderAuthBackend = {
+    snapshot: async () => snapshot(false),
+    authenticate: async () => ({ token: "main-process-only" }),
+    commitCredential: async () => ({ warning: "Credentials saved; retry catalog refresh." }),
+    logout: async () => undefined,
+  };
+  const coordinator = new ProviderAuthFlowCoordinator({
+    backendFor: () => providerBackend,
+    openExternal: async () => undefined,
+    createId: ids(PROMPT_A),
+  });
+
+  coordinator.start(owner, request());
+  await waitForMessages(owner, "providers:auth:done");
+  assert.deepEqual(messages(owner, "providers:auth:done"), [{
+    flowId: FLOW_A,
+    providerId: PROVIDER_ID,
+    cancelled: false,
+    warning: "Credentials saved; retry catalog refresh.",
+  }]);
+  assert.equal(messages(owner, "providers:auth:error").length, 0);
+});
+
 test("browser launch failure keeps a safe manual sign-in link available", async () => {
   const owner = new FakeOwner(1);
   const finish = deferred<unknown>();
