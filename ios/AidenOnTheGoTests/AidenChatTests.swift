@@ -299,8 +299,14 @@ final class AidenChatTests: XCTestCase {
         try await cache.saveChats([chat], instanceId: "instance-a", workspaceId: "workspace-1")
         try await cache.saveChat(chat, instanceId: "instance-a")
         try await cache.saveActiveStream(
-            .init(streamId: "stream-1", turnId: "turn-1", lastSequence: 14),
+            .init(deviceId: "device-a", streamId: "stream-1", turnId: "turn-1", lastSequence: 14),
             instanceId: "instance-a",
+            chatId: chat.id
+        )
+        try await cache.saveChats([chat], instanceId: "instance-b", workspaceId: "workspace-1")
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-b", streamId: "stream-2", turnId: "turn-2", lastSequence: 3),
+            instanceId: "instance-b",
             chatId: chat.id
         )
 
@@ -310,16 +316,36 @@ final class AidenChatTests: XCTestCase {
         let cachedChatB = await cache.loadChat(instanceId: "instance-b", chatId: chat.id)
         let stream = await cache.loadActiveStream(instanceId: "instance-a", chatId: chat.id)
         XCTAssertEqual(chatsA, [chat])
-        XCTAssertNil(chatsB)
+        XCTAssertEqual(chatsB, [chat])
         XCTAssertEqual(cachedChatA, chat)
         XCTAssertNil(cachedChatB)
-        XCTAssertEqual(stream, .init(streamId: "stream-1", turnId: "turn-1", lastSequence: 14))
+        XCTAssertEqual(
+            stream,
+            .init(deviceId: "device-a", streamId: "stream-1", turnId: "turn-1", lastSequence: 14)
+        )
 
         await cache.removeChat(instanceId: "instance-a", chatId: chat.id)
         let removedChat = await cache.loadChat(instanceId: "instance-a", chatId: chat.id)
         let removedStream = await cache.loadActiveStream(instanceId: "instance-a", chatId: chat.id)
         XCTAssertNil(removedChat)
         XCTAssertNil(removedStream)
+
+        let legacyStreamURL = root
+            .appending(path: "streams", directoryHint: .isDirectory)
+            .appending(path: "legacy-stream.json")
+        try Data("""
+        {"instanceId":"instance-a","chatId":"legacy-chat","stream":{
+        "streamId":"legacy-stream","turnId":"legacy-turn","lastSequence":2}}
+        """.utf8).write(to: legacyStreamURL, options: .atomic)
+
+        await cache.purge(instanceId: "instance-a")
+        let purgedChats = await cache.loadChats(instanceId: "instance-a", workspaceId: "workspace-1")
+        let retainedChats = await cache.loadChats(instanceId: "instance-b", workspaceId: "workspace-1")
+        let retainedActiveStream = await cache.loadActiveStream(instanceId: "instance-b", chatId: chat.id)
+        XCTAssertNil(purgedChats)
+        XCTAssertNotNil(retainedChats)
+        XCTAssertNotNil(retainedActiveStream)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyStreamURL.path))
     }
 
     func testAttachmentModelsRoundTripMetadataWithoutInlineContents() throws {
