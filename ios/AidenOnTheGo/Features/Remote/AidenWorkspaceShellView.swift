@@ -310,6 +310,11 @@ final class AidenWorkspaceArchiveStore {
     }
 }
 
+private struct AidenWorkspaceDefaultApplication {
+    let workspace: AidenWorkspace
+    let feedback: AidenHapticEvent
+}
+
 struct AidenWorkspaceShellView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Binding private var navigationRequest: AidenNavigationRequest?
@@ -334,6 +339,7 @@ struct AidenWorkspaceShellView: View {
     @State private var newAgentWorkspaceName = ""
     @State private var isCreatingAgent = false
     @State private var agentCreationStatus = ""
+    @State private var hapticScope = UUID()
     @FocusState private var searchFieldIsFocused: Bool
     @Namespace private var newAgentTransition
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
@@ -547,6 +553,8 @@ struct AidenWorkspaceShellView: View {
         .task(id: coordinator.connectionState) {
             await homeModel.load(coordinator: coordinator)
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
     }
 
     private var regularWorkspaceSidebar: some View {
@@ -912,16 +920,28 @@ struct AidenWorkspaceShellView: View {
             agentCreationStatus = ""
         }
 
-        guard let created = await coordinator.createWorkspace(workspaceCreate) else { return }
-        let workspace = await applyGlobalDefaults(to: created)
-        await createNewAgent(workspace: workspace, status: "Opening agent…", managesProgress: false)
+        let creationOutcome = await coordinator.createWorkspaceOutcome(workspaceCreate)
+        guard case .success(let created) = creationOutcome else {
+            if creationOutcome.isDefinitiveFailure {
+                coordinator.haptics.play(.error, scope: hapticScope)
+            }
+            return
+        }
+        let application = await applyGlobalDefaults(to: created)
+        await createNewAgent(
+            workspace: application.workspace,
+            status: "Opening agent…",
+            managesProgress: false,
+            completionFeedback: application.feedback
+        )
     }
 
     @MainActor
     private func createNewAgent(
         workspace: AidenWorkspace,
         status: String,
-        managesProgress: Bool = true
+        managesProgress: Bool = true,
+        completionFeedback: AidenHapticEvent = .success
     ) async {
         guard !isCreatingAgent || !managesProgress else { return }
         if managesProgress {
@@ -952,9 +972,17 @@ struct AidenWorkspaceShellView: View {
             guard coordinator.isCurrent(context) else { return }
             navigate(to: workspace.id)
             intentChat = chat
+            coordinator.haptics.play(
+                completionFeedback,
+                scope: hapticScope,
+                dedupeKey: "new-agent:\(workspace.id):\(chat.id):\(chat.revision)"
+            )
+        } catch let error where aidenIsCancellation(error) {
+            return
         } catch {
             guard coordinator.isCurrent(context) else { return }
             coordinator.presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             await coordinator.refreshWorkspaces()
             guard coordinator.isCurrent(context) else { return }
             await homeModel.load(coordinator: coordinator)
@@ -962,10 +990,15 @@ struct AidenWorkspaceShellView: View {
     }
 
     @MainActor
-    private func applyGlobalDefaults(to workspace: AidenWorkspace) async -> AidenWorkspace {
+    private func applyGlobalDefaults(to workspace: AidenWorkspace) async -> AidenWorkspaceDefaultApplication {
         let permission = AidenWorkspacePermission(rawValue: defaultWorkspacePermissionRaw) ?? .ask
-        guard permission != workspace.permission else { return workspace }
-        return await coordinator.updateWorkspace(workspace, permission: permission) ?? workspace
+        guard permission != workspace.permission else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
+        }
+        guard let updated = await coordinator.updateWorkspace(workspace, permission: permission) else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
+        }
+        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
     }
 
     @ViewBuilder
@@ -1171,6 +1204,7 @@ private struct AidenWorkspacesDirectoryView: View {
     @State private var workspacePendingRemoval: AidenWorkspace?
     @State private var renameText = ""
     @State private var retainedRenameDraftWorkspaceID: String?
+    @State private var hapticScope = UUID()
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     private var archivedWorkspaceIDs: Set<String> {
@@ -1234,6 +1268,8 @@ private struct AidenWorkspacesDirectoryView: View {
         .refreshable {
             await coordinator.refreshWorkspaces()
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -1260,7 +1296,12 @@ private struct AidenWorkspacesDirectoryView: View {
         .sheet(isPresented: $isShowingFolderBrowser) {
             AidenFolderBrowserView(coordinator: coordinator) { workspace in
                 Task {
-                    _ = await applyGlobalDefault(to: workspace)
+                    let application = await applyGlobalDefault(to: workspace)
+                    coordinator.haptics.play(
+                        application.feedback,
+                        scope: hapticScope,
+                        dedupeKey: "workspace-folder-add:\(workspace.id):\(workspace.revision)"
+                    )
                     isShowingFolderBrowser = false
                 }
             }
@@ -1271,8 +1312,12 @@ private struct AidenWorkspacesDirectoryView: View {
             Button("Create") {
                 let name = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
                 Task {
-                    if let workspace = await coordinator.createWorkspace(.folderless(name: name)) {
-                        _ = await applyGlobalDefault(to: workspace)
+                    let outcome = await coordinator.createWorkspaceOutcome(.folderless(name: name))
+                    if case .success(let workspace) = outcome {
+                        let application = await applyGlobalDefault(to: workspace)
+                        coordinator.haptics.play(application.feedback, scope: hapticScope, dedupeKey: "workspace-create:\(workspace.id):\(workspace.revision)")
+                    } else if outcome.isDefinitiveFailure {
+                        coordinator.haptics.play(.error, scope: hapticScope)
                     }
                 }
             }
@@ -1287,8 +1332,12 @@ private struct AidenWorkspacesDirectoryView: View {
         ) {
             Button("Create Managed Scratch") {
                 Task {
-                    if let workspace = await coordinator.createWorkspace(.scratch) {
-                        _ = await applyGlobalDefault(to: workspace)
+                    let outcome = await coordinator.createWorkspaceOutcome(.scratch)
+                    if case .success(let workspace) = outcome {
+                        let application = await applyGlobalDefault(to: workspace)
+                        coordinator.haptics.play(application.feedback, scope: hapticScope, dedupeKey: "workspace-create:\(workspace.id):\(workspace.revision)")
+                    } else if outcome.isDefinitiveFailure {
+                        coordinator.haptics.play(.error, scope: hapticScope)
                     }
                 }
             }
@@ -1312,8 +1361,12 @@ private struct AidenWorkspacesDirectoryView: View {
                 guard let workspace = workspacePendingRename else { return }
                 let trimmedName = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                 Task {
-                    if await coordinator.updateWorkspace(workspace, name: trimmedName) != nil {
+                    let outcome = await coordinator.updateWorkspaceOutcome(workspace, name: trimmedName)
+                    if case .success = outcome {
                         retainedRenameDraftWorkspaceID = nil
+                        coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-rename:\(workspace.id):\(trimmedName)")
+                    } else if outcome.isDefinitiveFailure {
+                        coordinator.haptics.play(.error, scope: hapticScope)
                     }
                     workspacePendingRename = nil
                 }
@@ -1359,11 +1412,15 @@ private struct AidenWorkspacesDirectoryView: View {
                 guard let workspace = workspacePendingRemoval else { return }
                 workspacePendingRemoval = nil
                 Task {
-                    if await coordinator.removeWorkspace(workspace) {
+                    let outcome = await coordinator.removeWorkspaceOutcome(workspace)
+                    if case .success = outcome {
                         archiveStore.forget(
                             workspaceID: workspace.id,
                             instanceID: coordinator.activeInstanceId
                         )
+                        coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)")
+                    } else if outcome.isDefinitiveFailure {
+                        coordinator.haptics.play(.error, scope: hapticScope)
                     }
                 }
             }
@@ -1411,10 +1468,15 @@ private struct AidenWorkspacesDirectoryView: View {
     }
 
     @MainActor
-    private func applyGlobalDefault(to workspace: AidenWorkspace) async -> AidenWorkspace {
+    private func applyGlobalDefault(to workspace: AidenWorkspace) async -> AidenWorkspaceDefaultApplication {
         let permission = AidenWorkspacePermission(rawValue: defaultWorkspacePermissionRaw) ?? .ask
-        guard permission != workspace.permission else { return workspace }
-        return await coordinator.updateWorkspace(workspace, permission: permission) ?? workspace
+        guard permission != workspace.permission else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
+        }
+        guard let updated = await coordinator.updateWorkspace(workspace, permission: permission) else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
+        }
+        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
     }
 }
 
@@ -1633,6 +1695,7 @@ private struct AidenWorkspaceSettingsView: View {
     @State private var name: String
     @State private var permission: AidenWorkspacePermission
     @State private var isConfirmingRemoval = false
+    @State private var hapticScope = UUID()
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -1719,12 +1782,20 @@ private struct AidenWorkspaceSettingsView: View {
                     Button("Save") {
                         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         Task {
-                            if await coordinator.updateWorkspace(
+                            let outcome = await coordinator.updateWorkspaceOutcome(
                                 workspace,
                                 name: trimmedName == workspace.name ? nil : trimmedName,
                                 permission: permission == workspace.permission ? nil : permission
-                            ) != nil {
+                            )
+                            if case .success = outcome {
+                                coordinator.haptics.play(
+                                    .success,
+                                    scope: hapticScope,
+                                    dedupeKey: "workspace-settings:\(workspace.id):\(workspace.revision)"
+                                )
                                 dismiss()
+                            } else if outcome.isDefinitiveFailure {
+                                coordinator.haptics.play(.error, scope: hapticScope)
                             }
                         }
                     }
@@ -1738,11 +1809,18 @@ private struct AidenWorkspaceSettingsView: View {
             ) {
                 Button(workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent", role: .destructive) {
                     Task {
-                        let removed = workspace.isManagedWorktree
-                            ? await coordinator.removeManagedWorktree(workspace)
-                            : await coordinator.removeWorkspace(workspace)
-                        if removed {
+                        let outcome = workspace.isManagedWorktree
+                            ? await coordinator.removeManagedWorktreeOutcome(workspace)
+                            : await coordinator.removeWorkspaceOutcome(workspace)
+                        if case .success = outcome {
+                            coordinator.haptics.play(
+                                .success,
+                                scope: hapticScope,
+                                dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)"
+                            )
                             onRemoved()
+                        } else if outcome.isDefinitiveFailure {
+                            coordinator.haptics.play(.error, scope: hapticScope)
                         }
                     }
                 }
@@ -1753,6 +1831,8 @@ private struct AidenWorkspaceSettingsView: View {
                      : "The folder, its files, and chats remain on your Mac, but the chats will no longer be listed. Delete the folder separately in Finder if you no longer need it.")
             }
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
     }
 }
 
@@ -2193,6 +2273,7 @@ private extension View {
 
 private struct AidenAppSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AidenHapticCenter.self) private var haptics
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var appearance: AidenAppearanceStore
     let addInstallation: () -> Void
@@ -2231,6 +2312,20 @@ private struct AidenAppSettingsView: View {
                     Text("Global Defaults")
                 } footer: {
                     Text("These are app-wide defaults. Permission, files, Git, and other workspace-specific options remain in each workspace’s ••• menu.")
+                }
+
+                Section {
+                    Toggle("Interaction haptics", isOn: Binding(
+                        get: { haptics.isEnabled },
+                        set: { haptics.isEnabled = $0 }
+                    ))
+                    .disabled(!haptics.supportsHaptics)
+                } header: {
+                    Text("Feedback")
+                } footer: {
+                    Text(haptics.supportsHaptics
+                        ? "Adds subtle feedback to important actions and confirmed outcomes. Standard controls keep their system feedback."
+                        : "Interaction haptics are not available on this device.")
                 }
 
                 Section("About") {
@@ -2330,6 +2425,7 @@ private struct AidenInstallationsView: View {
     let addInstallation: () -> Void
 
     @State private var installationToRemove: AidenInstallation?
+    @State private var hapticScope = UUID()
 
     var body: some View {
         NavigationStack {
@@ -2341,8 +2437,29 @@ private struct AidenInstallationsView: View {
                         }.count > 1
                         Button {
                             Task {
-                                await coordinator.switchInstallation(to: installation.id)
-                                dismiss()
+                                guard coordinator.activeInstanceId != installation.id else {
+                                    dismiss()
+                                    return
+                                }
+                                let operationID = UUID()
+                                let outcome = await coordinator.switchInstallationOutcome(to: installation.id)
+                                switch outcome {
+                                case .success:
+                                    coordinator.haptics.play(
+                                        .success,
+                                        scope: hapticScope,
+                                        dedupeKey: "installation-switch:\(operationID.uuidString)"
+                                    )
+                                    dismiss()
+                                case .failure:
+                                    coordinator.haptics.play(
+                                        .error,
+                                        scope: hapticScope,
+                                        dedupeKey: "installation-switch:\(operationID.uuidString)"
+                                    )
+                                case .cancelled, .stale, .busy:
+                                    break
+                                }
                             }
                         } label: {
                             HStack {
@@ -2409,7 +2526,24 @@ private struct AidenInstallationsView: View {
                 Button("Forget Installation", role: .destructive) {
                     guard let installationToRemove else { return }
                     Task {
-                        await coordinator.removeInstallation(installationToRemove.id)
+                        let operationID = UUID()
+                        let outcome = await coordinator.removeInstallationOutcome(installationToRemove.id)
+                        switch outcome {
+                        case .success:
+                            coordinator.haptics.play(
+                                .success,
+                                scope: hapticScope,
+                                dedupeKey: "installation-forget:\(operationID.uuidString)"
+                            )
+                        case .failure:
+                            coordinator.haptics.play(
+                                .error,
+                                scope: hapticScope,
+                                dedupeKey: "installation-forget:\(operationID.uuidString)"
+                            )
+                        case .cancelled, .stale, .busy:
+                            break
+                        }
                         self.installationToRemove = nil
                     }
                 }
@@ -2418,6 +2552,8 @@ private struct AidenInstallationsView: View {
                 Text("Its credential will be removed from this device. You can pair again from Aiden Agent settings.")
             }
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
     }
 }
 
@@ -2564,6 +2700,7 @@ private struct AidenFolderPageView: View {
     @State private var isLoading = true
     @State private var isLoadingMore = false
     @State private var errorMessage: String?
+    @State private var hapticScope = UUID()
 
     var body: some View {
         Group {
@@ -2608,20 +2745,24 @@ private struct AidenFolderPageView: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Add This Folder") {
                     Task {
-                        if let workspace = await coordinator.createSelectedFolderWorkspace(
+                        let outcome = await coordinator.createSelectedFolderWorkspaceOutcome(
                             context: location.context,
                             location: location.location,
                             name: nil
-                        ) {
+                        )
+                        if case .success(let workspace) = outcome {
                             onCreated(workspace)
-                        } else if coordinator.isCurrent(location.context) {
+                        } else if outcome.isDefinitiveFailure, coordinator.isCurrent(location.context) {
                             errorMessage = coordinator.presentedError
+                            coordinator.haptics.play(.error, scope: hapticScope)
                         }
                     }
                 }
                 .disabled(coordinator.isMutating || !coordinator.isCurrent(location.context))
             }
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
         .task(id: location.location) { await load() }
         .alert("Couldn’t Add Folder", isPresented: Binding(
             get: { errorMessage != nil },
