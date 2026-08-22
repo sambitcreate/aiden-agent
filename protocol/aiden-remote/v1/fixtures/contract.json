@@ -1,5 +1,5 @@
 {
-  "contractRevision": 3,
+  "contractRevision": 4,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
