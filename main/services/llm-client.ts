@@ -81,6 +81,7 @@ import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
+import { persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
@@ -802,8 +803,34 @@ export const llmClient = {
     });
     if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
-    let authoritativeChat!: Chat;
+    let authoritativeChat: Chat | undefined;
     let authoritativeMode: ChatStartParams["mode"];
+    const initializationTerminalState = { attempted: false };
+    const persistInitializationTerminal = async (
+      status: "failed" | "cancelled",
+      cancellationOrigin?: GenerationCancellationOrigin,
+    ): Promise<void> => {
+      await persistGenerationInitializationTerminal({
+        state: initializationTerminalState,
+        hasAuthoritativeChat: authoritativeChat !== undefined,
+        workspaceId: initialization.workspaceId,
+        streamId,
+        providerId: params.providerId,
+        model: params.model,
+        status,
+        cancellationOrigin,
+        isCurrent: () =>
+          initializing.get(streamId) === initialization ||
+          (active.get(streamId)?.chatId === params.chatId &&
+            active.get(streamId)?.owner === owner),
+        append: (message, meta) => chatStore.appendMessage(params.chatId, message, meta),
+        onUnknownOutcome: (terminalError) => logger.error(
+          "pi",
+          `Could not persist the initialization outcome for stream ${streamId}`,
+          terminalError,
+        ),
+      });
+    };
     try {
       const chat = await chatStore.get(params.chatId);
       if (!chat) {
@@ -855,7 +882,16 @@ export const llmClient = {
       );
     } catch (error) {
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        sendGeneration(streamId, "chat:done", { streamId, content: "" });
+        await persistInitializationTerminal(
+          "cancelled",
+          initialization.cancellationOrigin,
+        );
+        sendGeneration(streamId, "chat:done", {
+          streamId,
+          content: "",
+          cancelled: true,
+          cancellationOrigin: initialization.cancellationOrigin,
+        });
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
@@ -863,12 +899,17 @@ export const llmClient = {
         broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
+      await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
+    }
+    const generationChat = authoritativeChat;
+    if (!generationChat) {
+      throw new Error("This chat is no longer available.");
     }
     const {
       runtime,
@@ -1121,12 +1162,12 @@ export const llmClient = {
       };
       const promptJournal = piSession;
 
-      const currentUser = [...authoritativeChat.messages]
+      const currentUser = [...generationChat.messages]
         .reverse()
         .find((message) => message.role === "user");
       const priorVisibleMessages = currentUser
-        ? authoritativeChat.messages.filter((message) => message.id !== currentUser.id)
-        : authoritativeChat.messages;
+        ? generationChat.messages.filter((message) => message.id !== currentUser.id)
+        : generationChat.messages;
       const contentOverrides = new Map<string, string>();
       if (currentUser) {
         if (
@@ -1575,7 +1616,16 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       await computerUse?.close().catch(() => {});
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        sendGeneration(streamId, "chat:done", { streamId, content: "" });
+        await persistInitializationTerminal(
+          "cancelled",
+          initialization.cancellationOrigin,
+        );
+        sendGeneration(streamId, "chat:done", {
+          streamId,
+          content: "",
+          cancelled: true,
+          cancellationOrigin: initialization.cancellationOrigin,
+        });
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
@@ -1583,6 +1633,7 @@ export const llmClient = {
         broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
+      await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
@@ -1592,6 +1643,7 @@ export const llmClient = {
     }
     const agent = candidate;
     if (!agent || !piSession) {
+      await persistInitializationTerminal("failed");
       endLoadMonitor(initialization, streamId, false);
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
@@ -1767,6 +1819,10 @@ export const llmClient = {
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
+      await persistInitializationTerminal(
+        "cancelled",
+        activeGeneration.cancellationOrigin,
+      );
       await piTurnLease?.rollback().catch((error) => {
         logger.error(
           "pi",
@@ -1777,7 +1833,12 @@ export const llmClient = {
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       await computerUse?.close().catch(() => {});
-      sendGeneration(streamId, "chat:done", { streamId, content: "" });
+      sendGeneration(streamId, "chat:done", {
+        streamId,
+        content: "",
+        cancelled: true,
+        cancellationOrigin: activeGeneration.cancellationOrigin,
+      });
       releaseGenerationSkillReservation(activeGeneration);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
