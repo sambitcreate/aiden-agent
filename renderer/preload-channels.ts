@@ -9,6 +9,7 @@ export const INVOKE_PREFIXES = [
   "artificialAnalysis:",
   "assistant:",
   "attachments:",
+  "bots:",
   "chat:",
   "chats:",
   "computerUse:",

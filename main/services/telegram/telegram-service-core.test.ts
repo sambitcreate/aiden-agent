@@ -275,6 +275,7 @@ interface MockTurnOptions {
   workspaceResolver?: (
     workspaceId?: string,
   ) => { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
+  existingChats?: Array<{ id: string; workspaceId: string; botId: string }>;
 }
 
 /** Minimal owner surface the turn shim drives back through send(). */
@@ -291,7 +292,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
 
   const pendingStart = new EventEmitter();
   let pendingOwner: TurnOwner | undefined;
-  const createdChats: Array<{ id: string; workspaceId?: string }> = [];
+  const createdChats: Array<{ id: string; workspaceId?: string; botId?: string }> = [];
   const startedParams: Array<{
     chatId: string;
     workspaceId?: string;
@@ -344,9 +345,13 @@ function createMockTurn(opts: MockTurnOptions = {}) {
   };
 
   const chatStore = {
-    async create(input: { id: string; title: string; workspaceId?: string }) {
+    async create(input: { id: string; title: string; workspaceId?: string; botId?: string }) {
       createCalls += 1;
-      createdChats.push({ id: input.id, workspaceId: input.workspaceId });
+      createdChats.push({
+        id: input.id,
+        ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
+        ...(input.botId !== undefined ? { botId: input.botId } : {}),
+      });
       return {
         id: input.id,
         title: input.title,
@@ -354,8 +359,9 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         workspaceId: input.workspaceId,
       };
     },
-    async get(_id: string) {
-      return null;
+    async get(id: string) {
+      const chat = opts.existingChats?.find((candidate) => candidate.id === id);
+      return chat ? { ...chat, title: "Telegram bot", updatedAt: 0 } : null;
     },
     async appendMessage(id: string, _message: unknown) {
       appendCalls += 1;
@@ -461,6 +467,9 @@ interface HarnessOptions {
   telegramRendering?: "rich" | "html";
   telegramVoiceMode?: "hidden" | "mirror" | "always";
   telegramThreadedMode?: boolean;
+  profile?: string;
+  resolveBotBinding?: import("./telegram-service-core.js").TelegramServiceDeps["resolveBotBinding"];
+  validateBotBinding?: import("./telegram-service-core.js").TelegramServiceDeps["validateBotBinding"];
   resolveThreadWorkspace?: (threadId: number) => Promise<string | undefined>;
   clearThreadTargets?: () => Promise<void>;
   listModels?: () => Promise<readonly import("./telegram-controls.js").TelegramModelChoice[]>;
@@ -472,6 +481,7 @@ interface HarnessOptions {
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
   synthesizeVoice?: import("./telegram-service-core.js").TelegramServiceDeps["synthesizeVoice"];
   delayAfterFirstBatch?: boolean;
+  existingChats?: MockTurnOptions["existingChats"];
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -500,6 +510,7 @@ function harness(o: HarnessOptions = {}) {
         }
         return o.workspace ?? { kind: "assistant" as const };
       }),
+    existingChats: o.existingChats,
   });
   const sleepMock = createMockSleep();
   const logs = createLogs();
@@ -519,6 +530,9 @@ function harness(o: HarnessOptions = {}) {
     api: api as unknown as TelegramBotApi,
     config: config as unknown as TelegramConfig,
     turn: turnMock.turn as unknown as TelegramTurnDeps,
+    profile: o.profile,
+    resolveBotBinding: o.resolveBotBinding,
+    validateBotBinding: o.validateBotBinding,
     listWorkspaces: async () => o.workspaces ?? [],
     listModels: o.listModels,
     applyModelSelection: o.applyModelSelection,
@@ -1020,6 +1034,128 @@ test("a scoped Telegram prompt uses an isolated project chat", async () => {
   assert.equal(started?.chatId, "telegram-42-workspace-a");
   assert.equal(started?.workspaceId, "workspace-a");
   assert.equal(started?.mode, "assistant-automation");
+});
+
+test("bot-bound Telegram turns use the profile/bot backing chat and normal Pi mode", async () => {
+  const owner = person(42, "owner");
+  const binding = {
+    botId: "bot-a",
+    profile: "work",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "work",
+    backingChatId: "telegram-work-bot-a",
+  } as const;
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async (input) => input.profile === "work" ? binding : undefined,
+    workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
+    existingChats: [{ id: binding.backingChatId, workspaceId: "work", botId: "bot-a" }],
+    batches: [[makeUpdate(1, makeMessage(10, owner, "bot prompt"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(({ text }) => text.includes("Mock reply")));
+
+  assert.deepEqual(turnMock.createdChats(), []);
+  assert.equal(turnMock.startedParams()[0]?.chatId, "telegram-work-bot-a");
+  assert.equal(turnMock.startedParams()[0]?.mode, undefined);
+});
+
+test("bot binding validation rejects archived or missing bot identities before queue admission", async () => {
+  const owner = person(42, "owner");
+  const binding = {
+    botId: "archived-bot",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "work",
+    backingChatId: "telegram-default-archived-bot",
+  } as const;
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    resolveBotBinding: async () => binding,
+    validateBotBinding: async () => false,
+    batches: [[makeUpdate(1, makeMessage(10, owner, "should not run"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => api.sentMessages.some(({ text }) => text.includes("unavailable or archived")));
+
+  assert.equal(turnMock.startCalls(), 0);
+  assert.equal(service.queueSize, 0);
+});
+
+test("a binding resolver is never called for group chats or unauthorized users", async () => {
+  let calls = 0;
+  const resolver = async () => {
+    calls += 1;
+    return undefined;
+  };
+  const intruder = person(99, "intruder");
+  const group = makeMessage(10, person(42, "owner"), "group prompt", -100);
+  group.chat.type = "group";
+  const { service } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    resolveBotBinding: resolver,
+    batches: [[makeUpdate(1, group), makeUpdate(2, makeMessage(11, intruder, "private intruder"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => service.getStatus().status === "disabled");
+  assert.equal(calls, 0);
+});
+
+test("queued turns retain their captured backing chat when a source is rebound", async () => {
+  const owner = person(42, "owner");
+  const first = {
+    botId: "bot-a",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "work",
+    backingChatId: "telegram-bot-a",
+  } as const;
+  const second = {
+    botId: "bot-b",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "work",
+    backingChatId: "telegram-bot-b",
+  } as const;
+  let resolveCalls = 0;
+  const { service, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    pendingTurn: true,
+    resolveBotBinding: async () => resolveCalls++ === 0 ? first : second,
+    workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
+    existingChats: [
+      { id: first.backingChatId, workspaceId: "work", botId: "bot-a" },
+      { id: second.backingChatId, workspaceId: "work", botId: "bot-b" },
+    ],
+    batches: [[
+      makeUpdate(1, makeMessage(10, owner, "first")),
+      makeUpdate(2, makeMessage(11, owner, "second")),
+    ]],
+    autoStop: false,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1 && service.queueSize === 1);
+  turnMock.completePendingTurn();
+  await waitFor(() => turnMock.startCalls() === 2);
+
+  assert.deepEqual(turnMock.createdChats(), []);
+  service.stop();
 });
 
 test("dispatch gate blocks a second turn while one is already active", async () => {

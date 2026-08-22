@@ -48,6 +48,7 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
   let finishDeletionCalls = 0;
   const deps = {
     chatStore: {
+      listRegular: async () => [],
       list: async () => [chat()],
       get: async (id: string) => chat(id),
       create: async (input: { assertCurrent?: () => void; workspaceId?: string }) => {
@@ -136,6 +137,7 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
   const events: string[] = [];
   const application = fixture({
     chatStore: {
+      listRegular: async () => [],
       list: async () => [],
       get: async () => chat(),
       create: async () => chat(),

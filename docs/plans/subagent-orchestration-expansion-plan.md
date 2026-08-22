@@ -1,7 +1,9 @@
 # Subagent Orchestration Expansion
 
-Status: In progress. Phases 0–6 and the production-inert Phase 7A durable
-background lifecycle core are complete; Phase 7B activation is next.
+Status: In progress. Phases 0–6, the production-inert Phase 7A durable
+background lifecycle core, and the Phase 7B1 storage seam are complete. The
+2026-08-18 worker-startup diagnostic hardening is complete; Phase 7B
+coordinator activation is next.
 
 Spec date: 2026-08-05.
 
@@ -155,6 +157,16 @@ and its complete correction loop, the user explicitly stopped further review-
 subagent delegation. Remaining slices continue with implementation, direct root
 inspection, focused/aggregate automated gates, and correction of observed
 failures, but no additional independent review-subagent waits.
+
+Reliability remediation (2026-08-18): two live zero-activity child failures
+were traced to four pre-ready Electron worker exits whose bootstrap cause had
+been discarded. Isolated inference now retains only a bounded, redacted
+pre-ready stderr tail; writes one owner-only correlated record to the rotating
+`subagent-runtime.log`; preserves closed attempt/stage/exit and provider-failure
+category evidence; and has a real Electron worker `ready` smoke test registered
+in the focused gate. Parent and child prompts now state truthful failed-child
+and blocked-result behavior. No prompt, provider payload, header, URL,
+credential, or raw runtime exception enters renderer snapshots or Pi journals.
 
 ## Phases
 

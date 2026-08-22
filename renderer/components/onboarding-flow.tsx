@@ -86,6 +86,7 @@ const FEATURE_ILLUSTRATIONS = {
   skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
   mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
   assistant: new URL("../assets/onboarding/features/aiden-assistant.png", import.meta.url).href,
+  bots: new URL("../assets/onboarding/features/bots.png", import.meta.url).href,
   schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
     .href,
   voice: new URL("../assets/onboarding/features/voice-dictation.png", import.meta.url).href,
@@ -309,6 +310,16 @@ const featureBentos: FeatureBento[] = [
     icon: Bot,
     imageUrl: FEATURE_ILLUSTRATIONS.assistant,
     size: "hero",
+  },
+  {
+    id: "bots",
+    group: "control",
+    title: "Reusable Bots",
+    description:
+      "Create Pi-powered teammates with custom vector faces, durable instructions, separate conversations, and Telegram control.",
+    icon: Bot,
+    imageUrl: FEATURE_ILLUSTRATIONS.bots,
+    size: "standard",
   },
   {
     id: "schedules",

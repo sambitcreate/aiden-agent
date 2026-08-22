@@ -1164,6 +1164,14 @@ test("main-process shutdown continues to application quit after the subagent dea
   const forceQuitStart = source.indexOf("forceAppQuit = true;", cleanupStart);
   const appQuitStart = source.indexOf("app.quit();", forceQuitStart);
   const failureExitStart = source.indexOf("app.exit(1);", receiptFinalizationStart);
+  const failureDiagnosticFlush = source.lastIndexOf(
+    "await flushSubagentRuntimeDiagnostics();",
+    failureExitStart,
+  );
+  const normalDiagnosticFlush = source.lastIndexOf(
+    "await flushSubagentRuntimeDiagnostics();",
+    forceQuitStart,
+  );
 
   assert.ok(parentAbortStart >= 0);
   assert.ok(parentSettlementStart > parentAbortStart);
@@ -1172,10 +1180,14 @@ test("main-process shutdown continues to application quit after the subagent dea
   assert.ok(settlementStart >= 0);
   assert.ok(receiptFinalizationStart > settlementStart);
   assert.ok(failureExitStart > receiptFinalizationStart);
+  assert.ok(failureDiagnosticFlush > receiptFinalizationStart);
+  assert.ok(failureDiagnosticFlush < failureExitStart);
   assert.ok(failureExitStart < cleanupStart);
   assert.ok(cleanupStart > receiptFinalizationStart);
   assert.ok(cleanupStart > settlementStart);
   assert.ok(forceQuitStart > cleanupStart);
+  assert.ok(normalDiagnosticFlush > cleanupStart);
+  assert.ok(normalDiagnosticFlush < forceQuitStart);
   assert.ok(appQuitStart > forceQuitStart);
   assert.match(
     source.slice(receiptFinalizationStart, cleanupStart),

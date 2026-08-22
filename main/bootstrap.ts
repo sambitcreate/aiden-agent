@@ -5,8 +5,13 @@ import { crashReporter } from "electron";
 import { initDevLog, writeDevLog, writeDevLogSync } from "./services/dev-log.js";
 import { installProcessDiagnostics } from "./services/process-diagnostics.js";
 import { configureRuntimeProfile } from "./runtime-profile.js";
+import {
+  initSubagentRuntimeDiagnostics,
+  SUBAGENT_RUNTIME_LOG_FILENAME,
+} from "./services/subagents/subagent-runtime-diagnostics.js";
 
 const runtimeProfile = configureRuntimeProfile();
+initSubagentRuntimeDiagnostics(path.join(runtimeProfile.logsPath, SUBAGENT_RUNTIME_LOG_FILENAME));
 if (runtimeProfile.id === "development") {
   initDevLog(path.join(runtimeProfile.logsPath, "aiden-dev.log"));
   installProcessDiagnostics();

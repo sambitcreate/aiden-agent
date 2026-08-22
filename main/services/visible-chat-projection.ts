@@ -72,11 +72,13 @@ function boundedString(
 export function projectVisibleChatMetadata(input: {
   title: unknown;
   workspaceId?: unknown;
+  botId?: unknown;
   providerId?: unknown;
   model?: unknown;
 }): {
   title: string;
   workspaceId?: string;
+  botId?: string;
   providerId?: string;
   model?: string;
 } {
@@ -92,6 +94,13 @@ export function projectVisibleChatMetadata(input: {
       "workspace identifier",
       MAX_WORKSPACE_ID_CHARS,
       MAX_WORKSPACE_ID_BYTES,
+      true,
+    ),
+    botId: boundedString(
+      input.botId,
+      "bot identifier",
+      MAX_CHAT_ID_CHARS,
+      MAX_CHAT_ID_BYTES,
       true,
     ),
     providerId: boundedString(

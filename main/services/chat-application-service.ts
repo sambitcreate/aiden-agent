@@ -29,7 +29,7 @@ export interface ChatApplicationMutationOptions {
 export interface ChatApplicationDependencies {
   chatStore: Pick<
     typeof chatStore,
-    "list" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
+    "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
   >;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
@@ -66,6 +66,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
   return {
     list(workspaceId?: string) {
       return deps.chatStore.list(workspaceId);
+    },
+
+    listRegular(workspaceId?: string) {
+      return deps.chatStore.listRegular(workspaceId);
     },
 
     async get(chatId: string) {

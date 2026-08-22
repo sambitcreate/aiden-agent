@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createChatModelProviders,
   createModelEntries,
   decodeSelection,
   encodeSelection,
@@ -12,6 +13,7 @@ import {
   positionSavedModels,
   positionModels,
   visibleModelEntries,
+  resolveExplicitModelSelection,
   type ModelEntry,
 } from "./model-picker-data";
 import type { Provider } from "./types";
@@ -263,6 +265,199 @@ test("embedding-like ids stay out when stale discovery metadata is unavailable",
   assert.deepEqual(
     createModelEntries([local]).map((model) => model.model),
     ["chat-model"],
+  );
+});
+
+test("known embedding families stay out without excluding harmless similar chat ids", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    models: [
+      "intfloat/multilingual-e5-large-instruct",
+      "baai/bge-m3",
+      "thenlper/gte-large",
+      "nvidia--llama-3.2-nv-embedqa-1b",
+      "nvidia/nv-embedcode-7b-v1",
+      "all-mini-lm-l6-v2",
+      "multi-qa-mpnet-base-dot-v1",
+      "hkunlp/instructor-large",
+      "acme/bgeography-e5x-chat",
+    ],
+  });
+  assert.deepEqual(
+    createChatModelProviders([local]).flatMap(({ models }) => models),
+    ["acme/bgeography-e5x-chat"],
+  );
+});
+
+test("rerank-only models stay out while authoritative chat classifications override names", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    models: [
+      "voyage/rerank-2.5-lite",
+      "qwen3-reranker-4b",
+      "rerank-discussion-chat",
+      "opaque-score-v1",
+      "ordinary-chat",
+    ],
+    modelMetadata: {
+      "rerank-discussion-chat": { source: "provider", type: "llm" },
+      "opaque-score-v1": { source: "provider", type: "reranker" },
+    },
+  });
+  const catalogInfo = {
+    local: {
+      "qwen3-reranker-4b": {
+        id: "qwen3-reranker-4b",
+        modelType: "reranker" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "rerank-discussion-chat": {
+        id: "rerank-discussion-chat",
+        modelType: "llm" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+    },
+  };
+  assert.deepEqual(
+    createChatModelProviders([local], catalogInfo).flatMap(({ models }) => models),
+    ["rerank-discussion-chat", "ordinary-chat"],
+  );
+});
+
+test("offline catalog types close embedding ids that have no reliable name marker", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    models: ["all-mini-lm-l6-v2", "multi-qa-mpnet-base-dot-v1", "ordinary-chat"],
+  });
+  const catalogInfo = {
+    local: {
+      "all-mini-lm-l6-v2": {
+        id: "all-mini-lm-l6-v2",
+        modelType: "embedding" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "multi-qa-mpnet-base-dot-v1": {
+        id: "multi-qa-mpnet-base-dot-v1",
+        modelType: "embedding" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+    },
+  };
+  assert.deepEqual(
+    createChatModelProviders([local], catalogInfo).flatMap(({ models }) => models),
+    ["ordinary-chat"],
+  );
+});
+
+test("authoritative LLM types override heuristics while any non-chat type fails closed", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    models: [
+      "ordinary-embedding-discussion-chat",
+      "acme/gte-chat",
+      "conflicting-catalog",
+      "conflicting-provider",
+      "conflicting-reranker",
+      "conflicting-media",
+    ],
+    modelMetadata: {
+      "ordinary-embedding-discussion-chat": { source: "provider", type: "llm" },
+      "acme/gte-chat": { source: "provider", type: "llm" },
+      "conflicting-catalog": { source: "provider", type: "llm" },
+      "conflicting-provider": { source: "provider", type: "embedding" },
+      "conflicting-reranker": { source: "provider", type: "llm" },
+      "conflicting-media": { source: "provider", type: "llm" },
+    },
+  });
+  const catalogInfo = {
+    local: {
+      "ordinary-embedding-discussion-chat": {
+        id: "ordinary-embedding-discussion-chat",
+        modelType: "llm" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "acme/gte-chat": {
+        id: "acme/gte-chat",
+        modelType: "llm" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "conflicting-catalog": {
+        id: "conflicting-catalog",
+        modelType: "embedding" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "conflicting-provider": {
+        id: "conflicting-provider",
+        modelType: "llm" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "conflicting-reranker": {
+        id: "conflicting-reranker",
+        modelType: "reranker" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "conflicting-media": {
+        id: "conflicting-media",
+        modelType: "image" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+    },
+  };
+  assert.deepEqual(
+    createChatModelProviders([local], catalogInfo).flatMap(({ models }) => models),
+    ["ordinary-embedding-discussion-chat", "acme/gte-chat"],
+  );
+});
+
+test("face-generation selection excludes embeddings and never reroutes stale providers", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    models: ["chat", "text-embedding-private"],
+    defaultModel: "text-embedding-private",
+    modelMetadata: {
+      chat: { source: "provider", type: "llm" },
+      "text-embedding-private": { source: "provider", type: "embedding" },
+    },
+  });
+  const hosted = provider({ id: "hosted", label: "Hosted", models: ["cloud-chat"] });
+  const choices = createChatModelProviders([local, hosted]);
+  assert.deepEqual(
+    choices.map(({ provider: item, models }) => ({ id: item.id, models })),
+    [
+      { id: "local", models: ["chat"] },
+      { id: "hosted", models: ["cloud-chat"] },
+    ],
+  );
+  assert.deepEqual(resolveExplicitModelSelection({ providerId: "", model: "" }, choices), {
+    providerId: "local",
+    model: "chat",
+  });
+  assert.deepEqual(
+    resolveExplicitModelSelection({ providerId: "removed-local", model: "private-chat" }, choices),
+    { providerId: "", model: "" },
+  );
+  assert.deepEqual(
+    resolveExplicitModelSelection(
+      { providerId: "local", model: "text-embedding-private" },
+      choices,
+    ),
+    { providerId: "local", model: "" },
   );
 });
 

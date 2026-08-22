@@ -7,6 +7,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
@@ -40,6 +41,7 @@ import {
   logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
+  useBot,
   useComputerUseStatus,
   useGitInfo,
   useModelInfo,
@@ -123,6 +125,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
   const chat = useChat(chatId);
+  const bot = useBot(chat.data?.botId);
   const settings = useSettings();
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
@@ -203,9 +206,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
         : detachedGenerationDraining
           ? "Finishing the previous response…"
           : undefined;
-  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
+  const botReadinessMessage = chat.data?.botId
+    ? bot.isLoading
+      ? "Loading bot…"
+      : !bot.data
+        ? "This bot is no longer available."
+        : bot.data.archivedAt
+          ? "Restore this bot before continuing the conversation."
+          : undefined
+    : undefined;
+  const ready =
+    modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
   const readinessMessage =
-    chatReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
+    chatReadinessMessage ?? botReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -1363,7 +1376,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <ScrollArea
       className="h-full min-h-0"
-      title={chat.data?.title ?? "New agent"}
+      title={
+        bot.data ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <BotAvatar avatar={bot.data.avatar} name={bot.data.name} size="small" />
+            <span className="min-w-0">
+              <span className="flex items-center gap-2">
+                <span className="truncate">{bot.data.name}</span>
+                <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">Bot</span>
+              </span>
+              <span className="block truncate text-small font-normal text-secondary">{chat.data?.title ?? "New conversation"}</span>
+            </span>
+          </span>
+        ) : (chat.data?.title ?? "New agent")
+      }
       actions={
         <>
           <OpenInEditorPicker

@@ -91,6 +91,12 @@ test("telegramChatId returns telegram-<userId>", () => {
   assert.equal(telegramChatId(0), "telegram-0");
 });
 
+test("telegramChatId namespaces named Telegram profiles without changing the default legacy id", () => {
+  assert.equal(telegramChatId(123, undefined, "default"), "telegram-123");
+  assert.equal(telegramChatId(123, undefined, "work"), "telegram-work-123");
+  assert.notEqual(telegramChatId(123, "workspace-a", "work"), telegramChatId(123, "workspace-a", "notes"));
+});
+
 test("workspace Telegram turn starts assistant automation with the selected workspace", async () => {
   let startedParams: { chatId: string; workspaceId?: string; mode?: string } | undefined;
   let interactionSurface: string | undefined;
@@ -153,6 +159,39 @@ test("assistant-only Telegram turn preserves the owner chat and assistant mode",
   assert.equal(startedParams?.workspaceId, undefined);
   assert.equal(startedParams?.mode, "assistant-unattended");
   assert.equal(interactionSurface, "telegram");
+});
+
+test("bot-bound Telegram turn omits assistant mode while retaining the Pi admission path", async () => {
+  let startedParams: { chatId: string; workspaceId?: string; mode?: string } | undefined;
+  const llm = mockLlm(async (streamId, params, owner) => {
+    startedParams = params;
+    owner.send("chat:done", { streamId, content: "done" });
+    return true;
+  });
+  const { deps } = mockDeps({ llm, workspace: { kind: "project", workspaceId: "workspace-a" } });
+  const binding = {
+    botId: "bot-a",
+    profile: "work",
+    chatId: 100,
+    ownerUserId: 123,
+    workspaceId: "work",
+    backingChatId: "telegram-work-bot-a",
+  } as const;
+
+  const result = await sendTelegramTurn(
+    deps,
+    binding.backingChatId,
+    "bot prompt",
+    { kind: "project", workspaceId: "workspace-a" },
+    undefined,
+    undefined,
+    { binding },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(startedParams?.chatId, binding.backingChatId);
+  assert.equal(startedParams?.workspaceId, "workspace-a");
+  assert.equal(startedParams?.mode, undefined);
 });
 
 test("createTelegramBackgroundOwner exposes telegram:<streamId> documentId and resolves terminal on chat:done", async () => {
@@ -270,6 +309,64 @@ test("ensureTelegramChat creates a chat when none exists and reuses an existing 
   assert.equal(second, "telegram-123");
   assert.deepEqual(createCalls, ["telegram-123"]);
   assert.equal(broadcasts.length, 2);
+});
+
+test("ensureTelegramChat tags a bot backing chat with botId", async () => {
+  let created: { id: string; workspaceId?: string; botId?: string } | undefined;
+  const store: TelegramChatStore = {
+    async create(input) {
+      created = { id: input.id, workspaceId: input.workspaceId, botId: input.botId };
+      return { id: input.id, title: input.title, updatedAt: 1, botId: input.botId };
+    },
+    async get() {
+      return null;
+    },
+    async appendMessage(id) {
+      return { id, title: "Telegram", updatedAt: 2 };
+    },
+  };
+  const { deps } = mockDeps({ store });
+  const binding = {
+    botId: "bot-a",
+    profile: "work",
+    chatId: 123,
+    ownerUserId: 123,
+    workspaceId: "work",
+    backingChatId: "telegram-work-bot-a",
+  } as const;
+
+  const chatId = await ensureTelegramChat(deps, 123, "Bot A", "openai", "gpt-4o", "work", "work", binding);
+  assert.equal(chatId, "telegram-work-bot-a");
+  assert.deepEqual(created, { id: "telegram-work-bot-a", workspaceId: "work", botId: "bot-a" });
+});
+
+test("ensureTelegramChat refuses to reuse an untagged or differently tagged bot backing chat", async () => {
+  const binding = {
+    botId: "bot-a",
+    profile: "work",
+    chatId: 123,
+    ownerUserId: 123,
+    workspaceId: "work",
+    backingChatId: "telegram-work-bot-a",
+  } as const;
+  const { deps } = mockDeps({
+    store: {
+      async create(input) {
+        return { id: input.id, title: input.title, updatedAt: 1, botId: input.botId };
+      },
+      async get(id) {
+        return { id, title: "Existing", updatedAt: 1 };
+      },
+      async appendMessage(id) {
+        return { id, title: "Existing", updatedAt: 1 };
+      },
+    },
+  });
+
+  await assert.rejects(
+    ensureTelegramChat(deps, 123, "Bot A", "openai", "gpt-4o", "work", "work", binding),
+    /different bot or workspace binding/u,
+  );
 });
 
 test("owner.send throws after destroy is called", () => {

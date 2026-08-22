@@ -79,7 +79,14 @@ function optionalPositiveNumber(value: unknown): number | undefined {
 }
 
 function optionalModelType(value: unknown): ProviderModelType | undefined {
-  return value === "llm" || value === "embedding" ? value : undefined;
+  return value === "llm" ||
+    value === "embedding" ||
+    value === "reranker" ||
+    value === "image" ||
+    value === "audio" ||
+    value === "video"
+    ? value
+    : undefined;
 }
 
 function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadata> | undefined {
@@ -126,7 +133,8 @@ function parseProvider(value: unknown): StoredProvider {
   const models = Array.isArray(p.models)
     ? p.models.filter(
         (model): model is string =>
-          typeof model === "string" && modelMetadata?.[model]?.type !== "embedding",
+          typeof model === "string" &&
+          (modelMetadata?.[model]?.type === undefined || modelMetadata[model]?.type === "llm"),
       )
     : [];
   const defaultModel =

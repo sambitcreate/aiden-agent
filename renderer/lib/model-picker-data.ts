@@ -3,6 +3,7 @@ import { resolveModelDisplay } from "./model-display";
 import type { ModelPadPlacement } from "./model-pad-layout";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import { isModelHidden, type HiddenModelsByProvider } from "../shared/model-visibility";
+import { isNonChatModel } from "../shared/model-eligibility";
 
 export type { ModelRanking } from "./types";
 
@@ -16,7 +17,6 @@ const DEEP_VARIANT_RE =
   /(?:^|[\s._/-])(reasoner|reasoning|thinking|think|deep|high|xhigh)(?:$|[\s._/-])/i;
 const CAPABLE_VARIANT_RE = /(?:^|[\s._/-])(sonnet|opus|pro|ultra|max|large)(?:$|[\s._/-])/i;
 const PARAMETER_COUNT_RE = /(?:^|[\s._/-])(\d+(?:\.\d+)?)b(?:$|[\s._/-])/i;
-const EMBEDDING_MODEL_RE = /(?:^|[\s._/-])embedd?(?:ing|ings)?(?:$|[\s._/-])/i;
 
 export interface ModelEntry {
   value: string;
@@ -29,6 +29,16 @@ export interface ModelEntry {
   isLocal: boolean;
   info?: ModelInfo;
   ranking?: ModelRanking;
+}
+
+export interface ChatModelProvider {
+  provider: Provider;
+  models: string[];
+}
+
+export interface ExplicitModelSelection {
+  providerId: string;
+  model: string;
 }
 
 export type PositionConfidence = "personal" | "suggested" | "benchmark" | "estimated" | "unranked";
@@ -101,9 +111,11 @@ export function createModelEntries(
       const value = encodeSelection(provider.id, model);
       const info = infoByValue[value];
       if (
-        provider.modelMetadata?.[model]?.type === "embedding" ||
-        info?.modelType === "embedding" ||
-        EMBEDDING_MODEL_RE.test(model)
+        isNonChatModel({
+          model,
+          metadataType: provider.modelMetadata?.[model]?.type,
+          catalogType: info?.modelType,
+        })
       ) {
         continue;
       }
@@ -131,6 +143,54 @@ export function visibleModelEntries(
   hidden: HiddenModelsByProvider | undefined,
 ): ModelEntry[] {
   return entries.filter((entry) => !isModelHidden(hidden, entry.providerId, entry.model));
+}
+
+/** Group only text-generating models while preserving the configured provider order. */
+export function createChatModelProviders(
+  providers: Provider[],
+  infoByProvider: Readonly<
+    Record<string, Readonly<Record<string, ModelInfo | undefined>> | undefined>
+  > = {},
+): ChatModelProvider[] {
+  const infoByValue: Record<string, ModelInfo | undefined> = {};
+  for (const provider of providers) {
+    for (const [model, info] of Object.entries(infoByProvider[provider.id] ?? {})) {
+      infoByValue[encodeSelection(provider.id, model)] = info;
+    }
+  }
+  const modelsByProvider = new Map<string, string[]>();
+  for (const entry of createModelEntries(providers, infoByValue)) {
+    const models = modelsByProvider.get(entry.providerId) ?? [];
+    models.push(entry.model);
+    modelsByProvider.set(entry.providerId, models);
+  }
+  return providers.flatMap((provider) => {
+    const models = modelsByProvider.get(provider.id);
+    return models?.length ? [{ provider, models }] : [];
+  });
+}
+
+/** Never reroute a stale nonempty selection to another provider implicitly. */
+export function resolveExplicitModelSelection(
+  saved: ExplicitModelSelection,
+  providers: ChatModelProvider[],
+): ExplicitModelSelection {
+  const selected = providers.find(({ provider }) => provider.id === saved.providerId);
+  if (selected) {
+    return selected.models.includes(saved.model)
+      ? saved
+      : { providerId: selected.provider.id, model: "" };
+  }
+  if (saved.providerId || saved.model) return { providerId: "", model: "" };
+  const first = providers[0];
+  if (!first) return { providerId: "", model: "" };
+  return {
+    providerId: first.provider.id,
+    model:
+      first.provider.defaultModel && first.models.includes(first.provider.defaultModel)
+        ? first.provider.defaultModel
+        : (first.models[0] ?? ""),
+  };
 }
 
 /** Pinning affects the list order only; it must never move a model on the pad. */

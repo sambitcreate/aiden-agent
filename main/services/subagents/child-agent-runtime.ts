@@ -205,7 +205,12 @@ export class SubagentRuntimeRegistry {
     assertGenerationContextCapacity(contextOptions);
     const sessionPromise = new InMemorySessionRepo().create({ id: sessionId });
     const cancellation = new AbortController();
-    const childRuntime = this.inferenceIsolation?.wrap(spec.runtime) ?? spec.runtime;
+    const childRuntime =
+      this.inferenceIsolation?.wrap(spec.runtime, {
+        runId: spec.runId ?? childId,
+        generationId: spec.authority.generationId,
+        childId,
+      }) ?? spec.runtime;
     const compactionOptions = {
       models: createPiCompactionModels(childRuntime, (message) =>
         this.recordCompactionUsage?.(message, spec.runtime),
@@ -225,9 +230,11 @@ export class SubagentRuntimeRegistry {
       },
       onFault: ({ source, extensionId }) => {
         this.reportRuntimeFault(source);
-        writeDevLog("error", "subagents", [
-          `Pi child runtime fault (${source}${extensionId ? `:${extensionId}` : ""}).`,
-        ]);
+        if (extensionId) {
+          writeDevLog("error", "subagents", [
+            `Pi child extension fault (${source}:${extensionId}).`,
+          ]);
+        }
       },
       ...buildAgentRuntimeOptions(sessionId, childRuntime),
       convertToLlm,

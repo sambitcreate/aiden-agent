@@ -22,6 +22,8 @@ import { gitInfo } from "./git.js";
 import { configStore } from "./config-store.js";
 import { secrets } from "./secrets.js";
 import { chatStore } from "./chat-store.js";
+import { botStore } from "./bot-store.js";
+import { resolveBotForGeneration, withBotPersona } from "./bot-system-prompt.js";
 import { formatAvailableSkills, type SkillRegistrySnapshot } from "./skill-registry.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import {
@@ -46,6 +48,7 @@ import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import type { ApprovalDecision, Chat, ChatStartParams, WorkspacePermission } from "./types.js";
+import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
@@ -409,6 +412,7 @@ async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
   chat: Chat,
+  botBound: boolean,
   signal: AbortSignal,
   computerUseGateSnapshot: number,
   activatedComputerUse: (controller: ComputerUseController) => void,
@@ -659,7 +663,8 @@ async function prepareGeneration(
           : undefined,
       interactionSurface: options.interactionSurface,
       allowTelegramDirect:
-        !assistantMode || attendedAssistant || options.interactionSurface === "telegram",
+        !botBound &&
+        (!assistantMode || attendedAssistant || options.interactionSurface === "telegram"),
       assistantModelSelection: attendedAssistant ? assistantModelSelection : undefined,
       createSubagentTool: subagentSupervisor
         ? () =>
@@ -803,6 +808,7 @@ export const llmClient = {
     if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
     let authoritativeChat!: Chat;
+    let authoritativeBot: BotDefinition | undefined;
     let authoritativeMode: ChatStartParams["mode"];
     try {
       const chat = await chatStore.get(params.chatId);
@@ -811,6 +817,11 @@ export const llmClient = {
       }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
+      authoritativeBot = await resolveBotForGeneration(
+        chat,
+        authoritativeMode,
+        (botId) => botStore.get(botId),
+      );
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
@@ -845,6 +856,7 @@ export const llmClient = {
           mode: authoritativeMode,
         },
         chat,
+        Boolean(authoritativeChat.botId),
         initialization.controller.signal,
         computerUseGateSnapshot,
         (computerUse) => {
@@ -1060,8 +1072,11 @@ export const llmClient = {
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
               );
+      const botSystemPrompt = authoritativeBot
+        ? withBotPersona(baseSystemPrompt, authoritativeBot)
+        : baseSystemPrompt;
       const runtimeContributions = resolvePiAgentRuntimeContributionSnapshot(
-        baseSystemPrompt,
+        botSystemPrompt,
         tools,
         piResourcesForSkillSnapshot(skillSnapshot),
         runtimeExtensions,

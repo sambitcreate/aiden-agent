@@ -12,12 +12,13 @@ import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
 
 export type ProviderDeployment = "local" | "hosted";
 
-export type ProviderModelType = "llm" | "embedding";
+export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
 
 export interface ProviderModelMetadata {
   source: "lmstudio" | "ollama" | "provider";
@@ -435,6 +436,7 @@ export interface ModelInfo {
   toolCall?: boolean;
   reasoning?: boolean;
   openWeights?: boolean;
+  /** Normalized capability classification; every value except `llm` is non-chat. */
   modelType?: ProviderModelType;
   parameterCount?: string;
   format?: string;
@@ -495,6 +497,7 @@ export interface ChatMeta {
   id: string;
   title: string;
   workspaceId?: string;
+  botId?: string;
   providerId?: string;
   model?: string;
   createdAt: number;

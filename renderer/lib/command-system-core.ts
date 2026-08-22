@@ -43,7 +43,10 @@ export function workspaceCommandVisibility(pathname: string): {
 } {
   return {
     environment: pathname !== "/settings",
-    terminal: pathname === "/" || pathname.startsWith("/chat/"),
+    terminal:
+      pathname === "/" ||
+      pathname.startsWith("/chat/") ||
+      /^\/bots\/[^/]+\/chat\/[^/]+$/u.test(pathname),
   };
 }
 

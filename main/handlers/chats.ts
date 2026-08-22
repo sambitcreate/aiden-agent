@@ -43,6 +43,8 @@ import {
 } from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
+import { botStore } from "../services/bot-store.js";
+import { botMutationGate } from "../services/bot-mutation-gate.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -56,7 +58,7 @@ export function registerChatHistoryHandlers(): void {
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
-    chatApplicationService.list(
+    chatApplicationService.listRegular(
       typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,
     ),
   );
@@ -155,6 +157,12 @@ export function registerChatHistoryHandlers(): void {
       }
       const source = await chatStore.get(parsed.chatId);
       if (!source) throw new Error("The chat is no longer available.");
+      const runCopy = async () => {
+        if (source.botId) {
+          const bot = await botStore.get(source.botId);
+          if (!bot || bot.archivedAt !== undefined)
+            throw new Error("Archived bot conversations cannot be copied or forked.");
+        }
       const workspaceId = persistedChatWorkspaceId(source.workspaceId);
       if (workspaceId === ASSISTANT_WORKSPACE_ID) {
         throw new Error(
@@ -209,6 +217,8 @@ export function registerChatHistoryHandlers(): void {
         workspaceOperation.release();
         mutationAdmission.release();
       }
+      };
+      return source.botId ? botMutationGate.run(source.botId, runCopy) : runCopy();
     } finally {
       finishCopy?.();
       chatCopyActive = false;
