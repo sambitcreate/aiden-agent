@@ -155,24 +155,31 @@ private final class AidenHomeModel {
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
-        guard coordinator.connectionState == .connected, !isLoading else { return }
+        guard coordinator.connectionState == .connected,
+              let context = try? coordinator.requestContext(),
+              !isLoading else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         do {
-            let client = try coordinator.remoteClient()
+            let client = try coordinator.remoteClient(for: context)
             async let chatsRequest = client.chats()
             async let tasksRequest = client.scheduledTasks()
             async let catalogRequest: AidenModelCatalog? = try? await client.modelCatalog()
             let (chats, tasks, catalog) = try await (chatsRequest, tasksRequest, catalogRequest)
+            guard coordinator.isCurrent(context) else { return }
             self.chats = chats.sorted { $0.updatedAt > $1.updatedAt }
             scheduledTasks = tasks.sorted {
                 ($0.nextRunAt ?? .distantFuture) < ($1.nextRunAt ?? .distantFuture)
             }
             if let catalog { modelCatalog = catalog }
-            usage = try? await client.usage()
+            let loadedUsage = try? await client.usage()
+            guard coordinator.isCurrent(context) else { return }
+            usage = loadedUsage
         } catch {
-            errorMessage = error.localizedDescription
+            if coordinator.isCurrent(context) {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }
@@ -274,6 +281,11 @@ final class AidenWorkspaceArchiveStore {
 
     func forget(workspaceID: String, instanceID: String?) {
         unarchive(workspaceID: workspaceID, instanceID: instanceID)
+    }
+
+    func purge(instanceID: String) {
+        guard workspaceIDsByInstance.removeValue(forKey: instanceID) != nil else { return }
+        persist()
     }
 
     func prune(instanceID: String?, validWorkspaceIDs: Set<String>) {
@@ -494,6 +506,7 @@ struct AidenWorkspaceShellView: View {
             reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
         }
         .onChange(of: coordinator.activeInstanceId) { _, _ in
+            isShowingScheduledTasks = false
             syncArchivedWorkspaceProjection()
             reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
         }
@@ -921,14 +934,26 @@ struct AidenWorkspaceShellView: View {
             }
         }
 
+        let context: AidenRemoteRequestContext
         do {
-            let chat = try await coordinator.remoteClient().createChat(workspaceId: workspace.id)
+            context = try coordinator.requestContext()
+        } catch {
+            coordinator.presentedError = error.localizedDescription
+            return
+        }
+
+        do {
+            let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspace.id)
+            guard coordinator.isCurrent(context) else { return }
             await homeModel.load(coordinator: coordinator)
+            guard coordinator.isCurrent(context) else { return }
             navigate(to: workspace.id)
             intentChat = chat
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             coordinator.presentedError = error.localizedDescription
             await coordinator.refreshWorkspaces()
+            guard coordinator.isCurrent(context) else { return }
             await homeModel.load(coordinator: coordinator)
         }
     }
@@ -1003,6 +1028,13 @@ struct AidenWorkspaceShellView: View {
             return
         }
 
+        let context: AidenRemoteRequestContext
+        do {
+            context = try coordinator.requestContext(for: request.instanceId)
+        } catch {
+            coordinator.presentedError = error.localizedDescription
+            return
+        }
         do {
             let chat: AidenChat
             switch request.destination {
@@ -1018,10 +1050,12 @@ struct AidenWorkspaceShellView: View {
                     coordinator.presentedError = String(localized: "The requested workspace is unavailable. Choose or add a workspace first.")
                     return
                 }
+                chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspaceId)
+                guard coordinator.isCurrent(context) else { return }
                 navigate(to: workspaceId)
-                chat = try await coordinator.remoteClient().createChat(workspaceId: workspaceId)
             case .chat(let chatId):
-                chat = try await coordinator.remoteClient().chat(id: chatId)
+                chat = try await coordinator.remoteClient(for: context).chat(id: chatId)
+                guard coordinator.isCurrent(context) else { return }
                 guard activeWorkspaceIDs.contains(chat.workspaceId) else {
                     if archivedWorkspaceIDs.contains(chat.workspaceId) {
                         coordinator.presentedError = String(localized: "That chat belongs to a workspace archived on this device. Unarchive it from Workspaces to open the chat.")
@@ -1032,9 +1066,11 @@ struct AidenWorkspaceShellView: View {
                 }
                 navigate(to: chat.workspaceId)
             }
+            guard coordinator.isCurrent(context) else { return }
             intentStartsVoice = request.startsVoice
             intentChat = chat
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             coordinator.presentedError = error.localizedDescription
         }
     }
@@ -2227,6 +2263,64 @@ private struct AidenAppSettingsView: View {
     }
 }
 
+enum AidenInstallationPresentation {
+    static func endpointType(_ endpoint: URL) -> String {
+        guard let host = endpoint.host?.lowercased() else { return String(localized: "Remote") }
+        return host.hasSuffix(".ts.net")
+            ? String(localized: "Tailscale")
+            : String(localized: "Local Network")
+    }
+
+    static func reachability(
+        installationID: String,
+        activeInstallationID: String?,
+        connectionState: AidenRemoteConnectionState
+    ) -> String {
+        guard installationID == activeInstallationID else {
+            return String(localized: "Not checked")
+        }
+        switch connectionState {
+        case .connected: return String(localized: "Connected")
+        case .connecting: return String(localized: "Connecting")
+        case .offline: return String(localized: "Offline")
+        case .needsPairing: return String(localized: "Needs pairing")
+        }
+    }
+
+    static func lastConnection(_ date: Date?, now: Date = Date()) -> String {
+        guard let date else { return String(localized: "Never connected") }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return String(localized: "Last connected \(formatter.localizedString(for: date, relativeTo: now))")
+    }
+
+    static func identitySuffix(_ instanceID: String) -> String {
+        String(instanceID.suffix(6)).lowercased()
+    }
+
+    static func accessibilityValue(
+        installationID: String,
+        activeInstallationID: String?,
+        connectionState: AidenRemoteConnectionState,
+        endpoint: URL,
+        lastConnectedAt: Date?
+    ) -> String {
+        let selected = installationID == activeInstallationID
+            ? String(localized: "Selected")
+            : String(localized: "Not selected")
+        return [
+            selected,
+            reachability(
+                installationID: installationID,
+                activeInstallationID: activeInstallationID,
+                connectionState: connectionState
+            ),
+            endpointType(endpoint),
+            lastConnection(lastConnectedAt),
+        ].joined(separator: ", ")
+    }
+}
+
 private struct AidenInstallationsView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var coordinator: AidenRemoteCoordinator
@@ -2239,6 +2333,9 @@ private struct AidenInstallationsView: View {
             List {
                 Section("Paired installations") {
                     ForEach(coordinator.installationStore.installations) { installation in
+                        let duplicateName = coordinator.installationStore.installations.filter {
+                            $0.name.localizedCaseInsensitiveCompare(installation.name) == .orderedSame
+                        }.count > 1
                         Button {
                             Task {
                                 await coordinator.switchInstallation(to: installation.id)
@@ -2249,9 +2346,17 @@ private struct AidenInstallationsView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(installation.name)
                                         .foregroundStyle(.primary)
-                                    Text(installation.endpoint.host ?? installation.endpoint.absoluteString)
+                                    Text("\(AidenInstallationPresentation.reachability(installationID: installation.id, activeInstallationID: coordinator.activeInstanceId, connectionState: coordinator.connectionState)) · \(AidenInstallationPresentation.endpointType(installation.endpoint))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    Text(AidenInstallationPresentation.lastConnection(installation.lastConnectedAt))
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                    if duplicateName {
+                                        Text("Identity \(AidenInstallationPresentation.identitySuffix(installation.instanceId))")
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.tertiary)
+                                    }
                                 }
                                 Spacer()
                                 if coordinator.installationStore.activeInstallationId == installation.id {
@@ -2259,6 +2364,16 @@ private struct AidenInstallationsView: View {
                                 }
                             }
                         }
+                        .accessibilityLabel(duplicateName
+                            ? "\(installation.name), identity \(AidenInstallationPresentation.identitySuffix(installation.instanceId))"
+                            : installation.name)
+                        .accessibilityValue(AidenInstallationPresentation.accessibilityValue(
+                            installationID: installation.id,
+                            activeInstallationID: coordinator.activeInstanceId,
+                            connectionState: coordinator.connectionState,
+                            endpoint: installation.endpoint,
+                            lastConnectedAt: installation.lastConnectedAt
+                        ))
                         .disabled(coordinator.isMutating || coordinator.connectionState == .connecting)
                         .swipeActions {
                             Button("Forget", role: .destructive) { installationToRemove = installation }
@@ -2348,6 +2463,7 @@ extension AidenWorkspacePermission {
 private struct AidenFolderLocation: Hashable {
     let label: String
     let location: String
+    let context: AidenRemoteRequestContext
 }
 
 private struct AidenFolderBrowserView: View {
@@ -2356,6 +2472,7 @@ private struct AidenFolderBrowserView: View {
     let onCreated: (AidenWorkspace) -> Void
 
     @State private var roots: [AidenBrowserRoot] = []
+    @State private var context: AidenRemoteRequestContext?
     @State private var path: [AidenFolderLocation] = []
     @State private var errorMessage: String?
     @State private var isLoading = true
@@ -2373,8 +2490,14 @@ private struct AidenFolderBrowserView: View {
                     )
                 } else {
                     List(roots) { root in
-                        NavigationLink(value: AidenFolderLocation(label: root.label, location: root.location)) {
-                            Label(root.label, systemImage: "folder.fill")
+                        if let context {
+                            NavigationLink(value: AidenFolderLocation(
+                                label: root.label,
+                                location: root.location,
+                                context: context
+                            )) {
+                                Label(root.label, systemImage: "folder.fill")
+                            }
                         }
                     }
                 }
@@ -2409,9 +2532,21 @@ private struct AidenFolderBrowserView: View {
     private func loadRoots() async {
         isLoading = true
         defer { isLoading = false }
+        let requestContext: AidenRemoteRequestContext
         do {
-            roots = try await coordinator.browserRoots()
+            requestContext = try coordinator.requestContext()
         } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        do {
+            let loadedRoots = try await coordinator.browserRoots(context: requestContext)
+            guard coordinator.isCurrent(requestContext) else { return }
+            context = requestContext
+            path = []
+            roots = loadedRoots
+        } catch {
+            guard coordinator.isCurrent(requestContext) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -2442,7 +2577,11 @@ private struct AidenFolderPageView: View {
                     }
                     Section("Folders") {
                         ForEach(page.entries) { entry in
-                            NavigationLink(value: AidenFolderLocation(label: entry.name, location: entry.location)) {
+                            NavigationLink(value: AidenFolderLocation(
+                                label: entry.name,
+                                location: entry.location,
+                                context: location.context
+                            )) {
                                 Label(entry.name, systemImage: "folder")
                             }
                         }
@@ -2467,16 +2606,17 @@ private struct AidenFolderPageView: View {
                 Button("Add This Folder") {
                     Task {
                         if let workspace = await coordinator.createSelectedFolderWorkspace(
+                            context: location.context,
                             location: location.location,
                             name: nil
                         ) {
                             onCreated(workspace)
-                        } else {
+                        } else if coordinator.isCurrent(location.context) {
                             errorMessage = coordinator.presentedError
                         }
                     }
                 }
-                .disabled(coordinator.isMutating)
+                .disabled(coordinator.isMutating || !coordinator.isCurrent(location.context))
             }
         }
         .task(id: location.location) { await load() }
@@ -2495,8 +2635,14 @@ private struct AidenFolderPageView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            page = try await coordinator.browserChildren(location: location.location)
+            let loadedPage = try await coordinator.browserChildren(
+                context: location.context,
+                location: location.location
+            )
+            guard coordinator.isCurrent(location.context) else { return }
+            page = loadedPage
         } catch {
+            guard coordinator.isCurrent(location.context) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -2506,7 +2652,12 @@ private struct AidenFolderPageView: View {
         isLoadingMore = true
         defer { isLoadingMore = false }
         do {
-            let next = try await coordinator.browserChildren(location: location.location, cursor: cursor)
+            let next = try await coordinator.browserChildren(
+                context: location.context,
+                location: location.location,
+                cursor: cursor
+            )
+            guard coordinator.isCurrent(location.context) else { return }
             self.page = AidenBrowserPage(
                 rootId: page.rootId,
                 label: page.label,
@@ -2515,6 +2666,7 @@ private struct AidenFolderPageView: View {
                 nextCursor: next.nextCursor
             )
         } catch {
+            guard coordinator.isCurrent(location.context) else { return }
             errorMessage = error.localizedDescription
         }
     }
