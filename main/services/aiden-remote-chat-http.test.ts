@@ -111,8 +111,10 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
 
   const handler = createAidenRemoteRequestHandler({
     instanceId: "instance-1",
+    displayName: () => "Studio Mac",
     appVersion: "0.30.0",
     devices: {
+      acquireDeviceAuthorization: () => () => undefined,
       authenticate: async (credential) => credential === "a".repeat(43)
         ? {
             id: "device-1",
