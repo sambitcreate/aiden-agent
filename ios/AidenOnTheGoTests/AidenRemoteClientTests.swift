@@ -503,7 +503,8 @@ final class AidenRemoteClientTests: XCTestCase {
                     status: 200,
                     json: """
                     {"providers":[{"id":"openai","label":"OpenAI","models":[
-                    {"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["high","max"]}]}],
+                    {"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["high","max"],
+                    "defaultThinkingLevel":"max","thinkingCanDisable":false}]}],
                     "defaults":{"providerId":"openai","modelId":"gpt-5.6"}}
                     """
                 )
@@ -553,6 +554,8 @@ final class AidenRemoteClientTests: XCTestCase {
         let updated = try await client.updateChat(id: created.id, revision: created.revision, title: "Renamed")
         let catalog = try await client.modelCatalog()
         XCTAssertEqual(catalog.providers.first?.models.first?.thinkingLevels, ["high", "max"])
+        XCTAssertEqual(catalog.providers.first?.models.first?.effectiveThinkingLevel, "max")
+        XCTAssertEqual(catalog.providers.first?.models.first?.thinkingCanDisable, false)
         let turn = try await client.startTurn(
             chatId: updated.id,
             request: .init(text: "Work on this", providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
