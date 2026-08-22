@@ -46,6 +46,35 @@ test("remote stream journals typed events and is isolated to its paired device",
   );
 });
 
+test("remote stream forwards the renderer-safe chronological timeline without raw tool data", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const timeline = {
+    version: 3,
+    generationId: "stream-1",
+    status: "running",
+    startedAt: 1_000,
+    steps: [{
+      id: "tool-1",
+      order: 0,
+      kind: "tool",
+      toolCallId: "call-1",
+      toolName: "run_command",
+      label: "Run command",
+      status: "running",
+      startedAt: 1_000,
+      updatedAt: 1_000,
+      contentOffset: 0,
+      detail: "Check project status",
+    }],
+  };
+  owner.owner.send("chat:timeline", { timeline, rawCommand: "cat ~/.ssh/id_rsa" });
+  const event = app.service.snapshot().streams[0]?.events[1];
+  assert.equal(event?.type, "timeline");
+  assert.deepEqual(event?.payload, { timeline });
+  assert.doesNotMatch(JSON.stringify(event), /cat |\.ssh/u);
+});
+
 test("Mac-side cancellation is projected as cancelled instead of a successful completion", () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");

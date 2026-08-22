@@ -240,6 +240,45 @@ test("chat projection preserves only renderer-safe exceptional outcomes", () => 
   assert.notEqual(projection.revision, projectAidenRemoteChat(chat()).revision);
 });
 
+test("chat projection retains only the sanitized activity timeline", () => {
+  const safeTimeline = {
+    version: 3 as const,
+    generationId: "stream-safe",
+    status: "completed" as const,
+    startedAt: 1_000,
+    finishedAt: 2_000,
+    steps: [{
+      id: "tool-1",
+      order: 0,
+      kind: "tool" as const,
+      toolCallId: "call-1",
+      toolName: "read_file",
+      label: "Read file",
+      status: "completed" as const,
+      startedAt: 1_000,
+      updatedAt: 2_000,
+      finishedAt: 2_000,
+      contentOffset: 0,
+      target: "README.md",
+    }],
+  };
+  const projection = projectAidenRemoteChat(chat({
+    messages: [
+      { id: "assistant-safe", role: "assistant", content: "Done", createdAt: 2_000, timeline: safeTimeline },
+      {
+        id: "assistant-unsafe",
+        role: "assistant",
+        content: "No leak",
+        createdAt: 3_000,
+        timeline: { ...safeTimeline, steps: [{ ...safeTimeline.steps[0], target: "/Users/private/secret" }] },
+      },
+    ],
+  }));
+  assert.deepEqual(projection.messages[0]?.timeline, safeTimeline);
+  assert.equal(projection.messages[1]?.timeline, undefined);
+  assert.doesNotMatch(JSON.stringify(projection), /Users\/private/u);
+});
+
 test("chat reads expose an in-flight background title without changing the revision", async () => {
   let pending = true;
   const app = fixture(chat(), { isTitlePending: () => pending });
