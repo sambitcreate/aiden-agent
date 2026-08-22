@@ -111,6 +111,12 @@ The iOS asset catalog contains the complete 40-logo provider inventory from Aide
 
 Completed and in-flight assistant replies expose a long-press Copy action and accessibility action. In keeping with Hermex, the copied value is the original Markdown source. A requested GPT-5.6 Terra xhigh review found and closed missing scheduled-task icons, missing streaming Copy, and inaccurate desktop-only notice language. The signed iPhoneOS build-for-testing succeeds, the registered shipping/asset suite passes 7/7, and 23 focused chat, scheduled-task, and usage tests pass on the connected physical iPhone 13 Pro. No simulator, iPhone 16 Pro Max, archive, App Store Connect mutation, or TestFlight upload was used.
 
+## Internal TestFlight build 10 — 2026-08-21
+
+The accepted multi-instance hardening source was archived as version `0.1.0 (10)` using generic iOS hardware, exported with the checked-in internal-only policy, and uploaded through the explicitly selected telemetry-disabled App Store Connect profile. Exact build `426041ab-8638-4b6a-9d10-59ab2ee5b79b` processed as `VALID`, is assigned to `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`), reports `IN_BETA_TESTING`, and remains `NOT_APPLICABLE` externally. No simulator, external group, Beta App Review, App Review, metadata, pricing, screenshot, or availability mutation was used.
+
+The current Mac dev app was restarted from this worktree with the existing `Aiden Agent Dev` data root. It retained the same stable instance, existing device credentials, connection mode, and LAN port `49220`, so paired Aiden On The Go clients can reconnect without a new QR.
+
 ## Plan completion audit
 
 The current source, registered test commands, signed artifacts, and phase evidence were re-audited against every phase acceptance statement in `docs/plans/aiden-on-the-go-plan.md`:
