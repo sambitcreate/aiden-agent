@@ -32,11 +32,13 @@ export async function validateOnboardingProviderCredential({
 }: OnboardingProviderValidationInput): Promise<string[]> {
   const result = await testConnection(normalizeOnboardingValidationProvider(provider), apiKey);
   const accessible = new Set(result.models);
-  const usableModelIds = installedModelIds.filter((modelId) => accessible.has(modelId));
-  if (usableModelIds.length === 0) {
+  if (!installedModelIds.some((modelId) => accessible.has(modelId))) {
     throw new Error("Credentials were accepted, but no supported chat models are available.");
   }
   if (!isCurrent()) throw new Error("The onboarding window is no longer active.");
   await commit(apiKey);
-  return usableModelIds;
+  // Return the authenticated service's complete bounded list. The caller
+  // refreshes Pi after commit and intersects against that new executable
+  // catalog, allowing models released after Aiden was packaged to appear.
+  return [...accessible];
 }
