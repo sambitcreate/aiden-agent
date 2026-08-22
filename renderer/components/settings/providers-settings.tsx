@@ -163,9 +163,15 @@ export function ProvidersSettings() {
   const refreshProviders = async () => {
     setRefreshingProviders(true);
     try {
-      const refreshed = await providersApi.refresh();
-      qc.setQueryData(queryKeys.providers, refreshed);
-      toast.success("Pi provider models refreshed.");
+      const result = await providersApi.refresh();
+      qc.setQueryData(queryKeys.providers, result.providers);
+      if (result.errors.length > 0) {
+        toast.warning(
+          `${result.errors.length} provider catalog${result.errors.length === 1 ? "" : "s"} could not refresh; cached models were kept.`,
+        );
+      } else {
+        toast.success("Pi provider models refreshed.");
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't refresh Pi provider models.");
     } finally {
