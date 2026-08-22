@@ -362,6 +362,358 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyStreamURL.path))
     }
 
+    func testAttachmentImageValidationAndProtectedCacheFailClosed() async throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 16))
+        let png = renderer.pngData { context in
+            UIColor.systemPink.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 24, height: 16))
+        }
+        let attachment = AidenMessageAttachment(
+            id: "attachment-image-1",
+            name: "Preview.png",
+            mimeType: "image/png",
+            kind: .image,
+            size: png.count
+        )
+        XCTAssertEqual(
+            AidenAttachmentImageValidation.validatedData(
+                png,
+                mimeType: attachment.mimeType,
+                declaredSize: attachment.size
+            ),
+            png
+        )
+        XCTAssertNil(AidenAttachmentImageValidation.validatedData(
+            png,
+            mimeType: "image/jpeg",
+            declaredSize: png.count
+        ))
+        XCTAssertNil(AidenAttachmentImageValidation.validatedData(
+            png,
+            mimeType: "image/png",
+            declaredSize: png.count + 1
+        ))
+
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-attachment-cache-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        try await cache.saveAttachmentImage(
+            png,
+            instanceId: "instance-a",
+            deviceId: "device-a",
+            chatId: "chat-a",
+            attachment: attachment
+        )
+        let cachedImage = await cache.attachmentImage(
+            instanceId: "instance-a",
+            deviceId: "device-a",
+            chatId: "chat-a",
+            attachment: attachment
+        )
+        XCTAssertEqual(cachedImage, png)
+        let wrongDeviceImage = await cache.attachmentImage(
+            instanceId: "instance-a",
+            deviceId: "device-b",
+            chatId: "chat-a",
+            attachment: attachment
+        )
+        XCTAssertNil(wrongDeviceImage)
+        await cache.removeChat(instanceId: "instance-a", chatId: "chat-a")
+        let removedImage = await cache.attachmentImage(
+            instanceId: "instance-a",
+            deviceId: "device-a",
+            chatId: "chat-a",
+            attachment: attachment
+        )
+        XCTAssertNil(removedImage)
+    }
+
+    func testAttachmentThumbnailDownsamplesOffTheDisplayPath() async throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1_200, height: 800))
+        let data = renderer.pngData { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 1_200, height: 800))
+        }
+        let decodedImage = await AidenAttachmentImageDecoding.thumbnail(
+            data: data,
+            maximumPixelSize: 320
+        )
+        let image = try XCTUnwrap(decodedImage)
+        XCTAssertLessThanOrEqual(max(image.size.width, image.size.height), 320)
+        XCTAssertEqual(image.size.width / image.size.height, 1.5, accuracy: 0.02)
+    }
+
+    func testPersistedMessageOutcomesUseFixedSafePresentation() {
+        XCTAssertEqual(
+            AidenMessageOutcomePresentation.make(.init(
+                status: .failed,
+                category: "authentication",
+                attempts: 1,
+                retryExhausted: false
+            )),
+            .init(
+                title: "Generation failed",
+                detail: "The model provider rejected its credentials. Check Provider Settings on your Mac.",
+                symbol: "exclamationmark.triangle",
+                isFailure: true
+            )
+        )
+        XCTAssertEqual(
+            AidenMessageOutcomePresentation.make(.init(
+                status: .failed,
+                category: "private-provider-detail",
+                attempts: nil,
+                retryExhausted: nil
+            )).detail,
+            "The model provider could not complete this response."
+        )
+        XCTAssertEqual(
+            AidenMessageOutcomePresentation.make(.init(
+                status: .cancelled,
+                category: nil,
+                attempts: nil,
+                retryExhausted: nil
+            )).title,
+            "Response cancelled"
+        )
+    }
+
+    func testTerminalStreamCursorGetsExactlyOneFinalReplayBeforeCleanup() {
+        var gate = AidenTerminalReplayGate()
+        XCTAssertFalse(gate.shouldReplay(.running))
+        XCTAssertTrue(gate.shouldReplay(.cancelled))
+        XCTAssertFalse(gate.shouldReplay(.cancelled))
+        XCTAssertFalse(gate.shouldReplay(.error))
+    }
+
+    func testTerminalReconciliationRetriesIndefinitelyWithACappedBackoff() {
+        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: -1), 1_000)
+        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 0), 1_000)
+        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 1), 2_000)
+        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 4), 16_000)
+        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 5), 30_000)
+        XCTAssertEqual(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: 500), 30_000)
+    }
+
+    func testTypedMissingStreamFallsBackToDurableChatReconciliation() throws {
+        let gone = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.self,
+            from: Data(#"{"error":{"code":"stream_gone","message":"Gone","requestId":"req-1","retryable":false}}"#.utf8)
+        )
+        let notFound = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.self,
+            from: Data(#"{"error":{"code":"not_found","message":"Missing","requestId":"req-2","retryable":false}}"#.utf8)
+        )
+        let transient = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.self,
+            from: Data(#"{"error":{"code":"internal_error","message":"Retry","requestId":"req-3","retryable":true}}"#.utf8)
+        )
+
+        XCTAssertTrue(AidenTerminalReconciliation.isDefinitiveMissingStream(
+            AidenRemoteClientError.server(statusCode: 404, body: gone.error)
+        ))
+        XCTAssertTrue(AidenTerminalReconciliation.isDefinitiveMissingStream(
+            AidenRemoteClientError.server(statusCode: 404, body: notFound.error)
+        ))
+        XCTAssertFalse(AidenTerminalReconciliation.isDefinitiveMissingStream(
+            AidenRemoteClientError.server(statusCode: 503, body: transient.error)
+        ))
+        XCTAssertFalse(AidenTerminalReconciliation.isDefinitiveMissingStream(
+            AidenRemoteClientError.unexpectedStatus(404)
+        ))
+    }
+
+    func testMissingStreamResolutionNeverReusesAnEarlierTurnOutcome() {
+        let earlierFailed = AidenChatMessage(
+            id: "assistant-old",
+            role: .assistant,
+            text: "",
+            outcome: AidenMessageOutcome(
+                status: .failed,
+                category: "network",
+                attempts: 1,
+                retryExhausted: false
+            ),
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        let earlierComplete = AidenChatMessage(
+            id: "assistant-complete",
+            role: .assistant,
+            text: "Done",
+            createdAt: Date(timeIntervalSince1970: 2)
+        )
+        let currentUser = AidenChatMessage(
+            id: "user-current",
+            role: .user,
+            text: "Continue",
+            createdAt: Date(timeIntervalSince1970: 3)
+        )
+
+        XCTAssertEqual(
+            AidenMissingStreamResolution.resolve(messages: [earlierFailed, currentUser]),
+            .interrupted
+        )
+        XCTAssertEqual(
+            AidenMissingStreamResolution.resolve(messages: [earlierComplete, currentUser]),
+            .interrupted
+        )
+        XCTAssertEqual(
+            AidenMissingStreamResolution.resolve(messages: [currentUser, earlierComplete]),
+            .complete
+        )
+    }
+
+    func testFullscreenAttachmentGalleryOnlyKeepsTheSelectedPageAndNeighborsActive() {
+        XCTAssertTrue(AidenAttachmentGalleryWindow.contains(index: 0, selectedIndex: 0, count: 20))
+        XCTAssertTrue(AidenAttachmentGalleryWindow.contains(index: 9, selectedIndex: 10, count: 20))
+        XCTAssertTrue(AidenAttachmentGalleryWindow.contains(index: 10, selectedIndex: 10, count: 20))
+        XCTAssertTrue(AidenAttachmentGalleryWindow.contains(index: 11, selectedIndex: 10, count: 20))
+        XCTAssertFalse(AidenAttachmentGalleryWindow.contains(index: 8, selectedIndex: 10, count: 20))
+        XCTAssertFalse(AidenAttachmentGalleryWindow.contains(index: 19, selectedIndex: 10, count: 20))
+        XCTAssertFalse(AidenAttachmentGalleryWindow.contains(index: -1, selectedIndex: 0, count: 20))
+        XCTAssertFalse(AidenAttachmentGalleryWindow.contains(index: 0, selectedIndex: 0, count: 0))
+    }
+
+    func testInlineCardDeckPagesWithBoundedVisibleNeighborsAndFlicks() {
+        XCTAssertEqual(AidenInlineCardDeckLayout.viewportAspectRatio, 1)
+        XCTAssertEqual(AidenInlineCardDeckLayout.singleImageCornerRadius, 16)
+        XCTAssertEqual(AidenInlineCardDeckLayout.cardCornerRadius, 18)
+        XCTAssertTrue(AidenInlineCardDeckLayout.isVisible(index: 0, selection: 0, count: 5))
+        XCTAssertTrue(AidenInlineCardDeckLayout.isVisible(index: 1, selection: 0, count: 5))
+        XCTAssertFalse(AidenInlineCardDeckLayout.isVisible(index: 2, selection: 0, count: 5))
+        XCTAssertFalse(AidenInlineCardDeckLayout.isVisible(index: 3, selection: 0, count: 5))
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.resistedTranslation(
+                current: 0,
+                count: 5,
+                translation: 100
+            ),
+            22,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.resistedTranslation(
+                current: 1,
+                count: 5,
+                translation: -100
+            ),
+            -100,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.dragProgress(translation: -80, width: 320),
+            0.25,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.selectedCardOffset(translation: -80),
+            -70.4,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.preferredBackgroundIndex(
+                selection: 2,
+                count: 5,
+                translation: -40
+            ),
+            3
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.preferredBackgroundIndex(
+                selection: 2,
+                count: 5,
+                translation: 40
+            ),
+            1
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.preferredBackgroundIndex(
+                selection: 0,
+                count: 5,
+                translation: 40
+            ),
+            1
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.resolvedSelection(
+                current: 1,
+                count: 5,
+                translation: -20,
+                predictedTranslation: -120
+            ),
+            2
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.resolvedSelection(
+                current: 1,
+                count: 5,
+                translation: 20,
+                predictedTranslation: 30
+            ),
+            1
+        )
+        XCTAssertEqual(
+            AidenInlineCardDeckLayout.resolvedSelection(
+                current: 0,
+                count: 5,
+                translation: 120,
+                predictedTranslation: 160
+            ),
+            0
+        )
+    }
+
+    func testInlineCardDeckAnchorsToTheMessageSenderEdge() {
+        XCTAssertEqual(AidenMessageMediaEdge.forRole(.user), .trailing)
+        XCTAssertEqual(AidenMessageMediaEdge.forRole(.assistant), .leading)
+        XCTAssertLessThan(AidenMessageMediaEdge.trailing.backgroundRotationDegrees, 0)
+        XCTAssertGreaterThan(AidenMessageMediaEdge.leading.backgroundRotationDegrees, 0)
+    }
+
+    func testUserImageAttachmentsSitOutsideTheTextBubble() {
+        XCTAssertTrue(AidenMessageContentSurface.usesRaisedBubble(role: .user, content: .text))
+        XCTAssertTrue(AidenMessageContentSurface.usesRaisedBubble(
+            role: .user,
+            content: .fallbackAttachment
+        ))
+        XCTAssertFalse(AidenMessageContentSurface.usesRaisedBubble(
+            role: .user,
+            content: .imageAttachment
+        ))
+        XCTAssertFalse(AidenMessageContentSurface.usesRaisedBubble(
+            role: .assistant,
+            content: .text
+        ))
+    }
+
+    func testAttachmentThumbnailCacheSeparatesContentAndRequestedResolution() {
+        let imageA = Data("image-a".utf8)
+        let imageB = Data("image-b".utf8)
+        let key = AidenAttachmentThumbnailCacheKey.make(data: imageA, maximumPixelSize: 960)
+
+        XCTAssertEqual(
+            key,
+            AidenAttachmentThumbnailCacheKey.make(data: imageA, maximumPixelSize: 960)
+        )
+        XCTAssertNotEqual(
+            key,
+            AidenAttachmentThumbnailCacheKey.make(data: imageB, maximumPixelSize: 960)
+        )
+        XCTAssertNotEqual(
+            key,
+            AidenAttachmentThumbnailCacheKey.make(data: imageA, maximumPixelSize: 2_560)
+        )
+    }
+
+    func testPhotoLibraryUsageDescriptionIsExplicitAndSaveOnly() throws {
+        let value = try XCTUnwrap(
+            Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryAddUsageDescription") as? String
+        )
+        XCTAssertTrue(value.contains("only when you choose"))
+        XCTAssertTrue(value.contains("Save Image"))
+    }
+
     func testAttachmentModelsRoundTripMetadataWithoutInlineContents() throws {
         let json = """
         {"id":"message-1","role":"user","text":"",
@@ -441,7 +793,7 @@ final class AidenChatTests: XCTestCase {
         ) { XCTAssertEqual($0 as? AidenAttachmentPreparationError, .fileTooLarge) }
     }
 
-    func testImageAttachmentPreparationTranscodesAndBoundsDimensions() throws {
+    func testImageAttachmentPreparationPreservesValidPNGBytesAndExtension() throws {
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1
         let renderer = UIGraphicsImageRenderer(
@@ -456,11 +808,42 @@ final class AidenChatTests: XCTestCase {
         guard case .image(let name, let mimeType, let data) = upload else {
             return XCTFail("Expected an image upload")
         }
-        XCTAssertEqual(name, "camera.jpg")
-        XCTAssertEqual(mimeType, "image/jpeg")
+        XCTAssertEqual(name, "camera.png")
+        XCTAssertEqual(mimeType, "image/png")
+        XCTAssertEqual(data, source)
         XCTAssertLessThanOrEqual(data.count, AidenAttachmentPreparation.maximumImageBytes)
-        let image = try XCTUnwrap(UIImage(data: data))
-        XCTAssertLessThanOrEqual(max(image.size.width, image.size.height), 3_072)
+    }
+
+    func testImageAttachmentPreparationDoesNotFlattenTransparentPNG() throws {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = false
+        let source = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32), format: format).pngData { context in
+            UIColor.clear.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+            UIColor.systemPink.withAlphaComponent(0.5).setFill()
+            context.fill(CGRect(x: 8, y: 8, width: 16, height: 16))
+        }
+        let upload = try AidenAttachmentPreparation.imageUpload(data: source, name: "diagram.png")
+        guard case .image(let name, let mimeType, let data) = upload else {
+            return XCTFail("Expected an image upload")
+        }
+        XCTAssertEqual(name, "diagram.png")
+        XCTAssertEqual(mimeType, "image/png")
+        XCTAssertEqual(data, source)
+    }
+
+    func testImageAttachmentValidationRejectsTruncatedPixelData() throws {
+        let source = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64)).pngData { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        }
+        let truncated = Data(source.prefix(source.count / 2))
+        XCTAssertNil(AidenAttachmentImageValidation.validatedData(
+            truncated,
+            mimeType: "image/png",
+            declaredSize: truncated.count
+        ))
     }
 
     func testTextFilePreparationReadsABoundedPrefixAndMarksTruncation() throws {
@@ -475,6 +858,28 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(text.hasSuffix("… [truncated]"))
         XCTAssertLessThanOrEqual(text.unicodeScalars.count, AidenAttachmentPreparation.maximumTextScalars)
         XCTAssertLessThanOrEqual(Data(text.utf8).count, AidenAttachmentPreparation.maximumTextBytes)
+    }
+
+    func testPhotoTransferPreservesOriginalNameWithoutDependingOnTemporaryExtension() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-extensionless-photo-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let source = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20)).pngData { context in
+            UIColor.systemPurple.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+        }
+        try source.write(to: url)
+
+        let upload = try AidenAttachmentPreparation.fileUpload(
+            url: url,
+            preferredName: "Summer Photo.PNG",
+            forceImage: true
+        )
+        guard case .image(let name, let mimeType, _) = upload else {
+            return XCTFail("Expected an image upload")
+        }
+        XCTAssertEqual(name, "Summer Photo.png")
+        XCTAssertEqual(mimeType, "image/png")
     }
 
     func testTurnAttemptTrackerReusesOnlyTheExactAmbiguousRequestKey() {
