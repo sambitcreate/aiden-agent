@@ -362,6 +362,71 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyStreamURL.path))
     }
 
+    func testTerminalCleanupCannotDeleteANewerActiveStream() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-stream-generation-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-a", streamId: "stream-new", turnId: "turn-new", lastSequence: 0),
+            instanceId: "instance-a",
+            chatId: "chat-1"
+        )
+
+        let staleRemoval = await cache.removeActiveStream(
+            instanceId: "instance-a",
+            chatId: "chat-1",
+            ifStreamId: "stream-old"
+        )
+        XCTAssertFalse(staleRemoval)
+        let retained = await cache.loadActiveStream(instanceId: "instance-a", chatId: "chat-1")
+        XCTAssertEqual(retained?.streamId, "stream-new")
+        let currentRemoval = await cache.removeActiveStream(
+            instanceId: "instance-a",
+            chatId: "chat-1",
+            ifStreamId: "stream-new"
+        )
+        XCTAssertTrue(currentRemoval)
+    }
+
+    func testApprovalSnapshotMustBeLiveAndBoundToTheExactStreamAndChat() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let valid = AidenStreamPendingApproval(
+            approvalId: "approval-1",
+            streamId: "stream-1",
+            chatId: "chat-1",
+            summary: "Review",
+            toolCallId: "tool-1",
+            toolName: "run",
+            expiresAt: now.addingTimeInterval(60),
+            canAllow: false
+        )
+        XCTAssertEqual(
+            AidenPendingApprovalResolution.resolve(valid, streamId: "stream-1", chatId: "chat-1", now: now)?.canAllow,
+            false
+        )
+        XCTAssertNil(AidenPendingApprovalResolution.resolve(nil, streamId: "stream-1", chatId: "chat-1", now: now))
+        XCTAssertNil(AidenPendingApprovalResolution.resolve(valid, streamId: "stream-2", chatId: "chat-1", now: now))
+        XCTAssertNil(AidenPendingApprovalResolution.resolve(valid, streamId: "stream-1", chatId: "chat-2", now: now))
+        XCTAssertNil(
+            AidenPendingApprovalResolution.resolve(
+                .init(
+                    approvalId: valid.approvalId,
+                    streamId: valid.streamId,
+                    chatId: valid.chatId,
+                    summary: valid.summary,
+                    toolCallId: valid.toolCallId,
+                    toolName: valid.toolName,
+                    expiresAt: now,
+                    canAllow: true
+                ),
+                streamId: "stream-1",
+                chatId: "chat-1",
+                now: now
+            )
+        )
+    }
+
     func testAttachmentImageValidationAndProtectedCacheFailClosed() async throws {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 16))
         let png = renderer.pngData { context in
