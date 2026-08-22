@@ -1454,6 +1454,8 @@ struct AidenRemoteContractFixture: Decodable {
     let health: Health
     let pairingBootstrap: PairingBootstrap
     let pairingExchange: PairingExchange
+    let streamStatus: AidenStreamStatus
+    let streamApproval: AidenStreamApprovalSnapshot
     let events: [AidenRemoteStreamEvent]
     let error: AidenRemoteErrorEnvelope
 }
