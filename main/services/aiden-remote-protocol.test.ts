@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createDecipheriv, hkdfSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -89,6 +90,46 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
   assert.equal(JSON.stringify(fixture).includes("BEGIN PRIVATE KEY"), false);
 });
 
+test("shared manual pairing vector decrypts with the frozen cross-platform construction", async () => {
+  const vector = record(await json("fixtures/manual-pairing-vector.json"), "manual vector");
+  const bootstrap = record(vector.bootstrap, "manual bootstrap");
+  const code = String(vector.code).replace(/-/gu, "");
+  const payload = String(vector.payload);
+  assert.match(code, /^[0-9A-HJKMNP-TV-Z]{20}$/u);
+  assert.equal(bootstrap.kind, "aiden-manual-pairing-v1");
+  assert.equal(bootstrap.protocolVersion, 1);
+  assert.match(String(bootstrap.sessionId), /^pairing_[A-Za-z0-9_-]{32}$/u);
+
+  const key = Buffer.from(hkdfSync(
+    "sha256",
+    Buffer.from(code, "ascii"),
+    Buffer.from(String(bootstrap.salt), "base64url"),
+    Buffer.from(`aiden-manual-pairing-v1\n${String(bootstrap.sessionId)}`, "utf8"),
+    32,
+  ));
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    key,
+    Buffer.from(String(bootstrap.nonce), "base64url"),
+    { authTagLength: 16 },
+  );
+  decipher.setAAD(Buffer.from(
+    `aiden-manual-pairing-v1\n${String(bootstrap.sessionId)}\n${String(bootstrap.expiresAt)}`,
+    "utf8",
+  ));
+  decipher.setAuthTag(Buffer.from(String(bootstrap.tag), "base64url"));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(String(bootstrap.ciphertext), "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+  assert.equal(plaintext, payload);
+  assert.equal(JSON.stringify(bootstrap).includes(code), false);
+  const decrypted = record(JSON.parse(payload), "pairing payload");
+  const pairingBootstrap = record(decrypted.bootstrap, "pairing bootstrap");
+  assert.match(String(pairingBootstrap.secret), /^[A-Za-z0-9_-]{43}$/u);
+  assert.equal(JSON.stringify(bootstrap).includes(String(pairingBootstrap.secret)), false);
+});
+
 test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics", async () => {
   const document = record(await json("openapi.json"), "OpenAPI");
   assert.equal(document.openapi, "3.1.0");
@@ -97,6 +138,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   const paths = record(document.paths, "OpenAPI paths");
   const requiredPaths = [
     "/health",
+    "/pairing/manual-bootstrap",
     "/pairing/exchange",
     "/server",
     "/workspaces",
@@ -153,17 +195,22 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   assert.deepEqual(healthGet.security, []);
   const pairingPost = record(record(paths["/pairing/exchange"], "pairing").post, "pairing post");
   assert.deepEqual(pairingPost.security, []);
+  const manualPairingPost = record(
+    record(paths["/pairing/manual-bootstrap"], "manual pairing").post,
+    "manual pairing post",
+  );
+  assert.deepEqual(manualPairingPost.security, []);
 
   const methods = new Set(["get", "post", "put", "patch", "delete"]);
   for (const [route, pathValue] of Object.entries(paths)) {
-    if (route !== "/health" && route !== "/pairing/exchange") {
+    if (route !== "/health" && route !== "/pairing/exchange" && route !== "/pairing/manual-bootstrap") {
       const inherited = (record(pathValue, route).parameters as Array<Record<string, unknown>> | undefined) ?? [];
       assert(inherited.some((parameter) => parameter.$ref === "#/components/parameters/ProtocolVersion"), `${route} must require the exact protocol-version header`);
     }
     for (const [method, operationValue] of Object.entries(record(pathValue, route))) {
       if (!methods.has(method)) continue;
       const operationRecord = record(operationValue, `${method} ${route}`);
-      if (route === "/health" || route === "/pairing/exchange") continue;
+      if (route === "/health" || route === "/pairing/exchange" || route === "/pairing/manual-bootstrap") continue;
       assert(
         AIDEN_REMOTE_CAPABILITIES.includes(
           operationRecord["x-aiden-capability"] as (typeof AIDEN_REMOTE_CAPABILITIES)[number],
