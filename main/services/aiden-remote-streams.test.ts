@@ -42,6 +42,123 @@ test("remote stream journals typed events and is isolated to its paired device",
   );
 });
 
+test("Mac-side cancellation is projected as cancelled instead of a successful completion", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:delta", { delta: "Partial" });
+  owner.owner.send("chat:done", {
+    chat: { messages: [{ id: "assistant-1", role: "assistant" }] },
+    timeline: {
+      version: 3,
+      generationId: "stream-1",
+      status: "cancelled",
+      startedAt: 1_000,
+      finishedAt: 2_000,
+      cancellationOrigin: "user_stop",
+      steps: [],
+    },
+  });
+  const status = app.service.status("device-1", "stream-1");
+  const events = app.service.snapshot().streams[0]?.events ?? [];
+  const terminalEvent = events[events.length - 1];
+  assert.equal(status.state, "cancelled");
+  assert.equal(terminalEvent?.type, "cancelled");
+  assert.deepEqual(terminalEvent?.payload, { source: "server" });
+});
+
+test("Mac-side initialization cancellation without a timeline remains a terminal cancellation", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:done", {
+    streamId: "stream-1",
+    content: "",
+    cancelled: true,
+    cancellationOrigin: "user_stop",
+  });
+  const status = app.service.status("device-1", "stream-1");
+  const events = app.service.snapshot().streams[0]?.events ?? [];
+  const terminal = events[events.length - 1];
+  assert.equal(status.state, "cancelled");
+  assert.equal(terminal?.type, "cancelled");
+  assert.deepEqual(terminal?.payload, { source: "server" });
+});
+
+test("provider failure remains a replayable terminal error with its safe message", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:error", { message: "The model provider could not complete this response." });
+  assert.equal(app.service.status("device-1", "stream-1").state, "error");
+
+  const output: string[] = [];
+  let ended = false;
+  const response = Object.assign(new EventEmitter(), {
+    writeHead() { return this; },
+    write(value: string) { output.push(value); return true; },
+    end() { ended = true; return this; },
+  }) as unknown as ServerResponse;
+  app.service.openEvents("device-1", "stream-1", 0, response);
+  assert.equal(ended, true);
+  assert.match(output.join(""), /event: error/u);
+  assert.match(output.join(""), /The model provider could not complete this response\./u);
+});
+
+test("explicit cancellation dominates a racing provider error and private diagnostics stay local", async () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  await app.service.cancel("device-1", "stream-1", "cancel-race-key-0001");
+  owner.owner.send("chat:error", {
+    message: "/Users/private/project: provider token sk-private failed",
+  });
+  const events = app.service.snapshot().streams[0]?.events ?? [];
+  const terminal = events[events.length - 1];
+  assert.equal(app.service.status("device-1", "stream-1").state, "cancelled");
+  assert.equal(terminal?.type, "cancelled");
+  assert.doesNotMatch(JSON.stringify(terminal), /Users|sk-private/u);
+});
+
+test("provider errors expose only fixed product-owned copy", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:error", {
+    message: "/Users/private/project: provider token sk-private failed",
+  });
+  const events = app.service.snapshot().streams[0]?.events ?? [];
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  assert.deepEqual(terminal?.payload, {
+    code: "internal_error",
+    message: "The model provider could not complete this response.",
+  });
+});
+
+test("subscriber disconnect does not cancel work and reconnect replays completion", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const firstOutput: string[] = [];
+  const first = Object.assign(new EventEmitter(), {
+    writeHead() { return this; },
+    write(value: string) { firstOutput.push(value); return true; },
+    end() { return this; },
+  }) as unknown as ServerResponse;
+  app.service.openEvents("device-1", "stream-1", 0, first);
+  first.emit("close");
+  owner.owner.send("chat:delta", { delta: "Finished while offline" });
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  assert.equal(app.service.status("device-1", "stream-1").state, "done");
+
+  const replayOutput: string[] = [];
+  let replayEnded = false;
+  const replay = Object.assign(new EventEmitter(), {
+    writeHead() { return this; },
+    write(value: string) { replayOutput.push(value); return true; },
+    end() { replayEnded = true; return this; },
+  }) as unknown as ServerResponse;
+  app.service.openEvents("device-1", "stream-1", 1, replay);
+  assert.equal(replayEnded, true);
+  assert.match(replayOutput.join(""), /Finished while offline/u);
+  assert.match(replayOutput.join(""), /event: done/u);
+});
+
 test("SSE replay emits frozen envelopes and closes after a terminal event", () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
