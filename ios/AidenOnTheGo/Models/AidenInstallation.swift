@@ -8,6 +8,7 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
     let endpoint: URL
     let serverSpkiSha256: String
     let pairingTrust: AidenRemoteContractFixture.PairingTrust?
+    let credentialScope: String
     var capabilities: [AidenRemoteCapability]
     let createdAt: Date
     var lastConnectedAt: Date?
@@ -27,6 +28,10 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
         endpoint = exchange.endpoint
         serverSpkiSha256 = exchange.serverSpkiSha256
         self.pairingTrust = pairingTrust
+        credentialScope = Self.makeCredentialScope(
+            instanceId: exchange.instanceId,
+            deviceId: exchange.deviceId
+        )
         capabilities = exchange.capabilities
         self.createdAt = createdAt
         self.lastConnectedAt = lastConnectedAt
@@ -43,14 +48,20 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
             AidenRemoteContractFixture.PairingTrust.self,
             forKey: .pairingTrust
         )
+        credentialScope = try values.decodeIfPresent(String.self, forKey: .credentialScope)
+            ?? instanceId
         capabilities = try values.decode([AidenRemoteCapability].self, forKey: .capabilities)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         lastConnectedAt = try values.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case instanceId, deviceId, name, endpoint, serverSpkiSha256, pairingTrust
+        case instanceId, deviceId, name, endpoint, serverSpkiSha256, pairingTrust, credentialScope
         case capabilities, createdAt, lastConnectedAt
+    }
+
+    private static func makeCredentialScope(instanceId: String, deviceId: String) -> String {
+        "\(instanceId):\(deviceId)"
     }
 }
 
@@ -81,14 +92,15 @@ final class AidenInstallationStore {
     }
 
     func credential(for installation: AidenInstallation) throws -> String? {
-        try keychain.load(.remoteCredential, scope: installation.instanceId)
+        try keychain.load(.remoteCredential, scope: installation.credentialScope)
     }
 
     func savePairing(
         _ exchange: AidenRemoteContractFixture.PairingExchange,
         trust: AidenRemoteContractFixture.PairingTrust,
         name: String,
-        now: Date = Date()
+        now: Date = Date(),
+        connectedAt: Date? = nil
     ) throws -> AidenInstallation {
         let existing = installations.first { $0.id == exchange.instanceId }
         let installation = AidenInstallation(
@@ -96,22 +108,20 @@ final class AidenInstallationStore {
             pairingTrust: trust,
             name: name,
             createdAt: existing?.createdAt ?? now,
-            lastConnectedAt: now
+            lastConnectedAt: connectedAt ?? existing?.lastConnectedAt
         )
 
         // The scoped credential write must succeed before the installation is
         // advertised as usable in the registry.
-        let previousCredential = try keychain.load(.remoteCredential, scope: exchange.instanceId)
-        try keychain.save(exchange.credential, forKey: .remoteCredential, scope: exchange.instanceId)
+        try keychain.save(
+            exchange.credential,
+            forKey: .remoteCredential,
+            scope: installation.credentialScope
+        )
 
         var updated = installations.filter { $0.id != installation.id }
         updated.append(installation)
-        updated.sort { lhs, rhs in
-            if lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedSame {
-                return lhs.id < rhs.id
-            }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
+        updated.sort(by: Self.sortInstallations)
 
         let previousInstallations = installations
         let previousActiveId = activeInstallationId
@@ -122,12 +132,11 @@ final class AidenInstallationStore {
         } catch {
             installations = previousInstallations
             activeInstallationId = previousActiveId
-            if let previousCredential {
-                try? keychain.save(previousCredential, forKey: .remoteCredential, scope: exchange.instanceId)
-            } else {
-                try? keychain.delete(.remoteCredential, scope: exchange.instanceId)
-            }
+            try? keychain.delete(.remoteCredential, scope: installation.credentialScope)
             throw error
+        }
+        if let existing, existing.credentialScope != installation.credentialScope {
+            try? keychain.delete(.remoteCredential, scope: existing.credentialScope)
         }
         return installation
     }
@@ -147,16 +156,27 @@ final class AidenInstallationStore {
 
     func updateServer(_ server: AidenServer, connectedAt: Date = Date()) throws {
         guard let index = installations.firstIndex(where: { $0.id == server.instanceId }) else { return }
-        let previous = installations[index]
+        let previousInstallations = installations
         installations[index].name = server.name
         installations[index].capabilities = server.capabilities
         installations[index].lastConnectedAt = connectedAt
+        installations.sort(by: Self.sortInstallations)
         do {
             try persist()
         } catch {
-            installations[index] = previous
+            installations = previousInstallations
             throw error
         }
+    }
+
+    private static func sortInstallations(
+        _ lhs: AidenInstallation,
+        _ rhs: AidenInstallation
+    ) -> Bool {
+        if lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedSame {
+            return lhs.id < rhs.id
+        }
+        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
     }
 
     func remove(_ installationId: String) throws {
@@ -169,12 +189,13 @@ final class AidenInstallationStore {
         }
         do {
             try persist()
-            try keychain.delete(.remoteCredential, scope: installationId)
         } catch {
             installations = previousInstallations
             activeInstallationId = previousActiveId
-            try? persist()
             throw error
+        }
+        if let removed = previousInstallations.first(where: { $0.id == installationId }) {
+            try? keychain.delete(.remoteCredential, scope: removed.credentialScope)
         }
     }
 
