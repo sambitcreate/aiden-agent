@@ -573,6 +573,31 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    func attachmentContent(chatId: String, attachmentId: String) async throws -> AidenAttachmentContent {
+        var request = try makeRequest(
+            method: "GET",
+            path: ["chats", chatId, "attachments", attachmentId, "content"],
+            query: [],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        request.setValue("image/jpeg, image/png", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenAttachmentImageValidation.maximumBytes
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let response = response as? HTTPURLResponse,
+              let rawContentType = response.value(forHTTPHeaderField: "Content-Type"),
+              let contentType = rawContentType.split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+              contentType == "image/jpeg" || contentType == "image/png"
+        else { throw AidenRemoteClientError.invalidResponse }
+        return AidenAttachmentContent(data: data, mimeType: contentType)
+    }
+
     func moveChat(
         id: String,
         revision: String,
