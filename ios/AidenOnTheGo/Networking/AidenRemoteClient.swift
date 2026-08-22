@@ -937,6 +937,10 @@ final class AidenRemoteClient: @unchecked Sendable {
         try await send(method: "GET", path: ["streams", id])
     }
 
+    func streamApproval(id: String) async throws -> AidenStreamApprovalSnapshot {
+        try await send(method: "GET", path: ["streams", id, "approval"])
+    }
+
     func cancelStream(id: String, idempotencyKey: UUID = UUID()) async throws -> AidenStreamStatus {
         try await send(
             method: "POST",
