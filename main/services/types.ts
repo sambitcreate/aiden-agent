@@ -503,6 +503,8 @@ export interface AppSettings {
   assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
+  /** Main-owned first-run progress. Secrets and prompt drafts are never stored here. */
+  onboarding?: import("../../renderer/shared/onboarding.js").OnboardingState;
   /** Telegram remote-control enable flag; gates long-poll polling. */
   telegramEnabled?: boolean;
   /** Paired Telegram owner chat id; undefined until first /start pairs. */
