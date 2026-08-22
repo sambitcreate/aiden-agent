@@ -46,6 +46,10 @@ import {
   mergeAnthropicThinkingPreference,
   type AnthropicThinkingLevel,
 } from "../../renderer/shared/anthropic-thinking.js";
+import {
+  mergeProviderThinkingPreference,
+} from "../../renderer/shared/provider-thinking.js";
+import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import {
   remapHiddenModelProvider,
@@ -760,6 +764,24 @@ export function createConfigStore(
       const saved = await mutateSettings((config) => {
         config.settings.anthropicThinkingByModel = mergeAnthropicThinkingPreference(
           config.settings.anthropicThinkingByModel,
+          modelId,
+          level,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /** Atomically persist a Pi-native thinking preference for any other provider. */
+    async setProviderThinkingLevel(
+      providerId: string,
+      modelId: string,
+      level: GenerationThinkingLevel,
+    ): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.providerThinkingByModel = mergeProviderThinkingPreference(
+          config.settings.providerThinkingByModel,
+          providerId,
           modelId,
           level,
         );
