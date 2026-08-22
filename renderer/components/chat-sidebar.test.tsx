@@ -61,6 +61,19 @@ test("downloaded updates appear immediately above Profile in the sidebar footer"
   assert.ok(profileIndex < settingsIndex, "Profile and Settings should keep their stable order");
 });
 
+test("sidebar keeps a compact mobile connection surface beside Settings", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const connectionPopover = source("./remote-connection-popover.tsx");
+
+  assert.match(sidebar, /<RemoteConnectionPopover/u);
+  assert.match(sidebar, /search: \{ section: "remoteAccess" \}/u);
+  assert.match(connectionPopover, /aria-label=\{`Mobile connections · \$\{summary\}`\}/u);
+  assert.match(connectionPopover, /label="Active"/u);
+  assert.match(connectionPopover, /label="Inactive"/u);
+  assert.match(connectionPopover, />Previous</u);
+  assert.match(connectionPopover, /Add or manage connections/u);
+});
+
 test("update banner reports progress, failure recovery, and a guarded restart action", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const banner = between(
