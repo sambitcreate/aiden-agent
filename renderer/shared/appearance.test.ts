@@ -40,6 +40,14 @@ const NORMAL_TEXT_TOKENS = [
   "--terminal-white",
 ] as const;
 
+test("the shared mobile appearance fixture exactly matches Electron presets", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("../../protocol/aiden-appearance-v1.json", import.meta.url), "utf8"),
+  ) as { version: number; presets: typeof THEME_PRESETS };
+  assert.equal(fixture.version, 1);
+  assert.deepEqual(fixture.presets, THEME_PRESETS);
+});
+
 function assertSemanticContrast(
   variant: ThemeVariantConfig,
   scheme: AppearanceScheme,
@@ -118,7 +126,7 @@ test("built-in themes keep light neutrals softer and dark neutrals calmer", () =
   const darkAccents = {
     aiden: "#3E97F6",
     slate: "#21A9BE",
-    berry: "#22B69B",
+    berry: "#E8629F",
     moss: "#42B596",
   } as const;
 

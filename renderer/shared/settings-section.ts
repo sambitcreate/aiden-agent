@@ -5,6 +5,7 @@ export const SETTINGS_SECTIONS = [
   "mcp",
   "websearch",
   "telegram",
+  "remoteAccess",
   "computerUse",
   "scheduledTasks",
   "assistant",
@@ -42,6 +43,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   { id: "mcp", title: "MCP Servers", group: "Agent", keywords: ["connections", "protocol"] },
   { id: "websearch", title: "Web Search", group: "Agent", keywords: ["internet", "exa"] },
   { id: "telegram", title: "Telegram", group: "Agent", keywords: ["remote", "bot", "phone", "control"] },
+  {
+    id: "remoteAccess",
+    title: "Remote Access",
+    group: "Agent",
+    keywords: ["iphone", "ipad", "aiden on the go", "tailscale", "local network", "pairing"],
+  },
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",

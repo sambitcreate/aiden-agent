@@ -2,6 +2,7 @@ import type { ModelInfo, ModelRanking, Provider } from "./types";
 import { resolveModelDisplay } from "./model-display";
 import type { ModelPadPlacement } from "./model-pad-layout";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
+import { isModelHidden, type HiddenModelsByProvider } from "../shared/model-visibility";
 
 export type { ModelRanking } from "./types";
 
@@ -24,6 +25,7 @@ export interface ModelEntry {
   label: string;
   format: string | null;
   providerLabel: string;
+  providerArtwork?: Provider["artwork"];
   isLocal: boolean;
   info?: ModelInfo;
   ranking?: ModelRanking;
@@ -113,6 +115,7 @@ export function createModelEntries(
         label: display.label,
         format: display.format ?? info?.format ?? null,
         providerLabel: provider.label,
+        providerArtwork: provider.artwork,
         isLocal: local,
         info,
         ranking: rankingsByValue[value] ?? info?.ranking,
@@ -120,6 +123,14 @@ export function createModelEntries(
     }
   }
   return entries;
+}
+
+/** Apply the presentation-only model visibility preference to a picker catalog. */
+export function visibleModelEntries(
+  entries: readonly ModelEntry[],
+  hidden: HiddenModelsByProvider | undefined,
+): ModelEntry[] {
+  return entries.filter((entry) => !isModelHidden(hidden, entry.providerId, entry.model));
 }
 
 /** Pinning affects the list order only; it must never move a model on the pad. */

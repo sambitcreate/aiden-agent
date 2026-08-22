@@ -20,6 +20,7 @@ import {
   Clock3,
   Sparkles,
   Send,
+  Smartphone,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -34,6 +35,7 @@ import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
+import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
@@ -52,6 +54,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
   telegram: <Send className="size-5" />,
+  remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   assistant: <Sparkles className="size-5" />,
@@ -75,6 +78,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   modelData: ModelDataSettings,
   skills: SkillsSettings,
   telegram: TelegramSettings,
+  remoteAccess: RemoteAccessSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,

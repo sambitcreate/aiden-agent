@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+raw_limit="${AIDEN_SWIFT_FILE_SIZE_LIMIT:-500}"
+scan_root="$repo_root/AidenOnTheGo"
+
+if [[ ! "$raw_limit" =~ ^[0-9]+$ ]]; then
+  echo "AIDEN_SWIFT_FILE_SIZE_LIMIT must be a positive integer. Received: $raw_limit" >&2
+  exit 2
+fi
+
+limit="$((10#$raw_limit))"
+
+if (( limit <= 0 )); then
+  echo "AIDEN_SWIFT_FILE_SIZE_LIMIT must be a positive integer. Received: $raw_limit" >&2
+  exit 2
+fi
+
+is_exempt_file() {
+  local relative_path="$1"
+  local basename="${relative_path##*/}"
+
+  case "$relative_path" in
+    */Previews/*|*/Preview\ Content/*)
+      return 0
+      ;;
+  esac
+
+  case "$basename" in
+    *_Previews.swift|*.generated.swift|*.gen.swift|*Generated*.swift)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+warning_count=0
+
+while IFS= read -r -d "" file_path; do
+  relative_path="${file_path#"$repo_root/"}"
+
+  if is_exempt_file "$relative_path"; then
+    continue
+  fi
+
+  line_count="$(wc -l < "$file_path" | tr -d "[:space:]")"
+
+  if (( line_count > limit )); then
+    warning_count=$((warning_count + 1))
+
+    if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+      printf "::warning file=%s,line=1,title=Swift file size::%s has %s LOC, above the warning limit of %s. Split intentionally when practical.\n" \
+        "$relative_path" "$relative_path" "$line_count" "$limit"
+    fi
+
+    printf "warning: %s has %s LOC (limit %s)\n" "$relative_path" "$line_count" "$limit"
+  fi
+done < <(find "$scan_root" -type f -name "*.swift" -print0 | sort -z)
+
+if (( warning_count > 0 )); then
+  printf "Swift file-size policy: warning-only. %s production app Swift file(s) exceed %s LOC.\n" "$warning_count" "$limit"
+  echo "Existing oversized files do not fail this check; use the output to make future drift visible."
+else
+  printf "No production app Swift files exceed %s LOC.\n" "$limit"
+fi

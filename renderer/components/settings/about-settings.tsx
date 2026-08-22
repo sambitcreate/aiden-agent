@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Download, Github, Loader2, RefreshCw, RotateCcw } from "lucide-react";
+import { Download, Github, Loader2, RefreshCw, RotateCcw, Sparkles } from "lucide-react";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
@@ -61,6 +61,7 @@ export function AboutSettings() {
   const [resetting, setResetting] = React.useState(false);
   const [resetError, setResetError] = React.useState<string | null>(null);
   const [updateActionBusy, setUpdateActionBusy] = React.useState(false);
+  const [showingOnboarding, setShowingOnboarding] = React.useState(false);
   const resetButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const updateSnapshot = useAppUpdateSnapshot();
 
@@ -96,6 +97,19 @@ export function AboutSettings() {
       setResetError(message);
       toast.error(message);
       setResetting(false);
+    }
+  };
+
+  const showOnboarding = async () => {
+    if (showingOnboarding) return;
+    setShowingOnboarding(true);
+    try {
+      await appApi.setOnboardingOutcome("incomplete");
+      window.dispatchEvent(new Event("aiden:show-onboarding"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden couldn't reopen onboarding.");
+    } finally {
+      setShowingOnboarding(false);
     }
   };
 
@@ -171,6 +185,23 @@ export function AboutSettings() {
             </Button>
           </div>
         </div>
+        <Field
+          className="border-t border-separator"
+          label="Onboarding"
+          description="Reopen setup without deleting providers, credentials, preferences, or other app data."
+        >
+          <div className="settings-action-align-narrow flex justify-end max-[540px]:justify-start">
+            <Button
+              size="small"
+              variant="filled"
+              disabled={showingOnboarding}
+              onClick={() => void showOnboarding()}
+            >
+              {showingOnboarding ? <Loader2 className="animate-spin" /> : <Sparkles />}
+              {showingOnboarding ? "Opening…" : "Show onboarding"}
+            </Button>
+          </div>
+        </Field>
         <Field
           className="border-t border-separator"
           label="Software update"

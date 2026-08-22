@@ -4,8 +4,9 @@
 
 import * as React from "react";
 import { isUsable } from "./model-picker-data";
-import type { Provider } from "./types";
+import type { AppSettings, Provider } from "./types";
 import { telegramApi } from "./ipc";
+import { firstVisibleModelForProvider, isModelHidden } from "../shared/model-visibility";
 
 const PROVIDER_KEY = "aiden-agent.providerId";
 const MODEL_KEY = "aiden-agent.model";
@@ -45,6 +46,42 @@ export function isModelSelectionAvailable(
   return Boolean(provider && isUsable(provider) && provider.models.includes(selection.model));
 }
 
+/** Resolve the selection used for new work while leaving explicit legacy selections intact. */
+export function resolveVisibleModelSelection(
+  selection: ModelSelection,
+  providers: Provider[] | undefined,
+  hiddenModelsByProvider: AppSettings["hiddenModelsByProvider"],
+): ModelSelection | undefined {
+  if (
+    isModelSelectionAvailable(selection, providers) &&
+    !isModelHidden(hiddenModelsByProvider, selection.providerId, selection.model)
+  ) {
+    return selection;
+  }
+  for (const provider of providers ?? []) {
+    if (!isUsable(provider)) continue;
+    const model = firstVisibleModelForProvider(
+      hiddenModelsByProvider,
+      provider.id,
+      provider.models,
+      [provider.defaultModel],
+    );
+    if (model) return { providerId: provider.id, model };
+  }
+  return undefined;
+}
+
+/** Never choose a default until the presentation-visibility preference is authoritative. */
+export function initialVisibleModelSelection(
+  selection: ModelSelection,
+  providers: Provider[] | undefined,
+  hiddenModelsByProvider: AppSettings["hiddenModelsByProvider"],
+  visibilityLoaded: boolean,
+): ModelSelection | undefined {
+  if (!visibilityLoaded) return undefined;
+  return resolveVisibleModelSelection(selection, providers, hiddenModelsByProvider);
+}
+
 /** Subscribe follower surfaces to same-window writes, cross-window writes, and refocus refreshes. */
 export function subscribeModelSelection(listener: (selection: ModelSelection) => void): () => void {
   const sync = () => listener(readModelSelection());
@@ -71,7 +108,11 @@ export function persistModelSelection(providerId: string, model: string): void {
   window.dispatchEvent(new Event(MODEL_SELECTION_CHANGED_EVENT));
 }
 
-export function useModelSelection(providers: Provider[] | undefined) {
+export function useModelSelection(
+  providers: Provider[] | undefined,
+  hiddenModelsByProvider: AppSettings["hiddenModelsByProvider"],
+  visibilityLoaded: boolean,
+) {
   const [providerId, setProviderId] = React.useState(
     () => localStorage.getItem(PROVIDER_KEY) ?? "",
   );
@@ -86,9 +127,13 @@ export function useModelSelection(providers: Provider[] | undefined) {
     [],
   );
 
-  React.useEffect(() => telegramApi.onModelSelectionChanged((selection) => {
-    persistModelSelection(selection.providerId, selection.model);
-  }), []);
+  React.useEffect(
+    () =>
+      telegramApi.onModelSelectionChanged((selection) => {
+        persistModelSelection(selection.providerId, selection.model);
+      }),
+    [],
+  );
 
   // Once providers load, choose an initial usable provider only when there is no
   // saved selection. A removed or unavailable provider must remain explicit so a
@@ -96,18 +141,18 @@ export function useModelSelection(providers: Provider[] | undefined) {
   React.useEffect(() => {
     if (!providers?.length) return;
     if (providerId || model) return;
-    const usable = providers.filter(isUsable);
-    const first = usable[0];
-    if (first) {
-      const nextModel =
-        first.defaultModel && first.models.includes(first.defaultModel)
-          ? first.defaultModel
-          : first.models[0];
-      setProviderId(first.id);
-      setModel(nextModel);
-      persistModelSelection(first.id, nextModel);
+    const next = initialVisibleModelSelection(
+      { providerId: "", model: "" },
+      providers,
+      hiddenModelsByProvider,
+      visibilityLoaded,
+    );
+    if (next) {
+      setProviderId(next.providerId);
+      setModel(next.model);
+      persistModelSelection(next.providerId, next.model);
     }
-  }, [providers, providerId, model]);
+  }, [providers, providerId, model, hiddenModelsByProvider, visibilityLoaded]);
 
   const select = React.useCallback((pid: string, m: string) => {
     setProviderId(pid);

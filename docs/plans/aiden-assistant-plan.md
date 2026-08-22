@@ -52,7 +52,7 @@ Tailwind + semantic tokens in `renderer/styles.css`.
   equality_ between live broadcast sites and that list, so a missed entry fails CI.
 - Adding `"assistant:"` to `INVOKE_PREFIXES` fails the "every INVOKE_PREFIX has at least
   one live handler" test until a handler exists. Prefix and first handler land together.
-- Every new test file is registered in a `package.json` test script (per `CLAUDE.md`).
+- Every new test file is registered in the appropriate `package.json` test script so CI runs it.
 - UI work reviews `docs/chatgpt-desktop-ui-inspiration.md` and
   `docs/chatgpt-ui-element-specimen.html` first, and uses semantic tokens from
   `renderer/styles.css` / `renderer/shared/appearance.ts` — no one-off colors.

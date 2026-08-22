@@ -9,6 +9,16 @@ export default [
   },
   js.configs.recommended,
   {
+    files: [
+      "scripts/aiden-remote-*.mjs",
+      "scripts/ios-asc-monitor*.mjs",
+      "scripts/ios-live-activity-process-proof*.mjs",
+    ],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       parser: tsParser,

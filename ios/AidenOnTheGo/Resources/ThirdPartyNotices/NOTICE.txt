@@ -1,0 +1,19 @@
+Aiden On The Go third-party notices
+
+This folder contains license notices for third-party code and assets bundled
+with the iOS app.
+
+- Hermex (adapted SwiftUI interaction and implementation foundation)
+  See Hermex-LICENSE.txt.
+- KeychainAccess 4.2.2
+  See KeychainAccess-LICENSE.txt.
+- Thinking Orbs 0.3.1 (vendored SwiftUI iOS port)
+  See ThinkingOrbs-LICENSE.txt.
+- MarkdownUI 2.4.1
+  See MarkdownUI-LICENSE.txt.
+- NetworkImage 6.0.1 (transitive dependency of MarkdownUI)
+  See NetworkImage-LICENSE.txt.
+- swift-cmark 0.8.0 (transitive dependency of MarkdownUI)
+  See swift-cmark-COPYING.txt.
+- Provider logos (vector marks shared with Aiden Agent for provider identity)
+  See ProviderLogos-NOTICE.md for sources and trademark ownership.

@@ -16,6 +16,7 @@ function occurrences(source: string, value: string): number {
 test("keeps the selected Pi providers first in product order and puts every other provider under More", () => {
   const providers = [
     { id: "cloudflare-workers-ai" },
+    { id: "concentrate" },
     { id: "opencode-go" },
     { id: "groq" },
     { id: "openai" },
@@ -31,7 +32,15 @@ test("keeps the selected Pi providers first in product order and puts every othe
 
   assert.deepEqual(
     featured.map((provider) => provider.id),
-    ["openai", "anthropic", "opencode", "opencode-go", "zai-coding-cn", "kimi-coding"],
+    [
+      "openai",
+      "anthropic",
+      "concentrate",
+      "opencode",
+      "opencode-go",
+      "zai-coding-cn",
+      "kimi-coding",
+    ],
   );
   assert.deepEqual(
     more.map((provider) => provider.id),
@@ -75,6 +84,7 @@ test("onboarding reveals every other Pi provider in stable product order", () =>
 
 test("resolves provider logos without branding unknown custom or future providers", () => {
   assert.equal(resolveProviderIconSlug("openai"), "openai");
+  assert.equal(resolveProviderIconSlug("concentrate"), "concentrate");
   assert.equal(resolveProviderIconSlug("together"), "together");
   assert.equal(resolveProviderIconSlug("custom:lmstudio"), "lmstudio");
   assert.equal(resolveProviderIconSlug("custom:ollama"), "ollama");

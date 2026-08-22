@@ -88,3 +88,54 @@ test("retains the existing catalog path for non-Codex providers", async () => {
   assert.equal(result.name, "Catalog claude-example");
   assert.deepEqual(requests, [{ providerId: "anthropic", modelIds: ["claude-example"] }]);
 });
+
+test("uses provider-owned metadata when a newly published model is absent from bundled catalogs", async () => {
+  const service = createProviderModelInfo({
+    modelsCatalog: {
+      info: async (_provider, modelId) => ({
+        id: modelId,
+        vision: false,
+        toolCall: false,
+        reasoning: false,
+        openWeights: false,
+        metadataSource: "fallback",
+        matched: false,
+      }),
+      infoMany: async (_provider, modelIds) => Object.fromEntries(modelIds.map((modelId) => [modelId, {
+        id: modelId,
+        metadataSource: "fallback" as const,
+        matched: false,
+      }])),
+    },
+    legacyProvider: async (providerId) => ({
+      id: providerId,
+      baseUrl: "https://opencode.ai/zen/v1",
+      modelMetadata: {
+        "ox-alpha-free": {
+          source: "provider",
+          name: "Ox Alpha Free (Unlimited)",
+          type: "llm",
+          vision: true,
+          reasoning: true,
+          contextLength: 1_000_000,
+        },
+      },
+    }),
+    codexModelInfo: () => undefined,
+  });
+  assert.deepEqual(await service.info("opencode-go", "ox-alpha-free"), {
+    id: "ox-alpha-free",
+    name: "Ox Alpha Free (Unlimited)",
+    vision: true,
+    toolCall: false,
+    reasoning: true,
+    openWeights: false,
+    modelType: "llm",
+    parameterCount: undefined,
+    format: undefined,
+    contextLength: 1_000_000,
+    inputModalities: ["text", "image"],
+    metadataSource: "provider",
+    matched: true,
+  });
+});

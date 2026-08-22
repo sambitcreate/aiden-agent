@@ -11,6 +11,7 @@ import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -40,6 +41,8 @@ export interface StoredProvider {
   id: string;
   kind: ProviderKind;
   label: string;
+  /** Optional normalized artwork for custom providers. Never contains a filesystem path. */
+  artwork?: ProviderArtwork;
   /** Base URL including the version segment, e.g. https://api.openai.com/v1 */
   baseUrl: string;
   /** Suggested / cached model ids for the picker. */
@@ -168,7 +171,7 @@ export type ChatRole = "user" | "assistant" | "system";
 
 export type AttachmentKind = "image" | "text";
 
-/** A file attached to a user message. Images carry base64 `data`; text files carry inlined `text`. */
+/** A durable chat attachment. Images carry base64 `data`; text files carry inlined `text`. */
 export interface Attachment {
   id: string;
   name: string;
@@ -194,7 +197,7 @@ export interface ChatMessage {
   pi?: Omit<AssistantMessage, "diagnostics" | "errorMessage">;
   /** Closed, renderer-safe terminal provider outcome. */
   providerFailure?: ProviderFailureV1;
-  /** Files attached to a user message. */
+  /** Files attached to a user or assistant message. */
   attachments?: Attachment[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
@@ -215,7 +218,11 @@ export interface ModelRanking {
 }
 
 export type ModelMetadataSource =
-  "local" | "provider" | "artificial-analysis" | "models-dev" | "fallback";
+  | "local"
+  | "provider"
+  | "artificial-analysis"
+  | "models-dev"
+  | "fallback";
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
@@ -394,8 +401,7 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
-export type ChatTitleProviderId =
-  "automatic" | "apple-foundation-models" | "chat-model";
+export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"
@@ -458,6 +464,8 @@ export interface AssistantConfigSnapshot {
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
+  /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
+  hiddenModelsByProvider?: Record<string, string[]>;
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
@@ -480,6 +488,7 @@ export interface AppSettings {
   codexThinkingByModel?: Record<string, CodexThinkingLevel>;
   /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
+  providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
@@ -495,6 +504,8 @@ export interface AppSettings {
   assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
+  /** Main-owned first-run progress. Secrets and prompt drafts are never stored here. */
+  onboarding?: import("../../renderer/shared/onboarding.js").OnboardingState;
   /** Telegram remote-control enable flag; gates long-poll polling. */
   telegramEnabled?: boolean;
   /** Paired Telegram owner chat id; undefined until first /start pairs. */

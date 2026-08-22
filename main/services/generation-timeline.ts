@@ -130,6 +130,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Edit file", target: path };
     case "run_command":
       return { label: "Run command", detail: safeDetail(values.description) };
+    case "share_image":
+      return { label: "Share image", target: path };
     case "web_search":
       return { label: "Web search", detail: safeDetail(values.query) };
     case "schedule_task":

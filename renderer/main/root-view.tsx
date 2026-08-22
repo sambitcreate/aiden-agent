@@ -181,6 +181,21 @@ function RootContent() {
     });
   }, [queryClient]);
 
+  React.useEffect(() => {
+    return onNotification("workspaces:changed", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("chats:changed", () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+    });
+  }, [queryClient]);
+
   React.useEffect(
     () =>
       subscribeDetachedTerminalChats(
@@ -237,6 +252,10 @@ function RootContent() {
   React.useEffect(() => {
     return onNotification<{ path: string }>("app:navigate", (payload) => {
       if (!payload?.path) return;
+      if (document.querySelector("[data-onboarding-active='true']")) {
+        toast.info("Finish onboarding before opening another part of Aiden.");
+        return;
+      }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;

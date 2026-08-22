@@ -59,6 +59,10 @@ test("chat creation rejects excess keys lazily with constant errors", () => {
 
 test("the reserved Assistant workspace is minted only by the dedicated handler", () => {
   const handlers = readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
+  const applicationService = readFileSync(
+    new URL("../services/chat-application-service.ts", import.meta.url),
+    "utf8",
+  );
   const renderer = readFileSync(
     new URL(
       "../../renderer/components/assistant/use-assistant-chat.ts",
@@ -74,10 +78,14 @@ test("the reserved Assistant workspace is minted only by the dedicated handler",
     handlers.indexOf('"chats:createAssistant"'),
     handlers.indexOf('"chats:rename"'),
   );
-  assert.match(publicCreate, /parsed\.workspaceId === ASSISTANT_WORKSPACE_ID/u);
+  assert.match(publicCreate, /chatApplicationService\.create\(parsed, owner\)/u);
   assert.match(
-    publicCreate,
-    /configStore\.getWorkspace\(parsed\.workspaceId\)/u,
+    applicationService,
+    /input\.workspaceId === ASSISTANT_WORKSPACE_ID/u,
+  );
+  assert.match(
+    applicationService,
+    /configStore\.getWorkspace\(input\.workspaceId\)/u,
   );
   assert.match(assistantCreate, /parseAssistantChatCreate\(input\)/u);
   assert.match(assistantCreate, /workspaceId: ASSISTANT_WORKSPACE_ID/u);
@@ -117,16 +125,22 @@ test("public chat creation is aborted and drained across a workspace mutation", 
   finishMutation();
 
   const handlers = readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
+  const applicationService = readFileSync(
+    new URL("../services/chat-application-service.ts", import.meta.url),
+    "utf8",
+  );
   const publicCreate = handlers.slice(
     handlers.indexOf('"chats:create"'),
     handlers.indexOf('"chats:createAssistant"'),
   );
+  assert.match(publicCreate, /rendererDocumentOwner\(/u);
+  assert.match(publicCreate, /chatApplicationService\.create\(parsed, owner\)/u);
   assert.match(
-    publicCreate,
-    /workspaceMutationGate\.admit\(parsed\.workspaceId\)/u,
+    applicationService,
+    /workspaceMutationGate\.admit\(input\.workspaceId\)/u,
   );
-  assert.match(publicCreate, /admitRendererOwnedWorkspaceOperation\(/u);
-  assert.match(publicCreate, /workspaceOperation\?\.signal\.aborted/u);
-  assert.match(publicCreate, /workspaceOperation\?\.release\(\)/u);
-  assert.match(publicCreate, /mutationAdmission\?\.release\(\)/u);
+  assert.match(applicationService, /admitOwnedWorkspaceOperation\(/u);
+  assert.match(applicationService, /workspaceOperation\?\.signal\.aborted/u);
+  assert.match(applicationService, /workspaceOperation\?\.release\(\)/u);
+  assert.match(applicationService, /mutationAdmission\.release\(\)/u);
 });

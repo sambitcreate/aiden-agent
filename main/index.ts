@@ -101,6 +101,16 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
+import {
+  getOnboardingSnapshot,
+  setOnboardingOutcome,
+  setOnboardingProgress,
+} from "./services/onboarding-state.js";
+import { rendererDocumentOwner } from "./services/renderer-document-owner.js";
+import {
+  initializeAidenRemoteService,
+  stopAidenRemoteServiceAndSettle,
+} from "./services/aiden-remote-service-main.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -339,6 +349,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     // time to publish evidence after its lifecycle has already failed closed.
     app.exit(1);
     return;
+  }
+  try {
+    await stopAidenRemoteServiceAndSettle();
+  } catch (error) {
+    logger.error("aiden-remote", "Remote Access did not stop cleanly.", error);
   }
   cleanupApplication();
   try {
@@ -724,6 +739,79 @@ ipcMain.handle("app:resetOnboarding", async (event) => {
     return false;
   return requestOnboardingReset(window);
 });
+
+ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) => {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender.id !== mainWindow.webContents.id
+  ) {
+    throw new Error("Onboarding state is unavailable outside the active application window.");
+  }
+  const owner = rendererDocumentOwner(
+    event,
+    () => new Error("Onboarding state is unavailable outside the active application document."),
+  );
+  return getOnboardingSnapshot(legacyComplete === true, () => !owner.isDestroyed());
+});
+
+ipcMain.handle(
+  "app:setOnboardingOutcome",
+  async (event, outcome: unknown, selectedProviderId: unknown) => {
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      event.sender.id !== mainWindow.webContents.id
+    ) {
+      throw new Error("Onboarding can only be changed from the active application window.");
+    }
+    if (outcome !== "incomplete" && outcome !== "completed") {
+      throw new Error("Invalid onboarding outcome.");
+    }
+    if (
+      selectedProviderId !== undefined &&
+      (typeof selectedProviderId !== "string" ||
+        selectedProviderId.length === 0 ||
+        selectedProviderId.length > 128)
+    ) {
+      throw new Error("Invalid onboarding provider selection.");
+    }
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Onboarding can only be changed from the active application document."),
+    );
+    return setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+  },
+);
+
+ipcMain.handle(
+  "app:setOnboardingProgress",
+  async (event, step: unknown, selectedProviderId: unknown) => {
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      event.sender.id !== mainWindow.webContents.id
+    ) {
+      throw new Error("Onboarding can only be changed from the active application window.");
+    }
+    if (step !== "profile" && step !== "provider") {
+      throw new Error("Invalid onboarding step.");
+    }
+    if (
+      selectedProviderId !== undefined &&
+      (typeof selectedProviderId !== "string" ||
+        selectedProviderId.length === 0 ||
+        selectedProviderId.length > 128)
+    ) {
+      throw new Error("Invalid onboarding provider selection.");
+    }
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Onboarding can only be changed from the active application document."),
+    );
+    return setOnboardingProgress(step, selectedProviderId, () => !owner.isDestroyed());
+  },
+);
 
 ipcMain.handle("app:getUpdateState", (event) => {
   if (
@@ -1604,6 +1692,16 @@ if (!ownsSingleInstanceLock) {
         () => void portableConfigWatcher.refresh(),
       );
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
+
+      try {
+        await initializeAidenRemoteService();
+      } catch (error) {
+        logger.error(
+          "aiden-remote",
+          "Remote Access could not restore its saved listener state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
 
       await createMainWindow();
       if (packagedSubagentSoak) {
