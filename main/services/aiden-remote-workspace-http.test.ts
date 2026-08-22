@@ -87,8 +87,10 @@ test("HTTP client completes approved-folder selection and revision-checked works
   });
   const handler = createAidenRemoteRequestHandler({
     instanceId: "instance-1",
+    displayName: () => "Studio Mac",
     appVersion: "test",
     devices: {
+      acquireDeviceAuthorization: () => () => undefined,
       authenticate: async () => ({
         id: "device-1",
         revoked: false,
