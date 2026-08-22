@@ -452,9 +452,9 @@ async function prepareGeneration(
       ? settings.googleThinkingByModel?.[params.model]
       : params.providerId === OPENAI_CODEX_PROVIDER_ID
         ? settings.codexThinkingByModel?.[params.model]
-        : params.providerId === ANTHROPIC_PROVIDER_ID
+      : params.providerId === ANTHROPIC_PROVIDER_ID
           ? settings.anthropicThinkingByModel?.[params.model]
-          : undefined;
+          : settings.providerThinkingByModel?.[params.providerId]?.[params.model];
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
