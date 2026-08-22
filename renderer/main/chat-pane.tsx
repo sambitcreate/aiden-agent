@@ -79,6 +79,13 @@ import {
   normalizeAnthropicThinkingLevel,
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
+import {
+  normalizeProviderThinkingLevel,
+} from "../shared/provider-thinking";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../shared/generation-thinking";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
@@ -255,6 +262,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const anthropicThinkingLevel = normalizeAnthropicThinkingLevel(
     anthropicThinkingLevels,
     storedAnthropicThinkingLevel,
+  );
+  const providerThinkingLevels = React.useMemo<GenerationThinkingLevel[]>(() => {
+    const declared = thinkingMetadata?.thinkingLevels;
+    return declared?.filter(isGenerationThinkingLevel) ?? [];
+  }, [thinkingMetadata?.thinkingLevels]);
+  const providerThinkingSupported =
+    selectedProvider?.isBuiltin === true &&
+    providerId !== GOOGLE_PROVIDER_ID &&
+    providerId !== OPENAI_CODEX_PROVIDER_ID &&
+    providerId !== ANTHROPIC_PROVIDER_ID &&
+    Boolean(model) &&
+    modelInfo.data?.[model]?.reasoning === true &&
+    providerThinkingLevels.length > 0;
+  const storedProviderThinkingLevel = model
+    ? settings.data?.providerThinkingByModel?.[providerId]?.[model]
+    : undefined;
+  const providerThinkingLevel = normalizeProviderThinkingLevel(
+    providerThinkingLevels,
+    storedProviderThinkingLevel,
   );
   const localReasoningVisibilitySupported = Boolean(
     selectedProvider && isLocalProviderDeployment(selectedProvider),
@@ -567,7 +593,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               ? codexThinkingLevel
               : anthropicThinkingSupported
                 ? anthropicThinkingLevel
-                : undefined,
+                : providerThinkingSupported
+                  ? providerThinkingLevel
+                  : undefined,
         },
         {
           onDelta: (delta) => {
@@ -751,6 +779,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       chatId,
+      anthropicThinkingLevel,
+      anthropicThinkingSupported,
       codexThinkingLevel,
       codexThinkingSupported,
       effectiveWorkspaceId,
@@ -758,6 +788,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       googleThinkingLevel,
       googleThinkingSupported,
       providerId,
+      providerThinkingLevel,
+      providerThinkingSupported,
       model,
       qc,
       waitForStreamHandoff,
@@ -1039,6 +1071,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [anthropicThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+  );
+
+  const changeProviderThinking = React.useCallback(
+    async (level: GenerationThinkingLevel) => {
+      if (!model || !providerThinkingSupported || thinkingSaving ||
+        isStartingGeneration || isGenerating) return;
+      setThinkingSaving(true);
+      try {
+        const updated = await settingsApi.setProviderThinking(providerId, model, level);
+        qc.setQueryData(queryKeys.settings, updated);
+      } catch (changeError) {
+        toast.error(
+          changeError instanceof Error
+            ? changeError.message
+            : "Couldn't save this model's thinking level.",
+        );
+      } finally {
+        setThinkingSaving(false);
+      }
+    },
+    [
+      isGenerating,
+      isStartingGeneration,
+      model,
+      providerId,
+      providerThinkingSupported,
+      qc,
+      thinkingSaving,
+    ],
   );
 
   const changeLocalReasoningVisibility = React.useCallback(
@@ -1555,6 +1616,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                   disabled={thinkingSaving || isStartingGeneration || isGenerating}
                   onChange={(level) => void changeAnthropicThinking(level)}
+                />
+              ) : providerThinkingSupported ? (
+                <ThinkingControl
+                  providerLabel={selectedProvider?.label ?? "Model"}
+                  level={providerThinkingLevel}
+                  levels={providerThinkingLevels}
+                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                  onChange={(level) => void changeProviderThinking(level)}
                 />
               ) : localReasoningVisibilitySupported ? (
                 <ReasoningVisibilityControl
