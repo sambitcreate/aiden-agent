@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import AidenOnTheGo
@@ -58,13 +59,39 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         )
         try await cache.store(index: index, instanceId: "instance-1", workspaceId: "workspace-1")
         try await cache.store(document: document, instanceId: "instance-1", workspaceId: "workspace-1")
+        try await cache.store(index: index, instanceId: "instance-2", workspaceId: "workspace-1")
         let loaded = await cache.load(instanceId: "instance-1", workspaceId: "workspace-1")
         XCTAssertEqual(loaded?.index, index)
         XCTAssertEqual(loaded?.documents[fileID], document)
         let otherWorkspace = await cache.load(instanceId: "instance-1", workspaceId: "workspace-2")
         let otherInstallation = await cache.load(instanceId: "instance-2", workspaceId: "workspace-1")
         XCTAssertNil(otherWorkspace)
-        XCTAssertNil(otherInstallation)
+        XCTAssertEqual(otherInstallation?.index, index)
+
+        let legacySnapshot = AidenWorkspaceEnvironmentCache.Snapshot(
+            index: index,
+            documents: [:],
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let legacyData = try JSONEncoder().encode(legacySnapshot)
+        func legacyURL(instanceId: String, workspaceId: String) -> URL {
+            let digest = SHA256.hash(data: Data("\(instanceId)\u{0}\(workspaceId)".utf8))
+                .map { String(format: "%02x", $0) }
+                .joined()
+            return directory.appending(path: "\(digest).json")
+        }
+        let legacyA = legacyURL(instanceId: "instance-1", workspaceId: "legacy-a")
+        let legacyB = legacyURL(instanceId: "instance-2", workspaceId: "legacy-b")
+        try legacyData.write(to: legacyA, options: .atomic)
+        try legacyData.write(to: legacyB, options: .atomic)
+
+        await cache.purge(instanceId: "instance-1", knownWorkspaceIds: ["legacy-a"])
+        let purged = await cache.load(instanceId: "instance-1", workspaceId: "workspace-1")
+        let retained = await cache.load(instanceId: "instance-2", workspaceId: "workspace-1")
+        XCTAssertNil(purged)
+        XCTAssertEqual(retained?.index, index)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyA.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyB.path))
     }
 
     func testClientUsesOpaqueFileRoutesAndConfirmedGitMutationHeaders() async throws {
@@ -180,9 +207,19 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         )
         let model = AidenWorkspaceGitModel()
         model.reviewSnapshotId = snapshotID
-        await model.commit(client: client, workspaceId: "workspace-1", message: "Update", stagedOnly: false)
+        await model.commit(
+            client: client,
+            workspaceId: "workspace-1",
+            message: "Update",
+            stagedOnly: false,
+            isCurrent: { true }
+        )
         XCTAssertTrue(model.canRetryPendingMutation)
-        await model.retryPendingMutation(client: client, workspaceId: "workspace-1")
+        await model.retryPendingMutation(
+            client: client,
+            workspaceId: "workspace-1",
+            isCurrent: { true }
+        )
         XCTAssertFalse(model.canRetryPendingMutation)
         XCTAssertEqual(model.lastMessage, "Committed reviewed changes.")
 
