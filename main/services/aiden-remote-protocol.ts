@@ -132,6 +132,7 @@ export interface AidenRemoteContractFixture {
     deviceId: string;
     credential: string;
     capabilities: AidenRemoteCapability[];
+    displayName: string;
     endpoint: string;
     serverSpkiSha256: string;
   };
@@ -667,7 +668,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   const pairingExchange = value.pairingExchange;
   assertExactKeys(
     pairingExchange,
-    ["protocolVersion", "instanceId", "deviceId", "credential", "capabilities", "endpoint", "serverSpkiSha256"],
+    ["protocolVersion", "instanceId", "deviceId", "credential", "capabilities", "displayName", "endpoint", "serverSpkiSha256"],
     "Fixture pairing exchange",
   );
   if (pairingExchange.protocolVersion !== 1) throw new Error("Pairing exchange protocolVersion must be 1.");
@@ -680,6 +681,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     return entry as AidenRemoteCapability;
   });
   if (new Set(exchangeCapabilities).size !== exchangeCapabilities.length) throw new Error("Pairing exchange capabilities must be unique.");
+  assertBoundedString(pairingExchange, "displayName", 80);
   if (requiredString(pairingExchange, "endpoint") !== endpoint || requiredString(pairingExchange, "serverSpkiSha256") !== fingerprint) throw new Error("Pairing exchange identity does not match bootstrap.");
   if (!Array.isArray(value.events)) throw new Error("Fixture events must be an array.");
   const events = value.events.map(parseAidenRemoteStreamEvent).filter((event): event is AidenRemoteStreamEvent => event !== null);
