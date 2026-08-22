@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 
 async function fixture(options: {
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
+  authorizationBlocked?: () => boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -33,8 +35,19 @@ async function fixture(options: {
   };
   const handler = createAidenRemoteRequestHandler({
     instanceId: "instance-1",
+    displayName: () => "Studio Mac",
     appVersion: "0.30.0",
     devices: {
+      acquireDeviceAuthorization: () => {
+        if (options.authorizationBlocked?.()) {
+          throw new AidenRemoteServiceError(
+            "credential_revoked",
+            "This device was revoked in Aiden Settings.",
+            403,
+          );
+        }
+        return () => undefined;
+      },
       authenticate: async (credential) => {
         if (credential !== "a".repeat(43) || options.authenticate === "invalid") {
           return null;
@@ -301,6 +314,16 @@ async function fixture(options: {
       updateSettings: async () => ({}) as never,
     },
     pairing: {
+      manualBootstrap: () => ({
+        kind: "aiden-manual-pairing-v1",
+        protocolVersion: 1,
+        sessionId: `pairing_${"s".repeat(32)}`,
+        expiresAt: new Date(301_000).toISOString(),
+        salt: Buffer.alloc(16, 1).toString("base64url"),
+        nonce: Buffer.alloc(12, 2).toString("base64url"),
+        ciphertext: Buffer.from("sealed").toString("base64url"),
+        tag: Buffer.alloc(16, 3).toString("base64url"),
+      }),
       exchange: async () => ({
           protocolVersion: 1,
           instanceId: "instance-1",
@@ -350,6 +373,7 @@ test("health is the only unauthenticated read and server projection requires bot
     assert.equal(authenticated.status, 200);
     const server = await authenticated.json();
     assert.equal(server.instanceId, "instance-1");
+    assert.equal(server.name, "Studio Mac");
     assert.equal(server.connectionMode, "lan");
     assert.equal(JSON.stringify(server).includes("credential"), false);
   } finally {
@@ -709,6 +733,48 @@ test("revoked and capability-limited credentials fail with stable classification
   }
 });
 
+test("a body stalled across revocation cannot admit a turn after authorization is blocked", async () => {
+  let blocked = false;
+  const app = await fixture({
+    capabilities: ["chat:write"],
+    authorizationBlocked: () => blocked,
+  });
+  try {
+    const target = new URL(`${app.base}/chats/chat-1/turns`);
+    const response = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const request = httpRequest({
+        host: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${"a".repeat(43)}`,
+          "aiden-protocol-version": "1",
+          "content-type": "application/json",
+          "idempotency-key": "turn-stalled-revocation-0001",
+        },
+      }, (incoming) => {
+        const chunks: Buffer[] = [];
+        incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        incoming.on("end", () => resolve({
+          status: incoming.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString("utf8"),
+        }));
+      });
+      request.once("error", reject);
+      request.write("{");
+      blocked = true;
+      request.end("}");
+    });
+    const result = await response;
+    assert.equal(result.status, 403);
+    assert.equal(JSON.parse(result.body).error.code, "credential_revoked");
+    assert.equal(app.calls.some((entry) => entry.startsWith("turn:")), false);
+  } finally {
+    await app.close();
+  }
+});
+
 test("pairing rejects duplicate JSON fields, browser origins, and oversized bodies", async () => {
   const app = await fixture();
   try {
@@ -734,6 +800,42 @@ test("pairing rejects duplicate JSON fields, browser origins, and oversized bodi
     assert.equal((await oversized.json()).error.code, "payload_too_large");
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(app.logs.length, 3);
+  } finally {
+    await app.close();
+  }
+});
+
+test("manual pairing bootstrap is bounded, origin-rejecting, and does not accept input", async () => {
+  const app = await fixture();
+  try {
+    const response = await fetch(`${app.base}/pairing/manual-bootstrap`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.kind, "aiden-manual-pairing-v1");
+    assert.equal("secret" in body, false);
+    assert.equal("manualCode" in body, false);
+
+    const withInput = await fetch(`${app.base}/pairing/manual-bootstrap`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"code":"do-not-send-codes"}',
+    });
+    assert.equal(withInput.status, 400);
+    assert.equal((await withInput.json()).error.code, "invalid_request");
+
+    const browser = await fetch(`${app.base}/pairing/manual-bootstrap`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://attacker.example",
+      },
+      body: "{}",
+    });
+    assert.equal(browser.status, 403);
   } finally {
     await app.close();
   }
