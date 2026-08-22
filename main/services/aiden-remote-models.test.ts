@@ -16,6 +16,7 @@ function provider(overrides: Partial<Provider> = {}): Provider {
         name: "Chat Model",
         type: "llm",
         thinkingLevels: ["low", "high"],
+        thinkingCanDisable: false,
       },
       "embedding-model": { source: "provider", type: "embedding" },
     },
@@ -39,6 +40,8 @@ test("model projection includes only configured chat models and no connection se
       id: "chat-model",
       label: "Chat Model",
       thinkingLevels: ["low", "high"],
+      defaultThinkingLevel: "high",
+      thinkingCanDisable: false,
     },
   ]);
   const serialized = JSON.stringify(projection);
@@ -142,4 +145,35 @@ test("remote model projection remains below the generic iOS response ceiling", a
   const projection = await service.list();
   assert.ok(projection.providers[0]!.models.length < models.length);
   assert.ok(Buffer.byteLength(JSON.stringify(projection), "utf8") <= 900 * 1024);
+});
+
+test("OpenCode Go projects remotely refreshed Ox Alpha metadata and thinking choices to iOS", async () => {
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider({
+      id: "opencode-go",
+      label: "OpenCode Go",
+      models: ["ox-alpha-free"],
+      defaultModel: "ox-alpha-free",
+      modelMetadata: {
+        "ox-alpha-free": {
+          source: "provider",
+          name: "Ox Alpha Free (Unlimited)",
+          type: "llm",
+          reasoning: true,
+          thinkingLevels: ["low", "high", "max"],
+          thinkingCanDisable: false,
+        },
+      },
+    })],
+    getSettings: async () => ({
+      providerThinkingByModel: { "opencode-go": { "ox-alpha-free": "max" } },
+    }),
+  });
+  assert.deepEqual((await service.list()).providers[0]?.models, [{
+    id: "ox-alpha-free",
+    label: "Ox Alpha Free (Unlimited)",
+    thinkingLevels: ["low", "high", "max"],
+    defaultThinkingLevel: "max",
+    thinkingCanDisable: false,
+  }]);
 });
