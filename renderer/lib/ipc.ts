@@ -38,6 +38,8 @@ import type {
   FoundationModelsConnectionStatus,
   Profile,
   Provider,
+  ProviderCatalogRefreshResult,
+  OnboardingProviderValidationResult,
   ProviderModelMetadata,
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
@@ -180,9 +182,16 @@ export const providersApi = {
       id,
       key,
     ),
-  refresh: () => invoke<Provider[]>("providers:refresh"),
+  refresh: (providerId?: string) =>
+    invoke<ProviderCatalogRefreshResult>("providers:refresh", providerId),
+  refreshIfStale: () =>
+    invoke<ProviderCatalogRefreshResult>("providers:refreshIfStale"),
   validateOnboardingApiKey: (providerId: "openai" | "anthropic", key: string) =>
-    invoke<Provider>("providers:validateOnboardingApiKey", providerId, key),
+    invoke<OnboardingProviderValidationResult>(
+      "providers:validateOnboardingApiKey",
+      providerId,
+      key,
+    ),
   test: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<{
       ok: true;
@@ -240,6 +249,11 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setCodexThinking", modelId, level),
   setAnthropicThinking: (modelId: string, level: AnthropicThinkingLevel) =>
     invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
+  setProviderThinking: (
+    providerId: string,
+    modelId: string,
+    level: import("../shared/generation-thinking").GenerationThinkingLevel,
+  ) => invoke<AppSettings>("settings:setProviderThinking", providerId, modelId, level),
   setModelVisibility: (providerId: string, modelId: string, hidden: boolean) =>
     invoke<AppSettings>("settings:setModelVisibility", providerId, modelId, hidden),
   showAllProviderModels: (providerId: string) =>
