@@ -11,7 +11,14 @@ import {
   resolveProviderRuntimeLimits,
   resolveRuntimeLimits,
 } from "./models-catalog-core.js";
-import { discoverOllamaModels, normalizeProviderBaseUrl, testConnection } from "./models.js";
+import {
+  discoverOllamaModels,
+  MAX_DISCOVERED_MODELS,
+  MAX_MODEL_DISCOVERY_RESPONSE_BYTES,
+  normalizeProviderBaseUrl,
+  assertOnboardingTailnetBaseUrl,
+  testConnection,
+} from "./models.js";
 import { canonicalGoogleProvider } from "./google-provider.js";
 
 const lmStudioProvider = {
@@ -386,6 +393,142 @@ test("keyless Anthropic discovery omits x-api-key while retaining its protocol v
   );
 });
 
+test("hosted onboarding discovery sends provider-native credential headers", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requests: Array<{ url: string; headers: HeadersInit | undefined }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push({ url: String(input), headers: init?.headers });
+    return new Response(JSON.stringify({ data: [{ id: "supported-model" }] }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+
+  await testConnection(
+    {
+      ...lmStudioProvider,
+      id: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    },
+    "openai-secret",
+  );
+  await testConnection(
+    {
+      ...lmStudioProvider,
+      id: "anthropic",
+      kind: "anthropic",
+      baseUrl: "https://api.anthropic.com/v1",
+    },
+    "anthropic-secret",
+  );
+
+  assert.deepEqual(requests, [
+    {
+      url: "https://api.openai.com/v1/models",
+      headers: { Authorization: "Bearer openai-secret" },
+    },
+    {
+      url: "https://api.anthropic.com/v1/models",
+      headers: {
+        "x-api-key": "anthropic-secret",
+        "anthropic-version": "2023-06-01",
+      },
+    },
+  ]);
+});
+
+test("generic discovery ignores malformed and blank model identifiers", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        data: [
+          { id: {} },
+          { id: 42 },
+          { id: "   " },
+          { id: "  valid-model  " },
+        ],
+      }),
+      { status: 200 },
+    )) as typeof fetch;
+
+  const result = await testConnection(
+    { ...lmStudioProvider, id: "custom:hosted", baseUrl: "https://provider.example/v1" },
+    null,
+  );
+  assert.deepEqual(result.models, ["valid-model"]);
+  assert.equal(result.modelCount, 1);
+});
+
+test("credential-bearing discovery rejects redirects and never exposes upstream error bodies", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (_input, init) => {
+    assert.equal(init?.redirect, "error");
+    return new Response('{"secret":"upstream-account-detail"}', { status: 401 });
+  }) as typeof fetch;
+
+  await assert.rejects(
+    testConnection(
+      {
+        ...lmStudioProvider,
+        id: "custom:hosted",
+        baseUrl: "https://provider.example/v1",
+        needsKey: true,
+      },
+      "candidate-key",
+    ),
+    (error: unknown) => {
+      assert.match(String(error), /rejected those credentials/u);
+      assert.doesNotMatch(String(error), /upstream-account-detail|candidate-key/u);
+      return true;
+    },
+  );
+});
+
+test("model discovery bounds response bytes, model count, and identifier length", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  let oversized = true;
+  globalThis.fetch = (async () => {
+    if (oversized) {
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-length": String(MAX_MODEL_DISCOVERY_RESPONSE_BYTES + 1) },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        data: [
+          ...Array.from({ length: MAX_DISCOVERED_MODELS + 25 }, (_, index) => ({
+            id: `model-${index}`,
+          })),
+          { id: "x".repeat(300) },
+        ],
+      }),
+      { status: 200 },
+    );
+  }) as typeof fetch;
+
+  await assert.rejects(testConnection(lmStudioProvider, null), /catalog is too large/u);
+  oversized = false;
+  const result = await testConnection(lmStudioProvider, null);
+  assert.equal(result.models.length, MAX_DISCOVERED_MODELS);
+  assert.equal(
+    result.models.some((id) => id.length > 256),
+    false,
+  );
+});
+
 test("normalizes safe provider URLs and rejects credentials or request decorations", () => {
   assert.equal(
     normalizeProviderBaseUrl(" https://tailnet.example.ts.net/v1/// "),
@@ -400,6 +543,45 @@ test("normalizes safe provider URLs and rejects credentials or request decoratio
     /query string/u,
   );
   assert.throws(() => normalizeProviderBaseUrl("ftp://example.test/v1"), /HTTP or HTTPS/u);
+  for (const target of [
+    "http://169.254.169.254/latest",
+    "http://169.254.170.2/credentials",
+    "http://metadata.google.internal/v1",
+    "http://[fe80::1]/v1",
+    "http://[::ffff:169.254.169.254]/v1",
+  ]) {
+    assert.throws(() => normalizeProviderBaseUrl(target), /metadata service/u);
+  }
+  assert.doesNotThrow(() => assertOnboardingTailnetBaseUrl("https://model.tailnet.ts.net/v1"));
+  assert.doesNotThrow(() => assertOnboardingTailnetBaseUrl("http://100.64.20.5:11434/v1"));
+  assert.throws(
+    () => assertOnboardingTailnetBaseUrl("http://foo.100.100.100.200.nip.io/v1"),
+    /Tailscale/u,
+  );
+});
+
+test("transport failures never echo credential material", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (_input, init) => {
+    const authorization = new Headers(init?.headers).get("authorization") ?? "missing";
+    throw new Error(`transport rejected ${authorization}`);
+  }) as typeof fetch;
+  const canary = "CANARY_PROVIDER_SECRET";
+  await assert.rejects(
+    testConnection(
+      { ...lmStudioProvider, id: "custom:hosted", baseUrl: "https://provider.example/v1" },
+      canary,
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "Couldn't reach the provider model endpoint.");
+      assert.doesNotMatch(error.message, new RegExp(canary, "u"));
+      return true;
+    },
+  );
 });
 
 test("models.dev lookups retain unknown flags for unmatched model ids", () => {
