@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import type { ServerResponse } from "node:http";
-import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
+import { AidenRemoteStreamService, removeRevokedDeviceStreams } from "./aiden-remote-streams.js";
 
 function fixture() {
   let now = 1_000;
@@ -109,18 +109,51 @@ test("restart restores terminal journals and marks active work interrupted", () 
   assert.equal(status.lastSequence, 3);
 });
 
-test("revocation closes only the selected device streams and approval expiry denies safely", () => {
+test("revocation closes only the selected device streams and approval expiry denies safely", async () => {
   const app = fixture();
   const first = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
   const second = app.service.create("device-2", "stream-2", "chat-2", "turn-2");
   first.owner.send("chat:approval", { approvalId: "approval-1", summary: "Change a file" });
-  app.service.revokeDevice("device-1");
-  assert.equal(app.service.status("device-1", "stream-1").state, "cancelled");
+  await app.service.revokeDevice("device-1");
+  assert.throws(
+    () => app.service.status("device-1", "stream-1"),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
   assert.equal(app.service.status("device-2", "stream-2").state, "queued");
   assert.equal(app.cancelled.length, 1);
+  assert.equal(app.approvals.some((entry) => entry.includes("approval-1:deny")), true);
 
   second.owner.send("chat:approval", { approvalId: "approval-2", summary: "Run a command" });
   app.setNow(1_000 + 5 * 60 * 1_000 + 1);
   app.service.status("device-2", "stream-2");
   assert.equal(app.approvals.some((entry) => entry.includes("approval-2:deny")), true);
+});
+
+test("revoking one device releases every retained journal without consuming another device's capacity", async () => {
+  const app = fixture();
+  for (let index = 0; index < 256; index += 1) {
+    const streamId = `stream-a-${index}`;
+    const owner = app.service.create("device-a", streamId, `chat-${index}`, `turn-${index}`);
+    owner.owner.send("chat:done", {
+      chat: { messages: [{ id: `assistant-${index}`, role: "assistant" }] },
+    });
+  }
+  assert.throws(
+    () => app.service.create("device-b", "stream-b-blocked", "chat-b", "turn-b"),
+    (error: unknown) => (error as { code?: string }).code === "rate_limited",
+  );
+
+  await app.service.revokeDevice("device-a");
+  const owner = app.service.create("device-b", "stream-b", "chat-b", "turn-b");
+  assert.equal(owner.owner.documentId.length > 0, true);
+  assert.equal(app.service.status("device-b", "stream-b").state, "queued");
+  assert.equal(app.service.snapshot().streams.some(({ deviceId }) => deviceId === "device-a"), false);
+});
+
+test("restart filtering durably excludes journals owned by authoritative revoked devices", () => {
+  const app = fixture();
+  app.service.create("device-a", "stream-a", "chat-a", "turn-a");
+  app.service.create("device-b", "stream-b", "chat-b", "turn-b");
+  const filtered = removeRevokedDeviceStreams(app.service.snapshot(), new Set(["device-a"]));
+  assert.deepEqual(filtered.streams.map(({ deviceId }) => deviceId), ["device-b"]);
 });
