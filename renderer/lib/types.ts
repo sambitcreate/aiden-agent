@@ -131,6 +131,13 @@ export type ProviderAuthEvent =
   | {
       flowId: string;
       providerId: string;
+      type: "browser_open_failed";
+      url: string;
+      message: string;
+    }
+  | {
+      flowId: string;
+      providerId: string;
       type: "progress";
       message: string;
     };
@@ -725,6 +732,7 @@ export interface AppSettings {
   scheduledDefaultTimezone?: string;
   assistant?: AssistantConfig;
   profileName?: string;
+  onboarding?: import("../shared/onboarding.js").OnboardingState;
   telegramEnabled?: boolean;
   telegramAllowedUserId?: number;
   telegramProviderId?: string;
