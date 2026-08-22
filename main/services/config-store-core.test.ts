@@ -2115,6 +2115,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   const googleThinkingByModel = { "future-google": "ultra" };
   const codexThinkingByModel = { "future-codex": "ultra" };
   const anthropicThinkingByModel = { "future-anthropic": "ultra" };
+  const providerThinkingByModel = { "future-provider": { "future-model": "ultra" } };
   await fs.writeFile(
     h.settingsFile,
     JSON.stringify({
@@ -2129,6 +2130,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
         googleThinkingByModel,
         codexThinkingByModel,
         anthropicThinkingByModel,
+        providerThinkingByModel,
       },
     }),
     "utf-8",
@@ -2143,6 +2145,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   assert.deepEqual(saved.googleThinkingByModel, googleThinkingByModel);
   assert.deepEqual(saved.codexThinkingByModel, codexThinkingByModel);
   assert.deepEqual(saved.anthropicThinkingByModel, anthropicThinkingByModel);
+  assert.deepEqual(saved.providerThinkingByModel, providerThinkingByModel);
   assert.equal(saved.voiceProvider, "future-voice");
   assert.equal(saved.chatTitleProviderId, "future-title-policy");
   assert.equal(saved.scheduledDefaultMode, "future-mode");
@@ -2154,6 +2157,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   assert.equal(runtime.googleThinkingByModel, undefined);
   assert.equal(runtime.codexThinkingByModel, undefined);
   assert.equal(runtime.anthropicThinkingByModel, undefined);
+  assert.equal(runtime.providerThinkingByModel, undefined);
   assert.equal(runtime.voiceProvider, undefined);
   assert.equal(runtime.chatTitleProviderId, undefined);
   assert.equal(runtime.scheduledDefaultMode, undefined);
@@ -2163,6 +2167,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   await h.store.setGoogleThinkingLevel("known-google", "high");
   await h.store.setCodexThinkingLevel("known-codex", "xhigh");
   await h.store.setAnthropicThinkingLevel("known-anthropic", "max");
+  await h.store.setProviderThinkingLevel("opencode-go", "ox-alpha-free", "high");
 
   const edited = (await readJson<{ settings: Record<string, unknown> }>(h.settingsFile)).settings;
   assert.equal((edited.assistant as Record<string, unknown>).futureMode, "ambient");
@@ -2172,10 +2177,15 @@ test("future nested settings versions survive unrelated writes", async (t) => {
     (edited.anthropicThinkingByModel as Record<string, unknown>)["future-anthropic"],
     "ultra",
   );
+  assert.deepEqual(
+    (edited.providerThinkingByModel as Record<string, unknown>)["future-provider"],
+    { "future-model": "ultra" },
+  );
   const editedRuntime = await h.store.getSettings();
   assert.equal(editedRuntime.googleThinkingByModel?.["known-google"], "high");
   assert.equal(editedRuntime.codexThinkingByModel?.["known-codex"], "xhigh");
   assert.equal(editedRuntime.anthropicThinkingByModel?.["known-anthropic"], "max");
+  assert.equal(editedRuntime.providerThinkingByModel?.["opencode-go"]?.["ox-alpha-free"], "high");
 });
 
 test("editing MCP servers and skills preserves unknown future fields", async (t) => {
