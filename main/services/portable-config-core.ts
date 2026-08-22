@@ -19,7 +19,10 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { DataStore, DataStoreExternalChangeError } from "./data-store.js";
-import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
 import { assistantConfigFrom } from "../handlers/assistant-parse.js";
 import { parseGoogleThinkingPreferences } from "../../renderer/shared/google-thinking.js";
 import { parseCodexThinkingPreferences } from "../../renderer/shared/codex-thinking.js";
@@ -557,6 +560,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "googleThinkingByModel",
     "codexThinkingByModel",
     "anthropicThinkingByModel",
+    "providerThinkingByModel",
   ] as const) {
     if (settings[key] !== undefined && !isRecord(settings[key])) delete normalized[key];
   }
@@ -626,6 +630,27 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   projectThinkingMap("googleThinkingByModel", parseGoogleThinkingPreferences);
   projectThinkingMap("codexThinkingByModel", parseCodexThinkingPreferences);
   projectThinkingMap("anthropicThinkingByModel", parseAnthropicThinkingPreferences);
+  if (settings.providerThinkingByModel !== undefined) {
+    if (!isRecord(settings.providerThinkingByModel)) {
+      delete runtime.providerThinkingByModel;
+    } else {
+      const providers: Array<[string, Record<string, GenerationThinkingLevel>]> = [];
+      let retainedModels = 0;
+      for (const [providerId, rawModels] of Object.entries(settings.providerThinkingByModel).slice(0, 128)) {
+        if (!providerId || providerId.length > 256 || !isRecord(rawModels)) continue;
+        const models: Record<string, GenerationThinkingLevel> = {};
+        for (const [modelId, level] of Object.entries(rawModels).slice(0, 256)) {
+          if (retainedModels >= 512) break;
+          if (!modelId || modelId.length > 256 || !isGenerationThinkingLevel(level)) continue;
+          models[modelId] = level;
+          retainedModels += 1;
+        }
+        if (Object.keys(models).length > 0) providers.push([providerId, models]);
+      }
+      if (providers.length > 0) runtime.providerThinkingByModel = Object.fromEntries(providers);
+      else delete runtime.providerThinkingByModel;
+    }
+  }
   return runtime;
 }
 
