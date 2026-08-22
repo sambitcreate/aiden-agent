@@ -226,12 +226,15 @@ async function listen(
 
 async function closeServer(server: NetServer | null): Promise<void> {
   if (!server) return;
-  if ("closeIdleConnections" in server) {
-    (server as HttpServer).closeIdleConnections?.();
-    (server as HttpServer).closeAllConnections?.();
-  }
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
+    // Stop admitting sockets before forcing existing HTTP(S) connections
+    // closed. Reversing this order leaves a race where a new connection can
+    // arrive after closeAllConnections() and keep server.close() pending.
+    if ("closeIdleConnections" in server) {
+      (server as HttpServer).closeIdleConnections?.();
+      (server as HttpServer).closeAllConnections?.();
+    }
   });
 }
 
@@ -471,6 +474,8 @@ export class AidenRemoteService {
           selectedTailscaleServer = tailscaleServer;
           break;
         } catch (error) {
+          this.destroyConnections(this.lanConnections);
+          this.destroyConnections(this.tailscaleConnections);
           await Promise.all([
             closeServer(lanServer),
             closeServer(tailscaleServer),
@@ -487,6 +492,8 @@ export class AidenRemoteService {
         try {
           await this.options.state.commitLanPort(selectedPort);
         } catch (error) {
+          this.destroyConnections(this.lanConnections);
+          this.destroyConnections(this.tailscaleConnections);
           await Promise.all([
             closeServer(selectedLanServer),
             closeServer(selectedTailscaleServer),
