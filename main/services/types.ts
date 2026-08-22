@@ -488,6 +488,7 @@ export interface AppSettings {
   codexThinkingByModel?: Record<string, CodexThinkingLevel>;
   /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
+  providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
