@@ -213,3 +213,40 @@ final class AidenPinnedServerSessionDelegate: NSObject, URLSessionTaskDelegate, 
         completionHandler(request)
     }
 }
+
+/// Used only to fetch an AES-GCM sealed trust envelope. No unsealed response
+/// data from this session is trusted, and redirects are always rejected.
+final class AidenSealedBootstrapSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let expectedHost: String
+    private let expectedPort: Int
+
+    init(endpoint: URL) {
+        expectedHost = endpoint.host ?? ""
+        expectedPort = endpoint.port ?? 443
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              challenge.protectionSpace.host == expectedHost,
+              challenge.protectionSpace.port == expectedPort,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: serverTrust))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
