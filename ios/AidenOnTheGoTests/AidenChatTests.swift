@@ -1682,6 +1682,234 @@ final class AidenChatTests: XCTestCase {
     }
 }
 
+final class AidenHapticTests: XCTestCase {
+    @MainActor
+    private final class RecordingEmitter: AidenHapticEmitting {
+        private(set) var events: [AidenHapticEvent] = []
+
+        func activate(scope: UUID) {}
+        func deactivate(scope: UUID) {}
+
+        func emit(_ event: AidenHapticEvent, scope: UUID?, dedupeKey: String?) {
+            events.append(event)
+        }
+    }
+
+    @MainActor
+    func testPreferenceDefaultsOnAndPersistsDeviceLocally() throws {
+        let suiteName = "AidenHapticTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let initial = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { true },
+            isAudioCaptureActive: { false },
+            supportsHaptics: true
+        )
+        XCTAssertTrue(initial.isEnabled)
+        initial.isEnabled = false
+
+        let restored = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { true },
+            isAudioCaptureActive: { false },
+            supportsHaptics: true
+        )
+        XCTAssertFalse(restored.isEnabled)
+    }
+
+    @MainActor
+    func testDeliveryRequiresHardwareForegroundPreferenceAudioSilenceAndActiveScope() throws {
+        let suiteName = "AidenHapticGateTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var isActive = false
+        var isCapturing = false
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { isActive },
+            isAudioCaptureActive: { isCapturing },
+            supportsHaptics: true
+        )
+        let scope = UUID()
+
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 0)
+        isActive = true
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 0)
+        center.activate(scope: scope)
+        isCapturing = true
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 0)
+        isCapturing = false
+        center.isEnabled = false
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 0)
+        center.isEnabled = true
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 1)
+        center.deactivate(scope: scope)
+        center.play(.error, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 1)
+    }
+
+    @MainActor
+    func testUnsupportedHardwareNeverAdvancesPulse() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "AidenHapticUnsupportedTests.\(UUID().uuidString)"))
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { true },
+            isAudioCaptureActive: { false },
+            supportsHaptics: false
+        )
+        center.play(.success)
+        XCTAssertEqual(center.pulse.sequence, 0)
+    }
+
+    @MainActor
+    func testDedupeIsConsumedBeforeDeliveryGatesAndIncludesSemanticEvent() throws {
+        let suiteName = "AidenHapticDedupeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var isActive = false
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { isActive },
+            isAudioCaptureActive: { false },
+            supportsHaptics: true
+        )
+
+        center.play(.warning, dedupeKey: "operation-1")
+        isActive = true
+        center.play(.warning, dedupeKey: "operation-1")
+        XCTAssertEqual(center.pulse.sequence, 0, "A background observation must never replay later")
+        center.play(.success, dedupeKey: "operation-1")
+        XCTAssertEqual(center.pulse.sequence, 1, "A different semantic outcome may share a caller key")
+        center.play(.success, dedupeKey: "operation-1")
+        XCTAssertEqual(center.pulse.sequence, 1)
+    }
+
+    @MainActor
+    func testProtocolConveniencePlayDelegatesOnceWithoutRecursion() {
+        let emitter = RecordingEmitter()
+        emitter.play(.warning, dedupeKey: "approval-1")
+        XCTAssertEqual(emitter.events, [.warning])
+    }
+
+    @MainActor
+    func testDeliveryTimeGateRechecksForegroundAudioCaptureAndOriginatingScope() throws {
+        let suiteName = "AidenHapticDeliveryRaceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var isActive = true
+        var isCapturing = false
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { isActive },
+            isAudioCaptureActive: { isCapturing },
+            supportsHaptics: true
+        )
+        let scope = UUID()
+
+        center.activate(scope: scope)
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.scope, scope)
+        XCTAssertTrue(center.shouldDeliverNow(scope: center.pulse.scope))
+        center.deactivate(scope: scope)
+        XCTAssertFalse(
+            center.shouldDeliverNow(scope: center.pulse.scope),
+            "A queued pulse must not survive its view being dismissed in the same render batch"
+        )
+        center.activate(scope: scope)
+        isActive = false
+        XCTAssertFalse(center.shouldDeliverNow(scope: center.pulse.scope))
+        isActive = true
+        isCapturing = true
+        XCTAssertFalse(center.shouldDeliverNow(scope: center.pulse.scope))
+    }
+
+    func testCancellationRecognitionIncludesURLSessionCancellation() {
+        XCTAssertTrue(aidenIsCancellation(CancellationError()))
+        XCTAssertTrue(aidenIsCancellation(URLError(.cancelled)))
+        XCTAssertFalse(aidenIsCancellation(URLError(.timedOut)))
+    }
+
+    func testOnlyLocallyStartedStreamsMayAnnounceFeedback() {
+        XCTAssertTrue(AidenStreamFeedbackPolicy.localTurn.allowsFeedback)
+        XCTAssertFalse(AidenStreamFeedbackPolicy.restoredStream.allowsFeedback)
+        XCTAssertTrue(AidenStreamFeedbackDecision.announcesApproval(.localTurn))
+        XCTAssertFalse(AidenStreamFeedbackDecision.announcesApproval(.restoredStream))
+        XCTAssertEqual(
+            AidenStreamFeedbackDecision.terminalEvent(for: .failed, policy: .localTurn),
+            .error
+        )
+        XCTAssertEqual(
+            AidenStreamFeedbackDecision.terminalEvent(for: .interrupted, policy: .localTurn),
+            .error
+        )
+        XCTAssertNil(AidenStreamFeedbackDecision.terminalEvent(for: .failed, policy: .restoredStream))
+        XCTAssertNil(AidenStreamFeedbackDecision.terminalEvent(for: .cancelled, policy: .localTurn))
+        XCTAssertNil(AidenStreamFeedbackDecision.terminalEvent(for: .complete, policy: .localTurn))
+    }
+
+    @MainActor
+    func testLocalStreamFeedbackIsExactlyOnceWhileRestoredAndDismissedFlowsStaySilent() throws {
+        let suiteName = "AidenHapticStreamRaceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { true },
+            isAudioCaptureActive: { false },
+            supportsHaptics: true
+        )
+        let scope = UUID()
+        center.activate(scope: scope)
+
+        if AidenStreamFeedbackDecision.announcesApproval(.localTurn) {
+            center.play(.warning, scope: scope, dedupeKey: "approval:approval-1")
+        }
+        if AidenStreamFeedbackDecision.announcesApproval(.restoredStream) {
+            center.play(.warning, scope: scope, dedupeKey: "approval:approval-1")
+        }
+        XCTAssertEqual(center.pulse.sequence, 1)
+
+        if let event = AidenStreamFeedbackDecision.terminalEvent(for: .failed, policy: .localTurn) {
+            center.play(event, scope: scope, dedupeKey: "terminal:stream-1")
+            center.play(event, scope: scope, dedupeKey: "terminal:stream-1")
+        }
+        XCTAssertEqual(center.pulse.sequence, 2, "Response and SSE convergence must announce one terminal outcome")
+
+        if let event = AidenStreamFeedbackDecision.terminalEvent(for: .failed, policy: .restoredStream) {
+            center.play(event, scope: scope, dedupeKey: "terminal:restored-stream")
+        }
+        center.play(.actionStopped, scope: scope, dedupeKey: "turn-stop:stream-1")
+        center.play(.actionStopped, scope: scope, dedupeKey: "turn-stop:stream-1")
+        XCTAssertEqual(center.pulse.sequence, 3, "Stop response and SSE convergence must announce once")
+
+        center.play(.success, scope: scope, dedupeKey: "pairing:pair-1")
+        center.deactivate(scope: scope)
+        XCTAssertFalse(center.shouldDeliverNow(scope: center.pulse.scope), "Dismissed pairing must not vibrate")
+    }
+
+    func testMutationOutcomesSeparateDefinitiveFailureFromSilentNonOutcomes() {
+        let success = AidenRemoteMutationOutcome.success("workspace-1")
+        let failure = AidenRemoteMutationOutcome<String>.failure
+        let cancelled = AidenRemoteMutationOutcome<String>.cancelled
+        let stale = AidenRemoteMutationOutcome<String>.stale
+        let busy = AidenRemoteMutationOutcome<String>.busy
+
+        XCTAssertEqual(success.value, "workspace-1")
+        XCTAssertFalse(success.isDefinitiveFailure)
+        XCTAssertTrue(failure.isDefinitiveFailure)
+        XCTAssertFalse(cancelled.isDefinitiveFailure)
+        XCTAssertFalse(stale.isDefinitiveFailure)
+        XCTAssertFalse(busy.isDefinitiveFailure)
+    }
+}
+
 final class AidenAppearanceTests: XCTestCase {
     private struct Fixture: Decodable {
         let version: Int
