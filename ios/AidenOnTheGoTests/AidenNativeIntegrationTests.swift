@@ -4,6 +4,27 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenNativeIntegrationTests: XCTestCase {
+    @MainActor
+    func testLiveActivityLookupScopesIdenticalStreamIDsToInstallation() {
+        let attributes = AgentRunActivityAttributes(
+            instanceID: "instance-a",
+            sessionID: "chat-1",
+            sessionTitle: "Chat",
+            streamID: "stream-shared",
+            startedAt: Date()
+        )
+        XCTAssertTrue(AidenRemoteLiveActivityManager.matches(
+            attributes,
+            instanceID: "instance-a",
+            streamID: "stream-shared"
+        ))
+        XCTAssertFalse(AidenRemoteLiveActivityManager.matches(
+            attributes,
+            instanceID: "instance-b",
+            streamID: "stream-shared"
+        ))
+    }
+
     func testIntentCatalogContainsOnlyBoundedDisplayNamesAndStableIDs() throws {
         let suiteName = "AidenNativeIntegrationTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -139,9 +160,9 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(activity.content.state.responseExcerpt, "")
         XCTAssertFalse(activity.content.state.isFinal)
 
-        await manager.toolStarted(name: "read_file", streamID: proofID)
-        await manager.appendResponse("private response text", streamID: proofID)
-        await manager.markStale(streamID: proofID)
+        await manager.toolStarted(name: "read_file", instanceID: proofID, streamID: proofID)
+        await manager.appendResponse("private response text", instanceID: proofID, streamID: proofID)
+        await manager.markStale(instanceID: proofID, streamID: proofID)
 
         let staleDeadline = Date().addingTimeInterval(2)
         while !activity.content.state.isStale && Date() < staleDeadline {
@@ -218,7 +239,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
         let adoptingManager = AidenRemoteLiveActivityManager(defaults: defaults)
 
-        await adoptingManager.reconcile(client: client)
+        await adoptingManager.reconcile(instanceID: proofID, client: client, isCurrent: { true })
         let reconcileDeadline = Date().addingTimeInterval(2)
         while activity.content.state.status != .responding && Date() < reconcileDeadline {
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -321,7 +342,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
                 session: URLSession(configuration: configuration)
             )
             let manager = AidenRemoteLiveActivityManager(defaults: defaults)
-            await manager.reconcile(client: client)
+            await manager.reconcile(instanceID: proofID, client: client, isCurrent: { true })
 
             let reconcileDeadline = Date().addingTimeInterval(2)
             while activity.content.state.status != .responding && Date() < reconcileDeadline {
