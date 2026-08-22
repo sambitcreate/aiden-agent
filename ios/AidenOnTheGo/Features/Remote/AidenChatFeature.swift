@@ -436,12 +436,12 @@ final class AidenChatViewModel {
     func selectProvider(_ providerId: String) {
         selectedProviderId = providerId
         selectedModelId = visibleProviders.first { $0.id == providerId }?.models.first?.id
-        selectedThinkingLevel = selectedModel?.thinkingLevels?.first
+        selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
     }
 
     func selectModel(_ modelId: String) {
         selectedModelId = modelId
-        selectedThinkingLevel = selectedModel?.thinkingLevels?.first
+        selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
     }
 
     func send() async {
@@ -608,7 +608,7 @@ final class AidenChatViewModel {
         if selectedModelId == nil || selectedProvider?.models.contains(where: { $0.id == selectedModelId }) != true {
             selectedModelId = catalog.defaults["modelId"] ?? selectedProvider?.visibleModels.first?.id
         }
-        if selectedThinkingLevel == nil { selectedThinkingLevel = selectedModel?.thinkingLevels?.first }
+        if selectedThinkingLevel == nil { selectedThinkingLevel = selectedModel?.effectiveThinkingLevel }
     }
 
     private func restoreStreamIfNeeded() async {
@@ -1672,9 +1672,9 @@ private struct AidenComposerView: View {
                                                     )
                                                 } label: {
                                                     if isSelected(candidate, providerId: provider.id, thinkingLevel: level) {
-                                                        Label(level.capitalized, systemImage: "checkmark")
+                                                        Label(candidate.thinkingLabel(for: level), systemImage: "checkmark")
                                                     } else {
-                                                        Text(level.capitalized)
+                                                        Text(candidate.thinkingLabel(for: level))
                                                     }
                                                 }
                                             }
