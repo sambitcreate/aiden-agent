@@ -110,15 +110,64 @@ final class AidenDiscoveryModel: NSObject, ObservableObject, NetServiceBrowserDe
     }
 }
 
-struct AidenPairingView: View {
-    private enum PairingMethod: String, CaseIterable, Identifiable {
-        case scan = "Scan"
-        case code = "Enter Code"
-        case paste = "Paste"
+enum AidenPairingMethod: String, CaseIterable, Identifiable, Hashable {
+    case scanQRCode
+    case nearbyMac
+    case privateAddress
+    case pastePayload
 
-        var id: String { rawValue }
+    var id: String { rawValue }
+
+    static let primary: [AidenPairingMethod] = [
+        .scanQRCode,
+        .nearbyMac,
+        .privateAddress,
+    ]
+
+    static let advanced: [AidenPairingMethod] = [.pastePayload]
+
+    var title: String {
+        switch self {
+        case .scanQRCode: return String(localized: "Scan QR Code")
+        case .nearbyMac: return String(localized: "Nearby Mac + Setup Code")
+        case .privateAddress: return String(localized: "Private Address + Setup Code")
+        case .pastePayload: return String(localized: "Paste Pairing Payload")
+        }
     }
 
+    var detail: String {
+        switch self {
+        case .scanQRCode:
+            return String(localized: "Scan the one-time QR shown by Aiden Agent.")
+        case .nearbyMac:
+            return String(localized: "Find your Mac on local Wi-Fi, then enter its setup code.")
+        case .privateAddress:
+            return String(localized: "Enter the private Tailscale address and setup code shown on your Mac.")
+        case .pastePayload:
+            return String(localized: "Use the complete one-time payload when the camera is unavailable.")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .scanQRCode: return "qrcode.viewfinder"
+        case .nearbyMac: return "wifi"
+        case .privateAddress: return "network"
+        case .pastePayload: return "doc.on.clipboard"
+        }
+    }
+
+    var badge: String? {
+        switch self {
+        case .scanQRCode: return String(localized: "Recommended")
+        case .nearbyMac: return String(localized: "Local Network")
+        case .privateAddress: return String(localized: "Tailscale")
+        case .pastePayload: return nil
+        }
+    }
+}
+
+struct AidenPairingView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.aidenPalette) private var palette
@@ -127,7 +176,6 @@ struct AidenPairingView: View {
 
     @StateObject private var discovery = AidenDiscoveryModel()
     @State private var pairingPayload = ""
-    @State private var pairingMethod: PairingMethod = .scan
     @State private var manualCode = ""
     @State private var manualEndpoint = ""
     @State private var selectedAgentID: String?
@@ -204,6 +252,8 @@ struct AidenPairingView: View {
                 discovery.stop()
                 pairingPayload = ""
                 manualCode = ""
+                manualEndpoint = ""
+                selectedAgentID = nil
             }
             .sheet(isPresented: $isShowingScanner) {
                 NavigationStack {
@@ -317,136 +367,39 @@ struct AidenPairingView: View {
     }
 
     private var pairingPage: some View {
-        Form {
+        List {
             Section {
-                Picker("Pairing method", selection: $pairingMethod) {
-                    ForEach(PairingMethod.allCases) { method in
-                        Text(method.rawValue).tag(method)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                switch pairingMethod {
-                case .scan:
-                    Button { isShowingScanner = true } label: {
-                        Label("Scan Pairing QR", systemImage: "qrcode.viewfinder")
-                    }
-                case .code:
-                    TextField("XXXX-XXXX-XXXX-XXXX-XXXX", text: $manualCode)
-                        .font(codeTypography.swiftUIFont(relativeTo: .body))
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                        .keyboardType(.asciiCapable)
-                        .onChange(of: manualCode) { _, value in
-                            manualCode = formattedManualCodeInput(value)
-                        }
-                        .accessibilityLabel("Manual pairing setup code")
-
-                    TextField("https://mac-name.local:49220/api/aiden/v1", text: $manualEndpoint)
-                        .font(codeTypography.swiftUIFont(relativeTo: .footnote))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .accessibilityLabel("Aiden Agent address")
-                        .onChange(of: manualEndpoint) { _, value in
-                            guard let selectedAgentID else { return }
-                            let selectedEndpoint = discovery.agents.first {
-                                $0.id == selectedAgentID
-                            }?.endpoint
-                            if selectedEndpoint != value { self.selectedAgentID = nil }
-                        }
-
-                    Button("Pair with Setup Code") {
-                        guard let endpoint = manualEndpointURL else { return }
-                        let code = manualCode
-                        startPairing {
-                            await coordinator.pair(manualCode: code, endpoint: endpoint)
-                        }
-                    }
-                    .disabled(!canPairManually)
-                case .paste:
-                    PasteButton(payloadType: String.self) { values in
-                        if let payload = values.first { pairingPayload = payload }
-                    }
-
-                    TextEditor(text: $pairingPayload)
-                        .frame(minHeight: 96)
-                        .font(codeTypography.swiftUIFont(relativeTo: .footnote))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityLabel("Full pairing setup payload")
-
-                    Button("Pair with Setup Payload") {
-                        let payload = pairingPayload.trimmingCharacters(in: .whitespacesAndNewlines)
-                        startPairing { await coordinator.pair(qrPayload: payload) }
-                    }
-                    .disabled(!canPair)
-                }
-            } header: {
-                Text("Connect")
-            } footer: {
-                Text("The QR and setup code expire after five minutes and can be used once. Your setup code never leaves this device.")
-            }
-
-            if pairingMethod == .code {
-                Section {
-                if discovery.agents.isEmpty {
-                    HStack {
-                        if discovery.isSearching { ProgressView() }
-                        Text(discovery.isSearching ? "Looking for Aiden Agent…" : "No nearby Aiden Agent found")
-                            .foregroundStyle(palette.secondary)
-                    }
-                } else {
-                    ForEach(discovery.agents) { agent in
-                        Button {
-                            guard let endpoint = agent.endpoint else { return }
-                            selectedAgentID = agent.id
-                            manualEndpoint = endpoint
-                            pairingMethod = .code
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Label(agent.name, systemImage: "desktopcomputer")
-                                    if let endpoint = agent.endpoint {
-                                        Text(endpoint)
-                                            .font(codeTypography.swiftUIFont(relativeTo: .caption))
-                                            .foregroundStyle(palette.secondary)
-                                    }
-                                }
-                                Spacer()
-                                if selectedAgentID == agent.id {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(palette.accent)
-                                        .accessibilityHidden(true)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(agent.endpoint == nil)
-                        .accessibilityLabel(agent.endpoint.map { "\(agent.name), \($0)" } ?? agent.name)
-                        .accessibilityValue(selectedAgentID == agent.id ? "Selected" : "Not selected")
-                        .accessibilityAddTraits(selectedAgentID == agent.id ? .isSelected : [])
-                        .accessibilityHint(agent.endpoint == nil
-                            ? "This Mac is still resolving its network address."
-                            : "Use this Mac for manual pairing.")
+                ForEach(AidenPairingMethod.primary) { method in
+                    NavigationLink(value: method) {
+                        pairingMethodRow(method)
                     }
                 }
             } header: {
-                Text("Nearby Macs")
+                Text("Choose how to connect")
             } footer: {
-                Text("Choose a nearby Mac before entering its setup code. Discovery supplies the address only; the encrypted setup envelope verifies the Mac’s certificate and public-key fingerprint. For Tailscale, paste the exact private address shown on your Mac.")
-            }
+                Text("Choose the same connection shown in Aiden Agent’s Add Device window. QR pairing works with either Local Network or Tailscale.")
             }
 
-            Section("Connection") {
-                Label("Local Network uses pinned HTTPS", systemImage: "wifi")
-                Label("Tailscale uses the same device credential", systemImage: "network")
+            Section("More options") {
+                ForEach(AidenPairingMethod.advanced) { method in
+                    NavigationLink(value: method) {
+                        pairingMethodRow(method)
+                    }
+                }
+            }
+
+            Section("Private by design") {
+                Label("One-time codes expire after five minutes", systemImage: "clock.badge.checkmark")
+                Label("Every Mac uses pinned HTTPS", systemImage: "lock.shield.fill")
                 Label("Provider keys stay on your Mac", systemImage: "checkmark.shield")
             }
         }
         .scrollContentBackground(.hidden)
         .navigationTitle("Pair Aiden")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(for: AidenPairingMethod.self) { method in
+            pairingMethodPage(method)
+        }
         .onChange(of: discovery.agents) { _, agents in
             guard let selectedAgentID else { return }
             guard let selected = agents.first(where: { $0.id == selectedAgentID }),
@@ -455,6 +408,247 @@ struct AidenPairingView: View {
                 return
             }
         }
+    }
+
+    private func pairingMethodRow(_ method: AidenPairingMethod) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: method.systemImage)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(palette.accent)
+                .frame(width: 34, height: 34)
+                .background(palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    Text(method.title)
+                        .font(.body.weight(.semibold))
+                    if let badge = method.badge {
+                        Text(badge)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(palette.accent)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(palette.accent.opacity(0.10), in: Capsule())
+                    }
+                }
+                Text(method.detail)
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func pairingMethodPage(_ method: AidenPairingMethod) -> some View {
+        switch method {
+        case .scanQRCode:
+            qrPairingPage
+        case .nearbyMac:
+            nearbyMacPairingPage
+        case .privateAddress:
+            privateAddressPairingPage
+        case .pastePayload:
+            pastePayloadPairingPage
+        }
+    }
+
+    private var qrPairingPage: some View {
+        Form {
+            Section {
+                Label("Open Aiden Agent’s Add Device window and keep the one-time QR visible.", systemImage: "desktopcomputer")
+                Label("The QR already contains the selected Local Network or Tailscale address.", systemImage: "network")
+            } header: {
+                Text("On your Mac")
+            }
+
+            Section {
+                Button { isShowingScanner = true } label: {
+                    Label("Open Camera", systemImage: "qrcode.viewfinder")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            } footer: {
+                Text("The QR expires after five minutes and can be used once. Aiden pins the Mac’s HTTPS identity during pairing.")
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .navigationTitle("Scan QR Code")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var nearbyMacPairingPage: some View {
+        Form {
+            Section {
+                if discovery.agents.isEmpty {
+                    HStack(spacing: 10) {
+                        if discovery.isSearching { ProgressView() }
+                        Text(discovery.isSearching ? "Looking for Aiden Agent…" : "No nearby Aiden Agent found")
+                            .foregroundStyle(palette.secondary)
+                    }
+                } else {
+                    ForEach(discovery.agents) { agent in
+                        discoveredAgentButton(agent)
+                    }
+                }
+            } header: {
+                Text("Nearby Macs")
+            } footer: {
+                Text("Your iPhone or iPad and Mac must be on the same local network. Select the Mac shown in Aiden Agent’s Add Device window.")
+            }
+
+            Section {
+                manualEndpointField(
+                    placeholder: "https://mac-name.local:49220/api/aiden/v1",
+                    accessibilityLabel: "Nearby Aiden Agent address"
+                )
+                manualSetupCodeField
+                manualPairingButton
+            } header: {
+                Text("Setup code")
+            } footer: {
+                Text("If discovery is unavailable, enter the exact nearby Mac address shown in Aiden Agent. The setup code is encrypted and can be used once.")
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle("Nearby Mac")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var privateAddressPairingPage: some View {
+        Form {
+            Section {
+                manualEndpointField(
+                    placeholder: "https://mac-name.tailnet.ts.net/api/aiden/v1",
+                    accessibilityLabel: "Private Tailscale address"
+                )
+                manualSetupCodeField
+                manualPairingButton
+            } header: {
+                Text("Private address and setup code")
+            } footer: {
+                Text("Copy both values exactly from Aiden Agent. The private address must use HTTPS and end in /api/aiden/v1. Your setup code never leaves this device.")
+            }
+
+            Section("Before pairing") {
+                Label("Sign in to the same Tailscale network on both devices", systemImage: "network")
+                Label("Keep Aiden Agent open on your Mac", systemImage: "desktopcomputer")
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle("Private Address")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var pastePayloadPairingPage: some View {
+        Form {
+            Section {
+                PasteButton(payloadType: String.self) { values in
+                    if let payload = values.first { pairingPayload = payload }
+                }
+
+                TextEditor(text: $pairingPayload)
+                    .frame(minHeight: 120)
+                    .font(codeTypography.swiftUIFont(relativeTo: .footnote))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityLabel("Full pairing setup payload")
+
+                Button("Pair with Setup Payload") {
+                    let payload = pairingPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+                    startPairing { await coordinator.pair(qrPayload: payload) }
+                }
+                .disabled(!canPair)
+            } header: {
+                Text("One-time pairing payload")
+            } footer: {
+                Text("Use only the complete payload copied from your own Mac. It contains a one-time secret and expires after five minutes.")
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle("Paste Payload")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func discoveredAgentButton(_ agent: AidenDiscoveredAgent) -> some View {
+        Button {
+            guard let endpoint = agent.endpoint else { return }
+            selectedAgentID = agent.id
+            manualEndpoint = endpoint
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label(agent.name, systemImage: "desktopcomputer")
+                    if let endpoint = agent.endpoint {
+                        Text(endpoint)
+                            .font(codeTypography.swiftUIFont(relativeTo: .caption))
+                            .foregroundStyle(palette.secondary)
+                    }
+                }
+                Spacer()
+                if selectedAgentID == agent.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(palette.accent)
+                        .accessibilityHidden(true)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(agent.endpoint == nil)
+        .accessibilityLabel(agent.endpoint.map { "\(agent.name), \($0)" } ?? agent.name)
+        .accessibilityValue(selectedAgentID == agent.id ? "Selected" : "Not selected")
+        .accessibilityAddTraits(selectedAgentID == agent.id ? .isSelected : [])
+        .accessibilityHint(agent.endpoint == nil
+            ? "This Mac is still resolving its network address."
+            : "Use this Mac for setup-code pairing.")
+    }
+
+    private func manualEndpointField(
+        placeholder: String,
+        accessibilityLabel: String
+    ) -> some View {
+        TextField(placeholder, text: $manualEndpoint)
+            .font(codeTypography.swiftUIFont(relativeTo: .footnote))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(.URL)
+            .accessibilityLabel(accessibilityLabel)
+            .onChange(of: manualEndpoint) { _, value in
+                guard let selectedAgentID else { return }
+                let selectedEndpoint = discovery.agents.first {
+                    $0.id == selectedAgentID
+                }?.endpoint
+                if selectedEndpoint != value { self.selectedAgentID = nil }
+            }
+    }
+
+    private var manualSetupCodeField: some View {
+        TextField("XXXX-XXXX-XXXX-XXXX-XXXX", text: $manualCode)
+            .font(codeTypography.swiftUIFont(relativeTo: .body))
+            .textInputAutocapitalization(.characters)
+            .autocorrectionDisabled()
+            .keyboardType(.asciiCapable)
+            .onChange(of: manualCode) { _, value in
+                manualCode = formattedManualCodeInput(value)
+            }
+            .accessibilityLabel("Manual pairing setup code")
+    }
+
+    private var manualPairingButton: some View {
+        Button("Pair with Setup Code") {
+            guard let endpoint = manualEndpointURL else { return }
+            let code = manualCode
+            startPairing {
+                await coordinator.pair(manualCode: code, endpoint: endpoint)
+            }
+        }
+        .disabled(!canPairManually)
     }
 
     private func formattedManualCodeInput(_ value: String) -> String {
@@ -494,6 +688,8 @@ struct AidenPairingView: View {
             if result == .succeeded {
                 pairingPayload = ""
                 manualCode = ""
+                manualEndpoint = ""
+                selectedAgentID = nil
                 onPaired?()
             }
             pairingTask = nil
