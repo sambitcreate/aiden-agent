@@ -1596,8 +1596,9 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.start()
         let workspace = try XCTUnwrap(coordinator.workspaces.first(where: { $0.id == "workspace-a" }))
 
-        let removed = await coordinator.removeWorkspace(workspace)
-        XCTAssertFalse(removed)
+        let removalOutcome = await coordinator.removeWorkspaceOutcome(workspace)
+        XCTAssertTrue(removalOutcome.isDefinitiveFailure)
+        XCTAssertNil(removalOutcome.value)
         XCTAssertTrue(coordinator.workspaces.contains(where: { $0.id == workspace.id }))
         XCTAssertTrue(archiveStore.isArchived(workspaceID: workspace.id, instanceID: "instance-1"))
         XCTAssertEqual(coordinator.connectionState, .connected)
