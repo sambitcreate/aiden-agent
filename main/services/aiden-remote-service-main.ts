@@ -1,5 +1,7 @@
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { app, ipcMain, logger } from "../platform.js";
 import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
 import { DataStore } from "./data-store.js";
@@ -11,6 +13,7 @@ import {
 import {
   AidenRemoteStateRegistry,
   createDefaultAidenRemoteState,
+  defaultAidenRemoteDisplayName,
   parseAidenRemoteStateDocument,
   type AidenRemoteStateDocument,
 } from "./aiden-remote-state.js";
@@ -33,8 +36,10 @@ import {
   AidenRemoteStreamService,
   MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES,
   normalizeAidenRemoteStreamSnapshot,
+  removeRevokedDeviceStreams,
   type AidenRemoteStreamSnapshot,
 } from "./aiden-remote-streams.js";
+import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import { chatStore } from "./chat-store.js";
@@ -68,13 +73,18 @@ const STATE_FILE = "aiden-remote-v1.json";
 const OPERATIONS_FILE = "aiden-remote-operations-v1.json";
 const STREAMS_FILE = "aiden-remote-streams-v1.json";
 const MAX_STATE_BYTES = 512 * 1_024;
+const execFileAsync = promisify(execFile);
 
-function safeState(value: unknown): boolean {
+async function macComputerName(): Promise<string> {
   try {
-    parseAidenRemoteStateDocument(value);
-    return true;
+    const { stdout } = await execFileAsync(
+      "/usr/sbin/scutil",
+      ["--get", "ComputerName"],
+      { timeout: 1_000, maxBuffer: 4_096, encoding: "utf8" },
+    );
+    return stdout;
   } catch {
-    return false;
+    return os.hostname();
   }
 }
 
@@ -109,21 +119,41 @@ let runtimePromise: Promise<AidenRemoteRuntime> | null = null;
 
 async function createRuntime(): Promise<AidenRemoteRuntime> {
   const userData = app.getPath("userData");
+  const hostname = os.hostname();
+  const defaultDisplayName = defaultAidenRemoteDisplayName(await macComputerName());
   const store = new DataStore<AidenRemoteStateDocument>(
     STATE_FILE,
-    createDefaultAidenRemoteState(),
+    createDefaultAidenRemoteState(undefined, defaultDisplayName),
     () => userData,
     {
       maxBytes: MAX_STATE_BYTES,
       fileMode: 0o600,
-      normalize: parseAidenRemoteStateDocument,
-      isSafe: safeState,
+      normalize: (value) => parseAidenRemoteStateDocument(value, defaultDisplayName),
+      isSafe: (value) => {
+        try {
+          parseAidenRemoteStateDocument(value, defaultDisplayName);
+          return true;
+        } catch {
+          return false;
+        }
+      },
       rejectCorruptWrite: true,
       rejectUnsafeWrite: true,
     },
   );
   const state = new AidenRemoteStateRegistry({
     load: () => store.load(),
+    needsSaveAfterLoad: async () => {
+      const contents = await store.loadedDiskContents();
+      if (contents === null) return true;
+      try {
+        const raw = JSON.parse(contents.toString("utf8")) as unknown;
+        return !raw || typeof raw !== "object" || Array.isArray(raw)
+          || !("displayName" in raw) || !("lanPortCommitted" in raw);
+      } catch {
+        return false;
+      }
+    },
     save: async (document) => {
       await store.save(document);
       ipcMain.broadcast("remote:changed", {});
@@ -164,6 +194,14 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   );
   const tailscale = new AidenRemoteTailscaleController(
     await createSystemTailscaleCommandRunner(),
+    {
+      outcomeStore: {
+        begin: (outcome) => state.beginTailscalePendingOutcome(outcome),
+        snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
+        commit: (ownership) => state.commitTailscaleOutcome(ownership),
+        clear: () => state.clearTailscalePendingOutcome(),
+      },
+    },
   );
   let workspaceApi:
     | Promise<{
@@ -183,13 +221,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let activeStreams: AidenRemoteStreamService | undefined;
   let activeChats: AidenRemoteChatService | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
-  const hostname = os.hostname();
   const service = new AidenRemoteService({
     state,
     appVersion: app.getVersion(),
     hostname,
     tailscale,
-    bonjour: new DnsSdAidenRemoteBonjourPublisher("Aiden Agent", writeRemoteLog),
+    bonjour: new DnsSdAidenRemoteBonjourPublisher(writeRemoteLog),
+    notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
     workspaceApi: async (instanceId) => {
       if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
         workspaceApiInstanceId = instanceId;
@@ -206,6 +244,19 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             listProviders: listConfiguredProviders,
             getSettings: () => configStore.getSettings(),
           });
+          const loadedStreamSnapshot = normalizeAidenRemoteStreamSnapshot(await streamStore.load());
+          const revokedDeviceIds = new Set(
+            (await state.snapshot()).devices
+              .filter(({ revokedAt }) => revokedAt !== undefined)
+              .map(({ id }) => id),
+          );
+          const streamSnapshot = removeRevokedDeviceStreams(
+            loadedStreamSnapshot,
+            revokedDeviceIds,
+          );
+          if (streamSnapshot.streams.length !== loadedStreamSnapshot.streams.length) {
+            await streamStore.save(streamSnapshot);
+          }
           const streams = new AidenRemoteStreamService({
             now: Date.now,
             cancel: (streamId, ownerDocumentId) =>
@@ -213,7 +264,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             approve: (approvalId, decision, ownerDocumentId) =>
               llmClient.approve(approvalId, decision, ownerDocumentId),
             notifyChatChanged: () => ipcMain.broadcast("chats:changed", {}),
-            snapshot: normalizeAidenRemoteStreamSnapshot(await streamStore.load()),
+            snapshot: streamSnapshot,
             persist: (snapshot) => streamStore.save(snapshot),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
@@ -310,15 +361,12 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     service,
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
-    revokeDevice: async (deviceId) => {
-      const revoked = await state.revokeDevice(deviceId);
-      if (revoked) {
-        activeStreams?.revokeDevice(deviceId);
-        activeChats?.revokeDevice(deviceId);
-        workspaceOwners.revokeDevice(deviceId);
-      }
-      return revoked;
-    },
+    revokeDevice: (deviceId) => revokeAidenRemoteRuntimeDevice({
+      state,
+      streams: activeStreams,
+      chats: activeChats,
+      workspaceOwners,
+    }, deviceId),
   };
 }
 
