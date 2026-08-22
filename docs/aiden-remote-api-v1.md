@@ -161,6 +161,7 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
 - `POST /streams/{streamId}/cancel`
 - `POST /approvals/{approvalId}/respond`: `allow` or `deny` only.
+- `GET /streams/{streamId}/approval`: current bounded approval snapshot, or `null` after resolution.
 
 Turn start returns `turnId`, `streamId`, accepted state, and canonical appended message. The generation owner is the authenticated device/stream, not a socket. Disconnect never resends the prompt or cancels the turn. Restart during an active remote turn records one explicit interrupted terminal state and never retries the provider call.
 
@@ -226,6 +227,8 @@ Initial event types:
 - `heartbeat`: no semantic state change.
 
 The `terminal` bit is required. Known `done`, `error`, and `cancelled` events set it to `true`; every other known event sets it to `false`. An unknown nonterminal event is ignored for forward compatibility only after its required bounded payload object and envelope safety fields validate. An unknown terminal event fails closed and triggers authoritative reconciliation. Individual SSE frames are limited to 1 MiB before JSON decoding. Sequences are monotonically increasing and unique within a stream. Replay validates the caller's expected stream identity and includes only events after the acknowledged sequence. Duplicate/lower sequences are ignored. A stream mismatch or gap triggers snapshot/status reconciliation; it never triggers turn creation. Terminal events are immutable. Expired journals return `stream_gone` with the chat ID needed for snapshot recovery.
+
+When a stream reports `waiting_for_approval`, clients fetch its separate approval snapshot. This additive endpoint preserves the closed v1 stream-status contract while making reconnect authoritative. It returns approval, stream, and chat IDs; a safe summary; tool identity; expiry; and whether the mobile client may offer Allow. Exact privileged command, path, and external-mutation details remain host-only, so mobile renders those requests as deny-only. The snapshot becomes `null` as soon as the approval resolves, expires, is cancelled, or the stream terminates.
 
 ## 7. Idempotency, revisions, and operation ownership
 
