@@ -37,6 +37,7 @@ import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 import { isConfiguredSkill, isConfiguredSkillList } from "./skill-config-limits.js";
 import { normalizeHiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
+import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -549,6 +550,9 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     if (isRecord(settings.assistant)) normalized.assistant = structuredClone(settings.assistant);
     else delete normalized.assistant;
   }
+  const onboarding = parseOnboardingState(settings.onboarding);
+  if (onboarding) normalized.onboarding = onboarding;
+  else delete normalized.onboarding;
   for (const key of [
     "googleThinkingByModel",
     "codexThinkingByModel",
@@ -568,6 +572,9 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 /** Safe projection for consumers; persistence retains unknown nested future data. */
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
+  const onboarding = parseOnboardingState(settings.onboarding);
+  if (onboarding) runtime.onboarding = onboarding;
+  else delete runtime.onboarding;
   const hiddenModelsByProvider = normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider);
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete runtime.hiddenModelsByProvider;
