@@ -191,6 +191,17 @@ export function normalizeAidenRemoteStreamSnapshot(value: unknown): AidenRemoteS
   return parseSnapshot(value);
 }
 
+export function removeRevokedDeviceStreams(
+  value: unknown,
+  revokedDeviceIds: ReadonlySet<string>,
+): AidenRemoteStreamSnapshot {
+  const snapshot = parseSnapshot(value);
+  return {
+    version: 1,
+    streams: snapshot.streams.filter(({ deviceId }) => !revokedDeviceIds.has(deviceId)),
+  };
+}
+
 function sseFrame(event: AidenRemoteStreamEvent): string {
   return `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -201,6 +212,7 @@ export class AidenRemoteStreamService {
   private persistTail: Promise<void> = Promise.resolve();
   private persistDirty = false;
   private persistRunning = false;
+  private persistenceError: unknown;
   private readonly idempotency: AidenIdempotencyLedger;
 
   constructor(
@@ -341,9 +353,13 @@ export class AidenRemoteStreamService {
       while (this.persistDirty) {
         this.persistDirty = false;
         await this.options.persist!(this.snapshot());
+        this.persistenceError = undefined;
       }
     })()
-      .catch((error: unknown) => this.options.onPersistenceError?.(error))
+      .catch((error: unknown) => {
+        this.persistenceError = error;
+        this.options.onPersistenceError?.(error);
+      })
       .finally(() => {
         this.persistRunning = false;
         if (this.persistDirty) this.persist();
@@ -352,6 +368,7 @@ export class AidenRemoteStreamService {
 
   async settlePersistence(): Promise<void> {
     while (this.persistRunning || this.persistDirty) await this.persistTail;
+    if (this.persistenceError) throw this.persistenceError;
   }
 
   private prune(): void {
@@ -630,14 +647,32 @@ export class AidenRemoteStreamService {
     }
   }
 
-  revokeDevice(deviceId: string): void {
-    for (const stream of this.streams.values()) {
-      if (stream.deviceId !== deviceId || terminal(stream.state)) continue;
-      stream.cancelRequested = true;
-      stream.cancellationSource = "server";
-      this.options.cancel(stream.streamId, stream.owner.owner.documentId);
-      this.append(stream, "cancelled", { source: "server" }, true, "cancelled");
+  async revokeDevice(deviceId: string): Promise<void> {
+    for (const [approvalId, approval] of this.approvals) {
+      if (approval.deviceId !== deviceId) continue;
+      clearTimeout(approval.expiry);
+      this.options.approve(approvalId, "deny", approval.ownerDocumentId);
+      this.approvals.delete(approvalId);
     }
+    for (const [streamId, stream] of this.streams) {
+      if (stream.deviceId !== deviceId) continue;
+      if (!terminal(stream.state)) {
+        stream.cancelRequested = true;
+        stream.cancellationSource = "server";
+        this.options.cancel(stream.streamId, stream.owner.owner.documentId);
+        this.append(stream, "cancelled", { source: "server" }, true, "cancelled");
+      }
+      stream.owner.invalidate();
+      stream.activeTools.clear();
+      for (const subscriber of stream.subscribers) {
+        clearInterval(subscriber.heartbeat);
+        subscriber.response.end();
+      }
+      stream.subscribers.clear();
+      this.streams.delete(streamId);
+    }
+    this.persist();
+    await this.settlePersistence();
   }
 
   async respondApproval(
