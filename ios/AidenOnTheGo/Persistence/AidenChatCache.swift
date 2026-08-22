@@ -103,6 +103,15 @@ actor AidenChatCache {
         try? fileManager.removeItem(at: fileURL(kind: "streams", instanceId, chatId))
     }
 
+    @discardableResult
+    func removeActiveStream(instanceId: String, chatId: String, ifStreamId streamId: String) -> Bool {
+        guard loadActiveStream(instanceId: instanceId, chatId: chatId)?.streamId == streamId else {
+            return false
+        }
+        removeActiveStream(instanceId: instanceId, chatId: chatId)
+        return true
+    }
+
     func removeChat(instanceId: String, chatId: String) {
         try? fileManager.removeItem(at: fileURL(kind: "chats", instanceId, chatId))
         removeActiveStream(instanceId: instanceId, chatId: chatId)
