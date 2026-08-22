@@ -1,6 +1,11 @@
 import AVFoundation
+import Accessibility
+import CoreTransferable
+import CryptoKit
+import ImageIO
 import MarkdownUI
 import Observation
+import Photos
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -33,6 +38,7 @@ enum AidenAttachmentPreparation {
     static let maximumTextScalars = 100_000
 
     static func imageUpload(data: Data, name: String) throws -> AidenAttachmentUpload {
+        try Task.checkCancellation()
         guard !data.isEmpty, data.count <= maximumSourceImageBytes, let image = UIImage(data: data) else {
             throw data.count > maximumSourceImageBytes
                 ? AidenAttachmentPreparationError.imageTooLarge
@@ -49,11 +55,36 @@ enum AidenAttachmentPreparation {
         else {
             throw AidenAttachmentPreparationError.imageTooLarge
         }
-        for edge in [3_072.0, 2_048.0, 1_536.0] {
-            let rendered = scaled(image, maximumEdge: edge)
+        if data.count <= maximumImageBytes {
+            if AidenAttachmentImageValidation.validatedData(
+                data,
+                mimeType: "image/png",
+                declaredSize: data.count
+            ) != nil {
+                return .image(name: safeImageName(name, extension: "png"), mimeType: "image/png", data: data)
+            }
+            if AidenAttachmentImageValidation.validatedData(
+                data,
+                mimeType: "image/jpeg",
+                declaredSize: data.count
+            ) != nil {
+                return .image(name: safeImageName(name, extension: "jpg"), mimeType: "image/jpeg", data: data)
+            }
+        }
+        let preserveAlpha = hasAlpha(image)
+        for edge in [3_072.0, 2_048.0, 1_536.0, 1_024.0] {
+            try Task.checkCancellation()
+            let rendered = scaled(image, maximumEdge: edge, preserveAlpha: preserveAlpha)
+            if preserveAlpha,
+               let encoded = rendered.pngData(),
+               encoded.count <= maximumImageBytes {
+                return .image(name: safeImageName(name, extension: "png"), mimeType: "image/png", data: encoded)
+            }
+            guard !preserveAlpha else { continue }
             for quality in [0.86, 0.72, 0.58] {
+                try Task.checkCancellation()
                 if let encoded = rendered.jpegData(compressionQuality: quality), encoded.count <= maximumImageBytes {
-                    return .image(name: safeImageName(name), mimeType: "image/jpeg", data: encoded)
+                    return .image(name: safeImageName(name, extension: "jpg"), mimeType: "image/jpeg", data: encoded)
                 }
             }
         }
@@ -72,11 +103,17 @@ enum AidenAttachmentPreparation {
         return .text(name: safeDisplayName(name), mimeType: canonicalMimeType, text: text)
     }
 
-    static func fileUpload(url: URL) throws -> AidenAttachmentUpload {
+    static func fileUpload(
+        url: URL,
+        preferredName: String? = nil,
+        forceImage: Bool = false
+    ) throws -> AidenAttachmentUpload {
+        try Task.checkCancellation()
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-        let isImage = values.contentType?.conforms(to: .image) == true
+        let isImage = forceImage || values.contentType?.conforms(to: .image) == true
+        let displayName = preferredName ?? url.lastPathComponent
         let readLimit = isImage ? maximumSourceImageBytes : maximumTextBytes
         if isImage, let fileSize = values.fileSize, fileSize > readLimit {
             throw AidenAttachmentPreparationError.fileTooLarge
@@ -84,13 +121,14 @@ enum AidenAttachmentPreparation {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let data = try handle.read(upToCount: readLimit + 1) ?? Data()
+        try Task.checkCancellation()
         if isImage {
             guard data.count <= readLimit else { throw AidenAttachmentPreparationError.fileTooLarge }
-            return try imageUpload(data: data, name: url.lastPathComponent)
+            return try imageUpload(data: data, name: displayName)
         }
         let mimeType = try allowedTextMimeType(
             values.contentType?.preferredMIMEType ?? "text/plain",
-            name: url.lastPathComponent
+            name: displayName
         )
         let readWasTruncated = data.count > maximumTextBytes || (values.fileSize ?? 0) > maximumTextBytes
         let prefix = Data(data.prefix(maximumTextBytes))
@@ -106,10 +144,25 @@ enum AidenAttachmentPreparation {
             : maximumTextScalars
         let bounded = String(String.UnicodeScalarView(scalars.prefix(maximumContentScalars)))
         return .text(
-            name: safeDisplayName(url.lastPathComponent),
+            name: safeDisplayName(displayName),
             mimeType: mimeType,
             text: shouldTruncate ? bounded + suffix : bounded
         )
+    }
+
+    static func fileUploadAsync(
+        url: URL,
+        preferredName: String? = nil,
+        forceImage: Bool = false
+    ) async throws -> AidenAttachmentUpload {
+        let worker = Task.detached(priority: .userInitiated) {
+            try fileUpload(url: url, preferredName: preferredName, forceImage: forceImage)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     private static func decodedUTF8Prefix(_ data: Data, allowTrailingPartialScalar: Bool) -> String? {
@@ -121,7 +174,7 @@ enum AidenAttachmentPreparation {
         return nil
     }
 
-    private static func scaled(_ image: UIImage, maximumEdge: CGFloat) -> UIImage {
+    private static func scaled(_ image: UIImage, maximumEdge: CGFloat, preserveAlpha: Bool) -> UIImage {
         let sourceSize = image.size
         let sourceEdge = max(sourceSize.width, sourceSize.height)
         guard sourceEdge > maximumEdge, sourceSize.width > 0, sourceSize.height > 0 else { return image }
@@ -132,10 +185,15 @@ enum AidenAttachmentPreparation {
         )
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1
-        format.opaque = true
+        format.opaque = !preserveAlpha
         return UIGraphicsImageRenderer(size: target, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))
         }
+    }
+
+    private static func hasAlpha(_ image: UIImage) -> Bool {
+        guard let alphaInfo = image.cgImage?.alphaInfo else { return true }
+        return [.first, .last, .premultipliedFirst, .premultipliedLast].contains(alphaInfo)
     }
 
     private static func allowedTextMimeType(_ value: String, name: String) throws -> String {
@@ -159,9 +217,9 @@ enum AidenAttachmentPreparation {
         }
     }
 
-    private static func safeImageName(_ value: String) -> String {
+    private static func safeImageName(_ value: String, extension pathExtension: String) -> String {
         let base = URL(fileURLWithPath: safeDisplayName(value)).deletingPathExtension().lastPathComponent
-        return safeDisplayName("\(base.isEmpty ? "Photo" : base).jpg")
+        return safeDisplayName("\(base.isEmpty ? "Photo" : base).\(pathExtension)")
     }
 
     private static func safeDisplayName(_ value: String) -> String {
@@ -170,6 +228,30 @@ enum AidenAttachmentPreparation {
         }
         let bounded = String(String.UnicodeScalarView(filtered.prefix(255))).trimmingCharacters(in: .whitespacesAndNewlines)
         return bounded.isEmpty ? "Attachment" : bounded
+    }
+}
+
+private struct AidenPickedImageFile: Transferable, Sendable {
+    let url: URL
+    let name: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .image) { received in
+            let source = received.file
+            let values = try source.resourceValues(forKeys: [.fileSizeKey])
+            guard let size = values.fileSize,
+                  size > 0,
+                  size <= AidenAttachmentPreparation.maximumSourceImageBytes
+            else { throw AidenAttachmentPreparationError.imageTooLarge }
+            let originalName = source.lastPathComponent
+            let destinationBase = FileManager.default.temporaryDirectory
+                .appending(path: "AidenPickedImage-\(UUID().uuidString)")
+            let destination = source.pathExtension.isEmpty
+                ? destinationBase
+                : destinationBase.appendingPathExtension(source.pathExtension)
+            try FileManager.default.copyItem(at: source, to: destination)
+            return Self(url: destination, name: originalName)
+        }
     }
 }
 
@@ -210,6 +292,164 @@ enum AidenChatTitleReconciliation {
     // Apple Foundation Models titles are deliberately generated off the critical
     // chat path. Keep reconciliation bounded to the server's 15-second title window.
     static let retryMilliseconds = [400, 800, 1_200, 2_000, 3_000, 3_500, 3_500]
+}
+
+struct AidenTerminalReplayGate {
+    private(set) var hasReplayedTerminalCursor = false
+
+    mutating func shouldReplay(_ state: AidenStreamState) -> Bool {
+        guard state.isTerminal, !hasReplayedTerminalCursor else { return false }
+        hasReplayedTerminalCursor = true
+        return true
+    }
+}
+
+enum AidenTerminalReconciliation {
+    static func retryDelayMilliseconds(attempt: Int) -> Int {
+        let safeAttempt = max(0, min(attempt, 5))
+        return min(30_000, 1_000 * (1 << safeAttempt))
+    }
+
+    static func isDefinitiveMissingStream(_ error: Error) -> Bool {
+        guard let clientError = error as? AidenRemoteClientError else { return false }
+        guard case .server(let statusCode, let body) = clientError, statusCode == 404 else {
+            return false
+        }
+        return body.code.rawValue == "stream_gone" || body.code.rawValue == "not_found"
+    }
+}
+
+enum AidenAttachmentGalleryWindow {
+    static func contains(index: Int, selectedIndex: Int, count: Int) -> Bool {
+        guard count > 0,
+              (0..<count).contains(index),
+              (0..<count).contains(selectedIndex)
+        else { return false }
+        return abs(index - selectedIndex) <= 1
+    }
+}
+
+enum AidenInlineCardDeckLayout {
+    static let viewportAspectRatio: CGFloat = 1
+    static let singleImageCornerRadius: CGFloat = 16
+    static let cardCornerRadius: CGFloat = 18
+    static let edgeResistance: CGFloat = 0.22
+    static let selectedCardDragMultiplier: CGFloat = 0.88
+
+    static func resistedTranslation(
+        current: Int,
+        count: Int,
+        translation: CGFloat
+    ) -> CGFloat {
+        guard count > 1 else { return 0 }
+        let isPastLeadingEdge = current <= 0 && translation > 0
+        let isPastTrailingEdge = current >= count - 1 && translation < 0
+        return isPastLeadingEdge || isPastTrailingEdge
+            ? translation * edgeResistance
+            : translation
+    }
+
+    static func dragProgress(translation: CGFloat, width: CGFloat) -> CGFloat {
+        guard width > 0 else { return 0 }
+        return min(max(-translation / width, -1), 1)
+    }
+
+    static func selectedCardOffset(translation: CGFloat) -> CGFloat {
+        translation * selectedCardDragMultiplier
+    }
+
+    static func preferredBackgroundIndex(
+        selection: Int,
+        count: Int,
+        translation: CGFloat
+    ) -> Int? {
+        guard count > 1, (0..<count).contains(selection) else { return nil }
+        let preferred = translation > 0 ? selection - 1 : selection + 1
+        if (0..<count).contains(preferred) { return preferred }
+        let fallback = translation > 0 ? selection + 1 : selection - 1
+        return (0..<count).contains(fallback) ? fallback : nil
+    }
+
+    static func isVisible(index: Int, selection: Int, count: Int) -> Bool {
+        guard count > 1,
+              (0..<count).contains(index),
+              (0..<count).contains(selection)
+        else { return false }
+        return abs(index - selection) <= 1
+    }
+
+    static func resolvedSelection(
+        current: Int,
+        count: Int,
+        translation: CGFloat,
+        predictedTranslation: CGFloat
+    ) -> Int {
+        guard count > 1 else { return 0 }
+        let effectiveTranslation = abs(predictedTranslation) > abs(translation)
+            ? predictedTranslation
+            : translation
+        guard abs(translation) >= 44 || abs(effectiveTranslation) >= 80 else {
+            return min(max(current, 0), count - 1)
+        }
+        let direction = effectiveTranslation < 0 ? 1 : -1
+        return min(max(current + direction, 0), count - 1)
+    }
+}
+
+enum AidenMessageMediaEdge: Equatable {
+    case leading
+    case trailing
+
+    static func forRole(_ role: AidenChatRole) -> Self {
+        role == .user ? .trailing : .leading
+    }
+
+    var alignment: Alignment {
+        self == .trailing ? .trailing : .leading
+    }
+
+    var scaleAnchor: UnitPoint {
+        self == .trailing ? .trailing : .leading
+    }
+
+    var rotationAnchor: UnitPoint {
+        self == .trailing ? .bottomTrailing : .bottomLeading
+    }
+
+    var backgroundRotationDegrees: Double {
+        self == .trailing ? -1.8 : 1.8
+    }
+}
+
+enum AidenMessageContentSurface {
+    case text
+    case imageAttachment
+    case fallbackAttachment
+
+    static func usesRaisedBubble(role: AidenChatRole, content: Self) -> Bool {
+        guard role == .user else { return false }
+        return content != .imageAttachment
+    }
+}
+
+enum AidenMissingStreamResolution: Equatable {
+    case complete
+    case failed
+    case cancelled
+    case interrupted
+
+    static func resolve(messages: [AidenChatMessage]) -> Self {
+        guard let userIndex = messages.lastIndex(where: { $0.role == .user }),
+              userIndex < messages.index(before: messages.endIndex),
+              let assistant = messages[messages.index(after: userIndex)...]
+                .first(where: { $0.role == .assistant })
+        else { return .interrupted }
+        switch assistant.outcome?.status {
+        case .cancelled: return .cancelled
+        case .failed: return .failed
+        case nil: return .complete
+        }
+    }
 }
 
 @MainActor
@@ -353,6 +593,7 @@ final class AidenChatViewModel {
     private let onChatUpdated: @MainActor (AidenChat) -> Void
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
 
     private(set) var chat: AidenChat
@@ -536,32 +777,149 @@ final class AidenChatViewModel {
         }
     }
 
-    func upload(_ upload: AidenAttachmentUpload) async {
-        guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
+    @discardableResult
+    func upload(_ uploads: [AidenAttachmentUpload]) async -> Int {
+        guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else {
+            return uploads.count
+        }
+        guard let context = try? coordinator.requestContext(for: instanceId) else { return uploads.count }
         isUploadingAttachment = true
         presentedError = nil
         defer { isUploadingAttachment = false }
-        do {
-            let reference = try await coordinator.remoteClient(for: context).uploadAttachment(chatId: chat.id, upload: upload)
-            guard coordinator.isCurrent(context) else { return }
-            guard reference.isValid() else {
-                throw AidenRemoteClientError.invalidResponse
+        var failedCount = 0
+        var acceptedReferences: [AidenAttachmentReference] = []
+        for upload in uploads.prefix(10 - pendingAttachments.count) {
+            if Task.isCancelled {
+                await cleanupCancelledUpload(acceptedReferences, context: context)
+                return uploads.count
             }
-            pendingAttachments.append(reference)
-        } catch {
-            guard coordinator.isCurrent(context) else { return }
-            presentedError = error.localizedDescription
+            do {
+                let reference = try await coordinator.remoteClient(for: context).uploadAttachment(
+                    chatId: chat.id,
+                    upload: upload
+                )
+                guard coordinator.isCurrent(context) else {
+                    acceptedReferences.append(reference)
+                    await cleanupCancelledUpload(acceptedReferences, context: context)
+                    return uploads.count
+                }
+                guard reference.isValid() else {
+                    throw AidenRemoteClientError.invalidResponse
+                }
+                pendingAttachments.append(reference)
+                acceptedReferences.append(reference)
+                if case .image(_, let mimeType, let data) = upload {
+                    let attachment = AidenMessageAttachment(
+                        id: reference.id,
+                        name: reference.name,
+                        mimeType: mimeType,
+                        kind: .image,
+                        size: reference.size
+                    )
+                    try? await cache.saveAttachmentImage(
+                        data,
+                        instanceId: instanceId,
+                        deviceId: context.deviceId,
+                        chatId: chat.id,
+                        attachment: attachment
+                    )
+                }
+            } catch is CancellationError {
+                await cleanupCancelledUpload(acceptedReferences, context: context)
+                return uploads.count
+            } catch {
+                guard coordinator.isCurrent(context) else { return uploads.count }
+                failedCount += 1
+            }
         }
+        if failedCount > 0 {
+            presentedError = failedCount == 1
+                ? String(localized: "One attachment could not be uploaded. Other attachments are still ready to send.")
+                : String(localized: "\(failedCount) attachments could not be uploaded. Other attachments are still ready to send.")
+        }
+        return failedCount
+    }
+
+    private func cleanupCancelledUpload(
+        _ references: [AidenAttachmentReference],
+        context: AidenRemoteRequestContext
+    ) async {
+        guard !references.isEmpty else { return }
+        let cleanup = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for reference in references {
+                pendingAttachments.removeAll { $0.id == reference.id }
+                await cache.removeAttachmentImage(
+                    instanceId: instanceId,
+                    deviceId: context.deviceId,
+                    chatId: chat.id,
+                    attachmentId: reference.id
+                )
+                try? await coordinator.remoteClient(for: context).removeAttachment(
+                    chatId: chat.id,
+                    attachmentId: reference.id
+                )
+            }
+        }
+        await cleanup.value
+    }
+
+    @discardableResult
+    func upload(_ upload: AidenAttachmentUpload) async -> Int {
+        await self.upload([upload])
     }
 
     func removeAttachment(_ attachment: AidenAttachmentReference) async {
         pendingAttachments.removeAll { $0.id == attachment.id }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
+        await cache.removeAttachmentImage(
+            instanceId: instanceId,
+            deviceId: context.deviceId,
+            chatId: chat.id,
+            attachmentId: attachment.id
+        )
         do {
             try await coordinator.remoteClient(for: context).removeAttachment(chatId: chat.id, attachmentId: attachment.id)
         } catch {
             // The reference is short lived and server cleanup is automatic. Local removal remains authoritative for the composer.
+        }
+    }
+
+    func attachmentImageData(for attachment: AidenMessageAttachment) async -> Data? {
+        guard attachment.kind == .image,
+              let context = try? coordinator.requestContext(for: instanceId)
+        else { return nil }
+        if let cached = await cache.attachmentImage(
+            instanceId: instanceId,
+            deviceId: context.deviceId,
+            chatId: chat.id,
+            attachment: attachment
+        ) {
+            return cached
+        }
+        do {
+            let content = try await coordinator.remoteClient(for: context).attachmentContent(
+                chatId: chat.id,
+                attachmentId: attachment.id
+            )
+            guard coordinator.isCurrent(context),
+                  content.mimeType == attachment.mimeType,
+                  let data = await AidenAttachmentImageDecoding.validatedData(
+                      content.data,
+                      mimeType: content.mimeType,
+                      declaredSize: attachment.size
+                  )
+            else { return nil }
+            try? await cache.saveAttachmentImage(
+                data,
+                instanceId: instanceId,
+                deviceId: context.deviceId,
+                chatId: chat.id,
+                attachment: attachment
+            )
+            return data
+        } catch {
+            return nil
         }
     }
 
@@ -623,28 +981,32 @@ final class AidenChatViewModel {
             let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
             guard coordinator.isCurrent(context) else { return }
             streamState = status.state
-            if status.state.isTerminal {
-                await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
-                await reconcileChat(context: context)
-                await cache.removeActiveStream(instanceId: instanceId, chatId: chat.id)
-            } else {
+            if !status.state.isTerminal {
                 await liveActivities.start(
                     instanceID: instanceId,
                     chatID: chat.id,
                     title: chat.title,
                     streamID: stream.streamId
                 )
-                await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
-                startStreaming(stream, context: context)
             }
+            await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
+            // A terminal status can become visible before its final SSE event is
+            // consumed. Keep the durable cursor and replay first so cancellation
+            // and provider-failure details are never skipped on reopen.
+            startStreaming(stream, context: context)
         } catch {
             guard coordinator.isCurrent(context) else { return }
             presentedError = error.localizedDescription
             await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
+            // Retain and resume the durable cursor even if the first status
+            // probe happens while the phone is offline.
+            startStreaming(stream, context: context)
         }
     }
 
     private func startStreaming(_ stream: AidenChatCache.ActiveStream, context: AidenRemoteRequestContext) {
+        terminalReconciliationTask?.cancel()
+        terminalReconciliationTask = nil
         streamTask?.cancel()
         streamTask = Task { [weak self] in
             await self?.consume(stream, context: context)
@@ -653,6 +1015,8 @@ final class AidenChatViewModel {
 
     private func consume(_ original: AidenChatCache.ActiveStream, context: AidenRemoteRequestContext) async {
         var stream = original
+        var terminalReplayGate = AidenTerminalReplayGate()
+        var retryAttempt = 0
         while !Task.isCancelled && coordinator.isCurrent(context) {
             do {
                 let events = try coordinator.remoteClient(for: context).streamEvents(
@@ -675,9 +1039,11 @@ final class AidenChatViewModel {
 
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
                 guard coordinator.isCurrent(context) else { return }
+                retryAttempt = 0
                 streamState = status.state
                 await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
                 if status.state.isTerminal {
+                    if terminalReplayGate.shouldReplay(status.state) { continue }
                     await finishStream(context: context)
                     return
                 }
@@ -692,6 +1058,7 @@ final class AidenChatViewModel {
                     streamState = status.state
                     await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
                     if status.state.isTerminal {
+                        if terminalReplayGate.shouldReplay(status.state) { continue }
                         await finishStream(context: context)
                         return
                     }
@@ -700,9 +1067,20 @@ final class AidenChatViewModel {
                     return
                 } catch {
                     guard coordinator.isCurrent(context) else { return }
+                    if AidenTerminalReconciliation.isDefinitiveMissingStream(error),
+                       await reconcileMissingStream(stream, context: context) {
+                        return
+                    }
                     presentedError = error.localizedDescription
                     await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
-                    return
+                    let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: retryAttempt)
+                    retryAttempt += 1
+                    do {
+                        try await Task.sleep(for: .milliseconds(delay))
+                    } catch {
+                        return
+                    }
+                    continue
                 }
             }
         }
@@ -782,14 +1160,17 @@ final class AidenChatViewModel {
         }
     }
 
-    private func reconcileChat(context: AidenRemoteRequestContext) async {
+    @discardableResult
+    private func reconcileChat(context: AidenRemoteRequestContext) async -> Bool {
         do {
             let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isCurrent(context) else { return false }
             await acceptRemoteChat(remote, context: context)
+            return true
         } catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isCurrent(context) else { return false }
             presentedError = error.localizedDescription
+            return false
         }
     }
 
@@ -832,7 +1213,84 @@ final class AidenChatViewModel {
 
     private func finishStream(context: AidenRemoteRequestContext) async {
         guard coordinator.isCurrent(context) else { return }
-        await reconcileChat(context: context)
+        guard await reconcileChat(context: context) else {
+            scheduleTerminalReconciliation(context: context)
+            return
+        }
+        await clearFinishedStream()
+    }
+
+    private func reconcileMissingStream(
+        _ stream: AidenChatCache.ActiveStream,
+        context: AidenRemoteRequestContext
+    ) async -> Bool {
+        guard await reconcileChat(context: context) else { return false }
+        switch AidenMissingStreamResolution.resolve(messages: chat.messages) {
+        case .cancelled:
+            streamState = .cancelled
+            await liveActivities.finish(
+                instanceID: instanceId,
+                streamID: stream.streamId,
+                status: .cancelled,
+                message: String(localized: "Response cancelled")
+            )
+        case .failed:
+            streamState = .error
+            await liveActivities.finish(
+                instanceID: instanceId,
+                streamID: stream.streamId,
+                status: .failed,
+                message: String(localized: "Response failed")
+            )
+        case .complete:
+            streamState = .done
+            await liveActivities.finish(
+                instanceID: instanceId,
+                streamID: stream.streamId,
+                status: .complete,
+                message: String(localized: "Response complete")
+            )
+        case .interrupted:
+            streamState = .interrupted
+            await liveActivities.finish(
+                instanceID: instanceId,
+                streamID: stream.streamId,
+                status: .failed,
+                message: String(localized: "Response interrupted")
+            )
+        }
+        await clearFinishedStream()
+        return true
+    }
+
+    private func scheduleTerminalReconciliation(context: AidenRemoteRequestContext) {
+        guard terminalReconciliationTask == nil else { return }
+        terminalReconciliationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { terminalReconciliationTask = nil }
+            var attempt = 0
+            while !Task.isCancelled && coordinator.isCurrent(context) {
+                do {
+                    let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: attempt)
+                    try await Task.sleep(for: .milliseconds(delay))
+                    guard coordinator.isCurrent(context) else { return }
+                    if await reconcileChat(context: context) {
+                        await clearFinishedStream()
+                        return
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // Keep the durable stream cursor and continue retrying while
+                    // this Mac connection remains current. Long Tailscale or
+                    // local-network outages must not erase terminal evidence.
+                }
+                attempt += 1
+            }
+        }
+    }
+
+    private func clearFinishedStream() async {
         liveText = ""
         reasoning = ""
         tools = []
@@ -1015,7 +1473,13 @@ struct AidenChatDetailView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 18) {
                         ForEach(model.chat.messages) { message in
-                            AidenMessageView(message: message, speechPlayback: speechPlayback)
+                            AidenMessageView(
+                                message: message,
+                                speechPlayback: speechPlayback,
+                                loadAttachmentImage: { attachment in
+                                    await model.attachmentImageData(for: attachment)
+                                }
+                            )
                         }
                         if model.isStreaming || !model.liveText.isEmpty {
                             AidenLiveResponseView(model: model)
@@ -1103,6 +1567,7 @@ private struct AidenMessageView: View {
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
     let speechPlayback: AidenSpeechPlaybackController
+    let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -1132,17 +1597,50 @@ private struct AidenMessageView: View {
                 }
             }
         }
-        .accessibilityElement(children: message.role == .assistant ? .contain : .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(message.role == .user ? "You" : "Aiden")
     }
 
     private var messageContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(
+            alignment: message.role == .user ? .trailing : .leading,
+            spacing: 10
+        ) {
             if !message.text.isEmpty {
                 AidenMessageTextView(role: message.role, content: message.text)
+                    .padding(AidenMessageContentSurface.usesRaisedBubble(
+                        role: message.role,
+                        content: .text
+                    ) ? 12 : 0)
+                    .background(
+                        AidenMessageContentSurface.usesRaisedBubble(
+                            role: message.role,
+                            content: .text
+                        ) ? palette.raised : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
             }
             if let attachments = message.attachments, !attachments.isEmpty {
-                ForEach(attachments) { attachment in
+                let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
+                let imageAttachments = attachments.filter { attachment in
+                    attachment.kind == .image
+                        && (attachment.mimeType == "image/jpeg" || attachment.mimeType == "image/png")
+                        && attachment.size > 0
+                        && attachment.size <= AidenAttachmentImageValidation.maximumBytes
+                        && identifierCounts[attachment.id] == 1
+                }
+                if !imageAttachments.isEmpty {
+                    AidenMessageImageAttachmentsView(
+                        attachments: imageAttachments,
+                        edge: AidenMessageMediaEdge.forRole(message.role),
+                        loadData: loadAttachmentImage
+                    )
+                }
+                let fallbackAttachments = attachments.filter { attachment in
+                    !imageAttachments.contains(where: { $0.id == attachment.id })
+                }
+                ForEach(fallbackAttachments.indices, id: \.self) { index in
+                    let attachment = fallbackAttachments[index]
                     Label {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(attachment.name).lineLimit(1)
@@ -1150,11 +1648,25 @@ private struct AidenMessageView: View {
                                 .foregroundStyle(palette.secondary)
                         }
                     } icon: {
-                        Image(systemName: attachment.kind == .image ? "photo" : "doc.text")
+                        Image(systemName: attachment.kind == .image ? "photo.badge.exclamationmark" : "doc.text")
                     }
                     .font(.caption)
+                    .padding(AidenMessageContentSurface.usesRaisedBubble(
+                        role: message.role,
+                        content: .fallbackAttachment
+                    ) ? 10 : 0)
+                    .background(
+                        AidenMessageContentSurface.usesRaisedBubble(
+                            role: message.role,
+                            content: .fallbackAttachment
+                        ) ? palette.raised : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    )
                     .accessibilityElement(children: .combine)
                 }
+            }
+            if message.role == .assistant, let outcome = message.outcome {
+                AidenMessageOutcomeView(outcome: outcome)
             }
             if message.role == .assistant, !message.text.isEmpty {
                 Button {
@@ -1167,9 +1679,687 @@ private struct AidenMessageView: View {
                 .foregroundStyle(palette.secondary)
             }
         }
-        .padding(message.role == .user ? 12 : 0)
-        .background(message.role == .user ? palette.raised : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+struct AidenMessageOutcomePresentation: Equatable {
+    let title: String
+    let detail: String?
+    let symbol: String
+    let isFailure: Bool
+
+    static func make(_ outcome: AidenMessageOutcome) -> Self {
+        guard outcome.status == .failed else {
+            return Self(title: "Response cancelled", detail: nil, symbol: "stop.circle", isFailure: false)
+        }
+        let detail: String
+        switch outcome.category {
+        case "network":
+            detail = "Aiden could not reach the model provider."
+        case "timeout":
+            detail = "The model provider took too long to respond."
+        case "service_unavailable":
+            detail = "The model provider is temporarily unavailable."
+        case "rate_limit":
+            detail = "The model provider is receiving too many requests. Try again shortly."
+        case "authentication":
+            detail = "The model provider rejected its credentials. Check Provider Settings on your Mac."
+        case "quota":
+            detail = "The model provider account has no available quota."
+        case "invalid_request":
+            detail = "The model provider could not accept this request."
+        case "context_window":
+            detail = "This conversation is too large for the selected model."
+        case "output_limit":
+            detail = "The model reached its response limit before it could finish."
+        case "interrupted":
+            detail = "The response was interrupted before it could finish."
+        case "context_management":
+            detail = "Aiden could not prepare this conversation for the selected model."
+        default:
+            detail = "The model provider could not complete this response."
+        }
+        return Self(title: "Generation failed", detail: detail, symbol: "exclamationmark.triangle", isFailure: true)
+    }
+}
+
+private struct AidenMessageOutcomeView: View {
+    @Environment(\.aidenPalette) private var palette
+    let outcome: AidenMessageOutcome
+
+    var body: some View {
+        let presentation = AidenMessageOutcomePresentation.make(outcome)
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: presentation.symbol)
+                .foregroundStyle(presentation.isFailure ? Color.red : palette.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(presentation.title).fontWeight(.semibold)
+                if let detail = presentation.detail {
+                    Text(detail).foregroundStyle(palette.secondary)
+                }
+            }
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            presentation.isFailure ? Color.red.opacity(0.08) : palette.raised,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct AidenAttachmentGallerySelection: Identifiable {
+    let id: String
+}
+
+private struct AidenMessageImageAttachmentsView: View {
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    let attachments: [AidenMessageAttachment]
+    let edge: AidenMessageMediaEdge
+    let loadData: (AidenMessageAttachment) async -> Data?
+    @State private var gallerySelection: AidenAttachmentGallerySelection?
+    @State private var deckSelection = 0
+    @State private var deckDragTranslation: CGFloat = 0
+    @State private var deckDragAxis: Axis?
+
+    var body: some View {
+        Group {
+            if attachments.count == 1 {
+                AidenAttachmentThumbnailView(
+                    attachment: attachments[0],
+                    loadData: loadData,
+                    contentMode: .fit,
+                    showsBackground: false,
+                    imageCornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius,
+                    imageAlignment: edge.alignment
+                )
+                .aspectRatio(AidenInlineCardDeckLayout.viewportAspectRatio, contentMode: .fit)
+                .onTapGesture { openGallery(at: 0) }
+            } else {
+                cardDeck
+            }
+        }
+        .frame(maxWidth: 360, alignment: edge.alignment)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(attachments.count == 1
+            ? "Double-tap to open the image viewer"
+            : "Swipe up or down to choose a photo. Double-tap to open the image viewer")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { openGallery(at: deckSelection) }
+        .accessibilityAdjustableAction { direction in
+            guard attachments.count > 1 else { return }
+            switch direction {
+            case .increment: setDeckSelection(min(deckSelection + 1, attachments.count - 1))
+            case .decrement: setDeckSelection(max(deckSelection - 1, 0))
+            @unknown default: break
+            }
+        }
+        .onChange(of: attachments.map(\.id)) {
+            deckSelection = min(deckSelection, max(attachments.count - 1, 0))
+        }
+        .fullScreenCover(item: $gallerySelection) { selection in
+            AidenAttachmentGalleryView(
+                attachments: attachments,
+                initialAttachmentID: selection.id,
+                loadData: loadData
+            )
+        }
+    }
+
+    private var cardDeck: some View {
+        GeometryReader { proxy in
+            let width = max(proxy.size.width - 54, 1)
+            let dragProgress = AidenInlineCardDeckLayout.dragProgress(
+                translation: deckDragTranslation,
+                width: width
+            )
+            ZStack {
+                ForEach(Array(attachments.enumerated()), id: \.element.id) { index, attachment in
+                    if AidenInlineCardDeckLayout.isVisible(
+                        index: index,
+                        selection: deckSelection,
+                        count: attachments.count
+                    ) {
+                        deckCard(
+                            attachment: attachment,
+                            index: index,
+                            dragProgress: dragProgress,
+                            width: width
+                        )
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge.alignment)
+            .padding(.horizontal, 27)
+            .padding(.vertical, 18)
+            .contentShape(Rectangle())
+            .onTapGesture { openGallery(at: deckSelection) }
+            .simultaneousGesture(deckDragGesture(width: width))
+        }
+        .aspectRatio(AidenInlineCardDeckLayout.viewportAspectRatio, contentMode: .fit)
+    }
+
+    private func deckCard(
+        attachment: AidenMessageAttachment,
+        index: Int,
+        dragProgress: CGFloat,
+        width: CGFloat
+    ) -> some View {
+        let isSelected = index == deckSelection
+        let isPreferredBackground = index == AidenInlineCardDeckLayout.preferredBackgroundIndex(
+            selection: deckSelection,
+            count: attachments.count,
+            translation: deckDragTranslation
+        )
+        return AidenAttachmentThumbnailView(
+            attachment: attachment,
+            loadData: loadData,
+            contentMode: .fit,
+            showsBackground: false,
+            imageCornerRadius: AidenInlineCardDeckLayout.cardCornerRadius,
+            imageAlignment: edge.alignment
+        )
+        .frame(width: width)
+        .aspectRatio(AidenInlineCardDeckLayout.viewportAspectRatio, contentMode: .fit)
+        .scaleEffect(isSelected ? 1 : 0.94, anchor: edge.scaleAnchor)
+        .rotationEffect(
+            .degrees(isSelected
+                ? Double(dragProgress * 2.4)
+                : edge.backgroundRotationDegrees),
+            anchor: edge.rotationAnchor
+        )
+        .offset(
+            x: isSelected
+                ? AidenInlineCardDeckLayout.selectedCardOffset(translation: deckDragTranslation)
+                : 0,
+            y: isSelected ? 0 : 7
+        )
+        .shadow(
+            color: .black.opacity(isSelected ? 0.14 : 0),
+            radius: isSelected ? 8 : 0,
+            y: isSelected ? 5 : 0
+        )
+        .zIndex(isSelected ? 2 : (isPreferredBackground ? 1 : 0))
+        .accessibilityHidden(true)
+    }
+
+    private func deckDragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                if deckDragAxis == nil {
+                    deckDragAxis = abs(value.translation.width) > abs(value.translation.height)
+                        ? .horizontal
+                        : .vertical
+                }
+                guard deckDragAxis == .horizontal else { return }
+                deckDragTranslation = reduceMotion ? 0 : AidenInlineCardDeckLayout.resistedTranslation(
+                    current: deckSelection,
+                    count: attachments.count,
+                    translation: value.translation.width
+                )
+            }
+            .onEnded { value in
+                defer { deckDragAxis = nil }
+                guard deckDragAxis == .horizontal else {
+                    deckDragTranslation = 0
+                    return
+                }
+                let selection = AidenInlineCardDeckLayout.resolvedSelection(
+                    current: deckSelection,
+                    count: attachments.count,
+                    translation: value.translation.width,
+                    predictedTranslation: value.predictedEndTranslation.width
+                )
+                setDeckSelection(selection)
+            }
+    }
+
+    private var accessibilityLabel: String {
+        if attachments.count == 1 {
+            return "Image attachment, \(attachments[0].name)"
+        }
+        return "\(attachments.count) image attachments, photo \(deckSelection + 1) of \(attachments.count)"
+    }
+
+    private func setDeckSelection(_ selection: Int) {
+        let update = {
+            deckSelection = selection
+            deckDragTranslation = 0
+        }
+        if reduceMotion {
+            update()
+        } else {
+            withAnimation(.spring(duration: 0.22, bounce: 0.08), update)
+        }
+    }
+
+    private func openGallery(at index: Int) {
+        guard attachments.indices.contains(index) else { return }
+        gallerySelection = AidenAttachmentGallerySelection(id: attachments[index].id)
+    }
+}
+
+private struct AidenAttachmentThumbnailView: View {
+    enum LoadState {
+        case loading
+        case image(UIImage)
+        case failed
+    }
+
+    @Environment(\.aidenPalette) private var palette
+    let attachment: AidenMessageAttachment
+    let loadData: (AidenMessageAttachment) async -> Data?
+    let contentMode: ContentMode
+    var showsBackground = true
+    var imageCornerRadius: CGFloat = 0
+    var imageAlignment: Alignment = .center
+    @State private var state: LoadState = .loading
+
+    var body: some View {
+        ZStack {
+            if showsBackground {
+                palette.raised
+            }
+            switch state {
+            case .loading:
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Loading \(attachment.name)")
+            case .image(let image):
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: contentMode)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: imageAlignment)
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: imageCornerRadius,
+                        style: .continuous
+                    ))
+            case .failed:
+                VStack(spacing: 6) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                    Text("Open to retry")
+                }
+                .font(.caption)
+                .foregroundStyle(palette.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("Open \(attachment.name) to retry")
+            }
+        }
+        .clipped()
+        .task {
+            state = .loading
+            guard let data = await loadData(attachment), !Task.isCancelled,
+                  let image = await AidenAttachmentImageDecoding.thumbnail(
+                      data: data,
+                      maximumPixelSize: 960
+                  ),
+                  !Task.isCancelled
+            else {
+                if !Task.isCancelled { state = .failed }
+                return
+            }
+            state = .image(image)
+        }
+    }
+}
+
+private struct AidenAttachmentGalleryView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    let attachments: [AidenMessageAttachment]
+    let loadData: (AidenMessageAttachment) async -> Data?
+    @State private var selectedID: String
+    @State private var isSaving = false
+    @State private var toastMessage: String?
+    @State private var showsPhotoSettingsRecovery = false
+
+    init(
+        attachments: [AidenMessageAttachment],
+        initialAttachmentID: String,
+        loadData: @escaping (AidenMessageAttachment) async -> Data?
+    ) {
+        self.attachments = Array(attachments.prefix(20))
+        self.loadData = loadData
+        _selectedID = State(initialValue: initialAttachmentID)
+    }
+
+    var body: some View {
+        NavigationStack {
+            TabView(selection: $selectedID) {
+                ForEach(attachments) { attachment in
+                    AidenFullSizeAttachmentView(
+                        attachment: attachment,
+                        loadData: loadData,
+                        isActive: isNearSelection(attachment)
+                    )
+                        .tag(attachment.id)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: attachments.count > 1 ? .always : .never))
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle(positionLabel)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbarBackground(.black.opacity(0.72), for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(.white)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            save(selectedAttachments)
+                        } label: {
+                            Label("Save Image", systemImage: "square.and.arrow.down")
+                        }
+                        if attachments.count > 1 {
+                            Button {
+                                save(attachments)
+                            } label: {
+                                Label("Save All Images", systemImage: "square.stack.3d.down.right")
+                            }
+                        }
+                    } label: {
+                        if isSaving {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "square.and.arrow.down")
+                        }
+                    }
+                    .disabled(isSaving)
+                    .accessibilityLabel("Save images")
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let toastMessage {
+                    Text(toastMessage)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.bottom, 44)
+                        .transition(.opacity)
+                        .accessibilityAddTraits(.isStaticText)
+                }
+            }
+        }
+        .alert("Photos Access Needed", isPresented: $showsPhotoSettingsRecovery) {
+            Button("Not Now", role: .cancel) {}
+            Button("Open Settings") {
+                guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+                openURL(settingsURL)
+            }
+        } message: {
+            Text("Allow Aiden On The Go to add images in Settings, then try again.")
+        }
+    }
+
+    private var selectedAttachments: [AidenMessageAttachment] {
+        attachments.first { $0.id == selectedID }.map { [$0] } ?? []
+    }
+
+    private var positionLabel: String {
+        guard attachments.count > 1,
+              let index = attachments.firstIndex(where: { $0.id == selectedID })
+        else { return attachments.first?.name ?? "Image" }
+        return "\(index + 1) of \(attachments.count)"
+    }
+
+    private func isNearSelection(_ attachment: AidenMessageAttachment) -> Bool {
+        guard let selectedIndex = attachments.firstIndex(where: { $0.id == selectedID }),
+              let attachmentIndex = attachments.firstIndex(where: { $0.id == attachment.id })
+        else { return false }
+        return AidenAttachmentGalleryWindow.contains(
+            index: attachmentIndex,
+            selectedIndex: selectedIndex,
+            count: attachments.count
+        )
+    }
+
+    private func save(_ requested: [AidenMessageAttachment]) {
+        guard !requested.isEmpty, !isSaving else { return }
+        isSaving = true
+        toastMessage = nil
+        Task {
+            defer { isSaving = false }
+            do {
+                let savedCount = try await AidenPhotoLibrarySaving.save(
+                    attachments: Array(requested.prefix(20)),
+                    loadData: loadData
+                )
+                announce(savedCount == 1
+                    ? String(localized: "Saved to Photos")
+                    : String(localized: "Saved \(savedCount) images to Photos"))
+            } catch AidenPhotoLibrarySavingError.denied {
+                announce(AidenPhotoLibrarySavingError.denied.localizedDescription)
+                showsPhotoSettingsRecovery = true
+            } catch {
+                announce(error.localizedDescription)
+            }
+            try? await Task.sleep(for: .seconds(2.5))
+            if !Task.isCancelled { toastMessage = nil }
+        }
+    }
+
+    private func announce(_ message: String) {
+        toastMessage = message
+        AccessibilityNotification.Announcement(message).post()
+    }
+}
+
+private struct AidenFullSizeAttachmentView: View {
+    let attachment: AidenMessageAttachment
+    let loadData: (AidenMessageAttachment) async -> Data?
+    let isActive: Bool
+    @State private var image: UIImage?
+    @State private var failed = false
+    @State private var attempt = 0
+
+    var body: some View {
+        ZStack {
+            Color.black
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .accessibilityLabel(attachment.name)
+            } else if failed {
+                Button {
+                    attempt += 1
+                } label: {
+                    Label("Retry Image", systemImage: "arrow.clockwise")
+                        .foregroundStyle(.white)
+                        .padding()
+                }
+            } else {
+                ProgressView().tint(.white)
+                    .accessibilityLabel("Loading \(attachment.name)")
+            }
+        }
+        .task(id: "\(attempt)-\(isActive)") {
+            image = nil
+            failed = false
+            guard isActive else { return }
+            guard let data = await loadData(attachment), !Task.isCancelled,
+                  let decoded = await AidenAttachmentImageDecoding.thumbnail(
+                      data: data,
+                      maximumPixelSize: 2_560
+                  ),
+                  !Task.isCancelled
+            else {
+                if !Task.isCancelled { failed = true }
+                return
+            }
+            image = decoded
+        }
+    }
+}
+
+enum AidenAttachmentImageDecoding {
+    static func validatedData(
+        _ data: Data,
+        mimeType: String,
+        declaredSize: Int
+    ) async -> Data? {
+        await AidenAttachmentImageDecoder.shared.validatedData(
+            data,
+            mimeType: mimeType,
+            declaredSize: declaredSize
+        )
+    }
+
+    static func thumbnail(data: Data, maximumPixelSize: Int) async -> UIImage? {
+        await AidenAttachmentImageDecoder.shared.thumbnail(
+            data: data,
+            maximumPixelSize: maximumPixelSize
+        )
+    }
+}
+
+enum AidenAttachmentThumbnailCacheKey {
+    static func make(data: Data, maximumPixelSize: Int) -> String {
+        let digest = Data(SHA256.hash(data: data)).base64EncodedString()
+        return "\(maximumPixelSize):\(digest)"
+    }
+}
+
+private actor AidenAttachmentImageDecoder {
+    static let shared = AidenAttachmentImageDecoder()
+    private let thumbnailCache: NSCache<NSString, UIImage>
+
+    init() {
+        thumbnailCache = NSCache<NSString, UIImage>()
+        thumbnailCache.countLimit = 24
+        thumbnailCache.totalCostLimit = 32 * 1_024 * 1_024
+    }
+
+    func validatedData(_ data: Data, mimeType: String, declaredSize: Int) -> Data? {
+        guard !Task.isCancelled else { return nil }
+        return AidenAttachmentImageValidation.validatedData(
+            data,
+            mimeType: mimeType,
+            declaredSize: declaredSize
+        )
+    }
+
+    func thumbnail(data: Data, maximumPixelSize: Int) -> UIImage? {
+        guard !Task.isCancelled else { return nil }
+        guard maximumPixelSize > 0 else { return nil }
+        let cacheKey = AidenAttachmentThumbnailCacheKey.make(
+            data: data,
+            maximumPixelSize: maximumPixelSize
+        ) as NSString
+        if let cached = thumbnailCache.object(forKey: cacheKey) {
+            return cached
+        }
+        guard !Task.isCancelled,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+                  kCGImageSourceShouldCacheImmediately: true,
+              ] as CFDictionary)
+        else { return nil }
+        guard !Task.isCancelled else { return nil }
+        let decoded = UIImage(cgImage: image)
+        thumbnailCache.setObject(
+            decoded,
+            forKey: cacheKey,
+            cost: image.bytesPerRow * image.height
+        )
+        return decoded
+    }
+}
+
+enum AidenPhotoLibrarySavingError: LocalizedError {
+    case denied
+    case invalidImage
+
+    var errorDescription: String? {
+        switch self {
+        case .denied: String(localized: "Allow Aiden On The Go to add images in Photos Settings, then try again.")
+        case .invalidImage: String(localized: "One or more images could not be saved.")
+        }
+    }
+}
+
+enum AidenPhotoLibrarySaving {
+    @MainActor
+    static func save(
+        attachments: [AidenMessageAttachment],
+        loadData: (AidenMessageAttachment) async -> Data?
+    ) async throws -> Int {
+        guard !attachments.isEmpty, attachments.count <= 20 else {
+            throw AidenPhotoLibrarySavingError.invalidImage
+        }
+        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard status == .authorized || status == .limited else {
+            throw AidenPhotoLibrarySavingError.denied
+        }
+
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appending(path: "AidenPhotoSave-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+        var urls: [URL] = []
+        urls.reserveCapacity(attachments.count)
+        for (index, attachment) in attachments.enumerated() {
+            try Task.checkCancellation()
+            guard let data = await loadData(attachment) else {
+                throw AidenPhotoLibrarySavingError.invalidImage
+            }
+            let url = try await stage(
+                data: data,
+                attachment: attachment,
+                index: index,
+                directory: directory
+            )
+            urls.append(url)
+        }
+        try await PHPhotoLibrary.shared().performChanges {
+            for url in urls {
+                PHAssetCreationRequest.forAsset().addResource(
+                    with: .photo,
+                    fileURL: url,
+                    options: nil
+                )
+            }
+        }
+        return urls.count
+    }
+
+    private static func stage(
+        data: Data,
+        attachment: AidenMessageAttachment,
+        index: Int,
+        directory: URL
+    ) async throws -> URL {
+        let worker = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            guard AidenAttachmentImageValidation.validatedData(
+                data,
+                mimeType: attachment.mimeType,
+                declaredSize: attachment.size
+            ) != nil else { throw AidenPhotoLibrarySavingError.invalidImage }
+            let ext = attachment.mimeType == "image/png" ? "png" : "jpg"
+            let url = directory.appending(path: "\(index)-\(UUID().uuidString).\(ext)")
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+            try Task.checkCancellation()
+            return url
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 }
 
@@ -1592,9 +2782,11 @@ private struct AidenComposerView: View {
     let composerFocus: FocusState<Bool>.Binding
     @State private var voiceInput = ComposerVoiceInputController()
     @State private var didAutoStartVoice = false
-    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var isPhotoPickerPresented = false
     @State private var isFileImporterPresented = false
+    @State private var isPreparingAttachments = false
+    @State private var attachmentPreparationTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1637,7 +2829,7 @@ private struct AidenComposerView: View {
 
             HStack(alignment: .center, spacing: 10) {
                 AidenUIKitMenuButton {
-                    if model.isUploadingAttachment {
+                    if model.isUploadingAttachment || isPreparingAttachments {
                         ProgressView().controlSize(.small).frame(width: 44, height: 44)
                     } else {
                         Image(systemName: "plus")
@@ -1647,12 +2839,16 @@ private struct AidenComposerView: View {
                 } menu: {
                     attachmentMenu()
                 }
-                .disabled(!model.isConnected || model.isStreaming || model.isUploadingAttachment || model.pendingAttachments.count >= 10)
+                .disabled(
+                    !model.isConnected || model.isStreaming || model.isUploadingAttachment
+                        || isPreparingAttachments || model.pendingAttachments.count >= 10
+                )
                 .accessibilityLabel("Add attachment")
                 .accessibilityHint("Attach an image or bounded text file")
                 .photosPicker(
                     isPresented: $isPhotoPickerPresented,
-                    selection: $selectedPhoto,
+                    selection: $selectedPhotos,
+                    maxSelectionCount: max(1, attachmentCapacity),
                     matching: .images
                 )
 
@@ -1817,44 +3013,87 @@ private struct AidenComposerView: View {
             didAutoStartVoice = true
             await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
         }
-        .onChange(of: selectedPhoto) { _, item in
-            guard let item else { return }
-            Task {
-                defer { selectedPhoto = nil }
-                do {
-                    guard let data = try await item.loadTransferable(type: Data.self) else {
-                        throw AidenAttachmentPreparationError.invalidImage
-                    }
-                    let upload = try await Task.detached(priority: .userInitiated) {
-                        try AidenAttachmentPreparation.imageUpload(data: data, name: "Photo.jpg")
-                    }.value
-                    await model.upload(upload)
-                } catch {
-                    model.presentedError = error.localizedDescription
+        .onChange(of: selectedPhotos) { _, items in
+            guard !items.isEmpty, !isPreparingAttachments else { return }
+            let selected = Array(items.prefix(attachmentCapacity))
+            selectedPhotos = []
+            isPreparingAttachments = true
+            attachmentPreparationTask = Task {
+                defer {
+                    isPreparingAttachments = false
+                    attachmentPreparationTask = nil
                 }
+                var uploads: [AidenAttachmentUpload] = []
+                var preparationFailures = 0
+                for item in selected {
+                    guard !Task.isCancelled else { return }
+                    do {
+                        guard let picked = try await item.loadTransferable(type: AidenPickedImageFile.self) else {
+                            throw AidenAttachmentPreparationError.invalidImage
+                        }
+                        defer { try? FileManager.default.removeItem(at: picked.url) }
+                        let upload = try await AidenAttachmentPreparation.fileUploadAsync(
+                            url: picked.url,
+                            preferredName: picked.name,
+                            forceImage: true
+                        )
+                        uploads.append(upload)
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        preparationFailures += 1
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                let uploadFailures = await model.upload(uploads)
+                guard !Task.isCancelled else { return }
+                presentAttachmentFailures(preparationFailures + uploadFailures)
             }
         }
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: [.image, .plainText, .sourceCode, .json, .xml, .commaSeparatedText],
-            allowsMultipleSelection: false
+            allowsMultipleSelection: true
         ) { result in
-            Task {
+            let capacity = attachmentCapacity
+            guard capacity > 0, !isPreparingAttachments else { return }
+            isPreparingAttachments = true
+            attachmentPreparationTask = Task {
+                defer {
+                    isPreparingAttachments = false
+                    attachmentPreparationTask = nil
+                }
+                var uploads: [AidenAttachmentUpload] = []
+                var preparationFailures = 0
                 do {
                     let urls = try result.get()
-                    guard let url = urls.first else {
-                        throw AidenAttachmentPreparationError.unsupportedTextType
+                    preparationFailures += max(0, urls.count - capacity)
+                    for url in urls.prefix(capacity) {
+                        guard !Task.isCancelled else { return }
+                        do {
+                            let upload = try await AidenAttachmentPreparation.fileUploadAsync(url: url)
+                            uploads.append(upload)
+                        } catch is CancellationError {
+                            return
+                        } catch {
+                            preparationFailures += 1
+                        }
                     }
-                    let upload = try await Task.detached(priority: .userInitiated) {
-                        try AidenAttachmentPreparation.fileUpload(url: url)
-                    }.value
-                    await model.upload(upload)
                 } catch {
-                    model.presentedError = error.localizedDescription
+                    preparationFailures += 1
                 }
+                guard !Task.isCancelled else { return }
+                let uploadFailures = await model.upload(uploads)
+                guard !Task.isCancelled else { return }
+                presentAttachmentFailures(preparationFailures + uploadFailures)
             }
         }
-        .onDisappear { voiceInput.stopKeepingTranscript() }
+        .onDisappear {
+            voiceInput.stopKeepingTranscript()
+            attachmentPreparationTask?.cancel()
+            attachmentPreparationTask = nil
+            isPreparingAttachments = false
+        }
     }
 
     private func attachmentMenu() -> UIMenu {
@@ -1878,6 +3117,17 @@ private struct AidenComposerView: View {
                 }
             },
         ])
+    }
+
+    private var attachmentCapacity: Int {
+        max(0, 10 - model.pendingAttachments.count)
+    }
+
+    private func presentAttachmentFailures(_ count: Int) {
+        guard count > 0 else { return }
+        model.presentedError = count == 1
+            ? String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
+            : String(localized: "\(count) selected attachments could not be added. Other attachments are still ready to send.")
     }
 
     private var sendButtonBackground: Color {
