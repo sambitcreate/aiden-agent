@@ -32,8 +32,6 @@ import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attach
 const MAX_REQUEST_BODY_BYTES = 1_048_576;
 const MAX_FILE_REQUEST_BODY_BYTES = 6 * 1_048_576;
 const MAX_REQUEST_URL_LENGTH = 2_048;
-const SERVER_NAME = "Aiden Agent";
-
 export interface AidenRemoteServerProjection {
   protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
   instanceId: string;
@@ -47,9 +45,11 @@ export interface AidenRemoteServerProjection {
 
 export interface AidenRemoteRouterDependencies {
   instanceId: string;
+  displayName(): string;
   appVersion: string;
-  devices: Pick<AidenRemoteStateRegistry, "authenticate">;
-  pairing: Pick<AidenRemotePairingService, "exchange">;
+  devices: Pick<AidenRemoteStateRegistry, "authenticate" | "acquireDeviceAuthorization">;
+  pairing: Pick<AidenRemotePairingService, "exchange">
+    & Partial<Pick<AidenRemotePairingService, "manualBootstrap">>;
   workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove">;
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
@@ -76,6 +76,7 @@ export interface AidenRemoteRouterDependencies {
     requestId: string;
     route:
       | "health"
+      | "pairingManualBootstrap"
       | "pairingExchange"
       | "server"
       | "workspaces"
@@ -230,7 +231,7 @@ function bearerCredential(request: IncomingMessage): string | null {
   return match?.[1] ?? null;
 }
 
-async function authenticate(
+async function authenticateCredential(
   request: IncomingMessage,
   devices: Pick<AidenRemoteStateRegistry, "authenticate">,
   capability: AidenRemoteCapability,
@@ -472,6 +473,21 @@ function sourceIdentity(request: IncomingMessage): string {
   return address.length <= 128 ? address : "unknown";
 }
 
+function requireEmptyObject(value: unknown): void {
+  if (
+    !value
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || Object.keys(value).length !== 0
+  ) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "This request body must be an empty JSON object.",
+      400,
+    );
+  }
+}
+
 export function createAidenRemoteRequestHandler(
   dependencies: AidenRemoteRouterDependencies,
 ): (request: IncomingMessage, response: ServerResponse) => void {
@@ -480,6 +496,7 @@ export function createAidenRemoteRequestHandler(
     const startedAt = dependencies.now();
     let route: Parameters<AidenRemoteRouterDependencies["log"]>[0]["route"] = "unknown";
     let deviceIdSuffix: string | undefined;
+    let releaseDeviceAuthorization: (() => void) | undefined;
     void (async () => {
       if (request.headers.origin !== undefined) {
         throw new AidenRemoteServiceError(
@@ -493,6 +510,21 @@ export function createAidenRemoteRequestHandler(
         dependencies.acceptStrippedBasePath === true,
       );
       const { path, query } = target;
+      const authenticate = async (
+        _request: IncomingMessage,
+        _devices: Pick<AidenRemoteStateRegistry, "authenticate">,
+        capability: AidenRemoteCapability,
+      ): Promise<AidenRemoteAuthenticatedDevice> => {
+        const device = await authenticateCredential(request, dependencies.devices, capability);
+        // Every authenticated operation crosses the synchronous revocation
+        // fence. Only mutations participate in the drain; SSE/read lifetimes
+        // must not postpone durable revocation or cleanup.
+        releaseDeviceAuthorization = dependencies.devices.acquireDeviceAuthorization(
+          device.id,
+          request.method !== "GET",
+        );
+        return device;
+      };
       if (request.method === "GET" && path === "/health") {
         requireNoQuery(query);
         route = "health";
@@ -512,6 +544,20 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, result);
         return;
       }
+      if (request.method === "POST" && path === "/pairing/manual-bootstrap") {
+        requireNoQuery(query);
+        route = "pairingManualBootstrap";
+        requireEmptyObject(await readJsonBody(request, 64));
+        if (!dependencies.pairing.manualBootstrap) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This endpoint is unavailable.",
+            404,
+          );
+        }
+        writeJson(response, 200, dependencies.pairing.manualBootstrap());
+        return;
+      }
       if (request.method === "GET" && path === "/server") {
         requireNoQuery(query);
         route = "server";
@@ -520,7 +566,7 @@ export function createAidenRemoteRequestHandler(
         const projection: AidenRemoteServerProjection = {
           protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
           instanceId: dependencies.instanceId,
-          name: SERVER_NAME,
+          name: dependencies.displayName(),
           appVersion: dependencies.appVersion,
           capabilities: [...AIDEN_REMOTE_CAPABILITIES],
           connectionMode: dependencies.connectionMode(),
@@ -541,6 +587,7 @@ export function createAidenRemoteRequestHandler(
       if (path === "/workspaces" && request.method === "POST") {
         requireNoQuery(query);
         route = "workspaces";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "workspace:manage");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -548,7 +595,7 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           201,
-          await dependencies.workspaces.create(device.id, key, await readJsonBody(request)),
+          await dependencies.workspaces.create(device.id, key, body),
         );
         return;
       }
@@ -565,6 +612,7 @@ export function createAidenRemoteRequestHandler(
       if (workspaceMatch && request.method === "PATCH") {
         requireNoQuery(query);
         route = "workspace";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "workspace:manage");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -575,7 +623,7 @@ export function createAidenRemoteRequestHandler(
           await dependencies.workspaces.update(
             workspaceMatch[1]!,
             revision,
-            await readJsonBody(request),
+            body,
           ),
         );
         return;
@@ -619,6 +667,7 @@ export function createAidenRemoteRequestHandler(
       if (workspaceFileMatch && request.method === "PUT") {
         requireNoQuery(query);
         route = "workspaceFile";
+        const body = await readJsonBody(request, MAX_FILE_REQUEST_BODY_BYTES);
         const device = await authenticate(request, dependencies.devices, "files:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.files) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -629,7 +678,7 @@ export function createAidenRemoteRequestHandler(
             device.id,
             workspaceFileMatch[1]!,
             workspaceFileMatch[2]!,
-            await readJsonBody(request, MAX_FILE_REQUEST_BODY_BYTES),
+            body,
           ),
         );
         return;
@@ -655,6 +704,7 @@ export function createAidenRemoteRequestHandler(
           (action === "push" && request.method === "POST") ||
           (action === "worktrees" && request.method === "POST");
         if (readRoute || writeRoute) {
+          const body = request.method === "POST" ? await readJsonBody(request) : undefined;
           const device = await authenticate(
             request,
             dependencies.devices,
@@ -667,7 +717,7 @@ export function createAidenRemoteRequestHandler(
             return;
           }
           if (action === "diff" && request.method === "POST") {
-            writeJson(response, 200, await dependencies.git.diff(device.id, workspaceId, await readJsonBody(request)));
+            writeJson(response, 200, await dependencies.git.diff(device.id, workspaceId, body));
             return;
           }
           if (action === "branches" && request.method === "GET") {
@@ -676,17 +726,17 @@ export function createAidenRemoteRequestHandler(
           }
           if (action === "branches" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.createBranch(device.id, workspaceId, key, await readJsonBody(request)));
+            writeJson(response, 202, await dependencies.git.createBranch(device.id, workspaceId, key, body));
             return;
           }
           if (action === "checkout" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.checkout(device.id, workspaceId, key, await readJsonBody(request)));
+            writeJson(response, 202, await dependencies.git.checkout(device.id, workspaceId, key, body));
             return;
           }
           if (action === "commit" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.commit(device.id, workspaceId, key, await readJsonBody(request)));
+            writeJson(response, 202, await dependencies.git.commit(device.id, workspaceId, key, body));
             return;
           }
           if (action === "push-capability" && request.method === "GET") {
@@ -695,15 +745,15 @@ export function createAidenRemoteRequestHandler(
           }
           if (action === "push" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.push(device.id, workspaceId, key, await readJsonBody(request)));
+            writeJson(response, 202, await dependencies.git.push(device.id, workspaceId, key, body));
             return;
           }
           if (action === "compare" && request.method === "POST") {
-            writeJson(response, 200, await dependencies.git.compare(device.id, workspaceId, await readJsonBody(request)));
+            writeJson(response, 200, await dependencies.git.compare(device.id, workspaceId, body));
             return;
           }
           if (action === "comparison-diff" && request.method === "POST") {
-            writeJson(response, 200, await dependencies.git.comparisonDiff(device.id, workspaceId, await readJsonBody(request)));
+            writeJson(response, 200, await dependencies.git.comparisonDiff(device.id, workspaceId, body));
             return;
           }
           if (action === "worktrees" && request.method === "GET") {
@@ -712,7 +762,7 @@ export function createAidenRemoteRequestHandler(
           }
           if (action === "worktrees" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.createWorktree(device.id, workspaceId, key, await readJsonBody(request)));
+            writeJson(response, 202, await dependencies.git.createWorktree(device.id, workspaceId, key, body));
             return;
           }
         }
@@ -721,6 +771,7 @@ export function createAidenRemoteRequestHandler(
       if (managedWorktreeMatch && request.method === "DELETE") {
         requireNoQuery(query);
         route = "workspaceGit";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "git:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.git) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -734,7 +785,7 @@ export function createAidenRemoteRequestHandler(
             managedWorktreeMatch[1]!,
             revision,
             key,
-            await readJsonBody(request),
+            body,
           ),
         );
         return;
@@ -751,20 +802,22 @@ export function createAidenRemoteRequestHandler(
       if (path === "/scheduled-tasks" && request.method === "POST") {
         requireNoQuery(query);
         route = "scheduledTasks";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "schedule:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 201, await dependencies.schedules.create(device.id, key, await readJsonBody(request)));
+        writeJson(response, 201, await dependencies.schedules.create(device.id, key, body));
         return;
       }
       if (path === "/scheduled-tasks/preview" && request.method === "POST") {
         requireNoQuery(query);
         route = "scheduledTasks";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, dependencies.schedules.preview(await readJsonBody(request)));
+        writeJson(response, 200, dependencies.schedules.preview(body));
         return;
       }
       if (path === "/scheduled-tasks/scripts" && request.method === "GET") {
@@ -796,11 +849,12 @@ export function createAidenRemoteRequestHandler(
       if (path === "/scheduled-tasks/settings" && request.method === "PATCH") {
         requireNoQuery(query);
         route = "scheduledTasks";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "schedule:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
-        writeJson(response, 200, await dependencies.schedules.updateSettings(revision, await readJsonBody(request)));
+        writeJson(response, 200, await dependencies.schedules.updateSettings(revision, body));
         return;
       }
       const scheduledRunsMatch = /^\/scheduled-tasks\/([A-Za-z0-9._:-]{1,160})\/runs$/u.exec(path);
@@ -846,11 +900,12 @@ export function createAidenRemoteRequestHandler(
       if (scheduledTaskMatch && request.method === "PATCH") {
         requireNoQuery(query);
         route = "scheduledTasks";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "schedule:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
-        writeJson(response, 200, await dependencies.schedules.update(device.id, scheduledTaskMatch[1]!, revision, await readJsonBody(request)));
+        writeJson(response, 200, await dependencies.schedules.update(device.id, scheduledTaskMatch[1]!, revision, body));
         return;
       }
       if (scheduledTaskMatch && request.method === "DELETE") {
@@ -894,6 +949,7 @@ export function createAidenRemoteRequestHandler(
       if (path === "/workspace-browser/selections" && request.method === "POST") {
         requireNoQuery(query);
         route = "workspaceBrowserSelection";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "workspace:browse");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.workspaceBrowser) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -902,7 +958,7 @@ export function createAidenRemoteRequestHandler(
           201,
           await dependencies.workspaceBrowser.createSelection(
             device.id,
-            selectionLocation(await readJsonBody(request)),
+            selectionLocation(body),
           ),
         );
         return;
@@ -935,11 +991,12 @@ export function createAidenRemoteRequestHandler(
       if (path === "/chats" && request.method === "POST") {
         requireNoQuery(query);
         route = "chats";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 201, await dependencies.chats.create(device.id, key, await readJsonBody(request)));
+        writeJson(response, 201, await dependencies.chats.create(device.id, key, body));
         return;
       }
       const chatMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
@@ -955,11 +1012,12 @@ export function createAidenRemoteRequestHandler(
       if (chatMatch && request.method === "PATCH") {
         requireNoQuery(query);
         route = "chat";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
-        writeJson(response, 200, await dependencies.chats.rename(chatMatch[1]!, revision, await readJsonBody(request)));
+        writeJson(response, 200, await dependencies.chats.rename(chatMatch[1]!, revision, body));
         return;
       }
       if (chatMatch && request.method === "DELETE") {
@@ -978,29 +1036,32 @@ export function createAidenRemoteRequestHandler(
       if (moveMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "chatMove";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await dependencies.chats.move(device.id, moveMatch[1]!, revision, key, await readJsonBody(request)));
+        writeJson(response, 200, await dependencies.chats.move(device.id, moveMatch[1]!, revision, key, body));
         return;
       }
       const turnsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/turns$/u.exec(path);
       if (turnsMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "turns";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 202, await dependencies.chats.startTurn(device.id, turnsMatch[1]!, key, await readJsonBody(request)));
+        writeJson(response, 202, await dependencies.chats.startTurn(device.id, turnsMatch[1]!, key, body));
         return;
       }
       const attachmentCollectionMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/attachments$/u.exec(path);
       if (attachmentCollectionMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "chatAttachment";
+        const body = await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.chats?.uploadAttachment) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -1010,7 +1071,7 @@ export function createAidenRemoteRequestHandler(
           await dependencies.chats.uploadAttachment(
             device.id,
             attachmentCollectionMatch[1]!,
-            await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES),
+            body,
           ),
         );
         return;
@@ -1061,6 +1122,7 @@ export function createAidenRemoteRequestHandler(
       if (approvalMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "approvalRespond";
+        const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "approval:respond");
         deviceIdSuffix = device.id.slice(-8);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
@@ -1071,7 +1133,7 @@ export function createAidenRemoteRequestHandler(
           await dependencies.streams.respondApproval(
             device.id,
             approvalMatch[1]!,
-            approvalDecision(await readJsonBody(request)),
+            approvalDecision(body),
             key,
           ),
         );
@@ -1083,6 +1145,7 @@ export function createAidenRemoteRequestHandler(
         404,
       );
     })()
+      .finally(() => releaseDeviceAuthorization?.())
       .then(() => {
         dependencies.log({
           requestId: id,
