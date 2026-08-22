@@ -126,6 +126,15 @@ enum AidenPairingMethod: String, CaseIterable, Identifiable, Hashable {
 
     static let advanced: [AidenPairingMethod] = [.pastePayload]
 
+    var tabTitle: String {
+        switch self {
+        case .scanQRCode: return String(localized: "QR")
+        case .nearbyMac: return String(localized: "Nearby")
+        case .privateAddress: return String(localized: "Tailscale")
+        case .pastePayload: return String(localized: "Payload")
+        }
+    }
+
     var title: String {
         switch self {
         case .scanQRCode: return String(localized: "Scan QR Code")
@@ -167,6 +176,49 @@ enum AidenPairingMethod: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
+    case build
+    case extend
+    case control
+
+    var id: String { rawValue }
+
+    var eyebrow: String {
+        switch self {
+        case .build: return String(localized: "BUILD IN YOUR WORKSPACE")
+        case .extend: return String(localized: "CHOOSE AND EXTEND")
+        case .control: return String(localized: "AUTOMATE AND STAY IN CONTROL")
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .build: return String(localized: "Your Mac, ready to work")
+        case .extend: return String(localized: "Bring the right intelligence")
+        case .control: return String(localized: "Keep Aiden moving")
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .build:
+            return String(localized: "Chat with a workspace agent that can read and edit files, run commands, review diffs, and work with Git.")
+        case .extend:
+            return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and MCP connectors.")
+        case .control:
+            return String(localized: "Approve actions, manage scheduled work, use voice, and follow private usage from your iPhone or iPad.")
+        }
+    }
+
+    var imageName: String {
+        switch self {
+        case .build: return "OnboardingBuild"
+        case .extend: return "OnboardingExtend"
+        case .control: return "OnboardingControl"
+        }
+    }
+}
+
 struct AidenPairingView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(AidenAppearanceStore.self) private var appearance
@@ -179,15 +231,26 @@ struct AidenPairingView: View {
     @State private var manualCode = ""
     @State private var manualEndpoint = ""
     @State private var selectedAgentID: String?
+    @State private var selectedPairingMethod: AidenPairingMethod = .scanQRCode
+    @State private var selectedOnboardingPhase: AidenMobileOnboardingPhase = .build
     @State private var isShowingScanner = false
     @State private var isShowingAppearance = false
+    @State private var isShowingPayloadFallback = false
     @State private var pairingTask: Task<Void, Never>?
     @State private var step: Int
 
-    init(coordinator: AidenRemoteCoordinator, onPaired: (() -> Void)? = nil) {
+    private let onIntroductionComplete: (() -> Void)?
+
+    init(
+        coordinator: AidenRemoteCoordinator,
+        showsIntroduction: Bool = true,
+        onIntroductionComplete: (() -> Void)? = nil,
+        onPaired: (() -> Void)? = nil
+    ) {
         self.coordinator = coordinator
+        self.onIntroductionComplete = onIntroductionComplete
         self.onPaired = onPaired
-        _step = State(initialValue: onPaired == nil ? 0 : 2)
+        _step = State(initialValue: onPaired == nil && showsIntroduction ? 0 : 2)
     }
 
     private var canPair: Bool {
@@ -224,12 +287,30 @@ struct AidenPairingView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        isShowingAppearance = true
-                    } label: {
-                        Image(systemName: "circle.lefthalf.filled")
+                    if step == 2 {
+                        Menu {
+                            Button {
+                                isShowingPayloadFallback = true
+                            } label: {
+                                Label("Paste Pairing Payload", systemImage: "doc.on.clipboard")
+                            }
+                            Button {
+                                isShowingAppearance = true
+                            } label: {
+                                Label("Appearance", systemImage: "circle.lefthalf.filled")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                        }
+                        .accessibilityLabel("More pairing options")
+                    } else {
+                        Button {
+                            isShowingAppearance = true
+                        } label: {
+                            Image(systemName: "circle.lefthalf.filled")
+                        }
+                        .accessibilityLabel("Appearance")
                     }
-                    .accessibilityLabel("Appearance")
                 }
             }
             .overlay {
@@ -275,6 +356,16 @@ struct AidenPairingView: View {
             .sheet(isPresented: $isShowingAppearance) {
                 AidenAppearanceSettingsView(appearance: appearance)
             }
+            .sheet(isPresented: $isShowingPayloadFallback) {
+                NavigationStack {
+                    pastePayloadPairingPage
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { isShowingPayloadFallback = false }
+                            }
+                        }
+                }
+            }
             .alert(
                 AidenPairingAlertCopy.title,
                 isPresented: Binding(
@@ -291,30 +382,130 @@ struct AidenPairingView: View {
 
     private var welcomePage: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 32)
-            AidenSidebarLogo(size: 132, color: palette.accent)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Aiden")
-            Spacer(minLength: 34)
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Aiden, wherever you are.")
-                    .font(.system(size: 32, weight: .bold))
-                Text("Control Aiden Agent on your Mac from iPhone or iPad—chats, workspaces, files, Git, scheduled tasks, and approvals.")
-                    .font(.subheadline)
-                    .foregroundStyle(palette.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Image("AidenAppIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 42, height: 42)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Aiden On The Go")
+                        .font(.headline)
+                    Text("Aiden, wherever you are.")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                }
+                Spacer()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 28)
-            Spacer(minLength: 24)
-            Button("Get Started") { step = 1 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 20)
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+
+            TabView(selection: $selectedOnboardingPhase) {
+                ForEach(AidenMobileOnboardingPhase.allCases) { phase in
+                    onboardingPhasePage(phase)
+                        .tag(phase)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .accessibilityLabel("Aiden capabilities")
+
+            VStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    ForEach(AidenMobileOnboardingPhase.allCases) { phase in
+                        Button {
+                            selectedOnboardingPhase = phase
+                        } label: {
+                            Capsule()
+                                .fill(phase == selectedOnboardingPhase ? palette.accent : palette.secondary.opacity(0.24))
+                                .frame(width: phase == selectedOnboardingPhase ? 22 : 7, height: 7)
+                                .frame(width: 34, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(phase.title)
+                        .accessibilityValue(phase == selectedOnboardingPhase ? "Current page" : "")
+                    }
+                }
+
+                onboardingContinueButton
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 14)
         }
         .navigationBarHidden(true)
+    }
+
+    private func onboardingPhasePage(_ phase: AidenMobileOnboardingPhase) -> some View {
+        ScrollView {
+            VStack(spacing: 22) {
+                ZStack {
+                    Circle()
+                        .fill(palette.accent.opacity(0.07))
+                        .frame(width: 252, height: 252)
+                    Circle()
+                        .stroke(palette.accent.opacity(0.14), lineWidth: 1)
+                        .frame(width: 210, height: 210)
+                    Image(phase.imageName)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 250, maxHeight: 250)
+                        .accessibilityHidden(true)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 10) {
+                    Text(phase.eyebrow)
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(palette.accent)
+                    Text(phase.title)
+                        .font(.title.bold())
+                        .multilineTextAlignment(.center)
+                    Text(phase.detail)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 26)
+            }
+            .padding(.top, 24)
+            .padding(.bottom, 12)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    @ViewBuilder
+    private var onboardingContinueButton: some View {
+        let isLast = selectedOnboardingPhase == AidenMobileOnboardingPhase.allCases.last
+        prominentGlassButton(action: {
+            if isLast {
+                step = 1
+            } else if let index = AidenMobileOnboardingPhase.allCases.firstIndex(of: selectedOnboardingPhase) {
+                selectedOnboardingPhase = AidenMobileOnboardingPhase.allCases[index + 1]
+            }
+        }) {
+            Text(isLast ? "Set Up Connection" : "Continue")
+        }
+    }
+
+    @ViewBuilder
+    private func prominentGlassButton<Label: View>(
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        let button = Button(action: action) {
+            label()
+                .frame(maxWidth: .infinity)
+        }
+        .font(.headline)
+        .frame(maxWidth: .infinity)
+        .controlSize(.large)
+
+        if #available(iOS 26, *) {
+            button.buttonStyle(.glassProminent)
+        } else {
+            button.buttonStyle(.borderedProminent)
+        }
     }
 
     private var preparePage: some View {
@@ -341,10 +532,12 @@ struct AidenPairingView: View {
             .padding(24)
         }
         .safeAreaInset(edge: .bottom) {
-            Button("Choose Pairing Method") { step = 2 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
+            prominentGlassButton(action: {
+                onIntroductionComplete?()
+                step = 2
+            }) {
+                Text("Choose How to Connect")
+            }
                 .padding(20)
                 .background(.bar)
         }
@@ -367,39 +560,36 @@ struct AidenPairingView: View {
     }
 
     private var pairingPage: some View {
-        List {
-            Section {
-                ForEach(AidenPairingMethod.primary) { method in
-                    NavigationLink(value: method) {
-                        pairingMethodRow(method)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Choose the connection shown in Aiden Agent’s Add Device window.")
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Picker("Connection method", selection: $selectedPairingMethod) {
+                    ForEach(AidenPairingMethod.primary) { method in
+                        Text(method.tabTitle).tag(method)
                     }
                 }
-            } header: {
-                Text("Choose how to connect")
-            } footer: {
-                Text("Choose the same connection shown in Aiden Agent’s Add Device window. QR pairing works with either Local Network or Tailscale.")
+                .pickerStyle(.segmented)
+                .accessibilityHint("Swipe the content below or choose a tab.")
             }
+            .padding(.horizontal, 18)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
 
-            Section("More options") {
-                ForEach(AidenPairingMethod.advanced) { method in
-                    NavigationLink(value: method) {
-                        pairingMethodRow(method)
-                    }
-                }
+            TabView(selection: $selectedPairingMethod) {
+                qrPairingPage.tag(AidenPairingMethod.scanQRCode)
+                nearbyMacPairingPage.tag(AidenPairingMethod.nearbyMac)
+                privateAddressPairingPage.tag(AidenPairingMethod.privateAddress)
             }
-
-            Section("Private by design") {
-                Label("One-time codes expire after five minutes", systemImage: "clock.badge.checkmark")
-                Label("Every Mac uses pinned HTTPS", systemImage: "lock.shield.fill")
-                Label("Provider keys stay on your Mac", systemImage: "checkmark.shield")
-            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .accessibilityLabel("Connection setup")
         }
-        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
         .navigationTitle("Pair Aiden")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: AidenPairingMethod.self) { method in
-            pairingMethodPage(method)
-        }
         .onChange(of: discovery.agents) { _, agents in
             guard let selectedAgentID else { return }
             guard let selected = agents.first(where: { $0.id == selectedAgentID }),
@@ -407,51 +597,6 @@ struct AidenPairingView: View {
                 self.selectedAgentID = nil
                 return
             }
-        }
-    }
-
-    private func pairingMethodRow(_ method: AidenPairingMethod) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: method.systemImage)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(palette.accent)
-                .frame(width: 34, height: 34)
-                .background(palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text(method.title)
-                        .font(.body.weight(.semibold))
-                    if let badge = method.badge {
-                        Text(badge)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(palette.accent)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(palette.accent.opacity(0.10), in: Capsule())
-                    }
-                }
-                Text(method.detail)
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-    }
-
-    @ViewBuilder
-    private func pairingMethodPage(_ method: AidenPairingMethod) -> some View {
-        switch method {
-        case .scanQRCode:
-            qrPairingPage
-        case .nearbyMac:
-            nearbyMacPairingPage
-        case .privateAddress:
-            privateAddressPairingPage
-        case .pastePayload:
-            pastePayloadPairingPage
         }
     }
 
@@ -465,19 +610,14 @@ struct AidenPairingView: View {
             }
 
             Section {
-                Button { isShowingScanner = true } label: {
+                prominentGlassButton(action: { isShowingScanner = true }) {
                     Label("Open Camera", systemImage: "qrcode.viewfinder")
-                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
             } footer: {
                 Text("The QR expires after five minutes and can be used once. Aiden pins the Mac’s HTTPS identity during pairing.")
             }
         }
         .scrollContentBackground(.hidden)
-        .navigationTitle("Scan QR Code")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var nearbyMacPairingPage: some View {
@@ -515,8 +655,6 @@ struct AidenPairingView: View {
         }
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle("Nearby Mac")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var privateAddressPairingPage: some View {
@@ -541,8 +679,6 @@ struct AidenPairingView: View {
         }
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle("Private Address")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var pastePayloadPairingPage: some View {

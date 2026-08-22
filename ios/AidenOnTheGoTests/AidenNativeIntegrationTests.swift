@@ -473,8 +473,29 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(AidenPairingMethod.nearbyMac.badge, "Local Network")
         XCTAssertEqual(AidenPairingMethod.privateAddress.badge, "Tailscale")
         XCTAssertNil(AidenPairingMethod.pastePayload.badge)
+        XCTAssertEqual(
+            AidenPairingMethod.primary.map(\.tabTitle),
+            ["QR", "Nearby", "Tailscale"]
+        )
         XCTAssertTrue(AidenPairingMethod.nearbyMac.detail.contains("local Wi-Fi"))
         XCTAssertTrue(AidenPairingMethod.privateAddress.detail.contains("Tailscale"))
+    }
+
+    func testMobileOnboardingMirrorsMacCapabilityGroups() {
+        XCTAssertEqual(AidenMobileOnboardingPhase.allCases, [.build, .extend, .control])
+        XCTAssertEqual(
+            AidenMobileOnboardingPhase.allCases.map(\.imageName),
+            ["OnboardingBuild", "OnboardingExtend", "OnboardingControl"]
+        )
+        XCTAssertEqual(AidenMobileOnboardingPhase.build.eyebrow, "BUILD IN YOUR WORKSPACE")
+        XCTAssertEqual(AidenMobileOnboardingPhase.extend.eyebrow, "CHOOSE AND EXTEND")
+        XCTAssertEqual(
+            AidenMobileOnboardingPhase.control.eyebrow,
+            "AUTOMATE AND STAY IN CONTROL"
+        )
+        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Git"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("MCP"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.control.detail.contains("scheduled"))
     }
 }
 

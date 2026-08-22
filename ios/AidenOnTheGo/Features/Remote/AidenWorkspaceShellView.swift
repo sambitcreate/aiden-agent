@@ -413,7 +413,10 @@ struct AidenWorkspaceShellView: View {
             }
         }
         .sheet(isPresented: $isShowingPairing) {
-            AidenPairingView(coordinator: coordinator) { isShowingPairing = false }
+            AidenPairingView(
+                coordinator: coordinator,
+                onPaired: { isShowingPairing = false }
+            )
         }
         .sheet(isPresented: $isShowingAppSettings) {
             AidenAppSettingsView(

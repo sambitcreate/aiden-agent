@@ -39,6 +39,9 @@ const desktopProviderLogoDirectory = fileURLToPath(
 const iosAssetCatalogDirectory = fileURLToPath(
   new URL("../ios/AidenOnTheGo/Resources/Assets.xcassets/", import.meta.url),
 );
+const desktopOnboardingDirectory = fileURLToPath(
+  new URL("../renderer/assets/onboarding/", import.meta.url),
+);
 
 const appSourcePaths = [
   "AidenOnTheGo/AidenOnTheGoApp.swift",
@@ -159,10 +162,27 @@ test("iOS bundles every reviewed Aiden provider logo", async () => {
   }));
 });
 
+test("iOS onboarding reuses the reviewed Mac feature artwork byte for byte", async () => {
+  const artworkPairs = [
+    ["aiden-workspace.png", "OnboardingBuild.imageset/onboarding-build.png"],
+    ["features/model-freedom.png", "OnboardingExtend.imageset/onboarding-extend.png"],
+    ["features/scheduled-automations.png", "OnboardingControl.imageset/onboarding-control.png"],
+  ];
+
+  await Promise.all(artworkPairs.map(async ([desktopPath, iosPath]) => {
+    const [desktopArtwork, iosArtwork] = await Promise.all([
+      readFile(`${desktopOnboardingDirectory}${desktopPath}`),
+      readFile(`${iosAssetCatalogDirectory}${iosPath}`),
+    ]);
+    assert.deepEqual(iosArtwork, desktopArtwork, `${iosPath} diverged from Aiden Agent`);
+  }));
+});
+
 test("the Aiden home, onboarding, composer, schedules, and activity retain the reviewed product shell", async () => {
-  const [shell, pairing, chat, scheduledTasks, widget, project, logoDefinition, logoArtwork] = await Promise.all([
+  const [shell, pairing, content, chat, scheduledTasks, widget, project, logoDefinition, logoArtwork] = await Promise.all([
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/ContentView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenChatFeature.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift`, "utf8"),
     readFile(`${iosRoot}AidenLiveActivityWidget/AgentRunLiveActivityWidget.swift`, "utf8"),
@@ -244,10 +264,28 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /case \.privateAddress: return String\(localized: "Private Address \+ Setup Code"\)/u);
   assert.match(pairing, /case \.nearbyMac: return String\(localized: "Local Network"\)/u);
   assert.match(pairing, /case \.privateAddress: return String\(localized: "Tailscale"\)/u);
+  assert.match(pairing, /Picker\("Connection method", selection: \$selectedPairingMethod\)/u);
+  assert.match(
+    pairing,
+    /TabView\(selection: \$selectedPairingMethod\)[\s\S]*?qrPairingPage\.tag\(AidenPairingMethod\.scanQRCode\)[\s\S]*?nearbyMacPairingPage\.tag\(AidenPairingMethod\.nearbyMac\)[\s\S]*?privateAddressPairingPage\.tag\(AidenPairingMethod\.privateAddress\)/u,
+  );
+  assert.match(pairing, /\.tabViewStyle\(\.page\(indexDisplayMode: \.never\)\)/u);
+  assert.match(pairing, /Paste Pairing Payload[\s\S]*?More pairing options/u);
+  assert.match(pairing, /AidenMobileOnboardingPhase\.allCases[\s\S]*?Image\(phase\.imageName\)/u);
+  assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
+  assert.doesNotMatch(pairing, /AidenSidebarLogo/u);
+  assert.match(
+    pairing,
+    /prominentGlassButton\(action:[\s\S]*?Text\("Choose How to Connect"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
+  );
+  assert.match(pairing, /button\.buttonStyle\(\.glassProminent\)/u);
+  assert.match(content, /@AppStorage\("aiden\.mobileOnboarding\.v1\.complete"\)/u);
+  assert.match(content, /showsIntroduction: !hasCompletedMobileOnboarding/u);
+  assert.match(content, /onIntroductionComplete:[\s\S]*?hasCompletedMobileOnboarding = true/u);
   assert.match(pairing, /The QR already contains the selected Local Network or Tailscale address/u);
   assert.match(pairing, /https:\/\/mac-name\.local:49220\/api\/aiden\/v1/u);
   assert.match(pairing, /https:\/\/mac-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
-  assert.doesNotMatch(pairing, /Picker\("Pairing method"/u);
+  assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
   assert.match(chat, /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u);
   assert.doesNotMatch(chat, /PhotosPicker\(selection:/u);
   assert.match(chat, /\.fileImporter\(/u);

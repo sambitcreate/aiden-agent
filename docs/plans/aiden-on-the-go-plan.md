@@ -1,6 +1,6 @@
 # Aiden On The Go Plan
 
-Status: Active — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 7 is `VALID` and `IN_BETA_TESTING` for Internal Testers; physical-iPad and external/public-release acceptance remain open
+Status: Active — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 11 is `VALID` and `IN_BETA_TESTING` for Internal Testers; physical-iPad and external/public-release acceptance remain open
 Date: 2026-08-18
 Owners: Aiden Electron main process and the SwiftUI app under `ios/`
 
@@ -741,4 +741,12 @@ Implementation may begin with Phase 0. Later phases remain gated by the acceptan
 
 The iOS pairing surface now exposes the same connection choices as Aiden Agent's Add Device flow. The primary list presents Scan QR Code, Nearby Mac + Setup Code for local Wi-Fi/Bonjour, and Private Address + Setup Code for Tailscale; Paste Pairing Payload remains an advanced camera-unavailable fallback. Each route reuses the reviewed five-minute, one-use trust protocol rather than defining a second authentication mechanism. The QR path explicitly states that it already carries the Mac-selected Local Network or Tailscale endpoint, while manual paths request the exact address and setup code shown on the Mac.
 
-Focused contract tests lock the complete method inventory and Mac/iOS labels, while the shipping-source gate requires both canonical endpoint forms and rejects the former segmented picker. The full Remote Access, release, repository, type, lint, build, generic iPhoneOS, and signed physical-iPhone gates pass. Remaining physical-iPad and hands-on cross-network acceptance stay open under the existing Phase 12 gates.
+Focused contract tests lock the complete method inventory and Mac/iOS labels, while the shipping-source gate requires both canonical endpoint forms. The full Remote Access, release, repository, type, lint, build, generic iPhoneOS, and signed physical-iPhone gates pass. Remaining physical-iPad and hands-on cross-network acceptance stay open under the existing Phase 12 gates.
+
+## Progressive iOS onboarding and pairing follow-up — 2026-08-22
+
+First launch now introduces Aiden On The Go through three concise, swipeable capability pages derived from Aiden Agent's Mac onboarding groups: Build in your workspace, Choose and extend, and Automate and stay in control. The pages reuse the reviewed Mac workspace, model-freedom, and scheduled-automation PNGs byte for byte, omit provider setup because credentials remain Mac-owned, and follow the focused-page, dominant-artwork, single-bottom-action pattern reviewed in `LPOnBoarding`. Completion is device-local and recorded only after the user reaches connection setup, so an interrupted introduction resumes while settings-based Add Device remains direct.
+
+Connection setup now progressively discloses the three primary paths in a native segmented tab bar backed by a swipeable page container: QR, Nearby, and Tailscale. Each page retains its existing one-use pairing protocol and validation. Full-payload paste remains available from the overflow menu as a recovery path rather than competing with primary setup. Source contracts lock the three-tab order, swipe container, one-time onboarding behavior, Liquid Glass primary action, exact artwork parity, and the advanced fallback. A generic iPhoneOS test build, the complete iOS release-policy gate, and 14 focused native integration tests pass on the physical iPhone 13 Pro without using a simulator. Physical-iPad and hands-on visual acceptance remain open.
+
+All onboarding identity now uses the actual shipping Aiden app icon rather than the sidebar thinking mark. The capability Continue/Set Up Connection action, Prepare Your Mac's Choose How to Connect action, and QR setup's Open Camera action share one native Liquid Glass prominent-button primitive on supported systems with the reviewed bordered fallback on older iOS versions.

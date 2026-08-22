@@ -3,13 +3,20 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
     @State private var navigationRequest: AidenNavigationRequest?
 
     var body: some View {
         Group {
             switch coordinator.connectionState {
             case .needsPairing:
-                AidenPairingView(coordinator: coordinator)
+                AidenPairingView(
+                    coordinator: coordinator,
+                    showsIntroduction: !hasCompletedMobileOnboarding,
+                    onIntroductionComplete: {
+                        hasCompletedMobileOnboarding = true
+                    }
+                )
             case .connecting, .connected, .offline:
                 AidenWorkspaceShellView(
                     coordinator: coordinator,
