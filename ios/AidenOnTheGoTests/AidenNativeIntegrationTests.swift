@@ -458,6 +458,24 @@ final class AidenNativeIntegrationTests: XCTestCase {
             "Try again from Aiden Agent Remote Access settings."
         )
     }
+
+    func testPairingMethodsMirrorEveryMacConnectionChoice() {
+        XCTAssertEqual(
+            AidenPairingMethod.primary,
+            [.scanQRCode, .nearbyMac, .privateAddress]
+        )
+        XCTAssertEqual(AidenPairingMethod.advanced, [.pastePayload])
+        XCTAssertEqual(
+            Set(AidenPairingMethod.allCases),
+            [.scanQRCode, .nearbyMac, .privateAddress, .pastePayload]
+        )
+        XCTAssertEqual(AidenPairingMethod.scanQRCode.badge, "Recommended")
+        XCTAssertEqual(AidenPairingMethod.nearbyMac.badge, "Local Network")
+        XCTAssertEqual(AidenPairingMethod.privateAddress.badge, "Tailscale")
+        XCTAssertNil(AidenPairingMethod.pastePayload.badge)
+        XCTAssertTrue(AidenPairingMethod.nearbyMac.detail.contains("local Wi-Fi"))
+        XCTAssertTrue(AidenPairingMethod.privateAddress.detail.contains("Tailscale"))
+    }
 }
 
 private final class AidenNativeActivityURLProtocol: URLProtocol, @unchecked Sendable {
