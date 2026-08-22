@@ -6,6 +6,9 @@ import { AidenRemoteChatService } from "./aiden-remote-chats.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 
+const ONE_PIXEL_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+
 test("HTTP client resumes, approves, denies, and cancels device-owned mocked turns without duplicate messages", async () => {
   let chat: Chat = {
     id: "chat-1",
@@ -161,16 +164,16 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({
-        name: "proof.txt",
-        mimeType: "text/plain",
-        kind: "text",
-        text: "HTTP attachment contents",
+        name: "proof.png",
+        mimeType: "image/png",
+        kind: "image",
+        data: ONE_PIXEL_PNG,
       }),
     });
     assert.equal(uploadedResponse.status, 201);
     const uploaded = await uploadedResponse.json() as { id: string; name: string };
     assert.match(uploaded.id, /^att_[A-Za-z0-9_-]{43}$/u);
-    assert.equal(uploaded.name, "proof.txt");
+    assert.equal(uploaded.name, "proof.png");
     assert.equal(JSON.stringify(uploaded).includes("contents"), false);
 
     const discardedResponse = await fetch(`${base}/chats/chat-1/attachments`, {
@@ -195,8 +198,24 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     const replay = await start("Approve this", "turn-http-key-000001", [uploaded.id]);
     assert.deepEqual(replay, first);
     assert.deepEqual(first.message.attachments?.map(({ id, name }) => ({ id, name })), [
-      { id: uploaded.id, name: "proof.txt" },
+      { id: uploaded.id, name: "proof.png" },
     ]);
+    const attachmentContent = await fetch(
+      `${base}/chats/chat-1/attachments/${uploaded.id}/content`,
+      { headers },
+    );
+    assert.equal(attachmentContent.status, 200);
+    assert.equal(attachmentContent.headers.get("content-type"), "image/png");
+    assert.equal(attachmentContent.headers.get("cache-control"), "no-store");
+    assert.equal(
+      Buffer.from(await attachmentContent.arrayBuffer()).toString("base64"),
+      ONE_PIXEL_PNG,
+    );
+    const unauthenticatedContent = await fetch(
+      `${base}/chats/chat-1/attachments/${uploaded.id}/content`,
+      { headers: { "aiden-protocol-version": "1" } },
+    );
+    assert.equal(unauthenticatedContent.status, 401);
     assert.equal(appendCount, 1);
     const waiting = await fetch(`${base}/streams/${first.streamId}`, { headers });
     assert.equal((await waiting.json()).state, "waiting_for_approval");
