@@ -7,6 +7,8 @@ import {
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { AIDEN_REMOTE_CAPABILITIES } from "./aiden-remote-protocol.js";
 import type { AidenTailscaleOwnership } from "./aiden-remote-tailscale-route.js";
+import type { AidenTailscalePendingRouteOutcome } from "./aiden-remote-tailscale.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 
 const STATE_VERSION = 1 as const;
 const DEFAULT_LAN_PORT = 49_220;
@@ -14,6 +16,8 @@ const MAX_DEVICES = 32;
 const MAX_RETAINED_DEVICES = 128;
 const MAX_APPROVED_ROOTS = 32;
 const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60_000;
+export const MAX_AIDEN_REMOTE_DISPLAY_NAME_CHARACTERS = 80;
+const FALLBACK_AIDEN_REMOTE_DISPLAY_NAME = "Aiden Agent";
 
 export type AidenRemoteDeviceType = "iphone" | "ipad";
 export type AidenRemoteConnectionMode = "lan" | "tailscale" | "both";
@@ -45,17 +49,21 @@ export interface AidenRemoteApprovedRoot {
 export interface AidenRemoteStateDocument {
   version: typeof STATE_VERSION;
   instanceId: string;
+  displayName: string;
   enabled: boolean;
   connectionMode: AidenRemoteConnectionMode;
   lanPort: number;
+  lanPortCommitted: boolean;
   devices: StoredAidenRemoteDevice[];
   approvedRoots: AidenRemoteApprovedRoot[];
   tailscaleOwnership?: AidenTailscaleOwnership;
+  tailscalePendingOutcome?: AidenTailscalePendingRouteOutcome;
 }
 
 export interface AidenRemoteStateStorage {
   load(): Promise<unknown>;
   save(document: AidenRemoteStateDocument): Promise<void>;
+  needsSaveAfterLoad?(): Promise<boolean>;
 }
 
 export interface AidenRemoteDeviceProjection {
@@ -109,6 +117,31 @@ function boundedString(value: unknown, maximum: number): value is string {
   let characters = 0;
   for (const _character of value) characters += 1;
   return characters <= maximum;
+}
+
+export function normalizeAidenRemoteDisplayName(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("Aiden Remote display name must be text.");
+  }
+  const normalized = value.trim().replace(/\s+/gu, " ");
+  if (
+    !boundedString(normalized, MAX_AIDEN_REMOTE_DISPLAY_NAME_CHARACTERS) ||
+    /[\p{Cc}\p{Cf}]/u.test(normalized)
+  ) {
+    throw new Error(
+      `Aiden Remote display name must be 1–${MAX_AIDEN_REMOTE_DISPLAY_NAME_CHARACTERS} visible characters.`,
+    );
+  }
+  return normalized;
+}
+
+export function defaultAidenRemoteDisplayName(computerName: string): string {
+  const withoutLocalSuffix = computerName.trim().replace(/\.local\.?$/iu, "");
+  try {
+    return normalizeAidenRemoteDisplayName(withoutLocalSuffix);
+  } catch {
+    return FALLBACK_AIDEN_REMOTE_DISPLAY_NAME;
+  }
 }
 
 function digestString(value: unknown): value is string {
@@ -223,28 +256,66 @@ function parseOwnership(value: unknown): AidenTailscaleOwnership | undefined {
   return { path: record.path, target: record.target };
 }
 
+function parsePendingOutcome(value: unknown): AidenTailscalePendingRouteOutcome | undefined {
+  if (value === undefined) return undefined;
+  const record = ownRecord(value);
+  if (
+    !record
+    || !exactKeys(
+      record,
+      [
+        "operation",
+        "target",
+        "beforeFingerprint",
+        "preservedFingerprint",
+        "normalizeListenerScaffolding",
+        "createdAt",
+      ],
+      ["previousTarget"],
+    )
+    || !["connect", "takeover", "disconnect"].includes(String(record.operation))
+    || !boundedString(record.target, 2_048)
+    || (record.previousTarget !== undefined && !boundedString(record.previousTarget, 2_048))
+    || typeof record.beforeFingerprint !== "string"
+    || !/^[a-f0-9]{64}$/u.test(record.beforeFingerprint)
+    || typeof record.preservedFingerprint !== "string"
+    || !/^[a-f0-9]{64}$/u.test(record.preservedFingerprint)
+    || typeof record.normalizeListenerScaffolding !== "boolean"
+    || !safeTimestamp(record.createdAt)
+  ) {
+    throw new Error("Aiden Remote state has an invalid pending Tailscale outcome.");
+  }
+  return record as unknown as AidenTailscalePendingRouteOutcome;
+}
+
 export function createDefaultAidenRemoteState(
   random: (size: number) => Buffer = randomBytes,
+  displayName = FALLBACK_AIDEN_REMOTE_DISPLAY_NAME,
 ): AidenRemoteStateDocument {
   return {
     version: STATE_VERSION,
     instanceId: `instance_${random(24).toString("base64url")}`,
+    displayName: normalizeAidenRemoteDisplayName(displayName),
     enabled: false,
     connectionMode: "lan",
     lanPort: DEFAULT_LAN_PORT,
+    lanPortCommitted: false,
     devices: [],
     approvedRoots: [],
   };
 }
 
-export function parseAidenRemoteStateDocument(value: unknown): AidenRemoteStateDocument {
+export function parseAidenRemoteStateDocument(
+  value: unknown,
+  legacyDisplayName = FALLBACK_AIDEN_REMOTE_DISPLAY_NAME,
+): AidenRemoteStateDocument {
   const record = ownRecord(value);
   if (
     !record ||
     !exactKeys(
       record,
       ["version", "instanceId", "enabled", "connectionMode", "lanPort", "devices", "approvedRoots"],
-      ["tailscaleOwnership"],
+      ["displayName", "lanPortCommitted", "tailscaleOwnership", "tailscalePendingOutcome"],
     ) ||
     record.version !== STATE_VERSION ||
     !boundedString(record.instanceId, 128) ||
@@ -253,6 +324,7 @@ export function parseAidenRemoteStateDocument(value: unknown): AidenRemoteStateD
     !Number.isInteger(record.lanPort) ||
     Number(record.lanPort) < 1 ||
     Number(record.lanPort) > 65_535 ||
+    (record.lanPortCommitted !== undefined && typeof record.lanPortCommitted !== "boolean") ||
     !Array.isArray(record.devices) ||
     record.devices.length > MAX_RETAINED_DEVICES ||
     !Array.isArray(record.approvedRoots) ||
@@ -278,15 +350,23 @@ export function parseAidenRemoteStateDocument(value: unknown): AidenRemoteStateD
     throw new Error("Aiden Remote state contains duplicate approved-root identity.");
   }
   const tailscaleOwnership = parseOwnership(record.tailscaleOwnership);
+  const tailscalePendingOutcome = parsePendingOutcome(record.tailscalePendingOutcome);
   return {
     version: STATE_VERSION,
     instanceId: record.instanceId,
+    displayName: record.displayName === undefined
+      ? defaultAidenRemoteDisplayName(legacyDisplayName)
+      : normalizeAidenRemoteDisplayName(record.displayName),
     enabled: record.enabled,
     connectionMode: record.connectionMode as AidenRemoteConnectionMode,
     lanPort: Number(record.lanPort),
+    lanPortCommitted: record.lanPortCommitted === undefined
+      ? Boolean(record.enabled || devices.length > 0 || tailscaleOwnership)
+      : record.lanPortCommitted,
     devices: devices as StoredAidenRemoteDevice[],
     approvedRoots: approvedRoots as AidenRemoteApprovedRoot[],
     ...(tailscaleOwnership ? { tailscaleOwnership } : {}),
+    ...(tailscalePendingOutcome ? { tailscalePendingOutcome } : {}),
   };
 }
 
@@ -343,6 +423,10 @@ export function defaultAidenRemoteStateDependencies(): AidenRemoteStateDependenc
 export class AidenRemoteStateRegistry {
   private document: AidenRemoteStateDocument | null = null;
   private mutationTail: Promise<void> = Promise.resolve();
+  private readonly blockedDeviceAuthorizations = new Set<string>();
+  private readonly activeDeviceAuthorizations = new Map<string, number>();
+  private readonly authorizationWaiters = new Map<string, Set<() => void>>();
+  private readonly pendingRevocations = new Map<string, Promise<boolean>>();
 
   constructor(
     private readonly storage: AidenRemoteStateStorage,
@@ -362,8 +446,15 @@ export class AidenRemoteStateRegistry {
   async initialize(): Promise<AidenRemoteStateDocument> {
     return this.serialized(async () => {
       if (this.document) return structuredClone(this.document);
-      const loaded = parseAidenRemoteStateDocument(await this.storage.load());
-      await this.storage.save(loaded);
+      const raw = await this.storage.load();
+      const loaded = parseAidenRemoteStateDocument(raw);
+      const rawRecord = ownRecord(raw);
+      const needsSave = this.storage.needsSaveAfterLoad
+        ? await this.storage.needsSaveAfterLoad()
+        : rawRecord?.displayName === undefined || rawRecord?.lanPortCommitted === undefined;
+      if (needsSave) {
+        await this.storage.save(loaded);
+      }
       this.document = loaded;
       return structuredClone(loaded);
     });
@@ -390,6 +481,23 @@ export class AidenRemoteStateRegistry {
     });
   }
 
+  private async mutateIfChanged<T>(
+    operation: (
+      draft: AidenRemoteStateDocument,
+    ) => Promise<{ changed: boolean; value: T }> | { changed: boolean; value: T },
+  ): Promise<T> {
+    if (!this.document) await this.initialize();
+    return this.serialized(async () => {
+      const draft = structuredClone(await this.current());
+      const result = await operation(draft);
+      if (!result.changed) return result.value;
+      const validated = parseAidenRemoteStateDocument(draft);
+      await this.storage.save(validated);
+      this.document = validated;
+      return result.value;
+    });
+  }
+
   async snapshot(): Promise<AidenRemoteStateDocument> {
     await this.mutationTail;
     return structuredClone(await this.current());
@@ -410,6 +518,31 @@ export class AidenRemoteStateRegistry {
     });
   }
 
+  async setDisplayName(displayName: string): Promise<void> {
+    const normalized = normalizeAidenRemoteDisplayName(displayName);
+    await this.mutateIfChanged((draft) => {
+      if (draft.displayName === normalized) {
+        return { changed: false, value: undefined };
+      }
+      draft.displayName = normalized;
+      return { changed: true, value: undefined };
+    });
+  }
+
+  async commitLanPort(lanPort: number): Promise<void> {
+    if (!Number.isInteger(lanPort) || lanPort < 1 || lanPort >= 65_535 || lanPort % 2 !== 0) {
+      throw new Error("Invalid Aiden Remote listener port.");
+    }
+    await this.mutateIfChanged((draft) => {
+      if (draft.lanPort === lanPort && draft.lanPortCommitted) {
+        return { changed: false, value: undefined };
+      }
+      draft.lanPort = lanPort;
+      draft.lanPortCommitted = true;
+      return { changed: true, value: undefined };
+    });
+  }
+
   async listDevices(): Promise<AidenRemoteDeviceProjection[]> {
     const document = await this.snapshot();
     return document.devices.map(projectDevice);
@@ -420,6 +553,7 @@ export class AidenRemoteStateRegistry {
     type: AidenRemoteDeviceType;
     clientVersion: string;
     capabilities?: readonly AidenRemoteCapability[];
+    authorizeCommit?: () => boolean;
   }): Promise<AidenRemoteIssuedCredential> {
     if (
       !boundedString(input.name, 80) ||
@@ -452,9 +586,18 @@ export class AidenRemoteStateRegistry {
       credentialDigest: credentialDigest.toString("base64url"),
       capabilities,
       createdAt: now,
-      lastSeenAt: now,
+      // Credential issuance is not proof that the client persisted the
+      // credential and successfully authenticated back to this Mac.
+      lastSeenAt: 0,
     };
     await this.mutate((draft) => {
+      if (input.authorizeCommit && !input.authorizeCommit()) {
+        throw new AidenRemoteServiceError(
+          "pairing_closed",
+          "This pairing window was closed before the device was created.",
+          403,
+        );
+      }
       if (draft.devices.filter((entry) => entry.revokedAt === undefined).length >= MAX_DEVICES) {
         throw new Error("Aiden Remote device capacity reached.");
       }
@@ -485,32 +628,101 @@ export class AidenRemoteStateRegistry {
     const actual = await this.dependencies.deriveCredentialDigest(credential, salt);
     if (!safeEqual(stored, actual)) return null;
 
-    const authenticated: AidenRemoteAuthenticatedDevice = {
-      id: device.id,
-      capabilities: new Set(device.capabilities),
-      revoked: device.revokedAt !== undefined,
-    };
     const now = this.dependencies.now();
-    if (
-      !authenticated.revoked &&
-      now - device.lastSeenAt >= LAST_SEEN_WRITE_INTERVAL_MS
-    ) {
-      await this.mutate((draft) => {
-        const current = draft.devices.find((candidate) => candidate.id === device.id);
-        if (current && current.revokedAt === undefined) current.lastSeenAt = now;
-      });
+    return this.mutateIfChanged((draft) => {
+      // Re-resolve inside the mutation queue. Revocation or retention may have
+      // changed while the expensive credential digest was being derived.
+      const current = draft.devices.find((candidate) => candidate.id === device.id);
+      if (!current) return { changed: false, value: null };
+      const authenticated: AidenRemoteAuthenticatedDevice = {
+        id: current.id,
+        capabilities: new Set(current.capabilities),
+        revoked: current.revokedAt !== undefined,
+      };
+      const shouldPersistLastSeen =
+        !authenticated.revoked &&
+        (current.lastSeenAt === 0 || now - current.lastSeenAt >= LAST_SEEN_WRITE_INTERVAL_MS);
+      if (shouldPersistLastSeen) current.lastSeenAt = now;
+      return { changed: shouldPersistLastSeen, value: authenticated };
+    });
+  }
+
+  acquireDeviceAuthorization(deviceId: string, tracksMutationDrain = true): () => void {
+    if (this.blockedDeviceAuthorizations.has(deviceId)) {
+      throw new AidenRemoteServiceError(
+        "credential_revoked",
+        "This device was revoked in Aiden Settings.",
+        403,
+      );
     }
-    return authenticated;
+    if (tracksMutationDrain) {
+      this.activeDeviceAuthorizations.set(
+        deviceId,
+        (this.activeDeviceAuthorizations.get(deviceId) ?? 0) + 1,
+      );
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (!tracksMutationDrain) return;
+      const remaining = (this.activeDeviceAuthorizations.get(deviceId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.activeDeviceAuthorizations.set(deviceId, remaining);
+        return;
+      }
+      this.activeDeviceAuthorizations.delete(deviceId);
+      const waiters = this.authorizationWaiters.get(deviceId);
+      this.authorizationWaiters.delete(deviceId);
+      for (const resolve of waiters ?? []) resolve();
+    };
+  }
+
+  private waitForDeviceAuthorizations(deviceId: string): Promise<void> {
+    if ((this.activeDeviceAuthorizations.get(deviceId) ?? 0) === 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const waiters = this.authorizationWaiters.get(deviceId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.authorizationWaiters.set(deviceId, waiters);
+    });
   }
 
   async revokeDevice(deviceId: string): Promise<boolean> {
     if (!boundedString(deviceId, 128)) return false;
-    return this.mutate((draft) => {
-      const device = draft.devices.find((candidate) => candidate.id === deviceId);
-      if (!device || device.revokedAt !== undefined) return false;
-      device.revokedAt = this.dependencies.now();
-      return true;
-    });
+    const inFlight = this.pendingRevocations.get(deviceId);
+    if (inFlight) return inFlight;
+    const pending = (async () => {
+      this.blockedDeviceAuthorizations.add(deviceId);
+      let status: "revoked" | "already_revoked" | "missing";
+      try {
+        status = await this.mutate((draft) => {
+          const device = draft.devices.find((candidate) => candidate.id === deviceId);
+          if (!device) return "missing" as const;
+          if (device.revokedAt !== undefined) return "already_revoked" as const;
+          device.revokedAt = this.dependencies.now();
+          return "revoked" as const;
+        });
+      } catch (error) {
+        this.blockedDeviceAuthorizations.delete(deviceId);
+        throw error;
+      }
+      if (status === "missing") this.blockedDeviceAuthorizations.delete(deviceId);
+      // Revocation is durable before waiting for already-admitted mutations.
+      // A stalled application operation may delay cleanup, but it can never
+      // make the credential valid again after a restart.
+      if (status !== "missing") await this.waitForDeviceAuthorizations(deviceId);
+      return status === "revoked";
+    })();
+    this.pendingRevocations.set(deviceId, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.pendingRevocations.get(deviceId) === pending) {
+        this.pendingRevocations.delete(deviceId);
+      }
+    }
   }
 
   async setTailscaleOwnership(
@@ -519,6 +731,35 @@ export class AidenRemoteStateRegistry {
     await this.mutate((draft) => {
       if (ownership) draft.tailscaleOwnership = ownership;
       else delete draft.tailscaleOwnership;
+    });
+  }
+
+  async beginTailscalePendingOutcome(
+    outcome: AidenTailscalePendingRouteOutcome,
+  ): Promise<void> {
+    const validated = parsePendingOutcome(outcome);
+    if (!validated) throw new Error("Invalid pending Tailscale outcome.");
+    await this.mutate((draft) => {
+      if (draft.tailscalePendingOutcome) {
+        throw new Error("tailscale_reconciliation_required");
+      }
+      draft.tailscalePendingOutcome = validated;
+    });
+  }
+
+  async clearTailscalePendingOutcome(): Promise<void> {
+    await this.mutate((draft) => {
+      delete draft.tailscalePendingOutcome;
+    });
+  }
+
+  async commitTailscaleOutcome(
+    ownership: AidenTailscaleOwnership | undefined,
+  ): Promise<void> {
+    await this.mutate((draft) => {
+      if (ownership) draft.tailscaleOwnership = ownership;
+      else delete draft.tailscaleOwnership;
+      delete draft.tailscalePendingOutcome;
     });
   }
 
