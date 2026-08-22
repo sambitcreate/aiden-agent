@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 2)
+        XCTAssertEqual(fixture.contractRevision, 3)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
@@ -151,6 +151,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         )
         XCTAssertNoThrow(try fixture.pairingBootstrap.validated(at: fixtureReferenceDate))
         XCTAssertNoThrow(try fixture.pairingExchange.validated(against: fixture.pairingBootstrap))
+        XCTAssertEqual(fixture.pairingExchange.displayName, "Fixture Aiden")
 
         var lastSequence: [String: Int] = [:]
         var terminalStreams = Set<String>()
