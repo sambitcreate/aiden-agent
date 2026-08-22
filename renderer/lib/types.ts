@@ -61,6 +61,11 @@ export interface Provider {
   }>;
 }
 
+export interface ProviderCatalogRefreshResult {
+  providers: Provider[];
+  errors: Array<{ providerId: string; message: string }>;
+}
+
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex" as const;
 
 export interface CodexModelSummary {
@@ -146,6 +151,12 @@ export interface ProviderAuthDone {
   flowId: string;
   providerId: string;
   cancelled: boolean;
+  warning?: string;
+}
+
+export interface OnboardingProviderValidationResult {
+  provider: Provider;
+  catalogWarning?: string;
 }
 
 export interface ProviderAuthError {
@@ -722,6 +733,7 @@ export interface AppSettings {
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
   codexThinkingByModel?: Record<string, CodexThinkingLevel>;
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
+  providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
