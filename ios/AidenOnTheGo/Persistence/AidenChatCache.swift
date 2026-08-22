@@ -5,6 +5,7 @@ actor AidenChatCache {
     static let shared = AidenChatCache()
 
     struct ActiveStream: Codable, Equatable, Sendable {
+        let deviceId: String
         let streamId: String
         let turnId: String
         var lastSequence: Int
@@ -106,6 +107,16 @@ actor AidenChatCache {
         removeActiveStream(instanceId: instanceId, chatId: chatId)
     }
 
+    func purge(instanceId: String) {
+        purgeFiles(kind: "lists", instanceId: instanceId, as: ChatListEnvelope.self) { $0.instanceId }
+        purgeFiles(kind: "chats", instanceId: instanceId, as: ChatEnvelope.self) { $0.instanceId }
+        purgeFiles(kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) { $0.instanceId }
+    }
+
+    func removeActiveStreams(instanceId: String) {
+        purgeFiles(kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) { $0.instanceId }
+    }
+
     private func fileURL(kind: String, _ parts: String...) -> URL {
         let digest = SHA256.hash(data: Data(parts.joined(separator: "\u{1f}").utf8))
         let name = digest.map { String(format: "%02x", $0) }.joined()
@@ -118,6 +129,35 @@ actor AidenChatCache {
         guard let data = try? Data(contentsOf: url),
               data.count <= maxCacheFileBytes else { return nil }
         return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private func purgeFiles<Value: Decodable>(
+        kind: String,
+        instanceId: String,
+        as type: Value.Type,
+        instance: (Value) -> String
+    ) {
+        let directory = root.appending(path: kind, directoryHint: .isDirectory)
+        guard let urls = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for url in urls {
+            if let envelope: Value = load(type, from: url), instance(envelope) == instanceId {
+                try? fileManager.removeItem(at: url)
+                continue
+            }
+            // Older active-stream records did not contain deviceId and cannot
+            // decode with the current schema. Their outer envelope still has
+            // an exact installation identity, so explicit forget/re-pair can
+            // remove them without touching another Mac's cache.
+            guard let data = try? Data(contentsOf: url),
+                  data.count <= maxCacheFileBytes,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  object["instanceId"] as? String == instanceId else { continue }
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     private func save<Value: Encodable>(_ value: Value, to url: URL) throws {
