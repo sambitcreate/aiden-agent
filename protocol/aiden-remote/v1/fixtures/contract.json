@@ -1,5 +1,5 @@
 {
-  "contractRevision": 4,
+  "contractRevision": 5,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -113,6 +113,18 @@
     "state": "waiting_for_approval",
     "lastSequence": 9,
     "updatedAt": "2026-08-18T19:01:09.000Z"
+  },
+  "streamApproval": {
+    "approval": {
+      "approvalId": "approval_fixture_01",
+      "streamId": "stream_fixture_01",
+      "chatId": "chat_fixture_01",
+      "summary": "Allow a write operation?",
+      "toolCallId": "tool_fixture_01",
+      "toolName": "write",
+      "expiresAt": "2026-08-18T19:06:08.000Z",
+      "canAllow": true
+    }
   },
   "events": [
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 1, "timestamp": "2026-08-18T19:01:01.000Z", "type": "snapshot", "terminal": false, "payload": { "chatId": "chat_fixture_01", "turnId": "turn_fixture_01", "nextSequence": 2 } },
