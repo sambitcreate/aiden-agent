@@ -58,6 +58,7 @@ import type {
   WorkspaceFileWriteResult,
   WorkspacePermission,
 } from "./types";
+import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
@@ -135,6 +136,14 @@ export function onNotification<T>(
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
   resetOnboarding: () => invoke<boolean>("app:resetOnboarding"),
+  getOnboardingState: (legacyComplete: boolean) =>
+    invoke<OnboardingSnapshot>("app:getOnboardingState", legacyComplete),
+  setOnboardingOutcome: (
+    outcome: Exclude<OnboardingOutcome, "deferred">,
+    selectedProviderId?: string,
+  ) => invoke<OnboardingSnapshot>("app:setOnboardingOutcome", outcome, selectedProviderId),
+  setOnboardingProgress: (step: "profile" | "provider", selectedProviderId?: string) =>
+    invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
   setCloseGuard: (guard: {
     dirty: boolean;
@@ -172,6 +181,8 @@ export const providersApi = {
       key,
     ),
   refresh: () => invoke<Provider[]>("providers:refresh"),
+  validateOnboardingApiKey: (providerId: "openai" | "anthropic", key: string) =>
+    invoke<Provider>("providers:validateOnboardingApiKey", providerId, key),
   test: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<{
       ok: true;
@@ -402,13 +413,22 @@ export const aidenRemoteApi = {
     invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),
   setConnectionMode: (mode: AidenRemoteConnectionMode) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setConnectionMode", mode),
+  setDisplayName: (displayName: string) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setDisplayName", displayName),
   connectTailscale: () =>
     invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleConnect"),
   disconnectTailscale: () =>
     invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleDisconnect"),
+  reconcileTailscale: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleReconcile"),
+  reviewTailscaleTakeover: () =>
+    invoke<import("../shared/aiden-remote").AidenRemoteTailscaleTakeoverReviewView>("remote:tailscaleReviewTakeover"),
+  takeOverTailscale: (token: string) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleTakeOver", token),
   beginPairing: (transport: "lan" | "tailscale") =>
     invoke<AidenRemotePairingBootstrapView>("remote:beginPairing", transport),
-  closePairing: () => invoke<{ closed: true }>("remote:closePairing"),
+  closePairing: (pairingSessionId: string) =>
+    invoke<{ closed: boolean }>("remote:closePairing", pairingSessionId),
   revokeDevice: (deviceId: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:revokeDevice", deviceId),
   addApprovedRoot: () =>
