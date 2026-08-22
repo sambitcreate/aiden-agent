@@ -49,6 +49,8 @@
 	<string>Aiden On The Go connects to your Aiden Agent on your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Aiden On The Go uses the microphone only when you start on-device voice input.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Aiden On The Go saves chat images to your Photos library only when you choose Save Image or Save All Images.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Aiden On The Go transcribes your voice on this device to fill the chat composer.</string>
 	<key>NSSupportsLiveActivities</key>
