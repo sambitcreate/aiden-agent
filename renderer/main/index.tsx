@@ -5,7 +5,7 @@ import { router, queryClient } from "./router";
 import "../styles.css";
 import "katex/dist/katex.min.css";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { TooltipProvider, Toaster } from "../components/ui";
+import { TooltipProvider, Toaster, toast } from "../components/ui";
 import { initLogging } from "../lib/ui-utils";
 import { installDevErrorLogging } from "../lib/dev-log";
 import { applyCachedAppearance } from "../lib/appearance-runtime";
@@ -58,6 +58,19 @@ async function bootstrap(): Promise<void> {
     );
     migrateGoogleProviderPreferences(localStorage, aliases);
     queryClient.setQueryData(queryKeys.providers, providers);
+    // First paint uses the durable cache. Then explicitly revalidate stale
+    // provider catalogs once per renderer launch; this never contacts models.dev.
+    void providersApi
+      .refreshIfStale()
+      .then((result) => {
+        queryClient.setQueryData(queryKeys.providers, result.providers);
+        if (result.errors.length > 0) {
+          toast.warning(
+            `${result.errors.length} provider catalog${result.errors.length === 1 ? "" : "s"} could not refresh; cached models were kept. Retry in Provider Settings.`,
+          );
+        }
+      })
+      .catch(() => undefined);
   } catch {
     // Provider Settings will surface an actionable main-process error after render.
   }
