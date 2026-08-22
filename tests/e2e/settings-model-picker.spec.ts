@@ -52,7 +52,11 @@ async function assertRenderedSettingsDestination(
         "data-state",
         "unchecked",
       );
-      await expect(page.getByText("Off", { exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("group")
+          .filter({ has: page.getByRole("switch", { name: "Enable Aiden Remote Access" }) })
+          .getByText("Off", { exact: true }),
+      ).toBeVisible();
       return;
     case "Scheduled tasks":
       await expect(
