@@ -71,6 +71,13 @@ export type ProviderAuthEventDto =
   | {
       flowId: string;
       providerId: string;
+      type: "browser_open_failed";
+      url: string;
+      message: string;
+    }
+  | {
+      flowId: string;
+      providerId: string;
       type: "progress";
       message: string;
     };
@@ -281,13 +288,16 @@ function finiteNonNegative(value: number | undefined): number | undefined {
   return value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function externalHttpsUrl(value: string): string {
+function externalHttpsUrl(value: string, providerId?: string): string {
   if (value.length === 0 || value.length > MAX_EXTERNAL_URL_LENGTH) {
     throw new Error("Provider authentication supplied an invalid external URL.");
   }
   const url = new URL(value);
   if (url.protocol !== "https:" || url.username || url.password || !url.hostname) {
     throw new Error("Provider authentication supplied an invalid external URL.");
+  }
+  if (providerId === OPENAI_CODEX_PROVIDER_ID && url.hostname !== "auth.openai.com") {
+    throw new Error("ChatGPT authentication supplied an unexpected external host.");
   }
   return url.toString();
 }
@@ -803,7 +813,7 @@ export class ProviderAuthFlowCoordinator {
     if (!this.isCurrentSession(session)) return;
     let dto: ProviderAuthEventDto;
     if (event.type === "auth_url") {
-      const url = externalHttpsUrl(event.url);
+      const url = externalHttpsUrl(event.url, session.providerId);
       dto = {
         flowId: session.flowId,
         providerId: session.providerId,
@@ -814,9 +824,9 @@ export class ProviderAuthFlowCoordinator {
             ? "Complete sign-in in your browser."
             : boundedCopy(event.instructions, "Complete setup in your browser."),
       };
-      this.openExternal(session.providerId, url);
+      this.openExternal(session, url);
     } else if (event.type === "device_code") {
-      const verificationUri = externalHttpsUrl(event.verificationUri);
+      const verificationUri = externalHttpsUrl(event.verificationUri, session.providerId);
       if (event.userCode.length === 0 || event.userCode.length > 256) {
         throw new Error("Provider authentication supplied an invalid device code.");
       }
@@ -829,7 +839,7 @@ export class ProviderAuthFlowCoordinator {
         intervalSeconds: finiteNonNegative(event.intervalSeconds),
         expiresInSeconds: finiteNonNegative(event.expiresInSeconds),
       };
-      this.openExternal(session.providerId, verificationUri);
+      this.openExternal(session, verificationUri);
     } else if (event.type === "info") {
       // The established Codex flow deliberately redacts provider text. For
       // generic Pi setup, preserve instructional links but never forward URL
@@ -870,9 +880,17 @@ export class ProviderAuthFlowCoordinator {
     if (!this.safeSend(session, "providers:auth:event", dto)) this.abortSession(session);
   }
 
-  private openExternal(providerId: string, url: string): void {
+  private openExternal(session: AuthSession, url: string): void {
     void this.dependencies.openExternal(url).catch((error: unknown) => {
-      this.reportDiagnostic("open_external", providerId, error);
+      this.reportDiagnostic("open_external", session.providerId, error);
+      if (!this.isCurrentSession(session)) return;
+      this.safeSend(session, "providers:auth:event", {
+        flowId: session.flowId,
+        providerId: session.providerId,
+        type: "browser_open_failed",
+        url,
+        message: "Aiden couldn't open the browser automatically. Use the sign-in link below.",
+      } satisfies ProviderAuthEventDto);
     });
   }
 
