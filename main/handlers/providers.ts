@@ -4,7 +4,12 @@ import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
-import { listModels, normalizeProviderBaseUrl, testConnection } from "../services/models.js";
+import {
+  assertOnboardingTailnetBaseUrl,
+  listModels,
+  normalizeProviderBaseUrl,
+  testConnection,
+} from "../services/models.js";
 import {
   parseProviderAuthProviderId,
   parseProviderAuthResponseRequest,
@@ -148,6 +153,9 @@ function parseProvider(value: unknown): StoredProvider {
     // a renderer payload that could redirect native credentials.
     isBuiltin: false,
   };
+  if (provider.id === "custom:onboarding-tailscale") {
+    assertOnboardingTailnetBaseUrl(provider.baseUrl);
+  }
   return provider.id === GOOGLE_PROVIDER_ID ? canonicalGoogleProvider(provider) : provider;
 }
 
@@ -234,6 +242,23 @@ export function registerProviderHandlers(): void {
     providerAuthOwner(event);
     return providerAuthFlow.logout(parseProviderAuthProviderId(providerId));
   });
+
+  ipcMain.handle(
+    "providers:validateOnboardingApiKey",
+    async (event, providerIdValue: unknown, keyValue: unknown) => {
+      const owner = providerAuthOwner(event);
+      if (providerIdValue !== "openai" && providerIdValue !== "anthropic") {
+        throw new Error("This provider does not support onboarding API-key validation.");
+      }
+      const key = normalizeProviderCredentialInput(keyValue);
+      if (!key) throw new Error("Enter an API key before validating the connection.");
+      return providerRegistry.validateAndStoreOnboardingApiKey(
+        providerIdValue,
+        key,
+        () => !owner.isDestroyed(),
+      );
+    },
+  );
 
   ipcMain.handle("providers:save", async (event, providerValue: unknown, keyOverride?: unknown) => {
     const owner = providerAuthOwner(event);
