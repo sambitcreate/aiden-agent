@@ -10,9 +10,25 @@ export interface AidenRemoteStatusView {
   tailscaleRoutePreview?: string;
   tailscaleConnected: boolean;
   tailscaleInstalled: boolean;
+  tailscaleRouteState:
+    | "available"
+    | "owned"
+    | "other_aiden_live"
+    | "other_aiden_stale"
+    | "unrelated_conflict"
+    | "funnel_conflict"
+    | "reconciliation_required"
+    | "unavailable";
+  tailscaleErrorCode?: "not_installed" | "not_connected" | "https_unavailable" | "status_unavailable";
   pairedDeviceCount: number;
   approvedRootCount: number;
+  errorCode?: "remote_port_in_use";
   error?: string;
+}
+
+export interface AidenRemoteTailscaleTakeoverReviewView {
+  token: string;
+  expiresAt: number;
 }
 
 export interface AidenRemoteDeviceView {
@@ -34,12 +50,22 @@ export interface AidenRemoteApprovedRootView {
 }
 
 export interface AidenRemoteSettingsSnapshot {
+  instanceId: string;
+  displayName: string;
   status: AidenRemoteStatusView;
   devices: AidenRemoteDeviceView[];
   approvedRoots: AidenRemoteApprovedRootView[];
+  pairing?: AidenRemotePairingStatusView;
+}
+
+export interface AidenRemotePairingStatusView {
+  sessionId: string;
+  state: "awaiting_scan" | "finishing" | "failed" | "expired";
+  deviceId?: string;
 }
 
 export interface AidenRemotePairingBootstrapView {
+  pairingSessionId: string;
   protocolVersion: 1;
   instanceId: string;
   endpoint: string;
@@ -48,4 +74,6 @@ export interface AidenRemotePairingBootstrapView {
   expiresAt: string;
   /** Versioned scanner envelope; includes the LAN trust anchor when required. */
   qrPayload: string;
+  /** IPC-only 100-bit setup code. It is never exposed through remote status. */
+  manualCode: string;
 }
