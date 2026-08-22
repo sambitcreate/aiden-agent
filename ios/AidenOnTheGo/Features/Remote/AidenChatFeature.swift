@@ -241,32 +241,39 @@ final class AidenWorkspaceChatsModel {
     }
 
     func load() async {
-        guard let instanceId = coordinator.activeInstanceId else { return }
+        guard let context = try? coordinator.requestContext() else { return }
+        let instanceId = context.instanceId
         if chats.isEmpty, let cached = await cache.loadChats(instanceId: instanceId, workspaceId: workspaceId) {
+            guard coordinator.isCurrent(context) else { return }
             chats = cached
         }
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
         do {
-            let remote = try await coordinator.remoteClient().chats(workspaceId: workspaceId)
+            let remote = try await coordinator.remoteClient(for: context).chats(workspaceId: workspaceId)
+            guard coordinator.isCurrent(context) else { return }
             chats = Self.sorted(remote)
             try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             if chats.isEmpty { presentedError = error.localizedDescription }
         }
     }
 
     func create() async -> AidenChat? {
-        guard !isMutating, let instanceId = coordinator.activeInstanceId else { return nil }
+        guard !isMutating, let context = try? coordinator.requestContext() else { return nil }
+        let instanceId = context.instanceId
         isMutating = true
         defer { isMutating = false }
         do {
-            let chat = try await coordinator.remoteClient().createChat(workspaceId: workspaceId)
+            let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspaceId)
+            guard coordinator.isCurrent(context) else { return nil }
             upsert(chat)
             try await persist(chat: chat, instanceId: instanceId)
             return chat
         } catch {
+            guard coordinator.isCurrent(context) else { return nil }
             presentedError = error.localizedDescription
             return nil
         }
@@ -274,21 +281,24 @@ final class AidenWorkspaceChatsModel {
 
     func rename(_ chat: AidenChat, to title: String) async {
         let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty, !isMutating, let instanceId = coordinator.activeInstanceId else { return }
+        guard !cleaned.isEmpty, !isMutating, let context = try? coordinator.requestContext() else { return }
+        let instanceId = context.instanceId
         isMutating = true
         defer { isMutating = false }
         var optimistic = chat
         optimistic.title = cleaned
         upsert(optimistic)
         do {
-            let updated = try await coordinator.remoteClient().updateChat(
+            let updated = try await coordinator.remoteClient(for: context).updateChat(
                 id: chat.id,
                 revision: chat.revision,
                 title: cleaned
             )
+            guard coordinator.isCurrent(context) else { return }
             upsert(updated)
             try await persist(chat: updated, instanceId: instanceId)
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             upsert(chat)
             presentedError = error.localizedDescription
             await load()
@@ -296,15 +306,18 @@ final class AidenWorkspaceChatsModel {
     }
 
     func remove(_ chat: AidenChat) async {
-        guard !isMutating, let instanceId = coordinator.activeInstanceId else { return }
+        guard !isMutating, let context = try? coordinator.requestContext() else { return }
+        let instanceId = context.instanceId
         isMutating = true
         defer { isMutating = false }
         chats.removeAll { $0.id == chat.id }
         do {
-            try await coordinator.remoteClient().removeChat(id: chat.id, revision: chat.revision)
+            try await coordinator.remoteClient(for: context).removeChat(id: chat.id, revision: chat.revision)
+            guard coordinator.isCurrent(context) else { return }
             await cache.removeChat(instanceId: instanceId, chatId: chat.id)
             try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             upsert(chat)
             presentedError = error.localizedDescription
             await load()
@@ -381,7 +394,8 @@ final class AidenChatViewModel {
     var isStreaming: Bool { streamState.map { !$0.isTerminal } ?? false }
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
-        isConnected && !isStarting && !isUploadingAttachment && !isStreaming
+        isConnected && coordinator.activeInstanceId == instanceId
+            && !isStarting && !isUploadingAttachment && !isStreaming
     }
 
     var selectedProvider: AidenProvider? {
@@ -396,21 +410,26 @@ final class AidenChatViewModel {
 
     func load() async {
         guard !instanceId.isEmpty, !isLoading else { return }
+        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         isLoading = true
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
+            guard coordinator.isCurrent(context) else { return }
             chat = cached
         }
         defer { isLoading = false }
         do {
-            async let chatRequest = coordinator.remoteClient().chat(id: chat.id)
-            async let catalogRequest = coordinator.remoteClient().modelCatalog()
+            async let chatRequest = coordinator.remoteClient(for: context).chat(id: chat.id)
+            async let catalogRequest = coordinator.remoteClient(for: context).modelCatalog()
             let (remoteChat, remoteCatalog) = try await (chatRequest, catalogRequest)
+            guard coordinator.isCurrent(context) else { return }
             catalog = remoteCatalog
-            await acceptRemoteChat(remoteChat)
+            await acceptRemoteChat(remoteChat, context: context)
             resolveModelSelection()
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             if chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
+        guard coordinator.isCurrent(context) else { return }
         await restoreStreamIfNeeded()
     }
 
@@ -428,6 +447,7 @@ final class AidenChatViewModel {
     func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
+        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let submittedAttachments = pendingAttachments
         let request = AidenTurnRequestBuilder.make(
             text: text,
@@ -465,37 +485,48 @@ final class AidenChatViewModel {
         streamState = .queued
         let idempotencyKey = turnAttempts.key(for: request)
         do {
-            let response = try await coordinator.remoteClient().startTurn(
+            let response = try await coordinator.remoteClient(for: context).startTurn(
                 chatId: chat.id,
                 request: request,
                 idempotencyKey: idempotencyKey
             )
-            turnAttempts.reset()
-            chat.messages.removeAll { $0.id == optimisticID }
-            if !chat.messages.contains(where: { $0.id == response.message.id }) {
-                chat.messages.append(response.message)
+            let stream = AidenChatCache.ActiveStream(
+                deviceId: context.deviceId,
+                streamId: response.streamId,
+                turnId: response.turnId,
+                lastSequence: 0
+            )
+            var acceptedChat = chat
+            acceptedChat.messages.removeAll { $0.id == optimisticID }
+            if !acceptedChat.messages.contains(where: { $0.id == response.message.id }) {
+                acceptedChat.messages.append(response.message)
             }
+            // A normal installation switch retains an accepted turn for later
+            // resume. Forgetting, revoking, or re-pairing the captured device
+            // invalidates the context before any private cache/activity write.
+            let retained = await coordinator.withRetainedInstallationData(for: context) {
+                try? await cache.saveChat(acceptedChat, instanceId: instanceId)
+                try? await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
+                await liveActivities.start(
+                    instanceID: instanceId,
+                    chatID: chat.id,
+                    title: chat.title,
+                    streamID: response.streamId
+                )
+            }
+            guard retained else { return }
+            guard coordinator.isCurrent(context) else { return }
+            turnAttempts.reset()
+            chat = acceptedChat
             liveText = ""
             reasoning = ""
             tools = []
             timeline = []
             pendingApproval = nil
             streamState = .queued
-            let stream = AidenChatCache.ActiveStream(
-                streamId: response.streamId,
-                turnId: response.turnId,
-                lastSequence: 0
-            )
-            try? await cache.saveChat(chat, instanceId: instanceId)
-            try? await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
-            await liveActivities.start(
-                instanceID: instanceId,
-                chatID: chat.id,
-                title: chat.title,
-                streamID: response.streamId
-            )
-            startStreaming(stream)
+            startStreaming(stream, context: context)
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             chat.messages.removeAll { $0.id == optimisticID }
             chat.updatedAt = previousUpdatedAt
             if draft.isEmpty { draft = text }
@@ -507,24 +538,28 @@ final class AidenChatViewModel {
 
     func upload(_ upload: AidenAttachmentUpload) async {
         guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else { return }
+        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         isUploadingAttachment = true
         presentedError = nil
         defer { isUploadingAttachment = false }
         do {
-            let reference = try await coordinator.remoteClient().uploadAttachment(chatId: chat.id, upload: upload)
+            let reference = try await coordinator.remoteClient(for: context).uploadAttachment(chatId: chat.id, upload: upload)
+            guard coordinator.isCurrent(context) else { return }
             guard reference.isValid() else {
                 throw AidenRemoteClientError.invalidResponse
             }
             pendingAttachments.append(reference)
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             presentedError = error.localizedDescription
         }
     }
 
     func removeAttachment(_ attachment: AidenAttachmentReference) async {
         pendingAttachments.removeAll { $0.id == attachment.id }
+        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         do {
-            try await coordinator.remoteClient().removeAttachment(chatId: chat.id, attachmentId: attachment.id)
+            try await coordinator.remoteClient(for: context).removeAttachment(chatId: chat.id, attachmentId: attachment.id)
         } catch {
             // The reference is short lived and server cleanup is automatic. Local removal remains authoritative for the composer.
         }
@@ -532,11 +567,14 @@ final class AidenChatViewModel {
 
     func stop() async {
         guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
+        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let previousState = streamState
         streamState = .cancelled
         do {
-            streamState = try await coordinator.remoteClient().cancelStream(id: stream.streamId).state
+            streamState = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId).state
+            guard coordinator.isCurrent(context) else { return }
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             streamState = previousState
             presentedError = error.localizedDescription
         }
@@ -548,11 +586,14 @@ final class AidenChatViewModel {
             return
         }
         let previousState = streamState
+        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         pendingApproval = nil
         streamState = .running
         do {
-            _ = try await coordinator.remoteClient().respondToApproval(id: approval.id, decision: decision)
+            _ = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
+            guard coordinator.isCurrent(context) else { return }
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             pendingApproval = approval
             streamState = previousState
             presentedError = error.localizedDescription
@@ -572,12 +613,19 @@ final class AidenChatViewModel {
 
     private func restoreStreamIfNeeded() async {
         guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
+        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
+        guard stream.deviceId == context.deviceId else {
+            await cache.removeActiveStream(instanceId: instanceId, chatId: chat.id)
+            await liveActivities.endAll(forInstanceID: instanceId)
+            return
+        }
         do {
-            let status = try await coordinator.remoteClient().streamStatus(id: stream.streamId)
+            let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
+            guard coordinator.isCurrent(context) else { return }
             streamState = status.state
             if status.state.isTerminal {
-                await liveActivities.updateStatus(streamID: stream.streamId, state: status.state)
-                await reconcileChat()
+                await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
+                await reconcileChat(context: context)
                 await cache.removeActiveStream(instanceId: instanceId, chatId: chat.id)
             } else {
                 await liveActivities.start(
@@ -586,48 +634,51 @@ final class AidenChatViewModel {
                     title: chat.title,
                     streamID: stream.streamId
                 )
-                await liveActivities.updateStatus(streamID: stream.streamId, state: status.state)
-                startStreaming(stream)
+                await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
+                startStreaming(stream, context: context)
             }
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             presentedError = error.localizedDescription
-            await liveActivities.markStale(streamID: stream.streamId)
+            await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
         }
     }
 
-    private func startStreaming(_ stream: AidenChatCache.ActiveStream) {
+    private func startStreaming(_ stream: AidenChatCache.ActiveStream, context: AidenRemoteRequestContext) {
         streamTask?.cancel()
         streamTask = Task { [weak self] in
-            await self?.consume(stream)
+            await self?.consume(stream, context: context)
         }
     }
 
-    private func consume(_ original: AidenChatCache.ActiveStream) async {
+    private func consume(_ original: AidenChatCache.ActiveStream, context: AidenRemoteRequestContext) async {
         var stream = original
-        while !Task.isCancelled {
+        while !Task.isCancelled && coordinator.isCurrent(context) {
             do {
-                let events = try coordinator.remoteClient().streamEvents(
+                let events = try coordinator.remoteClient(for: context).streamEvents(
                     id: stream.streamId,
                     after: stream.lastSequence
                 )
                 for try await event in events {
                     try Task.checkCancellation()
+                    guard coordinator.isCurrent(context) else { return }
                     guard event.streamId == stream.streamId else { continue }
                     if event.sequence <= stream.lastSequence { continue }
                     if event.sequence != stream.lastSequence + 1 {
-                        await reconcileChat()
+                        await reconcileChat(context: context)
                     }
                     stream.lastSequence = event.sequence
                     try await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
-                    await apply(event)
+                    await apply(event, context: context)
                     if event.terminal { return }
                 }
 
-                let status = try await coordinator.remoteClient().streamStatus(id: stream.streamId)
+                let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
+                guard coordinator.isCurrent(context) else { return }
                 streamState = status.state
-                await liveActivities.updateStatus(streamID: stream.streamId, state: status.state)
+                await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
                 if status.state.isTerminal {
-                    await finishStream()
+                    await finishStream(context: context)
                     return
                 }
                 try await Task.sleep(for: .milliseconds(500))
@@ -636,87 +687,94 @@ final class AidenChatViewModel {
             } catch {
                 guard !Task.isCancelled else { return }
                 do {
-                    let status = try await coordinator.remoteClient().streamStatus(id: stream.streamId)
+                    let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
+                    guard coordinator.isCurrent(context) else { return }
                     streamState = status.state
-                    await liveActivities.updateStatus(streamID: stream.streamId, state: status.state)
+                    await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
                     if status.state.isTerminal {
-                        await finishStream()
+                        await finishStream(context: context)
                         return
                     }
                     try await Task.sleep(for: .seconds(1))
                 } catch is CancellationError {
                     return
                 } catch {
+                    guard coordinator.isCurrent(context) else { return }
                     presentedError = error.localizedDescription
-                    await liveActivities.markStale(streamID: stream.streamId)
+                    await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
                     return
                 }
             }
         }
     }
 
-    private func apply(_ event: AidenRemoteStreamEvent) async {
-        guard event.shouldApply, let payload = event.payload else { return }
+    private func apply(_ event: AidenRemoteStreamEvent, context: AidenRemoteRequestContext) async {
+        guard coordinator.isCurrent(context),
+              event.shouldApply,
+              let payload = event.payload else { return }
         switch event.type {
         case .snapshot:
             streamState = .reconciling
-            await reconcileChat()
+            await reconcileChat(context: context)
         case .status:
             if let value = payload.state, let state = AidenStreamState(rawValue: value) {
                 streamState = state
-                await liveActivities.updateStatus(streamID: event.streamId, state: state)
+                await liveActivities.updateStatus(instanceID: instanceId, streamID: event.streamId, state: state)
             }
         case .textDelta:
             liveText += payload.text ?? ""
             streamState = .running
-            await liveActivities.appendResponse(payload.text ?? "", streamID: event.streamId)
+            await liveActivities.appendResponse(payload.text ?? "", instanceID: instanceId, streamID: event.streamId)
         case .reasoningDelta:
             reasoning += payload.text ?? ""
-            await liveActivities.reasoning(streamID: event.streamId)
+            await liveActivities.reasoning(instanceID: instanceId, streamID: event.streamId)
         case .toolStarted:
             if let id = payload.toolId, let name = payload.name {
                 tools.append(AidenLiveTool(id: id, name: name, status: nil))
             }
-            await liveActivities.toolStarted(name: payload.name, streamID: event.streamId)
+            await liveActivities.toolStarted(name: payload.name, instanceID: instanceId, streamID: event.streamId)
         case .toolFinished:
             if let id = payload.toolId, let index = tools.firstIndex(where: { $0.id == id }) {
                 tools[index].status = payload.status
             }
-            await liveActivities.toolFinished(streamID: event.streamId)
+            await liveActivities.toolFinished(instanceID: instanceId, streamID: event.streamId)
         case .timeline:
             if let label = payload.label, timeline.last != label { timeline.append(label) }
         case .approvalRequired:
             if let id = payload.approvalId, let summary = payload.summary, let expiresAt = payload.expiresAt {
                 pendingApproval = AidenPendingApproval(id: id, summary: summary, expiresAt: expiresAt)
                 streamState = .waitingForApproval
-                await liveActivities.approvalRequired(streamID: event.streamId)
+                await liveActivities.approvalRequired(instanceID: instanceId, streamID: event.streamId)
             }
         case .error:
             presentedError = payload.message ?? "Aiden could not finish this response."
             streamState = .error
             await liveActivities.finish(
+                instanceID: instanceId,
                 streamID: event.streamId,
                 status: .failed,
                 message: String(localized: "Response failed"),
                 errorSummary: payload.message
             )
-            await finishStream()
+            await finishStream(context: context)
         case .cancelled:
             streamState = .cancelled
             await liveActivities.finish(
+                instanceID: instanceId,
                 streamID: event.streamId,
                 status: .cancelled,
                 message: String(localized: "Response cancelled")
             )
-            await finishStream()
+            await finishStream(context: context)
         case .done:
             streamState = .done
             await liveActivities.finish(
+                instanceID: instanceId,
                 streamID: event.streamId,
                 status: .complete,
                 message: String(localized: "Response complete")
             )
-            await finishStream()
+            await finishStream(context: context)
         case .heartbeat:
             break
         default:
@@ -724,25 +782,32 @@ final class AidenChatViewModel {
         }
     }
 
-    private func reconcileChat() async {
+    private func reconcileChat(context: AidenRemoteRequestContext) async {
         do {
-            let remote = try await coordinator.remoteClient().chat(id: chat.id)
-            await acceptRemoteChat(remote)
+            let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
+            guard coordinator.isCurrent(context) else { return }
+            await acceptRemoteChat(remote, context: context)
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             presentedError = error.localizedDescription
         }
     }
 
-    private func acceptRemoteChat(_ remote: AidenChat, scheduleTitleRefresh: Bool = true) async {
+    private func acceptRemoteChat(
+        _ remote: AidenChat,
+        context: AidenRemoteRequestContext,
+        scheduleTitleRefresh: Bool = true
+    ) async {
+        guard coordinator.isCurrent(context) else { return }
         chat = remote
         try? await cache.saveChat(remote, instanceId: instanceId)
         onChatUpdated(remote)
         if scheduleTitleRefresh, remote.isTitlePending {
-            schedulePendingTitleRefresh()
+            schedulePendingTitleRefresh(context: context)
         }
     }
 
-    private func schedulePendingTitleRefresh() {
+    private func schedulePendingTitleRefresh(context: AidenRemoteRequestContext) {
         guard titleRefreshTask == nil else { return }
         titleRefreshTask = Task { [weak self] in
             guard let self else { return }
@@ -750,8 +815,9 @@ final class AidenChatViewModel {
             for delay in AidenChatTitleReconciliation.retryMilliseconds {
                 do {
                     try await Task.sleep(for: .milliseconds(delay))
-                    let remote = try await coordinator.remoteClient().chat(id: chat.id)
-                    await acceptRemoteChat(remote, scheduleTitleRefresh: false)
+                    let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
+                    guard coordinator.isCurrent(context) else { return }
+                    await acceptRemoteChat(remote, context: context, scheduleTitleRefresh: false)
                     if !remote.isTitlePending { return }
                 } catch is CancellationError {
                     return
@@ -764,8 +830,9 @@ final class AidenChatViewModel {
         }
     }
 
-    private func finishStream() async {
-        await reconcileChat()
+    private func finishStream(context: AidenRemoteRequestContext) async {
+        guard coordinator.isCurrent(context) else { return }
+        await reconcileChat(context: context)
         liveText = ""
         reasoning = ""
         tools = []
