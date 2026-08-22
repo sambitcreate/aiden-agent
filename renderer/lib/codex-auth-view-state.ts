@@ -2,7 +2,7 @@ import type { ProviderAuthEvent, ProviderAuthPrompt } from "./types";
 
 export type CodexAuthActionableEvent = Extract<
   ProviderAuthEvent,
-  { type: "auth_url" | "device_code" }
+  { type: "auth_url" | "browser_open_failed" | "device_code" }
 >;
 
 export type CodexAuthPhase =
@@ -83,6 +83,7 @@ function eventMessage(event: ProviderAuthEvent): string {
   if (event.type === "device_code") {
     return "Enter this temporary code on OpenAI's verification page.";
   }
+  if (event.type === "browser_open_failed") return event.message;
   return event.message;
 }
 
@@ -143,7 +144,9 @@ export function reduceCodexAuthView(
       if (!hasFlow(state, action.event.flowId)) return state;
       if (state.view.phase === "cancelling" || state.view.phase === "finishing") return state;
       const actionable =
-        action.event.type === "auth_url" || action.event.type === "device_code"
+        action.event.type === "auth_url" ||
+        action.event.type === "browser_open_failed" ||
+        action.event.type === "device_code"
           ? action.event
           : undefined;
       return {
