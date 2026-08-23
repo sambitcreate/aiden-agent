@@ -342,6 +342,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         deviceName: String,
         deviceType: AidenDeviceType,
         clientVersion: String,
+        acceptsBotCapabilities: Bool = AppConfig.botFirstMobileEnabled,
         session injectedSession: URLSession? = nil,
         now: Date = Date()
     ) async throws -> AidenRemoteContractFixture.PairingExchange {
@@ -364,7 +365,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             deviceType: deviceType,
             clientVersion: clientVersion,
             acceptsDisplayName: true,
-            acceptsBotCapabilities: true
+            acceptsBotCapabilities: acceptsBotCapabilities
         )
         let exchange: AidenRemoteContractFixture.PairingExchange
         do {
@@ -403,6 +404,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         deviceName: String,
         deviceType: AidenDeviceType,
         clientVersion: String,
+        acceptsBotCapabilities: Bool = AppConfig.botFirstMobileEnabled,
         bootstrapSession injectedBootstrapSession: URLSession? = nil,
         pairingSession injectedPairingSession: URLSession? = nil,
         now: Date = Date()
@@ -418,6 +420,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             deviceName: deviceName,
             deviceType: deviceType,
             clientVersion: clientVersion,
+            acceptsBotCapabilities: acceptsBotCapabilities,
             session: injectedPairingSession,
             now: now
         )

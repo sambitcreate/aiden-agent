@@ -27,6 +27,7 @@ import {
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
 
 export function RootView() {
   useTheme();
@@ -201,6 +202,7 @@ function RootContent() {
 
   React.useEffect(() => {
     return onNotification("bots:changed", () => {
+      invalidateBotCanonicalPhotos();
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
         queryClient.invalidateQueries({ queryKey: ["bot"] }),

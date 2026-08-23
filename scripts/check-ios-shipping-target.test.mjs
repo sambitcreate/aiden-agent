@@ -8,6 +8,9 @@ const iosRoot = fileURLToPath(new URL("../ios/", import.meta.url));
 const projectPath = fileURLToPath(
   new URL("../ios/AidenOnTheGo.xcodeproj/project.pbxproj", import.meta.url),
 );
+const infoPlistPath = fileURLToPath(
+  new URL("../ios/AidenOnTheGo/Resources/Info.plist", import.meta.url),
+);
 const packageResolvedPath = fileURLToPath(
   new URL(
     "../ios/AidenOnTheGo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
@@ -157,6 +160,61 @@ test("the iOS tree contains no orphan imported Swift sources", async () => {
   assert.deepEqual(
     testEntries.filter((path) => path.endsWith(".swift")).sort(),
     testSources.slice().sort(),
+  );
+});
+
+test("the Bot-first mobile rollout flag fails closed across pairing and product routing", async () => {
+  const [project, info, appConfig, remoteClient, productShell, botsHome] = await Promise.all([
+    readFile(projectPath, "utf8"),
+    readFile(infoPlistPath, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Config/AppConfig.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Networking/AidenRemoteClient.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenProductShellView.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift`, "utf8"),
+  ]);
+
+  assert.equal([...project.matchAll(/AIDEN_BOT_FIRST_ENABLED = YES;/gu)].length, 2);
+  assert.match(info, /<key>AidenBotFirstEnabled<\/key>\s*<string>\$\(AIDEN_BOT_FIRST_ENABLED\)<\/string>/u);
+  assert.match(
+    appConfig,
+    /botFirstMobileEnabled:[\s\S]*?guard let value = Bundle\.main\.object[\s\S]*?return false/u,
+  );
+  assert.match(
+    remoteClient,
+    /acceptsBotCapabilities: Bool = AppConfig\.botFirstMobileEnabled[\s\S]*?acceptsBotCapabilities: acceptsBotCapabilities/u,
+  );
+  assert.match(
+    productShell,
+    /mobileEnabled: Bool = AppConfig\.botFirstMobileEnabled[\s\S]*?guard mobileEnabled else \{ return \.mobileDisabled \}/u,
+  );
+  assert.match(productShell, /Bots aren’t available in this version of Aiden On The Go\./u);
+  assert.match(
+    botsHome,
+    /isBotSurfaceActive: aidenBotSurfaceIsActive[\s\S]*?guard aidenBotSurfaceAllows[\s\S]*?expectedLoadID\.isBotSurfaceActive else/u,
+  );
+  assert.equal([...productShell.matchAll(/aidenBotSurfaceAllows\(/gu)].length, 8);
+  assert.equal([...botsHome.matchAll(/aidenBotSurfaceAllows\(/gu)].length, 2);
+  assert.match(
+    productShell,
+    /enum AidenBotSurfaceIngress:[\s\S]*?case homeLoad[\s\S]*?case search[\s\S]*?case openConversation[\s\S]*?case createConversation[\s\S]*?case mutationResolution[\s\S]*?case restoreConversation[\s\S]*?case deepLinkPresentation[\s\S]*?\}/u,
+  );
+  assert.match(
+    productShell,
+    /case \.createConversation, \.mutationResolution:\s*return isActive && availability\.canWrite/u,
+  );
+  const createStart = productShell.indexOf("private func createConversation(");
+  const createEnd = productShell.indexOf("private func allowsMutations(", createStart);
+  assert.ok(createStart >= 0 && createEnd > createStart);
+  const createConversation = productShell.slice(createStart, createEnd);
+  const createAdmission = createConversation.indexOf("aidenBotSurfaceAllows(\n            .createConversation");
+  const requestContext = createConversation.indexOf("coordinator.requestContext()");
+  const createMutation = createConversation.indexOf("client.createBotChat(");
+  assert.ok(createAdmission >= 0);
+  assert.ok(requestContext > createAdmission);
+  assert.ok(createMutation > requestContext);
+  assert.match(
+    productShell,
+    /switch aidenResolvedChatDestination[\s\S]*?case \.unavailable\(let message\):[\s\S]*?area = \.workspaces/u,
   );
 });
 
@@ -519,6 +577,33 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.ok(homeNavigationIndex >= 0 && homeNavigationIndex < chatsIndex);
   assert.match(shell, /AidenProductSwitcherButton\([\s\S]*?searchChrome/u);
   assert.match(productShell, /Menu \{[\s\S]*?areaButton\(\.bots\)[\s\S]*?areaButton\(\.workspaces\)[\s\S]*?Image\("AidenAppIcon"\)/u);
+  assert.match(
+    productShell,
+    /popover\(isPresented: isCoachmarkPresented, arrowEdge: \.top\)[\s\S]*?AidenBotSwitcherCoachmarkView[\s\S]*?presentationCompactAdaptation\(\.popover\)/u,
+  );
+  const coachmark = productShell.match(
+    /private struct AidenBotSwitcherCoachmarkView:[\s\S]*?private struct AidenBotShellView:/u,
+  )?.[0];
+  assert.ok(coachmark, "expected a bounded Bot switcher coachmark");
+  assert.match(coachmark, /Tap the Aiden logo to switch anytime\./u);
+  assert.match(coachmark, /aidenBotSwitcherCoachmarkDetail\(canWrite: canWrite\)/u);
+  assert.match(
+    productShell,
+    /one-time Full Access notice[\s\S]*?Choose Continue with Full Access or Customize first\./u,
+  );
+  assert.match(productShell, /This Mac shared Bots as read-only\./u);
+  assert.doesNotMatch(
+    coachmark,
+    /URLSession|AidenRemoteClient|managed (?:home|workspace)|Git repository/u,
+  );
+  assert.match(
+    productShell,
+    /needsBotSwitcherCoachmark\([\s\S]*?noticeGate = \.coaching[\s\S]*?isShowingSwitcherCoachmark = true/u,
+  );
+  assert.match(
+    productShell,
+    /completeBotSwitcherCoachmark\([\s\S]*?noticeGate = \.checking[\s\S]*?prepareBotAccess\(\)/u,
+  );
   assert.match(productShell, /AidenWorkspaceShellView\([\s\S]*?AidenBotShellView\(/u);
   assert.match(content, /AidenProductShellView\(/u);
   assert.match(shell, /Image\(systemName: "magnifyingglass"\)[\s\S]*?person\.crop\.circle\.fill/u);
@@ -593,6 +678,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /\.tabViewStyle\(\.page\(indexDisplayMode: \.never\)\)/u);
   assert.match(pairing, /Paste Pairing Payload[\s\S]*?More pairing options/u);
   assert.match(pairing, /AidenMobileOnboardingPhase\.allCases[\s\S]*?Image\(phase\.imageName\)/u);
+  assert.match(pairing, /BOTS AND WORKSPACES/u);
+  assert.match(pairing, /When Bots are available on your paired Mac[\s\S]*?tap the Aiden logo to switch\./u);
   assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
   assert.doesNotMatch(pairing, /AidenSidebarLogo/u);
   assert.match(pairing, /GeometryReader \{ proxy in[\s\S]*?AidenMobileOnboardingLayout\.contentWidth\(for: proxy\.size\.width\)[\s\S]*?AidenMobileOnboardingLayout\.contentHeight\(for: proxy\.size\.height\)/u);

@@ -141,6 +141,66 @@ final class AidenProductShellTests: XCTestCase {
         XCTAssertEqual(store.compactBotPath(for: "mac-b"), ["chat-b"])
     }
 
+    @MainActor
+    func testBotSwitcherCoachmarkIsVersionedAndScopedToTheExactPairing() throws {
+        let suiteName = "AidenProductShellTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AidenProductNavigationStore(defaults: defaults)
+
+        XCTAssertTrue(
+            store.needsBotSwitcherCoachmark(for: "mac-a", deviceID: "phone-a")
+        )
+        store.completeBotSwitcherCoachmark(for: "mac-a", deviceID: "phone-a")
+
+        XCTAssertFalse(
+            store.needsBotSwitcherCoachmark(for: "mac-a", deviceID: "phone-a")
+        )
+        XCTAssertTrue(
+            store.needsBotSwitcherCoachmark(for: "mac-a", deviceID: "phone-b")
+        )
+        XCTAssertTrue(
+            store.needsBotSwitcherCoachmark(for: "mac-b", deviceID: "phone-a")
+        )
+        XCTAssertTrue(
+            store.needsBotSwitcherCoachmark(
+                for: "mac-a",
+                deviceID: "phone-a",
+                version: 2
+            )
+        )
+
+        let restored = AidenProductNavigationStore(defaults: defaults)
+        XCTAssertFalse(
+            restored.needsBotSwitcherCoachmark(for: "mac-a", deviceID: "phone-a")
+        )
+    }
+
+    @MainActor
+    func testBotSwitcherCoachmarkRejectsInvalidScopeAndPurgesWithPairing() throws {
+        let suiteName = "AidenProductShellTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AidenProductNavigationStore(defaults: defaults)
+
+        XCTAssertFalse(store.needsBotSwitcherCoachmark(for: nil, deviceID: "phone-a"))
+        XCTAssertFalse(store.needsBotSwitcherCoachmark(for: "mac-a", deviceID: "bad id"))
+        XCTAssertFalse(
+            store.needsBotSwitcherCoachmark(for: "mac-a", deviceID: "phone-a", version: 0)
+        )
+
+        store.completeBotSwitcherCoachmark(for: "mac-a", deviceID: "phone-a")
+        store.completeBotSwitcherCoachmark(for: "mac-b", deviceID: "phone-b")
+        store.purge(instanceID: "mac-a")
+
+        XCTAssertTrue(
+            store.needsBotSwitcherCoachmark(for: "mac-a", deviceID: "phone-a")
+        )
+        XCTAssertFalse(
+            store.needsBotSwitcherCoachmark(for: "mac-b", deviceID: "phone-b")
+        )
+    }
+
     func testBotHealthAndInboxActivityKeepNewChatAndStatusHonest() {
         XCTAssertTrue(aidenBotCanStartNewChat(health: .ready, canWrite: true))
         XCTAssertFalse(aidenBotCanStartNewChat(health: .degraded, canWrite: true))
@@ -177,9 +237,24 @@ final class AidenProductShellTests: XCTestCase {
 
         XCTAssertEqual(AidenProductRouting.area(for: workspace), .workspaces)
         XCTAssertEqual(AidenProductRouting.area(for: bot), .bots)
+        XCTAssertEqual(
+            aidenResolvedChatDestination(for: workspace, botsAvailability: .mobileDisabled),
+            .workspaces
+        )
+        XCTAssertEqual(
+            aidenResolvedChatDestination(for: bot, botsAvailability: .mobileDisabled),
+            .unavailable("Bots aren’t available in this version of Aiden On The Go.")
+        )
+        XCTAssertEqual(
+            aidenResolvedChatDestination(
+                for: bot,
+                botsAvailability: .available(canWrite: false)
+            ),
+            .bots
+        )
     }
 
-    func testBotsAvailabilityDistinguishesUnsupportedFromNotGranted() throws {
+    func testBotsAvailabilityHonorsRolloutAndNegotiatedAccess() throws {
         let unsupported = try installation(device: [.serverRead], server: [.serverRead])
         let notGranted = try installation(
             device: [.serverRead],
@@ -189,10 +264,90 @@ final class AidenProductShellTests: XCTestCase {
             device: [.serverRead, .botRead],
             server: [.serverRead, .botRead, .botWrite]
         )
+        let writable = try installation(
+            device: [.serverRead, .botRead, .botWrite],
+            server: [.serverRead, .botRead, .botWrite]
+        )
 
-        XCTAssertEqual(AidenBotsAvailability.resolve(unsupported), .unsupported)
-        XCTAssertEqual(AidenBotsAvailability.resolve(notGranted), .notGranted)
-        XCTAssertEqual(AidenBotsAvailability.resolve(readOnly), .available(canWrite: false))
+        XCTAssertEqual(
+            AidenBotsAvailability.resolve(writable, mobileEnabled: false),
+            .mobileDisabled
+        )
+        XCTAssertEqual(
+            AidenBotsAvailability.resolve(writable, mobileEnabled: false).unavailableMessage,
+            "Bots aren’t available in this version of Aiden On The Go."
+        )
+        XCTAssertEqual(
+            AidenBotsAvailability.resolve(unsupported, mobileEnabled: true),
+            .unsupported
+        )
+        XCTAssertEqual(
+            AidenBotsAvailability.resolve(notGranted, mobileEnabled: true),
+            .notGranted
+        )
+        XCTAssertEqual(
+            AidenBotsAvailability.resolve(readOnly, mobileEnabled: true),
+            .available(canWrite: false)
+        )
+        XCTAssertEqual(
+            AidenBotsAvailability.resolve(writable, mobileEnabled: true),
+            .available(canWrite: true)
+        )
+        XCTAssertFalse(
+            aidenBotSurfaceIsActive(
+                area: .bots,
+                availability: AidenBotsAvailability.resolve(writable, mobileEnabled: false)
+            )
+        )
+        XCTAssertFalse(
+            aidenBotSurfaceIsActive(
+                area: .workspaces,
+                availability: .available(canWrite: true)
+            )
+        )
+        XCTAssertTrue(
+            aidenBotSurfaceIsActive(
+                area: .bots,
+                availability: .available(canWrite: false)
+            )
+        )
+        for ingress in AidenBotSurfaceIngress.allCases {
+            XCTAssertFalse(
+                aidenBotSurfaceAllows(
+                    ingress,
+                    area: .bots,
+                    availability: .mobileDisabled
+                ),
+                "rollout-off admitted \(ingress)"
+            )
+            XCTAssertFalse(
+                aidenBotSurfaceAllows(
+                    ingress,
+                    area: .workspaces,
+                    availability: .available(canWrite: true)
+                ),
+                "hidden Bot surface admitted \(ingress)"
+            )
+            let readOnlyExpected = ingress != .createConversation
+                && ingress != .mutationResolution
+            XCTAssertEqual(
+                aidenBotSurfaceAllows(
+                    ingress,
+                    area: .bots,
+                    availability: .available(canWrite: false)
+                ),
+                readOnlyExpected,
+                "read-only Bot surface policy is wrong for \(ingress)"
+            )
+        }
+        XCTAssertEqual(
+            aidenBotSwitcherCoachmarkDetail(canWrite: true),
+            "Before a Bot can act, Aiden shows a one-time Full Access notice. Choose Continue with Full Access or Customize first."
+        )
+        XCTAssertEqual(
+            aidenBotSwitcherCoachmarkDetail(canWrite: false),
+            "This Mac shared Bots as read-only. You can open their conversations here, then change Bot access on your Mac if you want to let them act."
+        )
     }
 
     private func installation(

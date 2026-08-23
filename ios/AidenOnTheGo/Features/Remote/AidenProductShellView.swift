@@ -30,6 +30,7 @@ enum AidenProductArea: String, Codable, CaseIterable, Identifiable, Sendable {
 
 enum AidenBotsAvailability: Equatable, Sendable {
     case available(canWrite: Bool)
+    case mobileDisabled
     case unsupported
     case notGranted
 
@@ -47,6 +48,8 @@ enum AidenBotsAvailability: Equatable, Sendable {
         switch self {
         case .available:
             nil
+        case .mobileDisabled:
+            "Bots aren’t available in this version of Aiden On The Go."
         case .unsupported:
             "Bots need a newer version of Aiden Agent on your Mac."
         case .notGranted:
@@ -54,7 +57,11 @@ enum AidenBotsAvailability: Equatable, Sendable {
         }
     }
 
-    static func resolve(_ installation: AidenInstallation?) -> Self {
+    static func resolve(
+        _ installation: AidenInstallation?,
+        mobileEnabled: Bool = AppConfig.botFirstMobileEnabled
+    ) -> Self {
+        guard mobileEnabled else { return .mobileDisabled }
         guard let installation,
               let supported = installation.serverCapabilities,
               supported.contains(.botRead) else {
@@ -71,6 +78,64 @@ enum AidenProductRouting {
     static func area(for chat: AidenChat) -> AidenProductArea {
         chat.isBotChat ? .bots : .workspaces
     }
+}
+
+enum AidenBotSurfaceIngress: CaseIterable, Sendable {
+    case homeLoad
+    case search
+    case openConversation
+    case createConversation
+    case mutationResolution
+    case restoreConversation
+    case deepLinkPresentation
+}
+
+enum AidenResolvedChatDestination: Equatable, Sendable {
+    case bots
+    case workspaces
+    case unavailable(String)
+}
+
+func aidenBotSurfaceIsActive(
+    area: AidenProductArea,
+    availability: AidenBotsAvailability
+) -> Bool {
+    area == .bots && availability.canOpen
+}
+
+func aidenBotSurfaceAllows(
+    _ ingress: AidenBotSurfaceIngress,
+    area: AidenProductArea,
+    availability: AidenBotsAvailability
+) -> Bool {
+    let isActive = aidenBotSurfaceIsActive(area: area, availability: availability)
+    switch ingress {
+    case .createConversation, .mutationResolution:
+        return isActive && availability.canWrite
+    case .homeLoad, .search, .openConversation, .restoreConversation,
+         .deepLinkPresentation:
+        return isActive
+    }
+}
+
+func aidenResolvedChatDestination(
+    for chat: AidenChat,
+    botsAvailability: AidenBotsAvailability
+) -> AidenResolvedChatDestination {
+    guard AidenProductRouting.area(for: chat) == .bots else { return .workspaces }
+    guard botsAvailability.canOpen else {
+        return .unavailable(
+            botsAvailability.unavailableMessage ?? "Bot access is unavailable."
+        )
+    }
+    return .bots
+}
+
+func aidenBotSwitcherCoachmarkDetail(canWrite: Bool) -> String {
+    if canWrite {
+        return "Before a Bot can act, Aiden shows a one-time Full Access notice. Choose Continue with Full Access or Customize first."
+    }
+    return "This Mac shared Bots as read-only. You can open their conversations here, then change Bot access on your Mac if you want to let them act."
 }
 
 func aidenBotChatAllowsMutations(
@@ -95,6 +160,7 @@ final class AidenProductNavigationStore {
         var compactWorkspacePathByInstance: [String: [String]] = [:]
         var compactBotPathByInstance: [String: [String]] = [:]
         var selectedBotByScope: [String: String]?
+        var botCoachmarkVersionsByScope: [String: Int]?
     }
 
     private static let snapshotKey = "aiden.product-navigation.v1"
@@ -176,6 +242,30 @@ final class AidenProductNavigationStore {
         persist()
     }
 
+    func needsBotSwitcherCoachmark(
+        for instanceID: String?,
+        deviceID: String?,
+        version: Int = 1
+    ) -> Bool {
+        guard let key = Self.scopeKey(instanceID: instanceID, deviceID: deviceID),
+              Self.isValidCoachmarkVersion(version) else { return false }
+        return (snapshot.botCoachmarkVersionsByScope?[key] ?? 0) < version
+    }
+
+    func completeBotSwitcherCoachmark(
+        for instanceID: String?,
+        deviceID: String?,
+        version: Int = 1
+    ) {
+        guard let key = Self.scopeKey(instanceID: instanceID, deviceID: deviceID),
+              Self.isValidCoachmarkVersion(version) else { return }
+        var values = snapshot.botCoachmarkVersionsByScope ?? [:]
+        guard (values[key] ?? 0) < version else { return }
+        values[key] = version
+        snapshot.botCoachmarkVersionsByScope = values
+        persist()
+    }
+
     func purge(instanceID: String) {
         snapshot.areasByInstance.removeValue(forKey: instanceID)
         snapshot.selectedWorkspaceByInstance.removeValue(forKey: instanceID)
@@ -183,6 +273,9 @@ final class AidenProductNavigationStore {
         snapshot.compactBotPathByInstance.removeValue(forKey: instanceID)
         let prefix = "\(instanceID.unicodeScalars.count):\(instanceID):"
         snapshot.selectedBotByScope = snapshot.selectedBotByScope?.filter { !$0.key.hasPrefix(prefix) }
+        snapshot.botCoachmarkVersionsByScope = snapshot.botCoachmarkVersionsByScope?.filter {
+            !$0.key.hasPrefix(prefix)
+        }
         persist()
     }
 
@@ -238,6 +331,15 @@ final class AidenProductNavigationStore {
             values[entry.key] = botID
         }
         result.selectedBotByScope = selected.isEmpty ? nil : selected
+        let coachmarks = (value.botCoachmarkVersionsByScope ?? [:]).reduce(
+            into: [String: Int]()
+        ) { values, entry in
+            guard values.count < 64,
+                  safeID(entry.key) != nil,
+                  isValidCoachmarkVersion(entry.value) else { return }
+            values[entry.key] = entry.value
+        }
+        result.botCoachmarkVersionsByScope = coachmarks.isEmpty ? nil : coachmarks
         return result
     }
 
@@ -254,6 +356,10 @@ final class AidenProductNavigationStore {
         guard let instanceID = safeID(instanceID), let deviceID = safeID(deviceID) else { return nil }
         return "\(instanceID.unicodeScalars.count):\(instanceID):\(deviceID)"
     }
+
+    private static func isValidCoachmarkVersion(_ version: Int) -> Bool {
+        (1...1_024).contains(version)
+    }
 }
 
 struct AidenProductSwitcherButton: View {
@@ -262,6 +368,19 @@ struct AidenProductSwitcherButton: View {
     let area: AidenProductArea
     let botsAvailability: AidenBotsAvailability
     let onSelect: (AidenProductArea) -> Void
+    private let isCoachmarkPresented: Binding<Bool>
+
+    init(
+        area: AidenProductArea,
+        botsAvailability: AidenBotsAvailability,
+        isCoachmarkPresented: Binding<Bool> = .constant(false),
+        onSelect: @escaping (AidenProductArea) -> Void
+    ) {
+        self.area = area
+        self.botsAvailability = botsAvailability
+        self.isCoachmarkPresented = isCoachmarkPresented
+        self.onSelect = onSelect
+    }
 
     var body: some View {
         Menu {
@@ -277,6 +396,13 @@ struct AidenProductSwitcherButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Aiden. Current area: \(area.title)")
         .accessibilityHint(accessibilityHint)
+        .popover(isPresented: isCoachmarkPresented, arrowEdge: .top) {
+            AidenBotSwitcherCoachmarkView(
+                canWrite: botsAvailability.canWrite,
+                onContinue: { isCoachmarkPresented.wrappedValue = false }
+            )
+            .presentationCompactAdaptation(.popover)
+        }
     }
 
     @ViewBuilder
@@ -304,6 +430,52 @@ struct AidenProductSwitcherButton: View {
     }
 }
 
+private struct AidenBotSwitcherCoachmarkView: View {
+    @Environment(\.aidenPalette) private var palette
+
+    let canWrite: Bool
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Image("AidenAppIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 42, height: 42)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Bots or Workspaces")
+                        .font(.headline)
+                    Text("Tap the Aiden logo to switch anytime.")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                }
+            }
+
+            Divider()
+
+            Label {
+                Text(aidenBotSwitcherCoachmarkDetail(canWrite: canWrite))
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: canWrite ? "checkmark.shield" : "eye")
+                    .foregroundStyle(palette.accent)
+            }
+
+            Button("Got it", action: onContinue)
+                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .foregroundStyle(palette.foreground)
+        .padding(20)
+        .frame(idealWidth: 330, maxWidth: 360)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 private struct AidenBotShellView: View {
     private struct PresentationScope: Hashable {
         let instanceID: String
@@ -314,6 +486,7 @@ private struct AidenBotShellView: View {
         let scope: PresentationScope?
         let connectionState: AidenRemoteConnectionState
         let chatID: String?
+        let isBotSurfaceActive: Bool
     }
 
     private struct ChatPresentation {
@@ -330,6 +503,7 @@ private struct AidenBotShellView: View {
     let deepLinkedDeviceID: String?
     let deepLinkedChatAllowsMutations: Bool
     let fullAccessActionsAllowed: Bool
+    @Binding var isShowingSwitcherCoachmark: Bool
     let onSelectArea: (AidenProductArea) -> Void
     let onRequestCustomAccess: () -> Void
 
@@ -346,8 +520,13 @@ private struct AidenBotShellView: View {
         RestorationID(
             scope: presentationScope,
             connectionState: coordinator.connectionState,
-            chatID: path.last
+            chatID: path.last,
+            isBotSurfaceActive: isBotSurfaceActive
         )
+    }
+
+    private var isBotSurfaceActive: Bool {
+        aidenBotSurfaceIsActive(area: area, availability: botsAvailability)
     }
 
     private var path: [String] {
@@ -366,6 +545,7 @@ private struct AidenBotShellView: View {
                 area: area,
                 availability: botsAvailability,
                 navigationStore: navigationStore,
+                isShowingSwitcherCoachmark: $isShowingSwitcherCoachmark,
                 onSelectArea: onSelectArea,
                 onOpenConversation: openConversation,
                 onCreateConversation: createConversation
@@ -395,7 +575,11 @@ private struct AidenBotShellView: View {
             }
         }
         .onChange(of: deepLinkedChat) { _, chat in
-            guard let chat, chat.isBotChat,
+            guard aidenBotSurfaceAllows(
+                .deepLinkPresentation,
+                area: area,
+                availability: botsAvailability
+            ), let chat, chat.isBotChat,
                   let instanceID = deepLinkedInstanceID,
                   let deviceID = deepLinkedDeviceID,
                   presentationScope == PresentationScope(instanceID: instanceID, deviceID: deviceID) else { return }
@@ -407,7 +591,11 @@ private struct AidenBotShellView: View {
             path = [chat.id]
         }
         .task(id: deepLinkedChat?.revision) {
-            guard let chat = deepLinkedChat, chat.isBotChat,
+            guard aidenBotSurfaceAllows(
+                .deepLinkPresentation,
+                area: area,
+                availability: botsAvailability
+            ), let chat = deepLinkedChat, chat.isBotChat,
                   let instanceID = deepLinkedInstanceID,
                   let deviceID = deepLinkedDeviceID,
                   presentationScope == PresentationScope(instanceID: instanceID, deviceID: deviceID) else { return }
@@ -419,7 +607,11 @@ private struct AidenBotShellView: View {
             path = [chat.id]
         }
         .onChange(of: deepLinkedChatAllowsMutations) { _, allowed in
-            guard let chat = deepLinkedChat,
+            guard aidenBotSurfaceAllows(
+                .mutationResolution,
+                area: area,
+                availability: botsAvailability
+            ), let chat = deepLinkedChat,
                   let instanceID = deepLinkedInstanceID,
                   let deviceID = deepLinkedDeviceID,
                   presentationScope == PresentationScope(instanceID: instanceID, deviceID: deviceID) else { return }
@@ -439,6 +631,11 @@ private struct AidenBotShellView: View {
 
     @MainActor
     private func openConversation(_ item: AidenBotConversationItem) async {
+        guard aidenBotSurfaceAllows(
+            .openConversation,
+            area: area,
+            availability: botsAvailability
+        ) else { return }
         guard coordinator.connectionState == .connected else {
             coordinator.presentedError = "Reconnect to your Mac to open this Bot chat."
             return
@@ -479,6 +676,11 @@ private struct AidenBotShellView: View {
 
     @MainActor
     private func createConversation(_ bot: AidenBotSummary) async {
+        guard aidenBotSurfaceAllows(
+            .createConversation,
+            area: area,
+            availability: botsAvailability
+        ) else { return }
         var capturedContext: AidenRemoteRequestContext?
         var sentAttempt: AidenBotConversationCreateAttempt?
         do {
@@ -542,7 +744,11 @@ private struct AidenBotShellView: View {
         client: AidenRemoteClient,
         context: AidenRemoteRequestContext
     ) async throws -> Bool {
-        guard botsAvailability.canWrite else { return false }
+        guard aidenBotSurfaceAllows(
+            .mutationResolution,
+            area: area,
+            availability: botsAvailability
+        ), botsAvailability.canWrite else { return false }
         guard let botID = chat.botId else { return false }
         let bot = try await client.bot(id: botID)
         guard coordinator.isCurrent(context) else { return false }
@@ -568,6 +774,16 @@ private struct AidenBotShellView: View {
 
     @MainActor
     private func hydrateRestoredPath() async {
+        guard aidenBotSurfaceAllows(
+            .restoreConversation,
+            area: area,
+            availability: botsAvailability
+        ) else {
+            path = []
+            chatsByScope = [:]
+            retainedCreateAttempt = nil
+            return
+        }
         guard coordinator.connectionState == .connected,
               let chatID = path.last,
               let scope = presentationScope,
@@ -660,6 +876,7 @@ private struct AidenFullAccessNoticeView: View {
 
 private enum AidenBotNoticeGate: Equatable {
     case inactive
+    case coaching
     case checking
     case required(AidenBotNoticeStatus)
     case accepted
@@ -739,6 +956,13 @@ private struct AidenProductNavigationResolutionID: Equatable {
 }
 
 struct AidenProductShellView: View {
+    private struct CoachmarkScope: Equatable {
+        let instanceID: String
+        let deviceID: String
+    }
+
+    private static let botSwitcherCoachmarkVersion = 1
+
     @Bindable var coordinator: AidenRemoteCoordinator
     @Binding private var navigationRequest: AidenNavigationRequest?
     @State private var workspaceNavigationRequest: AidenNavigationRequest?
@@ -750,6 +974,8 @@ struct AidenProductShellView: View {
     @State private var isSavingNotice = false
     @State private var noticeIncludesMigrationCopy = false
     @State private var isShowingCustomizePlaceholder = false
+    @State private var isShowingSwitcherCoachmark = false
+    @State private var coachmarkScope: CoachmarkScope?
     @State private var navigationStore: AidenProductNavigationStore
 
     init(
@@ -826,13 +1052,16 @@ struct AidenProductShellView: View {
                 deepLinkedDeviceID: deepLinkedBotDeviceID,
                 deepLinkedChatAllowsMutations: deepLinkedBotAllowsMutations,
                 fullAccessActionsAllowed: noticeGate == .accepted,
+                isShowingSwitcherCoachmark: $isShowingSwitcherCoachmark,
                 onSelectArea: selectArea,
                 onRequestCustomAccess: {
                     isShowingCustomizePlaceholder = true
                 }
             )
             .opacity(area == .bots ? 1 : 0)
-            .allowsHitTesting(area == .bots && !noticeGate.blocksBotActions)
+            .allowsHitTesting(
+                area == .bots && (!noticeGate.blocksBotActions || noticeGate == .coaching)
+            )
             .accessibilityHidden(area != .bots)
         }
         .overlay {
@@ -862,6 +1091,8 @@ struct AidenProductShellView: View {
             AidenBotCustomAccessFlowView(coordinator: coordinator)
         }
         .task(id: noticeResolutionID) {
+            coachmarkScope = nil
+            isShowingSwitcherCoachmark = false
             noticeGate = .inactive
             noticeIncludesMigrationCopy = false
             if deepLinkedBotInstanceID != coordinator.activeInstanceId
@@ -872,8 +1103,13 @@ struct AidenProductShellView: View {
                 deepLinkedBotAllowsMutations = false
             }
             if area == .bots {
+                if presentSwitcherCoachmarkIfNeeded() { return }
                 await prepareBotAccess()
             }
+        }
+        .onChange(of: isShowingSwitcherCoachmark) { wasShowing, isShowing in
+            guard wasShowing, !isShowing else { return }
+            completeSwitcherCoachmark()
         }
         .task(id: navigationResolutionID) {
             await resolveNavigationRequest()
@@ -883,6 +1119,8 @@ struct AidenProductShellView: View {
     @ViewBuilder
     private var botGateOverlay: some View {
         switch noticeGate {
+        case .coaching:
+            EmptyView()
         case .checking:
             ProgressView("Checking Bot access on your Mac…")
                 .padding()
@@ -929,9 +1167,46 @@ struct AidenProductShellView: View {
         }
         area = selected
         if selected == .bots {
+            if presentSwitcherCoachmarkIfNeeded() { return }
             noticeGate = .checking
             Task { await prepareBotAccess() }
         }
+    }
+
+    private func presentSwitcherCoachmarkIfNeeded() -> Bool {
+        guard botsAvailability.canOpen,
+              let installation = coordinator.installationStore.activeInstallation,
+              navigationStore.needsBotSwitcherCoachmark(
+                for: installation.id,
+                deviceID: installation.deviceId,
+                version: Self.botSwitcherCoachmarkVersion
+              ) else { return false }
+        coachmarkScope = CoachmarkScope(
+            instanceID: installation.id,
+            deviceID: installation.deviceId
+        )
+        noticeGate = .coaching
+        isShowingSwitcherCoachmark = true
+        return true
+    }
+
+    private func completeSwitcherCoachmark() {
+        guard noticeGate == .coaching, let scope = coachmarkScope else { return }
+        navigationStore.completeBotSwitcherCoachmark(
+            for: scope.instanceID,
+            deviceID: scope.deviceID,
+            version: Self.botSwitcherCoachmarkVersion
+        )
+        coachmarkScope = nil
+        let installation = coordinator.installationStore.activeInstallation
+        guard area == .bots,
+              installation?.id == scope.instanceID,
+              installation?.deviceId == scope.deviceID else {
+            noticeGate = .inactive
+            return
+        }
+        noticeGate = .checking
+        Task { await prepareBotAccess() }
     }
 
     @MainActor
@@ -1092,20 +1367,23 @@ struct AidenProductShellView: View {
                 let chat = try await coordinator.remoteClient(for: context).chat(id: chatID)
                 guard coordinator.isCurrent(context), navigationRequest == request else { return }
                 navigationRequest = nil
-                if AidenProductRouting.area(for: chat) == .bots {
-                    guard botsAvailability.canOpen else {
-                        coordinator.presentedError = botsAvailability.unavailableMessage
-                        return
-                    }
+                switch aidenResolvedChatDestination(
+                    for: chat,
+                    botsAvailability: botsAvailability
+                ) {
+                case .bots:
                     area = .bots
                     deepLinkedBotChat = chat
                     deepLinkedBotInstanceID = context.instanceId
                     deepLinkedBotDeviceID = context.deviceId
                     deepLinkedBotAllowsMutations = false
                     await prepareBotAccess()
-                } else {
+                case .workspaces:
                     area = .workspaces
                     workspaceNavigationRequest = request
+                case .unavailable(let message):
+                    area = .workspaces
+                    coordinator.presentedError = message
                 }
             } catch is CancellationError {
                 return

@@ -1419,7 +1419,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       title={
         bot.data ? (
           <span className="flex min-w-0 items-center gap-2">
-            <BotAvatar avatar={bot.data.avatar} name={bot.data.name} size="small" />
+            <BotAvatar botId={bot.data.id} avatar={bot.data.avatar} name={bot.data.name} photoLoading="immediate" size="small" />
             <span className="min-w-0">
               <span className="flex items-center gap-2">
                 <span className="truncate">{bot.data.name}</span>

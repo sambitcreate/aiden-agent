@@ -35,6 +35,8 @@
 	<false/>
 	<key>AidenAppGroupIdentifier</key>
 	<string>$(APP_GROUP_IDENTIFIER)</string>
+	<key>AidenBotFirstEnabled</key>
+	<string>$(AIDEN_BOT_FIRST_ENABLED)</string>
 	<key>AidenKeychainService</key>
 	<string>$(KEYCHAIN_SERVICE)</string>
 	<key>AidenURLScheme</key>

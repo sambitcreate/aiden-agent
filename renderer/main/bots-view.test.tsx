@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import {
+  BOT_CANONICAL_PHOTO_CACHE_MAX_BYTES,
+  BOT_CANONICAL_PHOTO_MAX_CONCURRENT,
+  BotCanonicalPhotoCache,
+} from "../lib/bot-canonical-photo-cache";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -76,6 +81,149 @@ test("bot avatars migrate durable ids into layered mouthless face recipes", () =
   }
 });
 
+test("existing Mac Bot surfaces overlay canonical photos and retain semantic fallbacks", () => {
+  const avatar = source("../components/bot-avatar.tsx");
+  const view = source("./bots-view.tsx");
+  const pane = source("./chat-pane.tsx");
+  const cache = source("../lib/bot-canonical-photo-cache.ts");
+  const root = source("./root-view.tsx");
+  assert.match(avatar, /<AvatarFace avatar=\{avatar\} \/>/u);
+  assert.match(avatar, /new IntersectionObserver/u);
+  assert.match(avatar, /rootMargin: "160px"/u);
+  assert.match(avatar, /setNearViewport\(entries\.some\(\(\{ isIntersecting \}\) => isIntersecting\)\)/u);
+  assert.match(avatar, /photoLoading === "immediate" \? "selected" : "visible"/u);
+  assert.match(avatar, /src=\{photo\.dataUrl\}/u);
+  assert.match(avatar, /onError=\{\(\) => setFailedRevision\(photo\.assetRevision\)\}/u);
+  assert.equal(view.match(/<BotAvatar botId=/gu)?.length, 2);
+  assert.match(view, /botId=\{bot\.id\}[\s\S]{0,140}photoLoading="visible"/u);
+  assert.match(view, /botId=\{selected\.id\}[\s\S]{0,160}photoLoading="immediate"/u);
+  assert.match(pane, /botId=\{bot\.data\.id\}[\s\S]{0,160}photoLoading="immediate"/u);
+  assert.match(cache, /BOT_CANONICAL_PHOTO_MAX_CONCURRENT = 4/u);
+  assert.match(cache, /BOT_CANONICAL_PHOTO_CACHE_MAX_BYTES = 32 \* 1_048_576/u);
+  assert.match(root, /invalidateBotCanonicalPhotos\(\)/u);
+});
+
+function canonicalPhoto(id: number, bytes = 12) {
+  return {
+    assetRevision: `avatar_revision_${id.toString(16).padStart(32, "0")}`,
+    dataUrl: `data:image/png;base64,${Buffer.alloc(bytes, id % 255).toString("base64")}` as const,
+  };
+}
+
+test("a maximum Bot roster has bounded parallel reads and retained canonical-photo bytes", async () => {
+  let running = 0;
+  let maxRunning = 0;
+  const cache = new BotCanonicalPhotoCache(async (botId) => {
+    running += 1;
+    maxRunning = Math.max(maxRunning, running);
+    await Promise.resolve();
+    running -= 1;
+    return canonicalPhoto(Number(botId.slice(4)), 12);
+  }, { maxConcurrent: 4, maxBytes: 48, maxEntries: 4 });
+  for (let index = 0; index < 256; index += 1) cache.request(`bot${index}`, "visible");
+  assert.deepEqual(cache.stats(), { active: 4, queued: 252, entries: 0, bytes: 0 });
+  await cache.settle();
+  assert.equal(maxRunning, BOT_CANONICAL_PHOTO_MAX_CONCURRENT);
+  assert.ok(cache.stats().entries <= 4);
+  assert.ok(cache.stats().bytes <= 48);
+  assert.ok(cache.stats().bytes < BOT_CANONICAL_PHOTO_CACHE_MAX_BYTES);
+});
+
+test("rapidly offscreen roster rows cancel queued canonical-photo reads", async () => {
+  const calls: string[] = [];
+  let releaseActive: (() => void) | undefined;
+  const active = new Promise<void>((resolve) => { releaseActive = resolve; });
+  const cache = new BotCanonicalPhotoCache(async (botId) => {
+    calls.push(botId);
+    await active;
+    return canonicalPhoto(calls.length);
+  }, { maxConcurrent: 4, maxBytes: 1_024, maxEntries: 8 });
+
+  for (let index = 0; index < 256; index += 1) {
+    const leaveViewport = cache.subscribe(`bot${index}`, "visible", () => undefined);
+    cache.request(`bot${index}`, "visible");
+    leaveViewport();
+  }
+
+  assert.equal(calls.length, BOT_CANONICAL_PHOTO_MAX_CONCURRENT);
+  assert.deepEqual(cache.stats(), { active: 4, queued: 0, entries: 0, bytes: 0 });
+  releaseActive!();
+  await cache.settle();
+  assert.equal(calls.length, BOT_CANONICAL_PHOTO_MAX_CONCURRENT);
+  assert.equal(cache.stats().queued, 0);
+
+  const leaveAfterReentry = cache.subscribe("bot4", "visible", () => undefined);
+  cache.request("bot4", "visible");
+  await cache.settle();
+  leaveAfterReentry();
+  assert.equal(calls.length, BOT_CANONICAL_PHOTO_MAX_CONCURRENT + 1);
+  assert.ok(cache.snapshot("bot4"));
+});
+
+test("a selected Bot photo jumps ahead of queued roster work", async () => {
+  const calls: string[] = [];
+  let releaseFirst: (() => void) | undefined;
+  const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const cache = new BotCanonicalPhotoCache(async (botId) => {
+    calls.push(botId);
+    if (botId === "roster-first") await first;
+    return canonicalPhoto(calls.length);
+  }, { maxConcurrent: 1, maxBytes: 1_024, maxEntries: 8 });
+  cache.request("roster-first", "visible");
+  cache.request("roster-second", "visible");
+  cache.request("selected", "selected");
+  assert.deepEqual(calls, ["roster-first"]);
+  releaseFirst!();
+  await cache.settle();
+  assert.deepEqual(calls, ["roster-first", "selected", "roster-second"]);
+  assert.equal(cache.snapshot("selected")?.assetRevision, canonicalPhoto(2).assetRevision);
+});
+
+test("an evicted roster photo reloads after leaving and re-entering the viewport", async () => {
+  const calls: string[] = [];
+  const cache = new BotCanonicalPhotoCache(async (botId) => {
+    calls.push(botId);
+    return canonicalPhoto(calls.length);
+  }, { maxConcurrent: 1, maxBytes: 1_024, maxEntries: 1 });
+
+  const leaveViewport = cache.subscribe("first", "visible", () => undefined);
+  cache.request("first", "visible");
+  await cache.settle();
+  leaveViewport();
+
+  cache.request("second", "visible");
+  await cache.settle();
+  assert.equal(cache.snapshot("first"), undefined);
+
+  const leaveAgain = cache.subscribe("first", "visible", () => undefined);
+  cache.request("first", "visible");
+  await cache.settle();
+  leaveAgain();
+
+  assert.deepEqual(calls, ["first", "second", "first"]);
+  assert.equal(cache.snapshot("first")?.assetRevision, canonicalPhoto(3).assetRevision);
+  assert.equal(cache.stats().entries, 1);
+});
+
+test("visible and selected subscribers share one active canonical-photo read", async () => {
+  let calls = 0;
+  let release: (() => void) | undefined;
+  const loading = new Promise<void>((resolve) => { release = resolve; });
+  const cache = new BotCanonicalPhotoCache(async () => {
+    calls += 1;
+    await loading;
+    return canonicalPhoto(calls);
+  }, { maxConcurrent: 2, maxBytes: 1_024, maxEntries: 2 });
+
+  cache.request("shared", "visible");
+  cache.request("shared", "selected");
+  assert.equal(calls, 1);
+  assert.deepEqual(cache.stats(), { active: 1, queued: 0, entries: 0, bytes: 0 });
+  release!();
+  await cache.settle();
+  assert.equal(calls, 1);
+});
+
 test("bot editor provides live manual controls and configured Pi model design", () => {
   const view = source("./bots-view.tsx");
   const studio = source("../components/bot-face-studio.tsx");
@@ -118,7 +266,7 @@ test("bot chats show authoritative bot identity and fence archived conversations
   const pane = source("./chat-pane.tsx");
   assert.match(pane, /const bot = useBot\(chat\.data\?\.botId\)/u);
   assert.match(pane, /Restore this bot before continuing the conversation/u);
-  assert.match(pane, /<BotAvatar avatar=\{bot\.data\.avatar\}/u);
+  assert.match(pane, /<BotAvatar botId=\{bot\.data\.id\} avatar=\{bot\.data\.avatar\}[\s\S]{0,160}photoLoading="immediate"/u);
   assert.match(pane, /!botReadinessMessage/u);
   assert.match(pane, /chat\.data\?\.title \?\? "New conversation"/u);
 });

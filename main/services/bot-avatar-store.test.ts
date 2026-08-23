@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createBotAvatarApplicationAdapter } from "./bot-avatar-application-adapter.js";
+import { projectBotAvatarForRenderer } from "./bot-avatar-renderer-projection.js";
+import type { BotDefinition } from "../../renderer/shared/bots.js";
 import {
   BOT_AVATAR_ASSETS_DIRECTORY,
   BOT_AVATAR_MANIFEST,
@@ -273,4 +275,115 @@ test("application adapter projects semantic fallback and exposes only canonical 
     });
     assert.deepEqual(await adapter.view(BOT_A, "spark"), { semantic: "spark" });
   } finally { await rm(paths.parent, { recursive: true, force: true }); }
+});
+
+test("renderer projection returns exact canonical bytes without exposing private store paths", async () => {
+  const paths = await temporaryRoot("aiden-bot-avatar-renderer-");
+  try {
+    const store = createFileBotAvatarStore({
+      root: () => paths.root, normalizer,
+      mintAssetId: () => ASSET_A, mintAssetRevision: () => REVISION_A,
+    });
+    const adapter = createBotAvatarApplicationAdapter({ store, ownerId: OWNER_A });
+    await adapter.put({
+      botId: BOT_A, expectedAssetRevision: null, operationId: "renderer-projection-put",
+    }, { mimeType: "image/png", data: png(512, 512).toString("base64") });
+    const bot: BotDefinition = {
+      id: BOT_A,
+      revision: "bot-revision-a",
+      name: "Planner",
+      instructions: "Plan carefully.",
+      avatar: "spark",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const projected = await projectBotAvatarForRenderer(BOT_A, {
+      bots: { get: async () => bot },
+      avatar: adapter,
+    });
+    assert.deepEqual(projected, {
+      assetRevision: REVISION_A,
+      dataUrl: `data:image/png;base64,${png(512, 512, 8).toString("base64")}`,
+    });
+    assert.doesNotMatch(JSON.stringify(projected), /bot-avatar-store|assetfilename|private\//u);
+  } finally { await rm(paths.parent, { recursive: true, force: true }); }
+});
+
+test("renderer projection preserves the semantic fallback for missing or stale raster state", async () => {
+  const bot: BotDefinition = {
+    id: BOT_A,
+    revision: "bot-revision-a",
+    name: "Planner",
+    instructions: "Plan carefully.",
+    avatar: "spark",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  assert.equal(await projectBotAvatarForRenderer(BOT_A, {
+    bots: { get: async () => null },
+    avatar: {
+      view: async () => ({ semantic: "spark" }),
+      content: async () => { throw new Error("must not read"); },
+    },
+  }), null);
+  assert.equal(await projectBotAvatarForRenderer(BOT_A, {
+    bots: { get: async () => bot },
+    avatar: {
+      view: async () => ({
+        semantic: "spark",
+        asset: { assetRevision: REVISION_A, mimeType: "image/png", width: 512, height: 512, byteSize: 1 },
+      }),
+      content: async () => { throw new Error("concurrently replaced"); },
+    },
+  }), null);
+});
+
+test("renderer projection reconciles one concurrent canonical-photo replacement", async () => {
+  const replacementRevision = "avatar_revision_20000000000040008000000000000002";
+  const bytes = Buffer.from("replacement");
+  let views = 0;
+  const projected = await projectBotAvatarForRenderer(BOT_A, {
+    bots: { get: async () => ({
+      id: BOT_A,
+      revision: "bot-revision-a",
+      name: "Planner",
+      instructions: "Plan carefully.",
+      avatar: "spark",
+      createdAt: 1,
+      updatedAt: 1,
+    }) },
+    avatar: {
+      view: async () => {
+        views += 1;
+        return {
+          semantic: "spark",
+          asset: {
+            assetRevision: views === 1 ? REVISION_A : replacementRevision,
+            mimeType: "image/png",
+            width: 512,
+            height: 512,
+            byteSize: bytes.length,
+          },
+        };
+      },
+      content: async (_botId, assetRevision) => {
+        if (assetRevision === REVISION_A) throw new Error("concurrently replaced");
+        return {
+          metadata: {
+            assetRevision: replacementRevision,
+            mimeType: "image/png",
+            width: 512,
+            height: 512,
+            byteSize: bytes.length,
+          },
+          bytes,
+        };
+      },
+    },
+  });
+  assert.equal(views, 2);
+  assert.deepEqual(projected, {
+    assetRevision: replacementRevision,
+    dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
+  });
 });

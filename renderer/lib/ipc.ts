@@ -67,6 +67,7 @@ import type {
   BotAvatarSuggestionInput,
   BotCreateInput,
   BotDefinition,
+  BotRendererCanonicalPhoto,
   BotUpdateInput,
 } from "../shared/bots";
 import { botAvatarSuggestionErrorMessage } from "../shared/bots";
@@ -761,6 +762,8 @@ export const botsApi = {
   list: (includeArchived = false) =>
     invoke<BotDefinition[]>("bots:list", includeArchived),
   get: (id: string) => invoke<BotDefinition | null>("bots:get", id),
+  getCanonicalPhoto: (id: string) =>
+    invoke<BotRendererCanonicalPhoto | null>("bots:getCanonicalPhoto", id),
   create: (input: BotCreateInput) => invoke<BotDefinition>("bots:create", input),
   suggestAvatar: async (input: BotAvatarSuggestionInput) => {
     try {

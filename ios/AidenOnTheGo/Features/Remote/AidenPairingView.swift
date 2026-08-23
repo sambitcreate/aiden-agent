@@ -185,7 +185,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
 
     var eyebrow: String {
         switch self {
-        case .build: return String(localized: "BUILD IN YOUR WORKSPACE")
+        case .build: return String(localized: "BOTS AND WORKSPACES")
         case .extend: return String(localized: "CHOOSE AND EXTEND")
         case .control: return String(localized: "AUTOMATE AND STAY IN CONTROL")
         }
@@ -193,7 +193,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .build: return String(localized: "Your Mac, ready to work")
+        case .build: return String(localized: "Choose how Aiden helps")
         case .extend: return String(localized: "Bring the right intelligence")
         case .control: return String(localized: "Keep Aiden moving")
         }
@@ -202,7 +202,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .build:
-            return String(localized: "Chat with a workspace agent that can read and edit files, run commands, review diffs, and work with Git.")
+            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. When Bots are available on your paired Mac, use them as reusable helpers and tap the Aiden logo to switch.")
         case .extend:
             return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and MCP connectors.")
         case .control:

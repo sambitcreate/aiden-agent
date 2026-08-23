@@ -487,13 +487,16 @@ final class AidenNativeIntegrationTests: XCTestCase {
             AidenMobileOnboardingPhase.allCases.map(\.imageName),
             ["OnboardingBuild", "OnboardingExtend", "OnboardingControl"]
         )
-        XCTAssertEqual(AidenMobileOnboardingPhase.build.eyebrow, "BUILD IN YOUR WORKSPACE")
+        XCTAssertEqual(AidenMobileOnboardingPhase.build.eyebrow, "BOTS AND WORKSPACES")
         XCTAssertEqual(AidenMobileOnboardingPhase.extend.eyebrow, "CHOOSE AND EXTEND")
         XCTAssertEqual(
             AidenMobileOnboardingPhase.control.eyebrow,
             "AUTOMATE AND STAY IN CONTROL"
         )
         XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Git"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Bots"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Workspaces"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Aiden logo"))
         XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("MCP"))
         XCTAssertTrue(AidenMobileOnboardingPhase.control.detail.contains("scheduled"))
     }

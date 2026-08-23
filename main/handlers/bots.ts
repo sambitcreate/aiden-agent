@@ -13,6 +13,9 @@ import { parseBotNoticeAcknowledgement } from "../../renderer/shared/bot-capabil
 import { botMutationGate } from "../services/bot-mutation-gate.js";
 import { generateBotAvatarSuggestion } from "../services/bot-avatar-generator.js";
 import { botAvatarOperations } from "../services/bot-avatar-operation-registry.js";
+import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-store-main.js";
+import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
+import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
 import {
   telegramBotBindingAuthority,
   telegramBotBindings,
@@ -112,6 +115,14 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:get", async (_event, id: unknown) =>
     botApplicationService.get(parseBotId(id)),
   );
+  ipcMain.handle("bots:getCanonicalPhoto", async (_event, id: unknown) => {
+    const botId = parseBotId(id);
+    const instanceId = (await (await getAidenRemoteRuntime()).state.snapshot()).instanceId;
+    return projectBotAvatarForRenderer(botId, {
+      bots: botApplicationService,
+      avatar: createMainBotAvatarApplicationAdapter(instanceId),
+    });
+  });
   ipcMain.handle("bots:create", async (_event, input: unknown) =>
     botApplicationService.createBot({
       audienceId: desktopAudienceId,

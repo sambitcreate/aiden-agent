@@ -58,6 +58,13 @@ test("public App Store identity stays aligned with shipping app links", async ()
   assert.match(appConfig, /supportURL = URL\(staticString: "https:\/\/chatwithaiden\.com\/"\)/u);
 });
 
+test("release metadata names the current processed TestFlight candidate", async () => {
+  const { metadata } = await loadFiles();
+
+  assert.match(metadata, /build `15` is the current processed internal candidate/u);
+  assert.doesNotMatch(metadata, /build `6` is the current internal candidate/u);
+});
+
 test("ASC owner operations are telemetry-off, strict, and credential-safe", async () => {
   const { ascRunbook, gitignore } = await loadFiles();
 

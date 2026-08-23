@@ -60,6 +60,21 @@ test("bot face generation is main-owned and uses only the bounded Pi recipe", ()
   assert.doesNotMatch(generator, /result\.errorMessage/u);
 });
 
+test("desktop canonical Bot photos cross IPC as bounded content with semantic fallback", () => {
+  const handlers = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
+  const projection = readFileSync(
+    new URL("../services/bot-avatar-renderer-projection.ts", import.meta.url),
+    "utf8",
+  );
+  const ipc = readFileSync(new URL("../../renderer/lib/ipc.ts", import.meta.url), "utf8");
+  assert.match(handlers, /bots:getCanonicalPhoto/u);
+  assert.match(handlers, /projectBotAvatarForRenderer/u);
+  assert.match(ipc, /bots:getCanonicalPhoto/u);
+  assert.match(projection, /data:image\/png;base64/u);
+  assert.match(projection, /catch \{\s*return null;/u);
+  assert.doesNotMatch(projection, /filename|filePath|assetPath/u);
+});
+
 test("generation resolves persisted bot identity and leaves ordinary prompts unchanged", () => {
   const client = readFileSync(new URL("../services/llm-client.ts", import.meta.url), "utf8");
   assert.match(

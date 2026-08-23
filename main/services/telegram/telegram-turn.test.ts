@@ -173,9 +173,16 @@ test("assistant-only Telegram turn preserves the owner chat and assistant mode",
 test("bot-bound Telegram turn omits assistant mode while retaining the Pi admission path", async () => {
   let startedParams: { chatId: string; workspaceId?: string; mode?: string } | undefined;
   let botAudienceId: string | undefined;
+  let approvalCeiling: Pick<Parameters<TelegramLlmClient["start"]>[3], "allowComputerUse" | "allowSubagents" | "allowMcpTools" | "interactionSurface"> | undefined;
   const llm = mockLlm(async (streamId, params, owner, options) => {
     startedParams = params;
     botAudienceId = options.botAudienceId;
+    approvalCeiling = {
+      allowComputerUse: options.allowComputerUse,
+      allowSubagents: options.allowSubagents,
+      allowMcpTools: options.allowMcpTools,
+      interactionSurface: options.interactionSurface,
+    };
     owner.send("chat:done", { streamId, content: "done" });
     return true;
   });
@@ -221,6 +228,12 @@ test("bot-bound Telegram turn omits assistant mode while retaining the Pi admiss
   assert.equal(startedParams?.workspaceId, "bot-home-a");
   assert.equal(startedParams?.mode, undefined);
   assert.equal(botAudienceId, "telegram:work:owner:123");
+  assert.deepEqual(approvalCeiling, {
+    allowComputerUse: false,
+    allowSubagents: false,
+    allowMcpTools: false,
+    interactionSurface: "telegram",
+  });
   assert.equal(requestedProvider, "openai");
   assert.equal(requestedModel, "gpt-4o");
 });

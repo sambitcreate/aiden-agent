@@ -161,6 +161,12 @@ export interface BotDefinition {
   archivedAt?: number;
 }
 
+/** Bounded canonical PNG bytes projected by main without exposing its private asset path. */
+export interface BotRendererCanonicalPhoto {
+  assetRevision: string;
+  dataUrl: `data:image/png;base64,${string}`;
+}
+
 export interface BotCreateInput {
   name: string;
   description?: string;

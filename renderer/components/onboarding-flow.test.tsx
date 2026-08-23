@@ -308,7 +308,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
-  assert.match(featurePresentation, /custom vector faces/u);
+  assert.match(featurePresentation, /durable instructions, separate conversations, access controls/u);
   assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 25);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });

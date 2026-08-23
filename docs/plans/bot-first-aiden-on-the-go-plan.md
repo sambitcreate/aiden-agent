@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phases 0–6 and Phase 7 implementation complete August 23, 2026; eligible-hardware Phase 7 acceptance remains open; Phase 8 in progress
+- Status: Active; Phases 0–8 implementation complete August 23, 2026; staged rollout and external physical-system acceptance remain open
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -520,7 +520,7 @@ Acceptance:
 
 ### Phase 7 — Apple Image Playground and generated-avatar lifecycle
 
-Implementation completed August 23, 2026. The shipping iOS target now has the availability-isolated system sheet, explicit non-personalized style boundary, accepted-image normalization/preview, authenticated canonical paired-Mac upload, exact-device cache, replacement/revert reconciliation, canonical-photo rendering in the Bot inbox/profile/shared chat, process-launch crash-residue cleanup, and updated privacy/App Review copy. The connected physical iPhone 13 Pro proves Apple's runtime reports Image Playground unavailable and the complete fallback renders without invoking a candidate. Independent review closed every actionable P0/P1 finding. Full supported-hardware acceptance remains open because no eligible physical Apple Intelligence iPhone/iPad is available: system generation through the real Mac normalizer, relaunch, replacement/revert, cancellation/refusal/model/network/PCC states, and pixel-equivalence must be proven before release. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-7.md`.
+Implementation completed August 23, 2026. The shipping iOS target now has the availability-isolated system sheet, explicit non-personalized style boundary, accepted-image normalization/preview, authenticated canonical paired-Mac upload, exact-device cache, replacement/revert reconciliation, canonical-photo rendering in the Bot inbox/profile/shared chat, process-launch crash-residue cleanup, and updated privacy/App Review copy. The connected physical iPhone 13 Pro proves Apple's runtime reports Image Playground unavailable and the complete fallback renders without invoking a candidate. Independent review closed every actionable P0/P1 finding. Full supported-hardware acceptance remains open because no eligible physical Apple Intelligence iPhone/iPad was owner-authorized for this phase: system generation through the real Mac normalizer, relaunch, replacement/revert, cancellation/refusal/model/network/PCC states, and pixel-equivalence must be proven before release. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-7.md`.
 
 1. Add an iOS 18.1 availability-isolated wrapper around the current SwiftUI Image Playground sheet.
 2. Prefill only visible identity/purpose, explicitly allow Apple's three non-personalized styles, disclose Apple-controlled generation, and support cancel/retry/unavailable/restricted/model-downloading/usage-limit states.
@@ -537,6 +537,8 @@ Acceptance:
 - source checks forbid `ImageCreator`, unrestricted `.all` styles, and accidental Photos-personalization enablement.
 
 ### Phase 8 — Onboarding, rollout, and release evidence
+
+Implementation completed August 23, 2026. Mobile rollout now fails closed through capability advertisement and every Bot surface ingress; the exact-pairing logo coachmark introduces Bots/Workspaces and the Full/Custom decision without widening read-only grants. Existing Mac Bot and shared-chat surfaces render path-private canonical photos over semantic fallbacks through a visibility-gated, four-request, 32 MiB cache. Telegram's shared protected resolver and stricter surface ceiling are regression-locked, desktop onboarding and build-15 metadata are accurate, the complete repository gate is green, and 27/27 final selected tests pass on the connected physical iPhone 13 Pro without a simulator. Independent review closed every actionable P0/P1 finding. The plan remains Active for the recorded eligible-hardware, physical-iPad, multi-device/Mac, packaged update/rollback, live Telegram, staged TestFlight, Xcode 27, accessibility, and App Store owner gates. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-8.md`.
 
 1. Keep Mac UI changes narrowly integrative: existing Bot views render the canonical photo returned from iOS with the semantic fallback. Defer the Mac Aiden-logo switcher, Messages-style inbox, and redesigned desktop Access editor to a later plan.
 2. Update Telegram to the same Full/Custom policy resolver and keep unsupported approvals blocked.

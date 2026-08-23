@@ -4,6 +4,7 @@ private struct AidenBotsHomeLoadID: Equatable {
     let instanceID: String?
     let deviceID: String?
     let connectionState: AidenRemoteConnectionState
+    let isBotSurfaceActive: Bool
 }
 
 private struct AidenBotsSearchID: Equatable {
@@ -76,6 +77,7 @@ struct AidenBotsHomeView: View {
     let area: AidenProductArea
     let availability: AidenBotsAvailability
     let navigationStore: AidenProductNavigationStore
+    @Binding var isShowingSwitcherCoachmark: Bool
     let onSelectArea: (AidenProductArea) -> Void
     let onOpenConversation: (AidenBotConversationItem) async -> Void
     let onCreateConversation: (AidenBotSummary) async -> Void
@@ -96,7 +98,11 @@ struct AidenBotsHomeView: View {
         AidenBotsHomeLoadID(
             instanceID: coordinator.activeInstanceId,
             deviceID: coordinator.installationStore.activeInstallation?.deviceId,
-            connectionState: coordinator.connectionState
+            connectionState: coordinator.connectionState,
+            isBotSurfaceActive: aidenBotSurfaceIsActive(
+                area: area,
+                availability: availability
+            )
         )
     }
 
@@ -272,6 +278,7 @@ struct AidenBotsHomeView: View {
             AidenProductSwitcherButton(
                 area: area,
                 botsAvailability: availability,
+                isCoachmarkPresented: $isShowingSwitcherCoachmark,
                 onSelect: onSelectArea
             )
             .frame(width: 52, height: 52)
@@ -574,6 +581,20 @@ struct AidenBotsHomeView: View {
         loadGeneration &+= 1
         let generation = loadGeneration
         let expectedLoadID = loadID
+        guard aidenBotSurfaceAllows(
+            .homeLoad,
+            area: area,
+            availability: availability
+        ), expectedLoadID.isBotSurfaceActive else {
+            snapshot = nil
+            remoteSearchResults = nil
+            presentedSheet = nil
+            isChoosingBot = false
+            isCreatingConversation = false
+            loadError = nil
+            isLoading = false
+            return
+        }
         guard let installation = coordinator.installationStore.activeInstallation else {
             snapshot = nil
             isLoading = false
@@ -686,7 +707,14 @@ struct AidenBotsHomeView: View {
     private func searchConversations() async {
         let expected = searchID
         remoteSearchResults = nil
-        guard !expected.query.isEmpty, coordinator.connectionState == .connected else { return }
+        guard aidenBotSurfaceAllows(
+                  .search,
+                  area: area,
+                  availability: availability
+              ),
+              expected.loadID.isBotSurfaceActive,
+              !expected.query.isEmpty,
+              coordinator.connectionState == .connected else { return }
         var capturedContext: AidenRemoteRequestContext?
         do {
             try await Task.sleep(for: .milliseconds(250))

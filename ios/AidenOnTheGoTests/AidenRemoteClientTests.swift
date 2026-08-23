@@ -65,6 +65,42 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(exchange.capabilities, [.serverRead, .workspaceRead, .workspaceManage])
     }
 
+    func testPairingOmitsBotCapabilityOptInWhenMobileRolloutIsDisabled() async throws {
+        let now = Date(timeIntervalSince1970: 1_787_100_000)
+        let bootstrap = makeBootstrap(now: now)
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            let body = try Self.bodyData(request)
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(object["acceptsBotCapabilities"] as? Bool, false)
+            return Self.response(
+                for: request,
+                status: 200,
+                json: """
+                {
+                  "protocolVersion": 1,
+                  "instanceId": "instance-1",
+                  "deviceId": "device-1",
+                  "credential": "\(String(repeating: "C", count: 43))",
+                  "capabilities": ["server:read", "workspace:read"],
+                  "endpoint": "https://aiden.test/api/aiden/v1",
+                  "serverSpkiSha256": "\(bootstrap.serverSpkiSha256)"
+                }
+                """
+            )
+        }
+
+        _ = try await AidenRemoteClient.pair(
+            payload: makePairingPayload(bootstrap: bootstrap),
+            deviceName: "iPhone",
+            deviceType: .iphone,
+            clientVersion: "1.0",
+            acceptsBotCapabilities: false,
+            session: session,
+            now: now
+        )
+    }
+
     func testManualPairingDecryptsSharedNodeVectorAndBindsSelectedEndpoint() async throws {
         let vectorURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "manual-pairing-vector", withExtension: "json")

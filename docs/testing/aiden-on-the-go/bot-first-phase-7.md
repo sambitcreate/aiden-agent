@@ -45,7 +45,7 @@ The final independent audit reported no remaining actionable P0/P1 implementatio
 
 ## Open release acceptance
 
-No eligible physical Apple Intelligence iPhone or iPad is available in the authorized environment. Therefore Phase 7 does **not** claim successful system generation. Before release, eligible physical hardware must prove:
+No eligible physical Apple Intelligence iPhone or iPad was owner-authorized for Phase 7 acceptance. Therefore Phase 7 does **not** claim successful system generation. Before release, owner-authorized eligible physical hardware must prove:
 
 1. system sheet → accepted preview → **Use this image** → authenticated real paired-Mac normalization/store;
 2. app/Mac relaunch, exact cache restoration, replacement, and revert;

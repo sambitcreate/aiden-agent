@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   resolveBotAvatar,
   type BotAvatar as BotAvatarValue,
@@ -5,6 +6,7 @@ import {
   type BotAvatarEyes,
   type BotAvatarShape,
 } from "../shared/bots";
+import { useBotCanonicalPhoto } from "../lib/bot-canonical-photo-cache";
 
 interface AvatarBody {
   path: string;
@@ -242,18 +244,53 @@ export function BotSidebarIcon() {
 
 export function BotAvatar({
   avatar,
+  botId,
   name,
+  photoLoading = "none",
   size = "medium",
 }: {
   avatar: BotAvatarValue;
+  botId?: string;
   name: string;
+  photoLoading?: "none" | "visible" | "immediate";
   size?: "small" | "medium" | "large" | "preview";
 }) {
+  const avatarRef = React.useRef<HTMLSpanElement>(null);
+  const [nearViewport, setNearViewport] = React.useState(photoLoading === "immediate");
+  React.useEffect(() => {
+    if (photoLoading === "none") {
+      setNearViewport(false);
+      return;
+    }
+    if (photoLoading === "immediate") {
+      setNearViewport(true);
+      return;
+    }
+    const element = avatarRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
+      setNearViewport(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      setNearViewport(entries.some(({ isIntersecting }) => isIntersecting));
+    }, { rootMargin: "160px" });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [photoLoading]);
+  const photoEnabled = Boolean(botId) && nearViewport && photoLoading !== "none";
+  const photo = useBotCanonicalPhoto(
+    botId,
+    photoEnabled,
+    photoLoading === "immediate" ? "selected" : "visible",
+  );
+  const [failedRevision, setFailedRevision] = React.useState<string>();
+  const showPhoto = photo && failedRevision !== photo.assetRevision;
   return (
     <span
+      ref={avatarRef}
       aria-hidden="true"
       title={name}
-      className={`grid shrink-0 place-items-center bg-control shadow-control ${
+      className={`relative grid shrink-0 place-items-center overflow-hidden bg-control shadow-control ${
         size === "small"
           ? "size-7 rounded-card p-1"
           : size === "large"
@@ -264,6 +301,15 @@ export function BotAvatar({
       }`}
     >
       <AvatarFace avatar={avatar} />
+      {showPhoto ? (
+        <img
+          alt=""
+          className="absolute inset-0 size-full object-cover"
+          draggable={false}
+          src={photo.dataUrl}
+          onError={() => setFailedRevision(photo.assetRevision)}
+        />
+      ) : null}
     </span>
   );
 }

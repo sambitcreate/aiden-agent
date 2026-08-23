@@ -316,7 +316,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Reusable Bots",
     description:
-      "Create Pi-powered teammates with custom vector faces, durable instructions, separate conversations, and Telegram control.",
+      "Create reusable teammates with durable instructions, separate conversations, access controls, and Telegram control.",
     icon: Bot,
     imageUrl: FEATURE_ILLUSTRATIONS.bots,
     size: "standard",

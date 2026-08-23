@@ -220,7 +220,7 @@ function Roster({ bots, onCreate }: { bots: BotDefinition[]; onCreate(): void })
                   className="flex min-h-28 items-start gap-3 rounded-card border border-field bg-well p-4 text-left outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control focus-visible:border-focus-ring focus-visible:bg-control-hover"
                   onClick={() => navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
                 >
-                  <BotAvatar avatar={bot.avatar} name={bot.name} size="large" />
+                  <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="visible" size="large" />
                   <span className="min-w-0 flex-1">
                     <Text as="span" variant="strong" className="block truncate">
                       {bot.name}
@@ -358,7 +358,7 @@ export function BotsView() {
               </Button>
               <header className="mt-6 flex items-start justify-between gap-5 max-[680px]:flex-col">
                 <div className="flex min-w-0 items-start gap-4">
-                  <BotAvatar avatar={selected.avatar} name={selected.name} size="large" />
+                  <BotAvatar botId={selected.id} avatar={selected.avatar} name={selected.name} photoLoading="immediate" size="large" />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <Text as="h1" variant="heading1" className="truncate">
