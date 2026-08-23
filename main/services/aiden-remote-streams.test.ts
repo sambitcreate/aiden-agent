@@ -7,6 +7,7 @@ import {
   normalizeAidenRemoteStreamSnapshot,
   removeRevokedDeviceStreams,
 } from "./aiden-remote-streams.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 
 function fixture() {
   let now = 1_000;
@@ -282,8 +283,9 @@ test("approval status is authoritative across reconnect and can be resolved from
   assert.deepEqual(changed, ["chat-1", "chat-1"]);
 });
 
-test("privileged approval details remain host-only and mobile fails closed", () => {
-  const service = fixture().service;
+test("privileged approval details remain host-only and mobile can deny but cannot allow", async () => {
+  const app = fixture();
+  const service = app.service;
   const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
   const details = {
     kind: "subagent-shell" as const,
@@ -317,6 +319,29 @@ test("privileged approval details remain host-only and mobile fails closed", () 
   const mobile = service.pendingApproval("device-1", "stream-1");
   assert.equal(mobile?.details, undefined);
   assert.equal(mobile?.canAllow, false);
+
+  await assert.rejects(
+    service.respondApproval(
+      "device-1",
+      "approval-1",
+      "allow",
+      "approval-host-only-allow-key",
+    ),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "capability_denied",
+  );
+  assert.equal(service.pendingApproval("device-1", "stream-1")?.approvalId, "approval-1");
+  assert.deepEqual(app.approvals, []);
+
+  const denied = await service.respondApproval(
+    "device-1",
+    "approval-1",
+    "deny",
+    "approval-host-only-deny-key",
+  );
+  assert.equal(denied.decision, "deny");
+  assert.equal(service.pendingApproval("device-1", "stream-1"), null);
+  assert.match(app.approvals[0] ?? "", /:deny:/u);
 });
 
 test("multiple approvals remain queued and cancellation synchronously clears them", async () => {
@@ -337,6 +362,51 @@ test("multiple approvals remain queued and cancellation synchronously clears the
   await assert.rejects(
     app.service.respondApproval("device-1", "approval-2", "allow", "approval-after-cancel-1"),
     (error: unknown) => (error as { code?: string }).code === "approval_expired",
+  );
+});
+
+test("Bot inbox activity is batched and approval response authority stays device-owned", () => {
+  const app = fixture();
+  const first = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const second = app.service.create("device-2", "stream-2", "chat-2", "turn-2");
+  first.owner.send("chat:approval", {
+    approvalId: "approval-1",
+    summary: "Review this action",
+  });
+  second.owner.send("chat:delta", { delta: "Working" });
+
+  assert.deepEqual(
+    app.service.projectChatActivities("device-1", ["chat-1", "chat-2", "chat-idle"]),
+    [
+      {
+        chatId: "chat-1",
+        activityState: "waiting_for_approval",
+        canRespondToApproval: true,
+      },
+      {
+        chatId: "chat-2",
+        activityState: "running",
+        canRespondToApproval: false,
+      },
+      {
+        chatId: "chat-idle",
+        activityState: "idle",
+        canRespondToApproval: false,
+      },
+    ],
+  );
+  assert.equal(
+    app.service.projectChatActivities("device-2", ["chat-1"])[0]
+      ?.canRespondToApproval,
+    false,
+  );
+  assert.throws(
+    () =>
+      app.service.projectChatActivities(
+        "device-1",
+        Array.from({ length: 201 }, (_, index) => `chat-${index}`),
+      ),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
 });
 

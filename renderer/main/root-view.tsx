@@ -192,7 +192,22 @@ function RootContent() {
 
   React.useEffect(() => {
     return onNotification("chats:changed", () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("bots:changed", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
+        queryClient.invalidateQueries({ queryKey: ["bot"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
+      ]);
     });
   }, [queryClient]);
 

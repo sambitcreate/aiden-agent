@@ -131,3 +131,15 @@ test("Bots is a stable sidebar destination and bot rosters do not open the termi
   assert.match(sidebar, /navigate\(\{ to: "\/bots" \}\)/u);
   assert.match(layout, /pathname\.startsWith\("\/bots"\) && !params\.chatId/u);
 });
+
+test("Remote Bot and chat notifications invalidate every dependent Bot cache", () => {
+  const root = source("./root-view.tsx");
+  assert.match(
+    root,
+    /onNotification\("chats:changed"[\s\S]*queryKey: queryKeys\.chats[\s\S]*queryKey: \["bot-chats"\]/u,
+  );
+  assert.match(
+    root,
+    /onNotification\("bots:changed"[\s\S]*queryKey: queryKeys\.bots[\s\S]*\["bot"\][\s\S]*\["bot-chats"\][\s\S]*\["bot-telegram-binding"\][\s\S]*queryKeys\.botTelegramTargets/u,
+  );
+});

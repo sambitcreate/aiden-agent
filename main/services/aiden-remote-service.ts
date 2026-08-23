@@ -39,8 +39,10 @@ import type { AidenRemoteChatService } from "./aiden-remote-chats.js";
 import type { AidenRemoteModelService } from "./aiden-remote-models.js";
 import type { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import type { AidenRemoteFileService } from "./aiden-remote-files.js";
+import type { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
 import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
+import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import type {
   BotNoticeAcknowledgement,
@@ -136,6 +138,7 @@ export interface AidenRemoteServiceOptions {
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
+        botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
@@ -146,6 +149,25 @@ export interface AidenRemoteServiceOptions {
             acknowledgement: BotNoticeAcknowledgement,
           ): Promise<BotNoticeStatus>;
         };
+        bots?: Pick<
+          AidenRemoteBotService,
+          | "list"
+          | "get"
+          | "create"
+          | "updateIdentity"
+          | "archive"
+          | "restore"
+          | "capabilityCatalog"
+          | "updateAccess"
+          | "createChat"
+          | "getChatAccess"
+          | "updateChatAccess"
+          | "favorites"
+          | "updateFavorites"
+        > & Partial<Pick<
+          AidenRemoteBotService,
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+        >>;
         settle?: () => Promise<void>;
       }
     | Promise<{
@@ -158,6 +180,7 @@ export interface AidenRemoteServiceOptions {
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
+        botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
@@ -168,6 +191,25 @@ export interface AidenRemoteServiceOptions {
             acknowledgement: BotNoticeAcknowledgement,
           ): Promise<BotNoticeStatus>;
         };
+        bots?: Pick<
+          AidenRemoteBotService,
+          | "list"
+          | "get"
+          | "create"
+          | "updateIdentity"
+          | "archive"
+          | "restore"
+          | "capabilityCatalog"
+          | "updateAccess"
+          | "createChat"
+          | "getChatAccess"
+          | "updateChatAccess"
+          | "favorites"
+          | "updateFavorites"
+        > & Partial<Pick<
+          AidenRemoteBotService,
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+        >>;
         settle?: () => Promise<void>;
       }>;
   now?: () => number;

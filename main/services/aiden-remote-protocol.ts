@@ -1132,7 +1132,7 @@ function parseBotAvatarView(value: unknown): AidenRemoteBotAvatarView {
   };
 }
 
-function parseBotSummary(value: unknown): AidenRemoteBotSummary {
+export function parseAidenRemoteBotSummary(value: unknown): AidenRemoteBotSummary {
   if (!isRecord(value)) throw new Error("Bot summary must be an object.");
   const health = enumMember(value.health, AIDEN_REMOTE_BOT_HEALTH_STATES, "Bot health");
   const createdAt = dateTimeValue(value.createdAt, "Bot createdAt");
@@ -1179,7 +1179,7 @@ function parseUniqueBotIds(
   return ids;
 }
 
-function parseBotFavoritesView(value: unknown): AidenRemoteBotFavoritesView {
+export function parseAidenRemoteBotFavoritesView(value: unknown): AidenRemoteBotFavoritesView {
   if (!isRecord(value)) throw new Error("Bot favorites view must be an object.");
   return {
     botIds: parseUniqueBotIds(value.botIds, "Bot favorites", AIDEN_REMOTE_BOT_MAX_FAVORITES),
@@ -1187,7 +1187,7 @@ function parseBotFavoritesView(value: unknown): AidenRemoteBotFavoritesView {
   };
 }
 
-function parseBotList(value: unknown): AidenRemoteBotList {
+export function parseAidenRemoteBotList(value: unknown): AidenRemoteBotList {
   if (!isRecord(value) || !Array.isArray(value.bots)) {
     throw new Error("Bot list must contain a bots array.");
   }
@@ -1197,10 +1197,10 @@ function parseBotList(value: unknown): AidenRemoteBotList {
   if (value.maxBots !== AIDEN_REMOTE_BOT_MAX_COUNT) {
     throw new Error("Bot list maxBots must be 256.");
   }
-  const bots = value.bots.map(parseBotSummary);
+  const bots = value.bots.map(parseAidenRemoteBotSummary);
   const botIds = new Set(bots.map((bot) => bot.id));
   if (botIds.size !== bots.length) throw new Error("Bot list ids must be unique.");
-  const favorites = parseBotFavoritesView(value.favorites);
+  const favorites = parseAidenRemoteBotFavoritesView(value.favorites);
   if (favorites.botIds.some((botId) => !botIds.has(botId))) {
     throw new Error("Bot favorites must refer to Bots in the list fixture.");
   }
@@ -1213,7 +1213,7 @@ function parseBotList(value: unknown): AidenRemoteBotList {
   return { bots, maxBots: AIDEN_REMOTE_BOT_MAX_COUNT, favorites };
 }
 
-function parseBotCreateRequest(value: unknown): AidenRemoteBotCreateRequest {
+export function parseAidenRemoteBotCreateRequest(value: unknown): AidenRemoteBotCreateRequest {
   if (!isRecord(value)) throw new Error("Bot create request must be an object.");
   assertExactKeys(
     value,
@@ -1225,7 +1225,7 @@ function parseBotCreateRequest(value: unknown): AidenRemoteBotCreateRequest {
     purpose: boundedText(value.purpose, "Bot create purpose", 280, true),
     instructions: boundedText(value.instructions, "Bot create instructions", 32_000),
     avatar: parseBotSemanticAvatar(value.avatar, true),
-    access: parseBotAccessUpdateRequest(value.access),
+    access: parseAidenRemoteBotAccessUpdateRequest(value.access),
     ...(hasOwn(value, "openingGreeting")
       ? {
           openingGreeting: boundedText(
@@ -1239,7 +1239,9 @@ function parseBotCreateRequest(value: unknown): AidenRemoteBotCreateRequest {
   };
 }
 
-function parseBotIdentityPatch(value: unknown): AidenRemoteBotIdentityPatchRequest {
+export function parseAidenRemoteBotIdentityPatchRequest(
+  value: unknown,
+): AidenRemoteBotIdentityPatchRequest {
   if (!isRecord(value)) throw new Error("Bot identity patch must be an object.");
   const allowed = ["name", "purpose", "openingGreeting", "instructions", "avatar"] as const;
   assertExactKeys(value, allowed, "Bot identity patch");
@@ -1316,7 +1318,9 @@ function parseBotConversationItem(value: unknown): AidenRemoteBotConversationIte
     : { ...base, activityState, canRespondToApproval: false };
 }
 
-function parseBotConversationPage(value: unknown): AidenRemoteBotConversationPage {
+export function parseAidenRemoteBotConversationPage(
+  value: unknown,
+): AidenRemoteBotConversationPage {
   if (!isRecord(value) || !Array.isArray(value.conversations)) {
     throw new Error("Bot conversation page must contain conversations.");
   }
@@ -1335,7 +1339,9 @@ function parseBotConversationPage(value: unknown): AidenRemoteBotConversationPag
   };
 }
 
-function parseBotConversationQuery(value: unknown): AidenRemoteBotConversationQuery {
+export function parseAidenRemoteBotConversationQuery(
+  value: unknown,
+): AidenRemoteBotConversationQuery {
   if (!isRecord(value)) throw new Error("Bot conversation query fixture must be an object.");
   assertExactKeys(value, ["cursor", "query", "botId", "limit"], "Bot conversation query");
   return {
@@ -1354,7 +1360,9 @@ function parseBotConversationQuery(value: unknown): AidenRemoteBotConversationQu
   };
 }
 
-function parseBotChatCreateRequest(value: unknown): AidenRemoteBotChatCreateRequest {
+export function parseAidenRemoteBotChatCreateRequest(
+  value: unknown,
+): AidenRemoteBotChatCreateRequest {
   if (!isRecord(value)) throw new Error("Bot chat create request must be an object.");
   assertExactKeys(value, ["providerId", "modelId"], "Bot chat create request");
   const hasProviderId = hasOwn(value, "providerId");
@@ -1687,7 +1695,9 @@ function assertUniqueOptionIds(
   }
 }
 
-function parseBotCapabilityCatalog(value: unknown): AidenRemoteBotCapabilityCatalog {
+export function parseAidenRemoteBotCapabilityCatalog(
+  value: unknown,
+): AidenRemoteBotCapabilityCatalog {
   if (!isRecord(value)) throw new Error("Bot capability catalog must be an object.");
   const boundedArray = (
     candidate: unknown,
@@ -1965,7 +1975,7 @@ function validateBotChatSelectionAgainstPolicy(
   }
 }
 
-function parseBotAccessView(value: unknown): AidenRemoteBotAccessView {
+export function parseAidenRemoteBotAccessView(value: unknown): AidenRemoteBotAccessView {
   if (!isRecord(value)) throw new Error("Bot access view must be an object.");
   const accessMode = enumMember(
     value.accessMode,
@@ -1989,10 +1999,10 @@ function parseBotAccessView(value: unknown): AidenRemoteBotAccessView {
     : { ...base, accessMode };
 }
 
-function parseBotDetail(value: unknown): AidenRemoteBotDetail {
+export function parseAidenRemoteBotDetail(value: unknown): AidenRemoteBotDetail {
   if (!isRecord(value)) throw new Error("Bot detail must be an object.");
-  const summary = parseBotSummary(value);
-  const access = parseBotAccessView(value.access);
+  const summary = parseAidenRemoteBotSummary(value);
+  const access = parseAidenRemoteBotAccessView(value.access);
   if (access.botId !== summary.id) throw new Error("Bot detail access belongs to another Bot.");
   return {
     ...summary,
@@ -2011,7 +2021,9 @@ function parseBotDetail(value: unknown): AidenRemoteBotDetail {
   };
 }
 
-function parseBotAccessUpdateRequest(value: unknown): AidenRemoteBotAccessUpdateRequest {
+export function parseAidenRemoteBotAccessUpdateRequest(
+  value: unknown,
+): AidenRemoteBotAccessUpdateRequest {
   if (!isRecord(value)) throw new Error("Bot access update request must be an object.");
   if (value.accessMode === "full") {
     assertExactKeys(
@@ -2049,7 +2061,9 @@ function parseBotAccessUpdateRequest(value: unknown): AidenRemoteBotAccessUpdate
   throw new Error("Bot access update mode is invalid.");
 }
 
-function parseBotChatAccessView(value: unknown): AidenRemoteBotChatAccessView {
+export function parseAidenRemoteBotChatAccessView(
+  value: unknown,
+): AidenRemoteBotChatAccessView {
   if (!isRecord(value)) throw new Error("Bot chat access view must be an object.");
   const mode = enumMember(value.mode, ["inherit", "custom"] as const, "Bot chat access mode");
   const custom = value.custom === undefined
@@ -2073,7 +2087,7 @@ function parseBotChatAccessView(value: unknown): AidenRemoteBotChatAccessView {
     : { ...base, mode };
 }
 
-function parseBotChatAccessUpdateRequest(
+export function parseAidenRemoteBotChatAccessUpdateRequest(
   value: unknown,
 ): AidenRemoteBotChatAccessUpdateRequest {
   if (!isRecord(value)) throw new Error("Bot chat access update request must be an object.");
@@ -2117,7 +2131,9 @@ function parseBotChatAccessUpdateRequest(
   throw new Error("Bot chat access update mode is invalid.");
 }
 
-function parseBotFavoritesUpdateRequest(value: unknown): AidenRemoteBotFavoritesUpdateRequest {
+export function parseAidenRemoteBotFavoritesUpdateRequest(
+  value: unknown,
+): AidenRemoteBotFavoritesUpdateRequest {
   if (!isRecord(value)) throw new Error("Bot favorites update request must be an object.");
   assertExactKeys(value, ["botIds"], "Bot favorites update request");
   return {
@@ -2157,7 +2173,9 @@ function parseBotNoticeAcknowledgementRequest(
   };
 }
 
-function parseBotAvatarUploadRequest(value: unknown): AidenRemoteBotAvatarUploadRequest {
+export function parseAidenRemoteBotAvatarUploadRequest(
+  value: unknown,
+): AidenRemoteBotAvatarUploadRequest {
   if (!isRecord(value)) throw new Error("Bot avatar upload request must be an object.");
   assertExactKeys(value, ["mimeType", "data"], "Bot avatar upload request");
   const mimeType = enumMember(
@@ -2650,29 +2668,29 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (requiredString(pairingExchange, "endpoint") !== endpoint || requiredString(pairingExchange, "serverSpkiSha256") !== fingerprint) throw new Error("Pairing exchange identity does not match bootstrap.");
 
   const chat = parseAidenRemoteChatProjection(value.chat, "Fixture Chat response");
-  const botSummary = parseBotSummary(value.botSummary);
-  const botList = parseBotList(value.botList);
-  const botDetail = parseBotDetail(value.botDetail);
+  const botSummary = parseAidenRemoteBotSummary(value.botSummary);
+  const botList = parseAidenRemoteBotList(value.botList);
+  const botDetail = parseAidenRemoteBotDetail(value.botDetail);
   const botAvatar = parseBotAvatarView(value.botAvatar);
   const botCreateRecord = isRecord(value.botCreate) ? value.botCreate : null;
   if (!botCreateRecord) throw new Error("Bot create fixture must be an object.");
   assertExactKeys(botCreateRecord, ["request", "response"], "Bot create fixture");
   const botCreate: AidenRemoteBotCreateFixture = {
-    request: parseBotCreateRequest(botCreateRecord.request),
-    response: parseBotDetail(botCreateRecord.response),
+    request: parseAidenRemoteBotCreateRequest(botCreateRecord.request),
+    response: parseAidenRemoteBotDetail(botCreateRecord.response),
   };
   const botIdentityRecord = isRecord(value.botIdentity) ? value.botIdentity : null;
   if (!botIdentityRecord) throw new Error("Bot identity fixture must be an object.");
   assertExactKeys(botIdentityRecord, ["request", "response"], "Bot identity fixture");
   const botIdentity: AidenRemoteBotIdentityFixture = {
-    request: parseBotIdentityPatch(botIdentityRecord.request),
-    response: parseBotDetail(botIdentityRecord.response),
+    request: parseAidenRemoteBotIdentityPatchRequest(botIdentityRecord.request),
+    response: parseAidenRemoteBotDetail(botIdentityRecord.response),
   };
-  const botArchive = parseBotDetail(value.botArchive);
-  const botRestore = parseBotDetail(value.botRestore);
+  const botArchive = parseAidenRemoteBotDetail(value.botArchive);
+  const botRestore = parseAidenRemoteBotDetail(value.botRestore);
   const botConversation = parseBotConversationItem(value.botConversation);
-  const botConversations = parseBotConversationPage(value.botConversations);
-  const botConversationQuery = parseBotConversationQuery(value.botConversationQuery);
+  const botConversations = parseAidenRemoteBotConversationPage(value.botConversations);
+  const botConversationQuery = parseAidenRemoteBotConversationQuery(value.botConversationQuery);
   const botChatCreateRecord = isRecord(value.botChatCreate) ? value.botChatCreate : null;
   if (!botChatCreateRecord) throw new Error("Bot chat create fixture must be an object.");
   assertExactKeys(
@@ -2681,14 +2699,14 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     "Bot chat create fixture",
   );
   const botChatCreate: AidenRemoteBotChatCreateFixture = {
-    request: parseBotChatCreateRequest(botChatCreateRecord.request),
+    request: parseAidenRemoteBotChatCreateRequest(botChatCreateRecord.request),
     response: parseAidenRemoteChatProjection(
       botChatCreateRecord.response,
       "Bot chat create response",
     ),
   };
-  const botCapabilityCatalog = parseBotCapabilityCatalog(value.botCapabilityCatalog);
-  const botPolicy = parseBotAccessView(value.botPolicy);
+  const botCapabilityCatalog = parseAidenRemoteBotCapabilityCatalog(value.botCapabilityCatalog);
+  const botPolicy = parseAidenRemoteBotAccessView(value.botPolicy);
   const botPolicyUpdateRecord = isRecord(value.botPolicyUpdate)
     ? value.botPolicyUpdate
     : null;
@@ -2699,10 +2717,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     "Bot policy update fixture",
   );
   const botPolicyUpdate: AidenRemoteBotPolicyUpdateFixture = {
-    request: parseBotAccessUpdateRequest(botPolicyUpdateRecord.request),
-    response: parseBotAccessView(botPolicyUpdateRecord.response),
+    request: parseAidenRemoteBotAccessUpdateRequest(botPolicyUpdateRecord.request),
+    response: parseAidenRemoteBotAccessView(botPolicyUpdateRecord.response),
   };
-  const botChatSubset = parseBotChatAccessView(value.botChatSubset);
+  const botChatSubset = parseAidenRemoteBotChatAccessView(value.botChatSubset);
   const botChatSubsetUpdateRecord = isRecord(value.botChatSubsetUpdate)
     ? value.botChatSubsetUpdate
     : null;
@@ -2715,10 +2733,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     "Bot chat subset update fixture",
   );
   const botChatSubsetUpdate: AidenRemoteBotChatSubsetUpdateFixture = {
-    request: parseBotChatAccessUpdateRequest(botChatSubsetUpdateRecord.request),
-    response: parseBotChatAccessView(botChatSubsetUpdateRecord.response),
+    request: parseAidenRemoteBotChatAccessUpdateRequest(botChatSubsetUpdateRecord.request),
+    response: parseAidenRemoteBotChatAccessView(botChatSubsetUpdateRecord.response),
   };
-  const botFavorites = parseBotFavoritesView(value.botFavorites);
+  const botFavorites = parseAidenRemoteBotFavoritesView(value.botFavorites);
   const botFavoritesUpdateRecord = isRecord(value.botFavoritesUpdate)
     ? value.botFavoritesUpdate
     : null;
@@ -2731,8 +2749,8 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     "Bot favorites update fixture",
   );
   const botFavoritesUpdate: AidenRemoteBotFavoritesUpdateFixture = {
-    request: parseBotFavoritesUpdateRequest(botFavoritesUpdateRecord.request),
-    response: parseBotFavoritesView(botFavoritesUpdateRecord.response),
+    request: parseAidenRemoteBotFavoritesUpdateRequest(botFavoritesUpdateRecord.request),
+    response: parseAidenRemoteBotFavoritesView(botFavoritesUpdateRecord.response),
   };
   const botNotice = parseBotAccessNoticeStatus(value.botNotice);
   const botNoticeAcknowledgementRecord = isRecord(value.botNoticeAcknowledgement)
@@ -2762,7 +2780,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     "Bot avatar upload fixture",
   );
   const botAvatarUpload: AidenRemoteBotAvatarUploadFixture = {
-    request: parseBotAvatarUploadRequest(botAvatarUploadRecord.request),
+    request: parseAidenRemoteBotAvatarUploadRequest(botAvatarUploadRecord.request),
     response: parseBotAvatarAsset(botAvatarUploadRecord.response),
   };
   const botAvatarMetadata = parseBotAvatarAsset(value.botAvatarMetadata);

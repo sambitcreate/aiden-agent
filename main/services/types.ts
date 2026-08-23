@@ -261,6 +261,8 @@ export interface ChatMeta {
   botId?: string;
   providerId?: string;
   model?: string;
+  /** Bounded last visible message text for list projections; never a full history. */
+  preview?: string;
   createdAt: number;
   updatedAt: number;
 }

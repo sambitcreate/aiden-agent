@@ -59,6 +59,26 @@ async function fixture(options: {
     updatedAt: new Date(2_000).toISOString(),
     revision: `rev_${"c".repeat(43)}`,
   };
+  const botAccess = {
+    botId: "bot-1",
+    accessMode: "full" as const,
+    revision: "bot_policy_revision_1",
+    policyEpoch: "bot_policy_epoch_1",
+    summary: "Can use your Mac, shell, enabled connections, and skills.",
+  };
+  const botDetail = {
+    id: "bot-1",
+    name: "Planner",
+    purpose: "Keeps projects moving",
+    instructions: "Help plan projects.",
+    avatar: { semantic: "spark" as const },
+    health: "ready" as const,
+    access: botAccess,
+    createdAt: new Date(1_000).toISOString(),
+    updatedAt: new Date(2_000).toISOString(),
+    revision: "bot_revision_1",
+  };
+  const favorites = { botIds: ["bot-1"], revision: "bot_favorites_revision_1" };
   const authorizeRetainedBotChat = async (
     input: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
   ): Promise<boolean> => {
@@ -293,6 +313,131 @@ async function fixture(options: {
           acceptedDecision: acknowledgement.decision,
         };
         return notice;
+      },
+    },
+    bots: {
+      list: async (includeArchived) => {
+        calls.push(`bots:list:${includeArchived}`);
+        return { bots: [botDetail], maxBots: 256, favorites };
+      },
+      get: async (botId) => {
+        calls.push(`bots:get:${botId}`);
+        return { ...botDetail, id: botId, access: { ...botAccess, botId } };
+      },
+      create: async (deviceId, key) => {
+        calls.push(`bots:create:${deviceId}:${key}`);
+        return botDetail;
+      },
+      updateIdentity: async (botId, revision) => {
+        calls.push(`bots:update:${botId}:${revision}`);
+        return { ...botDetail, id: botId, revision: "bot_revision_2" };
+      },
+      archive: async (botId, revision) => {
+        calls.push(`bots:archive:${botId}:${revision}`);
+        return {
+          ...botDetail,
+          id: botId,
+          health: "archived" as const,
+          archivedAt: new Date(3_000).toISOString(),
+          revision: "bot_revision_2",
+        };
+      },
+      restore: async (deviceId, botId, revision, key) => {
+        calls.push(`bots:restore:${deviceId}:${botId}:${revision}:${key}`);
+        return { ...botDetail, id: botId, revision: "bot_revision_3" };
+      },
+      capabilityCatalog: async (deviceId) => {
+        calls.push(`bots:catalog:${deviceId}`);
+        return {
+          revision: "bot_catalog_revision_1",
+          providers: [],
+          fileScopes: [],
+          shellAvailable: true,
+          connections: [],
+          skills: [],
+          otherCapabilities: [],
+          notice,
+        };
+      },
+      updateAccess: async (deviceId, botId, revision) => {
+        calls.push(`bots:access:${deviceId}:${botId}:${revision}`);
+        return { ...botAccess, botId, revision: "bot_policy_revision_2" };
+      },
+      createChat: async (deviceId, botId, key) => {
+        calls.push(`bots:chat:${deviceId}:${botId}:${key}`);
+        return { ...chat, botId };
+      },
+      getChatAccess: async (chatId) => {
+        calls.push(`bots:chat-access-get:${chatId}`);
+        return {
+          chatId,
+          botId: "bot-1",
+          mode: "inherit" as const,
+          revision: "bot_chat_policy_revision_1",
+          botPolicyRevision: botAccess.revision,
+          summary: "Full",
+        };
+      },
+      updateChatAccess: async (deviceId, chatId, revision) => {
+        calls.push(`bots:chat-access:${deviceId}:${chatId}:${revision}`);
+        return {
+          chatId,
+          botId: "bot-1",
+          mode: "inherit" as const,
+          revision: "bot_chat_policy_revision_2",
+          botPolicyRevision: botAccess.revision,
+          summary: "Full",
+        };
+      },
+      favorites: async () => {
+        calls.push("bots:favorites:get");
+        return favorites;
+      },
+      updateFavorites: async (revision) => {
+        calls.push(`bots:favorites:update:${revision}`);
+        return { ...favorites, revision: "bot_favorites_revision_2" };
+      },
+      listConversations: async (deviceId, input) => {
+        calls.push(`bots:conversations:${deviceId}:${input.query ?? ""}`);
+        return {
+          conversations: [{
+            chatId: "chat-1",
+            botId: "bot-1",
+            title: "Plan",
+            activityState: "waiting_for_approval" as const,
+            canRespondToApproval: true,
+            createdAt: new Date(1_000).toISOString(),
+            updatedAt: new Date(2_000).toISOString(),
+            revision: "chat_revision_1",
+          }],
+        };
+      },
+      putAvatar: async (deviceId, botId, revision, key) => {
+        calls.push(`bots:avatar:put:${deviceId}:${botId}:${revision}:${key}`);
+        return {
+          assetRevision: `avatar_revision_${"a".repeat(32)}`,
+          mimeType: "image/png" as const,
+          width: 512 as const,
+          height: 512 as const,
+          byteSize: 7,
+        };
+      },
+      deleteAvatar: async (botId, revision) => {
+        calls.push(`bots:avatar:delete:${botId}:${revision}`);
+        return { ...botDetail, id: botId };
+      },
+      avatarContent: async (botId, assetRevision) => {
+        calls.push(`bots:avatar:content:${botId}:${assetRevision}`);
+        return {
+          metadata: {
+            assetRevision,
+            mimeType: "image/png" as const,
+            width: 512 as const,
+            height: 512 as const,
+            byteSize: 7,
+          },
+          bytes: Buffer.from("pngdata"),
+        };
       },
     },
     streams: {
@@ -661,6 +806,204 @@ test("Bot grants do not imply support-vocabulary negotiation for a legacy device
     const server = await response.json();
     assert.deepEqual(server.capabilities, ["server:read", "bot:read"]);
     assert.equal("serverCapabilities" in server, false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favorites contract", async () => {
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write", "chat:read", "chat:write"],
+  });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const jsonHeaders = { ...headers, "content-type": "application/json" };
+  try {
+    assert.equal((await fetch(`${app.base}/bots?includeArchived=true`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/bot-capabilities`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/bot-favorites`, { headers })).status, 200);
+
+    const created = await fetch(`${app.base}/bots`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "idempotency-key": "bot-create-key-0001" },
+      body: JSON.stringify({
+        name: "Planner",
+        purpose: "Plans",
+        instructions: "Plan carefully.",
+        avatar: "spark",
+        access: {
+          accessMode: "full",
+          catalogRevision: "bot_catalog_revision_1",
+          confirmedForeground: true,
+        },
+      }),
+    });
+    assert.equal(created.status, 201);
+
+    assert.equal((await fetch(`${app.base}/bots/bot-1`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/bot-1`, {
+      method: "PATCH",
+      headers: { ...jsonHeaders, "if-match": "bot_revision_1" },
+      body: JSON.stringify({ name: "Updated" }),
+    })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/capabilities`, {
+      method: "PATCH",
+      headers: { ...jsonHeaders, "if-match": "bot_policy_revision_1" },
+      body: JSON.stringify({
+        accessMode: "full",
+        catalogRevision: "bot_catalog_revision_1",
+        confirmedForeground: true,
+      }),
+    })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/chats`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "idempotency-key": "bot-chat-key-00001" },
+      body: JSON.stringify({}),
+    })).status, 201);
+    assert.equal((await fetch(`${app.base}/chats/chat-1/capabilities`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/chats/chat-1/capabilities`, {
+      method: "PATCH",
+      headers: { ...jsonHeaders, "if-match": "bot_chat_policy_revision_1" },
+      body: JSON.stringify({
+        mode: "inherit",
+        catalogRevision: "bot_catalog_revision_1",
+        expectedBotPolicyRevision: "bot_policy_revision_1",
+      }),
+    })).status, 200);
+    assert.equal((await fetch(`${app.base}/bot-favorites`, {
+      method: "PATCH",
+      headers: { ...jsonHeaders, "if-match": "bot_favorites_revision_1" },
+      body: JSON.stringify({ botIds: ["bot-1"] }),
+    })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/bot-1`, {
+      method: "DELETE",
+      headers: { ...headers, "if-match": "bot_revision_2" },
+    })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/restore`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "if-match": "bot_revision_2",
+        "idempotency-key": "bot-restore-key-001",
+      },
+    })).status, 200);
+
+    assert.deepEqual(app.calls.filter((call) => call.startsWith("bots:")), [
+      "bots:list:true",
+      "bots:catalog:device-authorized-12345678",
+      "bots:favorites:get",
+      "bots:create:device-authorized-12345678:bot-create-key-0001",
+      "bots:get:bot-1",
+      "bots:update:bot-1:bot_revision_1",
+      "bots:access:device-authorized-12345678:bot-1:bot_policy_revision_1",
+      "bots:chat:device-authorized-12345678:bot-1:bot-chat-key-00001",
+      "bots:chat-access-get:chat-1",
+      "bots:chat-access:device-authorized-12345678:chat-1:bot_chat_policy_revision_1",
+      "bots:favorites:update:bot_favorites_revision_1",
+      "bots:archive:bot-1:bot_revision_2",
+      "bots:restore:device-authorized-12345678:bot-1:bot_revision_2:bot-restore-key-001",
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Bot inbox and avatar routes preserve device grants, approval ownership, and binary headers", async () => {
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write", "chat:read"],
+  });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const inbox = await fetch(
+      `${app.base}/bot-conversations?query=plan+week&limit=10`,
+      { headers },
+    );
+    assert.equal(inbox.status, 200);
+    assert.equal((await inbox.json()).conversations[0].canRespondToApproval, true);
+
+    const uploaded = await fetch(`${app.base}/bots/bot-1/avatar`, {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "if-match": "bot_revision_1",
+        "idempotency-key": "bot-avatar-put-key-0001",
+      },
+      body: JSON.stringify({ mimeType: "image/png", data: "aVZCTw==" }),
+    });
+    assert.equal(uploaded.status, 200);
+    const metadata = await uploaded.json();
+    assert.equal(metadata.mimeType, "image/png");
+
+    const content = await fetch(
+      `${app.base}/bots/bot-1/avatar/${metadata.assetRevision}`,
+      { headers },
+    );
+    assert.equal(content.status, 200);
+    assert.equal(content.headers.get("content-type"), "image/png");
+    assert.equal(content.headers.get("cache-control"), "no-store");
+    assert.equal(content.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(await content.text(), "pngdata");
+
+    const deleted = await fetch(`${app.base}/bots/bot-1/avatar`, {
+      method: "DELETE",
+      headers: { ...headers, "if-match": metadata.assetRevision },
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(
+      app.calls.filter(
+        (call) =>
+          call.startsWith("bots:conversations:") ||
+          call.startsWith("bots:avatar:"),
+      ),
+      [
+        "bots:conversations:device-authorized-12345678:plan week",
+        "bots:avatar:put:device-authorized-12345678:bot-1:bot_revision_1:bot-avatar-put-key-0001",
+        `bots:avatar:content:bot-1:${metadata.assetRevision}`,
+        `bots:avatar:delete:bot-1:${metadata.assetRevision}`,
+      ],
+    );
+  } finally {
+    await app.close();
+  }
+
+  const denied = await fixture({ capabilities: ["bot:read"] });
+  try {
+    const response = await fetch(`${denied.base}/bot-conversations`, {
+      headers,
+    });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, "capability_denied");
+    assert.equal(
+      denied.calls.some((call) => call.startsWith("bots:conversations:")),
+      false,
+    );
+  } finally {
+    await denied.close();
+  }
+});
+
+test("Bot mutations require every declared device grant before body effects", async () => {
+  const app = await fixture({ capabilities: ["bot:write", "chat:write"] });
+  try {
+    const response = await fetch(`${app.base}/bots`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+        "content-type": "application/json",
+        "idempotency-key": "bot-create-key-0002",
+      },
+      body: JSON.stringify({ unexpected: true }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, "capability_denied");
+    assert.equal(app.calls.some((call) => call.startsWith("bots:create:")), false);
   } finally {
     await app.close();
   }
@@ -1529,6 +1872,48 @@ test("a body stalled across revocation cannot admit a turn after authorization i
     assert.equal(result.status, 403);
     assert.equal(JSON.parse(result.body).error.code, "credential_revoked");
     assert.equal(app.calls.some((entry) => entry.startsWith("turn:")), false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("a stalled Bot mutation body is parsed before revocation admission", async () => {
+  let blocked = false;
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write"],
+    authorizationBlocked: () => blocked,
+  });
+  try {
+    const target = new URL(`${app.base}/bots`);
+    const response = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const request = httpRequest({
+        host: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${"a".repeat(43)}`,
+          "aiden-protocol-version": "1",
+          "content-type": "application/json",
+          "idempotency-key": "bot-stalled-revocation-001",
+        },
+      }, (incoming) => {
+        const chunks: Buffer[] = [];
+        incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        incoming.on("end", () => resolve({
+          status: incoming.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString("utf8"),
+        }));
+      });
+      request.once("error", reject);
+      request.write("{");
+      blocked = true;
+      request.end("}");
+    });
+    const result = await response;
+    assert.equal(result.status, 403);
+    assert.equal(JSON.parse(result.body).error.code, "credential_revoked");
+    assert.equal(app.calls.some((entry) => entry.startsWith("bots:create:")), false);
   } finally {
     await app.close();
   }

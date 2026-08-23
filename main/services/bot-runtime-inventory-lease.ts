@@ -1,5 +1,13 @@
 const INVALIDATED = "Bot runtime capabilities changed.";
 
+export class BotRuntimeInventoryLeaseInvalidError extends Error {
+  readonly name = "BotRuntimeInventoryLeaseInvalidError";
+
+  constructor() {
+    super(INVALIDATED);
+  }
+}
+
 export type BotRuntimeInventoryMutation =
   | "settings"
   | "provider_configuration"
@@ -46,7 +54,7 @@ export class BotRuntimeInventoryLeaseRegistry {
         active.controller.signal.aborted ||
         active.generation !== this.generation
       ) {
-        throw new Error(INVALIDATED);
+        throw new BotRuntimeInventoryLeaseInvalidError();
       }
     };
     return Object.freeze({
@@ -73,7 +81,7 @@ export class BotRuntimeInventoryLeaseRegistry {
     const active = [...this.active];
     this.active.clear();
     for (const lease of active) {
-      lease.controller.abort(new Error(INVALIDATED));
+      lease.controller.abort(new BotRuntimeInventoryLeaseInvalidError());
     }
   }
 

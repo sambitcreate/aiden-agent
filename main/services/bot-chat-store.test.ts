@@ -57,3 +57,27 @@ test("a main-owned Bot opening greeting is copied once into a new chat", async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Bot list metadata maintains only one bounded visible-message preview", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-bot-preview-"));
+  try {
+    const store = createChatStore(async () => root);
+    const chat = await store.create({
+      workspaceId: "managed-home-1",
+      botId: "bot-1",
+      initialAssistantMessage: "How can I help?",
+    });
+    assert.equal((await store.listByBot("bot-1"))[0]?.preview, "How can I help?");
+
+    await store.appendMessage(chat.id, {
+      role: "user",
+      content: `latest ${"x".repeat(3_000)}`,
+    });
+    const metadata = (await store.listByBot("bot-1"))[0];
+    assert.equal(metadata?.preview?.startsWith("latest "), true);
+    assert.equal(Array.from(metadata?.preview ?? "").length, 500);
+    assert.equal("messages" in (metadata ?? {}), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -10,13 +10,23 @@ import { BotCapabilityLeaseRegistry } from "./bot-capability-lease.js";
 import {
   BotCapabilityCommitUncertainError,
   createBotCapabilityStateCheckpoint,
+  withBotCapabilityStateCheckpoint,
   type BotCapabilityBootstrapMarker,
   type BotCapabilityBootstrapMarkerState,
   type BotCapabilityInitialBootstrapDisposition,
   type BotCapabilityRollbackAnchor,
+  type BotCapabilityStateCheckpoint,
 } from "./bot-capability-state-checkpoint.js";
-import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
-import { createBotCapabilityStore } from "./bot-capability-store.js";
+import {
+  BotCapabilityUnavailableError,
+  emptyBotCapabilityState,
+  type BotCapabilityState,
+} from "./bot-capability-store-core.js";
+import {
+  createBotCapabilityStore,
+  type BotCapabilityPersistence,
+} from "./bot-capability-store.js";
+import { BotRuntimeInventoryLeaseRegistry } from "./bot-runtime-inventory-lease.js";
 
 const stateFile = "bot-capabilities.json";
 const headFile = "bot-capability-state-head.json";
@@ -150,6 +160,61 @@ async function readHead(
   };
   return { phase: value.phase, sequence: value.sequence };
 }
+
+test("checkpoint persistence forwards the inventory fence through its publication callback", async () => {
+  let persisted = emptyBotCapabilityState();
+  let commitEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { commitEntered = resolve; });
+  let releaseCommit!: () => void;
+  const released = new Promise<void>((resolve) => { releaseCommit = resolve; });
+  const persistence: BotCapabilityPersistence = {
+    async load() { return structuredClone(persisted); },
+    async save(next, isCurrent = () => true) {
+      if (!isCurrent()) throw new Error("inventory publication is stale");
+      persisted = structuredClone(next);
+    },
+    async update<Result>(
+      mutation: (draft: BotCapabilityState) => Result | Promise<Result>,
+      isCurrent = () => true,
+    ) {
+      const next = structuredClone(persisted);
+      const result = await mutation(next);
+      if (!isCurrent()) throw new Error("inventory publication is stale");
+      persisted = next;
+      return result;
+    },
+    async loadedFromCorruptFile() { return false; },
+    async loadedFromUnsafeFile() { return false; },
+    async loadedDiskContents() { return null; },
+  };
+  const checkpoint: BotCapabilityStateCheckpoint = {
+    async initialize() {},
+    async commit(_previous, _next, publish) {
+      commitEntered();
+      await released;
+      return publish();
+    },
+  };
+  const protectedPersistence = withBotCapabilityStateCheckpoint(
+    persistence,
+    checkpoint,
+  );
+  await protectedPersistence.load();
+  const inventory = new BotRuntimeInventoryLeaseRegistry();
+  const lease = inventory.acquire();
+  const update = protectedPersistence.update((draft) => {
+    draft.sequence += 1;
+  }, () => {
+    lease.assertCurrent();
+    return true;
+  });
+  await entered;
+  inventory.invalidate("skill_content");
+  releaseCommit();
+
+  await assert.rejects(update, /capabilities changed/u);
+  assert.equal(persisted.sequence, 0);
+});
 
 test("independent authority rejects a valid older capability document", async (t) => {
   const root = await temporaryRoot(t);

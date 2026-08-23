@@ -52,6 +52,8 @@ import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
 import { AidenRemoteFileService } from "./aiden-remote-files.js";
+import { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
+import { createBotArchivedFileReadAuthority } from "./bot-archived-file-read-authority.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
 import { workspaceEnvironmentApplicationService } from "./workspace-environment-application-service-main.js";
 import { workspaceWorktreeApplicationService } from "./workspace-worktree-application-service-main.js";
@@ -75,13 +77,51 @@ import { scheduledTaskApplicationService } from "./scheduled-task-application-se
 import { botStore } from "./bot-store.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
-import { preflightBotTurnAuthority } from "./bot-runtime-authority-main.js";
+import {
+  botRuntimeAuthority,
+  preflightBotTurnAuthority,
+} from "./bot-runtime-authority-main.js";
+import {
+  AidenRemoteBotService,
+} from "./aiden-remote-bots.js";
+import {
+  botCapabilityCatalog,
+  botCapabilityStore,
+  botManagedWorkspace,
+} from "./bot-capability-services-main.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import {
+  createBotInboxProjectionService,
+  mergeBotInboxActivityPreviews,
+} from "./bot-inbox-projection.js";
+import { createMainBotAvatarApplicationAdapter } from "./bot-avatar-store-main.js";
+import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
+import {
+  botFavoritesStore,
+  withBotFavoritesMutation,
+} from "./bot-favorites-main.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
 const OPERATIONS_FILE = "aiden-remote-operations-v1.json";
 const STREAMS_FILE = "aiden-remote-streams-v1.json";
 const MAX_STATE_BYTES = 512 * 1_024;
 const execFileAsync = promisify(execFile);
+
+async function mapWithConcurrency<Input, Output>(
+  values: readonly Input[],
+  limit: number,
+  project: (value: Input) => Promise<Output>,
+): Promise<Output[]> {
+  const output = new Array<Output>(values.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next++;
+      output[index] = await project(values[index]!);
+    }
+  }));
+  return output;
+}
 
 async function macComputerName(): Promise<string> {
   try {
@@ -237,9 +277,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         models: AidenRemoteModelService;
         streams: AidenRemoteStreamService;
         files: AidenRemoteFileService;
+        botFiles: AidenRemoteBotFileService;
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
         usage: typeof usageStore;
+        bots: AidenRemoteBotService;
         botNotice: {
           status: typeof botApplicationService.noticeStatus;
           acknowledge: typeof botApplicationService.acknowledgeNotice;
@@ -331,10 +373,160 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
           });
           activeChats = chats;
+          const projectBotHealth = async (
+            botId: string,
+            fullReady?: boolean,
+          ): Promise<"ready" | "degraded" | "unavailable"> => {
+            const policy = await botCapabilityStore.getBotPolicy(botId);
+            if (policy.accessMode === "full") {
+              if (fullReady !== undefined) return fullReady ? "ready" : "unavailable";
+              const snapshot = await botCapabilityCatalog.snapshot({
+                audienceId: instanceId,
+                botId,
+              });
+              return snapshot.resources.providers.some(
+                (provider) => provider.option.available &&
+                  provider.models.some((model) => model.option.available),
+              ) ? "ready" : "unavailable";
+            }
+            const binding = await botCapabilityStore.getBotBinding(botId);
+            if (!binding) return "unavailable";
+            try {
+              const reconciled = await botCapabilityCatalog.reconcile(binding, {
+                audienceId: instanceId,
+                botId,
+              });
+              if (reconciled.issues.length === 0) return "ready";
+              return reconciled.issues.some(
+                ({ group }) => group === "provider" || group === "model",
+              ) ? "unavailable" : "degraded";
+            } catch {
+              return "unavailable";
+            }
+          };
+          const bots = new AidenRemoteBotService({
+            application: botApplicationService,
+            chatStore,
+            avatar: createMainBotAvatarApplicationAdapter(instanceId),
+            inbox: {
+              list: (deviceId, input) =>
+                createBotInboxProjectionService({
+                  listBots: () => botApplicationService.list(true),
+                  listChatMetadata: () => chatStore.list(),
+                  projectBatch: async (request) => {
+                    const activities = await streams.projectChatActivities(
+                      deviceId,
+                      request.map(({ chatId }) => chatId),
+                    );
+                    return mergeBotInboxActivityPreviews(request, activities);
+                  },
+                }).list(input),
+            },
+            favorites: {
+              load: () => botFavoritesStore.load(),
+              save: (snapshot) => botFavoritesStore.save(snapshot),
+            },
+            withFavoritesMutation: (action) => withBotFavoritesMutation(action),
+            health: (botId) => projectBotHealth(botId),
+            healthBatch: async (botIds) => {
+              const snapshot = await botCapabilityCatalog.snapshot({
+                audienceId: instanceId,
+              });
+              const fullReady = snapshot.resources.providers.some(
+                (provider) => provider.option.available &&
+                  provider.models.some((model) => model.option.available),
+              );
+              const rows = await mapWithConcurrency(botIds, 4, async (botId) =>
+                [botId, await projectBotHealth(botId, fullReady)] as const,
+              );
+              return new Map(rows);
+            },
+            resolveProviderModel: async ({
+              audienceId,
+              botId,
+              providerId,
+              modelId,
+            }) => {
+              const inventoryLease = botRuntimeInventoryLeases.acquire();
+              try {
+                const defaultSelection = providerId === undefined || modelId === undefined
+                  ? await models.resolve()
+                  : undefined;
+                const retained = await botCapabilityStore.getBotBinding(botId);
+                const snapshot = await botCapabilityCatalog.snapshot({
+                  audienceId,
+                  botId,
+                  ...(retained ? { retainedBindings: [retained] } : {}),
+                });
+                inventoryLease.assertCurrent();
+                const provider = snapshot.resources.providers.find((candidate) =>
+                  providerId !== undefined
+                    ? candidate.option.id === providerId
+                    : candidate.sourceId === defaultSelection?.providerId,
+                );
+                const model = provider?.models.find((candidate) =>
+                  modelId !== undefined
+                    ? candidate.option.id === modelId
+                    : candidate.sourceId === defaultSelection?.modelId,
+                );
+                if (
+                  !provider ||
+                  !model ||
+                  !provider.option.available ||
+                  !model.option.available
+                ) {
+                  throw new AidenRemoteServiceError(
+                    "operation_stale",
+                    "Provider selection is unavailable. Refresh the Bot capability list.",
+                    409,
+                    true,
+                  );
+                }
+                return {
+                  providerId: provider.sourceId,
+                  model: model.sourceId,
+                  assertCurrent: () => {
+                    try {
+                      inventoryLease.assertCurrent();
+                    } catch {
+                      throw new AidenRemoteServiceError(
+                        "operation_stale",
+                        "Provider selection changed. Refresh the Bot capability list.",
+                        409,
+                        true,
+                      );
+                    }
+                  },
+                  release: () => inventoryLease.release(),
+                };
+              } catch (error) {
+                inventoryLease.release();
+                throw error;
+              }
+            },
+            idempotency,
+            persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            notifyBotsChanged: () => ipcMain.broadcast("bots:changed", {}),
+            notifyChatsChanged: () => ipcMain.broadcast("chats:changed", {}),
+          });
           const files = new AidenRemoteFileService({
             instanceId,
             application: workspaceEnvironmentApplicationService,
             owners: workspaceOwners,
+          });
+          const botFiles = new AidenRemoteBotFileService({
+            instanceId,
+            authority: botRuntimeAuthority,
+            archivedRead: createBotArchivedFileReadAuthority({
+              bots: botStore,
+              chats: chatStore,
+              capabilities: botCapabilityStore,
+              catalog: botCapabilityCatalog,
+              managedWorkspace: botManagedWorkspace,
+              mutationGate: botMutationGate,
+              inventoryLeases: botRuntimeInventoryLeases,
+            }),
+            chats: chatStore,
           });
           const git = new AidenRemoteGitService({
             application: workspaceEnvironmentApplicationService,
@@ -370,9 +562,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             models,
             streams,
             files,
+            botFiles,
             git,
             schedules,
             usage: usageStore,
+            bots,
             botNotice: {
               status: (deviceId) => botApplicationService.noticeStatus(deviceId),
               acknowledge: (deviceId, acknowledgement) =>

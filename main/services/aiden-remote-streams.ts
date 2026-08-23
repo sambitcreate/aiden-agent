@@ -28,6 +28,7 @@ const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const APPROVAL_LIFETIME_MS = 5 * 60 * 1_000;
+const MAX_ACTIVITY_PROJECTION_CHATS = 200;
 export const MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES = 16 * 1_024 * 1_024;
 
 export type AidenRemoteStreamState =
@@ -71,6 +72,19 @@ export interface AidenRemotePendingApproval {
   /** Exact renderer-safe facts are host-only and never enter the mobile wire contract. */
   details?: ToolApprovalDetails;
 }
+
+export type AidenRemoteChatActivityProjection =
+  | {
+      chatId: string;
+      activityState: "waiting_for_approval";
+      /** True only when this exact paired device owns the pending approval. */
+      canRespondToApproval: boolean;
+    }
+  | {
+      chatId: string;
+      activityState: "idle" | "queued" | "running" | "reconciling";
+      canRespondToApproval: false;
+    };
 
 export interface AidenRemoteStreamSnapshot {
   version: 1;
@@ -815,6 +829,74 @@ export class AidenRemoteStreamService {
     };
   }
 
+  /**
+   * Project a bounded inbox batch with one stream-registry scan. This does not
+   * expose stream ids, turn ids, event payloads, or another device's approval
+   * authority.
+   */
+  projectChatActivities(
+    deviceId: string,
+    chatIds: readonly string[],
+  ): AidenRemoteChatActivityProjection[] {
+    this.prune();
+    if (
+      typeof deviceId !== "string" ||
+      deviceId.length === 0 ||
+      deviceId.length > 128 ||
+      chatIds.length > MAX_ACTIVITY_PROJECTION_CHATS ||
+      new Set(chatIds).size !== chatIds.length ||
+      chatIds.some((chatId) => !/^[A-Za-z0-9._:-]{1,128}$/u.test(chatId))
+    ) {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The Bot inbox activity request is invalid.",
+        400,
+      );
+    }
+    const requested = new Set(chatIds);
+    const latest = new Map<string, StreamRecord>();
+    for (const stream of this.streams.values()) {
+      if (!requested.has(stream.chatId) || terminal(stream.state)) continue;
+      const retained = latest.get(stream.chatId);
+      if (
+        !retained ||
+        stream.updatedAt > retained.updatedAt ||
+        (stream.updatedAt === retained.updatedAt && stream.streamId > retained.streamId)
+      ) {
+        latest.set(stream.chatId, stream);
+      }
+    }
+    return chatIds.map((chatId) => {
+      const stream = latest.get(chatId);
+      if (!stream) {
+        return { chatId, activityState: "idle", canRespondToApproval: false };
+      }
+      if (stream.state === "waiting_for_approval") {
+        const approval = this.pendingApprovalForStream(stream.streamId);
+        return {
+          chatId,
+          activityState: "waiting_for_approval",
+          canRespondToApproval:
+            approval !== undefined &&
+            stream.deviceId === deviceId &&
+            approval.expiresAt > new Date(this.options.now()).toISOString(),
+        };
+      }
+      if (
+        stream.state === "queued" ||
+        stream.state === "running" ||
+        stream.state === "reconciling"
+      ) {
+        return {
+          chatId,
+          activityState: stream.state,
+          canRespondToApproval: false,
+        };
+      }
+      return { chatId, activityState: "idle", canRespondToApproval: false };
+    });
+  }
+
   streamChatId(deviceId: string, streamId: string): string {
     return this.requireStream(deviceId, streamId).chatId;
   }
@@ -939,6 +1021,13 @@ export class AidenRemoteStreamService {
           const approval = this.approvals.get(approvalId);
           if (!approval || approval.deviceId !== deviceId || approval.expiresAt <= this.options.now()) {
             throw new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
+          }
+          if (decision === "allow" && (approval.details !== undefined || !approval.canAllow)) {
+            throw new AidenRemoteServiceError(
+              "capability_denied",
+              "This approval can only be allowed from the Mac.",
+              403,
+            );
           }
           if (!this.resolveApproval(approvalId, decision)) {
             throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);

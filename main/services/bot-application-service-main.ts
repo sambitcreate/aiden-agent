@@ -17,6 +17,8 @@ import {
 } from "./telegram/telegram-bot-bindings.js";
 import { reconcileTelegramBotBindings } from "./telegram/telegram-bot-binding-reconciliation.js";
 import { assertTelegramBackingChatMayBeDeleted } from "./telegram/telegram-bot-chat-lifecycle.js";
+import { removeArchivedBotFavorite } from "./bot-favorites-main.js";
+import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
 
 export const botApplicationService = createBotApplicationService({
   botStore,
@@ -27,12 +29,14 @@ export const botApplicationService = createBotApplicationService({
   lifecycleJournal: botLifecycleJournal,
   migrationSeal: botCapabilityMigrationSeal,
   mutationGate: botMutationGate,
+  inventoryLeases: botRuntimeInventoryLeases,
   deleteChatWithEffects: (chatId, assertCurrent, onDeletionRollForward) =>
     chatApplicationService.remove(chatId, { assertCurrent, onDeletionRollForward }),
   onArchiveBot: async (botId) => {
     if (await telegramBotBindings.get(botId)) {
       await telegramBotBindingAuthority.disableBot(botId);
     }
+    await removeArchivedBotFavorite(botId);
   },
   assertChatDeletionAllowed: (botId, chatId) =>
     assertTelegramBackingChatMayBeDeleted({

@@ -13,6 +13,10 @@ import {
   BotCapabilityNoticeRequiredError,
   BotCapabilityRevisionConflictError,
   BotCapabilityUnavailableError,
+  emptyBotCapabilityState,
+  isSafeBotCapabilityState,
+  parseBotCapabilityState,
+  type BotCapabilityState,
 } from "./bot-capability-store-core.js";
 import {
   bindBotCustomSelection,
@@ -25,6 +29,8 @@ import {
 } from "./bot-capability-catalog-core.js";
 import { BotCapabilityLeaseRegistry } from "./bot-capability-lease.js";
 import { createBotCapabilityStore } from "./bot-capability-store.js";
+import { DataStore } from "./data-store.js";
+import { BotRuntimeInventoryLeaseRegistry } from "./bot-runtime-inventory-lease.js";
 
 const filename = "bot-capabilities.json";
 
@@ -144,6 +150,52 @@ function storeAt(root: string, leases = new BotCapabilityLeaseRegistry()) {
   };
 }
 
+function stagedCapabilityPersistence(root: string) {
+  let armed = false;
+  let entered!: () => void;
+  let release!: () => void;
+  let enteredPromise = Promise.resolve();
+  let releasePromise = Promise.resolve();
+  const persistence = new DataStore<BotCapabilityState>(
+    filename,
+    emptyBotCapabilityState(),
+    () => root,
+    {
+      maxBytes: 8 * 1024 * 1024,
+      fileMode: 0o600,
+      normalize: (value) => {
+        try {
+          return parseBotCapabilityState(value);
+        } catch {
+          return emptyBotCapabilityState();
+        }
+      },
+      isSafe: isSafeBotCapabilityState,
+      rejectCorruptWrite: true,
+      rejectUnsafeWrite: true,
+      rejectExternalChanges: true,
+      beforeProtectedPublish: async () => {
+        if (!armed) return;
+        armed = false;
+        entered();
+        await releasePromise;
+      },
+    },
+  );
+  return {
+    persistence,
+    arm() {
+      armed = true;
+      enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+      releasePromise = new Promise<void>((resolve) => { release = resolve; });
+      return {
+        entered: enteredPromise,
+        release: () => release(),
+      };
+    },
+  };
+}
+
 const acknowledgement = (decision: "continue_full" | "customize_first" = "continue_full") => ({
   version: BOT_FULL_ACCESS_NOTICE_VERSION,
   decision,
@@ -182,6 +234,74 @@ test("durable policy and per-device notice state survive restart with private 06
 
   const disk = await readFile(join(root, filename), "utf8");
   assert.doesNotMatch(disk, /fingerprint|credential|\/Users\//u);
+});
+
+test("staged DataStore publication rechecks inventory leases for Bot and chat policies", async (t) => {
+  const root = await temporaryRoot(t);
+  const staged = stagedCapabilityPersistence(root);
+  let timestamp = 20_000;
+  let incarnation = 0;
+  const store = createBotCapabilityStore({
+    persistence: staged.persistence,
+    leases: new BotCapabilityLeaseRegistry(),
+    now: () => ++timestamp,
+    mintRevision: (kind, sequence) => `revision:${kind}:${sequence}`,
+    mintIncarnation: () => Buffer.alloc(32, ++incarnation).toString("base64url"),
+  });
+  await store.initialize();
+
+  const botInventory = new BotRuntimeInventoryLeaseRegistry();
+  const botLease = botInventory.acquire();
+  const botPublish = staged.arm();
+  const botPolicy = store.createBotPolicy({
+    botId: "bot:staged",
+    catalog: catalog(),
+    access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+    assertCurrent: botLease.assertCurrent,
+  });
+  await botPublish.entered;
+  botInventory.invalidate("provider_configuration");
+  botPublish.release();
+
+  await assert.rejects(botPolicy, /capabilities changed/u);
+  await assert.rejects(
+    store.getBotPolicy("bot:staged"),
+    BotCapabilityUnavailableError,
+  );
+  assert.deepEqual(
+    parseBotCapabilityState(JSON.parse(await readFile(join(root, filename), "utf8"))).policies,
+    [],
+  );
+
+  const committed = await store.createBotPolicy({
+    botId: "bot:staged",
+    catalog: catalog(),
+    access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+  });
+  const chatInventory = new BotRuntimeInventoryLeaseRegistry();
+  const chatLease = chatInventory.acquire();
+  const chatPublish = staged.arm();
+  const chatPolicy = store.createChatPolicy({
+    chatId: "chat:staged",
+    botId: "bot:staged",
+    expectedBotPolicyRevision: committed.revision,
+    catalog: catalog(),
+    assertCurrent: chatLease.assertCurrent,
+  });
+  await chatPublish.entered;
+  chatInventory.invalidate("mcp_configuration");
+  chatPublish.release();
+
+  await assert.rejects(chatPolicy, /capabilities changed/u);
+  await assert.rejects(
+    store.getChatPolicy("chat:staged"),
+    BotCapabilityUnavailableError,
+  );
+  const durable = parseBotCapabilityState(
+    JSON.parse(await readFile(join(root, filename), "utf8")),
+  );
+  assert.deepEqual(durable.policies.map(({ botId }) => botId), ["bot:staged"]);
+  assert.deepEqual(durable.chats, []);
 });
 
 test("Custom bindings survive restart, stay out of public views, and gate drift before leasing", async (t) => {

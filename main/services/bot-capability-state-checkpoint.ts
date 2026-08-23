@@ -547,24 +547,25 @@ export function withBotCapabilityStateCheckpoint(
 
   return {
     load: () => serialized(ensureInitialized),
-    save: (next) =>
+    save: (next, isCurrent = () => true) =>
       serialized(async () => {
         const previous = await ensureInitialized();
         try {
-          await checkpoint.commit(previous, next, () => persistence.save(next));
+          await checkpoint.commit(previous, next, () => persistence.save(next, isCurrent));
         } catch (error) {
           if (error instanceof BotCapabilityCommitUncertainError)
             poisoned = true;
           throw error;
         }
       }),
-    update: (mutation) =>
+    update: (mutation, isCurrent = () => true) =>
       serialized(async () => {
+        if (!isCurrent()) throw unavailable("Bot capabilities changed before publication.");
         const previous = await ensureInitialized();
         const next = structuredClone(previous);
         const result = await mutation(next);
         try {
-          await checkpoint.commit(previous, next, () => persistence.save(next));
+          await checkpoint.commit(previous, next, () => persistence.save(next, isCurrent));
         } catch (error) {
           if (error instanceof BotCapabilityCommitUncertainError)
             poisoned = true;

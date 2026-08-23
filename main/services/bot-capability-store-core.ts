@@ -111,6 +111,12 @@ export type StoredBotChatCapabilityPolicy = StoredBotChatPolicyBase &
     | { mode: "custom"; custom: BotCustomSelection }
   );
 
+export interface BotArchivedReadAuthoritySnapshot {
+  policy: StoredBotCapabilityPolicy;
+  chat: StoredBotChatCapabilityPolicy;
+  effectiveCustom?: BotCustomSelection;
+}
+
 export interface StoredBotNoticeAcceptance extends StoredRevision {
   /** Main-owned paired-device/principal identity; never a display label. */
   audienceId: string;
@@ -1411,6 +1417,34 @@ export class BotCapabilityStateEditor {
     return policy.accessMode === "custom"
       ? cloneBoundBotCustomSelection(policy.binding)
       : undefined;
+  }
+
+  /**
+   * Main-only read authority for immutable history and managed-home reads.
+   * Unlike turn admission this deliberately ignores notice state and mints no
+   * effect lease, so its caller must serialize the complete read with Bot
+   * lifecycle/policy mutations and independently fence live inventory.
+   */
+  inspectArchivedReadAuthority(
+    botId: string,
+    chatId: string,
+  ): BotArchivedReadAuthoritySnapshot {
+    const policy = this.policy(botId);
+    if (policy.authorityStatus !== "archived") {
+      throw new BotCapabilityUnavailableError("This Bot is not archived.");
+    }
+    const chat = this.chat(chatId);
+    if (chat.botId !== policy.botId) throw new BotCapabilityUnavailableError();
+    const effectiveCustom = chat.mode === "custom"
+      ? chat.custom
+      : policy.accessMode === "custom"
+        ? policy.custom
+        : undefined;
+    return {
+      policy: clonePolicy(policy),
+      chat: cloneChatPolicy(chat),
+      ...(effectiveCustom ? { effectiveCustom: cloneBotCustomSelection(effectiveCustom) } : {}),
+    };
   }
 }
 

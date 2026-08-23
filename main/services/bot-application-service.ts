@@ -108,6 +108,9 @@ export interface BotApplicationDependencies {
     seal(): Promise<void>;
   };
   mutationGate: Pick<BotMutationGate, "run">;
+  inventoryLeases?: {
+    acquire(): { assertCurrent(): void; release(): void };
+  };
   /**
    * Production deletion owns active-run cancellation and private runtime-effect
    * cleanup. Tests may omit it and exercise the underlying ChatStore directly.
@@ -148,6 +151,14 @@ export interface CopyBotChatApplicationInput {
   throughAssistantMessageId?: string;
   /** Main-owned owner/transport lease check, repeated at ChatStore's atomic commit. */
   assertCurrent?: () => void;
+}
+
+export class BotApplicationUnavailableError extends Error {
+  readonly name = "BotApplicationUnavailableError";
+
+  constructor(readonly reason: "missing" | "archived") {
+    super("This Bot is no longer available.");
+  }
 }
 
 function createReservation(operation: BotLifecycleOperation): BotManagedWorkspaceReservation {
@@ -234,6 +245,17 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   const snapshotForAudience = (audienceId: string, botId?: string) =>
     deps.catalog.snapshot({ audienceId, botId });
 
+  const withInventoryLease = async <Result>(
+    action: (assertCurrent: () => void) => Promise<Result>,
+  ): Promise<Result> => {
+    const lease = deps.inventoryLeases?.acquire();
+    try {
+      return await action(() => lease?.assertCurrent());
+    } finally {
+      lease?.release();
+    }
+  };
+
   const beginPending = async (
     input: Parameters<LifecycleJournalPort["begin"]>[0],
   ): Promise<BotLifecycleOperation> => {
@@ -269,12 +291,16 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     audienceId: string,
     requested?: BotAccessUpdate,
   ) => {
-    const { snapshot, access, binding } = await accessForCreate(audienceId, requested);
-    return deps.capabilityStore.createBotPolicy({
-      botId,
-      catalog: snapshot.catalog,
-      access,
-      ...(binding ? { binding } : {}),
+    return withInventoryLease(async (assertCurrent) => {
+      const { snapshot, access, binding } = await accessForCreate(audienceId, requested);
+      assertCurrent();
+      return deps.capabilityStore.createBotPolicy({
+        botId,
+        catalog: snapshot.catalog,
+        access,
+        ...(binding ? { binding } : {}),
+        assertCurrent,
+      });
     });
   };
 
@@ -649,7 +675,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   const activeBot = async (botId: string): Promise<BotDefinition> => {
     const bot = await deps.botStore.get(botId);
-    if (!bot || bot.archivedAt !== undefined) throw new Error("This Bot is no longer available.");
+    if (!bot) throw new BotApplicationUnavailableError("missing");
+    if (bot.archivedAt !== undefined) {
+      throw new BotApplicationUnavailableError("archived");
+    }
     await deps.capabilityStore.assertBotAuthorityMatchesIdentity({ botId, archived: false });
     return bot;
   };
@@ -668,6 +697,12 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         "This Custom Bot's provider and model selection is unavailable.",
       );
     }
+    const inventoryLease = deps.inventoryLeases?.acquire();
+    const assertCurrent = () => {
+      inventoryLease?.assertCurrent();
+      input.assertCurrent?.();
+    };
+    try {
     const snapshot = await deps.catalog.snapshot({
       audienceId: input.audienceId,
       botId: input.botId,
@@ -705,6 +740,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         botId: input.botId,
         expectedBotPolicyRevision: botPolicy.revision,
         catalog: snapshot.catalog,
+        assertCurrent,
       });
       operation = await advance(operation, "policy_committed");
       const chat = await deps.chatStore.create({
@@ -715,7 +751,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         providerId,
         model,
         initialAssistantMessage: bot.openingGreeting,
-        assertCurrent: input.assertCurrent,
+        assertCurrent,
       });
       operation = await advance(operation, "chat_committed");
       await deps.lifecycleJournal.complete(operationId, "chat_committed");
@@ -747,6 +783,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         // Preserve the original error and pending journal for startup repair.
       }
       throw error;
+    }
+    } finally {
+      inventoryLease?.release();
     }
   };
 
@@ -835,22 +874,26 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       await ensureOperational();
       return runBotMutation(input.botId, async () => {
         await activeBot(input.botId);
-        const snapshot = await snapshotForAudience(input.audienceId, input.botId);
-        const access = input.access;
-        const binding = access.accessMode === "custom"
-          ? await deps.catalog.bindCustom({
-              audienceId: input.audienceId,
-              botId: input.botId,
-              selection: access.custom,
-              catalogRevision: access.catalogRevision,
-            })
-          : undefined;
-        return deps.capabilityStore.updateBotPolicy({
-          botId: input.botId,
-          expectedRevision: input.expectedRevision,
-          catalog: snapshot.catalog,
-          access,
-          ...(binding ? { binding } : {}),
+        return withInventoryLease(async (assertCurrent) => {
+          const snapshot = await snapshotForAudience(input.audienceId, input.botId);
+          const access = input.access;
+          const binding = access.accessMode === "custom"
+            ? await deps.catalog.bindCustom({
+                audienceId: input.audienceId,
+                botId: input.botId,
+                selection: access.custom,
+                catalogRevision: access.catalogRevision,
+              })
+            : undefined;
+          assertCurrent();
+          return deps.capabilityStore.updateBotPolicy({
+            botId: input.botId,
+            expectedRevision: input.expectedRevision,
+            catalog: snapshot.catalog,
+            access,
+            ...(binding ? { binding } : {}),
+            assertCurrent,
+          });
         });
       });
     },
@@ -1161,12 +1204,16 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         if (!chat || chat.botId !== input.botId) {
           throw new Error("This Bot chat is no longer available.");
         }
-        const snapshot = await snapshotForAudience(input.audienceId, input.botId);
-        return deps.capabilityStore.updateChatPolicy({
-          chatId: input.chatId,
-          expectedRevision: input.expectedRevision,
-          catalog: snapshot.catalog,
-          access: input.access,
+        return withInventoryLease(async (assertCurrent) => {
+          const snapshot = await snapshotForAudience(input.audienceId, input.botId);
+          assertCurrent();
+          return deps.capabilityStore.updateChatPolicy({
+            chatId: input.chatId,
+            expectedRevision: input.expectedRevision,
+            catalog: snapshot.catalog,
+            access: input.access,
+            assertCurrent,
+          });
         });
       });
     },

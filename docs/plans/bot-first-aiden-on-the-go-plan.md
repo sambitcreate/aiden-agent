@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phases 0–3 complete August 23, 2026; Phase 4 next
+- Status: Active; Phases 0–4 complete August 23, 2026; Phase 5 next
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -467,6 +467,8 @@ Acceptance:
 - the UI's access summary exactly matches the effective main-owned tool inventory.
 
 ### Phase 4 — Remote bot service, inbox projection, and avatar store
+
+Completed August 23, 2026. The authenticated Remote service now exposes main-owned Bot CRUD, Full/Custom access, notice acknowledgement, favorite order, Bot-chat creation, bounded inbox/search, archived read-only files, and canonical 512 × 512 avatar assets. Provider/model selection is fenced against one current inventory, durable policy publication rechecks that fence at its final visibility boundary, and desktop notifications invalidate every dependent Bot cache. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-4.md`.
 
 1. Add bot service adapters and route them through the authenticated Aiden Remote router/service lifecycle.
 2. Implement bot CRUD, favorites/order, archive/restore, capability views/updates, bot-chat creation, and chat-subset updates.

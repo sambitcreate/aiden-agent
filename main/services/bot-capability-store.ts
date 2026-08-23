@@ -27,6 +27,7 @@ import {
   projectBotNoticeStatus,
   type BotCapabilityCoreDependencies,
   type BotCapabilityAuthorityStatus,
+  type BotArchivedReadAuthoritySnapshot,
   type BotCapabilityIncarnation,
   type BotCapabilityIncarnationInput,
   type BotCapabilityIncarnationNamespace,
@@ -57,8 +58,11 @@ const MAX_BOT_CAPABILITY_STATE_BYTES = 8 * 1024 * 1024;
 
 export interface BotCapabilityPersistence {
   load(): Promise<BotCapabilityState>;
-  save(state: BotCapabilityState): Promise<void>;
-  update<Result>(mutation: (draft: BotCapabilityState) => Result | Promise<Result>): Promise<Result>;
+  save(state: BotCapabilityState, isCurrent?: () => boolean): Promise<void>;
+  update<Result>(
+    mutation: (draft: BotCapabilityState) => Result | Promise<Result>,
+    isCurrent?: () => boolean,
+  ): Promise<Result>;
   loadedFromCorruptFile(): Promise<boolean>;
   loadedFromUnsafeFile(): Promise<boolean>;
   loadedDiskContents(): Promise<Buffer | null>;
@@ -312,10 +316,18 @@ export class BotCapabilityStore {
     catalog: BotCapabilityCatalog;
     access: unknown;
     binding?: unknown;
+    assertCurrent?: () => void;
   }): Promise<BotAccessView> {
     this.requireInitialized();
+    const isCurrent = () => {
+      input.assertCurrent?.();
+      return true;
+    };
     return this.serialized(() =>
-      this.persistence.update((state) => this.editor(state).createBotPolicy(input)),
+      this.persistence.update((state) => {
+        input.assertCurrent?.();
+        return this.editor(state).createBotPolicy(input);
+      }, isCurrent),
     );
   }
 
@@ -325,8 +337,13 @@ export class BotCapabilityStore {
     catalog: BotCapabilityCatalog;
     access: unknown;
     binding?: unknown;
+    assertCurrent?: () => void;
   }): Promise<BotAccessView> {
     this.requireInitialized();
+    const isCurrent = () => {
+      input.assertCurrent?.();
+      return true;
+    };
     return this.serialized(async () => {
       const state = await this.persistence.load();
       const policy = state.policies.find(({ botId }) => botId === input.botId);
@@ -356,9 +373,10 @@ export class BotCapabilityStore {
       }
       const narrowing = botPolicyTransitionNarrows(policy, access);
       if (narrowing) this.leases.invalidateBot(policy.botId);
-      const result = await this.persistence.update((draft) =>
-        this.editor(draft).updateBotPolicy(input),
-      );
+      const result = await this.persistence.update((draft) => {
+        input.assertCurrent?.();
+        return this.editor(draft).updateBotPolicy(input);
+      }, isCurrent);
       if (result.narrowed) {
         this.leases.publishBotEpoch(policy.botId, result.policyEpoch);
         for (const chat of result.narrowedChats) {
@@ -374,16 +392,34 @@ export class BotCapabilityStore {
     return this.serialized(async () => projectBotChatAccessView(await this.persistence.load(), chatId));
   }
 
+  async inspectArchivedReadAuthority(
+    botId: string,
+    chatId: string,
+  ): Promise<BotArchivedReadAuthoritySnapshot> {
+    this.requireInitialized();
+    return this.serialized(async () =>
+      this.editor(await this.persistence.load()).inspectArchivedReadAuthority(botId, chatId),
+    );
+  }
+
   async createChatPolicy(input: {
     chatId: string;
     botId: string;
     expectedBotPolicyRevision: string;
     catalog: BotCapabilityCatalog;
     custom?: unknown;
+    assertCurrent?: () => void;
   }): Promise<BotChatAccessView> {
     this.requireInitialized();
+    const isCurrent = () => {
+      input.assertCurrent?.();
+      return true;
+    };
     return this.serialized(() =>
-      this.persistence.update((state) => this.editor(state).createChatPolicy(input)),
+      this.persistence.update((state) => {
+        input.assertCurrent?.();
+        return this.editor(state).createChatPolicy(input);
+      }, isCurrent),
     );
   }
 
@@ -392,8 +428,13 @@ export class BotCapabilityStore {
     expectedRevision: string;
     catalog: BotCapabilityCatalog;
     access: unknown;
+    assertCurrent?: () => void;
   }): Promise<BotChatAccessView> {
     this.requireInitialized();
+    const isCurrent = () => {
+      input.assertCurrent?.();
+      return true;
+    };
     return this.serialized(async () => {
       const state = await this.persistence.load();
       const chat = state.chats.find(({ chatId }) => chatId === input.chatId);
@@ -421,9 +462,10 @@ export class BotCapabilityStore {
       }
       const narrowing = botChatTransitionNarrows(chat, access);
       if (narrowing) this.leases.invalidateChat(chat.botId, chat.chatId);
-      const result = await this.persistence.update((draft) =>
-        this.editor(draft).updateChatPolicy(input),
-      );
+      const result = await this.persistence.update((draft) => {
+        input.assertCurrent?.();
+        return this.editor(draft).updateChatPolicy(input);
+      }, isCurrent);
       if (result.narrowed) {
         this.leases.publishChatEpoch(chat.botId, chat.chatId, result.policyEpoch);
       }

@@ -31,6 +31,8 @@ import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
 const MAX_VISIBLE_COPY_BYTES = 64 * 1024 * 1024;
+const MAX_CHAT_META_PREVIEW_CHARS = 500;
+const MAX_CHAT_META_PREVIEW_BYTES = 2_000;
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]+$/u;
 const CHAT_DELETE_STAGING =
   /^\.index\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.chat-delete\.tmp$/u;
@@ -157,7 +159,11 @@ export function createChatStore(
           meta.botId.normalize("NFKC") === meta.botId &&
           SAFE_CHAT_ID.test(meta.botId))) &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
-      (meta.model === undefined || typeof meta.model === "string")
+      (meta.model === undefined || typeof meta.model === "string") &&
+      (meta.preview === undefined ||
+        (typeof meta.preview === "string" &&
+          Array.from(meta.preview).length <= MAX_CHAT_META_PREVIEW_CHARS &&
+          Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES))
     );
   }
 
@@ -483,6 +489,15 @@ export function createChatStore(
   }
 
   function metaOf(chat: Chat): ChatMeta {
+    const preview = [...chat.messages]
+      .reverse()
+      .find((message) =>
+        (message.role === "user" || message.role === "assistant") &&
+        message.content.trim().length > 0,
+      )?.content;
+    const boundedPreview = preview === undefined
+      ? undefined
+      : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
     return {
       id: chat.id,
       title: chat.title,
@@ -490,6 +505,7 @@ export function createChatStore(
       ...(chat.botId ? { botId: chat.botId } : {}),
       providerId: chat.providerId,
       model: chat.model,
+      ...(boundedPreview ? { preview: boundedPreview } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
