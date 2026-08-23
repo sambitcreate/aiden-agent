@@ -50,6 +50,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Config/AidenAppearance.swift",
   "AidenOnTheGo/Config/AppConfig.swift",
   "AidenOnTheGo/ContentView.swift",
+  "AidenOnTheGo/Features/Bots/Prototype/BotFirstPrototype.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
@@ -83,6 +84,7 @@ const appSourcePaths = [
 ];
 
 const testSources = [
+  "AidenBotPrototypeSnapshotTests.swift",
   "AidenChatTests.swift",
   "AidenNativeIntegrationTests.swift",
   "AidenRemoteClientTests.swift",
@@ -139,6 +141,243 @@ test("the iOS tree contains no orphan imported Swift sources", async () => {
     testEntries.filter((path) => path.endsWith(".swift")).sort(),
     testSources.slice().sort(),
   );
+});
+
+test("the DEBUG Bot regular-width evidence harness is deterministic and fixture-only", async () => {
+  const source = await readFile(
+    `${iosRoot}AidenOnTheGoTests/AidenBotPrototypeSnapshotTests.swift`,
+    "utf8",
+  );
+
+  assert.match(source, /^#if DEBUG/mu);
+  assert.match(source, /AidenBotFirstPrototypeLaunchView\(configuration: configuration\)/u);
+  assert.match(source, /noticeAcknowledged: true/u);
+  assert.match(source, /CGSize\(width: 1_024, height: 768\)/u);
+  assert.match(source, /UITraitCollection\(userInterfaceIdiom: \.pad\)/u);
+  assert.match(source, /UITraitCollection\(horizontalSizeClass: \.regular\)/u);
+  assert.match(source, /regularIPadTraits\.performAsCurrent/u);
+  assert.match(source, /UIHostingController\(rootView: content\)/u);
+  assert.match(source, /captureWindow\.makeKeyAndVisible\(\)/u);
+  assert.match(source, /captureWindow\.layer\.render\(in: context\.cgContext\)/u);
+  assert.doesNotMatch(source, /drawHierarchy|\bImageRenderer\(/u);
+  assert.match(source, /AidenThemePresetID\.allCases/u);
+  assert.match(source, /XCTAttachment\(data: pngData, uniformTypeIdentifier: "public\.png"\)/u);
+  assert.match(source, /attachment\.lifetime = \.keepAlways/u);
+  assert.doesNotMatch(
+    source,
+    /URLSession|AidenRemoteCoordinator|AidenRemoteClient|AidenChatCache/u,
+  );
+});
+
+test("bot-first sources reuse the one reviewed chat implementation", async () => {
+  const sources = await Promise.all(
+    appSourcePaths.map(async (path) => [path, await readFile(`${iosRoot}${path}`, "utf8")]),
+  );
+  const sourceByPath = new Map(sources);
+  const allSwift = sources.map(([, source]) => source).join("\n");
+  const app = sourceByPath.get("AidenOnTheGo/AidenOnTheGoApp.swift");
+  const content = sourceByPath.get("AidenOnTheGo/ContentView.swift");
+  const chat = sourceByPath.get("AidenOnTheGo/Features/Remote/AidenChatFeature.swift");
+  const count = (pattern) => [...allSwift.matchAll(pattern)].length;
+
+  assert.equal(count(/\bstruct\s+AidenChatDetailView\b/gu), 1);
+  assert.equal(count(/\bfinal\s+class\s+AidenChatViewModel\b/gu), 1);
+  assert.equal(count(/\bstruct\s+AidenComposerView\b/gu), 1);
+
+  const botSources = sources.filter(([path]) => path.includes("/Features/Bots/"));
+  assert.ok(botSources.length > 0, "expected reviewed Bot sources");
+  const botSwift = botSources.map(([, source]) => source).join("\n");
+  for (const [path, source] of botSources) {
+    assert.doesNotMatch(
+      source,
+      /\bstartTurn\b|\bAidenSSEParser\b|text\/event-stream|\b(?:struct|class)\s+\w*Composer\b/gu,
+      `${path} must not implement chat transport or input`,
+    );
+    assert.doesNotMatch(source, /@AppStorage\b/u, `${path} fixtures must not persist state`);
+    assert.doesNotMatch(
+      source,
+      /AidenRemoteCoordinator|AidenChatCache|AidenRemoteLiveActivityManager|clientFactory/u,
+      `${path} fixtures must not receive live runtime dependencies`,
+    );
+  }
+  assert.match(
+    botSwift,
+    /AidenChatDetailView\(readOnlyFixture:\s*chat\)/u,
+  );
+  assert.match(
+    app,
+    /let configuration = AidenBotFirstPrototypeConfiguration\.current[\s\S]*?initialValue: configuration == nil \? AidenRemoteCoordinator\(\) : nil/u,
+  );
+  assert.match(
+    app,
+    /initialValue: configuration == nil \? AidenAppearanceStore\(\) : nil/u,
+  );
+  assert.match(
+    app,
+    /if let prototypeConfiguration \{[\s\S]*?AidenBotFirstPrototypeLaunchView\(configuration: prototypeConfiguration\)[\s\S]*?\} else if let remoteCoordinator, let appearance/u,
+  );
+  const prototypeBranch = app.match(
+    /if let prototypeConfiguration \{[\s\S]*?\} else if let remoteCoordinator, let appearance/u,
+  )?.[0];
+  assert.ok(prototypeBranch, "expected a bounded prototype launch branch");
+  assert.doesNotMatch(
+    prototypeBranch,
+    /AidenAppearanceStore\(|AidenAppearanceRoot|\.environment\(appearance\)/u,
+  );
+  assert.doesNotMatch(content, /AidenBotFirstPrototype/u);
+  assert.match(
+    chat,
+    /init\(readOnlyFixture chat: AidenChat\) \{[\s\S]*?runtime = \.readOnlyFixture[\s\S]*?onChatUpdated = \{ _ in \}/u,
+  );
+  assert.match(
+    chat,
+    /init\(readOnlyFixture chat: AidenChat\) \{[\s\S]*?_coordinator = State\(initialValue: nil\)[\s\S]*?AidenChatViewModel\(readOnlyFixture: chat\)/u,
+  );
+  assert.match(chat, /func load\(\) async \{\s*guard !isReadOnlyFixture else \{ return \}/u);
+  assert.match(chat, /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \}/u);
+  assert.match(
+    chat,
+    /AidenComposerView\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u,
+  );
+  assert.match(
+    chat,
+    /guard !model\.isReadOnlyPresentation, autoStartVoice/u,
+  );
+  assert.match(
+    chat,
+    /AidenApprovalCard\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u,
+  );
+  assert.match(botSwift, /--bot-first-prototype-theme/u);
+  assert.match(botSwift, /--bot-first-prototype-state/u);
+  assert.match(botSwift, /--bot-first-prototype-screen/u);
+  assert.match(botSwift, /case inbox[\s\S]*?case profile[\s\S]*?case editor[\s\S]*?case access[\s\S]*?case chat/u);
+  assert.match(botSwift, /Bots can use your Mac/u);
+  assert.match(botSwift, /Continue with Full Access/u);
+  assert.match(botSwift, /Customize first/u);
+  assert.match(botSwift, /onDismiss: presentCustomEditorAfterNoticeIfNeeded/u);
+  assert.match(
+    botSwift,
+    /onCustomize: \{[\s\S]*?newBotDefaultAccess = \.custom[\s\S]*?shouldOpenCustomEditorAfterNotice = true[\s\S]*?noticeAcknowledged = true/u,
+  );
+  assert.match(
+    botSwift,
+    /sheet\(isPresented: \$isPresentingPostNoticeEditor\)[\s\S]*?AidenBotPrototypeEditorView\(bot: nil, initialAccess: \.custom\)/u,
+  );
+  assert.match(botSwift, /case newChat\(botID: String, sequence: Int\)/u);
+  assert.match(botSwift, /static func newChat\(bot:[\s\S]*?"prototype-new-\\\(bot\.id\)-\\\(sequence\)"/u);
+  assert.match(
+    botSwift,
+    /newConversationSequence \+= 1[\s\S]*?\.newChat\(botID: botID, sequence: newConversationSequence\)/u,
+  );
+  const conversationChooser = botSwift.match(
+    /confirmationDialog\("New Conversation"[\s\S]*?\} message: \{[\s\S]*?Choose a bot to start with\./u,
+  )?.[0];
+  assert.ok(conversationChooser, "expected a bounded new-conversation chooser");
+  assert.match(conversationChooser, /onNewConversation\(bot\.id\)/u);
+  assert.doesNotMatch(conversationChooser, /Fixtures\.recents|onOpen\(\.chat/u);
+  const profileSection = botSwift.match(
+    /private struct AidenBotPrototypeProfileView:[\s\S]*?private enum AidenBotPrototypeLookStyle:/u,
+  )?.[0];
+  assert.ok(profileSection, "expected a bounded Bot profile section");
+  assert.match(profileSection, /Button\(action: onNewConversation\)/u);
+  assert.match(profileSection, /profileMetric\("Access", value: accessSummary/u);
+  assert.match(profileSection, /profileMetric\("Files", value: accessPolicy\.ceiling\.files\.rawValue/u);
+  assert.match(profileSection, /accessPolicy\.ceiling\.allowedConnectionIDs\.count/u);
+  assert.match(profileSection, /accessPolicy\.ceiling\.allowedSkillIDs\.count/u);
+  assert.doesNotMatch(profileSection, /sampleRecent|Fixtures\.chat/u);
+  assert.match(botSwift, /@State private var botAccessPolicies:/u);
+  assert.match(botSwift, /@State private var chatAccessPolicies:/u);
+  const chatPolicySection = botSwift.match(
+    /private struct AidenBotPrototypeChatAccessPolicy:[\s\S]*?private struct AidenBotPrototypeChatAccessKey:/u,
+  )?.[0];
+  assert.ok(chatPolicySection, "expected a bounded chat access policy section");
+  assert.match(
+    chatPolicySection,
+    /guard mode == \.customize else \{ return \.inheriting\(botPolicy\) \}/u,
+  );
+  assert.match(botSwift, /connectionIDs\.intersection\(ceiling\.allowedConnectionIDs\)/u);
+  assert.match(botSwift, /skillIDs\.intersection\(ceiling\.allowedSkillIDs\)/u);
+  assert.match(botSwift, /chosenLocationIDs\.intersection\(ceiling\.allowedChosenLocationIDs\)/u);
+  assert.match(botSwift, /files\.limited\(to: ceiling\.files\)/u);
+  assert.match(
+    botSwift,
+    /if updated\.mode == \.inheritBot \{[\s\S]*?chatAccessPolicies\.removeValue\(forKey: key\)[\s\S]*?\} else \{[\s\S]*?updated\.intersecting\(botPolicy\(for: botID\)\)/u,
+  );
+  assert.match(
+    botSwift,
+    /if chatPolicy\.mode == \.inheritBot \{[\s\S]*?chatAccessPolicies\.removeValue\(forKey: key\)[\s\S]*?\} else \{[\s\S]*?chatPolicy\.intersecting\(policy\)/u,
+  );
+  const editorSection = botSwift.match(
+    /private struct AidenBotPrototypeEditorView:[\s\S]*?private enum AidenBotPrototypeAccessScope:/u,
+  )?.[0];
+  assert.ok(editorSection, "expected a bounded Bot editor section");
+  assert.match(editorSection, /initialAccess: AidenBotPrototypeAccess = \.full/u);
+  assert.match(editorSection, /Section\("Look"\)[\s\S]*?Shuffle Look/u);
+  assert.match(editorSection, /Image Playground isn’t available on this iPhone/u);
+  assert.match(editorSection, /No image request was sent/u);
+  assert.match(editorSection, /Section\("Review"\)/u);
+  assert.match(editorSection, /confirmationDialog\("Discard changes\?"/u);
+  assert.match(editorSection, /interactiveDismissDisabled\(isDirty\)/u);
+  assert.doesNotMatch(editorSection, /import ImagePlayground|imagePlaygroundSheet|URLSession/u);
+  const accessSection = botSwift.match(
+    /private struct AidenBotPrototypeAccessView:[\s\S]*?private struct AidenBotPrototypeChatDestination:/u,
+  )?.[0];
+  assert.ok(accessSection, "expected a bounded Bot access section");
+  assert.match(accessSection, /case inheritBot = "Inherit Bot"|AidenBotPrototypeChatAccess/u);
+  assert.match(accessSection, /scope == \.bot \? access == \.custom : chatAccess == \.customize/u);
+  assert.match(accessSection, /case \.shell: return ceiling\.shell/u);
+  assert.match(accessSection, /\.disabled\(!allowed\)/u);
+  assert.match(botSwift, /case fullMac = "Full Mac"[\s\S]*?case botFolderOnly = "Bot folder only"[\s\S]*?case chosenLocations = "Chosen locations"[\s\S]*?case off = "Off"/u);
+  assert.match(accessSection, /Section\("Mac files"\)[\s\S]*?Picker\("Files", selection: \$files\)[\s\S]*?locationCatalog/u);
+  assert.match(accessSection, /Section \{[\s\S]*?Picker\("Connections", selection: \$connectionMode\)[\s\S]*?connectionCatalog[\s\S]*?Text\("Connections"\)/u);
+  assert.match(accessSection, /All enabled/u);
+  assert.match(accessSection, /Some connections are powered by MCP/u);
+  assert.match(accessSection, /Picker\("Skills", selection: \$skillMode\)[\s\S]*?skillCatalog/u);
+  assert.match(accessSection, /All available/u);
+  assert.match(accessSection, /@State private var connectionIDs: Set<String>/u);
+  assert.match(accessSection, /@State private var skillIDs: Set<String>/u);
+  assert.match(accessSection, /chosenLocationIDs: chosenLocationIDs[\s\S]*?connectionIDs: connectionIDs[\s\S]*?skillIDs: skillIDs/u);
+  assert.match(accessSection, /fileScopeAllowed[\s\S]*?option\.limited\(to: botPolicy\.ceiling\.files\) == option/u);
+  assert.match(accessSection, /catalogItemAllowed[\s\S]*?botPolicy\.ceiling\.allowedConnectionIDs\.contains\(id\)[\s\S]*?botPolicy\.ceiling\.allowedSkillIDs\.contains\(id\)/u);
+  assert.match(
+    accessSection,
+    /onBotPolicyChanged\?\(\.init\(mode: access, capabilities: selectedCapabilities\)\)/u,
+  );
+  assert.match(
+    accessSection,
+    /chatAccess == \.inheritBot[\s\S]*?AidenBotPrototypeChatAccessPolicy\.inheriting\(botPolicy\)[\s\S]*?mode: \.customize[\s\S]*?capabilities: selectedCapabilities[\s\S]*?\.intersecting\(botPolicy\)/u,
+  );
+  assert.doesNotMatch(
+    accessSection,
+    /fullNoticeAccepted|Bots can use your Mac|Continue with Full Access|Customize first/u,
+  );
+  assert.doesNotMatch(botSwift, /UserDefaults|Keychain|URLSession/u);
+  assert.match(botSwift, /\.safeAreaInset\(edge: \.bottom/u);
+  assert.match(botSwift, /TextField\("Search"/u);
+  assert.match(botSwift, /Image\(systemName: "square\.and\.pencil"\)/u);
+  assert.match(botSwift, /\[bot\.name, bot\.summary\]\.contains/u);
+  assert.match(botSwift, /\[bot\.name, bot\.summary, recent\.title, recent\.preview\]\.contains/u);
+  assert.match(botSwift, /ForEach\(bots\) \{ bot in/u);
+  assert.match(botSwift, /hasTypedNoResults[\s\S]*?!normalizedQuery\.isEmpty && filteredBotResults\.isEmpty && filteredRecents\.isEmpty/u);
+  assert.match(botSwift, /if hasTypedNoResults \|\| fixtureState == \.noResults/u);
+  assert.match(botSwift, /ForEach\(availableBots\) \{ bot in[\s\S]*?onNewConversation\(bot\.id\)/u);
+  assert.match(botSwift, /guard !isBotArchived\(botID\) else \{ return \}/u);
+  assert.match(botSwift, /@State private var favoriteOrder[\s\S]*?moveFavorite\(bot\.id, by: -1\)[\s\S]*?moveFavorite\(bot\.id, by: 1\)/u);
+  assert.match(botSwift, /confirmationDialog\("Archive this bot\?"[\s\S]*?archivedBotIDs\.insert/u);
+  assert.match(botSwift, /confirmationDialog\("Delete selected conversations\?"[\s\S]*?deletedRecentIDs\.formUnion\(selectedRecentIDs\)/u);
+  assert.match(botSwift, /isArchived \? "Archived bots are read-only until restored\."/u);
+  assert.match(botSwift, /\.disabled\(!allowsBotChanges\)/u);
+  assert.match(botSwift, /@Environment\(\\\.accessibilityReduceMotion\) private var accessibilityReduceMotion/u);
+  assert.match(botSwift, /\.environment\(\\\.aidenReduceMotion, aidenReduceMotion \|\| accessibilityReduceMotion\)/u);
+  assert.match(botSwift, /effectiveReduceMotion: Bool \{ reduceMotion \|\| accessibilityReduceMotion \}/u);
+  assert.equal([...botSwift.matchAll(/\bwithAnimation\(/gu)].length, 2);
+  assert.match(botSwift, /if effectiveReduceMotion \{[\s\S]*?isEditing = nextValue[\s\S]*?\} else \{[\s\S]*?withAnimation/u);
+  assert.match(botSwift, /if effectiveReduceMotion \{[\s\S]*?update\(\)[\s\S]*?\} else \{[\s\S]*?withAnimation/u);
+  const inboxToolbar = botSwift.match(
+    /private var inboxToolbar:[\s\S]*?private var bottomDock:/u,
+  )?.[0];
+  assert.ok(inboxToolbar, "expected a bounded inbox toolbar section");
+  assert.doesNotMatch(inboxToolbar, /magnifyingglass|Close search/u);
 });
 
 test("iOS bundles every reviewed Aiden provider logo", async () => {

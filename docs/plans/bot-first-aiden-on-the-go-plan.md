@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Planned; owner decisions resolved August 22, 2026; ready for Phase 0
+- Status: Active; Phase 0 complete August 22, 2026; Phase 1 next
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -9,7 +9,7 @@
 
 Aiden On The Go will have two clear product areas:
 
-- **Workspaces** — project-oriented chats with folders, terminal, review, and Git.
+- **Workspaces** — project-oriented chats with folders, Files, review, and Git.
 - **Bots** — reusable helpers presented like familiar message contacts and threads.
 
 The Aiden logo at the top of the existing mobile home becomes the switcher. Tapping it opens exactly those two choices, marks the current choice, and returns the person to the last place they visited in each area. Bots becomes the default after a paired Mac supports and grants the new bot capability; Workspaces remains the safe fallback for older installations.
@@ -100,11 +100,12 @@ The current home logo becomes a native button/menu with exactly two rows:
 | Choice | Plain-language description | Destination |
 | --- | --- | --- |
 | Bots | Reusable helpers and their conversations | Last Bot thread/profile, otherwise Bots home |
-| Workspaces | Projects, folders, terminal, review, and Git | Last Workspace/chat, otherwise Workspace home |
+| Workspaces | Projects, folders, Files, review, and Git | Last Workspace/chat, otherwise Workspace home |
 
 Behavior:
 
 - remember the last selected area and independent navigation state per paired `instanceId`;
+- keep both native area stacks mounted while switching so the existing chat view model retains stream state, selection, and scroll position; use one device-local `AidenChatDraftStore` keyed by `(instanceId, chatId)` for both Workspace and Bot chats so installation switches and ordinary view reconstruction preserve an unsent draft without inventing a Bot-specific chat model;
 - default to Bots only when the authenticated device has `bot:read`;
 - disable Bots with actionable “Update or approve access on your Mac” copy when the server or device grant is missing;
 - do not switch until navigation succeeds;
@@ -118,17 +119,17 @@ Pairing remains outside this switcher. Scheduled Tasks, Usage, installation mana
 
 The first screen is a calm inbox, not a configuration dashboard:
 
-1. Header: Aiden logo switcher, centered **Bots** title, Search, Edit, and **+**.
+1. Header: **Edit**, the Aiden logo switcher with centered **Bots** title, and **+** for New Bot.
 2. Favorites: horizontally scrolling circular bot avatars and visible names.
 3. Recent conversations: flat rows with bot avatar, bot name, conversation title or bounded last-message preview, honest activity state, and relative time.
-4. Floating compose: starts a new conversation by choosing an existing bot. **+** always creates a new bot.
+4. Bottom dock: an iMessage-inspired Search capsule and a separate circular New Conversation button remain anchored above the safe area. New Conversation chooses an existing bot and always creates a distinct chat. **+** always creates a new bot.
 
 Rules:
 
 - tapping a favorite opens its bot profile; it never silently sends or creates work;
 - tapping a recent row opens that exact persisted chat;
 - no fake unread badge is introduced. A ring/badge is shown only for real streaming, waiting-for-approval, failed, or locally known new activity;
-- search covers bot name, purpose, conversation title, and the bounded previews actually returned by the Mac;
+- the bottom Search field covers bot name, purpose, conversation title, and the bounded previews actually returned by the Mac;
 - Edit supports favorite ordering, bot archive entry points, and confirmed multi-chat deletion without permanent red-minus decorations over every avatar;
 - empty, loading, retryable error, no-result, offline-cache, archived, and capability-degraded states each have distinct copy and actions.
 
@@ -156,6 +157,29 @@ Use one guided native sheet/Form with progressive sections and a stable Save act
 5. **Review** — concise summary of what the bot can access before Save.
 
 The first time a person enters Bots on a given paired installation and policy version, show one blocking notice before any bot can act: Bots start with Full Access to the Mac capabilities already enabled in Aiden; work normally begins in a private Aiden-managed folder; and access can be reduced at any time in Bot settings. Offer **Continue with Full Access** and **Customize first**. Remember acceptance on the Mac, version the notice, and show it again only when the meaning of Full Access materially expands.
+
+Freeze the first notice as policy identifier `bot-full-access-v1` with this copy:
+
+> **Bots can use your Mac**
+>
+> By default, bots can use files your Mac lets Aiden access, run commands, and use connections and skills enabled in Aiden. Each bot starts in a private Aiden folder, but Full Access can work elsewhere when your request needs it. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or change access in Bot Settings anytime.
+
+The actions are **Continue with Full Access** and **Customize first**. Existing-bot migration adds: **Your existing bots will keep the capabilities they already use. Aiden prepared a private working folder for each.** The Mac stores the accepted policy identifier and timestamp for the paired installation; local dismissal never counts as acceptance.
+
+Other first-release state copy is also fixed so degraded security state does not become a vague spinner:
+
+| State | Copy |
+| --- | --- |
+| Full summary | **Can use your Mac, shell, enabled connections, and skills.** |
+| Custom summary | **Uses only the access you select. This chat can reduce it further.** |
+| Offline | **Offline — showing saved bots. Reconnect to create, edit, or send.** |
+| Unsupported Mac | **Bots need a newer version of Aiden Agent on your Mac.** |
+| Device not granted | **Approve Bot access on your Mac, or pair this phone again.** |
+| Policy/home repair | **This bot's access needs repair on your Mac before it can work.** |
+| Selection drift | **Some selected access is unavailable. Review it on your Mac.** |
+| Archived | **Archived bots are read-only until restored.** |
+| No search result | **No bots or conversations match your search.** |
+| Empty | **Create your first bot to give a familiar helper its own conversations and tools.** |
 
 Drafts stay local until Save. Cancel on a dirty draft asks before discarding. Saving is one main-owned mutation with optimistic revision checking; a network ambiguity reconciles from the Mac instead of repeating creation.
 
@@ -222,6 +246,8 @@ The effective authority for a tool call is the intersection of:
 5. the current surface's supported approval and safety behavior (Electron, mobile, or Telegram);
 6. the fresh turn/tool-effect lease.
 
+Regular chats continue to use their saved Workspace permission. Bot chats do not expose or compose a second Workspace permission setting: their managed workspace carries a main-owned internal runtime baseline solely so existing tools can operate, and that baseline can never widen the Bot resolver's result. This keeps the visible Full/Custom summary identical to the effective authority instead of allowing a hidden Workspace setting to contradict it.
+
 The least powerful result always wins. A valid `full` record deliberately follows the current ordinary Aiden inventory. Full Access is never inferred from corrupt or future-version data: creation and migration write it explicitly and atomically; missing/corrupt/future records block bot actions and show **Repair access** rather than guessing.
 
 Specific enforcement:
@@ -280,6 +306,8 @@ Increment `contractRevision` from its current value to the next free revision. K
 
 New clients explicitly advertise support for the Bot capability vocabulary during pairing; only then may a new pairing disclose and grant bot read/write. Existing paired devices do **not** silently gain new authority. The Mac must locally approve the additional capability or require re-pairing, with minimum-client enforcement where needed. `/server` must distinguish server-supported capabilities from the authenticated device's actual grants so iOS never advertises an action it cannot perform.
 
+Swift must represent those values separately (for example, `serverCapabilities` and `deviceCapabilities`). The current legacy `AidenInstallation.capabilities` value is ambiguous because `/server` overwrites the pairing grant; migration therefore treats legacy Bot grants as absent until the Mac explicitly approves the upgrade or the phone re-pairs. Merely seeing `bot:read` in server support never enables the Bots area.
+
 ### Proposed endpoint inventory
 
 Exact request/response shapes are frozen in Phase 1, but the behavior is:
@@ -295,6 +323,7 @@ Exact request/response shapes are frozen in Phase 1, but the behavior is:
 - `GET /bot-capabilities` — safe provider, file-scope, shell, connection/MCP, skill, and other capability-group projection; no managed path.
 - `PATCH /bots/{botId}/capabilities` — expected-revision Full/Custom policy update.
 - `PATCH /chats/{chatId}/capabilities` — expected-revision chat subset update.
+- `GET /bot-conversations/{chatId}/files` and bot-chat-scoped file read/write routes — reuse the existing safe file DTOs while authorizing against the device grant, authoritative `botId`, bot policy, chat reduction, policy epoch, and managed-home identity. Ordinary Workspace file routes reject hidden Bot homes even if an opaque workspace ID is learned.
 - `PUT /bots/{botId}/avatar` — one bounded selected raster upload with expected revision.
 - `GET /bots/{botId}/avatar/{assetRevision}` — authenticated canonical image content with `no-store`/`nosniff` headers.
 - `DELETE /bots/{botId}/avatar` — return to the semantic fallback.
@@ -302,6 +331,8 @@ Exact request/response shapes are frozen in Phase 1, but the behavior is:
 Add optional `botId` to the Chat DTO. Make `GET /chats` regular-only and use the dedicated Bot collection for bot recents; this corrects the current undocumented mixing behavior and makes older mobile builds stop showing indistinguishable bot chats.
 
 Bot list/detail/favorite/access mutations use optimistic revisions. Create/chat/avatar operations use device-scoped idempotency keys. Disconnect never retries a create or a turn solely because the response was lost.
+
+Favorite membership and order are Mac-owned Bot metadata, revision-checked, and shared across paired devices. Device-local caches mirror the authoritative order but cannot silently reorder it while offline.
 
 ### Bounded inbox projection
 
@@ -335,6 +366,8 @@ On the Mac:
 - serve only the exact authenticated bot/revision route, never a raw local path or data URL.
 
 iOS caches bounded avatar bytes under protected, installation/device/bot/revision keys and prunes them with the existing installation data. Cached Bots remain read-only offline; avatar Save stays disabled until the authoritative Mac can accept it.
+
+The shared `AidenChatDraftStore` may persist only composer text keyed by `(instanceId, chatId)` in the app's protected private container. It is not available to App Intents, the widget App Group, logs, or other installations; a successful send clears it and installation removal/revocation/re-pair purges it. Attachments retain their existing bounded reference lifecycle and are not copied into this draft store.
 
 ## Migration and compatibility
 

@@ -43,7 +43,7 @@ Initial capability IDs:
 | `schedule:read` | Read scheduled tasks/settings/run history. |
 | `schedule:write` | Confirmed task/settings mutations and run-now. |
 
-No capability can enable Computer Use, mint the reserved Assistant identity, select a hidden unattended mode, read provider/MCP credentials, execute a generic shell/Git command, or widen a workspace's tool authority.
+No capability can enable Computer Use, mint the reserved Assistant identity, select a hidden unattended mode, read provider/MCP credentials, accept a client-authored shell/Git command, or widen a regular Workspace chat's tool authority. This prohibits a generic remote terminal or command endpoint. It does not prohibit the existing Mac-owned agent runtime from invoking its shell tool during an authenticated Bot turn after the Bot policy, chat reduction, device grant, OS/global availability, approvals, and fresh effect lease all allow it.
 
 ## 3. Error envelope
 

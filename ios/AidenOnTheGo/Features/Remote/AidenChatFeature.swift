@@ -586,10 +586,19 @@ final class AidenWorkspaceChatsModel {
 @MainActor
 @Observable
 final class AidenChatViewModel {
-    private let coordinator: AidenRemoteCoordinator
-    private let instanceId: String
-    private let cache: AidenChatCache
-    private let liveActivities: AidenRemoteLiveActivityManager
+    private enum Runtime {
+        case live(
+            coordinator: AidenRemoteCoordinator,
+            instanceId: String,
+            cache: AidenChatCache,
+            liveActivities: AidenRemoteLiveActivityManager
+        )
+#if DEBUG
+        case readOnlyFixture
+#endif
+    }
+
+    private let runtime: Runtime
     private let onChatUpdated: @MainActor (AidenChat) -> Void
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
@@ -615,6 +624,43 @@ final class AidenChatViewModel {
     var selectedThinkingLevel: String?
     var presentedError: String?
 
+    private var isReadOnlyFixture: Bool {
+#if DEBUG
+        if case .readOnlyFixture = runtime { return true }
+#endif
+        return false
+    }
+
+    var isReadOnlyPresentation: Bool { isReadOnlyFixture }
+
+    private var coordinator: AidenRemoteCoordinator {
+        guard case .live(let coordinator, _, _, _) = runtime else {
+            preconditionFailure("Read-only fixture chats have no remote coordinator")
+        }
+        return coordinator
+    }
+
+    private var instanceId: String {
+        guard case .live(_, let instanceId, _, _) = runtime else {
+            preconditionFailure("Read-only fixture chats have no installation identity")
+        }
+        return instanceId
+    }
+
+    private var cache: AidenChatCache {
+        guard case .live(_, _, let cache, _) = runtime else {
+            preconditionFailure("Read-only fixture chats have no persistent cache")
+        }
+        return cache
+    }
+
+    private var liveActivities: AidenRemoteLiveActivityManager {
+        guard case .live(_, _, _, let liveActivities) = runtime else {
+            preconditionFailure("Read-only fixture chats have no Live Activity runtime")
+        }
+        return liveActivities
+    }
+
     init(
         coordinator: AidenRemoteCoordinator,
         chat: AidenChat,
@@ -622,20 +668,36 @@ final class AidenChatViewModel {
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) {
-        self.coordinator = coordinator
+        runtime = .live(
+            coordinator: coordinator,
+            instanceId: coordinator.activeInstanceId ?? "",
+            cache: cache,
+            liveActivities: liveActivities ?? .shared
+        )
         self.chat = chat
-        instanceId = coordinator.activeInstanceId ?? ""
-        self.cache = cache
-        self.liveActivities = liveActivities ?? .shared
         self.onChatUpdated = onChatUpdated
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
     }
 
-    var isConnected: Bool { coordinator.connectionState == .connected }
+#if DEBUG
+    init(readOnlyFixture chat: AidenChat) {
+        runtime = .readOnlyFixture
+        self.chat = chat
+        onChatUpdated = { _ in }
+        selectedProviderId = chat.providerId
+        selectedModelId = chat.modelId
+    }
+#endif
+
+    var isConnected: Bool {
+        guard !isReadOnlyFixture else { return false }
+        return coordinator.connectionState == .connected
+    }
     var isStreaming: Bool { streamState.map { !$0.isTerminal } ?? false }
     var canSend: Bool {
-        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
+        guard !isReadOnlyFixture else { return false }
+        return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
             && !isStarting && !isUploadingAttachment && !isStreaming
     }
@@ -651,6 +713,7 @@ final class AidenChatViewModel {
     var visibleProviders: [AidenProvider] { catalog?.visibleProviders ?? [] }
 
     func load() async {
+        guard !isReadOnlyFixture else { return }
         guard !instanceId.isEmpty, !isLoading else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         isLoading = true
@@ -687,6 +750,7 @@ final class AidenChatViewModel {
     }
 
     func send() async {
+        guard !isReadOnlyFixture else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
@@ -780,6 +844,7 @@ final class AidenChatViewModel {
 
     @discardableResult
     func upload(_ uploads: [AidenAttachmentUpload]) async -> Int {
+        guard !isReadOnlyFixture else { return uploads.count }
         guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else {
             return uploads.count
         }
@@ -871,6 +936,7 @@ final class AidenChatViewModel {
     }
 
     func removeAttachment(_ attachment: AidenAttachmentReference) async {
+        guard !isReadOnlyFixture else { return }
         pendingAttachments.removeAll { $0.id == attachment.id }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         await cache.removeAttachmentImage(
@@ -887,6 +953,7 @@ final class AidenChatViewModel {
     }
 
     func attachmentImageData(for attachment: AidenMessageAttachment) async -> Data? {
+        guard !isReadOnlyFixture else { return nil }
         guard attachment.kind == .image,
               let context = try? coordinator.requestContext(for: instanceId)
         else { return nil }
@@ -925,6 +992,7 @@ final class AidenChatViewModel {
     }
 
     func stop() async {
+        guard !isReadOnlyFixture else { return }
         guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let previousState = streamState
@@ -942,6 +1010,7 @@ final class AidenChatViewModel {
     }
 
     func respondToApproval(_ decision: AidenApprovalDecision) async {
+        guard !isReadOnlyFixture else { return }
         guard let approval = pendingApproval, approval.expiresAt > Date() else {
             pendingApproval = nil
             return
@@ -1519,7 +1588,7 @@ struct AidenChatDetailView: View {
     @State private var speechPlayback = AidenSpeechPlaybackController()
     @State private var composerHeight: CGFloat = 132
     @FocusState private var composerIsFocused: Bool
-    @Bindable private var coordinator: AidenRemoteCoordinator
+    @State private var coordinator: AidenRemoteCoordinator?
     let autoStartVoice: Bool
 
     init(
@@ -1528,7 +1597,7 @@ struct AidenChatDetailView: View {
         autoStartVoice: Bool = false,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) {
-        self.coordinator = coordinator
+        _coordinator = State(initialValue: coordinator)
         _model = State(initialValue: AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
@@ -1537,8 +1606,16 @@ struct AidenChatDetailView: View {
         self.autoStartVoice = autoStartVoice
     }
 
+#if DEBUG
+    init(readOnlyFixture chat: AidenChat) {
+        _coordinator = State(initialValue: nil)
+        _model = State(initialValue: AidenChatViewModel(readOnlyFixture: chat))
+        autoStartVoice = false
+    }
+#endif
+
     private var workspace: AidenWorkspace? {
-        coordinator.workspaces.first { $0.id == model.chat.workspaceId }
+        coordinator?.workspaces.first { $0.id == model.chat.workspaceId }
     }
 
     var body: some View {
@@ -1586,6 +1663,7 @@ struct AidenChatDetailView: View {
                 autoStartVoice: autoStartVoice,
                 composerFocus: $composerIsFocused
             )
+                .disabled(model.isReadOnlyPresentation)
                 .padding(.horizontal)
                 .padding(.bottom, 10)
                 .background {
@@ -1605,7 +1683,7 @@ struct AidenChatDetailView: View {
         .navigationTitle(model.chat.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if let workspace, workspace.hasFolder {
+            if let coordinator, let workspace, workspace.hasFolder {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
                         AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace)
@@ -2770,6 +2848,7 @@ private struct AidenLiveResponseView: View {
                     onDeny: { Task { await model.respondToApproval(.deny) } },
                     onAllow: { Task { await model.respondToApproval(.allow) } }
                 )
+                .disabled(model.isReadOnlyPresentation)
                 .id(approval.id)
             }
 
@@ -3252,6 +3331,7 @@ private struct AidenComposerView: View {
 
                 Button {
                     Task {
+                        guard !model.isReadOnlyPresentation else { return }
                         await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
                     }
                 } label: {
@@ -3265,7 +3345,7 @@ private struct AidenComposerView: View {
                     }
                     .frame(width: 44, height: 44)
                 }
-                .disabled(model.isStreaming || voiceInput.isRequestingPermission)
+                .disabled(model.isReadOnlyPresentation || model.isStreaming || voiceInput.isRequestingPermission)
                 .accessibilityLabel(voiceInput.isListening ? "Stop voice input" : "Start voice input")
 
                 if model.isStreaming {
@@ -3277,6 +3357,7 @@ private struct AidenComposerView: View {
                             .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
+                    .disabled(model.isReadOnlyPresentation)
                     .accessibilityLabel("Stop response")
                 } else {
                     Button {
@@ -3312,12 +3393,12 @@ private struct AidenComposerView: View {
         }
         .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
         .task {
-            guard autoStartVoice, !didAutoStartVoice else { return }
+            guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
             await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
         }
         .onChange(of: selectedPhotos) { _, items in
-            guard !items.isEmpty, !isPreparingAttachments else { return }
+            guard !model.isReadOnlyPresentation, !items.isEmpty, !isPreparingAttachments else { return }
             let selected = Array(items.prefix(attachmentCapacity))
             selectedPhotos = []
             isPreparingAttachments = true
@@ -3358,6 +3439,7 @@ private struct AidenComposerView: View {
             allowedContentTypes: [.image, .plainText, .sourceCode, .json, .xml, .commaSeparatedText],
             allowsMultipleSelection: true
         ) { result in
+            guard !model.isReadOnlyPresentation else { return }
             let capacity = attachmentCapacity
             guard capacity > 0, !isPreparingAttachments else { return }
             isPreparingAttachments = true

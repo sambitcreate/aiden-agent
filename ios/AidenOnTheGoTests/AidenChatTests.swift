@@ -1101,6 +1101,35 @@ final class AidenChatTests: XCTestCase {
         ).attachmentIds)
     }
 
+#if DEBUG
+    @MainActor
+    func testReadOnlyFixtureChatRejectsEveryLiveEntryPointWithoutMutatingItsChat() async {
+        let chat = sampleChat()
+        let model = AidenChatViewModel(readOnlyFixture: chat)
+
+        XCTAssertFalse(model.isConnected)
+        XCTAssertFalse(model.canSend)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertFalse(model.isStreaming)
+        XCTAssertTrue(model.isReadOnlyPresentation)
+
+        model.draft = "This must stay local"
+        await model.load()
+        await model.send()
+        let rejectedUploads = await model.upload([
+            .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
+        ])
+        await model.stop()
+        await model.respondToApproval(.allow)
+
+        XCTAssertEqual(rejectedUploads, 1)
+        XCTAssertEqual(model.chat, chat)
+        XCTAssertEqual(model.draft, "This must stay local")
+        XCTAssertTrue(model.pendingAttachments.isEmpty)
+        XCTAssertNil(model.presentedError)
+    }
+#endif
+
     private func eventJSON(sequence: Int, type: String, payload: String) -> String {
         """
         {"protocolVersion":1,"streamId":"stream-1","sequence":\(sequence),
