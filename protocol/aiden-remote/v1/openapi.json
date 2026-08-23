@@ -4742,7 +4742,13 @@
             "properties": {
               "accessMode": { "const": "full" },
               "catalogRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "confirmedForeground": { "const": true }
+              "confirmedForeground": { "const": true },
+              "providerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "modelId": { "type": "string", "minLength": 1, "maxLength": 512 }
+            },
+            "dependentRequired": {
+              "providerId": ["modelId"],
+              "modelId": ["providerId"]
             },
             "additionalProperties": false
           },
@@ -4842,6 +4848,15 @@
           "avatar": { "$ref": "#/components/schemas/BotAvatarView" },
           "health": { "$ref": "#/components/schemas/BotHealth" },
           "access": { "$ref": "#/components/schemas/BotAccessView" },
+          "modelSelection": {
+            "type": "object",
+            "required": ["providerId", "modelId"],
+            "properties": {
+              "providerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "modelId": { "type": "string", "minLength": 1, "maxLength": 512 }
+            },
+            "additionalProperties": false
+          },
           "createdAt": { "type": "string", "format": "date-time" },
           "updatedAt": { "type": "string", "format": "date-time" },
           "archivedAt": { "type": "string", "format": "date-time" },

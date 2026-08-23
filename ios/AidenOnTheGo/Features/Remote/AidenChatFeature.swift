@@ -826,6 +826,7 @@ final class AidenChatViewModel {
 
     var visibleProviders: [AidenProvider] { catalog?.visibleProviders ?? [] }
     var usesPersistedBotModelAuthority: Bool { chat.isBotChat }
+    var showsComposerModelControl: Bool { !chat.isBotChat }
     var selectedModelDisplayLabel: String { selectedModel?.label ?? selectedModelId ?? "Model unavailable" }
 
     private var turnModelSelection: AidenChatModelSelection {
@@ -2313,7 +2314,7 @@ struct AidenMessageOutcomePresentation: Equatable {
         case "quota":
             detail = "The model provider account has no available quota."
         case "invalid_request":
-            detail = "The model provider could not accept this request. Review the selected model in Bot Access."
+            detail = "The model provider could not accept this request. For a Bot, change its model in Edit Bot; for a Workspace chat, use the composer."
         case "context_window":
             detail = "This conversation is too large for the selected model."
         case "output_limit":
@@ -3539,38 +3540,7 @@ private struct AidenComposerView: View {
                     matching: .images
                 )
 
-                if model.usesPersistedBotModelAuthority {
-                    HStack(spacing: 4) {
-                        if let provider = model.selectedProvider {
-                            AidenProviderIcon(
-                                providerID: provider.id,
-                                providerLabel: provider.label,
-                                modelID: model.selectedModel?.id,
-                                artwork: provider.artwork,
-                                size: 15,
-                                color: palette.secondary
-                            )
-                        }
-                        Text(model.selectedModelDisplayLabel).lineLimit(1)
-                        if let level = model.selectedThinkingLevel,
-                           model.selectedModel?.thinkingLevels?.isEmpty == false {
-                            Text("· \(level.capitalized)")
-                                .lineLimit(1)
-                                .foregroundStyle(palette.secondary.opacity(0.8))
-                        }
-                        Image(systemName: "lock.fill")
-                            .font(.caption2)
-                            .accessibilityHidden(true)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-                    .frame(maxWidth: 180, alignment: .leading)
-                    .frame(minHeight: 44)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Model")
-                    .accessibilityValue("\(selectedModelAccessibilityValue), set by Bot access")
-                    .accessibilityHint("Change this model in Bot Access.")
-                } else if !model.visibleProviders.isEmpty {
+                if model.showsComposerModelControl, !model.visibleProviders.isEmpty {
                     Menu {
                         ForEach(model.visibleProviders) { provider in
                             Section {
@@ -3647,7 +3617,8 @@ private struct AidenComposerView: View {
                     }
                     .accessibilityLabel("Model")
                     .accessibilityValue(selectedModelAccessibilityValue)
-                } else if let selectedModel = model.selectedModel {
+                } else if model.showsComposerModelControl,
+                          let selectedModel = model.selectedModel {
                     HStack(spacing: 4) {
                         Text(selectedModel.label).lineLimit(1)
                         Text("· Hidden")

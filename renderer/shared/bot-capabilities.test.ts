@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   botCustomSelectionIsSubset,
   intersectBotCustomSelections,
+  parseBotAccessUpdate,
   type BotCustomSelection,
   type BotFileScopeOption,
 } from "./bot-capabilities.js";
@@ -33,6 +34,28 @@ test("Full Mac is a semantic ceiling for Bot-home and approved-location chat red
     true,
   );
   assert.equal(botCustomSelectionIsSubset(full, selection(["home"]), scopes), false);
+});
+
+test("Full Bot access accepts only an exact optional provider/model pair", () => {
+  assert.deepEqual(parseBotAccessUpdate({
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+    providerId: "provider:opaque",
+    modelId: "model/selected",
+  }), {
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+    providerId: "provider:opaque",
+    modelId: "model/selected",
+  });
+  assert.throws(() => parseBotAccessUpdate({
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+    providerId: "provider:opaque",
+  }), /Full Access/u);
 });
 
 test("file-scope intersection preserves a chat reduction below Full Mac", () => {

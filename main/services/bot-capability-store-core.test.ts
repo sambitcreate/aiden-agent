@@ -46,6 +46,11 @@ function inventory(): BotCapabilityInventory {
         label: "Model",
         available: true,
         modelFingerprint: digest("model"),
+      }, {
+        sourceId: "private-model-next",
+        label: "Model Next",
+        available: true,
+        modelFingerprint: digest("model-next"),
       }],
     }],
     fileScopes: [
@@ -112,6 +117,14 @@ function selection(overrides: Partial<BotCustomSelection> = {}): BotCustomSelect
 
 function binding(custom: BotCustomSelection) {
   return bindBotCustomSelection({ selection: custom, catalogRevision, snapshot });
+}
+
+function selectionForModel(index: number): BotCustomSelection {
+  return selection({ modelId: snapshot.catalog.providers[0]!.models[index]!.id });
+}
+
+function modelBinding(index: number) {
+  return binding(selectionForModel(index)).provider;
 }
 
 function fixture(state: BotCapabilityState = emptyBotCapabilityState()) {
@@ -408,6 +421,130 @@ test("catalog and optimistic revisions are exact and forged chat widening is rej
   if (reducedView.mode !== "custom") assert.fail("expected reduced Custom chat");
   assert.deepEqual(reducedView.custom.connectionIds, []);
   assert.equal(reducedView.custom.shellEnabled, false);
+});
+
+test("Full model authority bumps revisions and rebases only the canonical reduced chat", () => {
+  const { state, editor } = fixture();
+  const initialSelection = selectionForModel(0);
+  const initial = editor.createBotPolicy({
+    botId: "bot:model-owner",
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      providerId: initialSelection.providerId,
+      modelId: initialSelection.modelId,
+    },
+    modelBinding: modelBinding(0),
+  });
+  const mailId = snapshot.catalog.connections[0]!.id;
+  const writingId = snapshot.catalog.skills[0]!.id;
+  const reduced = selectionForModel(0);
+  reduced.shellEnabled = false;
+  reduced.connectionIds = [mailId];
+  reduced.skillIds = [writingId];
+  reduced.otherCapabilityIds = [];
+  const canonical = editor.createChatPolicy({
+    chatId: "chat:canonical",
+    botId: initial.botId,
+    expectedBotPolicyRevision: initial.revision,
+    catalog: catalog(),
+    custom: reduced,
+  });
+  const legacy = editor.createChatPolicy({
+    chatId: "chat:legacy",
+    botId: initial.botId,
+    expectedBotPolicyRevision: initial.revision,
+    catalog: catalog(),
+    custom: reduced,
+  });
+  const legacyBefore = structuredClone(state.chats.find(({ chatId }) => chatId === legacy.chatId));
+  const nextSelection = selectionForModel(1);
+
+  const updated = editor.updateBotPolicy({
+    botId: initial.botId,
+    expectedRevision: initial.revision,
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      providerId: nextSelection.providerId,
+      modelId: nextSelection.modelId,
+    },
+    modelBinding: modelBinding(1),
+    canonicalChatId: canonical.chatId,
+  });
+
+  assert.equal(updated.authorityChanged, true);
+  assert.notEqual(updated.view.revision, initial.revision);
+  assert.notEqual(updated.view.policyEpoch, initial.policyEpoch);
+  assert.deepEqual(updated.narrowedChats.map(({ chatId }) => chatId), [canonical.chatId]);
+  assert.deepEqual(editor.getBotModelAuthority(initial.botId)?.selection, {
+    providerId: nextSelection.providerId,
+    modelId: nextSelection.modelId,
+  });
+  const canonicalAfter = projectBotChatAccessView(state, canonical.chatId);
+  assert.equal(canonicalAfter.mode, "custom");
+  if (canonicalAfter.mode !== "custom") assert.fail("expected canonical Custom chat");
+  assert.equal(canonicalAfter.custom.providerId, nextSelection.providerId);
+  assert.equal(canonicalAfter.custom.modelId, nextSelection.modelId);
+  assert.equal(canonicalAfter.custom.shellEnabled, false);
+  assert.deepEqual(canonicalAfter.custom.connectionIds, [mailId]);
+  assert.deepEqual(canonicalAfter.custom.skillIds, [writingId]);
+  assert.deepEqual(canonicalAfter.custom.otherCapabilityIds, []);
+  assert.notEqual(canonicalAfter.revision, canonical.revision);
+  assert.equal(
+    state.chats.find(({ chatId }) => chatId === canonical.chatId)?.policyEpoch,
+    2,
+  );
+  assert.deepEqual(
+    state.chats.find(({ chatId }) => chatId === legacy.chatId),
+    legacyBefore,
+  );
+  assert.doesNotThrow(() => editor.assertAuthorityBindingsCurrent({
+    botId: initial.botId,
+    chatId: canonical.chatId,
+    snapshot,
+  }));
+  const changedSnapshot = buildBotCapabilityCatalogSnapshot({
+    inventory: {
+      ...inventory(),
+      providers: inventory().providers.map((provider) => ({
+        ...provider,
+        connectionFingerprint: digest("provider-credentials-changed"),
+      })),
+    },
+    notice: snapshot.catalog.notice,
+    mintOpaqueId: createBotCapabilityOpaqueIdMint(Buffer.alloc(32, 7)),
+  });
+  assert.throws(
+    () => editor.assertAuthorityBindingsCurrent({
+      botId: initial.botId,
+      chatId: canonical.chatId,
+      snapshot: changedSnapshot,
+    }),
+    BotCapabilityBindingDriftError,
+  );
+  assert.doesNotThrow(() => parseBotCapabilityState(structuredClone(state)));
+  assert.throws(
+    () => editor.updateBotPolicy({
+      botId: initial.botId,
+      expectedRevision: initial.revision,
+      catalog: catalog(),
+      access: {
+        accessMode: "full",
+        catalogRevision,
+        confirmedForeground: true,
+        providerId: initialSelection.providerId,
+        modelId: initialSelection.modelId,
+      },
+      modelBinding: modelBinding(0),
+      canonicalChatId: canonical.chatId,
+    }),
+    BotCapabilityRevisionConflictError,
+  );
 });
 
 test("create rollback removes only an uncommitted identity policy and its impossible chats", () => {

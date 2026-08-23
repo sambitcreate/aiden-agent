@@ -40,6 +40,7 @@ const STAGES = {
   delete_chat: ["prepared", "authority_fenced", "chat_deleted", "policy_removed"],
   archive_bot: ["prepared", "authority_archived", "identity_archived"],
   restore_bot: ["prepared", "identity_restored", "authority_restored"],
+  update_model: ["prepared", "policy_committed", "chat_committed"],
 } as const satisfies Partial<Record<BotLifecycleOperation["kind"], readonly BotLifecycleStage[]>>;
 
 type BotStorePort = Pick<
@@ -49,7 +50,13 @@ type BotStorePort = Pick<
 
 type ChatStorePort = Pick<
   ChatStore,
-  "list" | "get" | "create" | "copyVisibleHistory" | "remove" | "listByBot"
+  | "list"
+  | "get"
+  | "create"
+  | "copyVisibleHistory"
+  | "remove"
+  | "listByBot"
+  | "setBotModelSelection"
 >;
 
 type CapabilityStorePort = Pick<
@@ -66,6 +73,7 @@ type CapabilityStorePort = Pick<
   | "archiveBotAuthority"
   | "restoreBotAuthority"
   | "getBotBinding"
+  | "getBotModelAuthority"
   | "assertAuthorityBindingsCurrent"
   | "admit"
   | "createBotPolicy"
@@ -295,19 +303,56 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     requested: BotAccessUpdate | undefined,
   ) => {
     const snapshot = await snapshotForAudience(audienceId);
-    const access: BotAccessUpdate = requested ?? {
+    let access: BotAccessUpdate = requested ?? {
       accessMode: "full",
       catalogRevision: snapshot.catalog.revision,
       confirmedForeground: true,
     };
+    if (
+      access.accessMode === "full" &&
+      access.providerId === undefined &&
+      access.modelId === undefined
+    ) {
+      const provider = snapshot.catalog.providers.find((candidate) =>
+        candidate.available && candidate.models.some((model) => model.available),
+      );
+      const model = provider?.models.find((candidate) => candidate.available);
+      if (!provider || !model) {
+        throw new BotCapabilityUnavailableError(
+          "A new Bot requires an available provider and model.",
+        );
+      }
+      access = {
+        ...access,
+        providerId: provider.id,
+        modelId: model.id,
+      };
+    }
     const binding = access.accessMode === "custom"
       ? await deps.catalog.bindCustom({
           audienceId,
           selection: access.custom,
           catalogRevision: access.catalogRevision,
+          snapshot,
         })
       : undefined;
-    return { snapshot, access, binding };
+    const modelBinding = access.accessMode === "full" && access.providerId && access.modelId
+      ? (await deps.catalog.bindCustom({
+          audienceId,
+          selection: {
+            providerId: access.providerId,
+            modelId: access.modelId,
+            fileScopeIds: [],
+            shellEnabled: false,
+            connectionIds: [],
+            skillIds: [],
+            otherCapabilityIds: [],
+          },
+          catalogRevision: access.catalogRevision,
+          snapshot,
+        })).provider
+      : undefined;
+    return { snapshot, access, binding, modelBinding };
   };
 
   const createPolicy = async (
@@ -316,13 +361,17 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     requested?: BotAccessUpdate,
   ) => {
     return withInventoryLease(async (assertCurrent) => {
-      const { snapshot, access, binding } = await accessForCreate(audienceId, requested);
+      const { snapshot, access, binding, modelBinding } = await accessForCreate(
+        audienceId,
+        requested,
+      );
       assertCurrent();
       return deps.capabilityStore.createBotPolicy({
         botId,
         catalog: snapshot.catalog,
         access,
         ...(binding ? { binding } : {}),
+        ...(modelBinding ? { modelBinding } : {}),
         assertCurrent,
       });
     });
@@ -546,6 +595,47 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     await deps.lifecycleJournal.complete(current.operationId, "authority_restored");
   };
 
+  const finishUpdateModel = async (operation: BotLifecycleOperation): Promise<void> => {
+    const chatId = lifecycleChatId(operation);
+    const authority = await deps.capabilityStore.getBotModelAuthority(operation.botId);
+    if (!authority) {
+      throw new Error("A committed Bot model update has no durable model authority.");
+    }
+    const chat = await deps.chatStore.get(chatId);
+    if (!chat || chat.botId !== operation.botId) {
+      throw new Error("The Bot model-update chat identity could not be recovered.");
+    }
+    const canonical = selectCanonicalBotChat(await deps.chatStore.listByBot(operation.botId));
+    if (canonical?.id !== chatId) {
+      throw new Error("A Bot model update cannot retarget a historical chat.");
+    }
+    const chatPolicy = await deps.capabilityStore.getChatPolicy(chatId);
+    if (chatPolicy.botId !== operation.botId) {
+      throw new Error("The Bot model-update policy has the wrong owner.");
+    }
+    if (
+      chatPolicy.mode === "custom" &&
+      (chatPolicy.custom.providerId !== authority.selection.providerId ||
+        chatPolicy.custom.modelId !== authority.selection.modelId)
+    ) {
+      throw new Error("The Bot chat reduction was not rebased to its saved model.");
+    }
+    let current = operation;
+    current = await advance(current, "policy_committed");
+    await deps.chatStore.setBotModelSelection(
+      chatId,
+      authority.binding.sourceProviderId,
+      authority.binding.sourceModelId,
+      (currentChat) => {
+        if (currentChat.botId !== operation.botId) {
+          throw new Error("The Bot model-update chat changed owner.");
+        }
+      },
+    );
+    current = await advance(current, "chat_committed");
+    await deps.lifecycleJournal.complete(current.operationId, "chat_committed");
+  };
+
   const reconcileOperation = (operation: BotLifecycleOperation): Promise<void> => {
     switch (operation.kind) {
       case "create_bot": return finishCreateBot(operation);
@@ -554,6 +644,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       case "delete_chat": return finishDeleteChat(operation);
       case "archive_bot": return finishArchive(operation);
       case "restore_bot": return finishRestore(operation);
+      case "update_model": return finishUpdateModel(operation);
       default:
         throw new Error(`Unsupported pending Bot lifecycle: ${operation.kind}.`);
     }
@@ -617,6 +708,114 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       catalogRevision: runtimeCatalog.catalog.revision,
       confirmedExplicitFull: true,
     });
+
+    // Provider/model belongs to the Bot. Older Full policies predate that
+    // invariant, so adopt their canonical chat selection (or the first
+    // available configured model when no chat exists) before runtime opens.
+    // Chat metadata is repaired below as a one-way execution mirror.
+    for (const bot of bots) {
+      const chats = botChats.filter(({ botId }) => botId === bot.id);
+      const canonical = selectCanonicalBotChat(chats);
+      let authority = await deps.capabilityStore.getBotModelAuthority(bot.id);
+      if (!authority) {
+        const retained = canonical ? retainedBotProviderForChat(canonical) : undefined;
+        const snapshot = await deps.catalog.snapshotForRuntime({
+          botId: bot.id,
+          ...(retained && retained.length > 0 ? { retainedProviders: retained } : {}),
+        });
+        const sourceProvider = canonical?.providerId;
+        const sourceModel = canonical?.model;
+        const provider = sourceProvider
+          ? snapshot.resources.providers.find(({ sourceId }) => sourceId === sourceProvider)
+          : snapshot.resources.providers.find(({ option, models }) =>
+              option.available && models.some((model) => model.option.available),
+            );
+        const model = sourceModel
+          ? provider?.models.find(({ sourceId }) => sourceId === sourceModel)
+          : provider?.models.find(({ option }) => option.available);
+        if (!provider || !model) {
+          throw new BotCapabilityUnavailableError(
+            "A Bot's saved provider and model could not be recovered.",
+          );
+        }
+        const policy = await deps.capabilityStore.getBotPolicy(bot.id);
+        if (policy.accessMode !== "full") {
+          throw new BotCapabilityUnavailableError(
+            "A Custom Bot is missing its saved provider and model authority.",
+          );
+        }
+        const selection = {
+          providerId: provider.option.id,
+          modelId: model.option.id,
+          fileScopeIds: [],
+          shellEnabled: false,
+          connectionIds: [],
+          skillIds: [],
+          otherCapabilityIds: [],
+        };
+        const binding = await deps.catalog.bindCustom({
+          audienceId: "desktop:local",
+          botId: bot.id,
+          selection,
+          catalogRevision: snapshot.catalog.revision,
+          snapshot,
+        });
+        await deps.capabilityStore.updateBotPolicy({
+          botId: bot.id,
+          expectedRevision: policy.revision,
+          catalog: snapshot.catalog,
+          access: {
+            accessMode: "full",
+            catalogRevision: snapshot.catalog.revision,
+            confirmedForeground: true,
+            providerId: selection.providerId,
+            modelId: selection.modelId,
+          },
+          modelBinding: binding.provider,
+          ...(canonical ? { canonicalChatId: canonical.id } : {}),
+        });
+        authority = await deps.capabilityStore.getBotModelAuthority(bot.id);
+      }
+      if (!authority) {
+        throw new BotCapabilityUnavailableError(
+          "A Bot's saved provider and model authority is unavailable.",
+        );
+      }
+      if (canonical) {
+        const chatPolicy = await deps.capabilityStore.getChatPolicy(canonical.id);
+        if (
+          chatPolicy.mode === "custom" &&
+          (chatPolicy.custom.providerId !== authority.selection.providerId ||
+            chatPolicy.custom.modelId !== authority.selection.modelId)
+        ) {
+          await deps.capabilityStore.updateChatPolicy({
+            chatId: canonical.id,
+            expectedRevision: chatPolicy.revision,
+            catalog: runtimeCatalog.catalog,
+            access: {
+              mode: "custom",
+              catalogRevision: runtimeCatalog.catalog.revision,
+              expectedBotPolicyRevision: (await deps.capabilityStore.getBotPolicy(bot.id)).revision,
+              custom: {
+                ...chatPolicy.custom,
+                providerId: authority.selection.providerId,
+                modelId: authority.selection.modelId,
+              },
+            },
+          });
+        }
+        await deps.chatStore.setBotModelSelection(
+          canonical.id,
+          authority.binding.sourceProviderId,
+          authority.binding.sourceModelId,
+          (chat) => {
+            if (chat.botId !== bot.id) {
+              throw new Error("The Bot model mirror changed owner during recovery.");
+            }
+          },
+        );
+      }
+    }
     for (const bot of bots) {
       await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
         botId: bot.id,
@@ -738,6 +937,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     const binding = botPolicy.accessMode === "custom"
       ? await deps.capabilityStore.getBotBinding(input.botId)
       : undefined;
+    const modelAuthority = await deps.capabilityStore.getBotModelAuthority(input.botId);
     if (botPolicy.accessMode === "custom" && !binding) {
       throw new BotCapabilityUnavailableError(
         "This Custom Bot's provider and model selection is unavailable.",
@@ -760,15 +960,20 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         snapshot,
       });
     }
-    const providerId = binding?.provider.sourceProviderId ?? input.providerId;
-    const model = binding?.provider.sourceModelId ?? input.model;
+    if (!modelAuthority) {
+      throw new BotCapabilityUnavailableError(
+        "This Bot's saved provider and model selection is unavailable.",
+      );
+    }
+    const providerId = modelAuthority.binding.sourceProviderId;
+    const model = modelAuthority.binding.sourceModelId;
     if (
-      binding &&
+      modelAuthority &&
       ((input.providerId !== undefined && input.providerId !== providerId) ||
         (input.model !== undefined && input.model !== model))
     ) {
       throw new BotCapabilityUnavailableError(
-        "This Custom Bot must use its selected provider and model.",
+        "This Bot must use the provider and model saved in Bot settings.",
       );
     }
     const chatId = input.chatId ?? mintChatId();
@@ -921,7 +1126,12 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       return runBotMutation(input.botId, async () => {
         await activeBot(input.botId);
         return withInventoryLease(async (assertCurrent) => {
-          const snapshot = await snapshotForAudience(input.audienceId, input.botId);
+          const currentChat = await canonicalChatForBot(input.botId);
+          const snapshot = await snapshotForAudience(
+            input.audienceId,
+            input.botId,
+            currentChat ? retainedBotProviderForChat(currentChat) : undefined,
+          );
           const access = input.access;
           const binding = access.accessMode === "custom"
             ? await deps.catalog.bindCustom({
@@ -932,15 +1142,78 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
                 snapshot,
               })
             : undefined;
+          const modelBinding = access.accessMode === "full" && access.providerId && access.modelId
+            ? (await deps.catalog.bindCustom({
+                audienceId: input.audienceId,
+                botId: input.botId,
+                selection: {
+                  providerId: access.providerId,
+                  modelId: access.modelId,
+                  fileScopeIds: [],
+                  shellEnabled: false,
+                  connectionIds: [],
+                  skillIds: [],
+                  otherCapabilityIds: [],
+                },
+                catalogRevision: access.catalogRevision,
+                snapshot,
+              })).provider
+            : undefined;
+          const currentModel = await deps.capabilityStore.getBotModelAuthority(input.botId);
+          const selectedProvider = binding?.provider ?? modelBinding ?? currentModel?.binding;
+          const needsMirror = Boolean(
+            currentChat && selectedProvider &&
+            (currentChat.providerId !== selectedProvider.sourceProviderId ||
+              currentChat.model !== selectedProvider.sourceModelId),
+          );
+          let operation = needsMirror && currentChat
+            ? await beginPending({
+                operationId: mintOperationId(),
+                kind: "update_model",
+                botId: input.botId,
+                subject: {
+                  chatId: currentChat.id,
+                  expectedRevision: input.expectedRevision,
+                },
+              })
+            : undefined;
           assertCurrent();
-          return deps.capabilityStore.updateBotPolicy({
-            botId: input.botId,
-            expectedRevision: input.expectedRevision,
-            catalog: snapshot.catalog,
-            access,
-            ...(binding ? { binding } : {}),
-            assertCurrent,
-          });
+          let result;
+          try {
+            result = await deps.capabilityStore.updateBotPolicy({
+              botId: input.botId,
+              expectedRevision: input.expectedRevision,
+              catalog: snapshot.catalog,
+              access,
+              ...(binding ? { binding } : {}),
+              ...(modelBinding ? { modelBinding } : {}),
+              ...(currentChat ? { canonicalChatId: currentChat.id } : {}),
+              assertCurrent,
+            });
+          } catch (error) {
+            if (operation) {
+              await deps.lifecycleJournal.rollback(operation.operationId, operation.stage);
+            }
+            throw error;
+          }
+          if (operation) {
+            try {
+              await finishUpdateModel(operation);
+            } catch {
+              await reconcileVisibleCommit(operation, async () => {
+                const authority = await deps.capabilityStore.getBotModelAuthority(input.botId);
+                const chat = await deps.chatStore.get(currentChat!.id);
+                if (
+                  !authority || !chat || chat.botId !== input.botId ||
+                  chat.providerId !== authority.binding.sourceProviderId ||
+                  chat.model !== authority.binding.sourceModelId
+                ) {
+                  throw new Error("The Bot model mirror could not be verified after recovery.");
+                }
+              });
+            }
+          }
+          return result;
         });
       });
     },
@@ -1119,6 +1392,24 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         ...(binding ? { retainedBindings: [binding] } : {}),
       });
       return snapshot.catalog;
+    },
+
+    async modelSelection(audienceId: string, botId: string) {
+      await ensureOperational();
+      const bot = await deps.botStore.get(botId);
+      if (!bot) throw new Error("This Bot is no longer available.");
+      const authority = await deps.capabilityStore.getBotModelAuthority(botId);
+      if (!authority) return undefined;
+      const chat = await canonicalChatForBot(botId);
+      if (
+        chat &&
+        (chat.providerId !== authority.binding.sourceProviderId ||
+          chat.model !== authority.binding.sourceModelId)
+      ) {
+        return undefined;
+      }
+      void audienceId;
+      return { ...authority.selection };
     },
 
     async getChatAccess(chatId: string) {

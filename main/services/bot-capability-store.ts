@@ -37,6 +37,7 @@ import {
   type BotCapabilityState,
   type StoredBotCapabilityPolicy,
   type StoredBotChatCapabilityPolicy,
+  type StoredBotModelAuthority,
 } from "./bot-capability-store-core.js";
 import {
   parseBoundBotCustomSelection,
@@ -83,6 +84,7 @@ export interface BotCapabilityAdmission {
   policy: StoredBotCapabilityPolicy;
   chat?: StoredBotChatCapabilityPolicy;
   effectiveCustom?: import("../../renderer/shared/bot-capabilities.js").BotCustomSelection;
+  modelAuthority?: StoredBotModelAuthority;
   lease: BotCapabilityAuthorityLease;
 }
 
@@ -311,11 +313,19 @@ export class BotCapabilityStore {
     );
   }
 
+  async getBotModelAuthority(botId: string): Promise<StoredBotModelAuthority | undefined> {
+    this.requireInitialized();
+    return this.serialized(async () =>
+      this.editor(await this.persistence.load()).getBotModelAuthority(botId),
+    );
+  }
+
   async createBotPolicy(input: {
     botId: string;
     catalog: BotCapabilityCatalog;
     access: unknown;
     binding?: unknown;
+    modelBinding?: unknown;
     assertCurrent?: () => void;
   }): Promise<BotAccessView> {
     this.requireInitialized();
@@ -337,6 +347,8 @@ export class BotCapabilityStore {
     catalog: BotCapabilityCatalog;
     access: unknown;
     binding?: unknown;
+    modelBinding?: unknown;
+    canonicalChatId?: string;
     assertCurrent?: () => void;
   }): Promise<BotAccessView> {
     this.requireInitialized();
@@ -372,12 +384,14 @@ export class BotCapabilityStore {
         );
       }
       const narrowing = botPolicyTransitionNarrows(policy, access);
-      if (narrowing) this.leases.invalidateBot(policy.botId);
+      const mayChangeFullModel =
+        access.accessMode === "full" && access.providerId !== undefined;
+      if (narrowing || mayChangeFullModel) this.leases.invalidateBot(policy.botId);
       const result = await this.persistence.update((draft) => {
         input.assertCurrent?.();
         return this.editor(draft).updateBotPolicy(input);
       }, isCurrent);
-      if (result.narrowed) {
+      if (result.authorityChanged) {
         this.leases.publishBotEpoch(policy.botId, result.policyEpoch);
         for (const chat of result.narrowedChats) {
           this.leases.publishChatEpoch(policy.botId, chat.chatId, chat.policyEpoch);
@@ -538,10 +552,11 @@ export class BotCapabilityStore {
       const state = await this.persistence.load();
       const editor = this.editor(state);
       const authority = editor.assertBotMayAct(input);
-      if (authority.effectiveCustom) {
+      const modelAuthority = editor.getBotModelAuthority(input.botId);
+      if (authority.effectiveCustom || modelAuthority) {
         if (!input.snapshot) {
           throw new BotCapabilityUnavailableError(
-            "Current Bot capability bindings are required for Custom access.",
+            "Current Bot capability bindings are required for Bot access.",
           );
         }
         editor.assertAuthorityBindingsCurrent({
@@ -561,7 +576,7 @@ export class BotCapabilityStore {
             }
           : {}),
       });
-      return { ...authority, lease };
+      return { ...authority, ...(modelAuthority ? { modelAuthority } : {}), lease };
     });
   }
 

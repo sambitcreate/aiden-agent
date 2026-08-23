@@ -512,6 +512,8 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.equal(record(botDetailProperties.instructions, "instructions").maxLength, 32_000);
   assert.equal(record(botDetailProperties.openingGreeting, "openingGreeting").maxLength, 2_000);
   assert.equal(record(botDetailProperties.access, "Bot access").$ref, "#/components/schemas/BotAccessView");
+  const botModelSelection = record(botDetailProperties.modelSelection, "Bot model selection");
+  assert.deepEqual(botModelSelection.required, ["providerId", "modelId"]);
   const createRequest = record(schemas.BotCreateRequest, "BotCreateRequest");
   assert.equal(createRequest["x-aiden-provider-model-must-be-currently-available"], true);
   assert.deepEqual(createRequest.required, ["name", "purpose", "instructions", "avatar", "access"]);
@@ -581,6 +583,10 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "catalogRevision",
     "confirmedForeground",
   ]);
+  assert.deepEqual(record(botUpdateVariants[0], "full Bot update").dependentRequired, {
+    providerId: ["modelId"],
+    modelId: ["providerId"],
+  });
   assert.deepEqual(record(botUpdateVariants[1], "custom Bot update").required, [
     "accessMode",
     "catalogRevision",

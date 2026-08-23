@@ -643,6 +643,29 @@ final class AidenBotContractTests: XCTestCase {
             ),
             .full(catalogRevision: "catalog_revision")
         )
+        XCTAssertEqual(
+            try AidenRemoteJSONDecoder.decode(
+                AidenBotAccessUpdate.self,
+                from: Data(
+                    #"{"accessMode":"full","catalogRevision":"catalog_revision","confirmedForeground":true,"providerId":"provider_fixture","modelId":"model_fixture"}"#.utf8
+                )
+            ),
+            .full(
+                catalogRevision: "catalog_revision",
+                selection: AidenBotModelSelection(
+                    providerId: "provider_fixture",
+                    modelId: "model_fixture"
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(
+                AidenBotAccessUpdate.self,
+                from: Data(
+                    #"{"accessMode":"full","catalogRevision":"catalog_revision","confirmedForeground":true,"providerId":"provider_fixture"}"#.utf8
+                )
+            )
+        )
         XCTAssertThrowsError(
             try AidenRemoteJSONDecoder.decode(
                 AidenBotAccessUpdate.self,
@@ -1734,6 +1757,50 @@ final class AidenBotContractTests: XCTestCase {
         )
 
         XCTAssertNil(try draft.identityPatch(comparedTo: fixture.botDetail))
+    }
+
+    func testFullAccessBotModelIsOwnedByNewAndEditBotSettings() throws {
+        var object = try sharedFixtureObject()
+        var catalog = try XCTUnwrap(object["botCapabilityCatalog"] as? [String: Any])
+        var providers = try XCTUnwrap(catalog["providers"] as? [[String: Any]])
+        var provider = try XCTUnwrap(providers.first)
+        var models = try XCTUnwrap(provider["models"] as? [[String: Any]])
+        models.append(["id": "model_fixture_2", "label": "Fixture Model 2", "available": true])
+        provider["models"] = models
+        providers[0] = provider
+        catalog["providers"] = providers
+        let acceptedNotice: [String: Any] = [
+            "version": "bot-full-access-v1",
+            "requiresAcknowledgement": false,
+            "acceptedAt": "2026-08-23T19:55:00.000Z",
+            "acceptedDecision": "continue_full",
+        ]
+        catalog["notice"] = acceptedNotice
+        object["botCapabilityCatalog"] = catalog
+        object["botNotice"] = acceptedNotice
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: data(for: object)
+        )
+        var draft = try XCTUnwrap(
+            AidenBotEditorDraft(detail: fixture.botDetail, catalog: fixture.botCapabilityCatalog)
+        )
+        XCTAssertEqual(draft.customAccess.modelID, "model_fixture")
+        XCTAssertFalse(try draft.changesAccess(
+            comparedTo: fixture.botDetail,
+            catalog: fixture.botCapabilityCatalog
+        ))
+
+        draft.customAccess.modelID = "model_fixture_2"
+        XCTAssertTrue(try draft.changesAccess(
+            comparedTo: fixture.botDetail,
+            catalog: fixture.botCapabilityCatalog
+        ))
+        guard case let .full(_, selection) = try draft.accessUpdate(catalog: fixture.botCapabilityCatalog) else {
+            return XCTFail("Full Access must carry the model selected in Edit Bot")
+        }
+        XCTAssertEqual(selection?.providerId, "provider_fixture")
+        XCTAssertEqual(selection?.modelId, "model_fixture_2")
     }
 
     func testBotEditorDirtyStateDistinguishesCleanCreateAndEditBaselines() throws {

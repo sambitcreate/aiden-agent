@@ -418,6 +418,7 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     let avatar: AidenBotAvatarView
     let health: AidenBotHealth
     let access: AidenBotAccessView
+    let modelSelection: AidenBotModelSelection?
     let createdAt: Date
     let updatedAt: Date
     let revision: String
@@ -451,6 +452,11 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
         avatar = try values.decode(AidenBotAvatarView.self, forKey: .avatar)
         health = try values.decode(AidenBotHealth.self, forKey: .health)
         access = try values.decode(AidenBotAccessView.self, forKey: .access)
+        modelSelection = try AidenBotWire.optional(
+            AidenBotModelSelection.self,
+            from: values,
+            forKey: .modelSelection
+        )
         let createdTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
         createdAt = createdTimestamp.date
         let updatedTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
@@ -471,6 +477,27 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
         ) else {
             throw AidenBotContractError.invalidCombination("bot timestamps")
         }
+    }
+}
+
+struct AidenBotModelSelection: Codable, Equatable, Sendable {
+    let providerId: String
+    let modelId: String
+
+    init(providerId: String, modelId: String) {
+        self.providerId = providerId
+        self.modelId = modelId
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        providerId = try AidenBotWire.requiredString(values, forKey: .providerId, maxLength: 256)
+        modelId = try AidenBotWire.requiredString(values, forKey: .modelId, maxLength: 512)
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case providerId, modelId
     }
 }
 
@@ -1156,12 +1183,12 @@ struct AidenBotAccessView: Codable, Equatable, Sendable {
 }
 
 enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
-    case full(catalogRevision: String)
+    case full(catalogRevision: String, selection: AidenBotModelSelection? = nil)
     case custom(catalogRevision: String, selection: AidenBotCustomSelection)
 
     var catalogRevision: String {
         switch self {
-        case let .full(catalogRevision), let .custom(catalogRevision, _):
+        case let .full(catalogRevision, _), let .custom(catalogRevision, _):
             return catalogRevision
         }
     }
@@ -1190,9 +1217,21 @@ enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
                   !values.contains(.custom) else {
                 throw AidenBotContractError.invalidCombination("full access update")
             }
-            self = .full(catalogRevision: catalogRevision)
+            let providerId = try AidenBotWire.optionalString(values, forKey: .providerId, maxLength: 256)
+            let modelId = try AidenBotWire.optionalString(values, forKey: .modelId, maxLength: 512)
+            guard (providerId == nil) == (modelId == nil) else {
+                throw AidenBotContractError.invalidCombination("full access provider/model")
+            }
+            self = .full(
+                catalogRevision: catalogRevision,
+                selection: providerId.flatMap { provider in
+                    modelId.map { AidenBotModelSelection(providerId: provider, modelId: $0) }
+                }
+            )
         case .custom:
-            guard !values.contains(.confirmedForeground) else {
+            guard !values.contains(.confirmedForeground),
+                  !values.contains(.providerId),
+                  !values.contains(.modelId) else {
                 throw AidenBotContractError.invalidCombination("custom access update")
             }
             self = .custom(
@@ -1207,10 +1246,12 @@ enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .full(catalogRevision):
+        case let .full(catalogRevision, selection):
             try values.encode(AidenBotAccessMode.full, forKey: .accessMode)
             try values.encode(catalogRevision, forKey: .catalogRevision)
             try values.encode(true, forKey: .confirmedForeground)
+            try values.encodeIfPresent(selection?.providerId, forKey: .providerId)
+            try values.encodeIfPresent(selection?.modelId, forKey: .modelId)
         case let .custom(catalogRevision, selection):
             try values.encode(AidenBotAccessMode.custom, forKey: .accessMode)
             try values.encode(catalogRevision, forKey: .catalogRevision)
@@ -1219,7 +1260,7 @@ enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case accessMode, catalogRevision, confirmedForeground, custom
+        case accessMode, catalogRevision, confirmedForeground, custom, providerId, modelId
     }
 }
 

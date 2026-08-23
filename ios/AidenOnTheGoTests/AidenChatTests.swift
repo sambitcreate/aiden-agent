@@ -938,7 +938,7 @@ final class AidenChatTests: XCTestCase {
                 attempts: 1,
                 retryExhausted: false
             )).detail,
-            "The model provider could not accept this request. Review the selected model in Bot Access."
+            "The model provider could not accept this request. For a Bot, change its model in Edit Bot; for a Workspace chat, use the composer."
         )
         XCTAssertEqual(
             AidenMessageOutcomePresentation.make(.init(
@@ -1424,8 +1424,15 @@ final class AidenChatTests: XCTestCase {
         model.selectModel("gemini-flash")
 
         XCTAssertTrue(model.usesPersistedBotModelAuthority)
+        XCTAssertFalse(model.showsComposerModelControl)
         XCTAssertEqual(model.selectedProviderId, "openai")
         XCTAssertEqual(model.selectedModelId, "gpt-5.6")
+
+        var workspaceChat = sampleChat()
+        workspaceChat.botId = nil
+        let workspaceModel = AidenChatViewModel(readOnlyFixture: workspaceChat)
+        XCTAssertFalse(workspaceModel.usesPersistedBotModelAuthority)
+        XCTAssertTrue(workspaceModel.showsComposerModelControl)
     }
 
     @MainActor

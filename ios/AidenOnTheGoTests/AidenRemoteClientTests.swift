@@ -1095,6 +1095,9 @@ final class AidenRemoteClientTests: XCTestCase {
                 let body = try Self.jsonBody(request)
                 XCTAssertEqual(body["catalogRevision"] as? String, "bot_catalog_revision_3")
                 XCTAssertEqual(body["expectedBotPolicyRevision"] as? String, "bot_policy_revision_4")
+                let custom = try XCTUnwrap(body["custom"] as? [String: Any])
+                XCTAssertEqual(custom["providerId"] as? String, "provider_fixture")
+                XCTAssertEqual(custom["modelId"] as? String, "model_fixture")
                 authoritativeAccess = try customAccessData(body: body, revision: patchCount + 2)
                 if ambiguousPatch {
                     ambiguousPatch = false

@@ -240,6 +240,19 @@ function fixture(
       if (!policy) throw new Error("missing");
       return structuredClone(policy);
     },
+    async modelSelection(_audienceId: string, botId: string) {
+      const matching = [...chats.values()]
+        .filter((chat) => chat.botId === botId)
+        .sort((left, right) =>
+          right.updatedAt - left.updatedAt ||
+          right.createdAt - left.createdAt ||
+          left.id.localeCompare(right.id),
+        );
+      const selected = matching[0];
+      return selected?.providerId === "source-provider" && selected.model === "source-model"
+        ? { providerId: PROVIDER_ID, modelId: MODEL_ID }
+        : undefined;
+    },
     async updateBotAccess(input: {
       botId: string;
       expectedRevision: string;
@@ -582,6 +595,10 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
   assert.equal(reopenedChat.id, chat.id);
   assert.equal(app.chats.size, 1);
   assert.equal(app.resolvedSelections.length, 1);
+  assert.deepEqual(
+    (await app.service.get(created.id, "device_1")).modelSelection,
+    { providerId: PROVIDER_ID, modelId: MODEL_ID },
+  );
 
   const subset = await app.service.getChatAccess(chat.id);
   const narrowed = await app.service.updateChatAccess(
@@ -721,9 +738,7 @@ test("an invalidated provider inventory lease publishes neither Full nor Custom 
         "device_1",
         botId,
         `inventory-stale-${accessMode}-key`,
-        accessMode === "full"
-          ? { providerId: PROVIDER_ID, modelId: MODEL_ID }
-          : {},
+        { providerId: PROVIDER_ID, modelId: MODEL_ID },
       ),
       (error: unknown) =>
         error instanceof AidenRemoteServiceError && error.code === "operation_stale",
@@ -733,6 +748,24 @@ test("an invalidated provider inventory lease publishes neither Full nor Custom 
     assert.equal(released, 1);
     assert.equal(app.notifications.some((entry) => entry.startsWith("chat:")), false);
   }
+});
+
+test("an omitted first-chat pair inherits Bot authority without resolving a new default", async () => {
+  const app = fixture([bot("bot_saved_model")], {
+    resolveProviderModel: async () => {
+      throw new Error("An omitted pair must not resolve the current global default.");
+    },
+  });
+
+  const chat = await app.service.createChat(
+    "device_1",
+    "bot_saved_model",
+    "inherit-saved-model-key",
+    {},
+  );
+
+  assert.equal(chat.botId, "bot_saved_model");
+  assert.equal(app.resolvedSelections.length, 0);
 });
 
 test("Mac archive and Remote favorites updates are linearizable through Bot gates then the shared favorites lane", async () => {

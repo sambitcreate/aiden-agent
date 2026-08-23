@@ -15,6 +15,7 @@ import type { BotCapabilityAdmission } from "./bot-capability-store.js";
 import type {
   StoredBotCapabilityPolicy,
   StoredBotChatCapabilityPolicy,
+  StoredBotModelAuthority,
 } from "./bot-capability-store-core.js";
 import { BotCapabilityNoticeRequiredError } from "./bot-capability-store-core.js";
 import {
@@ -300,6 +301,7 @@ function fixture(input: {
   chatCustom?: BotCustomSelection;
   currentSnapshot?: BotCapabilityCatalogSnapshot;
   chatWorkspaceId?: string;
+  omitModelAuthority?: boolean;
 } = {}) {
   const inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
   let currentSnapshot = input.currentSnapshot ?? snapshot();
@@ -317,6 +319,18 @@ function fixture(input: {
         snapshot: currentSnapshot,
       })
     : undefined;
+  const modelBinding = botBinding?.provider ?? bindBotCustomSelection({
+    selection: selection(currentSnapshot),
+    catalogRevision: currentSnapshot.catalog.revision,
+    snapshot: currentSnapshot,
+  }).provider;
+  const modelAuthority: StoredBotModelAuthority = {
+    selection: {
+      providerId: modelBinding.providerOption.id,
+      modelId: modelBinding.modelOption.id,
+    },
+    binding: modelBinding,
+  };
   let currentBot = bot();
   let currentChat = {
     ...chat(),
@@ -351,6 +365,7 @@ function fixture(input: {
       : currentPolicy.accessMode === "custom"
         ? { effectiveCustom: currentPolicy.custom }
         : {}),
+    ...(!input.omitModelAuthority ? { modelAuthority } : {}),
     lease,
   });
   const catalogInputs: Array<{
@@ -500,6 +515,26 @@ test("a Custom chat reduction intersects the Bot ceiling and retains exact tool 
   assert.equal(authority.files.botHome, true);
 });
 
+test("a Full Bot with a Custom chat reduction keeps Custom access while using Bot model authority", async () => {
+  const current = snapshot();
+  const app = fixture({
+    chatCustom: selection(current, { connection: true }),
+    currentSnapshot: current,
+  });
+  const { authority } = await app.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
+  assert.equal(authority.accessMode, "custom");
+  assert.equal(authority.provider.sourceProviderId, "provider-a");
+  assert.equal(authority.provider.sourceModelId, "model-a");
+  assert.equal(authority.shell.enabled, false);
+  assert.deepEqual(authority.skills, []);
+  assert.deepEqual(authority.otherCapabilities, []);
+  assert.deepEqual(authority.connections.map(({ sourceId }) => sourceId), ["mcp-a"]);
+});
+
 test("Custom shell remains independently enabled when Files is narrower than Full Mac", async () => {
   const app = fixture({ customBot: true });
   const { authority } = await app.resolver.admit({
@@ -531,6 +566,16 @@ test("provider/model binding never falls back", async () => {
     app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
     "provider_mismatch",
   );
+});
+
+test("missing admitted Bot model authority fails closed for Full and Custom access", async () => {
+  for (const customBot of [false, true]) {
+    const app = fixture({ customBot, omitModelAuthority: true });
+    await expectFailure(
+      app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
+      "access_unavailable",
+    );
+  }
 });
 
 test("the sole store admission gate prevents Full authority before audience notice acceptance", async () => {

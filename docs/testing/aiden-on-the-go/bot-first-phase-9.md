@@ -12,21 +12,32 @@ Date: August 23, 2026
 - Layout-shaped cold-load skeletons that become static when Reduce Motion is enabled.
 - Reused authenticated Remote client and `URLSession` for connection pooling.
 - Honest Custom Access conflict/error handling, selected tombstones, and unavailable-skill filtering.
-- Bot-chat provider/model authority, actionable stale-model failure copy, inline durable failure presentation, and legacy stream-journal repair.
+- New/Edit Bot are the only Bot provider/model controls. Full and Custom settings resolve audience-safe catalog IDs into revisioned, durable Bot-owned model authority. The one persistent chat is a recoverable execution mirror, so model changes preserve its history and any reduced Files, shell, connection, skill, or other grants; Bot composers and access-reduction sheets have no model selector, while Workspace composers remain unchanged.
+- Safe New Bot two-step retry: a retained Bot creation result and independent chat idempotency key prevent duplicate Bots if opening the one persistent chat fails after identity creation.
+- Actionable stale-model failure copy, inline durable failure presentation, and legacy stream-journal repair.
 
 ## Automated evidence
 
 - Physical iPhone 13 Pro focused XCTest selection: 182 tests executed, 179 passed, 3 configuration-dependent skips, 0 failures.
 - Backend one-chat focused suite: 123/123 passed.
-- Registered Bot backend suite: 396/396 passed.
-- Full Aiden Remote suite: 305 passed, 1 environment-dependent skip, 0 failures.
+- Registered Bot backend suite: 402/402 passed.
+- Full Aiden Remote suite: 308 passed, 1 environment-dependent skip, 0 failures.
+- Application-service boundary suite: 72/72 passed.
 - TypeScript type-check: passed.
+- Focused Remote Bot/protocol/router suite after model-authority changes: 51/51 passed.
+- Generic physical-iOS build-for-testing, including the updated Swift contract and XCTest bundle: passed.
+- Final model-authority selection on the physical iPhone 13 Pro: 5/5 passed, covering New/Edit ownership, composer mutation rejection, persistent-chat model pinning and scope, and Remote mutation decoding.
 - Scoped ESLint: passed.
 - `git diff --check`: passed.
+- Independent post-fix source-and-test re-review: no remaining P0/P1 findings; focused integrated review gates passed 121/121.
 
 Physical XCTest result bundle:
 
 `/Users/sambitbiswas/Library/Developer/Xcode/DerivedData/AidenOnTheGo-dsudslimvchaxlcfkvlzjlfcaqoi/Logs/Test/Test-AidenOnTheGo-2026.08.23_15-01-36--0400.xcresult`
+
+Final model-authority XCTest result bundle:
+
+`/tmp/aiden-model-authority-final/Logs/Test/Test-AidenOnTheGo-2026.08.23_16-16-45--0400.xcresult`
 
 ## Physical-device evidence
 

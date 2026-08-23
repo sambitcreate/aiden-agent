@@ -129,23 +129,6 @@ struct AidenBotChatAccessDraft: Equatable {
             && (botAccess.custom.map { Set($0.fileScopeIds).contains(id) } ?? true)
     }
 
-    mutating func selectProvider(
-        _ providerID: String,
-        catalog: AidenBotCapabilityCatalog,
-        botAccess: AidenBotAccessView
-    ) {
-        guard let provider = catalog.providers.first(where: {
-            $0.id == providerID && $0.available
-        }), let model = provider.models.first(where: \.available) else { return }
-        if let ceiling = botAccess.custom,
-           provider.id != ceiling.providerId || !provider.models.contains(where: {
-               $0.id == ceiling.modelId && $0.available
-           }) {
-            return
-        }
-        self.providerID = provider.id
-        modelID = botAccess.custom?.modelId ?? model.id
-    }
 }
 
 enum AidenBotChatAccessPresentation {
@@ -548,6 +531,8 @@ struct AidenBotChatAccessSheetView: View {
             Section {
                 Text("Bot defaults set the ceiling. This chat can inherit them or turn capabilities off, but it cannot add access.")
                     .foregroundStyle(palette.secondary)
+                Text("The AI Provider and Model come from Bot settings. Use Edit Bot to change them.")
+                    .foregroundStyle(palette.secondary)
             }
         } else {
             unavailableContent
@@ -588,8 +573,6 @@ struct AidenBotChatAccessSheetView: View {
                 .disabled(!canChangeDraft)
                 filesAndCommands(catalog: catalog, bot: bot)
                     .disabled(!canChangeDraft)
-                aiSection(catalog: catalog, bot: bot)
-                    .disabled(!canChangeDraft)
                 optionSection(
                     title: "Other abilities",
                     description: "Additional capabilities enabled for this bot on your Mac.",
@@ -609,6 +592,14 @@ struct AidenBotChatAccessSheetView: View {
                 ) {
                     Label(message, systemImage: "lock.fill")
                         .foregroundStyle(palette.secondary)
+                }
+                if let draft = model.draft,
+                   !draft.isSaveable(botAccess: bot.access, catalog: catalog) {
+                    Label(
+                        "Some saved access is unavailable. Change Provider or Model in Edit Bot, or turn off unavailable access here before saving.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(palette.warning)
                 }
                 if let error = model.errorMessage {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -655,30 +646,6 @@ struct AidenBotChatAccessSheetView: View {
             coordinator: coordinator,
             hostAllowsMutations: hostAllowsMutations
         )
-    }
-
-    private func aiSection(catalog: AidenBotCapabilityCatalog, bot: AidenBotDetail) -> some View {
-        Section("AI") {
-            Picker("Provider", selection: providerBinding(catalog: catalog, bot: bot)) {
-                ForEach(catalog.providers) { provider in
-                    Text(optionTitle(provider.label, available: provider.available))
-                        .tag(provider.id)
-                        .disabled(!provider.available || (bot.access.custom?.providerId != nil
-                            && bot.access.custom?.providerId != provider.id))
-                }
-            }
-            Picker("Model", selection: modelBinding(catalog: catalog, bot: bot)) {
-                ForEach(catalog.providers.first(where: { $0.id == model.draft?.providerID })?.models ?? []) { option in
-                    Text(optionTitle(option.label, available: option.available))
-                        .tag(option.id)
-                        .disabled(!option.available || (bot.access.custom?.modelId != nil
-                            && bot.access.custom?.modelId != option.id))
-                }
-            }
-            Text("Provider credentials stay on your Mac.")
-                .font(.footnote)
-                .foregroundStyle(palette.secondary)
-        }
     }
 
     private func filesAndCommands(catalog: AidenBotCapabilityCatalog, bot: AidenBotDetail) -> some View {
@@ -793,36 +760,6 @@ struct AidenBotChatAccessSheetView: View {
         )
     }
 
-    private func providerBinding(
-        catalog: AidenBotCapabilityCatalog,
-        bot: AidenBotDetail
-    ) -> Binding<String> {
-        Binding(
-            get: { model.draft?.providerID ?? "" },
-            set: { id in
-                guard var draft = model.draft else { return }
-                draft.selectProvider(id, catalog: catalog, botAccess: bot.access)
-                model.draft = draft
-            }
-        )
-    }
-
-    private func modelBinding(
-        catalog: AidenBotCapabilityCatalog,
-        bot: AidenBotDetail
-    ) -> Binding<String> {
-        Binding(
-            get: { model.draft?.modelID ?? "" },
-            set: { id in
-                guard var draft = model.draft,
-                      let provider = catalog.providers.first(where: { $0.id == draft.providerID }),
-                      provider.models.contains(where: { $0.id == id && $0.available }),
-                      bot.access.custom?.modelId == nil || bot.access.custom?.modelId == id else { return }
-                draft.modelID = id
-                model.draft = draft
-            }
-        )
-    }
 }
 
 @MainActor

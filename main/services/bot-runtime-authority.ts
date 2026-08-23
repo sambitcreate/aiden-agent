@@ -21,7 +21,6 @@ import type {
   BotCatalogConnectionResource,
   BotCatalogFileScopeResource,
   BotCatalogOrdinaryCapabilityResource,
-  BotCatalogProviderResource,
   BotCatalogSkillResource,
   BotOrdinaryCapabilityKind,
 } from "./bot-capability-catalog-core.js";
@@ -216,28 +215,6 @@ function providerAuthority(provider: BoundBotProviderModel): BotRuntimeProviderA
   };
 }
 
-function fullProviderAuthority(
-  chat: Chat,
-  resources: readonly BotCatalogProviderResource[],
-): BotRuntimeProviderAuthority {
-  if (!chat.providerId || !chat.model) fail("provider_mismatch");
-  const provider = resources.find(
-    (candidate) => candidate.option.available && candidate.sourceId === chat.providerId,
-  );
-  const model = provider?.models.find(
-    (candidate) => candidate.option.available && candidate.sourceId === chat.model,
-  );
-  if (!provider || !model) fail("provider_mismatch");
-  return {
-    sourceProviderId: provider.sourceId,
-    sourceModelId: model.sourceId,
-    connectionFingerprint: provider.connectionFingerprint,
-    providerExactFingerprint: provider.exactFingerprint,
-    modelFingerprint: model.modelFingerprint,
-    modelExactFingerprint: model.exactFingerprint,
-  };
-}
-
 function scopeAuthority(
   scope: BotCatalogFileScopeResource | BoundBotFileScope,
 ): BotRuntimeFileScopeAuthority {
@@ -360,38 +337,61 @@ function buildAuthority(input: {
 }): BotRuntimeEffectiveAuthority {
   const { admission, snapshot, chat } = input;
   if (!admission.chat) fail("access_unavailable");
-  const binding = admission.effectiveCustom ? customBinding(admission, snapshot) : undefined;
-  const provider = binding
-    ? providerAuthority(binding.provider)
-    : fullProviderAuthority(chat, snapshot.resources.providers);
+  const custom = admission.effectiveCustom !== undefined;
+  if (!admission.modelAuthority) fail("access_unavailable");
+  // Provider/model authority is Bot-owned for both Full and Custom access.
+  // The Chat fields are a durable execution mirror and must agree exactly;
+  // they must never become an authority fallback when the Bot binding is absent.
+  const provider = providerAuthority(admission.modelAuthority.binding);
   assertProviderMatchesChat(chat, provider);
 
-  const full = binding === undefined;
-  const files = fileAuthority(
-    full
-      ? snapshot.resources.fileScopes.filter(({ option }) => option.available)
-      : binding.fileScopes,
-  );
-  const shell = full
-    ? snapshot.resources.shell.available
+  // Effective Custom access may come from either the Bot or its canonical
+  // Chat reduction. Keep accessMode and all non-model grants based on that
+  // effective ceiling, independently of the Bot-owned model authority above.
+  let files: BotRuntimeFileAuthority;
+  let shell: BotRuntimeEffectiveAuthority["shell"];
+  let connections: BotRuntimeConnectionAuthority[];
+  let skills: BotRuntimeSkillAuthority[];
+  let otherCapabilities: BotRuntimeOtherAuthority[];
+  if (!custom) {
+    files = fileAuthority(
+      snapshot.resources.fileScopes.filter(({ option }) => option.available),
+    );
+    shell = snapshot.resources.shell.available
       ? {
           enabled: true,
           shellFingerprint: snapshot.resources.shell.shellFingerprint,
           exactFingerprint: snapshot.resources.shell.exactFingerprint,
         }
-      : { enabled: false as const }
-    : binding.shell
+      : { enabled: false };
+    connections = snapshot.resources.connections
+      .filter(({ option }) => option.available)
+      .map(connectionAuthority);
+    skills = snapshot.resources.skills
+      .filter(({ option }) => option.available)
+      .map(skillAuthority);
+    otherCapabilities = snapshot.resources.otherCapabilities
+      .filter(({ option }) => option.available)
+      .map(otherAuthority);
+  } else {
+    const binding = customBinding(admission, snapshot);
+    files = fileAuthority(binding.fileScopes);
+    shell = binding.shell
       ? {
           enabled: true,
           shellFingerprint: binding.shell.shellFingerprint,
           exactFingerprint: binding.shell.exactFingerprint,
         }
-      : { enabled: false as const };
+      : { enabled: false };
+    connections = binding.connections.map(connectionAuthority);
+    skills = binding.skills.map(skillAuthority);
+    otherCapabilities = binding.otherCapabilities.map(otherAuthority);
+  }
   return freezeDeep({
     audienceId: input.audienceId,
     botId: input.bot.id,
     chatId: chat.id,
-    accessMode: full ? "full" : "custom",
+    accessMode: custom ? "custom" : "full",
     botPolicy: {
       revision: admission.policy.revision,
       epoch: `epoch:${admission.policy.policyEpoch}`,
@@ -405,18 +405,9 @@ function buildAuthority(input: {
     provider,
     files,
     shell,
-    connections: (full
-      ? snapshot.resources.connections.filter(({ option }) => option.available)
-      : binding.connections
-    ).map(connectionAuthority),
-    skills: (full
-      ? snapshot.resources.skills.filter(({ option }) => option.available)
-      : binding.skills
-    ).map(skillAuthority),
-    otherCapabilities: (full
-      ? snapshot.resources.otherCapabilities.filter(({ option }) => option.available)
-      : binding.otherCapabilities
-    ).map(otherAuthority),
+    connections,
+    skills,
+    otherCapabilities,
     managedHome: managedHomeAuthority(input.workspace),
     workingDirectory: input.workspace.homePath,
   });

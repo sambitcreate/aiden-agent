@@ -857,6 +857,33 @@ export function createChatStore(
       });
     },
 
+    /**
+     * Change the durable provider/model authority for an existing Bot chat
+     * without rewriting or reordering its conversation history.
+     */
+    async setBotModelSelection(
+      id: string,
+      providerId: string,
+      model: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return serialized(async () => {
+        const chat = await readChat(id);
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        if (!chat.botId) throw new Error("Only a Bot chat can change its Bot model authority.");
+        const resolvedProviderId = await resolveProviderId(providerId);
+        if (!resolvedProviderId || !model.trim()) {
+          throw new Error("A Bot model selection requires a provider and model.");
+        }
+        if (chat.providerId === resolvedProviderId && chat.model === model) return chat;
+        chat.providerId = resolvedProviderId;
+        chat.model = model;
+        await writeChatAndMeta(chat);
+        return chat;
+      });
+    },
+
     /** Persist the chat-local Computer Use opt-in without reordering conversation history. */
     async setComputerUseEnabled(
       id: string,

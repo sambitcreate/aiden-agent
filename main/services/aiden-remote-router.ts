@@ -1180,7 +1180,7 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(response, 200, await dependencies.bots.get(botMatch[1]!));
+        writeJson(response, 200, await dependencies.bots.get(botMatch[1]!, device.id));
         return;
       }
       if (botMatch && request.method === "PATCH") {
@@ -1201,6 +1201,7 @@ export function createAidenRemoteRequestHandler(
             botMatch[1]!,
             revision,
             body,
+            device.id,
           ),
         );
         return;

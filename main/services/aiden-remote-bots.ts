@@ -286,6 +286,10 @@ type BotApplicationPort = {
   getCanonicalChat(botId: string): Promise<Chat | null>;
   capabilityCatalog(audienceId: string, botId?: string): Promise<BotCapabilityCatalog>;
   getBotAccess(botId: string): Promise<BotAccessView>;
+  modelSelection?(
+    audienceId: string,
+    botId: string,
+  ): Promise<{ providerId: string; modelId: string } | undefined>;
   updateBotAccess(input: {
     audienceId: string;
     botId: string;
@@ -530,16 +534,23 @@ export class AidenRemoteBotService {
     return projectAidenRemoteBotSummary(bot, await this.avatar(bot), health);
   }
 
-  private async detail(bot: BotDefinition): Promise<AidenRemoteBotDetail> {
-    const [summary, access] = await Promise.all([
+  private async detail(
+    bot: BotDefinition,
+    audienceId?: string,
+  ): Promise<AidenRemoteBotDetail> {
+    const [summary, access, modelSelection] = await Promise.all([
       this.summary(bot),
       this.options.application.getBotAccess(bot.id),
+      audienceId === undefined || !this.options.application.modelSelection
+        ? Promise.resolve(undefined)
+        : this.options.application.modelSelection(audienceId, bot.id),
     ]);
     return parseAidenRemoteBotDetail({
       ...summary,
       instructions: bot.instructions,
       ...(bot.openingGreeting === undefined ? {} : { openingGreeting: bot.openingGreeting }),
       access: parseAidenRemoteBotAccessView(access),
+      ...(modelSelection ? { modelSelection } : {}),
     });
   }
 
@@ -579,8 +590,8 @@ export class AidenRemoteBotService {
     return parseAidenRemoteBotList({ bots: summaries, maxBots: MAX_BOTS, favorites });
   }
 
-  async get(botId: string): Promise<AidenRemoteBotDetail> {
-    return this.detail(await this.bot(botId));
+  async get(botId: string, audienceId?: string): Promise<AidenRemoteBotDetail> {
+    return this.detail(await this.bot(botId), audienceId);
   }
 
   async listConversations(
@@ -730,7 +741,7 @@ export class AidenRemoteBotService {
             access: parsed.access as BotAccessUpdate,
           });
           this.options.notifyBotsChanged?.(created.id);
-          return this.detail(created);
+          return this.detail(created, deviceId);
         },
       );
     } catch (error) {
@@ -742,6 +753,7 @@ export class AidenRemoteBotService {
     botId: string,
     expectedRevision: string,
     input: unknown,
+    audienceId?: string,
   ): Promise<AidenRemoteBotDetail> {
     const parsed = parseRequest(
       parseAidenRemoteBotIdentityPatchRequest,
@@ -765,7 +777,7 @@ export class AidenRemoteBotService {
         avatar: structuredClone(parsed.avatar ?? existing.avatar),
       });
       this.options.notifyBotsChanged?.(updated.id);
-      return this.detail(updated);
+      return this.detail(updated, audienceId);
     } catch (error) {
       return mapBotMutationError(error);
     }
@@ -850,6 +862,8 @@ export class AidenRemoteBotService {
         access: parsed as BotAccessUpdate,
       });
       this.options.notifyBotsChanged?.(existing.id);
+      const canonical = await this.options.application.getCanonicalChat(existing.id);
+      if (canonical) this.options.notifyChatsChanged?.(canonical.id);
       return parseAidenRemoteBotAccessView(access);
     } catch (error) {
       return mapBotMutationError(error);
@@ -902,25 +916,28 @@ export class AidenRemoteBotService {
               403,
             );
           }
-          const provider = await this.resolveProviderModel(deviceId, existing.id,
-            access.accessMode === "full" ? {
-                ...(parsed.providerId !== undefined ? { providerId: parsed.providerId } : {}),
-                ...(parsed.modelId !== undefined ? { modelId: parsed.modelId } : {}),
-              } : {
-                providerId: access.custom.providerId,
-                modelId: access.custom.modelId,
-              });
           let chat: Chat;
-          try {
+          if (parsed.providerId === undefined && parsed.modelId === undefined) {
             chat = await this.options.application.createChat({
               audienceId: deviceId,
               botId: existing.id,
-              providerId: provider.providerId,
-              model: provider.model,
-              assertCurrent: provider.assertCurrent,
             });
-          } finally {
-            provider.release?.();
+          } else {
+            const provider = await this.resolveProviderModel(deviceId, existing.id, {
+              providerId: parsed.providerId!,
+              modelId: parsed.modelId!,
+            });
+            try {
+              chat = await this.options.application.createChat({
+                audienceId: deviceId,
+                botId: existing.id,
+                providerId: provider.providerId,
+                model: provider.model,
+                assertCurrent: provider.assertCurrent,
+              });
+            } finally {
+              provider.release?.();
+            }
           }
           if (chat.botId !== existing.id) {
             throw new AidenRemoteServiceError(

@@ -28,9 +28,14 @@ import {
 } from "../../renderer/shared/bot-capabilities.js";
 import {
   assertBoundBotCustomSelectionCurrent,
+  assertBoundBotProviderModelCurrent,
+  boundBotProviderModelFingerprint,
   boundBotCustomSelectionFingerprint,
+  cloneBoundBotProviderModel,
   cloneBoundBotCustomSelection,
+  parseBoundBotProviderModel,
   parseBoundBotCustomSelection,
+  type BoundBotProviderModel,
   type BoundBotCustomSelection,
 } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
@@ -87,7 +92,13 @@ interface StoredBotPolicyBase extends StoredRevision {
 
 export type StoredBotCapabilityPolicy = StoredBotPolicyBase &
   (
-    | { accessMode: "full"; custom?: never; binding?: never }
+    | {
+        accessMode: "full";
+        custom?: never;
+        binding?: never;
+        /** Main-only durable model authority. Older Full policies may omit it. */
+        model?: StoredBotModelAuthority;
+      }
     | {
         accessMode: "custom";
         custom: BotCustomSelection;
@@ -95,6 +106,11 @@ export type StoredBotCapabilityPolicy = StoredBotPolicyBase &
         binding: BoundBotCustomSelection;
       }
   );
+
+export interface StoredBotModelAuthority {
+  selection: { providerId: string; modelId: string };
+  binding: BoundBotProviderModel;
+}
 
 interface StoredBotChatPolicyBase extends StoredRevision {
   chatId: string;
@@ -308,6 +324,64 @@ function parseRevision(value: Record<string, unknown>, stateSequence: number): S
   };
 }
 
+function parseStoredBotModelAuthority(value: unknown): StoredBotModelAuthority {
+  if (!isRecord(value) || !exactKeys(value, ["selection", "binding"]) || !isRecord(value.selection)) {
+    throw new BotCapabilityUnavailableError("Bot model authority storage is invalid.");
+  }
+  if (!exactKeys(value.selection, ["providerId", "modelId"])) {
+    throw new BotCapabilityUnavailableError("Bot model selection storage is invalid.");
+  }
+  const providerId = value.selection.providerId;
+  const modelId = value.selection.modelId;
+  if (!isPathSafeBotCapabilityId(providerId) || !isPathSafeBotCapabilityId(modelId)) {
+    throw new BotCapabilityUnavailableError("Bot model selection storage is invalid.");
+  }
+  const binding = parseBoundBotProviderModel(value.binding);
+  if (
+    binding.providerOption.id !== providerId ||
+    binding.modelOption.id !== modelId
+  ) {
+    throw new BotCapabilityUnavailableError(
+      "Bot model selection does not match its private binding.",
+    );
+  }
+  return {
+    selection: { providerId, modelId },
+    binding,
+  };
+}
+
+function cloneStoredBotModelAuthority(
+  value: StoredBotModelAuthority,
+): StoredBotModelAuthority {
+  return {
+    selection: { ...value.selection },
+    binding: cloneBoundBotProviderModel(value.binding),
+  };
+}
+
+function modelAuthorityFingerprint(value: StoredBotModelAuthority | undefined): string | undefined {
+  return value
+    ? `${value.selection.providerId}\0${value.selection.modelId}\0${boundBotProviderModelFingerprint(value.binding)}`
+    : undefined;
+}
+
+export function storedBotModelAuthority(
+  policy: StoredBotCapabilityPolicy,
+): StoredBotModelAuthority | undefined {
+  return policy.accessMode === "custom"
+    ? {
+        selection: {
+          providerId: policy.custom.providerId,
+          modelId: policy.custom.modelId,
+        },
+        binding: cloneBoundBotProviderModel(policy.binding.provider),
+      }
+    : policy.model
+      ? cloneStoredBotModelAuthority(policy.model)
+      : undefined;
+}
+
 function parsePolicy(value: unknown, stateSequence: number): StoredBotCapabilityPolicy {
   if (!isRecord(value)) throw new BotCapabilityUnavailableError();
   const common = [
@@ -322,7 +396,11 @@ function parsePolicy(value: unknown, stateSequence: number): StoredBotCapability
     "updatedAt",
   ] as const;
   if (
-    !exactKeys(value, common, value.accessMode === "custom" ? ["custom", "binding"] : []) ||
+    !exactKeys(
+      value,
+      common,
+      value.accessMode === "custom" ? ["custom", "binding"] : ["model"],
+    ) ||
     (value.accessMode !== "full" && value.accessMode !== "custom") ||
     !safeInteger(value.policyEpoch, 1) ||
     !safeTimestamp(value.createdAt) ||
@@ -341,7 +419,13 @@ function parsePolicy(value: unknown, stateSequence: number): StoredBotCapability
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
   } as StoredBotPolicyBase;
-  if (value.accessMode === "full") return { ...base, accessMode: "full" };
+  if (value.accessMode === "full") {
+    return {
+      ...base,
+      accessMode: "full",
+      ...(value.model === undefined ? {} : { model: parseStoredBotModelAuthority(value.model) }),
+    };
+  }
   const custom = parseBotCustomSelection(value.custom);
   const binding = parseBoundBotCustomSelection(value.binding);
   if (
@@ -536,7 +620,10 @@ function clonePolicy(policy: StoredBotCapabilityPolicy): StoredBotCapabilityPoli
         custom: cloneBotCustomSelection(policy.custom),
         binding: cloneBoundBotCustomSelection(policy.binding),
       }
-    : { ...policy };
+    : {
+        ...policy,
+        ...(policy.model ? { model: cloneStoredBotModelAuthority(policy.model) } : {}),
+      };
 }
 
 function cloneChatPolicy(policy: StoredBotChatCapabilityPolicy): StoredBotChatCapabilityPolicy {
@@ -617,6 +704,7 @@ export interface BotCapabilityPolicyAudit {
 export interface BotPolicyUpdateResult {
   view: BotAccessView;
   narrowed: boolean;
+  authorityChanged: boolean;
   policyEpoch: number;
   narrowedChats: Array<{ chatId: string; policyEpoch: number }>;
 }
@@ -748,6 +836,49 @@ export class BotCapabilityStateEditor {
     return binding;
   }
 
+  private modelForFullAccess(
+    access: BotAccessUpdate,
+    bindingValue: unknown,
+    previous?: StoredBotCapabilityPolicy,
+  ): StoredBotModelAuthority | undefined {
+    if (access.accessMode !== "full") {
+      if (bindingValue !== undefined) {
+        throw new BotCapabilityUnavailableError(
+          "Custom Access cannot persist a separate Full model binding.",
+        );
+      }
+      return undefined;
+    }
+    const hasSelection = access.providerId !== undefined && access.modelId !== undefined;
+    if (!hasSelection) {
+      if (bindingValue !== undefined) {
+        throw new BotCapabilityUnavailableError(
+          "A Full model binding requires an exact provider and model selection.",
+        );
+      }
+      const retained = previous ? storedBotModelAuthority(previous) : undefined;
+      return retained ? cloneStoredBotModelAuthority(retained) : undefined;
+    }
+    if (bindingValue === undefined) {
+      throw new BotCapabilityUnavailableError(
+        "A Full Bot model selection requires an exact main-owned binding.",
+      );
+    }
+    const binding = parseBoundBotProviderModel(bindingValue);
+    if (
+      binding.providerOption.id !== access.providerId ||
+      binding.modelOption.id !== access.modelId
+    ) {
+      throw new BotCapabilityUnavailableError(
+        "The Full Bot model binding does not match the requested selection.",
+      );
+    }
+    return {
+      selection: { providerId: access.providerId, modelId: access.modelId },
+      binding,
+    };
+  }
+
   auditBotInventory(botIds: readonly string[]): BotCapabilityPolicyAudit {
     if (botIds.length > BOT_CAPABILITY_LIMITS.bots) {
       throw new BotCapabilityUnavailableError("Bot inventory exceeds its limit.");
@@ -819,6 +950,11 @@ export class BotCapabilityStateEditor {
     return policy.accessMode === "custom"
       ? cloneBoundBotCustomSelection(policy.binding)
       : undefined;
+  }
+
+  /** Main-only durable provider/model authority for New/Edit Bot and runtime repair. */
+  getBotModelAuthority(botId: string): StoredBotModelAuthority | undefined {
+    return storedBotModelAuthority(this.policy(botId));
   }
 
   migrateLegacyBotsToFull(input: {
@@ -914,6 +1050,7 @@ export class BotCapabilityStateEditor {
     catalog: BotCapabilityCatalog;
     access: unknown;
     binding?: unknown;
+    modelBinding?: unknown;
   }): BotAccessView {
     const botId = assertBotIdentity(input.botId, "bot");
     if (this.state.policies.some((entry) => entry.botId === botId)) {
@@ -928,6 +1065,7 @@ export class BotCapabilityStateEditor {
       validateSelectionAgainstCatalog(access.custom, input.catalog);
     }
     const binding = this.bindingForCustomAccess(access, input.binding);
+    const model = this.modelForFullAccess(access, input.modelBinding);
     const timestamp = this.timestamp();
     const common: StoredBotPolicyBase = {
       botId,
@@ -947,7 +1085,11 @@ export class BotCapabilityStateEditor {
             custom: cloneBotCustomSelection(access.custom),
             binding: cloneBoundBotCustomSelection(binding!),
           }
-        : { ...common, accessMode: "full" },
+        : {
+            ...common,
+            accessMode: "full",
+            ...(model ? { model: cloneStoredBotModelAuthority(model) } : {}),
+          },
     );
     return projectBotAccessView(this.state, botId);
   }
@@ -958,6 +1100,8 @@ export class BotCapabilityStateEditor {
     catalog: BotCapabilityCatalog;
     access: unknown;
     binding?: unknown;
+    modelBinding?: unknown;
+    canonicalChatId?: string;
   }): BotPolicyUpdateResult {
     const policy = this.policy(input.botId);
     this.assertPolicyRevision(policy, input.expectedRevision);
@@ -967,18 +1111,33 @@ export class BotCapabilityStateEditor {
       validateSelectionAgainstCatalog(access.custom, input.catalog);
     }
     const binding = this.bindingForCustomAccess(access, input.binding);
+    const previousModel = storedBotModelAuthority(policy);
+    const fullModel = this.modelForFullAccess(access, input.modelBinding, policy);
+    const nextModel = access.accessMode === "custom"
+      ? {
+          selection: {
+            providerId: access.custom.providerId,
+            modelId: access.custom.modelId,
+          },
+          binding: cloneBoundBotProviderModel(binding!.provider),
+        }
+      : fullModel;
+    const modelChanged =
+      modelAuthorityFingerprint(previousModel) !== modelAuthorityFingerprint(nextModel);
     const bindingChanged =
       policy.accessMode === "custom" &&
       access.accessMode === "custom" &&
       boundBotCustomSelectionFingerprint(policy.binding) !==
         boundBotCustomSelectionFingerprint(binding!);
     const narrowed = botPolicyTransitionNarrows(policy, access) || bindingChanged;
-    if (narrowed && policy.policyEpoch >= Number.MAX_SAFE_INTEGER) {
+    const authorityChanged = narrowed || modelChanged;
+    if (authorityChanged && policy.policyEpoch >= Number.MAX_SAFE_INTEGER) {
       throw new Error("Bot capability policy epoch is exhausted.");
     }
     const unchanged =
       policy.accessMode === access.accessMode &&
       policy.catalogRevision === access.catalogRevision &&
+      !modelChanged &&
       (policy.accessMode === "full" ||
         (access.accessMode === "custom" &&
           botCustomSelectionsEqual(policy.custom, access.custom) &&
@@ -987,6 +1146,7 @@ export class BotCapabilityStateEditor {
       return {
         view: projectBotAccessView(this.state, policy.botId),
         narrowed: false,
+        authorityChanged: false,
         policyEpoch: policy.policyEpoch,
         narrowedChats: [],
       };
@@ -998,7 +1158,7 @@ export class BotCapabilityStateEditor {
       authorityStatus: policy.authorityStatus,
       accessMode: undefined as never,
       catalogRevision: access.catalogRevision,
-      policyEpoch: narrowed ? policy.policyEpoch + 1 : policy.policyEpoch,
+      policyEpoch: authorityChanged ? policy.policyEpoch + 1 : policy.policyEpoch,
       ...this.issueRevision("policy"),
       createdAt: policy.createdAt,
       updatedAt: Math.max(policy.updatedAt, timestamp),
@@ -1011,19 +1171,30 @@ export class BotCapabilityStateEditor {
             custom: cloneBotCustomSelection(access.custom),
             binding: cloneBoundBotCustomSelection(binding!),
           }
-        : { ...common, accessMode: "full" };
+        : {
+            ...common,
+            accessMode: "full",
+            ...(fullModel ? { model: cloneStoredBotModelAuthority(fullModel) } : {}),
+          };
     this.state.policies[policyIndex] = nextPolicy;
 
     const narrowedChats: Array<{ chatId: string; policyEpoch: number }> = [];
-    if (narrowed && nextPolicy.accessMode === "custom") {
+    if ((narrowed && nextPolicy.accessMode === "custom") || (modelChanged && nextModel)) {
       for (let index = 0; index < this.state.chats.length; index += 1) {
         const chat = this.state.chats[index]!;
         if (chat.botId !== policy.botId || chat.mode !== "custom") continue;
-        const custom = intersectBotCustomSelections(
-          chat.custom,
-          nextPolicy.custom,
-          input.catalog.fileScopes,
-        );
+        if (input.canonicalChatId !== undefined && chat.chatId !== input.canonicalChatId) continue;
+        const custom = narrowed && nextPolicy.accessMode === "custom"
+          ? intersectBotCustomSelections(
+              chat.custom,
+              nextPolicy.custom,
+              input.catalog.fileScopes,
+            )
+          : {
+              ...cloneBotCustomSelection(chat.custom),
+              providerId: nextModel!.selection.providerId,
+              modelId: nextModel!.selection.modelId,
+            };
         if (botCustomSelectionsEqual(custom, chat.custom)) continue;
         if (chat.policyEpoch >= Number.MAX_SAFE_INTEGER) {
           throw new Error("Bot chat capability policy epoch is exhausted.");
@@ -1042,6 +1213,7 @@ export class BotCapabilityStateEditor {
     return {
       view: projectBotAccessView(this.state, policy.botId),
       narrowed,
+      authorityChanged,
       policyEpoch: nextPolicy.policyEpoch,
       narrowedChats,
     };
@@ -1110,6 +1282,14 @@ export class BotCapabilityStateEditor {
     this.assertPolicyRevision(policy, access.expectedBotPolicyRevision);
     if (access.mode === "custom") {
       validateSelectionAgainstCatalog(access.custom, input.catalog);
+      const model = storedBotModelAuthority(policy);
+      if (
+        model &&
+        (access.custom.providerId !== model.selection.providerId ||
+          access.custom.modelId !== model.selection.modelId)
+      ) {
+        throw new BotCapabilitySubsetError();
+      }
       if (
         policy.accessMode === "custom" &&
         !botCustomSelectionIsSubset(access.custom, policy.custom, input.catalog.fileScopes)
@@ -1404,6 +1584,10 @@ export class BotCapabilityStateEditor {
     snapshot: BotCapabilityCatalogSnapshot;
   }): BoundBotCustomSelection | undefined {
     const policy = this.policy(input.botId);
+    const model = storedBotModelAuthority(policy);
+    if (model) {
+      assertBoundBotProviderModelCurrent(model.binding, input.snapshot);
+    }
     if (policy.accessMode === "custom") {
       assertBoundBotCustomSelectionCurrent(policy.binding, input.snapshot);
     }

@@ -358,7 +358,7 @@ struct AidenBotCustomAccessFlowView: View {
             } header: {
                 Text("Bot")
             } footer: {
-                Text("Custom Access can only reduce what Aiden and your Mac already allow.")
+                Text("Custom Access can only reduce what Aiden and your Mac already allow. Change the AI Provider or Model in Edit Bot.")
             }
 
             if isLoadingBot, draft == nil {
@@ -399,8 +399,6 @@ struct AidenBotCustomAccessFlowView: View {
                             .accessibilityLabel("Access save status: \(saveError)")
                     }
                 }
-                aiSection(catalog)
-                    .disabled(!canWrite)
                 optionSection(
                     title: "Connections",
                     description: "Choose the services and accounts this bot can use.",
@@ -434,7 +432,7 @@ struct AidenBotCustomAccessFlowView: View {
                 } else if let draft, !draft.isSaveable(in: catalog) {
                     Section {
                         Label(
-                            "Some selected access is unavailable. Choose available options before saving.",
+                            "Some saved access is unavailable. Change Provider or Model in Edit Bot, or turn off unavailable access here before saving.",
                             systemImage: "exclamationmark.triangle.fill"
                         )
                         .foregroundStyle(.orange)
@@ -445,32 +443,6 @@ struct AidenBotCustomAccessFlowView: View {
         .scrollContentBackground(.hidden)
         .background(palette.canvas)
         .disabled(isSaving)
-    }
-
-    private func aiSection(_ catalog: AidenBotCapabilityCatalog) -> some View {
-        return Section {
-            Picker("Provider", selection: providerBinding(catalog)) {
-                ForEach(catalog.providers) { provider in
-                    Text(optionTitle(provider.label, available: provider.available))
-                        .tag(provider.id)
-                        .disabled(!provider.available)
-                }
-            }
-            .accessibilityHint("Select an AI provider already configured on your Mac.")
-
-            Picker("Model", selection: modelBinding(catalog)) {
-                ForEach(selectedProvider(in: catalog)?.models ?? []) { model in
-                    Text(optionTitle(model.label, available: model.available))
-                        .tag(model.id)
-                        .disabled(!model.available)
-                }
-            }
-            .accessibilityHint("Select the model this bot will use.")
-        } header: {
-            Text("AI")
-        } footer: {
-            Text("Credentials stay on your Mac.")
-        }
     }
 
     private func filesAndShellSection(_ catalog: AidenBotCapabilityCatalog) -> some View {
@@ -564,35 +536,6 @@ struct AidenBotCustomAccessFlowView: View {
                 } else {
                     selectedBotID = nextBotID
                 }
-            }
-        )
-    }
-
-    private func selectedProvider(in catalog: AidenBotCapabilityCatalog) -> AidenBotProviderOption? {
-        catalog.providers.first { $0.id == draft?.providerID }
-    }
-
-    private func providerBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
-        Binding(
-            get: { draft?.providerID ?? "" },
-            set: { providerID in
-                guard var next = draft else { return }
-                next.selectProvider(providerID, catalog: catalog)
-                draft = next
-            }
-        )
-    }
-
-    private func modelBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
-        Binding(
-            get: { draft?.modelID ?? "" },
-            set: { modelID in
-                guard let provider = selectedProvider(in: catalog),
-                      provider.available,
-                      provider.models.contains(where: { $0.id == modelID && $0.available }),
-                      var next = draft else { return }
-                next.modelID = modelID
-                draft = next
             }
         )
     }

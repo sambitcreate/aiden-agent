@@ -54,7 +54,18 @@ function catalog(): BotCapabilityCatalogSnapshot {
   return {
     catalog: publicCatalog,
     resources: {
-      providers: [],
+      providers: [{
+        option: publicCatalog.providers[0]!,
+        sourceId: "provider:exact",
+        connectionFingerprint: "1".repeat(64),
+        exactFingerprint: "2".repeat(64),
+        models: [{
+          option: publicCatalog.providers[0]!.models[0]!,
+          sourceId: "model:exact",
+          modelFingerprint: "3".repeat(64),
+          exactFingerprint: "4".repeat(64),
+        }],
+      }],
       fileScopes: [],
       shell: { available: true, shellFingerprint: "a".repeat(64), exactFingerprint: "b".repeat(64) },
       connections: [],
@@ -84,6 +95,7 @@ function fixture(options: {
   pending?: BotLifecycleOperation[];
   failIdentityCreate?: boolean;
   migrationSealed?: boolean;
+  failModelWriteOnce?: boolean;
   failJournalOnceAfter?: { method: "checkpoint" | "complete"; stage: BotLifecycleStage };
   failPendingReadAfterEvent?: string;
 } = {}) {
@@ -101,11 +113,16 @@ function fixture(options: {
   );
   const chatPolicies = new Map<string, BotChatAccessView>();
   const botBindings = new Map<string, unknown>();
+  const modelAuthorities = new Map<string, {
+    selection: { providerId: string; modelId: string };
+    binding: { sourceProviderId: string; sourceModelId: string };
+  }>();
   const homes = new Map<string, { botId: string; workspaceId: string; createdAt: number }>();
   const pending = new Map((options.pending ?? []).map((entry) => [entry.operationId, entry]));
   let revision = 0;
   let identityRevision = 0;
   let journalFailureRemaining = options.failJournalOnceAfter ? 1 : 0;
+  let modelWriteFailureRemaining = options.failModelWriteOnce ? 1 : 0;
   let migrationSealed = options.migrationSealed === true;
 
   const botPolicy = (botId: string): BotAccessView => ({
@@ -300,6 +317,23 @@ function fixture(options: {
         events.push("chat:remove");
         chats.delete(id);
       },
+      async setBotModelSelection(
+        id: string,
+        providerId: string,
+        model: string,
+        assertCurrent?: (chat: Chat) => void | Promise<void>,
+      ) {
+        const current = chats.get(id)!;
+        await assertCurrent?.(current);
+        if (modelWriteFailureRemaining > 0) {
+          modelWriteFailureRemaining -= 1;
+          throw new Error("chat model write interrupted");
+        }
+        current.providerId = providerId;
+        current.model = model;
+        events.push("chat:model-update");
+        return current;
+      },
     },
     capabilityStore: {
       async initialize() { events.push("policy:initialize"); },
@@ -365,6 +399,7 @@ function fixture(options: {
         return changed;
       },
       async getBotBinding(id: string) { return botBindings.get(id); },
+      async getBotModelAuthority(id: string) { return modelAuthorities.get(id); },
       async assertAuthorityBindingsCurrent(input: { botId: string }) {
         if (!botBindings.has(input.botId)) {
           throw new BotCapabilityUnavailableError("missing binding");
@@ -385,18 +420,39 @@ function fixture(options: {
           lease: { release() { events.push("policy:release"); } },
         };
       },
-      async createBotPolicy(input: { botId: string; binding?: unknown }) {
+      async createBotPolicy(input: {
+        botId: string;
+        access: BotAccessUpdate;
+        binding?: { provider?: { sourceProviderId: string; sourceModelId: string } };
+        modelBinding?: { sourceProviderId: string; sourceModelId: string };
+      }) {
         events.push(input.binding ? "policy:create:bound" : "policy:create");
         const value = botPolicy(input.botId);
         policies.set(input.botId, value);
         authorityStatuses.set(input.botId, "active");
+        const provider = input.access.accessMode === "custom"
+          ? input.binding?.provider
+          : input.modelBinding;
+        const providerId = input.access.accessMode === "custom"
+          ? input.access.custom.providerId
+          : input.access.providerId;
+        const modelId = input.access.accessMode === "custom"
+          ? input.access.custom.modelId
+          : input.access.modelId;
+        if (provider && providerId && modelId) {
+          modelAuthorities.set(input.botId, {
+            selection: { providerId, modelId },
+            binding: provider,
+          });
+        }
         return value;
       },
       async updateBotPolicy(input: {
         botId: string;
         expectedRevision: string;
         access: BotAccessUpdate;
-        binding?: unknown;
+        binding?: { version?: number; provider?: { sourceProviderId: string; sourceModelId: string } };
+        modelBinding?: { sourceProviderId: string; sourceModelId: string };
       }) {
         const current = policies.get(input.botId);
         if (!current) throw new BotCapabilityUnavailableError("missing policy");
@@ -404,7 +460,7 @@ function fixture(options: {
           throw new Error("This Bot access changed on another surface. Refresh it and try again.");
         }
         if (input.access.accessMode === "custom") {
-          assert.deepEqual(input.binding, { version: 1 });
+          assert.equal((input.binding as { version?: number }).version, 1);
           events.push("policy:validate-binding");
         } else {
           assert.equal(input.binding, undefined);
@@ -418,6 +474,23 @@ function fixture(options: {
               custom: structuredClone(input.access.custom),
             }
           : issued;
+        if (input.binding) botBindings.set(input.botId, input.binding);
+        else botBindings.delete(input.botId);
+        const provider = input.access.accessMode === "custom"
+          ? input.binding?.provider
+          : input.modelBinding ?? modelAuthorities.get(input.botId)?.binding;
+        const providerId = input.access.accessMode === "custom"
+          ? input.access.custom.providerId
+          : input.access.providerId ?? modelAuthorities.get(input.botId)?.selection.providerId;
+        const modelId = input.access.accessMode === "custom"
+          ? input.access.custom.modelId
+          : input.access.modelId ?? modelAuthorities.get(input.botId)?.selection.modelId;
+        if (provider && providerId && modelId) {
+          modelAuthorities.set(input.botId, {
+            selection: { providerId, modelId },
+            binding: provider,
+          });
+        }
         policies.set(input.botId, value);
         return value;
       },
@@ -432,9 +505,25 @@ function fixture(options: {
         chatPolicies.set(input.chatId, value);
         return value;
       },
-      async updateChatPolicy(input: { chatId: string }) {
+      async updateChatPolicy(input: {
+        chatId: string;
+        access?: { mode: "inherit" | "custom"; custom?: BotChatAccessView extends never ? never : unknown };
+      }) {
         events.push("chat-policy:update");
-        return chatPolicies.get(input.chatId)!;
+        const current = chatPolicies.get(input.chatId)!;
+        const custom = input.access?.mode === "custom"
+          ? (input.access.custom as Extract<BotChatAccessView, { mode: "custom" }>["custom"])
+          : undefined;
+        const next: BotChatAccessView = custom
+          ? {
+              ...current,
+              mode: "custom",
+              custom: structuredClone(custom),
+              revision: `revision:chat:${++revision}`,
+            }
+          : current;
+        chatPolicies.set(input.chatId, next);
+        return next;
       },
       async copyChatPolicy(input: { botId: string; targetChatId: string }) {
         events.push("chat-policy:copy");
@@ -476,7 +565,13 @@ function fixture(options: {
       async bindCustom(input?: { botId?: string; snapshot?: BotCapabilityCatalogSnapshot }) {
         if (!input?.snapshot) catalogTargets.push(input?.botId);
         events.push("catalog:bind-custom");
-        return { version: 1 };
+        return {
+          version: 1,
+          provider: {
+            sourceProviderId: "provider:exact",
+            sourceModelId: "model:exact",
+          },
+        };
       },
     },
     managedWorkspace: {
@@ -535,6 +630,7 @@ function fixture(options: {
     authorityStatuses,
     chatPolicies,
     botBindings,
+    modelAuthorities,
     homes,
     pending,
     catalogTargets,
@@ -551,6 +647,8 @@ test("initialization migrates legacy Bots to explicit Full and gives each exactl
   assert.deepEqual(app.events, [
     "policy:initialize",
     "policy:migrate-full",
+    "catalog:bind-custom",
+    "policy:update",
     "journal:begin:create_bot",
     "home:reconcile",
     "journal:workspace_provisioned",
@@ -731,6 +829,88 @@ test("Bot access updates use a scoped catalog and publish only a validated priva
   );
   assert.equal(app.policies.get(owner.id)?.revision, fullResult.revision);
   assert.equal(app.policies.get(owner.id)?.accessMode, "full");
+});
+
+test("Edit Bot model updates the one persistent Full Access chat without rewriting history", async () => {
+  const owner = bot("bot:model-edit");
+  const app = fixture({ bots: [owner] });
+  await app.service.initialize();
+  app.modelAuthorities.set(owner.id, {
+    selection: { providerId: "provider:old", modelId: "model:old" },
+    binding: { sourceProviderId: "provider:old", sourceModelId: "model:old" },
+  });
+  const chat = await app.service.createChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    providerId: "provider:old",
+    model: "model:old",
+  });
+  chat.messages.push({
+    id: "existing-message",
+    role: "user",
+    content: "Keep this history",
+    createdAt: 2,
+  });
+  const previousUpdatedAt = chat.updatedAt;
+  app.events.length = 0;
+
+  await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "full",
+      catalogRevision: CATALOG_REVISION,
+      confirmedForeground: true,
+      providerId: "provider:opaque",
+      modelId: "model:opaque",
+    },
+  });
+
+  const updated = app.chats.get(chat.id)!;
+  assert.equal(updated.providerId, "provider:exact");
+  assert.equal(updated.model, "model:exact");
+  assert.equal(updated.updatedAt, previousUpdatedAt);
+  assert.ok(updated.messages.some(({ content }) => content === "Keep this history"));
+  assert.ok(app.events.includes("chat:model-update"));
+  assert.deepEqual(await app.service.modelSelection("device:a", owner.id), {
+    providerId: "provider:opaque",
+    modelId: "model:opaque",
+  });
+});
+
+test("an interrupted Bot model mirror is recovered from durable Bot settings", async () => {
+  const owner = bot("bot:model-recovery");
+  const app = fixture({ bots: [owner], failModelWriteOnce: true });
+  await app.service.initialize();
+  app.modelAuthorities.set(owner.id, {
+    selection: { providerId: "provider:old", modelId: "model:old" },
+    binding: { sourceProviderId: "provider:old", sourceModelId: "model:old" },
+  });
+  const chat = await app.service.createChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    providerId: "provider:old",
+    model: "model:old",
+  });
+
+  await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "full",
+      catalogRevision: CATALOG_REVISION,
+      confirmedForeground: true,
+      providerId: "provider:opaque",
+      modelId: "model:opaque",
+    },
+  });
+
+  assert.equal(app.chats.get(chat.id)?.providerId, "provider:exact");
+  assert.equal(app.chats.get(chat.id)?.model, "model:exact");
+  assert.equal(app.pending.size, 0);
+  assert.equal(app.events.filter((event) => event === "chat:model-update").length, 1);
 });
 
 test("sealed policy or managed-home loss blocks instead of reminting Full authority", async () => {

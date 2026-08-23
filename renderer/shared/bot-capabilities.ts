@@ -105,6 +105,9 @@ export type BotAccessUpdate =
       accessMode: "full";
       catalogRevision: string;
       confirmedForeground: true;
+      /** Optional Bot model authority. Older clients omit this pair. */
+      providerId?: string;
+      modelId?: string;
     }
   | {
       accessMode: "custom";
@@ -301,10 +304,22 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
     throw new BotCapabilityValidationError("Invalid Bot access update.");
   }
   if (value.accessMode === "full") {
+    const hasProviderId = Object.prototype.hasOwnProperty.call(value, "providerId");
+    const hasModelId = Object.prototype.hasOwnProperty.call(value, "modelId");
     if (
-      !hasOnlyKeys(value, ["accessMode", "catalogRevision", "confirmedForeground"]) ||
-      Object.keys(value).length !== 3 ||
-      value.confirmedForeground !== true
+      !hasOnlyKeys(value, [
+        "accessMode",
+        "catalogRevision",
+        "confirmedForeground",
+        "providerId",
+        "modelId",
+      ]) ||
+      value.confirmedForeground !== true ||
+      hasProviderId !== hasModelId ||
+      (hasProviderId && (
+        !isBoundedBotText(value.providerId, BOT_CAPABILITY_LIMITS.providerIdChars) ||
+        !isBoundedBotText(value.modelId, BOT_CAPABILITY_LIMITS.modelIdChars)
+      ))
     ) {
       throw new BotCapabilityValidationError("Full Access requires foreground confirmation.");
     }
@@ -312,6 +327,12 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
       accessMode: "full",
       catalogRevision: assertBotRevision(value.catalogRevision, "catalog revision"),
       confirmedForeground: true,
+      ...(hasProviderId
+        ? {
+            providerId: value.providerId as string,
+            modelId: value.modelId as string,
+          }
+        : {}),
     };
   }
   if (

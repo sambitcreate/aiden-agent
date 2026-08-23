@@ -12,6 +12,7 @@ export type BotLifecycleKind =
   | "create_chat"
   | "copy_chat"
   | "delete_chat"
+  | "update_model"
   | "archive_bot"
   | "restore_bot";
 
@@ -33,6 +34,7 @@ export type BotLifecycleSubject =
   | { workspaceId: string; workspaceCreatedAt: number }
   | { sourceChatId: string; targetChatId: string }
   | { chatId: string; workspaceId: string }
+  | { chatId: string; expectedRevision: string }
   | { chatId: string }
   | { expectedRevision: string };
 
@@ -89,6 +91,12 @@ export type BotLifecycleBeginInput =
     }
   | {
       operationId: string;
+      kind: "update_model";
+      botId: string;
+      subject: { chatId: string; expectedRevision: string };
+    }
+  | {
+      operationId: string;
       kind: "archive_bot" | "restore_bot";
       botId: string;
       subject: { expectedRevision: string };
@@ -124,6 +132,7 @@ const STAGES: Readonly<Record<BotLifecycleKind, readonly BotLifecycleStage[]>> =
   create_chat: ["prepared", "policy_committed", "chat_committed"],
   copy_chat: ["prepared", "policy_committed", "chat_committed"],
   delete_chat: ["prepared", "authority_fenced", "chat_deleted", "policy_removed"],
+  update_model: ["prepared", "policy_committed", "chat_committed"],
   archive_bot: ["prepared", "authority_archived", "identity_archived"],
   restore_bot: ["prepared", "identity_restored", "authority_restored"],
 };
@@ -153,12 +162,23 @@ function isChatId(value: unknown): value is string {
   );
 }
 
+function isExpectedRevision(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    value.normalize("NFKC") === value &&
+    /^[A-Za-z0-9:_-]+$/u.test(value)
+  );
+}
+
 function parseKind(value: unknown): BotLifecycleKind {
   if (
     value === "create_bot" ||
     value === "create_chat" ||
     value === "copy_chat" ||
     value === "delete_chat" ||
+    value === "update_model" ||
     value === "archive_bot" ||
     value === "restore_bot"
   ) {
@@ -205,15 +225,20 @@ function parseSubject(kind: BotLifecycleKind, value: unknown): BotLifecycleSubje
         throw new BotLifecycleJournalStateError("Bot delete lifecycle subject is corrupt.");
       }
       return { chatId: value.chatId };
+    case "update_model":
+      if (
+        !hasExactKeys(value, ["chatId", "expectedRevision"]) ||
+        !isChatId(value.chatId) ||
+        !isExpectedRevision(value.expectedRevision)
+      ) {
+        throw new BotLifecycleJournalStateError("Bot model-update lifecycle subject is corrupt.");
+      }
+      return { chatId: value.chatId, expectedRevision: value.expectedRevision };
     case "archive_bot":
     case "restore_bot":
       if (
         !hasExactKeys(value, ["expectedRevision"]) ||
-        typeof value.expectedRevision !== "string" ||
-        value.expectedRevision.length === 0 ||
-        value.expectedRevision.length > 256 ||
-        value.expectedRevision.normalize("NFKC") !== value.expectedRevision ||
-        !/^[A-Za-z0-9:_-]+$/u.test(value.expectedRevision)
+        !isExpectedRevision(value.expectedRevision)
       ) {
         throw new BotLifecycleJournalStateError("Bot lifecycle subject is corrupt.");
       }

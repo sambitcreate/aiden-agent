@@ -298,6 +298,10 @@
       "policyEpoch": "bot_policy_epoch_4",
       "summary": "Can use your Mac, shell, enabled connections, and skills."
     },
+    "modelSelection": {
+      "providerId": "provider_fixture",
+      "modelId": "model_fixture"
+    },
     "createdAt": "2026-08-18T17:00:00.000Z",
     "updatedAt": "2026-08-18T18:45:00.000Z",
     "revision": "bot_revision_7"

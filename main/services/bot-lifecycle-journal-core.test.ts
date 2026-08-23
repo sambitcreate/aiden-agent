@@ -7,6 +7,7 @@ import {
   BotLifecycleJournalConflictError,
   BotLifecycleJournalStateError,
   createBotLifecycleJournalCore,
+  parseBotLifecycleJournalDocument,
   reconcilePendingBotLifecycles,
   type BotLifecycleBeginInput,
   type BotLifecycleJournalDocument,
@@ -25,6 +26,7 @@ const OPERATION_E = "50000000-0000-4000-8000-000000000005";
 const WORKSPACE_A = "60000000-0000-4000-8000-000000000006";
 const OPERATION_F = "70000000-0000-4000-8000-000000000007";
 const OPERATION_G = "80000000-0000-4000-8000-000000000008";
+const OPERATION_H = "90000000-0000-4000-8000-000000000009";
 
 async function temporaryRoot(prefix: string): Promise<{ parent: string; root: string }> {
   const parent = await mkdtemp(join(tmpdir(), prefix));
@@ -72,6 +74,12 @@ const operations: readonly BotLifecycleBeginInput[] = [
     botId: "bot-1",
     subject: { expectedRevision: "botrev:before-restore" },
   },
+  {
+    operationId: OPERATION_H,
+    kind: "update_model",
+    botId: "bot-1",
+    subject: { chatId: "chat-model", expectedRevision: "botrev:before-model" },
+  },
 ];
 
 const stageSequences: Readonly<
@@ -81,6 +89,7 @@ const stageSequences: Readonly<
   create_chat: ["prepared", "policy_committed", "chat_committed"],
   copy_chat: ["prepared", "policy_committed", "chat_committed"],
   delete_chat: ["prepared", "authority_fenced", "chat_deleted", "policy_removed"],
+  update_model: ["prepared", "policy_committed", "chat_committed"],
   archive_bot: ["prepared", "authority_archived", "identity_archived"],
   restore_bot: ["prepared", "identity_restored", "authority_restored"],
 };
@@ -271,6 +280,9 @@ test("reconciliation runs in admission order, preserves failures, and exposes ev
       restore_bot: async (operation) => {
         handled.push(operation.kind);
       },
+      update_model: async (operation) => {
+        handled.push(operation.kind);
+      },
     },
     onError: (operation, error) => {
       failed.push(`${operation.kind}:${String(error)}`);
@@ -282,6 +294,7 @@ test("reconciliation runs in admission order, preserves failures, and exposes ev
     "delete_chat",
     "archive_bot",
     "restore_bot",
+    "update_model",
   ]);
   assert.match(failed[0]!, /^copy_chat:Error: copy repair failed$/u);
   assert.equal((await journal.listPending()).length, operations.length);
@@ -350,6 +363,77 @@ test("corrupt, future, duplicate, oversized, and path-like journal input fails c
     journal.begin({ ...operations[3]!, operationId: "client-id" } as BotLifecycleBeginInput),
     BotLifecycleJournalStateError,
   );
+});
+
+test("model-update lifecycle has exact subject parsing and keeps version 2 documents compatible", async () => {
+  const legacy = parseBotLifecycleJournalDocument({
+    version: 2,
+    pending: [
+      {
+        operationId: OPERATION_B,
+        kind: "create_chat",
+        botId: "bot-1",
+        subject: { chatId: "chat-new", workspaceId: WORKSPACE_A },
+        stage: "prepared",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    completed: [],
+  });
+  assert.equal(legacy.version, 2);
+  assert.equal(legacy.pending[0]?.kind, "create_chat");
+
+  let document: BotLifecycleJournalDocument | null = null;
+  const journal = createBotLifecycleJournalCore({
+    storage: {
+      read: async () => structuredClone(document),
+      write: async (next) => {
+        document = structuredClone(next);
+      },
+    },
+    now: () => 1,
+  });
+  const modelUpdate = operations.find(({ kind }) => kind === "update_model")!;
+  assert.equal((await journal.begin(modelUpdate)).status, "pending");
+  assert.equal(
+    (await journal.checkpoint(OPERATION_H, "prepared", "policy_committed")).stage,
+    "policy_committed",
+  );
+  assert.equal(
+    (await journal.checkpoint(OPERATION_H, "policy_committed", "chat_committed")).stage,
+    "chat_committed",
+  );
+  await journal.complete(OPERATION_H, "chat_committed");
+  const completed = await journal.lookup(OPERATION_H);
+  assert.equal(completed?.status, "completed");
+  if (completed?.status === "completed") {
+    assert.deepEqual(completed.operation.subject, {
+      chatId: "chat-model",
+      expectedRevision: "botrev:before-model",
+    });
+  }
+
+  for (const subject of [
+    { chatId: "chat-model" },
+    { expectedRevision: "botrev:before-model" },
+    { chatId: "chat-model", expectedRevision: "botrev:before-model", extra: true },
+    { chatId: "../chat-model", expectedRevision: "botrev:before-model" },
+    { chatId: "chat-model", expectedRevision: "revision with spaces" },
+  ]) {
+    const invalid = createBotLifecycleJournalCore({
+      storage: { read: async () => null, write: async () => undefined },
+    });
+    await assert.rejects(
+      invalid.begin({
+        operationId: OPERATION_H,
+        kind: "update_model",
+        botId: "bot-1",
+        subject,
+      } as BotLifecycleBeginInput),
+      BotLifecycleJournalStateError,
+    );
+  }
 });
 
 test("production journal rejects corrupt JSON and symlink substitution", async () => {

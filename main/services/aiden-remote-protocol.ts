@@ -216,6 +216,7 @@ export type AidenRemoteBotAccessView = AidenRemoteBotAccessViewBase & (
 export type AidenRemoteBotDetail = AidenRemoteBotSummary & {
   instructions: string;
   access: AidenRemoteBotAccessView;
+  modelSelection?: { providerId: string; modelId: string };
   openingGreeting?: string;
 };
 
@@ -339,6 +340,8 @@ export type AidenRemoteBotAccessUpdateRequest =
       accessMode: "full";
       catalogRevision: string;
       confirmedForeground: true;
+      providerId?: string;
+      modelId?: string;
     }
   | {
       accessMode: "custom";
@@ -2008,6 +2011,19 @@ export function parseAidenRemoteBotDetail(value: unknown): AidenRemoteBotDetail 
     ...summary,
     instructions: boundedText(value.instructions, "Bot instructions", 32_000),
     access,
+    ...(hasOwn(value, "modelSelection")
+      ? {
+          modelSelection: (() => {
+            const selection = value.modelSelection;
+            if (!isRecord(selection)) throw new Error("Bot model selection must be an object.");
+            assertExactKeys(selection, ["providerId", "modelId"], "Bot model selection");
+            return {
+              providerId: boundedText(selection.providerId, "Bot model providerId", 256),
+              modelId: boundedText(selection.modelId, "Bot model modelId", 512),
+            };
+          })(),
+        }
+      : {}),
     ...(hasOwn(value, "openingGreeting")
       ? {
           openingGreeting: boundedText(
@@ -2026,12 +2042,14 @@ export function parseAidenRemoteBotAccessUpdateRequest(
 ): AidenRemoteBotAccessUpdateRequest {
   if (!isRecord(value)) throw new Error("Bot access update request must be an object.");
   if (value.accessMode === "full") {
+    const hasProviderId = hasOwn(value, "providerId");
+    const hasModelId = hasOwn(value, "modelId");
     assertExactKeys(
       value,
-      ["accessMode", "catalogRevision", "confirmedForeground"],
+      ["accessMode", "catalogRevision", "confirmedForeground", "providerId", "modelId"],
       "Full Bot access update",
     );
-    if (value.confirmedForeground !== true) {
+    if (value.confirmedForeground !== true || hasProviderId !== hasModelId) {
       throw new Error("Full Bot access update requires foreground confirmation.");
     }
     return {
@@ -2041,6 +2059,12 @@ export function parseAidenRemoteBotAccessUpdateRequest(
         "Full Bot access catalogRevision",
       ),
       confirmedForeground: true,
+      ...(hasProviderId
+        ? {
+            providerId: boundedOpaqueSelectionId(value.providerId, "Full Bot providerId"),
+            modelId: boundedText(value.modelId, "Full Bot modelId", 512),
+          }
+        : {}),
     };
   }
   if (value.accessMode === "custom") {
@@ -2929,6 +2953,34 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botCapabilityCatalog,
     "Canonical Bot Chat",
   );
+  if (botCreate.request.access.accessMode === "full") {
+    assertAvailableBotChatModel(
+      botCreate.request.access.providerId,
+      botCreate.request.access.modelId,
+      botCapabilityCatalog,
+      "Bot create Full Access model",
+    );
+  }
+  if (botPolicyUpdate.request.accessMode === "full") {
+    assertAvailableBotChatModel(
+      botPolicyUpdate.request.providerId,
+      botPolicyUpdate.request.modelId,
+      botCapabilityCatalog,
+      "Bot policy Full Access model",
+    );
+  }
+  for (const [label, detail] of [
+    ["Bot detail", botDetail],
+    ["Bot create response", botCreate.response],
+    ["Bot identity response", botIdentity.response],
+  ] as const) {
+    assertAvailableBotChatModel(
+      detail.modelSelection?.providerId,
+      detail.modelSelection?.modelId,
+      botCapabilityCatalog,
+      label,
+    );
+  }
   const responseSelections: Array<
     readonly [string, AidenRemoteBotCustomSelection | undefined]
   > = [

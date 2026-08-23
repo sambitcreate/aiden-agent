@@ -417,6 +417,67 @@ function parseBoundProvider(value: unknown): BoundBotProviderModel {
   };
 }
 
+/** Strict decoder for the provider/model slice retained by a Full Bot policy. */
+export function parseBoundBotProviderModel(value: unknown): BoundBotProviderModel {
+  return parseBoundProvider(value);
+}
+
+export function cloneBoundBotProviderModel(
+  value: BoundBotProviderModel,
+): BoundBotProviderModel {
+  return parseBoundProvider(value);
+}
+
+export function boundBotProviderModelFingerprint(value: BoundBotProviderModel): string {
+  const provider = parseBoundProvider(value);
+  return botCapabilityFactsFingerprint({
+    providerId: provider.providerOption.id,
+    providerExactFingerprint: provider.providerExactFingerprint,
+    modelId: provider.modelOption.id,
+    modelExactFingerprint: provider.modelExactFingerprint,
+  });
+}
+
+/** Return only public opaque drift facts for a Bot-owned provider/model binding. */
+export function botProviderModelDrift(
+  binding: BoundBotProviderModel,
+  current: BotCapabilityCatalogSnapshot,
+): BotCapabilityDriftIssue[] {
+  binding = parseBoundBotProviderModel(binding);
+  const issues: BotCapabilityDriftIssue[] = [];
+  const provider = current.resources.providers.find(
+    ({ option }) => option.id === binding.providerOption.id,
+  );
+  if (
+    !provider ||
+    provider.sourceId !== binding.sourceProviderId ||
+    provider.exactFingerprint !== binding.providerExactFingerprint
+  ) {
+    issues.push(issue("provider", binding.providerOption.id, "changed_or_removed"));
+  } else if (!provider.option.available) {
+    issues.push(issue("provider", binding.providerOption.id, "unavailable"));
+  }
+  const model = provider?.models.find(({ option }) => option.id === binding.modelOption.id);
+  if (
+    !model ||
+    model.sourceId !== binding.sourceModelId ||
+    model.exactFingerprint !== binding.modelExactFingerprint
+  ) {
+    issues.push(issue("model", binding.modelOption.id, "changed_or_removed"));
+  } else if (!model.option.available) {
+    issues.push(issue("model", binding.modelOption.id, "unavailable"));
+  }
+  return issues;
+}
+
+export function assertBoundBotProviderModelCurrent(
+  binding: BoundBotProviderModel,
+  current: BotCapabilityCatalogSnapshot,
+): void {
+  const issues = botProviderModelDrift(binding, current);
+  if (issues.length > 0) throw new BotCapabilityBindingDriftError(issues);
+}
+
 function parseBoundFileScope(value: unknown, index: number): BoundBotFileScope {
   const scope = storedRecord(value, `Bot bound file scope ${index}`, [
     "option",

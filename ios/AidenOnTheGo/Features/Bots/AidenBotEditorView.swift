@@ -46,8 +46,14 @@ struct AidenBotEditorDraft: Equatable {
     }
 
     init?(detail: AidenBotDetail, catalog: AidenBotCapabilityCatalog) {
-        guard let customAccess = AidenBotCustomAccessDraft(access: detail.access, catalog: catalog)
+        guard var customAccess = AidenBotCustomAccessDraft(access: detail.access, catalog: catalog)
         else { return nil }
+        if let selected = detail.modelSelection,
+           let provider = catalog.providers.first(where: { $0.id == selected.providerId }),
+           provider.models.contains(where: { $0.id == selected.modelId }) {
+            customAccess.providerID = selected.providerId
+            customAccess.modelID = selected.modelId
+        }
         name = detail.name
         purpose = detail.purpose
         openingGreeting = detail.openingGreeting ?? ""
@@ -74,11 +80,21 @@ struct AidenBotEditorDraft: Equatable {
     }
 
     func accessUpdate(catalog: AidenBotCapabilityCatalog) throws -> AidenBotAccessUpdate {
+        let modelSelection = AidenBotModelSelection(
+            providerId: customAccess.providerID,
+            modelId: customAccess.modelID
+        )
+        guard catalog.containsAvailable(
+            providerId: modelSelection.providerId,
+            modelId: modelSelection.modelId
+        ) else {
+            throw AidenBotContractError.invalidCombination("unavailable Bot model")
+        }
         if usesFullAccess {
             guard Self.fullAccessAccepted(in: catalog) else {
                 throw AidenBotContractError.invalidCombination("full access notice")
             }
-            return .full(catalogRevision: catalog.revision)
+            return .full(catalogRevision: catalog.revision, selection: modelSelection)
         }
         let selection = try customAccess.selection()
         guard catalog.containsAvailable(selection) else {
@@ -120,8 +136,9 @@ struct AidenBotEditorDraft: Equatable {
     func changesAccess(comparedTo detail: AidenBotDetail, catalog: AidenBotCapabilityCatalog) throws -> Bool {
         let next = try accessUpdate(catalog: catalog)
         switch next {
-        case .full:
+        case let .full(_, selection):
             return detail.access.accessMode.rawValue != AidenBotAccessMode.full.rawValue
+                || detail.modelSelection != selection
         case let .custom(_, selection):
             return detail.access.accessMode.rawValue != AidenBotAccessMode.custom.rawValue
                 || detail.access.custom != selection
@@ -147,6 +164,7 @@ private struct AidenBotEditorCreateAttempt: Equatable {
     let context: AidenRemoteRequestContext
     let request: AidenBotCreateRequest
     let idempotencyKey: UUID
+    let chatIdempotencyKey: UUID
 }
 
 private struct AidenBotEditorEditAttempt: Equatable {
@@ -238,6 +256,7 @@ struct AidenBotEditorView: View {
     @State private var saveError: String?
     @State private var activeCreateAttempt: AidenBotEditorCreateAttempt?
     @State private var retainedCreateAttempt: AidenBotEditorCreateAttempt?
+    @State private var retainedCreatedBot: AidenBotDetail?
     @State private var activeEditAttempt: AidenBotEditorEditAttempt?
     @State private var avatarModel: AidenBotGeneratedAvatarModel?
     @State private var isConfirmingDiscard = false
@@ -391,7 +410,6 @@ struct AidenBotEditorView: View {
             identitySection
             accessModeSection(catalog)
             aiSection(catalog)
-                .disabled(draft?.usesFullAccess == true)
             optionSection(
                 title: "Connections",
                 description: "Services and accounts this Bot may use.",
@@ -556,6 +574,7 @@ struct AidenBotEditorView: View {
                         .disabled(!provider.available)
                 }
             }
+            .accessibilityHint("Select the AI provider this Bot always uses.")
             Picker("Model", selection: modelBinding(catalog)) {
                 ForEach(selectedProvider(in: catalog)?.models ?? []) { model in
                     Text(optionTitle(model.label, available: model.available))
@@ -563,10 +582,11 @@ struct AidenBotEditorView: View {
                         .disabled(!model.available)
                 }
             }
+            .accessibilityHint("Select the AI model this Bot always uses.")
         } header: {
-            Text("AI")
+            Text("AI Provider and Model")
         } footer: {
-            Text("Provider credentials stay on your Mac.")
+            Text("This Bot uses this Provider and Model in every chat. Credentials stay on your Mac.")
         }
     }
 
@@ -686,6 +706,7 @@ struct AidenBotEditorView: View {
         )
         draft = next
         retainedCreateAttempt = nil
+        retainedCreatedBot = nil
     }
 
     private func textBinding(_ keyPath: WritableKeyPath<AidenBotEditorDraft, String>) -> Binding<String> {
@@ -966,7 +987,8 @@ struct AidenBotEditorView: View {
                 attempt = AidenBotEditorCreateAttempt(
                     context: context,
                     request: createRequest,
-                    idempotencyKey: UUID()
+                    idempotencyKey: UUID(),
+                    chatIdempotencyKey: UUID()
                 )
             }
             retainedCreateAttempt = attempt
@@ -976,14 +998,38 @@ struct AidenBotEditorView: View {
             defer { if activeCreateAttempt == attempt { activeCreateAttempt = nil } }
             guard coordinator.isCurrent(attempt.context), activeCreateAttempt == attempt,
                   capturedContext == attempt.context else { return }
-            let created = try await coordinator.remoteClient(for: attempt.context).createBot(
-                attempt.request,
-                idempotencyKey: attempt.idempotencyKey
+            let client = try coordinator.remoteClient(for: attempt.context)
+            let created: AidenBotDetail
+            if let retainedCreatedBot {
+                created = retainedCreatedBot
+            } else {
+                created = try await client.createBot(
+                    attempt.request,
+                    idempotencyKey: attempt.idempotencyKey
+                )
+                guard coordinator.isCurrent(attempt.context), activeCreateAttempt == attempt,
+                      capturedContext == attempt.context else { return }
+                self.retainedCreatedBot = created
+            }
+            guard coordinator.isCurrent(attempt.context), activeCreateAttempt == attempt,
+                  capturedContext == attempt.context else { return }
+            let model = draft.customAccess
+            _ = try await client.createBotChat(
+                botId: created.id,
+                request: try AidenBotChatCreateRequest(
+                    providerId: model.providerID,
+                    modelId: model.modelID
+                ),
+                idempotencyKey: attempt.chatIdempotencyKey
             )
             guard coordinator.isCurrent(attempt.context), activeCreateAttempt == attempt,
                   capturedContext == attempt.context else { return }
+            let authoritative = try await client.bot(id: created.id)
+            guard coordinator.isCurrent(attempt.context), activeCreateAttempt == attempt,
+                  capturedContext == attempt.context else { return }
             retainedCreateAttempt = nil
-            onSaved(created)
+            retainedCreatedBot = nil
+            onSaved(authoritative)
             dismiss()
         } catch is CancellationError {
             return
@@ -993,7 +1039,7 @@ struct AidenBotEditorView: View {
                 return
             }
             guard coordinator.isCurrent(context), capturedContext == context else { return }
-            if let sentAttempt, retainedCreateAttempt == sentAttempt,
+            if retainedCreatedBot == nil, let sentAttempt, retainedCreateAttempt == sentAttempt,
                !aidenBotEditorCreateFailureIsAmbiguous(error) {
                 retainedCreateAttempt = nil
             }

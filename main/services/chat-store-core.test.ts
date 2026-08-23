@@ -64,6 +64,37 @@ test("serializes assistant persistence with a background title update", async (t
   );
 });
 
+test("Bot model authority changes durably without changing history or activity time", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-model-store-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = createChatStore(async () => directory);
+  const chat = await first.create({
+    botId: "bot:model-owner",
+    providerId: "provider:old",
+    model: "model:old",
+    initialAssistantMessage: "Welcome",
+  });
+  const before = await first.appendMessage(chat.id, {
+    role: "user",
+    content: "Keep this conversation",
+  });
+
+  const changed = await first.setBotModelSelection(
+    chat.id,
+    "provider:new",
+    "model:new",
+    (current) => assert.equal(current.botId, "bot:model-owner"),
+  );
+  assert.equal(changed.updatedAt, before.updatedAt);
+  assert.deepEqual(changed.messages, before.messages);
+
+  const restarted = createChatStore(async () => directory);
+  const restored = await restarted.get(chat.id);
+  assert.equal(restored?.providerId, "provider:new");
+  assert.equal(restored?.model, "model:new");
+  assert.deepEqual(restored?.messages, before.messages);
+});
+
 test("persists canonical Pi assistant provenance across restart without crossing the visible-copy boundary", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-pi-provenance-"),
