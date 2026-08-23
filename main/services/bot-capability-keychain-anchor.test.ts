@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   botCapabilityKeychainAccountForCanonicalRoot,
+  botCapabilitySecurityInteractiveWrite,
   createBotCapabilityKeychainAnchor,
   createBotCapabilityKeychainBootstrapMarker,
   createTelegramBotBindingKeychainAnchor,
@@ -12,6 +13,35 @@ import {
 const TEST_ACCOUNT = botCapabilityKeychainAccountForCanonicalRoot(
   "/private/aiden-test-profile",
 );
+
+test("production Keychain writes use bounded interactive hex without argv secrets", () => {
+  const value = '{"signed":"authority-value"}';
+  const command = botCapabilitySecurityInteractiveWrite(
+    [
+      "add-generic-password",
+      "-U",
+      "-a",
+      TEST_ACCOUNT,
+      "-s",
+      "com.aiden.bot-capability.test.v1",
+      "-w",
+    ],
+    value,
+  );
+  assert.match(
+    command,
+    /^add-generic-password -U -a user-data:[a-f0-9]{64} -s com\.aiden\.bot-capability\.test\.v1 -X [a-f0-9]+\n$/u,
+  );
+  assert.equal(command.includes(value), false);
+  assert.equal(command.includes(Buffer.from(value, "utf8").toString("hex")), true);
+  assert.throws(
+    () => botCapabilitySecurityInteractiveWrite(
+      ["add-generic-password", "-a", "unsafe account", "-w"],
+      value,
+    ),
+    /write command is invalid/u,
+  );
+});
 
 test("Keychain authority sends its value only through bounded stdin", async () => {
   let stored: string | null = null;

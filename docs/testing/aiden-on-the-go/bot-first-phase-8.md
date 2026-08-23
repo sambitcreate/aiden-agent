@@ -34,6 +34,10 @@ The final regression pairs a behavioral Swift policy test with a bounded shippin
 - A signed physical-device run on the connected, unlocked iPhone 13 Pro at Xcode destination `00008110-00063CD91E98801E` passed 27/27 selected tests: 15 native-integration, 10 product-shell, and two pairing/rollout tests. No simulator was used.
 - Independent final review found no remaining P0/P1 security, data-loss, navigation, privacy, or bounded-resource defect in the implemented scope.
 
+## Live development startup follow-up
+
+The first real restart of the shared development profile exposed a macOS Keychain CLI mismatch that mocks could not reproduce: `security add-generic-password -w` prompted on a controlling terminal instead of consuming the piped secret and hit the five-second fail-closed timeout. The writer now uses `security -i` with a strictly bounded command and hex value carried only through stdin; the secret remains absent from process arguments, and the existing compare-before-store plus read-back verification remains authoritative. A temporary isolated keychain proved the real command before the development profile was retried. The focused Keychain tests, type-check, lint, and the full Bot suite pass (387/387 plus 10/10 native pretests). A live restart then created and verified all four protected Bot/Telegram authority items, restored the existing `Aiden Agent Dev` profile, and started Remote on its retained LAN port `49220` without a Bot initialization error.
+
 ## Rollout and open release acceptance
 
 The code-level Phase 8 scope is complete, but the plan remains Active. The mobile flag is enabled in the current Debug and Release build configurations and can be overridden to `NO` for rollback. Wider release still requires owner-authorized external evidence:
