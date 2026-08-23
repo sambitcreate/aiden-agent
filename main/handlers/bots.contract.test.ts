@@ -15,6 +15,25 @@ test("bot identity and managed-home chats use the transaction-owned application 
   assert.doesNotMatch(generation, /interactionSurface/u);
 });
 
+test("desktop and paired Telegram principals have explicit one-time notice IPC paths", () => {
+  const bots = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
+  const ipc = readFileSync(
+    new URL("../../renderer/lib/ipc.ts", import.meta.url),
+    "utf8",
+  );
+  for (const channel of [
+    "bots:getAccessNotice",
+    "bots:acknowledgeAccessNotice",
+    "bots:getTelegramAccessNotice",
+    "bots:acknowledgeTelegramAccessNotice",
+  ]) {
+    assert.match(bots, new RegExp(channel, "u"));
+    assert.match(ipc, new RegExp(channel, "u"));
+  }
+  assert.match(bots, /parseBotNoticeAcknowledgement/u);
+  assert.match(bots, /telegramBotNoticeAudienceId\(\s*profileName,/u);
+});
+
 test("bot face generation is main-owned and uses only the bounded Pi recipe", () => {
   const bots = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
   const params = readFileSync(new URL("./bot-params.ts", import.meta.url), "utf8");
@@ -47,10 +66,12 @@ test("generation resolves persisted bot identity and leaves ordinary prompts unc
     client,
     /resolveBotForGeneration\([\s\S]{0,140}\(botId\) => botStore\.get\(botId\)/u,
   );
-  assert.match(
-    client,
-    /const botSystemPrompt = authoritativeBot[\s\S]{0,180}\? withBotPersona\(baseSystemPrompt, authoritativeBot\)[\s\S]{0,80}: baseSystemPrompt/u,
-  );
+  assert.match(client, /const botSystemPrompt = authoritativeBot/u);
+  assert.match(client, /\? withBotRuntimeInstructions\(/u);
+  assert.match(client, /: baseSystemPrompt;/u);
+  assert.match(client, /botRuntimeAuthority\.admit\(\{/u);
+  assert.match(client, /prepareBotGeneration\(\{/u);
+  assert.match(client, /revalidateBeforeEffect\(\)/u);
   assert.match(client, /resolvePiAgentRuntimeContributionSnapshot\(\s*botSystemPrompt,/u);
 });
 
@@ -84,7 +105,25 @@ test("Telegram profile reset and deletion share the binding incarnation fence", 
   assert.match(service, /resetPairing[\s\S]*telegramProfileMutationFence\.runDestructive\(profile/u);
   assert.match(service, /deleteProfile[\s\S]*telegramBotBindingAuthority\.disableProfile\(profile\)/u);
   assert.match(service, /resetPairing[\s\S]*telegramBotBindingAuthority\.disableProfile\(profile\)/u);
+  assert.match(service, /deleteProfile[\s\S]*revokeTelegramBotNoticeForCurrentOwner\(profile\)/u);
+  assert.match(service, /resetPairing[\s\S]*revokeTelegramBotNoticeForCurrentOwner\(profile\)/u);
   assert.match(service, /async start\(\): Promise<void> \{\s*await telegramBotBindings\.assertHealthy\(\)/u);
+});
+
+test("Remote production wires Bot notice and retained-chat policy authority", () => {
+  const remote = readFileSync(
+    new URL("../services/aiden-remote-service-main.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(remote, /retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat/u);
+  assert.match(remote, /botApplicationService\.authorizeRetainedChat\(\{/u);
+  assert.match(remote, /botNotice:\s*\{/u);
+  assert.match(remote, /botApplicationService\.acknowledgeNotice/u);
+  assert.match(remote, /revokeNoticeAudience\(deviceId\)/u);
+  assert.match(
+    remote,
+    /const revoked = await revokeAidenRemoteRuntimeDevice[\s\S]*await botApplicationService\.revokeNoticeAudience\(deviceId\);\s*return revoked;/u,
+  );
 });
 
 test("Telegram authority reduction stays independent from Bot mutation health", () => {

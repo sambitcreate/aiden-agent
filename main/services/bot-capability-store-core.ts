@@ -503,7 +503,11 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
     if (
       chat.mode === "custom" &&
       policy.accessMode === "custom" &&
-      !botCustomSelectionIsSubset(chat.custom, policy.custom)
+      !botCustomSelectionIsSubset(
+        chat.custom,
+        policy.custom,
+        policy.binding.fileScopes.map(({ option }) => option),
+      )
     ) {
       throw new BotCapabilityUnavailableError("Bot chat access exceeds its stored Bot policy.");
     }
@@ -1009,7 +1013,11 @@ export class BotCapabilityStateEditor {
       for (let index = 0; index < this.state.chats.length; index += 1) {
         const chat = this.state.chats[index]!;
         if (chat.botId !== policy.botId || chat.mode !== "custom") continue;
-        const custom = intersectBotCustomSelections(chat.custom, nextPolicy.custom);
+        const custom = intersectBotCustomSelections(
+          chat.custom,
+          nextPolicy.custom,
+          input.catalog.fileScopes,
+        );
         if (botCustomSelectionsEqual(custom, chat.custom)) continue;
         if (chat.policyEpoch >= Number.MAX_SAFE_INTEGER) {
           throw new Error("Bot chat capability policy epoch is exhausted.");
@@ -1056,7 +1064,10 @@ export class BotCapabilityStateEditor {
     const custom = input.custom === undefined ? undefined : parseBotCustomSelection(input.custom);
     if (custom) {
       validateSelectionAgainstCatalog(custom, input.catalog);
-      if (policy.accessMode === "custom" && !botCustomSelectionIsSubset(custom, policy.custom)) {
+      if (
+        policy.accessMode === "custom" &&
+        !botCustomSelectionIsSubset(custom, policy.custom, input.catalog.fileScopes)
+      ) {
         throw new BotCapabilitySubsetError();
       }
     }
@@ -1093,7 +1104,10 @@ export class BotCapabilityStateEditor {
     this.assertPolicyRevision(policy, access.expectedBotPolicyRevision);
     if (access.mode === "custom") {
       validateSelectionAgainstCatalog(access.custom, input.catalog);
-      if (policy.accessMode === "custom" && !botCustomSelectionIsSubset(access.custom, policy.custom)) {
+      if (
+        policy.accessMode === "custom" &&
+        !botCustomSelectionIsSubset(access.custom, policy.custom, input.catalog.fileScopes)
+      ) {
         throw new BotCapabilitySubsetError();
       }
     }

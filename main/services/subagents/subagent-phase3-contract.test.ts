@@ -134,7 +134,10 @@ test("chat removal deletes private child history before the chat can disappear",
     source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
   ]);
-  assert.match(handler, /chatApplicationService\.remove\(asString\(id, "id"\)\)/u);
+  assert.match(
+    handler,
+    /const chatId = asString\(id, "id"\);[\s\S]*if \(chat\?\.botId\)[\s\S]*botApplicationService\.deleteChat\([\s\S]*return chatApplicationService\.remove\(chatId\)/u,
+  );
   const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
   const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");
   const deleteRuns = applicationService.indexOf(
@@ -785,8 +788,9 @@ test("managed worktree identity gates generation, terminal, scheduled, and works
   ]);
   assert.match(
     llm,
-    /if \(workspace\) await assertManagedWorktreeAdmission\(workspace\)/u,
+    /if \(workspace && !botBound\) await assertManagedWorktreeAdmission\(workspace\)/u,
   );
+  assert.match(llm, /botContext\?\.prepared\.workspace/u);
   assert.match(
     terminal,
     /workspaceFolder[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,

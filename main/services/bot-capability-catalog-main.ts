@@ -83,7 +83,12 @@ function relayAbort(parent: AbortSignal, child: AbortController): () => void {
 export class BotCapabilityCatalogMainService {
   private keyPromise?: Promise<Uint8Array>;
 
-  constructor(private readonly ports: BotCapabilityInventoryPorts) {}
+  constructor(
+    private readonly ports: BotCapabilityInventoryPorts,
+    private readonly hooks: {
+      onRuntimeSnapshot?(botId: string | undefined, snapshot: BotCapabilityCatalogSnapshot): void;
+    } = {},
+  ) {}
 
   private selectionKey(): Promise<Uint8Array> {
     this.keyPromise ??= this.ports.loadOpaqueSelectionKey().then((value) => {
@@ -217,7 +222,7 @@ export class BotCapabilityCatalogMainService {
       botId?: string;
     } = {},
   ): Promise<BotCapabilityCatalogSnapshot> {
-    return this.buildSnapshot({
+    const snapshot = await this.buildSnapshot({
       notice: {
         version: BOT_FULL_ACCESS_NOTICE_VERSION,
         requiresAcknowledgement: true,
@@ -226,6 +231,8 @@ export class BotCapabilityCatalogMainService {
       signal: input.signal,
       botId: input.botId,
     });
+    this.hooks.onRuntimeSnapshot?.(input.botId, snapshot);
+    return snapshot;
   }
 
   /** Re-read every inventory before binding, so a stale UI revision fails closed. */
@@ -294,6 +301,9 @@ export class BotCapabilityCatalogMainService {
 
 export function createBotCapabilityCatalogMainService(
   ports: BotCapabilityInventoryPorts,
+  hooks: {
+    onRuntimeSnapshot?(botId: string | undefined, snapshot: BotCapabilityCatalogSnapshot): void;
+  } = {},
 ): BotCapabilityCatalogMainService {
-  return new BotCapabilityCatalogMainService(ports);
+  return new BotCapabilityCatalogMainService(ports, hooks);
 }

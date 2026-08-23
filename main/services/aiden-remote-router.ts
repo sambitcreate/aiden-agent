@@ -32,6 +32,11 @@ import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
+import {
+  parseBotNoticeAcknowledgement,
+  type BotNoticeAcknowledgement,
+  type BotNoticeStatus,
+} from "../../renderer/shared/bot-capabilities.js";
 
 const MAX_REQUEST_BODY_BYTES = 1_048_576;
 const MAX_FILE_REQUEST_BODY_BYTES = 6 * 1_048_576;
@@ -90,6 +95,13 @@ export interface AidenRemoteRouterDependencies {
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+  botNotice?: {
+    status(deviceId: string): Promise<BotNoticeStatus>;
+    acknowledge(
+      deviceId: string,
+      acknowledgement: BotNoticeAcknowledgement,
+    ): Promise<BotNoticeStatus>;
+  };
   connectionMode(): AidenRemoteConnectionMode;
   now(): number;
   /** Tailscale Serve strips the public API prefix before loopback proxying. */
@@ -101,6 +113,7 @@ export interface AidenRemoteRouterDependencies {
       | "pairingManualBootstrap"
       | "pairingExchange"
       | "server"
+      | "botAccessNotice"
       | "workspaces"
       | "workspace"
       | "workspaceBrowserRoots"
@@ -626,6 +639,18 @@ function requireEmptyObject(value: unknown): void {
   }
 }
 
+function botNoticeAcknowledgement(value: unknown): BotNoticeAcknowledgement {
+  try {
+    return parseBotNoticeAcknowledgement(value);
+  } catch {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The Bot access notice acknowledgement is invalid.",
+      400,
+    );
+  }
+}
+
 export function createAidenRemoteRequestHandler(
   dependencies: AidenRemoteRouterDependencies,
 ): (request: IncomingMessage, response: ServerResponse) => void {
@@ -714,6 +739,51 @@ export function createAidenRemoteRequestHandler(
           serverTime: new Date(dependencies.now()).toISOString(),
         };
         writeJson(response, 200, projection);
+        return;
+      }
+      if (request.method === "GET" && path === "/bot-access-notice") {
+        requireNoQuery(query);
+        route = "botAccessNotice";
+        const device = await authenticate(request, dependencies.devices, "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.botNotice) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This endpoint is unavailable.",
+            404,
+          );
+        }
+        writeJson(response, 200, await dependencies.botNotice.status(device.id));
+        return;
+      }
+      if (
+        request.method === "POST" &&
+        path === "/bot-access-notice/acknowledgement"
+      ) {
+        requireNoQuery(query);
+        route = "botAccessNotice";
+        const body = botNoticeAcknowledgement(await readJsonBody(request));
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!device.capabilities.has("bot:read")) {
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "This device does not have access to that Aiden capability.",
+            403,
+          );
+        }
+        if (!dependencies.botNotice) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This endpoint is unavailable.",
+            404,
+          );
+        }
+        writeJson(
+          response,
+          200,
+          await dependencies.botNotice.acknowledge(device.id, body),
+        );
         return;
       }
       if (path === "/workspaces" && request.method === "GET") {

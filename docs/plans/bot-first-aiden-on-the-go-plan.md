@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phases 0–2 complete August 23, 2026; Phase 3 next
+- Status: Active; Phases 0–3 complete August 23, 2026; Phase 4 next
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -445,6 +445,8 @@ Acceptance:
 - create/update/archive/restore/copy/restart and simulated crash points reconcile without duplicate homes, implicit repositories, or authority outside the selected mode.
 
 ### Phase 3 — Enforce Full/Custom access and managed workspace behavior
+
+Completed August 23, 2026. Every Bot turn now enters through exact Bot/chat/audience authority, runs from its managed home with the Bot workspace instructions, binds the selected provider/model without fallback, and carries live policy and inventory leases through every controlled tool effect. Full and Custom Files, shell, MCP, Skill, subagent, Remote, desktop, and Telegram surfaces share the same main-owned resolver. Native descriptor-relative Telegram inbox storage closes parent-directory replacement races. Schedules remain honestly unavailable to Bots until the delayed scheduler can persist Bot identity and re-admit current authority at execution time. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-3.md`.
 
 1. Set each bot home as the working directory and ordinary save destination for its chats; assert provisioning never creates `.git`.
 2. Update the main-owned bot system prompt with the managed-home contract, outside-Mac inspection rule, minimal-change rule, and no-automatic-Git rule defined above.

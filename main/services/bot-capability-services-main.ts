@@ -21,14 +21,26 @@ import { createBotLifecycleJournal } from "./bot-lifecycle-journal.js";
 import { createBotManagedWorkspaceService } from "./bot-managed-workspace.js";
 import { configStore } from "./config-store.js";
 import { inspectConfiguredMcpToolsForBotCatalog } from "./mcp.js";
-import { resolveBotMcpInventory } from "./bot-mcp-inventory.js";
-import { resolveBotCapabilitySkills } from "./bot-skill-inventory.js";
+import {
+  resolveBotMcpConnectionIdentities,
+  resolveBotMcpInventory,
+} from "./bot-mcp-inventory.js";
+import {
+  resolveBotCapabilitySkills,
+  resolveBotRuntimeSkillBindings,
+} from "./bot-skill-inventory.js";
 import { secrets } from "./secrets.js";
 import { discoverSkillCandidates } from "./skills-discovery.js";
 import { subagentsEnabled } from "./subagents/feature-flag.js";
 import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js";
 import { botStore } from "./bot-store.js";
 import { chatStore } from "./chat-store.js";
+import {
+  botRuntimeInventoryLeases,
+  invalidateBotRuntimeInventoryAuthority,
+} from "./bot-runtime-inventory-lease.js";
+import { BotSkillContentWatcher } from "./bot-skill-content-watcher.js";
+import { skillRegistry } from "./skill-registry-main.js";
 
 export const BOT_SERVICE_DIRECTORY = "bot-service";
 
@@ -54,6 +66,27 @@ export async function prepareBotServiceStorage(): Promise<void> {
 const opaqueKeyStore = createBotCapabilityOpaqueKeyStore({
   root: botServiceRoot,
 });
+
+export const botSkillContentWatcher = new BotSkillContentWatcher(() => {
+  skillRegistry.invalidate();
+  invalidateBotRuntimeInventoryAuthority("skill_content");
+});
+
+/** Main-only join from exact Bot grants to the existing runtime skill registry. */
+export async function resolveBotRuntimeSkills(botId: string) {
+  const skills = await resolveBotRuntimeSkillBindings({
+    loadIdentityKey: () => opaqueKeyStore.load(),
+    listConfigured: () => configStore.listSkills(),
+    botId,
+    loadBotHomePath: async () => (await botManagedWorkspace.resolve(botId)).homePath,
+    discover: (workspaceRoot) => discoverSkillCandidates(workspaceRoot),
+  });
+  await botSkillContentWatcher.watchSkillFiles(
+    skills.flatMap(({ runtimePath }) => runtimePath ? [runtimePath] : []),
+  );
+  return skills;
+}
+
 let capabilityKeychainAccountPromise: Promise<string> | undefined;
 const capabilityKeychainAccount = (): Promise<string> => {
   capabilityKeychainAccountPromise ??= fs
@@ -95,6 +128,18 @@ export const botCapabilityStore = createBotCapabilityStore({
   checkpoint: capabilityStateCheckpoint,
 });
 const capabilityIncarnations = createBotCapabilityIncarnationStore(botCapabilityStore);
+
+/** Fresh durable identities for the exact Bot-to-child MCP authority join. */
+export function resolveBotRuntimeMcpConnectionIdentities(signal: AbortSignal) {
+  return resolveBotMcpConnectionIdentities(signal, {
+    listServers: () => configStore.listMcpServers(),
+    credentialSignature: async (server, currentSignal) => {
+      if (currentSignal.aborted) throw currentSignal.reason;
+      return botMcpCredentialSignature(server, await opaqueKeyStore.load());
+    },
+    incarnations: capabilityIncarnations,
+  });
+}
 export const botManagedWorkspace = createBotManagedWorkspaceService({
   root: botServiceRoot,
 });
@@ -165,4 +210,12 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
     hasWebCredential: async () => Boolean(await secrets.getKey("exa")),
     subagentsAvailable: () => subagentsEnabled(),
   }),
+  {
+    onRuntimeSnapshot: (botId, snapshot) => {
+      botRuntimeInventoryLeases.publishFingerprint(
+        botId === undefined ? "global" : `bot:${botId}`,
+        snapshot.catalog.revision,
+      );
+    },
+  },
 );

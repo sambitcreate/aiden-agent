@@ -55,6 +55,7 @@ import {
   telegramProfilePatch,
   telegramProfileRuntimeFile,
   telegramProfileTokenKey,
+  telegramBotNoticeAudienceId,
 } from "./telegram-profile-config.js";
 import { createTelegramThreadStore } from "./telegram-thread-store.js";
 import { createTelegramOwnershipLease } from "./telegram-ownership.js";
@@ -67,6 +68,10 @@ import { registerTelegramDirectRuntime } from "./telegram-direct-runtime.js";
 import { firstVisibleModelForProvider } from "../../../renderer/shared/model-visibility.js";
 import { botStore } from "../bot-store.js";
 import { botApplicationService } from "../bot-application-service-main.js";
+import { botManagedWorkspace } from "../bot-capability-services-main.js";
+import { resolveBotInboundAttachmentHome } from "../bot-inbound-attachment-home.js";
+import { preflightBotTurnAuthority } from "../bot-runtime-authority-main.js";
+import { writeBotInboundAttachment } from "../bot-inbound-attachment-inbox.js";
 import {
   telegramBotBindingAuthority,
   telegramBotBindings,
@@ -79,6 +84,16 @@ let profileSettingsMutation = Promise.resolve();
 
 async function getProfileSettings(profile: string) {
   return projectTelegramProfile(await configStore.getSettings(), profile);
+}
+
+async function revokeTelegramBotNoticeForCurrentOwner(
+  profile: string,
+): Promise<void> {
+  const ownerUserId = (await getProfileSettings(profile)).telegramAllowedUserId;
+  if (ownerUserId === undefined) return;
+  await botApplicationService.revokeNoticeAudience(
+    telegramBotNoticeAudienceId(profile, ownerUserId),
+  );
 }
 
 const validateTelegramBotBinding = createTelegramBotBindingValidator({
@@ -113,21 +128,28 @@ async function setProfileSettings(
   return result!;
 }
 
-async function resolveProvider(profile = DEFAULT_TELEGRAM_PROFILE): Promise<{
+async function resolveProvider(
+  profile = DEFAULT_TELEGRAM_PROFILE,
+  requestedProviderId?: string,
+  requestedModel?: string,
+): Promise<{
   providerId: string;
   model: string;
   provider: StoredProvider;
 } | null> {
   const settings = await getProfileSettings(profile);
   // Prefer Telegram-specific provider/model, fall back to the global default.
-  const providerId = settings.telegramProviderId ?? settings.lastProviderId;
+  if ((requestedProviderId === undefined) !== (requestedModel === undefined)) {
+    return null;
+  }
+  const providerId = requestedProviderId ?? settings.telegramProviderId ?? settings.lastProviderId;
   if (!providerId) return null;
   const provider =
     (await providerRegistry.selectionProvider(providerId)) ??
     (await configStore.getProvider(providerId));
   if (!provider) return null;
   const model =
-    settings.telegramModel ??
+    requestedModel ?? settings.telegramModel ??
     firstVisibleModelForProvider(
       settings.hiddenModelsByProvider,
       providerId,
@@ -446,17 +468,43 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
         chatId,
       ),
     transcribeAudio: transcribe,
-    storeInboundFile: async ({ bytes, name, workspaceId }) => {
-      const workspace = workspaceId
+    storeInboundFile: async ({ bytes, name, workspaceId, botId }) => {
+      const botHome = await resolveBotInboundAttachmentHome({
+        botId,
+        workspaceId,
+        resolveManagedWorkspace: (id) =>
+          botApplicationService.resolveManagedWorkspace(id),
+        revalidateManagedWorkspace: (expected) =>
+          botManagedWorkspace.revalidate(expected),
+        canonicalize: realpath,
+      });
+      // Bot routes must never fall through to either a regular Workspace or
+      // the global inbox. The resolver above throws for every Bot mismatch.
+      const workspace = !botId && workspaceId
         ? await configStore.getWorkspace(workspaceId)
         : undefined;
-      const workspaceRoot =
+      const workspaceRoot = botHome?.homePath ?? (
         isTelegramFolderWorkspace(workspace) && workspace.folderPath
           ? await realpath(workspace.folderPath)
-          : undefined;
+          : undefined
+      );
       const root = workspaceRoot
         ? path.join(workspaceRoot, ".aiden", "telegram-inbox", profile)
         : path.join(app.getPath("userData"), "telegram-inbox", profile);
+      if (botHome) {
+        const safeName =
+          path
+            .basename(name)
+            .replace(/[^A-Za-z0-9._-]+/gu, "_")
+            .slice(-120) || "telegram-file";
+        const leaf = `${randomUUID()}-${safeName}`;
+        return writeBotInboundAttachment({
+          home: botHome,
+          profile,
+          leaf,
+          bytes,
+        });
+      }
       await mkdir(root, { recursive: true, mode: 0o700 });
       const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1_000;
       for (const entry of await readdir(root, { withFileTypes: true }).catch(
@@ -644,10 +692,11 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     turn: {
       llmClient,
       chatStore,
-      resolveProvider: () => resolveProvider(profile),
+      resolveProvider: (providerId, model) => resolveProvider(profile, providerId, model),
       resolveThinkingLevel: async () =>
         (await getProfileSettings(profile)).telegramThinkingLevel,
       resolveWorkspace,
+      preflightBotTurnAuthority,
       broadcastMetadata,
     },
     getToken: () => secrets.getKey(tokenKey),
@@ -892,6 +941,7 @@ export function createTelegramProfileManager() {
         const service = services.get(profile);
         await service?.stopAndSettle();
         await telegramBotBindingAuthority.disableProfile(profile);
+        await revokeTelegramBotNoticeForCurrentOwner(profile);
         await service?.resetPairing();
         services.delete(profile);
         await secrets.deleteKey(telegramProfileTokenKey(profile));
@@ -935,6 +985,7 @@ export function createTelegramProfileManager() {
       const profile = activeProfile;
       await telegramProfileMutationFence.runDestructive(profile, async () => {
         await telegramBotBindingAuthority.disableProfile(profile);
+        await revokeTelegramBotNoticeForCurrentOwner(profile);
         await serviceFor(profile).resetPairing();
       });
     },

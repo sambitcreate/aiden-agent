@@ -8,6 +8,7 @@ import {
   type AidenRemoteCapability,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
@@ -25,6 +26,10 @@ async function fixture(options: {
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
+  let notice: import("../../renderer/shared/bot-capabilities.js").BotNoticeStatus = {
+    version: BOT_FULL_ACCESS_NOTICE_VERSION,
+    requiresAcknowledgement: true,
+  };
   const workspace = {
     id: "workspace-1",
     name: "Project",
@@ -271,6 +276,24 @@ async function fixture(options: {
         days: [],
         models: [],
       }),
+    },
+    botNotice: {
+      status: async (deviceId) => {
+        calls.push(`bot-notice:status:${deviceId}`);
+        return notice;
+      },
+      acknowledge: async (deviceId, acknowledgement) => {
+        calls.push(
+          `bot-notice:ack:${deviceId}:${acknowledgement.decision}`,
+        );
+        notice = {
+          version: BOT_FULL_ACCESS_NOTICE_VERSION,
+          requiresAcknowledgement: false,
+          acceptedAt: new Date(1_000).toISOString(),
+          acceptedDecision: acknowledgement.decision,
+        };
+        return notice;
+      },
     },
     streams: {
       streamChatId: () => "chat-1",
@@ -526,6 +549,100 @@ test("Bot-aware server projection separates supported capabilities from device g
     assert.equal(server.serverCapabilities.includes("bot:read"), true);
     assert.equal(server.serverCapabilities.includes("bot:write"), true);
     assert.notDeepEqual(server.serverCapabilities, server.capabilities);
+  } finally {
+    await app.close();
+  }
+});
+
+test("paired devices explicitly acknowledge the one-time Bot notice under their stable device id", async () => {
+  const app = await fixture({ capabilities: ["bot:read", "bot:write"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const pending = await fetch(`${app.base}/bot-access-notice`, { headers });
+    assert.equal(pending.status, 200);
+    assert.deepEqual(await pending.json(), {
+      version: BOT_FULL_ACCESS_NOTICE_VERSION,
+      requiresAcknowledgement: true,
+    });
+
+    const accepted = await fetch(
+      `${app.base}/bot-access-notice/acknowledgement`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          version: BOT_FULL_ACCESS_NOTICE_VERSION,
+          decision: "customize_first",
+          confirmedForeground: true,
+        }),
+      },
+    );
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(await accepted.json(), {
+      version: BOT_FULL_ACCESS_NOTICE_VERSION,
+      requiresAcknowledgement: false,
+      acceptedAt: new Date(1_000).toISOString(),
+      acceptedDecision: "customize_first",
+    });
+
+    const reread = await fetch(`${app.base}/bot-access-notice`, { headers });
+    assert.equal(reread.status, 200);
+    assert.equal((await reread.json()).acceptedDecision, "customize_first");
+    assert.deepEqual(app.calls.filter((call) => call.startsWith("bot-notice:")), [
+      "bot-notice:status:device-authorized-12345678",
+      "bot-notice:ack:device-authorized-12345678:customize_first",
+      "bot-notice:status:device-authorized-12345678",
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Bot notice acknowledgement requires both Bot grants and exact foreground disclosure", async () => {
+  const app = await fixture({ capabilities: ["bot:write"] });
+  try {
+    const response = await fetch(
+      `${app.base}/bot-access-notice/acknowledgement`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${"a".repeat(43)}`,
+          "aiden-protocol-version": "1",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          version: BOT_FULL_ACCESS_NOTICE_VERSION,
+          decision: "continue_full",
+          confirmedForeground: false,
+        }),
+      },
+    );
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "invalid_request");
+    assert.equal(app.calls.some((call) => call.startsWith("bot-notice:ack:")), false);
+
+    const disclosed = await fetch(
+      `${app.base}/bot-access-notice/acknowledgement`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${"a".repeat(43)}`,
+          "aiden-protocol-version": "1",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          version: BOT_FULL_ACCESS_NOTICE_VERSION,
+          decision: "continue_full",
+          confirmedForeground: true,
+        }),
+      },
+    );
+    assert.equal(disclosed.status, 403);
+    assert.equal((await disclosed.json()).error.code, "capability_denied");
+    assert.equal(app.calls.some((call) => call.startsWith("bot-notice:ack:")), false);
   } finally {
     await app.close();
   }

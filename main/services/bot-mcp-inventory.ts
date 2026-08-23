@@ -19,8 +19,62 @@ export interface BotMcpInventoryDependencies {
   deadlineMs?: number;
 }
 
+export interface BotMcpConnectionIdentity {
+  readonly serverId: string;
+  readonly connectionFingerprint: string;
+}
+
+type BotMcpConnectionIdentityDependencies = Pick<
+  BotMcpInventoryDependencies,
+  "listServers" | "credentialSignature" | "incarnations"
+>;
+
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new Error("Bot MCP inventory discovery was cancelled.");
+}
+
+/**
+ * Resolve the durable, rollback-resistant connection identities used by Bot
+ * grants. Child MCP inventories retain their process-owned fingerprints, so a
+ * caller must positively join them through this fresh identity snapshot rather
+ * than comparing two intentionally different credential domains.
+ */
+export async function resolveBotMcpConnectionIdentities(
+  signal: AbortSignal,
+  dependencies: BotMcpConnectionIdentityDependencies,
+): Promise<readonly BotMcpConnectionIdentity[]> {
+  if (signal.aborted) throw abortReason(signal);
+  const servers = [...(await dependencies.listServers())]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .slice(0, BOT_CAPABILITY_LIMITS.connections);
+  if (signal.aborted) throw abortReason(signal);
+  const signatures = await Promise.all(
+    servers.map((server) => dependencies.credentialSignature(server, signal)),
+  );
+  if (signal.aborted) throw abortReason(signal);
+  const incarnations = await dependencies.incarnations.reconcileNamespace(
+    "mcp",
+    servers.map((server, index) => ({
+      sourceId: server.id,
+      credentialSignature: signatures[index]!,
+    })),
+  );
+  if (signal.aborted) throw abortReason(signal);
+  const incarnationById = new Map(
+    incarnations.map((value) => [value.sourceId, value] as const),
+  );
+  return servers.map((server) => {
+    const incarnation = incarnationById.get(server.id);
+    if (!incarnation) throw new Error("Bot MCP incarnation was not resolved.");
+    return {
+      serverId: server.id,
+      connectionFingerprint: botCapabilityFactsFingerprint({
+        runtime: mcpRuntimeConnectionSnapshot(server),
+        resourceIncarnation: incarnation.resourceIncarnation,
+        credentialIncarnation: incarnation.credentialIncarnation,
+      }),
+    };
+  });
 }
 
 /**
@@ -53,24 +107,19 @@ export async function resolveBotMcpInventory(
       const servers = [...(await dependencies.listServers())]
         .sort((left, right) => left.id.localeCompare(right.id))
         .slice(0, BOT_CAPABILITY_LIMITS.connections);
-      const signatures = await Promise.all(
-        servers.map((server) => dependencies.credentialSignature(server, controller.signal)),
-      );
-      const incarnations = await dependencies.incarnations.reconcileNamespace(
-        "mcp",
-        servers.map((server, index) => ({
-          sourceId: server.id,
-          credentialSignature: signatures[index]!,
-        })),
-      );
-      const incarnationById = new Map(
-        incarnations.map((value) => [value.sourceId, value] as const),
+      const identities = await resolveBotMcpConnectionIdentities(controller.signal, {
+        listServers: async () => servers,
+        credentialSignature: dependencies.credentialSignature,
+        incarnations: dependencies.incarnations,
+      });
+      const identityById = new Map(
+        identities.map((value) => [value.serverId, value] as const),
       );
       const completed: SubagentMcpScopeV2[] = [];
       await Promise.allSettled(
         servers.filter(({ enabled }) => enabled).map(async (server) => {
-          const incarnation = incarnationById.get(server.id);
-          if (!incarnation) throw new Error("Bot MCP incarnation was not resolved.");
+          const identity = identityById.get(server.id);
+          if (!identity) throw new Error("Bot MCP connection identity was not resolved.");
           const tools = normalizeSubagentMcpInventoryV2(
             await dependencies.inspectTools(server, controller.signal),
           ).map((tool) =>
@@ -86,11 +135,7 @@ export async function resolveBotMcpInventory(
           if (controller.signal.aborted || tools.length === 0) return;
           completed.push({
             serverId: server.id,
-            connectionFingerprint: botCapabilityFactsFingerprint({
-              runtime: mcpRuntimeConnectionSnapshot(server),
-              resourceIncarnation: incarnation.resourceIncarnation,
-              credentialIncarnation: incarnation.credentialIncarnation,
-            }),
+            connectionFingerprint: identity.connectionFingerprint,
             tools,
           });
         }),

@@ -6,12 +6,18 @@
 import { createPortableConfigStores } from "./portable-config-core.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import { invalidateChangedMcpConfigurationLeases } from "./mcp-config-lease.js";
+import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
+import {
+  invalidateChangedBotPortableAuthority,
+  invalidateChangedBotSettingsAuthority,
+} from "./bot-runtime-inventory-publication.js";
 
 export const configStores = createPortableConfigStores(
   () => aidenConfigDir(),
   undefined,
   {
     beforePortableExternalCacheCommit: (previous, next) => {
+      invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority);
       if (!previous) return;
       invalidateChangedMcpConfigurationLeases(
         previous.mcpServers,
@@ -19,12 +25,21 @@ export const configStores = createPortableConfigStores(
       );
     },
     beforePortableWritePublish: (previous, next) => {
+      invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority);
       if (!previous) return;
       invalidateChangedMcpConfigurationLeases(
         previous.mcpServers,
         next.mcpServers,
       );
     },
+    afterPortableWritePublish: (previous, next) =>
+      invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
+    beforeSettingsExternalCacheCommit: (previous, next) =>
+      invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
+    beforeSettingsWritePublish: (previous, next) =>
+      invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
+    afterSettingsWritePublish: (previous, next) =>
+      invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
   },
 );
 

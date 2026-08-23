@@ -303,6 +303,7 @@ function fixture(options: {
       async initialize() { events.push("policy:initialize"); },
       async noticeStatus() { return catalog().catalog.notice; },
       async acknowledgeNotice() { return catalog().catalog.notice; },
+      async revokeNoticeAudience() { return true; },
       async auditBotInventory(botIds: readonly string[]) {
         return {
           complete: botIds.every((id) => policies.has(id)),
@@ -362,6 +363,26 @@ function fixture(options: {
         return changed;
       },
       async getBotBinding(id: string) { return botBindings.get(id); },
+      async assertAuthorityBindingsCurrent(input: { botId: string }) {
+        if (!botBindings.has(input.botId)) {
+          throw new BotCapabilityUnavailableError("missing binding");
+        }
+        events.push("policy:validate-current-binding");
+        return botBindings.get(input.botId);
+      },
+      async admit(input: { botId: string; chatId?: string }) {
+        if (
+          authorityStatuses.get(input.botId) !== "active" ||
+          (input.chatId !== undefined && !chatPolicies.has(input.chatId))
+        ) {
+          throw new BotCapabilityUnavailableError("authority unavailable");
+        }
+        events.push("policy:admit");
+        return {
+          policy: {},
+          lease: { release() { events.push("policy:release"); } },
+        };
+      },
       async createBotPolicy(input: { botId: string; binding?: unknown }) {
         events.push(input.binding ? "policy:create:bound" : "policy:create");
         const value = botPolicy(input.botId);
@@ -998,6 +1019,60 @@ test("post-visible chat journal failures recover the exact chat in the live serv
   assert.equal(app.pending.size, 0);
 });
 
+test("Custom Bot chats atomically derive their exact bound provider and model", async () => {
+  const owner = bot("bot:custom-chat");
+  const app = fixture({ bots: [owner] });
+  await app.service.initialize();
+  const current = app.policies.get(owner.id)!;
+  const custom = {
+    providerId: "provider:opaque",
+    modelId: "model:opaque",
+    fileScopeIds: ["scope:home"],
+    shellEnabled: false,
+    connectionIds: [],
+    skillIds: [],
+    otherCapabilityIds: [],
+  };
+  app.policies.set(owner.id, {
+    ...current,
+    accessMode: "custom",
+    custom,
+    summary: "Custom",
+  });
+  app.botBindings.set(owner.id, {
+    provider: {
+      sourceProviderId: "provider:exact",
+      sourceModelId: "model:exact",
+    },
+  });
+  app.events.length = 0;
+
+  const chat = await app.service.createChat({
+    audienceId: "device:a",
+    botId: owner.id,
+  });
+  assert.equal(chat.providerId, "provider:exact");
+  assert.equal(chat.model, "model:exact");
+  assert.ok(
+    app.events.indexOf("catalog:retained-binding") <
+      app.events.indexOf("policy:validate-current-binding"),
+  );
+  assert.ok(
+    app.events.indexOf("policy:validate-current-binding") <
+      app.events.indexOf("chat-policy:create"),
+  );
+
+  await assert.rejects(
+    app.service.createChat({
+      audienceId: "device:a",
+      botId: owner.id,
+      providerId: "provider:other",
+      model: "model:exact",
+    }),
+    /must use its selected provider and model/u,
+  );
+});
+
 test("an unrecoverable visible commit fences later Bot mutations until restart", async () => {
   const owner = bot("bot:poisoned-live-recovery");
   const app = fixture({
@@ -1331,6 +1406,57 @@ test("archived Bot chats remain readable but reject a new delete mutation", asyn
   assert.equal(app.chats.has(chat.id), true);
   assert.equal(app.chatPolicies.has(chat.id), true);
   assert.deepEqual(app.events, []);
+});
+
+test("retained Bot authorization preserves archived handles and admits active writes", async () => {
+  const owner = bot("bot:retained");
+  const app = fixture({ bots: [owner] });
+  await app.service.initialize();
+  const chat = await app.service.createChat({
+    audienceId: "device:a",
+    botId: owner.id,
+  });
+  app.events.length = 0;
+  assert.equal(await app.service.authorizeRetainedChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    chatId: chat.id,
+    access: "read",
+  }), true);
+  assert.equal(await app.service.authorizeRetainedChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    chatId: chat.id,
+    access: "write",
+  }), true);
+  assert.deepEqual(
+    app.events.filter(
+      (event) => event.startsWith("policy:a") || event === "policy:release",
+    ),
+    ["policy:admit", "policy:release"],
+  );
+
+  app.authorityStatuses.set(owner.id, "archived");
+  const stored = app.bots.find(({ id }) => id === owner.id)!;
+  stored.archivedAt = 2;
+  assert.equal(await app.service.authorizeRetainedChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    chatId: chat.id,
+    access: "read",
+  }), true);
+  assert.equal(await app.service.authorizeRetainedChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    chatId: chat.id,
+    access: "write",
+  }), true);
+  assert.equal(await app.service.authorizeRetainedChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    chatId: "chat:missing",
+    access: "read",
+  }), false);
 });
 
 test("an enabled Telegram backing chat cannot be deleted or resurrected on restart", async () => {

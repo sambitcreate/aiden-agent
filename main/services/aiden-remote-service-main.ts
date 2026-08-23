@@ -30,7 +30,10 @@ import {
   MAX_DURABLE_LEDGER_SNAPSHOT_BYTES,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
-import { AidenRemoteChatService } from "./aiden-remote-chats.js";
+import {
+  AidenRemoteChatService,
+  type AidenRemoteRetainedBotChatAuthorizationRequest,
+} from "./aiden-remote-chats.js";
 import { AidenRemoteModelService } from "./aiden-remote-models.js";
 import {
   AidenRemoteStreamService,
@@ -71,6 +74,8 @@ import { usageStore } from "./usage-store.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
+import { botApplicationService } from "./bot-application-service-main.js";
+import { preflightBotTurnAuthority } from "./bot-runtime-authority-main.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
 const OPERATIONS_FILE = "aiden-remote-operations-v1.json";
@@ -109,6 +114,17 @@ function writeRemoteLog(entry: AidenRemoteServiceLogEntry): void {
   if (entry.level === "error") logger.error("aiden-remote", entry.event, details);
   else if (entry.level === "warn") logger.warn("aiden-remote", entry.event, details);
   else logger.info("aiden-remote", entry.event, details);
+}
+
+async function authorizeRemoteRetainedBotChat(
+  request: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
+): Promise<boolean> {
+  return botApplicationService.authorizeRetainedChat({
+    audienceId: request.deviceId,
+    botId: request.botId,
+    chatId: request.chatId,
+    access: request.access,
+  });
 }
 
 export interface AidenRemoteRuntime {
@@ -224,6 +240,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
         usage: typeof usageStore;
+        botNotice: {
+          status: typeof botApplicationService.noticeStatus;
+          acknowledge: typeof botApplicationService.acknowledgeNotice;
+        };
       }>
     | undefined;
   let workspaceApiInstanceId: string | undefined;
@@ -303,8 +323,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             models,
             bots: botStore,
             botMutations: botMutationGate,
-            // Phase 1 intentionally omits retainedBotChatAuthorizer. Phase 2
-            // will inject the versioned notice plus Full/Custom policy owner.
+            retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
+            botTurnAuthorityPreflight: preflightBotTurnAuthority,
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
@@ -353,6 +373,14 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             git,
             schedules,
             usage: usageStore,
+            botNotice: {
+              status: (deviceId) => botApplicationService.noticeStatus(deviceId),
+              acknowledge: (deviceId, acknowledgement) =>
+                botApplicationService.acknowledgeNotice(
+                  deviceId,
+                  acknowledgement,
+                ),
+            },
             settle: () => streams.settlePersistence(),
             workspaces: new AidenRemoteWorkspaceService({
               application: workspaceApplicationService,
@@ -376,12 +404,18 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     service,
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
-    revokeDevice: (deviceId) => revokeAidenRemoteRuntimeDevice({
-      state,
-      streams: activeStreams,
-      chats: activeChats,
-      workspaceOwners,
-    }, deviceId),
+    revokeDevice: async (deviceId) => {
+      const revoked = await revokeAidenRemoteRuntimeDevice({
+        state,
+        streams: activeStreams,
+        chats: activeChats,
+        workspaceOwners,
+      }, deviceId);
+      // Cleanup is intentionally idempotent: a retry after a crash between the
+      // device tombstone and notice removal must still remove the acceptance.
+      await botApplicationService.revokeNoticeAudience(deviceId);
+      return revoked;
+    },
     pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
     respondApprovalFromHost: (chatId, approvalId, decision) =>
       activeStreams?.respondApprovalFromHost(chatId, approvalId, decision) ?? false,

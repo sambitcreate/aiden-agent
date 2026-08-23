@@ -30,6 +30,8 @@ interface EncryptedPiCredentialStoreOptions {
   /** A committed write stays successful when directory fsync is unsupported. */
   onDurabilityWarning?(error: Error): void;
   syncDirectory?(directory: string): Promise<void>;
+  beforeWritePublish?(): void;
+  afterWritePublish?(): void;
 }
 
 async function syncDirectory(directory: string): Promise<void> {
@@ -175,7 +177,9 @@ export class EncryptedPiCredentialStore implements CredentialStore {
       await handle.sync();
       await handle.close();
       handle = undefined;
+      this.options.beforeWritePublish?.();
       await fs.rename(temporary, destination);
+      this.options.afterWritePublish?.();
     } catch (error) {
       await handle?.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);

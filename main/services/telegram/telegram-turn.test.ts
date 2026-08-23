@@ -11,7 +11,15 @@ import {
   type TelegramTurnDeps,
 } from "./telegram-turn.js";
 
-type ChatRecord = { id: string; workspaceId?: string; title: string; updatedAt: number };
+type ChatRecord = {
+  id: string;
+  workspaceId?: string;
+  botId?: string;
+  providerId?: string;
+  model?: string;
+  title: string;
+  updatedAt: number;
+};
 
 function lease(): ChatTurnLease {
   return {
@@ -79,6 +87,7 @@ function mockDeps(opts: {
         ? async () => ({ providerId: "openai", model: "gpt-4o", provider: MOCK_PROVIDER })
         : async () => (opts.provider ? { ...opts.provider, provider: MOCK_PROVIDER } : null),
     resolveWorkspace: async () => opts.workspace ?? { kind: "assistant" },
+    preflightBotTurnAuthority: async () => undefined,
     broadcastMetadata: (chat) => {
       broadcasts.push(chat);
     },
@@ -163,8 +172,10 @@ test("assistant-only Telegram turn preserves the owner chat and assistant mode",
 
 test("bot-bound Telegram turn omits assistant mode while retaining the Pi admission path", async () => {
   let startedParams: { chatId: string; workspaceId?: string; mode?: string } | undefined;
-  const llm = mockLlm(async (streamId, params, owner) => {
+  let botAudienceId: string | undefined;
+  const llm = mockLlm(async (streamId, params, owner, options) => {
     startedParams = params;
+    botAudienceId = options.botAudienceId;
     owner.send("chat:done", { streamId, content: "done" });
     return true;
   });
@@ -178,6 +189,22 @@ test("bot-bound Telegram turn omits assistant mode while retaining the Pi admiss
     backingWorkspaceId: "bot-home-a",
     backingChatId: "telegram-work-bot-a",
   } as const;
+  deps.chatStore = mockChatStore({
+    id: binding.backingChatId,
+    botId: binding.botId,
+    workspaceId: binding.backingWorkspaceId,
+    providerId: "openai",
+    model: "gpt-4o",
+    title: "Bot A",
+    updatedAt: 1,
+  }).store;
+  let requestedProvider: string | undefined;
+  let requestedModel: string | undefined;
+  deps.resolveProvider = async (providerId, model) => {
+    requestedProvider = providerId;
+    requestedModel = model;
+    return { providerId: "openai", model: "gpt-4o", provider: MOCK_PROVIDER };
+  };
 
   const result = await sendTelegramTurn(
     deps,
@@ -193,6 +220,127 @@ test("bot-bound Telegram turn omits assistant mode while retaining the Pi admiss
   assert.equal(startedParams?.chatId, binding.backingChatId);
   assert.equal(startedParams?.workspaceId, "bot-home-a");
   assert.equal(startedParams?.mode, undefined);
+  assert.equal(botAudienceId, "telegram:work:owner:123");
+  assert.equal(requestedProvider, "openai");
+  assert.equal(requestedModel, "gpt-4o");
+});
+
+test("bot-bound Telegram rejects a non-exact provider resolution before durable append", async () => {
+  let beginCalls = 0;
+  let startCalls = 0;
+  const llm = mockLlm(async () => {
+    startCalls += 1;
+    return true;
+  });
+  llm.beginChatTurn = () => {
+    beginCalls += 1;
+    return lease();
+  };
+  const binding = {
+    botId: "bot-a",
+    profile: "work",
+    chatId: 100,
+    ownerUserId: 123,
+    workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
+    backingChatId: "telegram-work-bot-a",
+  } as const;
+  const { store, appended } = mockChatStore({
+    id: binding.backingChatId,
+    botId: binding.botId,
+    workspaceId: binding.backingWorkspaceId,
+    providerId: "provider-bot",
+    model: "model-bot",
+    title: "Bot A",
+    updatedAt: 1,
+  });
+  const { deps } = mockDeps({
+    llm,
+    store,
+    provider: { providerId: "provider-profile", model: "model-profile" },
+    workspace: { kind: "project", workspaceId: binding.backingWorkspaceId },
+  });
+
+  await assert.rejects(
+    sendTelegramTurn(
+      deps,
+      binding.backingChatId,
+      "must not persist",
+      { kind: "project", workspaceId: binding.backingWorkspaceId },
+      undefined,
+      undefined,
+      { binding },
+    ),
+    /no longer resolves exactly/u,
+  );
+  assert.equal(appended.length, 0);
+  assert.equal(beginCalls, 0);
+  assert.equal(startCalls, 0);
+});
+
+test("bot-bound Telegram preflights protected runtime authority before reserving or appending", async () => {
+  let beginCalls = 0;
+  let startCalls = 0;
+  let preflightRequest: unknown;
+  const llm = mockLlm(async () => {
+    startCalls += 1;
+    return true;
+  });
+  llm.beginChatTurn = () => {
+    beginCalls += 1;
+    return lease();
+  };
+  const binding = {
+    botId: "bot-a",
+    profile: "work",
+    chatId: 100,
+    ownerUserId: 123,
+    workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
+    backingChatId: "telegram-work-bot-a",
+  } as const;
+  const { store, appended } = mockChatStore({
+    id: binding.backingChatId,
+    botId: binding.botId,
+    workspaceId: binding.backingWorkspaceId,
+    providerId: "provider-bot",
+    model: "model-bot",
+    title: "Bot A",
+    updatedAt: 1,
+  });
+  const { deps } = mockDeps({
+    llm,
+    store,
+    provider: { providerId: "provider-bot", model: "model-bot" },
+    workspace: { kind: "project", workspaceId: binding.backingWorkspaceId },
+  });
+  deps.preflightBotTurnAuthority = async (request) => {
+    preflightRequest = request;
+    throw new Error("protected Bot policy uses another model");
+  };
+
+  await assert.rejects(
+    sendTelegramTurn(
+      deps,
+      binding.backingChatId,
+      "must not persist",
+      { kind: "project", workspaceId: binding.backingWorkspaceId },
+      undefined,
+      undefined,
+      { binding },
+    ),
+    /protected Bot policy uses another model/u,
+  );
+  assert.deepEqual(preflightRequest, {
+    audienceId: "telegram:work:owner:123",
+    botId: "bot-a",
+    chatId: binding.backingChatId,
+    providerId: "provider-bot",
+    model: "model-bot",
+  });
+  assert.equal(appended.length, 0);
+  assert.equal(beginCalls, 0);
+  assert.equal(startCalls, 0);
 });
 
 test("createTelegramBackgroundOwner exposes telegram:<streamId> documentId and resolves terminal on chat:done", async () => {

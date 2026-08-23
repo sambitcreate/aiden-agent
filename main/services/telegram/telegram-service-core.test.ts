@@ -175,6 +175,12 @@ function createMockApi(opts: MockApiOptions) {
     async sendChatAction(_chatId: number, _action: string): Promise<void> {
       sendChatActionCalls += 1;
     },
+    async downloadFile(fileId: string) {
+      return {
+        file: { file_id: fileId, file_unique_id: `unique-${fileId}` },
+        bytes: new Uint8Array([1, 2, 3]),
+      };
+    },
     async editMessageText(): Promise<void> {},
     async answerCallbackQuery(): Promise<void> {
       answerCallbackQueryCalls += 1;
@@ -279,7 +285,13 @@ interface MockTurnOptions {
   workspaceResolver?: (
     workspaceId?: string,
   ) => { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
-  existingChats?: Array<{ id: string; workspaceId: string; botId: string }>;
+  existingChats?: Array<{
+    id: string;
+    workspaceId: string;
+    botId: string;
+    providerId?: string;
+    model?: string;
+  }>;
 }
 
 /** Minimal owner surface the turn shim drives back through send(). */
@@ -365,7 +377,15 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     },
     async get(id: string) {
       const chat = opts.existingChats?.find((candidate) => candidate.id === id);
-      return chat ? { ...chat, title: "Telegram bot", updatedAt: 0 } : null;
+      return chat
+        ? {
+            providerId: "openai",
+            model: "gpt-4",
+            ...chat,
+            title: "Telegram bot",
+            updatedAt: 0,
+          }
+        : null;
     },
     async appendMessage(id: string, _message: unknown) {
       appendCalls += 1;
@@ -394,6 +414,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         opts.workspaceResolver?.(workspaceId) ?? opts.workspace ?? { kind: "assistant" as const }
       );
     },
+    async preflightBotTurnAuthority() {},
     broadcastMetadata(_chat: unknown) {},
   };
 
@@ -487,6 +508,7 @@ interface HarnessOptions {
   synthesizeVoice?: import("./telegram-service-core.js").TelegramServiceDeps["synthesizeVoice"];
   delayAfterFirstBatch?: boolean;
   existingChats?: MockTurnOptions["existingChats"];
+  storeInboundFile?: import("./telegram-service-core.js").TelegramServiceDeps["storeInboundFile"];
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -548,6 +570,7 @@ function harness(o: HarnessOptions = {}) {
     mediaGroupDebounceMs: o.mediaGroupDebounceMs,
     handleExtensionUpdate: o.handleExtensionUpdate,
     synthesizeVoice: o.synthesizeVoice,
+    storeInboundFile: o.storeInboundFile,
     getToken: () => Promise.resolve("mock-token"),
     now: () => 0,
     sleep: sleepMock.sleep,
@@ -1174,6 +1197,69 @@ test("a persisted Bot binding dispatches in its managed home while retaining its
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Bot-bound Telegram files carry exact Bot identity into managed-home storage", async () => {
+  const owner = person(42, "owner");
+  const stored: Array<{
+    workspaceId?: string;
+    botId?: string;
+    name: string;
+  }> = [];
+  const inbound: TelegramMessage = {
+    ...makeMessage(10, owner, "inspect this file"),
+    document: {
+      file_id: "file-1",
+      file_unique_id: "unique-file-1",
+      file_name: "report.pdf",
+      mime_type: "application/pdf",
+      file_size: 3,
+    },
+  };
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => ({
+      botId: "bot-a",
+      profile: "work",
+      chatId: 100,
+      ownerUserId: 42,
+      workspaceId: "external-work",
+      backingWorkspaceId: "managed-bot-home",
+      backingChatId: "telegram-work-bot-a",
+      enabled: true,
+      revision: "binding-revision",
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+    existingChats: [{
+      id: "telegram-work-bot-a",
+      workspaceId: "managed-bot-home",
+      botId: "bot-a",
+    }],
+    storeInboundFile: async (input) => {
+      stored.push({
+        workspaceId: input.workspaceId,
+        botId: input.botId,
+        name: input.name,
+      });
+      return "/private/bot-home/.aiden/telegram-inbox/work/report.pdf";
+    },
+    batches: [[makeUpdate(1, inbound)]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(
+    ({ text }) => text.includes("Mock reply"),
+  ));
+
+  assert.deepEqual(stored, [{
+    workspaceId: "managed-bot-home",
+    botId: "bot-a",
+    name: "report.pdf",
+  }]);
 });
 
 test("bot binding validation rejects archived or missing bot identities before queue admission", async () => {

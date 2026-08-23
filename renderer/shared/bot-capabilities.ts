@@ -402,16 +402,21 @@ export function cloneBotCustomSelection(selection: BotCustomSelection): BotCusto
 export function botCustomSelectionIsSubset(
   candidate: BotCustomSelection,
   ceiling: BotCustomSelection,
+  fileScopes?: readonly Pick<BotFileScopeOption, "id" | "kind">[],
 ): boolean {
   const subset = (values: readonly string[], allowed: readonly string[]) => {
     const set = new Set(allowed);
     return values.every((value) => set.has(value));
   };
+  const rawFileSubset = subset(candidate.fileScopeIds, ceiling.fileScopeIds);
+  const ceilingHasFullMac = fileScopes?.some(
+    (scope) => scope.kind === "full_mac" && ceiling.fileScopeIds.includes(scope.id),
+  );
   return (
     candidate.providerId === ceiling.providerId &&
     candidate.modelId === ceiling.modelId &&
     (!candidate.shellEnabled || ceiling.shellEnabled) &&
-    subset(candidate.fileScopeIds, ceiling.fileScopeIds) &&
+    (rawFileSubset || ceilingHasFullMac === true) &&
     subset(candidate.connectionIds, ceiling.connectionIds) &&
     subset(candidate.skillIds, ceiling.skillIds) &&
     subset(candidate.otherCapabilityIds, ceiling.otherCapabilityIds)
@@ -443,15 +448,25 @@ export function botCustomSelectionNarrows(
 export function intersectBotCustomSelections(
   chat: BotCustomSelection,
   bot: BotCustomSelection,
+  fileScopes?: readonly Pick<BotFileScopeOption, "id" | "kind">[],
 ): BotCustomSelection {
   const intersection = (left: readonly string[], right: readonly string[]) => {
     const allowed = new Set(right);
     return left.filter((value) => allowed.has(value));
   };
+  const includesFullMac = (selection: BotCustomSelection) =>
+    fileScopes?.some(
+      (scope) => scope.kind === "full_mac" && selection.fileScopeIds.includes(scope.id),
+    ) === true;
+  const fileScopeIds = includesFullMac(bot)
+    ? [...chat.fileScopeIds]
+    : includesFullMac(chat)
+      ? [...bot.fileScopeIds]
+      : intersection(chat.fileScopeIds, bot.fileScopeIds);
   return {
     providerId: bot.providerId,
     modelId: bot.modelId,
-    fileScopeIds: intersection(chat.fileScopeIds, bot.fileScopeIds),
+    fileScopeIds,
     shellEnabled: chat.shellEnabled && bot.shellEnabled,
     connectionIds: intersection(chat.connectionIds, bot.connectionIds),
     skillIds: intersection(chat.skillIds, bot.skillIds),

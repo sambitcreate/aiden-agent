@@ -42,6 +42,10 @@ import type { AidenRemoteFileService } from "./aiden-remote-files.js";
 import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
+import type {
+  BotNoticeAcknowledgement,
+  BotNoticeStatus,
+} from "../../renderer/shared/bot-capabilities.js";
 
 const MAX_CONNECTIONS = 64;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -135,6 +139,13 @@ export interface AidenRemoteServiceOptions {
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+        botNotice?: {
+          status(deviceId: string): Promise<BotNoticeStatus>;
+          acknowledge(
+            deviceId: string,
+            acknowledgement: BotNoticeAcknowledgement,
+          ): Promise<BotNoticeStatus>;
+        };
         settle?: () => Promise<void>;
       }
     | Promise<{
@@ -150,6 +161,13 @@ export interface AidenRemoteServiceOptions {
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+        botNotice?: {
+          status(deviceId: string): Promise<BotNoticeStatus>;
+          acknowledge(
+            deviceId: string,
+            acknowledgement: BotNoticeAcknowledgement,
+          ): Promise<BotNoticeStatus>;
+        };
         settle?: () => Promise<void>;
       }>;
   now?: () => number;

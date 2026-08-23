@@ -5,6 +5,7 @@ import type { Chat, ChatMessage } from "./types.js";
 import {
   AidenRemoteChatService,
   projectAidenRemoteChat,
+  type AidenRemoteBotTurnAuthorityPreflight,
   type AidenRemoteRetainedBotChatAuthorizer,
 } from "./aiden-remote-chats.js";
 import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
@@ -43,12 +44,15 @@ function fixture(
     botArchived?: boolean;
     botAvailable?: boolean;
     retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
+    botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
   let creates = 0;
   let appends = 0;
   let notifications = 0;
+  let begins = 0;
+  let starts = 0;
   let botArchived = fixtureOptions.botArchived === true;
   const streams = new AidenRemoteStreamService({
     now: () => 10_000,
@@ -125,6 +129,7 @@ function fixture(
     },
     generation: {
       beginChatTurn: (_chatId, _turnId, _ownerId) => {
+        begins += 1;
         let active = true;
         return {
           isActive: () => active,
@@ -135,6 +140,7 @@ function fixture(
         };
       },
       start: async (streamId, _params, owner, generationOptions) => {
+        starts += 1;
         if (fixtureOptions.startThrows) throw new Error("provider setup failed");
         generationOptions.onTurnAccepted();
         owner.send("chat:delta", { streamId, delta: "Answer" });
@@ -153,7 +159,11 @@ function fixture(
     },
     streams,
     models: {
-      resolve: async () => ({ providerId: "provider-1", modelId: "model-1", thinkingLevels: ["low", "high"] }),
+      resolve: async (providerId, modelId) => ({
+        providerId: providerId ?? "provider-1",
+        modelId: modelId ?? "model-1",
+        thinkingLevels: ["low", "high"],
+      }),
     },
     bots: {
       get: async (id) =>
@@ -174,6 +184,8 @@ function fixture(
     ...(fixtureOptions.retainedBotChatAuthorizer
       ? { retainedBotChatAuthorizer: fixtureOptions.retainedBotChatAuthorizer }
       : {}),
+    botTurnAuthorityPreflight:
+      fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
@@ -184,6 +196,8 @@ function fixture(
     creates: () => creates,
     appends: () => appends,
     notifications: () => notifications,
+    begins: () => begins,
+    starts: () => starts,
     current: () => current ? structuredClone(current) : null,
     setBotArchived: (value: boolean) => { botArchived = value; },
   };
@@ -764,6 +778,83 @@ test("remote turn atomically appends once, owns its stream, and replays the acce
     () => app.streams.status("device-2", first.streamId),
     (error: unknown) => (error as { code?: string }).code === "not_found",
   );
+});
+
+test("remote Bot turn rejects a provider-model override before durable append", async () => {
+  const app = fixture(chat({ botId: "bot-1" }), {
+    retainedBotChatAuthorizer: () => true,
+  });
+
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "bot-model-override-0001", {
+      text: "must not persist",
+      providerId: "provider-2",
+      modelId: "model-2",
+    }),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "invalid_request" &&
+      (error as { status?: number }).status === 400,
+  );
+  assert.equal(app.appends(), 0);
+  assert.deepEqual(app.current()?.messages, []);
+  assert.equal(app.current()?.providerId, "provider-1");
+  assert.equal(app.current()?.model, "model-1");
+});
+
+test("remote Bot turn preflights protected runtime authority before reserving or consuming", async () => {
+  let protectedPairMatches = false;
+  const attachments = new AidenRemoteAttachmentStore({
+    now: () => 10_000,
+    randomId: () => `att_${"A".repeat(43)}`,
+  });
+  const app = fixture(chat({ botId: "bot-1" }), {
+    attachments,
+    retainedBotChatAuthorizer: () => true,
+    botTurnAuthorityPreflight: async (request) => {
+      assert.deepEqual(request, {
+        audienceId: "device-1",
+        botId: "bot-1",
+        chatId: "chat-1",
+        providerId: "provider-1",
+        model: "model-1",
+      });
+      if (!protectedPairMatches) {
+        throw new Error("protected Bot policy uses another model");
+      }
+    },
+  });
+  const image = await app.service.uploadAttachment("device-1", "chat-1", {
+    name: "still-available.png",
+    mimeType: "image/png",
+    kind: "image",
+    data: ONE_PIXEL_PNG,
+  });
+
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "bot-policy-mismatch-0001", {
+      text: "must not persist",
+      attachmentIds: [image.id],
+    }),
+    /protected Bot policy uses another model/u,
+  );
+  assert.equal(app.appends(), 0);
+  assert.equal(app.begins(), 0);
+  assert.equal(app.starts(), 0);
+  assert.deepEqual(app.current()?.messages, []);
+
+  // The same one-shot attachment can be used after authority is restored,
+  // proving the denied preflight did not consume it.
+  protectedPairMatches = true;
+  const accepted = await app.service.startTurn(
+    "device-1",
+    "chat-1",
+    "bot-policy-restored-0001",
+    { text: "now allowed", attachmentIds: [image.id] },
+  );
+  assert.equal(accepted.status, "accepted");
+  assert.equal(app.appends(), 1);
+  assert.equal(app.begins(), 1);
+  assert.equal(app.starts(), 1);
 });
 
 test("a provider setup failure after append returns the one accepted message with a terminal error stream", async () => {

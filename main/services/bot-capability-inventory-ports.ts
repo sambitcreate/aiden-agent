@@ -203,8 +203,13 @@ function ordinaryInventory(input: {
     {
       kind: "schedules",
       label: "Schedules",
-      description: "Create and manage Aiden scheduled tasks.",
-      available: input.settings.scheduledTasksEnabled !== false,
+      description: "Coming after scheduled runs can re-check this Bot's access at run time.",
+      // Ordinary scheduled tasks persist a workspace/provider/MCP snapshot and
+      // execute later without a live Bot audience or Bot capability admission.
+      // Advertising that path would turn Full access into a delayed authority
+      // bypass. Keep it unavailable until the scheduler stores Bot identity and
+      // re-admits the run against current Bot/chat policy and managed home.
+      available: false,
     },
     {
       kind: "subagents",

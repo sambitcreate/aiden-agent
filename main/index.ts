@@ -113,6 +113,7 @@ import {
   stopAidenRemoteServiceAndSettle,
 } from "./services/aiden-remote-service-main.js";
 import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
+import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -263,6 +264,7 @@ function cleanupApplication(): void {
   llmClient.abortAll();
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
+  botSkillContentWatcher.dispose();
   void mcpManager.closeAll();
 }
 

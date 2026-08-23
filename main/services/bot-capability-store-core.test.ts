@@ -450,6 +450,41 @@ test("a Custom chat cannot exceed its Bot even with otherwise valid catalog gran
   );
 });
 
+test("a Full Mac Custom bot permits narrower home and chosen-location chats", () => {
+  const { state, editor } = fixture();
+  const fullMac = snapshot.catalog.fileScopes.find(({ kind }) => kind === "full_mac")!;
+  const home = snapshot.catalog.fileScopes.find(({ kind }) => kind === "bot_home")!;
+  const fullMacCustom = selection({ fileScopeIds: [fullMac.id] });
+  const bot = editor.createBotPolicy({
+    botId: "bot:full-mac",
+    catalog: catalog(),
+    access: { accessMode: "custom", catalogRevision, custom: fullMacCustom },
+    binding: binding(fullMacCustom),
+  });
+  assert.doesNotThrow(() =>
+    editor.createChatPolicy({
+      chatId: "chat:narrow-files",
+      botId: "bot:full-mac",
+      expectedBotPolicyRevision: bot.revision,
+      catalog: catalog(),
+      custom: selection(),
+    }),
+  );
+  assert.doesNotThrow(() => parseBotCapabilityState(structuredClone(state)));
+
+  const narrowedBot = selection({ fileScopeIds: [home.id] });
+  editor.updateBotPolicy({
+    botId: "bot:full-mac",
+    expectedRevision: bot.revision,
+    catalog: catalog(),
+    access: { accessMode: "custom", catalogRevision, custom: narrowedBot },
+    binding: binding(narrowedBot),
+  });
+  const chat = projectBotChatAccessView(state, "chat:narrow-files");
+  assert.equal(chat.mode, "custom");
+  assert.deepEqual(chat.custom.fileScopeIds, [home.id]);
+});
+
 test("notice acknowledgement is isolated by stable audience and action admission never shares it", () => {
   const { state, editor } = fixture();
   editor.createBotPolicy({

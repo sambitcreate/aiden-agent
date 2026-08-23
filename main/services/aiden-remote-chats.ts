@@ -116,6 +116,18 @@ export type AidenRemoteRetainedBotChatAuthorizer = (
   request: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
 ) => boolean | Promise<boolean>;
 
+export interface AidenRemoteBotTurnAuthorityPreflightRequest {
+  audienceId: string;
+  botId: string;
+  chatId: string;
+  providerId: string;
+  model: string;
+}
+
+export type AidenRemoteBotTurnAuthorityPreflight = (
+  request: Readonly<AidenRemoteBotTurnAuthorityPreflightRequest>,
+) => Promise<void>;
+
 function ownRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -463,6 +475,7 @@ export class AidenRemoteChatService {
             allowComputerUse: false;
             usageSource: "chat";
             turnId: string;
+            botAudienceId?: string;
             onTurnAccepted(): void;
           },
         ): Promise<boolean>;
@@ -477,6 +490,7 @@ export class AidenRemoteChatService {
        * retained Bot-chat read and write even when device grants are present.
        */
       retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
+      botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -803,6 +817,31 @@ export class AidenRemoteChatService {
             parsed.providerId ?? authoritative.providerId,
             parsed.modelId ?? authoritative.model,
           );
+          if (authoritative.botId && (
+            !authoritative.providerId ||
+            !authoritative.model ||
+            selection.providerId !== authoritative.providerId ||
+            selection.modelId !== authoritative.model
+          )) {
+            throw new AidenRemoteServiceError(
+              "invalid_request",
+              "This Bot uses its saved AI connection and model. Reload it before sending.",
+              400,
+            );
+          }
+          if (authoritative.botId) {
+            const preflight = this.options.botTurnAuthorityPreflight;
+            if (!preflight) {
+              throw new Error("Bot turn authority is unavailable.");
+            }
+            await preflight({
+              audienceId: deviceId,
+              botId: authoritative.botId,
+              chatId: authoritative.id,
+              providerId: selection.providerId,
+              model: selection.modelId,
+            });
+          }
           if (
             parsed.thinkingLevel &&
             selection.thinkingLevels.length > 0 &&
@@ -870,6 +909,7 @@ export class AidenRemoteChatService {
                 allowComputerUse: false,
                 usageSource: "chat",
                 turnId,
+                ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
                 onTurnAccepted: () => {
                   accepted = true;
                   this.options.streams.markRunning(deviceId, streamId);

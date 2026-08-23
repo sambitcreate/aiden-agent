@@ -12,6 +12,7 @@ import type { UsageRequestSource } from "../usage-store-core.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { scheduledProviderFingerprint } from "../schedule-provider-binding.js";
 import type { TelegramBotBindingSnapshot } from "./telegram-queue.js";
+import { telegramBotNoticeAudienceId } from "./telegram-profile-config.js";
 
 /** Minimal llmClient surface the shim needs. */
 export interface TelegramLlmClient {
@@ -36,6 +37,7 @@ export interface TelegramLlmClient {
       interactionSurface: "telegram";
       usageSource: UsageRequestSource;
       turnId: string;
+      botAudienceId?: string;
       providerFingerprint?: string;
     },
   ): Promise<boolean>;
@@ -61,7 +63,15 @@ export interface TelegramChatStore {
   }): Promise<{ id: string; workspaceId?: string; botId?: string; title: string; updatedAt: number }>;
   get(
     id: string,
-  ): Promise<{ id: string; workspaceId?: string; botId?: string; title: string; updatedAt: number } | null>;
+  ): Promise<{
+    id: string;
+    workspaceId?: string;
+    botId?: string;
+    providerId?: string;
+    model?: string;
+    title: string;
+    updatedAt: number;
+  } | null>;
   appendMessage(
     id: string,
     message: { role: "user" | "assistant"; content: string; attachments?: Attachment[] },
@@ -72,7 +82,7 @@ export interface TelegramChatStore {
 export interface TelegramTurnDeps {
   llmClient: TelegramLlmClient;
   chatStore: TelegramChatStore;
-  resolveProvider(): Promise<{
+  resolveProvider(providerId?: string, model?: string): Promise<{
     providerId: string;
     model: string;
     provider: Pick<
@@ -89,6 +99,13 @@ export interface TelegramTurnDeps {
   }): void;
   /** Resolve the selection captured when the Telegram prompt was accepted. */
   resolveWorkspace(workspaceId?: string): Promise<TelegramWorkspaceResolution>;
+  preflightBotTurnAuthority?(input: {
+    audienceId: string;
+    botId: string;
+    chatId: string;
+    providerId: string;
+    model: string;
+  }): Promise<void>;
 }
 
 export type TelegramWorkspaceResolution =
@@ -236,13 +253,52 @@ export async function sendTelegramTurn(
   }
   const workspaceId =
     resolvedWorkspace.kind === "project" ? resolvedWorkspace.workspaceId : undefined;
-  const provider = await deps.resolveProvider();
+  const authoritativeBotChat = options?.binding
+    ? await deps.chatStore.get(chatId)
+    : undefined;
+  if (options?.binding && (
+    !authoritativeBotChat ||
+    authoritativeBotChat.id !== options.binding.backingChatId ||
+    authoritativeBotChat.botId !== options.binding.botId ||
+    authoritativeBotChat.workspaceId !== options.binding.backingWorkspaceId ||
+    workspaceId !== options.binding.backingWorkspaceId ||
+    !authoritativeBotChat.providerId ||
+    !authoritativeBotChat.model
+  )) {
+    throw new Error("This Bot's Telegram conversation no longer has its exact saved AI connection.");
+  }
+  // A bound Bot owns its provider/model selection. Telegram's profile-wide
+  // choice is only an ordinary-chat default and must never rewrite a Bot chat.
+  const provider = await deps.resolveProvider(
+    authoritativeBotChat?.providerId,
+    authoritativeBotChat?.model,
+  );
   if (!provider) {
     return {
       content: "",
       error: "No provider is configured. Choose a provider in Aiden first.",
       ok: false,
     };
+  }
+  if (authoritativeBotChat && (
+    provider.providerId !== authoritativeBotChat.providerId ||
+    provider.model !== authoritativeBotChat.model
+  )) {
+    throw new Error("This Bot's saved AI connection no longer resolves exactly.");
+  }
+  if (options?.binding) {
+    const preflight = deps.preflightBotTurnAuthority;
+    if (!preflight) throw new Error("Bot turn authority is unavailable.");
+    await preflight({
+      audienceId: telegramBotNoticeAudienceId(
+        options.binding.profile,
+        options.binding.ownerUserId,
+      ),
+      botId: options.binding.botId,
+      chatId,
+      providerId: provider.providerId,
+      model: provider.model,
+    });
   }
 
   const streamId = telegramStreamId();
@@ -298,6 +354,14 @@ export async function sendTelegramTurn(
         interactionSurface: "telegram",
         usageSource: "telegram",
         turnId: streamId,
+        ...(options?.binding
+          ? {
+              botAudienceId: telegramBotNoticeAudienceId(
+                options.binding.profile,
+                options.binding.ownerUserId,
+              ),
+            }
+          : {}),
         providerFingerprint: scheduledProviderFingerprint(provider.provider),
       },
     );

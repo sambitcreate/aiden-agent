@@ -13,6 +13,34 @@ export const SHARE_IMAGE_TOOL_NAME = "share_image";
 export interface ShareImageToolDependencies {
   workspaceRoot: string;
   share(attachment: Attachment): void;
+  /** Bot callers use a workspace-only path contract; ordinary callers retain existing behavior. */
+  scopeToWorkspace?: boolean;
+  expectedWorkspaceIdentity?: { readonly device: string; readonly inode: string };
+}
+
+function pathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function verifyScopedWorkspace(
+  dependencies: ShareImageToolDependencies,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) throw signal.reason ?? new Error("Image sharing was cancelled.");
+  const canonical = await fs.realpath(dependencies.workspaceRoot);
+  const metadata = await fs.stat(canonical, { bigint: true });
+  if (!metadata.isDirectory()) {
+    throw new Error("The authorized image folder changed during this response.");
+  }
+  const expected = dependencies.expectedWorkspaceIdentity;
+  if (
+    expected &&
+    (metadata.dev.toString() !== expected.device || metadata.ino.toString() !== expected.inode)
+  ) {
+    throw new Error("The authorized image folder changed during this response.");
+  }
+  return canonical;
 }
 
 function textResult(text: string): AgentToolResult<null> {
@@ -102,10 +130,17 @@ export function createShareImageTool(dependencies: ShareImageToolDependencies): 
       if (typeof suppliedPath !== "string" || suppliedPath.trim().length === 0) {
         throw new Error("An image path is required.");
       }
+      const scopedRoot = dependencies.scopeToWorkspace
+        ? await verifyScopedWorkspace(dependencies, signal)
+        : undefined;
       const requestedPath = path.isAbsolute(suppliedPath)
         ? path.normalize(suppliedPath)
-        : path.resolve(dependencies.workspaceRoot, suppliedPath);
+        : path.resolve(scopedRoot ?? dependencies.workspaceRoot, suppliedPath);
       const image = await readVerifiedImage(requestedPath, signal);
+      if (scopedRoot && !pathInside(scopedRoot, image.resolvedPath)) {
+        throw new Error("Bot images must come from this Bot's folder.");
+      }
+      if (scopedRoot) await verifyScopedWorkspace(dependencies, signal);
       const attachment: Attachment = {
         id: `shared_${randomUUID()}`,
         name: safeDisplayName(image.resolvedPath, image.mimeType),

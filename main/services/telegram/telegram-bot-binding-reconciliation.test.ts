@@ -121,7 +121,10 @@ test("repairs a binding committed before its backing chat and is idempotent afte
 
   assert.deepEqual(first, { inspected: 1, repaired: 1, disabled: 0 });
   assert.deepEqual(second, { inspected: 1, repaired: 0, disabled: 0 });
-  assert.deepEqual(state.creates, [{ audienceId: "telegram:work", chatId: CHAT_ID }]);
+  assert.deepEqual(state.creates, [{
+    audienceId: "telegram:work:owner:7",
+    chatId: CHAT_ID,
+  }]);
   assert.deepEqual(state.disabled, []);
   assert.equal(state.chats.get(CHAT_ID)?.workspaceId, HOME_ID);
 });

@@ -3,11 +3,13 @@ import { chatStore } from "../services/chat-store.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { configStore } from "../services/config-store.js";
 import { llmClient } from "../services/llm-client.js";
+import { BOT_DESKTOP_AUDIENCE_ID } from "../services/bot-runtime-authority-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
+import { parseBotNoticeAcknowledgement } from "../../renderer/shared/bot-capabilities.js";
 import { botMutationGate } from "../services/bot-mutation-gate.js";
 import { generateBotAvatarSuggestion } from "../services/bot-avatar-generator.js";
 import { botAvatarOperations } from "../services/bot-avatar-operation-registry.js";
@@ -16,7 +18,10 @@ import {
   telegramBotBindings,
 } from "../services/telegram/telegram-bot-bindings.js";
 import { telegramService } from "../services/telegram/telegram-service.js";
-import { normalizeTelegramProfileName } from "../services/telegram/telegram-profile-config.js";
+import {
+  normalizeTelegramProfileName,
+  telegramBotNoticeAudienceId,
+} from "../services/telegram/telegram-profile-config.js";
 import { telegramProfileMutationFence } from "../services/telegram/telegram-profile-mutation-fence.js";
 import {
   parseBotAvatarSuggestionInput,
@@ -29,7 +34,76 @@ import {
 } from "./bot-params.js";
 
 export function registerBotHandlers(): void {
-  const desktopAudienceId = "desktop:local";
+  const desktopAudienceId = BOT_DESKTOP_AUDIENCE_ID;
+  const pairedTelegramAudience = async (profileValue: unknown) => {
+    const profileName = normalizeTelegramProfileName(
+      typeof profileValue === "string" ? profileValue : "",
+    );
+    const profile = (await telegramService.listProfiles()).find(
+      ({ name }) => name === profileName,
+    );
+    const ownerUserId = profile?.settings.allowedUserId;
+    if (!profile || ownerUserId === undefined) {
+      throw new Error("Choose a Telegram profile with a paired owner.");
+    }
+    return {
+      profileName,
+      audienceId: telegramBotNoticeAudienceId(profileName, ownerUserId),
+    };
+  };
+  ipcMain.handle("bots:getAccessNotice", async () =>
+    botApplicationService.noticeStatus(desktopAudienceId),
+  );
+  ipcMain.handle("bots:acknowledgeAccessNotice", async (event, input: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Bot access notice requires the active application document."),
+    );
+    return botApplicationService.acknowledgeNotice(
+      desktopAudienceId,
+      parseBotNoticeAcknowledgement(input),
+      () => {
+        if (owner.isDestroyed()) {
+          throw new Error("The application changed before Bot access was confirmed.");
+        }
+      },
+    );
+  });
+  ipcMain.handle("bots:getTelegramAccessNotice", async (_event, profile: unknown) => {
+    const principal = await pairedTelegramAudience(profile);
+    return botApplicationService.noticeStatus(principal.audienceId);
+  });
+  ipcMain.handle(
+    "bots:acknowledgeTelegramAccessNotice",
+    async (event, input: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Bot access notice requires the active application document."),
+      );
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("Invalid Telegram Bot access notice fields.");
+      }
+      const raw = input as Record<string, unknown>;
+      if (
+        !Object.keys(raw).every((key) =>
+          key === "profile" || key === "acknowledgement",
+        ) ||
+        Object.keys(raw).length !== 2
+      ) {
+        throw new Error("Invalid Telegram Bot access notice fields.");
+      }
+      const principal = await pairedTelegramAudience(raw.profile);
+      return botApplicationService.acknowledgeNotice(
+        principal.audienceId,
+        parseBotNoticeAcknowledgement(raw.acknowledgement),
+        () => {
+          if (owner.isDestroyed()) {
+            throw new Error("The application changed before Bot access was confirmed.");
+          }
+        },
+      );
+    },
+  );
   ipcMain.handle("bots:list", async (_event, includeArchived: unknown) => {
     if (includeArchived !== undefined && typeof includeArchived !== "boolean")
       throw new Error("Invalid bot list fields.");
@@ -266,7 +340,10 @@ export function registerBotHandlers(): void {
                 }
               } else {
                 await operations.createChat({
-                  audienceId: `telegram:${profileName}`,
+                  audienceId: telegramBotNoticeAudienceId(
+                    profileName,
+                    profile.settings.allowedUserId,
+                  ),
                   chatId: binding.backingChatId,
                   providerId: profile.settings.providerId,
                   model: profile.settings.model,

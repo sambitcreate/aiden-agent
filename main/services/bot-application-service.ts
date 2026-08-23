@@ -52,6 +52,7 @@ type CapabilityStorePort = Pick<
   | "initialize"
   | "noticeStatus"
   | "acknowledgeNotice"
+  | "revokeNoticeAudience"
   | "auditBotInventory"
   | "migrateLegacyBotsToFull"
   | "getBotPolicy"
@@ -60,6 +61,8 @@ type CapabilityStorePort = Pick<
   | "archiveBotAuthority"
   | "restoreBotAuthority"
   | "getBotBinding"
+  | "assertAuthorityBindingsCurrent"
+  | "admit"
   | "createBotPolicy"
   | "updateBotPolicy"
   | "getChatPolicy"
@@ -657,7 +660,36 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     const bot = await activeBot(input.botId);
     const home = await deps.managedWorkspace.resolve(input.botId);
     const botPolicy = await deps.capabilityStore.getBotPolicy(input.botId);
-    const snapshot = await snapshotForAudience(input.audienceId, input.botId);
+    const binding = botPolicy.accessMode === "custom"
+      ? await deps.capabilityStore.getBotBinding(input.botId)
+      : undefined;
+    if (botPolicy.accessMode === "custom" && !binding) {
+      throw new BotCapabilityUnavailableError(
+        "This Custom Bot's provider and model selection is unavailable.",
+      );
+    }
+    const snapshot = await deps.catalog.snapshot({
+      audienceId: input.audienceId,
+      botId: input.botId,
+      ...(binding ? { retainedBindings: [binding] } : {}),
+    });
+    if (binding) {
+      await deps.capabilityStore.assertAuthorityBindingsCurrent({
+        botId: input.botId,
+        snapshot,
+      });
+    }
+    const providerId = binding?.provider.sourceProviderId ?? input.providerId;
+    const model = binding?.provider.sourceModelId ?? input.model;
+    if (
+      binding &&
+      ((input.providerId !== undefined && input.providerId !== providerId) ||
+        (input.model !== undefined && input.model !== model))
+    ) {
+      throw new BotCapabilityUnavailableError(
+        "This Custom Bot must use its selected provider and model.",
+      );
+    }
     const chatId = input.chatId ?? mintChatId();
     const workspaceId = home.workspaceId;
     const operationId = mintOperationId();
@@ -680,8 +712,8 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         title: bot.name,
         workspaceId,
         botId: input.botId,
-        providerId: input.providerId,
-        model: input.model,
+        providerId,
+        model,
         initialAssistantMessage: bot.openingGreeting,
         assertCurrent: input.assertCurrent,
       });
@@ -696,7 +728,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           if (
             !committed ||
             committed.botId !== input.botId ||
-            committed.workspaceId !== workspaceId
+            committed.workspaceId !== workspaceId ||
+            committed.providerId !== providerId ||
+            committed.model !== model
           ) {
             throw new Error("The visible Bot chat does not match its committed operation.");
           }
@@ -1142,9 +1176,22 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       return deps.capabilityStore.noticeStatus(audienceId);
     },
 
-    async acknowledgeNotice(audienceId: string, acknowledgement: BotNoticeAcknowledgement) {
+    async acknowledgeNotice(
+      audienceId: string,
+      acknowledgement: BotNoticeAcknowledgement,
+      assertCurrent?: () => void,
+    ) {
       await ensureOperational();
-      return deps.capabilityStore.acknowledgeNotice(audienceId, acknowledgement);
+      return deps.capabilityStore.acknowledgeNotice(
+        audienceId,
+        acknowledgement,
+        assertCurrent,
+      );
+    },
+
+    async revokeNoticeAudience(audienceId: string) {
+      await ensureOperational();
+      return deps.capabilityStore.revokeNoticeAudience(audienceId);
     },
 
     async resolveManagedWorkspace(botId: string) {
@@ -1159,6 +1206,67 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         throw new Error("This Bot is no longer available.");
       }
       return deps.chatStore.listByBot(botId);
+    },
+
+    /**
+     * Authorize a retained external chat handle without exposing whether
+     * policy, notice, or exact Custom bindings caused a denial. Historical
+     * reads remain available for archived Bots; every write requires current
+     * active runtime authority and the caller's one-time notice decision.
+     */
+    async authorizeRetainedChat(input: {
+      audienceId: string;
+      botId: string;
+      chatId: string;
+      access: "read" | "write";
+    }): Promise<boolean> {
+      try {
+        await ensureOperational();
+        const [bot, chat] = await Promise.all([
+          deps.botStore.get(input.botId),
+          deps.chatStore.get(input.chatId),
+        ]);
+        if (!bot || !chat || chat.botId !== input.botId) return false;
+        await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
+          botId: input.botId,
+          archived: bot.archivedAt !== undefined,
+        });
+        const [botPolicy, chatPolicy] = await Promise.all([
+          deps.capabilityStore.getBotPolicy(input.botId),
+          deps.capabilityStore.getChatPolicy(input.chatId),
+        ]);
+        if (
+          botPolicy.botId !== input.botId ||
+          chatPolicy.botId !== input.botId ||
+          chatPolicy.chatId !== input.chatId
+        ) {
+          return false;
+        }
+        // An archived retained handle is still authentic. The chat service's
+        // lifecycle gate returns the stable bot_archived mutation result
+        // before any effect; requiring active turn authority here would turn
+        // that useful state into an indistinguishable not_found response.
+        if (input.access === "read" || bot.archivedAt !== undefined) return true;
+
+        const binding = botPolicy.accessMode === "custom"
+          ? await deps.capabilityStore.getBotBinding(input.botId)
+          : undefined;
+        if (botPolicy.accessMode === "custom" && !binding) return false;
+        const snapshot = await deps.catalog.snapshotForRuntime({
+          botId: input.botId,
+          ...(binding ? { retainedBindings: [binding] } : {}),
+        });
+        const admission = await deps.capabilityStore.admit({
+          audienceId: input.audienceId,
+          botId: input.botId,
+          chatId: input.chatId,
+          snapshot,
+        });
+        admission.lease.release();
+        return true;
+      } catch {
+        return false;
+      }
     },
   };
 }

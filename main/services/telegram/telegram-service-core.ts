@@ -104,7 +104,14 @@ export interface TelegramServiceDeps {
   abortChat?(chatId: string): Promise<void>;
   compactChat?(chatId: string): Promise<TelegramCompactionResult>;
   transcribeAudio?(input: { audioBase64: string; mimeType: string }): Promise<string>;
-  storeInboundFile?(input: { bytes: Uint8Array; name: string; mimeType: string; workspaceId?: string }): Promise<string>;
+  storeInboundFile?(input: {
+    bytes: Uint8Array;
+    name: string;
+    mimeType: string;
+    workspaceId?: string;
+    /** Main-owned binding identity; present only for a validated Bot route. */
+    botId?: string;
+  }): Promise<string>;
   listPromptCommands?(workspaceId?: string): Promise<readonly TelegramPromptCommand[]>;
   readOutboundAttachment?(workspaceId: string | undefined, requestedPath: string): Promise<{
     bytes: Uint8Array;
@@ -572,7 +579,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         api: deps.api,
         transcribeAudio: deps.transcribeAudio,
         storeFile: deps.storeInboundFile
-          ? (input) => deps.storeInboundFile!({ ...input, workspaceId: selectedWorkspaceId })
+          ? (input) => deps.storeInboundFile!({
+              ...input,
+              workspaceId: selectedWorkspaceId,
+              ...(binding ? { botId: binding.botId } : {}),
+            })
           : undefined,
       },
       message,

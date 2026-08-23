@@ -285,7 +285,7 @@ test("production tool assembly reaches the feature-gated lazy factory", async ()
   assert.ok(builderEnd > registrationStart);
 });
 
-test("production generation carries parent read-tool exclusions into child capability assembly", async () => {
+test("production generation carries parent exclusions and Bot Files authority into child reads", async () => {
   const [generationSource, childRuntimeSource, assemblySource, chatHandlerSource] =
     await Promise.all([
       readFile(new URL("../llm-client.ts", import.meta.url), "utf-8"),
@@ -295,8 +295,9 @@ test("production generation carries parent read-tool exclusions into child capab
     ]);
   assert.match(
     generationSource,
-    /inheritedCeiling:\s*inheritedSubagentReadToolCeiling\(\s*options\.excludeToolNames,?\s*\)/u,
+    /const subagentReadCeiling\s*=\s*botContext\s*&&\s*!botContext\.admission\.authority\.files\.botHome\s*\?\s*\[\]\s*:\s*inheritedSubagentReadToolCeiling\(options\.excludeToolNames\)/u,
   );
+  assert.match(generationSource, /inheritedCeiling:\s*subagentReadCeiling/u);
   assert.match(
     childRuntimeSource,
     /buildProductionSubagentChildTools\(\s*\{[\s\S]*\.\.\.toolInput,[\s\S]*signal: input\.signal,[\s\S]*mcpMutationsEnabled/u,

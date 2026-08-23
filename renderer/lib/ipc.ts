@@ -70,6 +70,10 @@ import type {
   BotUpdateInput,
 } from "../shared/bots";
 import { botAvatarSuggestionErrorMessage } from "../shared/bots";
+import type {
+  BotNoticeAcknowledgement,
+  BotNoticeStatus,
+} from "../shared/bot-capabilities";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -741,6 +745,19 @@ export const chatsApi = {
 };
 
 export const botsApi = {
+  getAccessNotice: () =>
+    invoke<BotNoticeStatus>("bots:getAccessNotice"),
+  acknowledgeAccessNotice: (acknowledgement: BotNoticeAcknowledgement) =>
+    invoke<BotNoticeStatus>("bots:acknowledgeAccessNotice", acknowledgement),
+  getTelegramAccessNotice: (profile: string) =>
+    invoke<BotNoticeStatus>("bots:getTelegramAccessNotice", profile),
+  acknowledgeTelegramAccessNotice: (
+    profile: string,
+    acknowledgement: BotNoticeAcknowledgement,
+  ) => invoke<BotNoticeStatus>("bots:acknowledgeTelegramAccessNotice", {
+    profile,
+    acknowledgement,
+  }),
   list: (includeArchived = false) =>
     invoke<BotDefinition[]>("bots:list", includeArchived),
   get: (id: string) => invoke<BotDefinition | null>("bots:get", id),

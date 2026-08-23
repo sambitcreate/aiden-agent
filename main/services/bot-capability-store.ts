@@ -177,13 +177,22 @@ export class BotCapabilityStore {
     return this.serialized(async () => projectBotNoticeStatus(await this.persistence.load(), audienceId));
   }
 
-  async acknowledgeNotice(audienceId: string, acknowledgement: unknown): Promise<BotNoticeStatus> {
+  async acknowledgeNotice(
+    audienceId: string,
+    acknowledgement: unknown,
+    assertCurrent?: () => void,
+  ): Promise<BotNoticeStatus> {
     this.requireInitialized();
     return this.serialized(async () => {
       const before = await this.persistence.load();
       const prior = projectBotNoticeStatus(before, audienceId);
-      const next = await this.persistence.update((state) =>
-        this.editor(state).acknowledgeNotice(audienceId, acknowledgement));
+      const next = await this.persistence.update((state) => {
+        assertCurrent?.();
+        return this.editor(state).acknowledgeNotice(
+          audienceId,
+          acknowledgement,
+        );
+      });
       if (
         !prior.requiresAcknowledgement &&
         !next.requiresAcknowledgement &&
