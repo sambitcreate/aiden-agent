@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phases 0–4 complete August 23, 2026; Phase 5 next
+- Status: Active; Phases 0–5 complete August 23, 2026; Phase 6 in progress
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -483,6 +483,8 @@ Acceptance:
 - revoking one phone closes its bot access without disrupting another.
 
 ### Phase 5 — Swift domain, cache, and product shell
+
+Completed August 23, 2026. The shipping iOS app now has the typed Bot client/domain, exact installation-and-device cache, independent Bots/Workspaces navigation, native Aiden-logo switcher, notice/Custom-first gates, Bot-aware deep links, and one shared draft-safe chat surface. The first Phase 6 slice also ships the Bots inbox, bottom Search and New Chat dock, and guided Bot creation editor. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-5.md`.
 
 1. Add typed Bot DTOs, avatar recipes, access/catalog views, client methods, and instance-scoped cache.
 2. Add an outer `AidenProductShellView` with per-installation Workspaces/Bots mode state while leaving pairing unchanged.

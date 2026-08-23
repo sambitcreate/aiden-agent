@@ -5,6 +5,43 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testFailedSendRestoresSubmittedTextWithoutClobberingTheNextDraft() {
+        XCTAssertEqual(
+            AidenDraftSendReconciliation.failedDraft(submitted: "First message", current: ""),
+            "First message"
+        )
+        XCTAssertEqual(
+            AidenDraftSendReconciliation.failedDraft(
+                submitted: "First message",
+                current: "Next message"
+            ),
+            "First message\n\nNext message"
+        )
+    }
+
+    @MainActor
+    func testLiveChatMutationAuthorizationCanBeRevokedAndRestored() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-bot","workspaceId":"managed-home","botId":"bot-1","title":"Bot","messages":[],"createdAt":"2026-08-23T12:00:00Z","updatedAt":"2026-08-23T12:00:01Z","revision":"rev-1"}"#.utf8
+            )
+        )
+        let model = AidenChatViewModel(
+            coordinator: AidenRemoteCoordinator(),
+            chat: chat,
+            allowsMutations: true
+        )
+
+        XCTAssertFalse(model.isReadOnlyPresentation)
+        model.setAllowsMutations(false)
+        XCTAssertTrue(model.isReadOnlyPresentation)
+        model.setAllowsMutations(true)
+        XCTAssertFalse(model.isReadOnlyPresentation)
+    }
+
     func testRemoteChatDecodesOptionalBotIdentityAndWorkspaceProjectionStaysDisjoint() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

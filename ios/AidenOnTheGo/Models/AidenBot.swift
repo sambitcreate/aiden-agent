@@ -284,6 +284,15 @@ struct AidenBotAvatarAsset: Codable, Equatable, Sendable {
     }
 }
 
+/// Canonical raster bytes returned by the authenticated Bot avatar route.
+/// The server always publishes a 512 x 512 PNG; keeping the bytes separate
+/// from Bot DTOs prevents a photo or temporary location from entering normal
+/// list/detail persistence.
+struct AidenBotAvatarContent: Equatable, Sendable {
+    let data: Data
+    let assetRevision: String
+}
+
 struct AidenBotAvatarView: Codable, Equatable, Sendable {
     let semantic: AidenBotSemanticAvatar
     let asset: AidenBotAvatarAsset?

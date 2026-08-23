@@ -1581,4 +1581,90 @@ final class AidenBotContractTests: XCTestCase {
             fixture["capabilities"] = capabilities.filter { $0 != "bot:read" }
         }
     }
+
+    func testCustomAccessDraftStartsFromAllAvailableFullAccessChoices() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+        let draft = try XCTUnwrap(
+            AidenBotCustomAccessDraft(
+                access: fixture.botPolicy,
+                catalog: fixture.botCapabilityCatalog
+            )
+        )
+
+        XCTAssertTrue(draft.isSaveable(in: fixture.botCapabilityCatalog))
+        XCTAssertEqual(
+            draft.connectionIDs,
+            Set(fixture.botCapabilityCatalog.connections.filter(\.available).map(\.id))
+        )
+        XCTAssertEqual(
+            draft.skillIDs,
+            Set(fixture.botCapabilityCatalog.skills.filter(\.available).map(\.id))
+        )
+        XCTAssertEqual(draft.shellEnabled, fixture.botCapabilityCatalog.shellAvailable)
+    }
+
+    func testCustomAccessDraftPreservesAnExistingCustomReduction() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+        let access = fixture.botPolicyUpdate.response
+        let draft = try XCTUnwrap(
+            AidenBotCustomAccessDraft(
+                access: access,
+                catalog: fixture.botCapabilityCatalog
+            )
+        )
+
+        XCTAssertEqual(try draft.selection(), try XCTUnwrap(access.custom))
+    }
+
+    func testBotEditorCustomizeFirstBuildsCustomCreateRequestOnlyOnSave() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+        var draft = try XCTUnwrap(
+            AidenBotEditorDraft(catalog: fixture.botCapabilityCatalog, defaultAccess: .custom)
+        )
+        draft.name = "  Research Helper  "
+        draft.purpose = "  Finds and explains sources  "
+        draft.openingGreeting = "  What should we investigate?  "
+        draft.instructions = "  Verify important claims before answering.  "
+
+        XCTAssertFalse(draft.usesFullAccess)
+        let request = try draft.createRequest(catalog: fixture.botCapabilityCatalog)
+        XCTAssertEqual(request.name, "Research Helper")
+        XCTAssertEqual(request.purpose, "Finds and explains sources")
+        XCTAssertEqual(request.openingGreeting, "What should we investigate?")
+        XCTAssertEqual(request.instructions, "Verify important claims before answering.")
+        XCTAssertEqual(request.avatar, .recipe(AidenBotEditorDraft.defaultAvatar))
+        guard case let .custom(revision, selection) = request.access else {
+            return XCTFail("Customize First must create a Custom Bot")
+        }
+        XCTAssertEqual(revision, fixture.botCapabilityCatalog.revision)
+        XCTAssertTrue(fixture.botCapabilityCatalog.containsAvailable(selection))
+    }
+
+    func testBotEditorIdentityDraftDoesNotCreateEmptyPatch() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+        let draft = try XCTUnwrap(
+            AidenBotEditorDraft(
+                detail: fixture.botDetail,
+                catalog: fixture.botCapabilityCatalog
+            )
+        )
+
+        XCTAssertNil(try draft.identityPatch(comparedTo: fixture.botDetail))
+    }
 }

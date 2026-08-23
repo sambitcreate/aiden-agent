@@ -50,10 +50,14 @@ const appSourcePaths = [
   "AidenOnTheGo/Config/AidenAppearance.swift",
   "AidenOnTheGo/Config/AppConfig.swift",
   "AidenOnTheGo/ContentView.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotCustomAccessFlowView.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotEditorView.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift",
   "AidenOnTheGo/Features/Bots/Prototype/BotFirstPrototype.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
+  "AidenOnTheGo/Features/Remote/AidenProductShellView.swift",
   "AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
@@ -81,14 +85,18 @@ const appSourcePaths = [
   "AidenOnTheGo/Networking/AidenRemoteContract.swift",
   "AidenOnTheGo/Networking/AidenSSEParser.swift",
   "AidenOnTheGo/Networking/AidenServerTrust.swift",
+  "AidenOnTheGo/Persistence/AidenBotCache.swift",
   "AidenOnTheGo/Persistence/AidenChatCache.swift",
+  "AidenOnTheGo/Persistence/AidenChatDraftStore.swift",
 ];
 
 const testSources = [
   "AidenBotContractTests.swift",
   "AidenBotPrototypeSnapshotTests.swift",
+  "AidenBotCacheTests.swift",
   "AidenChatTests.swift",
   "AidenNativeIntegrationTests.swift",
+  "AidenProductShellTests.swift",
   "AidenRemoteClientTests.swift",
   "AidenRemotePhase0Tests.swift",
   "AidenScheduledTaskTests.swift",
@@ -188,13 +196,17 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
 
   const botSources = sources.filter(([path]) => path.includes("/Features/Bots/"));
   assert.ok(botSources.length > 0, "expected reviewed Bot sources");
-  const botSwift = botSources.map(([, source]) => source).join("\n");
+  const prototypeSources = botSources.filter(([path]) => path.includes("/Features/Bots/Prototype/"));
+  assert.ok(prototypeSources.length > 0, "expected reviewed Bot prototype sources");
+  const botSwift = prototypeSources.map(([, source]) => source).join("\n");
   for (const [path, source] of botSources) {
     assert.doesNotMatch(
       source,
       /\bstartTurn\b|\bAidenSSEParser\b|text\/event-stream|\b(?:struct|class)\s+\w*Composer\b/gu,
       `${path} must not implement chat transport or input`,
     );
+  }
+  for (const [path, source] of prototypeSources) {
     assert.doesNotMatch(source, /@AppStorage\b/u, `${path} fixtures must not persist state`);
     assert.doesNotMatch(
       source,
@@ -236,7 +248,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /init\(readOnlyFixture chat: AidenChat\) \{[\s\S]*?_coordinator = State\(initialValue: nil\)[\s\S]*?AidenChatViewModel\(readOnlyFixture: chat\)/u,
   );
   assert.match(chat, /func load\(\) async \{\s*guard !isReadOnlyFixture else \{ return \}/u);
-  assert.match(chat, /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \}/u);
+  assert.match(chat, /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \|\| !allowsMutations \}/u);
   assert.match(
     chat,
     /AidenComposerView\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u,
@@ -420,8 +432,9 @@ test("iOS onboarding reuses the reviewed Mac feature artwork byte for byte", asy
 });
 
 test("the Aiden home, onboarding, composer, schedules, and activity retain the reviewed product shell", async () => {
-  const [shell, pairing, content, chat, scheduledTasks, widget, project, logoDefinition, logoArtwork] = await Promise.all([
+  const [shell, productShell, pairing, content, chat, scheduledTasks, widget, project, logoDefinition, logoArtwork] = await Promise.all([
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenProductShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/ContentView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenChatFeature.swift`, "utf8"),
@@ -440,10 +453,13 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.ok(scheduledIndex >= 0 && scheduledIndex < usageIndex);
   assert.ok(usageIndex < workspacesIndex);
   assert.ok(homeNavigationIndex >= 0 && homeNavigationIndex < chatsIndex);
-  assert.match(shell, /Image\("AidenAppIcon"\)[\s\S]*?searchChrome/u);
+  assert.match(shell, /AidenProductSwitcherButton\([\s\S]*?searchChrome/u);
+  assert.match(productShell, /Menu \{[\s\S]*?areaButton\(\.bots\)[\s\S]*?areaButton\(\.workspaces\)[\s\S]*?Image\("AidenAppIcon"\)/u);
+  assert.match(productShell, /AidenWorkspaceShellView\([\s\S]*?AidenBotShellView\(/u);
+  assert.match(content, /AidenProductShellView\(/u);
   assert.match(shell, /Image\(systemName: "magnifyingglass"\)[\s\S]*?person\.crop\.circle\.fill/u);
   assert.match(shell, /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Mac Folder"/u);
-  assert.match(shell, /Image\(systemName: "square\.and\.pencil"\)[\s\S]*?aidenProminentGlassButton\(\)[\s\S]*?accessibilityLabel\("New Agent"\)/u);
+  assert.match(shell, /Image\(systemName: "square\.and\.pencil"\)[\s\S]*?aidenProminentGlassButton\(\)[\s\S]*?accessibilityLabel\("New Workspace Chat"\)/u);
   assert.match(shell, /content\.buttonStyle\(\.glass\)/u);
   assert.match(shell, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
   assert.match(

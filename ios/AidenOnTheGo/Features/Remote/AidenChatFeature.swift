@@ -496,6 +496,7 @@ final class AidenWorkspaceChatsModel {
             chats = Self.sorted(AidenChat.regularWorkspaceChats(from: remote))
             try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
             if chats.isEmpty { presentedError = error.localizedDescription }
         }
@@ -542,6 +543,7 @@ final class AidenWorkspaceChatsModel {
             upsert(updated)
             try await persist(chat: updated, instanceId: instanceId)
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
             upsert(chat)
             presentedError = error.localizedDescription
@@ -559,6 +561,7 @@ final class AidenWorkspaceChatsModel {
             try await coordinator.remoteClient(for: context).removeChat(id: chat.id, revision: chat.revision)
             guard coordinator.isCurrent(context) else { return }
             await cache.removeChat(instanceId: instanceId, chatId: chat.id)
+            await AidenChatDraftStore.shared.remove(instanceId: instanceId, chatId: chat.id)
             try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
         } catch {
             guard coordinator.isCurrent(context) else { return }
@@ -588,6 +591,22 @@ final class AidenWorkspaceChatsModel {
     }
 }
 
+enum AidenDraftSendReconciliation {
+    static func failedDraft(submitted: String, current: String) -> String {
+        guard !current.isEmpty else { return submitted }
+        guard current != submitted else { return current }
+        return "\(submitted)\n\n\(current)"
+    }
+
+    static func failedAttachments(
+        submitted: [AidenAttachmentReference],
+        current: [AidenAttachmentReference]
+    ) -> [AidenAttachmentReference] {
+        var seen = Set<String>()
+        return (submitted + current).filter { seen.insert($0.id).inserted }
+    }
+}
+
 @MainActor
 @Observable
 final class AidenChatViewModel {
@@ -604,12 +623,18 @@ final class AidenChatViewModel {
     }
 
     private let runtime: Runtime
+    private var allowsMutations: Bool
     private let onChatUpdated: @MainActor (AidenChat) -> Void
+    private let draftStore: AidenChatDraftStore
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
     @ObservationIgnored private var activeStreamID: String?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
+    @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
+    @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private var suppressesDraftPersistence = false
+    @ObservationIgnored private var draftGeneration: UInt64 = 0
 
     private(set) var chat: AidenChat
     private(set) var catalog: AidenModelCatalog?
@@ -623,7 +648,14 @@ final class AidenChatViewModel {
     private(set) var pendingApproval: AidenPendingApproval?
     private(set) var pendingAttachments: [AidenAttachmentReference] = []
     private(set) var isUploadingAttachment = false
-    var draft = ""
+    var draft = "" {
+        didSet {
+            guard draft != oldValue else { return }
+            draftGeneration &+= 1
+            guard !suppressesDraftPersistence else { return }
+            scheduleDraftPersistence()
+        }
+    }
     var selectedProviderId: String?
     var selectedModelId: String?
     var selectedThinkingLevel: String?
@@ -636,7 +668,16 @@ final class AidenChatViewModel {
         return false
     }
 
-    var isReadOnlyPresentation: Bool { isReadOnlyFixture }
+    var isReadOnlyPresentation: Bool { isReadOnlyFixture || !allowsMutations }
+
+    func setAllowsMutations(_ allowed: Bool) {
+        guard !isReadOnlyFixture else { return }
+        allowsMutations = allowed
+        if !allowed {
+            draftPersistenceTask?.cancel()
+            draftPersistenceTask = nil
+        }
+    }
 
     private var coordinator: AidenRemoteCoordinator {
         guard case .live(let coordinator, _, _, _) = runtime else {
@@ -670,7 +711,9 @@ final class AidenChatViewModel {
         coordinator: AidenRemoteCoordinator,
         chat: AidenChat,
         cache: AidenChatCache = .shared,
+        draftStore: AidenChatDraftStore = .shared,
         liveActivities: AidenRemoteLiveActivityManager? = nil,
+        allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) {
         runtime = .live(
@@ -680,6 +723,8 @@ final class AidenChatViewModel {
             liveActivities: liveActivities ?? .shared
         )
         self.chat = chat
+        self.allowsMutations = allowsMutations
+        self.draftStore = draftStore
         self.onChatUpdated = onChatUpdated
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
@@ -689,6 +734,8 @@ final class AidenChatViewModel {
     init(readOnlyFixture chat: AidenChat) {
         runtime = .readOnlyFixture
         self.chat = chat
+        allowsMutations = false
+        draftStore = .shared
         onChatUpdated = { _ in }
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
@@ -701,7 +748,7 @@ final class AidenChatViewModel {
     }
     var isStreaming: Bool { streamState.map { !$0.isTerminal } ?? false }
     var canSend: Bool {
-        guard !isReadOnlyFixture else { return false }
+        guard !isReadOnlyPresentation else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
             && !isStarting && !isUploadingAttachment && !isStreaming
@@ -722,11 +769,20 @@ final class AidenChatViewModel {
         guard !instanceId.isEmpty, !isLoading else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         isLoading = true
+        defer { isLoading = false }
+        if draftSession == nil {
+            let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
+            guard coordinator.isCurrent(context) else { return }
+            draftSession = session
+            if draft.isEmpty, let savedDraft = await draftStore.load(session: session) {
+                guard coordinator.isCurrent(context), draftSession == session else { return }
+                draft = savedDraft
+            }
+        }
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
             guard coordinator.isCurrent(context) else { return }
             chat = cached
         }
-        defer { isLoading = false }
         do {
             async let chatRequest = coordinator.remoteClient(for: context).chat(id: chat.id)
             async let catalogRequest = coordinator.remoteClient(for: context).modelCatalog()
@@ -736,11 +792,25 @@ final class AidenChatViewModel {
             await acceptRemoteChat(remoteChat, context: context)
             resolveModelSelection()
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
             if chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
         guard coordinator.isCurrent(context) else { return }
         await restoreStreamIfNeeded()
+    }
+
+    private func scheduleDraftPersistence() {
+        guard !isReadOnlyPresentation, let session = draftSession else { return }
+        let text = draft
+        draftPersistenceTask?.cancel()
+        draftPersistenceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, let self,
+                  self.draftSession == session,
+                  self.draft == text else { return }
+            _ = try? await self.draftStore.save(text, session: session)
+        }
     }
 
     func selectProvider(_ providerId: String) {
@@ -755,7 +825,7 @@ final class AidenChatViewModel {
     }
 
     func send() async {
-        guard !isReadOnlyFixture else { return }
+        guard !isReadOnlyPresentation else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
@@ -789,7 +859,11 @@ final class AidenChatViewModel {
         isStarting = true
         defer { isStarting = false }
         presentedError = nil
+        draftPersistenceTask?.cancel()
+        suppressesDraftPersistence = true
         draft = ""
+        suppressesDraftPersistence = false
+        let clearedDraftGeneration = draftGeneration
         pendingAttachments = []
         chat.messages.append(optimisticMessage)
         chat.updatedAt = now
@@ -818,6 +892,11 @@ final class AidenChatViewModel {
             let retained = await coordinator.withRetainedInstallationData(for: context) {
                 try? await cache.saveChat(acceptedChat, instanceId: instanceId)
                 try? await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
+                if let draftSession,
+                   draftGeneration == clearedDraftGeneration,
+                   draft.isEmpty {
+                    _ = try? await draftStore.save("", session: draftSession)
+                }
                 await liveActivities.start(
                     instanceID: instanceId,
                     chatID: chat.id,
@@ -837,11 +916,18 @@ final class AidenChatViewModel {
             streamState = .queued
             startStreaming(stream, context: context)
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
             chat.messages.removeAll { $0.id == optimisticID }
             chat.updatedAt = previousUpdatedAt
-            if draft.isEmpty { draft = text }
-            if pendingAttachments.isEmpty { pendingAttachments = submittedAttachments }
+            draft = AidenDraftSendReconciliation.failedDraft(
+                submitted: text,
+                current: draft
+            )
+            pendingAttachments = AidenDraftSendReconciliation.failedAttachments(
+                submitted: submittedAttachments,
+                current: pendingAttachments
+            )
             streamState = nil
             presentedError = error.localizedDescription
         }
@@ -849,7 +935,7 @@ final class AidenChatViewModel {
 
     @discardableResult
     func upload(_ uploads: [AidenAttachmentUpload]) async -> Int {
-        guard !isReadOnlyFixture else { return uploads.count }
+        guard !isReadOnlyPresentation else { return uploads.count }
         guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else {
             return uploads.count
         }
@@ -899,6 +985,9 @@ final class AidenChatViewModel {
                 await cleanupCancelledUpload(acceptedReferences, context: context)
                 return uploads.count
             } catch {
+                if await coordinator.handleCredentialRevocation(error, context: context) {
+                    return uploads.count
+                }
                 guard coordinator.isCurrent(context) else { return uploads.count }
                 failedCount += 1
             }
@@ -926,10 +1015,14 @@ final class AidenChatViewModel {
                     chatId: chat.id,
                     attachmentId: reference.id
                 )
-                try? await coordinator.remoteClient(for: context).removeAttachment(
-                    chatId: chat.id,
-                    attachmentId: reference.id
-                )
+                do {
+                    try await coordinator.remoteClient(for: context).removeAttachment(
+                        chatId: chat.id,
+                        attachmentId: reference.id
+                    )
+                } catch {
+                    if await coordinator.handleCredentialRevocation(error, context: context) { return }
+                }
             }
         }
         await cleanup.value
@@ -941,7 +1034,7 @@ final class AidenChatViewModel {
     }
 
     func removeAttachment(_ attachment: AidenAttachmentReference) async {
-        guard !isReadOnlyFixture else { return }
+        guard !isReadOnlyPresentation else { return }
         pendingAttachments.removeAll { $0.id == attachment.id }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         await cache.removeAttachmentImage(
@@ -953,6 +1046,7 @@ final class AidenChatViewModel {
         do {
             try await coordinator.remoteClient(for: context).removeAttachment(chatId: chat.id, attachmentId: attachment.id)
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             // The reference is short lived and server cleanup is automatic. Local removal remains authoritative for the composer.
         }
     }
@@ -992,12 +1086,13 @@ final class AidenChatViewModel {
             )
             return data
         } catch {
+            _ = await coordinator.handleCredentialRevocation(error, context: context)
             return nil
         }
     }
 
     func stop() async {
-        guard !isReadOnlyFixture else { return }
+        guard !isReadOnlyPresentation else { return }
         guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let previousState = streamState
@@ -1008,6 +1103,7 @@ final class AidenChatViewModel {
             guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
             await apply(status, streamID: stream.streamId, context: context)
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
             streamState = previousState
             presentedError = error.localizedDescription
@@ -1015,7 +1111,7 @@ final class AidenChatViewModel {
     }
 
     func respondToApproval(_ decision: AidenApprovalDecision) async {
-        guard !isReadOnlyFixture else { return }
+        guard !isReadOnlyPresentation else { return }
         guard let approval = pendingApproval, approval.expiresAt > Date() else {
             pendingApproval = nil
             return
@@ -1029,6 +1125,7 @@ final class AidenChatViewModel {
             _ = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
             guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
             pendingApproval = approval
             streamState = previousState
@@ -1074,6 +1171,7 @@ final class AidenChatViewModel {
             // and provider-failure details are never skipped on reopen.
             startStreaming(stream, context: context)
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
             presentedError = error.localizedDescription
             await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
@@ -1145,6 +1243,7 @@ final class AidenChatViewModel {
                 } catch is CancellationError {
                     return
                 } catch {
+                    if await coordinator.handleCredentialRevocation(error, context: context) { return }
                     guard coordinator.isCurrent(context) else { return }
                     if AidenTerminalReconciliation.isDefinitiveMissingStream(error),
                        await reconcileMissingStream(stream, context: context) {
@@ -1288,6 +1387,7 @@ final class AidenChatViewModel {
             streamState = .waitingForApproval
             await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
             pendingApproval = nil
             streamState = .reconciling
@@ -1303,6 +1403,7 @@ final class AidenChatViewModel {
             await acceptRemoteChat(remote, context: context)
             return true
         } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
             guard coordinator.isCurrent(context) else { return false }
             presentedError = error.localizedDescription
             return false
@@ -1338,6 +1439,7 @@ final class AidenChatViewModel {
                 } catch is CancellationError {
                     return
                 } catch {
+                    if await coordinator.handleCredentialRevocation(error, context: context) { return }
                     // A transient local-network interruption should not surface after a
                     // successful reply. The next normal refresh remains authoritative.
                     continue
@@ -1595,20 +1697,24 @@ struct AidenChatDetailView: View {
     @FocusState private var composerIsFocused: Bool
     @State private var coordinator: AidenRemoteCoordinator?
     let autoStartVoice: Bool
+    let allowsMutations: Bool
 
     init(
         coordinator: AidenRemoteCoordinator,
         chat: AidenChat,
         autoStartVoice: Bool = false,
+        allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) {
         _coordinator = State(initialValue: coordinator)
         _model = State(initialValue: AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
+            allowsMutations: allowsMutations,
             onChatUpdated: onChatUpdated
         ))
         self.autoStartVoice = autoStartVoice
+        self.allowsMutations = allowsMutations
     }
 
 #if DEBUG
@@ -1616,6 +1722,7 @@ struct AidenChatDetailView: View {
         _coordinator = State(initialValue: nil)
         _model = State(initialValue: AidenChatViewModel(readOnlyFixture: chat))
         autoStartVoice = false
+        allowsMutations = false
     }
 #endif
 
@@ -1684,6 +1791,9 @@ struct AidenChatDetailView: View {
         .onPreferenceChange(AidenComposerHeightPreferenceKey.self) { height in
             guard height > 0 else { return }
             composerHeight = height
+        }
+        .onChange(of: allowsMutations, initial: true) { _, allowed in
+            model.setAllowsMutations(allowed)
         }
         .navigationTitle(model.chat.title)
         .navigationBarTitleDisplayMode(.inline)

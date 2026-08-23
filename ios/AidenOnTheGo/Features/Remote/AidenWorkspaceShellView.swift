@@ -315,12 +315,14 @@ final class AidenWorkspaceArchiveStore {
 struct AidenWorkspaceShellView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Binding private var navigationRequest: AidenNavigationRequest?
+    let productArea: AidenProductArea
+    let botsAvailability: AidenBotsAvailability
+    let navigationStore: AidenProductNavigationStore
+    let onSelectProductArea: (AidenProductArea) -> Void
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.aidenPalette) private var palette
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    @State private var selectedWorkspaceId: String?
-    @State private var compactWorkspacePath: [String] = []
     @State private var isShowingPairing = false
     @State private var isShowingAppSettings = false
     @State private var isShowingScheduledTasks = false
@@ -342,10 +344,36 @@ struct AidenWorkspaceShellView: View {
 
     init(
         coordinator: AidenRemoteCoordinator,
-        navigationRequest: Binding<AidenNavigationRequest?> = .constant(nil)
+        navigationRequest: Binding<AidenNavigationRequest?> = .constant(nil),
+        productArea: AidenProductArea = .workspaces,
+        botsAvailability: AidenBotsAvailability = .unsupported,
+        navigationStore: AidenProductNavigationStore = .shared,
+        onSelectProductArea: @escaping (AidenProductArea) -> Void = { _ in }
     ) {
         self.coordinator = coordinator
         _navigationRequest = navigationRequest
+        self.productArea = productArea
+        self.botsAvailability = botsAvailability
+        self.navigationStore = navigationStore
+        self.onSelectProductArea = onSelectProductArea
+    }
+
+    private var selectedWorkspaceId: String? {
+        get { navigationStore.selectedWorkspace(for: coordinator.activeInstanceId) }
+        nonmutating set {
+            navigationStore.setSelectedWorkspace(newValue, for: coordinator.activeInstanceId)
+        }
+    }
+
+    private var compactWorkspacePath: [String] {
+        get { navigationStore.compactWorkspacePath(for: coordinator.activeInstanceId) }
+        nonmutating set {
+            navigationStore.setCompactWorkspacePath(newValue, for: coordinator.activeInstanceId)
+        }
+    }
+
+    private var compactWorkspacePathBinding: Binding<[String]> {
+        Binding(get: { compactWorkspacePath }, set: { compactWorkspacePath = $0 })
     }
 
     private var usesSplitNavigation: Bool {
@@ -381,7 +409,7 @@ struct AidenWorkspaceShellView: View {
                 }
                 .navigationSplitViewStyle(.balanced)
             } else {
-                NavigationStack(path: $compactWorkspacePath) {
+                NavigationStack(path: compactWorkspacePathBinding) {
                     compactWorkspaceSidebar
                         .navigationDestination(for: String.self) { workspaceID in
                             workspaceDetail(workspaceID: workspaceID)
@@ -513,7 +541,9 @@ struct AidenWorkspaceShellView: View {
         .onChange(of: coordinator.activeInstanceId) { _, _ in
             isShowingScheduledTasks = false
             syncArchivedWorkspaceProjection()
-            reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            if coordinator.connectionState == .connected {
+                reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            }
         }
         .onChange(of: compactWorkspacePath) { _, path in
             guard let workspaceID = path.last,
@@ -633,7 +663,7 @@ struct AidenWorkspaceShellView: View {
                     searchText.isEmpty ? "No Chats Yet" : "No Matching Chats",
                     systemImage: searchText.isEmpty ? "bubble.left" : "magnifyingglass",
                     description: Text(searchText.isEmpty
-                        ? "Start a new agent to create your first chat."
+                        ? "Start a new Workspace chat to begin."
                         : "Try a different search term.")
                 )
                 .listRowInsets(EdgeInsets())
@@ -663,14 +693,14 @@ struct AidenWorkspaceShellView: View {
 
     private var homeHeader: some View {
         HStack(spacing: isSearching ? 0 : 16) {
-            Image("AidenAppIcon")
-                .resizable()
-                .scaledToFit()
+            AidenProductSwitcherButton(
+                area: productArea,
+                botsAvailability: botsAvailability,
+                onSelect: onSelectProductArea
+            )
                 .frame(width: isSearching ? 0 : 68, height: 68, alignment: .leading)
                 .opacity(isSearching ? 0 : 1)
                 .clipped()
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Aiden")
 
             searchChrome
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -856,8 +886,8 @@ struct AidenWorkspaceShellView: View {
         }
         .aidenProminentGlassButton()
         .disabled(coordinator.connectionState != .connected || coordinator.isMutating || isCreatingAgent)
-        .accessibilityLabel("New Agent")
-        .accessibilityHint("Choose where the new agent should work.")
+        .accessibilityLabel("New Workspace Chat")
+        .accessibilityHint("Choose the workspace for a new chat.")
         .matchedTransitionSource(id: "AidenNewAgentOptions", in: newAgentTransition)
         .popover(isPresented: $isShowingNewAgentChoices, arrowEdge: .bottom) {
             AidenNewAgentPopover(
@@ -889,7 +919,7 @@ struct AidenWorkspaceShellView: View {
 
     @MainActor
     private func createNewAgent(in workspace: AidenWorkspace) async {
-        await createNewAgent(workspace: workspace, status: "Opening agent…")
+        await createNewAgent(workspace: workspace, status: "Opening chat…")
     }
 
     @MainActor
@@ -918,7 +948,7 @@ struct AidenWorkspaceShellView: View {
 
         guard let created = await coordinator.createWorkspace(workspaceCreate) else { return }
         let workspace = await applyGlobalDefaults(to: created)
-        await createNewAgent(workspace: workspace, status: "Opening agent…", managesProgress: false)
+        await createNewAgent(workspace: workspace, status: "Opening chat…", managesProgress: false)
     }
 
     @MainActor
@@ -1012,6 +1042,7 @@ struct AidenWorkspaceShellView: View {
     }
 
     private func reconcileNavigation(workspaceIDs: [String]) {
+        if coordinator.connectionState == .connecting, workspaceIDs.isEmpty { return }
         selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
             current: selectedWorkspaceId,
             workspaceIDs: workspaceIDs
@@ -1104,11 +1135,11 @@ private struct AidenNewAgentPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("New Agent")
+                Text("New Workspace Chat")
                     .font(.title3.bold())
                     .foregroundStyle(palette.foreground)
 
-                Text("Choose where Aiden should work.")
+                Text("Choose the workspace for this chat.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
             }

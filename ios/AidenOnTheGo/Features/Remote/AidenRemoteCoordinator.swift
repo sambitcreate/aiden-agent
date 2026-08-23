@@ -563,6 +563,20 @@ final class AidenRemoteCoordinator {
         return retained
     }
 
+    /// Bot feature calls use the remote client directly so their DTO state can
+    /// stay feature-local. This keeps credential revocation on the same
+    /// immediate purge path as coordinator-owned Workspace operations.
+    func handleCredentialRevocation(
+        _ error: Error,
+        context: AidenRemoteRequestContext
+    ) async -> Bool {
+        guard isCurrent(context),
+              let clientError = error as? AidenRemoteClientError,
+              clientError.isCredentialRevoked else { return false }
+        await handleConnectionError(error, installationId: context.instanceId)
+        return true
+    }
+
     private func load(
         installation: AidenInstallation,
         credential: String,
@@ -689,6 +703,9 @@ final class AidenRemoteCoordinator {
         knownWorkspaceIds: Set<String> = []
     ) async {
         workspaceArchiveStore.purge(instanceID: installationId)
+        AidenProductNavigationStore.shared.purge(instanceID: installationId)
+        await AidenBotCache.shared.purge(instanceId: installationId)
+        await AidenChatDraftStore.shared.purge(instanceId: installationId)
         await chatCache.purge(instanceId: installationId)
         await scheduledTaskCache.purge(instanceId: installationId)
         await workspaceEnvironmentCache.purge(

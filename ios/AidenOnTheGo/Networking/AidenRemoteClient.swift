@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import ImageIO
 
 enum AidenDeviceType: String, Codable, Sendable {
     case iphone
@@ -715,6 +716,324 @@ final class AidenRemoteClient: @unchecked Sendable {
         try await send(method: "GET", path: ["models"])
     }
 
+    // MARK: - Bots
+
+    func bots(includeArchived: Bool = false) async throws -> AidenBotList {
+        try await send(
+            method: "GET",
+            path: ["bots"],
+            query: [URLQueryItem(name: "includeArchived", value: includeArchived ? "true" : "false")]
+        )
+    }
+
+    func bot(id: String) async throws -> AidenBotDetail {
+        try validateBotIdentifier(id)
+        let detail: AidenBotDetail = try await send(method: "GET", path: ["bots", id])
+        return try validatedBotDetail(detail, expectedID: id)
+    }
+
+    func createBot(
+        _ create: AidenBotCreateRequest,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenBotDetail {
+        try await send(
+            method: "POST",
+            path: ["bots"],
+            body: create,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [201]
+        )
+    }
+
+    func updateBotIdentity(
+        id: String,
+        revision: String,
+        patch: AidenBotIdentityPatch
+    ) async throws -> AidenBotDetail {
+        try validateBotIdentifier(id)
+        try validateRevision(revision)
+        let detail: AidenBotDetail = try await send(
+            method: "PATCH",
+            path: ["bots", id],
+            body: patch,
+            headers: ["If-Match": revision]
+        )
+        return try validatedBotDetail(detail, expectedID: id)
+    }
+
+    func archiveBot(id: String, revision: String) async throws -> AidenBotDetail {
+        try validateBotIdentifier(id)
+        try validateRevision(revision)
+        let response: AidenBotArchiveResponse = try await send(
+            method: "DELETE",
+            path: ["bots", id],
+            headers: ["If-Match": revision]
+        )
+        return try validatedBotDetail(response.bot, expectedID: id)
+    }
+
+    func restoreBot(
+        id: String,
+        revision: String,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenBotDetail {
+        try validateBotIdentifier(id)
+        try validateRevision(revision)
+        let response: AidenBotRestoreResponse = try await send(
+            method: "POST",
+            path: ["bots", id, "restore"],
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ]
+        )
+        return try validatedBotDetail(response.bot, expectedID: id)
+    }
+
+    func botConversations(
+        query: AidenBotConversationQuery
+    ) async throws -> AidenBotConversationPage {
+        var queryItems: [URLQueryItem] = []
+        if let cursor = query.cursor {
+            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        if let search = query.query {
+            queryItems.append(URLQueryItem(name: "query", value: search))
+        }
+        if let botId = query.botId {
+            queryItems.append(URLQueryItem(name: "botId", value: botId))
+        }
+        if let limit = query.limit {
+            queryItems.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        let page: AidenBotConversationPage = try await send(
+            method: "GET",
+            path: ["bot-conversations"],
+            query: queryItems
+        )
+        if let botId = query.botId,
+           !page.conversations.allSatisfy({ $0.botId == botId }) {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return page
+    }
+
+    func botConversations() async throws -> AidenBotConversationPage {
+        try await botConversations(query: AidenBotConversationQuery())
+    }
+
+    func createBotChat(
+        botId: String,
+        request: AidenBotChatCreateRequest,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChat {
+        try validateBotIdentifier(botId)
+        let response: AidenBotChatCreateResponse = try await send(
+            method: "POST",
+            path: ["bots", botId, "chats"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [201]
+        )
+        guard response.chat.botId == botId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return response.chat
+    }
+
+    func botCapabilityCatalog() async throws -> AidenBotCapabilityCatalog {
+        try await send(method: "GET", path: ["bot-capabilities"])
+    }
+
+    func updateBotAccess(
+        botId: String,
+        revision: String,
+        update: AidenBotAccessUpdate
+    ) async throws -> AidenBotAccessView {
+        try validateBotIdentifier(botId)
+        try validateRevision(revision)
+        let response: AidenBotAccessView = try await send(
+            method: "PATCH",
+            path: ["bots", botId, "capabilities"],
+            body: update,
+            headers: ["If-Match": revision]
+        )
+        guard response.botId == botId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return response
+    }
+
+    func botChatAccess(chatId: String) async throws -> AidenBotChatAccessView {
+        try validateRemoteIdentifier(chatId)
+        let response: AidenBotChatAccessView = try await send(
+            method: "GET",
+            path: ["chats", chatId, "capabilities"]
+        )
+        guard response.chatId == chatId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return response
+    }
+
+    func updateBotChatAccess(
+        chatId: String,
+        revision: String,
+        update: AidenBotChatAccessUpdate
+    ) async throws -> AidenBotChatAccessView {
+        try validateRemoteIdentifier(chatId)
+        try validateRevision(revision)
+        let response: AidenBotChatAccessView = try await send(
+            method: "PATCH",
+            path: ["chats", chatId, "capabilities"],
+            body: update,
+            headers: ["If-Match": revision]
+        )
+        guard response.chatId == chatId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return response
+    }
+
+    func botFavorites() async throws -> AidenBotFavorites {
+        try await send(method: "GET", path: ["bot-favorites"])
+    }
+
+    func updateBotFavorites(
+        _ update: AidenBotFavoritesUpdateRequest,
+        revision: String
+    ) async throws -> AidenBotFavorites {
+        try validateRevision(revision)
+        return try await send(
+            method: "PATCH",
+            path: ["bot-favorites"],
+            body: update,
+            headers: ["If-Match": revision]
+        )
+    }
+
+    func botAccessNotice() async throws -> AidenBotNoticeStatus {
+        try await send(method: "GET", path: ["bot-access-notice"])
+    }
+
+    func acknowledgeBotAccessNotice(
+        _ acknowledgement: AidenBotNoticeAcknowledgement,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenBotNoticeStatus {
+        try await send(
+            method: "POST",
+            path: ["bot-access-notice", "acknowledgement"],
+            body: acknowledgement,
+            headers: idempotencyHeaders(idempotencyKey)
+        )
+    }
+
+    func botConversationFiles(chatId: String) async throws -> AidenWorkspaceFileIndex {
+        try validateRemoteIdentifier(chatId)
+        let value: AidenWorkspaceFileIndex = try await send(
+            method: "GET",
+            path: ["bot-conversations", chatId, "files"],
+            maximumResponseBytes: AidenRemoteProtocol.maxFileJSONBodyBytes
+        )
+        return try AidenWorkspaceEnvironmentValidation.validated(value)
+    }
+
+    func botConversationFile(
+        chatId: String,
+        fileId: String
+    ) async throws -> AidenWorkspaceFileDocument {
+        try validateRemoteIdentifier(chatId)
+        try validateOpaqueFileIdentifier(fileId)
+        let value: AidenWorkspaceFileDocument = try await send(
+            method: "GET",
+            path: ["bot-conversations", chatId, "files", fileId],
+            maximumResponseBytes: AidenRemoteProtocol.maxFileJSONBodyBytes
+        )
+        return try AidenWorkspaceEnvironmentValidation.validated(value, expectedID: fileId)
+    }
+
+    func writeBotConversationFile(
+        chatId: String,
+        fileId: String,
+        content: String,
+        expectedVersion: String
+    ) async throws -> AidenWorkspaceFileDocument {
+        try validateRemoteIdentifier(chatId)
+        try validateOpaqueFileIdentifier(fileId)
+        try validateRevision(expectedVersion)
+        let value: AidenWorkspaceFileDocument = try await send(
+            method: "PUT",
+            path: ["bot-conversations", chatId, "files", fileId],
+            body: AidenWorkspaceFileWriteRequest(content: content, expectedVersion: expectedVersion),
+            maximumResponseBytes: AidenRemoteProtocol.maxFileJSONBodyBytes
+        )
+        return try AidenWorkspaceEnvironmentValidation.validated(value, expectedID: fileId)
+    }
+
+    func putBotAvatar(
+        botId: String,
+        revision: String,
+        upload: AidenBotAvatarUpload,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenBotAvatarAsset {
+        try validateBotIdentifier(botId)
+        try validateRevision(revision)
+        return try await send(
+            method: "PUT",
+            path: ["bots", botId, "avatar"],
+            body: upload,
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ],
+            maximumResponseBytes: AidenRemoteProtocol.maxJSONBodyBytes
+        )
+    }
+
+    func deleteBotAvatar(botId: String, revision: String) async throws -> AidenBotDetail {
+        try validateBotIdentifier(botId)
+        try validateRevision(revision)
+        let detail: AidenBotDetail = try await send(
+            method: "DELETE",
+            path: ["bots", botId, "avatar"],
+            headers: ["If-Match": revision]
+        )
+        return try validatedBotDetail(detail, expectedID: botId)
+    }
+
+    func botAvatar(
+        botId: String,
+        assetRevision: String
+    ) async throws -> AidenBotAvatarContent {
+        try validateBotIdentifier(botId)
+        try validateAvatarRevision(assetRevision)
+        var request = try makeRequest(
+            method: "GET",
+            path: ["bots", botId, "avatar", assetRevision],
+            query: [],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        request.setValue("image/png", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: 4 * 1_048_576
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.value(forHTTPHeaderField: "Content-Type")?
+                .split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() == "image/png",
+              httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased() == "no-store",
+              httpResponse.value(forHTTPHeaderField: "X-Content-Type-Options")?.lowercased() == "nosniff",
+              Self.isCanonicalBotPNG(data) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
+    }
+
     func scheduledTasks() async throws -> [AidenScheduledTask] {
         let value: ScheduledTaskList = try await send(method: "GET", path: ["scheduled-tasks"])
         return try AidenScheduledTaskValidation.tasks(value.tasks)
@@ -1319,6 +1638,108 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private func idempotencyHeaders(_ key: UUID) -> [String: String] {
         ["Idempotency-Key": key.uuidString.lowercased()]
+    }
+
+    private func validateBotIdentifier(_ value: String) throws {
+        try validateSafeIdentifier(value, maximumScalars: AidenRemoteProtocol.maxBotIdentifierLength)
+    }
+
+    private func validateRemoteIdentifier(_ value: String) throws {
+        try validateSafeIdentifier(value, maximumScalars: AidenRemoteProtocol.maxIdentifierLength)
+    }
+
+    private func validateRevision(_ value: String) throws {
+        guard !value.isEmpty,
+              value.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength,
+              value.unicodeScalars.allSatisfy({ $0.value >= 0x21 && $0.value <= 0x7e }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    private func validateSafeIdentifier(_ value: String, maximumScalars: Int) throws {
+        guard !value.isEmpty,
+              value.unicodeScalars.count <= maximumScalars,
+              value.unicodeScalars.allSatisfy({ scalar in
+                  switch scalar.value {
+                  case 48...57, 65...90, 97...122, 45, 46, 58, 95:
+                      return true
+                  default:
+                      return false
+                  }
+              }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    private func validateOpaqueFileIdentifier(_ value: String) throws {
+        let suffix = value.dropFirst(5)
+        guard value.hasPrefix("file_"), suffix.count == 43,
+              suffix.unicodeScalars.allSatisfy({ scalar in
+                  switch scalar.value {
+                  case 48...57, 65...90, 97...122, 45, 95:
+                      return true
+                  default:
+                      return false
+                  }
+              }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    private func validateAvatarRevision(_ value: String) throws {
+        let suffix = value.dropFirst("avatar_revision_".count)
+        guard value.hasPrefix("avatar_revision_"), suffix.count == 32,
+              suffix.unicodeScalars.allSatisfy({ scalar in
+                  (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+              }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    private func validatedBotDetail(
+        _ detail: AidenBotDetail,
+        expectedID: String
+    ) throws -> AidenBotDetail {
+        guard detail.id == expectedID else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return detail
+    }
+
+    private static func isCanonicalBotPNG(_ data: Data) -> Bool {
+        guard data.count >= 24,
+              data.prefix(8).elementsEqual([137, 80, 78, 71, 13, 10, 26, 10]),
+              data[12..<16].elementsEqual([73, 72, 68, 82]),
+              [UInt8](data.suffix(12)) == [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130],
+              let source = CGImageSourceCreateWithData(
+                  data as CFData,
+                  [kCGImageSourceShouldCache: false] as CFDictionary
+              ),
+              CGImageSourceGetType(source) as String? == "public.png",
+              CGImageSourceGetStatus(source) == .statusComplete,
+              CGImageSourceGetCount(source) == 1,
+              CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+              width.intValue == 512,
+              height.intValue == 512,
+              let pngProperties = properties[kCGImagePropertyPNGDictionary]
+                as? [CFString: Any],
+              pngProperties[kCGImagePropertyAPNGLoopCount] == nil,
+              pngProperties[kCGImagePropertyAPNGDelayTime] == nil,
+              pngProperties[kCGImagePropertyAPNGUnclampedDelayTime] == nil,
+              let image = CGImageSourceCreateImageAtIndex(
+                  source,
+                  0,
+                  [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+              ),
+              image.width == 512,
+              image.height == 512 else {
+            return false
+        }
+        return true
     }
 
     private func validatedGit(_ result: AidenGitResult) throws -> AidenGitResult {

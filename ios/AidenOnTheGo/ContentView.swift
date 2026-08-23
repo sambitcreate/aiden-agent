@@ -18,7 +18,7 @@ struct ContentView: View {
                     }
                 )
             case .connecting, .connected, .offline:
-                AidenWorkspaceShellView(
+                AidenProductShellView(
                     coordinator: coordinator,
                     navigationRequest: $navigationRequest
                 )
