@@ -789,6 +789,12 @@ export class AidenRemoteChatService {
   }
 
   async remove(chatId: string, revision: string): Promise<void> {
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      // A Bot owns one persistent conversation. It can be retained by
+      // archiving the Bot, but the generic chat endpoint must never delete it.
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
     await this.options.application.remove(safeId(chatId, "chat"), {
       assertCurrent: (chat) => requireRevision(revision, chat),
     });

@@ -43,6 +43,7 @@ import {
   prepareBotGeneration,
   type PreparedBotGeneration,
 } from "./bot-generation-preparation.js";
+import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 import {
   botRuntimeAuthority,
   BOT_DESKTOP_AUDIENCE_ID,
@@ -1156,6 +1157,14 @@ export const llmClient = {
         (botId) => botStore.get(botId),
       );
       if (authoritativeBot) {
+        const canonical = selectCanonicalBotChat(
+          await chatStore.listByBot(authoritativeBot.id),
+        );
+        if (canonical?.id !== chat.id) {
+          throw new Error(
+            "This historical Bot chat is read-only. Open the Bot's current chat.",
+          );
+        }
         const providerId = chat.providerId;
         const model = chat.model;
         const botId = authoritativeBot.id;

@@ -2139,6 +2139,41 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testCoordinatorReusesOneRemoteClientWithinAnActivation() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(
+                instanceId: "instance-client-cache",
+                deviceId: "device-client-cache",
+                credential: String(repeating: "C", count: 43)
+            ),
+            trust: makeSystemTrust(),
+            name: "Cached Mac"
+        )
+        let session = makeSession()
+        var factoryCalls = 0
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                factoryCalls += 1
+                return AidenRemoteClient(
+                    endpoint: installation.endpoint,
+                    credential: credential,
+                    session: session
+                )
+            }
+        )
+
+        let context = try coordinator.requestContext()
+        let first = try coordinator.remoteClient(for: context)
+        let second = try coordinator.remoteClient(for: context)
+
+        XCTAssertTrue(first === second)
+        XCTAssertEqual(factoryCalls, 1)
+    }
+
+    @MainActor
     func testInstallationStoreKeepsCredentialsScopedAndSwitchesWithoutLeakage() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)

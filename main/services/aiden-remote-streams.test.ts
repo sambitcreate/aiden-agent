@@ -461,6 +461,81 @@ test("unpaired UTF-16 from provider notifications is sanitized before persistenc
   assert.doesNotMatch(JSON.stringify(service.snapshot()), /\\ud800|\\udc00/u);
 });
 
+test("legacy label-only timeline journals load into the current safe timeline shape", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:timeline", {
+    timeline: {
+      version: 3,
+      generationId: "stream-1",
+      status: "running",
+      startedAt: 1_000,
+      steps: [],
+    },
+  });
+  const legacy = app.service.snapshot();
+  legacy.streams[0]!.events[1]!.payload = { label: "Run command" };
+
+  const normalized = normalizeAidenRemoteStreamSnapshot(legacy);
+  const payload = normalized.streams[0]!.events[1]!.payload;
+  assert.equal("label" in payload, false);
+  assert.deepEqual(payload, {
+    timeline: {
+      version: 2,
+      generationId: "stream-1",
+      status: "running",
+      startedAt: 1_000,
+      steps: [{
+        id: "tool-2",
+        order: 0,
+        kind: "tool",
+        toolCallId: "call-2",
+        toolName: "legacy_activity",
+        label: "Run command",
+        status: "running",
+        startedAt: 1_000,
+        updatedAt: 1_000,
+      }],
+    },
+  });
+});
+
+test("legacy timeline migration strips only label and still rejects unknown payload fields", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:timeline", {
+    timeline: {
+      version: 3,
+      generationId: "stream-1",
+      status: "running",
+      startedAt: 1_000,
+      steps: [],
+    },
+  });
+  const snapshot = app.service.snapshot();
+  const currentTimeline = structuredClone(
+    snapshot.streams[0]!.events[1]!.payload.timeline,
+  );
+  snapshot.streams[0]!.events[1]!.payload = {
+    label: "Thinking",
+    timeline: currentTimeline,
+  };
+  assert.deepEqual(
+    normalizeAidenRemoteStreamSnapshot(snapshot).streams[0]!.events[1]!.payload,
+    { timeline: currentTimeline },
+  );
+
+  snapshot.streams[0]!.events[1]!.payload = {
+    label: "Thinking",
+    timeline: currentTimeline,
+    hiddenPrompt: "must remain rejected",
+  };
+  assert.throws(
+    () => normalizeAidenRemoteStreamSnapshot(snapshot),
+    /unsupported field/u,
+  );
+});
+
 test("aggregate stream journals stay within the durable snapshot budget", async () => {
   const service = new AidenRemoteStreamService({
     now: () => 1_000,

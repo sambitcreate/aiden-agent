@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  BotAccessUpdate,
-  BotAccessView,
-  BotCapabilityCatalog,
-  BotChatAccessUpdate,
-  BotChatAccessView,
+import {
+  BotCapabilityValidationError,
+  type BotAccessUpdate,
+  type BotAccessView,
+  type BotCapabilityCatalog,
+  type BotChatAccessUpdate,
+  type BotChatAccessView,
 } from "../../renderer/shared/bot-capabilities.js";
 import type { BotCreateInput, BotDefinition, BotUpdateInput } from "../../renderer/shared/bots.js";
 import { BotCapabilityRevisionConflictError } from "./bot-capability-store-core.js";
@@ -98,6 +99,7 @@ function fixture(
       snapshot: AidenRemoteBotFavoritesSnapshot,
     ) => Promise<void>;
     onArchiveBot?: (botId: string) => Promise<void>;
+    updateBotAccessError?: unknown;
   } = {},
 ) {
   let bots = initial.map((entry) => structuredClone(entry));
@@ -223,6 +225,15 @@ function fixture(
       });
       return structuredClone(created);
     },
+    async getCanonicalChat(botId: string) {
+      const matching = [...chats.values()].filter((chat) => chat.botId === botId);
+      const selected = matching.sort((left, right) =>
+        right.updatedAt - left.updatedAt ||
+        right.createdAt - left.createdAt ||
+        left.id.localeCompare(right.id),
+      )[0];
+      return selected ? structuredClone(selected) : null;
+    },
     async capabilityCatalog() { return catalog(); },
     async getBotAccess(botId: string) {
       const policy = policies.get(botId);
@@ -234,6 +245,9 @@ function fixture(
       expectedRevision: string;
       access: BotAccessUpdate;
     }) {
+      if (options.updateBotAccessError !== undefined) {
+        throw options.updateBotAccessError;
+      }
       const current = policies.get(input.botId)!;
       if (current.revision !== input.expectedRevision) {
         throw new BotCapabilityRevisionConflictError(current.revision);
@@ -552,6 +566,22 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
   assert.equal(chat.providerId, "source-provider");
   assert.equal(chat.modelId, "source-model");
   assert.equal(app.resolvedSelections.length, 1);
+  const replayedChat = await app.service.createChat(
+    "device_1",
+    created.id,
+    "bot-chat-key-0001",
+    { providerId: PROVIDER_ID, modelId: MODEL_ID },
+  );
+  const reopenedChat = await app.service.createChat(
+    "device_1",
+    created.id,
+    "bot-chat-key-0002",
+    { providerId: "stale-provider", modelId: "stale-model" },
+  );
+  assert.equal(replayedChat.id, chat.id);
+  assert.equal(reopenedChat.id, chat.id);
+  assert.equal(app.chats.size, 1);
+  assert.equal(app.resolvedSelections.length, 1);
 
   const subset = await app.service.getChatAccess(chat.id);
   const narrowed = await app.service.updateChatAccess(
@@ -587,6 +617,61 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
   assert.equal(restored.health, "ready");
   assert.ok(app.notifications.includes(`bot:${created.id}`));
   assert.ok(app.notifications.includes(`chat:${chat.id}`));
+});
+
+test("a durable legacy chat replay reconciles to the current canonical Bot chat", async () => {
+  const idempotency = new AidenIdempotencyLedger();
+  const request = { providerId: PROVIDER_ID, modelId: MODEL_ID } as const;
+  const beforeUpgrade = fixture([bot("bot_1")], { idempotency });
+  const historical = await beforeUpgrade.service.createChat(
+    "device_1",
+    "bot_1",
+    "bot-chat-legacy-replay-01",
+    request,
+  );
+
+  const restarted = fixture([bot("bot_1")], {
+    idempotency: new AidenIdempotencyLedger(idempotency.snapshot()),
+  });
+  restarted.chats.set(historical.id, {
+    id: historical.id,
+    botId: historical.botId,
+    workspaceId: "managed_home_opaque",
+    title: historical.title,
+    providerId: historical.providerId,
+    model: historical.modelId,
+    createdAt: Date.parse(historical.createdAt),
+    updatedAt: Date.parse(historical.updatedAt),
+    messages: [],
+  });
+  restarted.chats.set("chat_current", {
+    id: "chat_current",
+    botId: "bot_1",
+    workspaceId: "managed_home_opaque",
+    title: "Planner",
+    providerId: "source-provider",
+    model: "source-model",
+    createdAt: 5_000,
+    updatedAt: 6_000,
+    messages: [],
+  });
+
+  const replay = await restarted.service.createChat(
+    "device_1",
+    "bot_1",
+    "bot-chat-legacy-replay-01",
+    request,
+  );
+  const repeatedReplay = await restarted.service.createChat(
+    "device_1",
+    "bot_1",
+    "bot-chat-legacy-replay-01",
+    request,
+  );
+  assert.equal(replay.id, "chat_current");
+  assert.equal(replay.botId, "bot_1");
+  assert.deepEqual(repeatedReplay, replay);
+  assert.equal(restarted.resolvedSelections.length, 0);
 });
 
 test("an invalidated provider inventory lease publishes neither Full nor Custom Bot chat state", async () => {
@@ -751,6 +836,28 @@ test("stale identity, policy, and favorites revisions return authoritative confl
   await assert.rejects(
     app.service.updateFavorites(favorites.revision, { botIds: [] }),
     (error: unknown) => (error as { code?: string }).code === "revision_conflict",
+  );
+});
+
+test("stale capability validation maps to a retryable operation conflict", async () => {
+  const app = fixture(undefined, {
+    updateBotAccessError: new BotCapabilityValidationError(
+      "Internal inventory details must not cross the Remote boundary.",
+    ),
+  });
+
+  await assert.rejects(
+    app.service.updateAccess("device_1", "bot_1", "policy_revision_1", {
+      accessMode: "full",
+      catalogRevision: CATALOG_REVISION,
+      confirmedForeground: true,
+    }),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      error.code === "operation_stale" &&
+      error.status === 409 &&
+      error.retryable === true &&
+      !error.message.includes("Internal inventory details"),
   );
 });
 

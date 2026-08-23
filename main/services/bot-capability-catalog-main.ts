@@ -253,7 +253,7 @@ export class BotCapabilityCatalogMainService {
     return snapshot;
   }
 
-  /** Re-read every inventory before binding, so a stale UI revision fails closed. */
+  /** Bind against a caller-leased snapshot, or re-read inventory when none is supplied. */
   async bindCustom(input: {
     audienceId: string;
     selection: BotCustomSelection;
@@ -261,13 +261,15 @@ export class BotCapabilityCatalogMainService {
     retainedBindings?: readonly BoundBotCustomSelection[];
     signal?: AbortSignal;
     botId?: string;
+    /** A snapshot already captured under the caller's live inventory lease. */
+    snapshot?: BotCapabilityCatalogSnapshot;
   }): Promise<BoundBotCustomSelection> {
-    const snapshot = await this.snapshot({
+    const snapshot = input.snapshot ?? (await this.snapshot({
       audienceId: input.audienceId,
       retainedBindings: input.retainedBindings,
       signal: input.signal,
       botId: input.botId,
-    });
+    }));
     return bindBotCustomSelection({
       selection: input.selection,
       catalogRevision: input.catalogRevision,

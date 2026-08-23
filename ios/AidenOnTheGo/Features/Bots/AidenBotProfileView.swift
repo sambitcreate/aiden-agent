@@ -1,5 +1,29 @@
 import SwiftUI
 
+private struct AidenBotProfileSkeletonView: View {
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(spacing: 18) {
+            AidenBotSkeletonBlock(width: 112, height: 112, radius: 56, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: 170, height: 28, radius: 12, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: 230, height: 15, radius: 7, reduceMotion: reduceMotion)
+            HStack(spacing: 8) {
+                ForEach(0..<4, id: \.self) { _ in
+                    AidenBotSkeletonBlock(width: 56, height: 62, radius: 14, reduceMotion: reduceMotion)
+                }
+            }
+            AidenBotSkeletonBlock(width: nil, height: 118, radius: 18, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: nil, height: 170, radius: 18, reduceMotion: reduceMotion)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Bot")
+    }
+}
+
 struct AidenBotProfileRoute: Identifiable, Equatable {
     let summary: AidenBotSummary
     var id: String { summary.id }
@@ -149,7 +173,6 @@ private struct AidenBotProfileMutation: Equatable {
         case favorites(revision: String, botIDs: [String])
         case archive(revision: String)
         case restore(revision: String, idempotencyKey: UUID)
-        case deleteChats([(id: String, revision: String)])
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             switch (lhs, rhs) {
@@ -159,8 +182,6 @@ private struct AidenBotProfileMutation: Equatable {
                 lhs == rhs
             case let (.restore(lRevision, lKey), .restore(rRevision, rKey)):
                 lRevision == rRevision && lKey == rKey
-            case let (.deleteChats(lhs), .deleteChats(rhs)):
-                lhs.map(\.id) == rhs.map(\.id) && lhs.map(\.revision) == rhs.map(\.revision)
             default:
                 false
             }
@@ -183,6 +204,7 @@ struct AidenBotProfileView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var detail: AidenBotDetail?
     @State private var favorites: AidenBotFavorites?
     @State private var conversations: [AidenBotConversationItem] = []
@@ -195,9 +217,6 @@ struct AidenBotProfileView: View {
     @State private var retainedRestore: (revision: String, key: UUID)?
     @State private var requiresRefreshAfterMutation = false
     @State private var isConfirmingArchive = false
-    @State private var isConfirmingDelete = false
-    @State private var isSelectingChats = false
-    @State private var selectedChatIDs: Set<String> = []
     @State private var loadGeneration: UInt = 0
 
     private var botID: String { initialSummary.id }
@@ -221,17 +240,6 @@ struct AidenBotProfileView: View {
     private var isFavorite: Bool { favorites?.botIds.contains(botID) == true }
 
     private var favoriteIndex: Int? { favorites?.botIds.firstIndex(of: botID) }
-
-    private var deletableConversations: [AidenBotConversationItem] {
-        guard let detail else { return [] }
-        return conversations.filter {
-            aidenBotConversationCanDelete($0, botHealth: detail.health, canWrite: canWrite)
-        }
-    }
-
-    private var selectedDeletableConversations: [AidenBotConversationItem] {
-        deletableConversations.filter { selectedChatIDs.contains($0.id) }
-    }
 
     var body: some View {
         NavigationStack {
@@ -288,18 +296,6 @@ struct AidenBotProfileView: View {
         } message: {
             Text("Its chats stay available to read. Restore the Bot later to edit it or start new work.")
         }
-        .confirmationDialog(
-            deleteConfirmationTitle,
-            isPresented: $isConfirmingDelete,
-            titleVisibility: .visible
-        ) {
-            Button(deleteConfirmationTitle, role: .destructive) {
-                Task { await deleteSelectedChats() }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Deleted chats and their messages cannot be recovered.")
-        }
         .alert(
             "Couldn’t Complete the Change",
             isPresented: Binding(
@@ -315,9 +311,10 @@ struct AidenBotProfileView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isLoading {
-            ProgressView("Loading Bot…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if let detail {
+            profile(detail)
+        } else if isLoading {
+            AidenBotProfileSkeletonView(reduceMotion: reduceMotion)
         } else if let loadError {
             ContentUnavailableView {
                 Label("Couldn’t Load Bot", systemImage: "exclamationmark.bubble")
@@ -329,14 +326,20 @@ struct AidenBotProfileView: View {
                     Task { await load(for: expectedSession) }
                 }
             }
-        } else if let detail {
-            profile(detail)
         }
     }
 
     private func profile(_ detail: AidenBotDetail) -> some View {
         ScrollView {
             LazyVStack(spacing: 22) {
+                if let loadError {
+                    Label(loadError, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 16))
+                }
                 identityHeader(detail)
                 if detail.health == .archived {
                     Label(
@@ -361,7 +364,7 @@ struct AidenBotProfileView: View {
                 }
                 actionBar(detail)
                 favoriteOrderCard(detail)
-                conversationCard(detail)
+                conversationCard
                 identityDetails(detail)
             }
             .frame(maxWidth: 680)
@@ -401,10 +404,17 @@ struct AidenBotProfileView: View {
 
     private func actionBar(_ detail: AidenBotDetail) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            profileAction("New Chat", systemImage: "square.and.pencil") {
+            profileAction(
+                conversations.isEmpty ? "Start Chat" : "Open Chat",
+                systemImage: "message"
+            ) {
                 guard detail.health == .ready else { return }
                 if showsDismissButton { dismiss() }
-                Task { await onCreateConversation(initialSummary) }
+                if let conversation = conversations.first {
+                    Task { await onOpenConversation(conversation) }
+                } else {
+                    Task { await onCreateConversation(initialSummary) }
+                }
             }
             .disabled(!aidenBotCanStartNewChat(health: detail.health, canWrite: canWrite))
             .accessibilityHint(
@@ -488,25 +498,12 @@ struct AidenBotProfileView: View {
         }
     }
 
-    private func conversationCard(_ detail: AidenBotDetail) -> some View {
+    private var conversationCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Recent Chats")
+                Text("Chat")
                     .font(.headline)
                 Spacer()
-                if isSelectingChats {
-                    Button("Cancel") {
-                        isSelectingChats = false
-                        selectedChatIDs = []
-                    }
-                    if !selectedDeletableConversations.isEmpty {
-                        Button("Delete (\(selectedDeletableConversations.count))", role: .destructive) {
-                            isConfirmingDelete = true
-                        }
-                    }
-                } else if !deletableConversations.isEmpty {
-                    Button("Select") { isSelectingChats = true }
-                }
             }
             .padding(16)
 
@@ -518,7 +515,7 @@ struct AidenBotProfileView: View {
                     .padding(16)
             } else {
                 ForEach(conversations) { conversation in
-                    conversationRow(conversation, detail: detail)
+                    conversationRow(conversation)
                     if conversation.id != conversations.last?.id { Divider().padding(.leading, 56) }
                 }
             }
@@ -526,47 +523,16 @@ struct AidenBotProfileView: View {
         .background(palette.raised, in: RoundedRectangle(cornerRadius: 18))
     }
 
-    private func conversationRow(
-        _ conversation: AidenBotConversationItem,
-        detail: AidenBotDetail
-    ) -> some View {
-        let canDelete = aidenBotConversationCanDelete(
-            conversation,
-            botHealth: detail.health,
-            canWrite: canWrite
-        )
-        let accessibility = aidenBotConversationSelectionAccessibility(
-            isSelecting: isSelectingChats,
-            isSelected: selectedChatIDs.contains(conversation.id),
-            canDelete: canDelete,
-            botHealth: detail.health,
-            canWrite: canWrite,
-            activityState: conversation.activityState
-        )
+    private func conversationRow(_ conversation: AidenBotConversationItem) -> some View {
         return Button {
-            if isSelectingChats {
-                guard canDelete else { return }
-                if selectedChatIDs.contains(conversation.id) {
-                    selectedChatIDs.remove(conversation.id)
-                } else {
-                    selectedChatIDs.insert(conversation.id)
-                }
-            } else {
-                if showsDismissButton { dismiss() }
-                Task { await onOpenConversation(conversation) }
-            }
+            if showsDismissButton { dismiss() }
+            Task { await onOpenConversation(conversation) }
         } label: {
             HStack(spacing: 12) {
-                if isSelectingChats {
-                    Image(systemName: selectedChatIDs.contains(conversation.id) ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(canDelete ? palette.accent : palette.secondary)
-                        .accessibilityHidden(true)
-                } else {
-                    Image(systemName: "message")
-                        .foregroundStyle(palette.accent)
-                        .frame(width: 28)
-                        .accessibilityHidden(true)
-                }
+                Image(systemName: "message")
+                    .foregroundStyle(palette.accent)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(conversation.title.isEmpty ? "New Chat" : conversation.title)
                         .foregroundStyle(palette.foreground)
@@ -586,12 +552,7 @@ struct AidenBotProfileView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isSelectingChats && !canDelete)
-        .accessibilityValue(accessibility.value)
-        .accessibilityAddTraits(
-            accessibility.isSelected ? .isSelected : []
-        )
-        .accessibilityHint(accessibility.hint)
+        .accessibilityHint("Opens this Bot’s persistent chat.")
     }
 
     private func identityDetails(_ detail: AidenBotDetail) -> some View {
@@ -630,11 +591,6 @@ struct AidenBotProfileView: View {
         .accessibilityLabel("Bot actions")
     }
 
-    private var deleteConfirmationTitle: String {
-        let count = selectedDeletableConversations.count
-        return count == 1 ? "Delete Chat" : "Delete \(count) Chats"
-    }
-
     private func conversationStatus(_ conversation: AidenBotConversationItem) -> String {
         switch conversation.activityState {
         case .idle: "No preview"
@@ -660,8 +616,6 @@ struct AidenBotProfileView: View {
         activeMutation = nil
         retainedRestore = nil
         requiresRefreshAfterMutation = false
-        isSelectingChats = false
-        selectedChatIDs = []
     }
 
     @MainActor
@@ -676,6 +630,20 @@ struct AidenBotProfileView: View {
             let context = try coordinator.requestContext()
             requestContext = context
             guard isCurrentLoad(generation, session: expectedSession, context: context) else { return }
+            if let cached = await AidenBotCache.shared.load(
+                instanceId: context.instanceId,
+                deviceId: context.deviceId
+            ) {
+                guard isCurrentLoad(generation, session: expectedSession, context: context) else { return }
+                if let cachedDetail = cached.details.first(where: { $0.id == botID }) {
+                    detail = cachedDetail
+                    favorites = cached.list?.favorites
+                    conversations = aidenCanonicalBotConversations(
+                        cached.conversations?.conversations ?? []
+                    ).filter { $0.botId == botID }
+                    isLoading = false
+                }
+            }
             let client = try coordinator.remoteClient(for: context)
             async let detailRequest = client.bot(id: botID)
             async let favoritesRequest = client.botFavorites()
@@ -692,14 +660,22 @@ struct AidenBotProfileView: View {
                   !Task.isCancelled else { return }
             detail = loadedDetail
             favorites = loadedFavorites
-            conversations = page.conversations
+            conversations = aidenCanonicalBotConversations(page.conversations)
+                .filter { $0.botId == botID }
             capturedContext = context
             if retainedRestore?.revision != loadedDetail.revision {
                 retainedRestore = nil
             }
             requiresRefreshAfterMutation = false
-            isSelectingChats = false
-            selectedChatIDs = []
+            _ = await coordinator.withRetainedInstallationData(for: context) {
+                _ = try? await AidenBotCache.shared.upsertDetailAndStore(
+                    loadedDetail,
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId
+                )
+            }
+            guard isCurrentLoad(generation, session: expectedSession, context: context),
+                  !Task.isCancelled else { return }
             isLoading = false
         } catch is CancellationError {
             return
@@ -728,6 +704,11 @@ struct AidenBotProfileView: View {
         activeMutation = mutation
         loadGeneration &+= 1
         mutationError = nil
+        let previousFavorites = favorites
+        self.favorites = try? AidenBotFavorites(
+            botIds: botIDs,
+            revision: favorites.revision
+        )
         defer { if activeMutation == mutation { activeMutation = nil } }
         do {
             let update = try AidenBotFavoritesUpdateRequest(botIds: botIDs)
@@ -755,6 +736,7 @@ struct AidenBotProfileView: View {
             } catch {
                 if await coordinator.handleCredentialRevocation(error, context: context) { return }
                 guard isCurrent(mutation) else { return }
+                self.favorites = previousFavorites
                 requiresRefreshAfterMutation = true
                 mutationError = "Aiden could not confirm the latest Favorites order. Refresh before trying again."
             }
@@ -833,84 +815,6 @@ struct AidenBotProfileView: View {
             guard isCurrent(mutation) else { return }
             requiresRefreshAfterMutation = true
             mutationError = "Aiden could not confirm the Bot’s latest state. Refresh before trying again."
-        }
-    }
-
-    @MainActor
-    private func deleteSelectedChats() async {
-        guard canWrite, let context = capturedContext, coordinator.isCurrent(context),
-              let detail, detail.health != .archived else { return }
-        let selected = selectedDeletableConversations
-        guard !selected.isEmpty else { return }
-        let mutation = AidenBotProfileMutation(
-            context: context,
-            botID: botID,
-            kind: .deleteChats(selected.map { ($0.id, $0.revision) }),
-            token: UUID()
-        )
-        activeMutation = mutation
-        loadGeneration &+= 1
-        mutationError = nil
-        var deletedCount = 0
-        defer { if activeMutation == mutation { activeMutation = nil } }
-        do {
-            let client = try coordinator.remoteClient(for: context)
-            for conversation in selected {
-                guard isCurrent(mutation),
-                      conversations.contains(where: {
-                          $0.id == conversation.id && $0.revision == conversation.revision
-                      }) else { return }
-                _ = try await aidenBotProfileDeleteConversation(
-                    client: client,
-                    projection: conversation,
-                    expectedBotID: botID,
-                    isCurrent: {
-                        isCurrent(mutation)
-                            && conversations.contains(where: {
-                                $0.id == conversation.id && $0.revision == conversation.revision
-                            })
-                    }
-                )
-                guard isCurrent(mutation) else { return }
-                conversations.removeAll { $0.id == conversation.id }
-                selectedChatIDs.remove(conversation.id)
-                deletedCount += 1
-            }
-            isSelectingChats = false
-            selectedChatIDs = []
-            onChanged()
-        } catch is CancellationError {
-            return
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard isCurrent(mutation) else { return }
-            do {
-                let page = try await coordinator.remoteClient(for: context).botConversations(
-                    query: try AidenBotConversationQuery(botId: botID, limit: 50)
-                )
-                guard isCurrent(mutation), page.conversations.allSatisfy({ $0.botId == botID }) else { return }
-                conversations = page.conversations
-                let remainingSelected = Set(selected.map(\.id)).intersection(
-                    Set(page.conversations.map(\.id))
-                )
-                selectedChatIDs = remainingSelected
-                if remainingSelected.isEmpty {
-                    isSelectingChats = false
-                    onChanged()
-                    return
-                }
-                requiresRefreshAfterMutation = true
-                mutationError = deletedCount == 0
-                    ? "The selected chat still exists. Refresh before trying again."
-                    : "Deleted \(deletedCount) chat\(deletedCount == 1 ? "" : "s"). Refresh before retrying the remaining selection."
-                onChanged()
-            } catch {
-                if await coordinator.handleCredentialRevocation(error, context: context) { return }
-                guard isCurrent(mutation) else { return }
-                requiresRefreshAfterMutation = true
-                mutationError = "Aiden could not confirm the selected chats’ latest state. Refresh before trying again."
-                onChanged()
-            }
         }
     }
 

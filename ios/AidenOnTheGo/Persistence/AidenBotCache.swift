@@ -30,6 +30,59 @@ struct AidenBotCacheSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+/// A partial cache refresh. A `nil` member means that segment was not fetched
+/// and the last-good value must be preserved. Callers that refresh the inbox,
+/// for example, must not erase editor-owned capability or notice data.
+struct AidenBotCacheSegments: Sendable {
+    var list: AidenBotList?
+    var details: [AidenBotDetail]?
+    var conversations: AidenBotConversationPage?
+    var catalog: AidenBotCapabilityCatalog?
+    var notice: AidenBotNoticeStatus?
+
+    init(
+        list: AidenBotList? = nil,
+        details: [AidenBotDetail]? = nil,
+        conversations: AidenBotConversationPage? = nil,
+        catalog: AidenBotCapabilityCatalog? = nil,
+        notice: AidenBotNoticeStatus? = nil
+    ) {
+        self.list = list
+        self.details = details
+        self.conversations = conversations
+        self.catalog = catalog
+        self.notice = notice
+    }
+
+    func applying(
+        to existing: AidenBotCacheSnapshot?,
+        savedAt: Date
+    ) -> AidenBotCacheSnapshot {
+        let mergedDetails = details ?? existing?.details ?? []
+        let mergedConversations = conversations ?? existing?.conversations
+        let retainedBotIDs = list.map { Set($0.bots.map(\.id)) }
+        let prunedDetails = retainedBotIDs.map { botIDs in
+            mergedDetails.filter { botIDs.contains($0.id) }
+        } ?? mergedDetails
+        let prunedConversations = retainedBotIDs.flatMap { botIDs in
+            mergedConversations.map { page in
+                AidenBotConversationPage(
+                    validatedSubsetOf: page,
+                    retainingBotIDs: botIDs
+                )
+            }
+        } ?? mergedConversations
+        return AidenBotCacheSnapshot(
+            list: list ?? existing?.list,
+            details: prunedDetails,
+            conversations: prunedConversations,
+            catalog: catalog ?? existing?.catalog,
+            notice: notice ?? existing?.notice,
+            savedAt: savedAt
+        )
+    }
+}
+
 /// Device-local Bot cache isolated by public installation identity.
 ///
 /// Every async refresh captures an Activation. Selecting A, then B, then A
@@ -116,6 +169,94 @@ actor AidenBotCache {
     @discardableResult
     func store(_ snapshot: AidenBotCacheSnapshot, activation: Activation) throws -> Bool {
         guard isCurrent(activation), Self.isValid(snapshot) else { return false }
+        return try write(snapshot, activation: activation)
+    }
+
+    /// Atomically overlays only the freshly fetched segments on the last-good
+    /// snapshot. Conversation pages must preserve the product invariant that
+    /// each Bot owns at most one canonical chat.
+    ///
+    /// Returns the merged snapshot, or `nil` when the activation became stale
+    /// or the combination would violate the cache's bounded projection rules.
+    func mergeAndStore(
+        _ segments: AidenBotCacheSegments,
+        savedAt: Date = Date(),
+        activation: Activation
+    ) throws -> AidenBotCacheSnapshot? {
+        guard isCurrent(activation) else { return nil }
+        let existing = load(
+            instanceId: activation.instanceId,
+            deviceId: activation.deviceId
+        )
+        let merged = segments.applying(to: existing, savedAt: savedAt)
+        guard Self.isValid(merged) else { return nil }
+        guard try write(merged, activation: activation) else { return nil }
+        return merged
+    }
+
+    func upsertDetailAndStore(
+        _ detail: AidenBotDetail,
+        instanceId: String,
+        deviceId: String
+    ) throws -> AidenBotCacheSnapshot? {
+        let existing = load(instanceId: instanceId, deviceId: deviceId)
+        var details = existing?.details ?? []
+        details.removeAll { $0.id == detail.id }
+        details.append(detail)
+        return try mergeAndStore(
+            AidenBotCacheSegments(details: details),
+            instanceId: instanceId,
+            deviceId: deviceId
+        )
+    }
+
+    /// Merges authoritative segments for an exact retained pairing without
+    /// changing the foreground surface activation. Callers must hold
+    /// `AidenRemoteCoordinator.withRetainedInstallationData` while using this
+    /// entry point so removal or re-pair cannot race the write.
+    func mergeAndStore(
+        _ segments: AidenBotCacheSegments,
+        savedAt: Date = Date(),
+        instanceId: String,
+        deviceId: String
+    ) throws -> AidenBotCacheSnapshot? {
+        let existing = load(instanceId: instanceId, deviceId: deviceId)
+        let merged = segments.applying(to: existing, savedAt: savedAt)
+        guard Self.isValid(merged) else { return nil }
+        let activation = Activation(
+            instanceId: instanceId,
+            deviceId: deviceId,
+            generation: generation
+        )
+        let selectedMatches = selectedInstanceId == instanceId && selectedDeviceId == deviceId
+        if selectedMatches {
+            guard try write(merged, activation: activation) else { return nil }
+            return merged
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(Envelope(
+            version: 1,
+            instanceId: instanceId,
+            deviceId: deviceId,
+            snapshot: merged
+        ))
+        guard data.count <= maximumEnvelopeBytes else {
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
+        let url = snapshotURL(instanceId: instanceId, deviceId: deviceId)
+        try createProtectedDirectory(url.deletingLastPathComponent())
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        return merged
+    }
+
+    @discardableResult
+    private func write(
+        _ snapshot: AidenBotCacheSnapshot,
+        activation: Activation
+    ) throws -> Bool {
+        guard isCurrent(activation) else { return false }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(Envelope(
@@ -236,10 +377,16 @@ actor AidenBotCache {
             let listed = Set(list.bots.map(\.id))
             guard details.allSatisfy({ listed.contains($0.id) }) else { return false }
         }
-        if let conversations = snapshot.conversations, let list = snapshot.list {
-            let listed = Set(list.bots.map(\.id))
-            guard conversations.conversations.allSatisfy({ listed.contains($0.botId) }) else {
+        if let conversations = snapshot.conversations {
+            guard Set(conversations.conversations.map(\.botId)).count
+                    == conversations.conversations.count else {
                 return false
+            }
+            if let list = snapshot.list {
+                let listed = Set(list.bots.map(\.id))
+                guard conversations.conversations.allSatisfy({ listed.contains($0.botId) }) else {
+                    return false
+                }
             }
         }
         return true

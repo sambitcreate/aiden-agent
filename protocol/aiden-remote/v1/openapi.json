@@ -1121,7 +1121,9 @@
       ],
       "post": {
         "operationId": "createBotChat",
+        "x-aiden-canonical-chat-per-bot": true,
         "x-aiden-provider-model-must-be-currently-available": true,
+        "x-aiden-provider-model-required-only-when-creating": true,
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "bot:write",
         "x-aiden-capabilities": ["bot:read", "bot:write", "chat:write"],
@@ -1136,7 +1138,7 @@
         },
         "responses": {
           "201": {
-            "description": "Authoritative Bot-classified chat created",
+            "description": "Existing canonical Bot chat returned, or one authoritative chat created when absent; 201 is retained for v1 client compatibility",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/BotChatCreateResponse" } }
             }

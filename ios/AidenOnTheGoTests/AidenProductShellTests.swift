@@ -3,6 +3,60 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenProductShellTests: XCTestCase {
+    func testBotsHomeUsesSkeletonOnlyForTrueColdLoad() {
+        XCTAssertEqual(
+            aidenBotsHomeContentState(
+                hasSnapshot: false,
+                isLoading: true,
+                totalBotCount: 0,
+                activeBotCount: 0,
+                conversationCount: 0,
+                hasQuery: false,
+                filteredBotCount: 0,
+                filteredConversationCount: 0
+            ),
+            .loading
+        )
+        XCTAssertEqual(
+            aidenBotsHomeContentState(
+                hasSnapshot: true,
+                isLoading: true,
+                totalBotCount: 2,
+                activeBotCount: 2,
+                conversationCount: 2,
+                hasQuery: false,
+                filteredBotCount: 2,
+                filteredConversationCount: 2
+            ),
+            .content
+        )
+        XCTAssertEqual(
+            aidenBotsHomeContentState(
+                hasSnapshot: true,
+                isLoading: true,
+                totalBotCount: 0,
+                activeBotCount: 0,
+                conversationCount: 0,
+                hasQuery: false,
+                filteredBotCount: 0,
+                filteredConversationCount: 0
+            ),
+            .empty
+        )
+    }
+
+    func testBotEditorsKeepWarmCachedContentVisibleDuringRefresh() {
+        XCTAssertTrue(
+            aidenBotUsesColdLoadingPlaceholder(isLoading: true, hasUsableContent: false)
+        )
+        XCTAssertFalse(
+            aidenBotUsesColdLoadingPlaceholder(isLoading: true, hasUsableContent: true)
+        )
+        XCTAssertFalse(
+            aidenBotUsesColdLoadingPlaceholder(isLoading: false, hasUsableContent: false)
+        )
+    }
+
     func testArchivedBotChatsRemainReadOnlyForFullAndCustomAccess() {
         XCTAssertFalse(
             aidenBotChatAllowsMutations(

@@ -1835,6 +1835,73 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertFalse(aidenBotCustomAccessIsDirty(draft: changed, cleanDraft: changed))
     }
 
+    func testCustomAccessOnlyShowsAvailableOptionsAndSelectedTombstones() throws {
+        let available = try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityOption.self,
+            from: data(for: [
+                "id": "skill:available",
+                "label": "Available skill",
+                "available": true,
+                "description": "Ready to use",
+            ])
+        )
+        let rejected = try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityOption.self,
+            from: data(for: [
+                "id": "skill:rejected",
+                "label": "Invalid skill",
+                "available": false,
+                "description": "Unavailable",
+            ])
+        )
+
+        XCTAssertEqual(
+            aidenBotVisibleCapabilityOptions([available, rejected], selectedIDs: []),
+            [available]
+        )
+        XCTAssertEqual(
+            aidenBotVisibleCapabilityOptions(
+                [available, rejected],
+                selectedIDs: [rejected.id]
+            ),
+            [available, rejected]
+        )
+        XCTAssertEqual(
+            aidenBotCapabilityOptionTitle(rejected, isSelected: true),
+            "Previously selected skill — unavailable"
+        )
+    }
+
+    func testCustomAccessOnlyRebasesExpectedRevisionConflicts() throws {
+        let conflictEnvelope = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.self,
+            from: data(for: [
+                "error": [
+                    "code": "operation_stale",
+                    "message": "The capability catalog changed.",
+                    "requestId": "request_test",
+                    "retryable": false,
+                ],
+            ])
+        )
+        XCTAssertEqual(
+            aidenBotAccessSaveFailureKind(
+                AidenRemoteClientError.server(statusCode: 409, body: conflictEnvelope.error)
+            ),
+            .conflict
+        )
+        XCTAssertEqual(
+            aidenBotAccessSaveFailureKind(
+                AidenRemoteClientError.server(statusCode: 500, body: conflictEnvelope.error)
+            ),
+            .retryable
+        )
+        XCTAssertEqual(
+            aidenBotAccessSaveFailureKind(AidenRemoteClientError.invalidResponse),
+            .retryable
+        )
+    }
+
     func testFavoriteOrderSupportsMembershipAndStableReordering() {
         XCTAssertEqual(aidenBotFavoriteOrder(["a", "b"], moving: "c", .add), ["a", "b", "c"])
         XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .earlier), ["b", "a", "c"])

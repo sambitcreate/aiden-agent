@@ -177,6 +177,78 @@ function terminal(state: AidenRemoteStreamState): boolean {
   return state === "done" || state === "error" || state === "cancelled" || state === "interrupted";
 }
 
+/**
+ * Older v1 journals stored timeline activity as a single renderer-safe label.
+ * Normalize that one known local-storage shape without accepting it on the
+ * current Remote wire contract or relaxing validation for any other field.
+ */
+function normalizeLegacyTimelineEvent(value: unknown): unknown {
+  const event = ownRecord(value);
+  const payload = ownRecord(event?.payload);
+  if (event?.type !== "timeline" || !payload || !("label" in payload)) return value;
+
+  const keys = Object.keys(payload);
+  if (
+    keys.some((key) => key !== "label" && key !== "timeline") ||
+    typeof payload.label !== "string" ||
+    payload.label.length === 0 ||
+    payload.label.length > 120
+  ) {
+    return value;
+  }
+
+  if ("timeline" in payload) {
+    return {
+      ...event,
+      payload: { timeline: structuredClone(payload.timeline) },
+    };
+  }
+
+  if (
+    typeof event.streamId !== "string" ||
+    !Number.isSafeInteger(event.sequence) ||
+    Number(event.sequence) < 1 ||
+    typeof event.timestamp !== "string"
+  ) {
+    return value;
+  }
+  const timestamp = Date.parse(event.timestamp);
+  if (!Number.isFinite(timestamp)) return value;
+  const sequence = Number(event.sequence);
+  const label = payload.label;
+  const step = label === "Thinking"
+    ? {
+        id: `think-${sequence}`,
+        order: 0,
+        kind: "thinking" as const,
+        startedAt: timestamp,
+        updatedAt: timestamp,
+      }
+    : {
+        id: `tool-${sequence}`,
+        order: 0,
+        kind: "tool" as const,
+        toolCallId: `call-${sequence}`,
+        toolName: "legacy_activity",
+        label,
+        status: "running" as const,
+        startedAt: timestamp,
+        updatedAt: timestamp,
+      };
+  return {
+    ...event,
+    payload: {
+      timeline: {
+        version: 2,
+        generationId: event.streamId,
+        status: "running",
+        startedAt: timestamp,
+        steps: [step],
+      },
+    },
+  };
+}
+
 function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
   const record = ownRecord(value);
   if (
@@ -217,7 +289,8 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
     }
     let previous = 0;
     const events = stream.events.map((rawEvent) => {
-      const event = ownRecord(rawEvent);
+      const normalizedEvent = normalizeLegacyTimelineEvent(rawEvent);
+      const event = ownRecord(normalizedEvent);
       const payload = ownRecord(event?.payload);
       if (
         !event ||
@@ -234,12 +307,12 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
         event.type.length === 0 ||
         event.type.length > 80 ||
         typeof event.terminal !== "boolean" ||
-        !parseAidenRemoteStreamEvent(rawEvent)
+        !parseAidenRemoteStreamEvent(normalizedEvent)
       ) {
         throw new Error("Invalid Aiden Remote stream snapshot.");
       }
       previous = Number(event.sequence);
-      return structuredClone(rawEvent) as AidenRemoteStreamEvent;
+      return structuredClone(normalizedEvent) as AidenRemoteStreamEvent;
     });
     streamIds.add(stream.streamId);
     streams.push({

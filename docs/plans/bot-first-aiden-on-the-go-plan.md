@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phases 0–8 implementation complete August 23, 2026; staged rollout and external physical-system acceptance remain open
+- Status: Active; Phases 0–9 implementation complete August 23, 2026; staged rollout and external physical-system acceptance remain open
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -16,7 +16,7 @@ The Aiden logo at the top of the existing mobile home becomes the switcher. Tapp
 
 The Bots area will adapt the attached Messages references without copying Apple's product chrome. It will lead with large bot identities, favorites, recent conversations, search, and simple create/edit actions. It will continue to use Aiden's own appearance presets, semantic colors, chat renderer, streaming, attachments, approvals, and motion language.
 
-A bot remains a thin, reusable identity over Aiden's existing Pi-backed chat runtime. The phone will not host a second agent engine. Bot definitions, conversations, access policies, generated avatars, provider selection, managed workspaces, and every tool decision remain authoritative on the paired Mac. Every bot gets a durable Aiden-managed home workspace for its chats and artifacts, but that implementation detail stays out of the ordinary UI unless the person asks about it.
+A bot remains a thin, reusable identity over Aiden's existing Pi-backed chat runtime. The phone will not host a second agent engine. Bot definitions, each Bot's one persistent chat, access policies, generated avatars, provider selection, managed workspaces, and every tool decision remain authoritative on the paired Mac. Every bot gets a durable Aiden-managed home workspace for its chat and artifacts, but that implementation detail stays out of the ordinary UI unless the person asks about it.
 
 ## Owner decisions captured by this plan
 
@@ -25,11 +25,12 @@ These are settled product requirements for implementation:
 1. The complete bot-first UX ships on **iPhone/iPad first**. Mac work in this release is limited to the runtime, policy enforcement, managed workspace, Remote API, canonical avatar storage, and displaying the avatar returned from iOS in existing surfaces. A Mac shell/inbox redesign comes later.
 2. Every bot starts in **Full Access** after one clear, versioned notice. Full Access makes the ordinary capabilities currently enabled in Aiden available to that bot—including shell, Mac files, configured connections/MCPs, and skills—while preserving OS permissions, existing action approvals, and Aiden's global safety rules.
 3. A person can switch a bot to **Custom Access** in Bot settings and selectively reduce Files, shell, Connections, Skills, and other exposed capability groups. A chat can further narrow its bot, but cannot exceed the bot's setting.
-4. Every bot has one durable Aiden-managed home workspace. Aiden uses it as the working directory and normal save location for every chat with that bot, keeps the path out of routine UI, and reveals it only when the person asks. Full Access may inspect or operate elsewhere on the Mac when the task needs it.
+4. Every bot has one durable Aiden-managed home workspace. Aiden uses it as the working directory and normal save location for that Bot's persistent chat, keeps the path out of routine UI, and reveals it only when the person asks. Full Access may inspect or operate elsewhere on the Mac when the task needs it.
 5. Managed bot workspaces are **not Git repositories by default**. Shell is available in Full Access, and Git is not categorically prohibited: it becomes relevant only if the person asks, a task opens an existing repository, or a repository is explicitly initialized.
 6. Provider credentials, MCP credentials, skill contents, internal paths, and configuration remain Mac-only. Mobile selects safe, already-configured entries; it never receives or edits their secrets.
 7. Apple avatar creation uses the system **Image Playground** sheet, including Private Cloud Compute on supported OS/device combinations. Only the image the person accepts is uploaded to the paired Mac and saved as the bot's canonical photo.
 8. Existing semantic Aiden avatars remain the universal fallback and rollback identity.
+9. Every Bot has exactly **one persistent chat**. Opening, searching for, or selecting a Bot resumes that chat; Aiden creates it only when the Bot has none. Legacy duplicates remain recoverable but cannot become a second writable Bot chat.
 
 ## Research and current-state audit
 
@@ -121,8 +122,8 @@ The first screen is a calm inbox, not a configuration dashboard:
 
 1. Header: **Edit**, the Aiden logo switcher with centered **Bots** title, and **+** for New Bot.
 2. Favorites: horizontally scrolling circular bot avatars and visible names.
-3. Recent conversations: flat rows with bot avatar, bot name, conversation title or bounded last-message preview, honest activity state, and relative time.
-4. Bottom dock: an iMessage-inspired Search capsule and a separate circular New Conversation button remain anchored above the safe area. New Conversation chooses an existing bot and always creates a distinct chat. **+** always creates a new bot.
+3. Recent chats: one flat row per bot with bot avatar, bot name, bounded last-message preview, honest activity state, and relative time.
+4. Bottom dock: an iMessage-inspired Search capsule and a separate circular New Chat button remain anchored above the safe area. New Chat chooses a bot and opens its one chat, creating it only when absent. **+** always creates a new bot.
 
 Rules:
 
@@ -130,7 +131,7 @@ Rules:
 - tapping a recent row opens that exact persisted chat;
 - no fake unread badge is introduced. A ring/badge is shown only for real streaming, waiting-for-approval, failed, or locally known new activity;
 - the bottom Search field covers bot name, purpose, conversation title, and the bounded previews actually returned by the Mac;
-- Edit supports favorite ordering, bot archive entry points, and confirmed multi-chat deletion without permanent red-minus decorations over every avatar;
+- Edit supports favorite ordering and bot archive entry points without permanent red-minus decorations over every avatar; the Bot's persistent chat is not independently deletable;
 - empty, loading, retryable error, no-result, offline-cache, archived, and capability-degraded states each have distinct copy and actions.
 
 ### 3. Bot profile
@@ -138,9 +139,9 @@ Rules:
 A bot profile behaves like a contact card:
 
 - large avatar, name, purpose, and capability summary;
-- **New conversation** as the primary action;
+- **Open chat** as the primary action, creating the Bot's chat only when absent;
 - **Edit bot** and **Access** as direct actions;
-- recent conversations below;
+- the Bot's single chat state below;
 - Telegram status when a binding exists;
 - archive/restore in the overflow menu with clear consequences.
 
@@ -200,7 +201,7 @@ Changing access while a turn is active invalidates its authority lease. Removed 
 
 ### 6. Managed workspace and bot system instructions
 
-Each bot owns one durable Aiden-managed home workspace. Every new chat for that bot binds to the same home so files and context remain useful across conversations. Aiden does not present folder setup, Git initialization, or a workspace chooser during ordinary bot creation. The path is omitted from normal mobile DTOs and UI; if the person asks where files are stored, the bot may state the resolved path and the app may offer the existing Files entry point.
+Each bot owns one durable Aiden-managed home workspace. Its one persistent chat binds to that home so files and context remain useful across the Bot's lifetime. Aiden does not present folder setup, Git initialization, or a workspace chooser during ordinary bot creation. The path is omitted from normal mobile DTOs and UI; if the person asks where files are stored, the bot may state the resolved path and the app may offer the existing Files entry point.
 
 The main process—not iOS, the renderer, or editable bot instructions—injects an authoritative workspace section into every bot turn after the editable persona. Its required meaning is:
 
@@ -273,7 +274,7 @@ Full mode is intentionally dynamic: a connection, skill, or ordinary capability 
 - Switching a bot from Custom to Full requires an explicit confirmation and takes effect on the next turn; it never retries a running tool automatically.
 - A re-added connection/skill receives a new internal grant identity, so old chats cannot regain it accidentally.
 - Chat customization is revision-checked: an inheriting Full chat stores explicit reductions; a Custom chat stores a subset of its bot's bound grants.
-- New bot chats bind to the bot's managed home. Existing chats retain their authoritative workspace/history during migration, while the bot home becomes the normal destination for all new chats.
+- A Bot's persistent chat binds to the bot's managed home. During migration, the deterministic canonical chat retains its authoritative history while the bot home becomes its normal artifact destination; historical duplicates remain recoverable and read-only.
 - Copying a chat preserves its inheritance/reductions; it does not mint access or create a second bot home.
 - Telegram-bound bot chats use the same Full/Custom resolver plus Telegram's existing supported approval and safety ceiling. Unsupported actions remain unavailable rather than bypassing the policy.
 
@@ -378,7 +379,7 @@ The current runtime already gives bot turns ambient Aiden capabilities, so migra
 - preserve bot identity, instructions, semantic avatar, archive state, Telegram binding, chat history, existing chat workspace, and each chat's provider/model;
 - transactionally create one valid `full` policy and one durable non-Git managed home for every existing bot;
 - show the versioned Full Access notice before the first bot action from Aiden On The Go, with **Continue with Full Access** and **Customize first**;
-- use the new managed home for every new chat and as the normal artifact destination; do not move nonempty historical chats or rewrite their workspace/history during migration;
+- use the managed home for the Bot's one persistent chat and as its normal artifact destination; do not rewrite nonempty historical chat history during migration;
 - make existing chats inherit the bot's explicit Full policy unless a later user action narrows them;
 - allow immediate conversion to Custom, including selective Connections and Skills controls;
 - block and offer repair for corrupt/future policy or workspace-binding data; never treat corruption as permission to infer Full.
@@ -433,7 +434,7 @@ Completed August 23, 2026. Bot identity, explicit Full/Custom policy, protected 
 
 1. Extract a bot application service from Electron IPC semantics; HTTP never calls IPC or impersonates a `WebContents`.
 2. Add the versioned Full/Custom capability store, optimistic revisions, notice acknowledgement, crash reconciliation, mode-0600 permissions, and policy view projector.
-3. Add a main-owned managed-workspace service that provisions exactly one durable, non-Git home per bot, resolves the private path for prompts/tools, and reuses it across new chats.
+3. Add a main-owned managed-workspace service that provisions exactly one durable, non-Git home per bot and resolves the private path for its persistent chat's prompts/tools.
 4. Add safe catalogs for providers/models, file scopes, shell, MCP connections/tools, skills, and other ordinary Aiden capability groups.
 5. Add per-chat inheritance/reductions, Custom opaque grants, policy epochs/leases, archive/copy/delete handling, and explicit-Full legacy migration.
 6. Keep identity, policy, workspace, and avatar mutations isolated by revision while reconciling incomplete multi-store creation safely.
@@ -448,7 +449,7 @@ Acceptance:
 
 Completed August 23, 2026. Every Bot turn now enters through exact Bot/chat/audience authority, runs from its managed home with the Bot workspace instructions, binds the selected provider/model without fallback, and carries live policy and inventory leases through every controlled tool effect. Full and Custom Files, shell, MCP, Skill, subagent, Remote, desktop, and Telegram surfaces share the same main-owned resolver. Native descriptor-relative Telegram inbox storage closes parent-directory replacement races. Schedules remain honestly unavailable to Bots until the delayed scheduler can persist Bot identity and re-admit current authority at execution time. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-3.md`.
 
-1. Set each bot home as the working directory and ordinary save destination for its chats; assert provisioning never creates `.git`.
+1. Set each bot home as the working directory and ordinary save destination for its persistent chat; assert provisioning never creates `.git`.
 2. Update the main-owned bot system prompt with the managed-home contract, outside-Mac inspection rule, minimal-change rule, and no-automatic-Git rule defined above.
 3. Build Full mode from the current ordinary Aiden inventory, including shell, OS-accessible Files, configured MCP connections, skills, and other globally enabled capabilities while preserving existing approvals and safety gates.
 4. Split Files from shell for Custom mode; enforce Bot folder, chosen locations, or Off plus the exact selected capability groups.
@@ -468,10 +469,10 @@ Acceptance:
 
 ### Phase 4 — Remote bot service, inbox projection, and avatar store
 
-Completed August 23, 2026. The authenticated Remote service now exposes main-owned Bot CRUD, Full/Custom access, notice acknowledgement, favorite order, Bot-chat creation, bounded inbox/search, archived read-only files, and canonical 512 × 512 avatar assets. Provider/model selection is fenced against one current inventory, durable policy publication rechecks that fence at its final visibility boundary, and desktop notifications invalidate every dependent Bot cache. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-4.md`.
+Completed August 23, 2026. The authenticated Remote service now exposes main-owned Bot CRUD, Full/Custom access, notice acknowledgement, favorite order, Bot-chat open-or-create, bounded inbox/search, archived read-only files, and canonical 512 × 512 avatar assets. Provider/model selection is fenced against one current inventory, durable policy publication rechecks that fence at its final visibility boundary, and desktop notifications invalidate every dependent Bot cache. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-4.md`.
 
 1. Add bot service adapters and route them through the authenticated Aiden Remote router/service lifecycle.
-2. Implement bot CRUD, favorites/order, archive/restore, capability views/updates, bot-chat creation, and chat-subset updates.
+2. Implement bot CRUD, favorites/order, archive/restore, capability views/updates, one-chat-per-Bot open-or-create, and chat-subset updates.
 3. Add the bounded paginated inbox/search projection.
 4. Add canonical raster asset storage/upload/content/delete with cross-device and cross-bot isolation.
 5. Add desktop refresh notifications and optimistic conflict responses for simultaneous mobile/Mac edits.
@@ -484,7 +485,7 @@ Acceptance:
 
 ### Phase 5 — Swift domain, cache, and product shell
 
-Completed August 23, 2026. The shipping iOS app now has the typed Bot client/domain, exact installation-and-device cache, independent Bots/Workspaces navigation, native Aiden-logo switcher, notice/Custom-first gates, Bot-aware deep links, and one shared draft-safe chat surface. The first Phase 6 slice also ships the Bots inbox, bottom Search and New Chat dock, and guided Bot creation editor. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-5.md`.
+Completed August 23, 2026. The shipping iOS app now has the typed Bot client/domain, exact installation-and-device cache, independent Bots/Workspaces navigation, native Aiden-logo switcher, notice/Custom-first gates, Bot-aware deep links, and one shared draft-safe chat surface. The first Phase 6 slice also ships the Bots inbox, bottom Search and Open Chat dock, and guided Bot creation editor. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-5.md`.
 
 1. Add typed Bot DTOs, avatar recipes, access/catalog views, client methods, and instance-scoped cache.
 2. Add an outer `AidenProductShellView` with per-installation Workspaces/Bots mode state while leaving pairing unchanged.
@@ -556,6 +557,23 @@ Acceptance:
 - generated photos selected on iOS survive paired-Mac save/restart and appear in existing Mac Bot surfaces without requiring a desktop redesign;
 - onboarding advertises only shipped behavior and its required asset remains exact;
 - App Review can create and use a Bot without Image Playground, and the “No data collected” declaration remains only if the final build still has no developer telemetry or relay.
+
+### Phase 9 — One-chat invariant and mobile reliability
+
+Completed August 23, 2026. Every Bot now owns exactly one writable persistent chat. Remote open-or-create is serialized per Bot and converges concurrent requests and retries on the same canonical chat; older duplicate records remain readable for recovery but are hidden and read-only. iOS resumes that chat from favorites, inbox, search, profile, and the bottom dock. Bot data is cache-first with stale-while-revalidate segment merging, optimistic favorite updates, connection reuse, and layout-shaped reduced-motion-aware skeletons. Custom Access now distinguishes revision drift from transport/server failures, hides unusable unselected skill tombstones, and preserves retryable drafts. Bot chat sends remain pinned to the Bot chat's saved provider/model, while obsolete provider/model failures produce actionable inline recovery instead of duplicate modal alerts. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-9.md`.
+
+1. Enforce one canonical writable chat per Bot across open/create, copy/fork, inbox projection, access mutation, turn/file authorization, independent-deletion rejection, retries, and concurrent requests.
+2. Make iOS Bot state cache-first and identity-scoped, merge independently refreshed segments without clearing warm UI, and reuse the active authenticated client connection pool.
+3. Apply optimistic UI only to reversible local intent, with authoritative confirmation and rollback; use skeletons only for true cold layout loads.
+4. Keep the Bot chat provider/model authoritative, improve stale-model recovery, and remove duplicate blocking error presentation.
+5. Repair legacy stream journals and return honest retry/conflict behavior from Custom Access.
+
+Acceptance:
+
+- simultaneous open requests with different idempotency keys return the same chat and create at most one durable chat;
+- no Bot surface offers or exposes a second writable chat;
+- last-good cached Bot UI survives partial refresh failure without crossing installation/device identity;
+- physical iPhone focused suites, full Remote suites, type-check, lint, and independent source review pass.
 
 ## Likely implementation map
 
@@ -679,5 +697,6 @@ Cover strict required-field decoding, tolerant additive fields, per-installation
 1. Apple Image Playground and Private Cloud Compute are acceptable on supported phones. The accepted result is sent to the paired Mac and becomes the bot photo.
 2. The Messages-style Bot-first redesign is iPhone/iPad-only for this release. A Mac UX redesign is deferred.
 3. Managed bot workspaces are not active Git repositories by default. Shell is available; Git is neither initialized automatically nor categorically blocked when a real task needs it.
-4. Each bot has one hidden Aiden-managed home used by its chats. The bot normally creates and saves files there, may inspect the rest of the Mac as needed under Full Access, and explains the folder only when asked. The main-owned bot system instructions enforce that behavior.
+4. Each bot has one hidden Aiden-managed home used by its single persistent chat. The bot normally creates and saves files there, may inspect the rest of the Mac as needed under Full Access, and explains the folder only when asked. The main-owned bot system instructions enforce that behavior.
 5. Bots default to Full Access after a one-time versioned notice. People can switch a bot to Custom and reduce capabilities; a chat can narrow its bot but cannot exceed it.
+6. Each Bot owns exactly one persistent chat. Every Bot entry point resumes it, creating it only if absent; legacy duplicates are recoverable but not independently writable.

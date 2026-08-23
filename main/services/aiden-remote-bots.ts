@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import type {
-  BotAccessUpdate,
-  BotAccessView,
-  BotCapabilityCatalog,
-  BotChatAccessUpdate,
-  BotChatAccessView,
+import {
+  BotCapabilityValidationError,
+  type BotAccessUpdate,
+  type BotAccessView,
+  type BotCapabilityCatalog,
+  type BotChatAccessUpdate,
+  type BotChatAccessView,
 } from "../../renderer/shared/bot-capabilities.js";
 import type {
   BotCreateInput,
@@ -65,7 +66,10 @@ import {
   type BotAvatarContent,
 } from "./bot-avatar-store-core.js";
 import type { Chat } from "./types.js";
-import { BotApplicationUnavailableError } from "./bot-application-service.js";
+import {
+  BotApplicationUnavailableError,
+  BotHistoricalChatReadOnlyError,
+} from "./bot-application-service.js";
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 
 const BOT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
@@ -174,6 +178,13 @@ function mapBotMutationError(error: unknown): never {
           404,
         );
   }
+  if (error instanceof BotHistoricalChatReadOnlyError) {
+    throw new AidenRemoteServiceError(
+      "operation_stale",
+      "This historical Bot chat is read-only. Open the Bot's current chat.",
+      409,
+    );
+  }
   if (
     error instanceof BotIdentityRevisionConflictError ||
     error instanceof BotCapabilityRevisionConflictError ||
@@ -198,6 +209,14 @@ function mapBotMutationError(error: unknown): never {
     throw new AidenRemoteServiceError(
       "operation_stale",
       "Some selected Bot access is unavailable. Refresh and review it on your Mac.",
+      409,
+      true,
+    );
+  }
+  if (error instanceof BotCapabilityValidationError) {
+    throw new AidenRemoteServiceError(
+      "operation_stale",
+      "Bot capabilities changed. Refresh and review the current access choices.",
       409,
       true,
     );
@@ -264,6 +283,7 @@ type BotApplicationPort = {
     model?: string;
     assertCurrent?: () => void;
   }): Promise<Chat>;
+  getCanonicalChat(botId: string): Promise<Chat | null>;
   capabilityCatalog(audienceId: string, botId?: string): Promise<BotCapabilityCatalog>;
   getBotAccess(botId: string): Promise<BotAccessView>;
   updateBotAccess(input: {
@@ -850,7 +870,7 @@ export class AidenRemoteBotService {
     const existing = await this.bot(botId);
     this.requireActive(existing);
     try {
-      return await this.executeIdempotent(
+      const replayedOrCreated = await this.executeIdempotent(
         {
           deviceId,
           route: "POST /bots/{id}/chats",
@@ -859,6 +879,17 @@ export class AidenRemoteBotService {
         },
         parsed,
         async () => {
+          const canonical = await this.options.application.getCanonicalChat(existing.id);
+          if (canonical) {
+            if (canonical.botId !== existing.id) {
+              throw new AidenRemoteServiceError(
+                "internal_error",
+                "Aiden could not verify the canonical Bot chat.",
+                500,
+              );
+            }
+            return projectAidenRemoteChat(canonical);
+          }
           const access = await this.options.application.getBotAccess(existing.id);
           if (
             access.accessMode === "custom" &&
@@ -902,6 +933,25 @@ export class AidenRemoteBotService {
           return projectAidenRemoteChat(chat);
         },
       );
+      if (replayedOrCreated.botId !== existing.id) {
+        throw new AidenRemoteServiceError(
+          "internal_error",
+          "Aiden could not verify the Bot chat result.",
+          500,
+        );
+      }
+      // A durable idempotency entry written before the one-chat invariant can
+      // contain a now-historical duplicate. Keep the key replayable, but make
+      // every public replay converge on the Bot's persistent canonical chat.
+      const canonical = await this.options.application.getCanonicalChat(existing.id);
+      if (!canonical || canonical.botId !== existing.id) {
+        throw new AidenRemoteServiceError(
+          "internal_error",
+          "Aiden could not verify the canonical Bot chat.",
+          500,
+        );
+      }
+      return projectAidenRemoteChat(canonical);
     } catch (error) {
       return mapBotMutationError(error);
     }

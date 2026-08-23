@@ -28,6 +28,7 @@ The complete planned product includes:
 - Cache-only App Intents, app-driven Live Activities, on-device dictation, and local read-aloud.
 - Offline read-only display of previously fetched data. Mutations are disabled while disconnected.
 - A Bot-first Messages-like inbox with favorites, recent threads, search, bot profiles, and guided create/edit flows, alongside the retained Workspaces experience.
+- Exactly one persistent chat per Bot. Every Bot entry point resumes it and creates it only when absent; legacy duplicate records are recoverable but not a second writable conversation.
 - Bot Access with explicit **Full Access** by default after one versioned one-time notice, plus **Custom** reductions for Mac files, shell, configured Connections/MCPs, Skills, and other projected capability groups. A chat may narrow its bot but never exceed it.
 - Exactly one hidden, durable, non-Git Aiden-managed home per bot. Shell and ordinary file creation start there; Full Access may inspect other OS-accessible Mac locations when the task needs it.
 - Bot avatars using the existing semantic editor everywhere and the system Image Playground sheet where supported. Only a person-accepted image is sent to the paired Mac and stored as the canonical bot photo.
@@ -146,7 +147,7 @@ Phase acceptance evidence belongs in `docs/testing/aiden-on-the-go/`. Evidence m
 
 ## 11. Delivery order
 
-The original `docs/plans/aiden-on-the-go-plan.md` phases 0 through 12 remain the shipped mobile foundation and release-evidence record. Implement the active bot-first extension through `docs/plans/bot-first-aiden-on-the-go-plan.md` phases 0 through 8 in order. Do not expose later Bot endpoints during an earlier phase or advance merely because code compiles: satisfy the phase acceptance gate, complete independent review, fix findings, rerun affected checks, and record evidence first.
+The original `docs/plans/aiden-on-the-go-plan.md` phases 0 through 12 remain the shipped mobile foundation and release-evidence record. Implement the active bot-first extension through `docs/plans/bot-first-aiden-on-the-go-plan.md` phases 0 through 9 in order. Do not expose later Bot endpoints during an earlier phase or advance merely because code compiles: satisfy the phase acceptance gate, complete independent review, fix findings, rerun affected checks, and record evidence first.
 
 ## 12. Attribution
 

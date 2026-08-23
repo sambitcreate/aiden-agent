@@ -670,6 +670,11 @@ struct AidenBotConversationPage: Codable, Equatable, Sendable {
     let conversations: [AidenBotConversationItem]
     let nextCursor: String?
 
+    init(validatedSubsetOf page: Self, retainingBotIDs: Set<String>) {
+        conversations = page.conversations.filter { retainingBotIDs.contains($0.botId) }
+        nextCursor = page.nextCursor
+    }
+
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         conversations = try values.decode([AidenBotConversationItem].self, forKey: .conversations)

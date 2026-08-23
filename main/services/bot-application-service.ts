@@ -31,6 +31,7 @@ import type { BotMutationGate } from "./bot-mutation-gate.js";
 import { BotIdentityRevisionConflictError, type BotStore } from "./bot-store-core.js";
 import type { ChatStore } from "./chat-store-core.js";
 import type { Chat } from "./types.js";
+import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 
 const STAGES = {
   create_bot: ["prepared", "workspace_provisioned", "policy_committed", "identity_committed"],
@@ -162,6 +163,22 @@ export class BotApplicationUnavailableError extends Error {
 
   constructor(readonly reason: "missing" | "archived") {
     super("This Bot is no longer available.");
+  }
+}
+
+export class BotHistoricalChatReadOnlyError extends Error {
+  readonly name = "BotHistoricalChatReadOnlyError";
+
+  constructor() {
+    super("Historical Bot chats are read-only.");
+  }
+}
+
+export class BotPersistentChatDeletionError extends Error {
+  readonly name = "BotPersistentChatDeletionError";
+
+  constructor() {
+    super("A Bot's persistent chat cannot be deleted independently. Archive the Bot instead.");
   }
 }
 
@@ -690,11 +707,33 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     return bot;
   };
 
+  const canonicalChatForBot = async (botId: string): Promise<Chat | null> => {
+    const selected = selectCanonicalBotChat(await deps.chatStore.listByBot(botId));
+    if (!selected) return null;
+    const chat = await deps.chatStore.get(selected.id);
+    if (!chat || chat.botId !== botId) {
+      throw new BotCapabilityUnavailableError(
+        "The canonical Bot chat could not be verified.",
+      );
+    }
+    const policy = await deps.capabilityStore.getChatPolicy(chat.id);
+    if (policy.botId !== botId || policy.chatId !== chat.id) {
+      throw new BotCapabilityUnavailableError(
+        "The canonical Bot chat access policy could not be verified.",
+      );
+    }
+    return chat;
+  };
+
   const createChatUnderMutation = async (
     input: CreateBotChatApplicationInput,
   ): Promise<Chat> => {
     const bot = await activeBot(input.botId);
     const home = await deps.managedWorkspace.resolve(input.botId);
+    const existing = await canonicalChatForBot(input.botId);
+    if (existing) {
+      return existing;
+    }
     const botPolicy = await deps.capabilityStore.getBotPolicy(input.botId);
     const binding = botPolicy.accessMode === "custom"
       ? await deps.capabilityStore.getBotBinding(input.botId)
@@ -890,6 +929,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
                 botId: input.botId,
                 selection: access.custom,
                 catalogRevision: access.catalogRevision,
+                snapshot,
               })
             : undefined;
           assertCurrent();
@@ -999,6 +1039,13 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       return runBotMutation(input.botId, () => createChatUnderMutation(input));
     },
 
+    async getCanonicalChat(botId: string): Promise<Chat | null> {
+      await ensureOperational();
+      await activeBot(botId);
+      await deps.managedWorkspace.resolve(botId);
+      return canonicalChatForBot(botId);
+    },
+
     async withBotMutation<Result>(
       botId: string,
       action: (operations: {
@@ -1021,63 +1068,14 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       await ensureOperational();
       return runBotMutation(input.botId, async () => {
         await activeBot(input.botId);
-        const home = await deps.managedWorkspace.resolve(input.botId);
+        await deps.managedWorkspace.resolve(input.botId);
         const source = await deps.chatStore.get(input.sourceChatId);
         if (!source || source.botId !== input.botId) {
           throw new Error("This Bot chat is no longer available.");
         }
-        const targetChatId = mintChatId();
-        const operationId = mintOperationId();
-        let operation = await beginPending({
-          operationId,
-          kind: "copy_chat",
-          botId: input.botId,
-          subject: { sourceChatId: input.sourceChatId, targetChatId },
-        });
-        try {
-          await deps.capabilityStore.copyChatPolicy({
-            sourceChatId: input.sourceChatId,
-            targetChatId,
-            botId: input.botId,
-          });
-          operation = await advance(operation, "policy_committed");
-          const chat = await deps.chatStore.copyVisibleHistory({
-            sourceChatId: input.sourceChatId,
-            targetChatId,
-            expectedWorkspaceId: source.workspaceId ?? "default",
-            targetWorkspaceId: home.workspaceId,
-            throughAssistantMessageId: input.throughAssistantMessageId,
-            assertCurrent: input.assertCurrent,
-          });
-          operation = await advance(operation, "chat_committed");
-          await deps.lifecycleJournal.complete(operationId, "chat_committed");
-          return chat;
-        } catch (error) {
-          const visible = await deps.chatStore.get(targetChatId);
-          if (visible) {
-            await reconcileVisibleCommit(operation, async () => {
-              const committed = await deps.chatStore.get(targetChatId);
-              if (
-                !committed ||
-                committed.botId !== input.botId ||
-                committed.workspaceId !== home.workspaceId
-              ) {
-                throw new Error("The visible Bot chat copy does not match its committed operation.");
-              }
-              const policy = await deps.capabilityStore.getChatPolicy(targetChatId);
-              if (policy.botId !== input.botId) {
-                throw new Error("The visible Bot chat copy has the wrong access policy.");
-              }
-            });
-            return (await deps.chatStore.get(targetChatId))!;
-          }
-          try {
-            await rollbackChatPolicy(operation, targetChatId);
-          } catch {
-            // Preserve the original error and pending journal for startup repair.
-          }
-          throw error;
-        }
+        const canonical = await canonicalChatForBot(input.botId);
+        if (!canonical) throw new Error("This Bot chat is no longer available.");
+        return canonical;
       });
     },
 
@@ -1093,79 +1091,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         if (!chat || chat.botId !== input.botId) {
           throw new Error("This Bot chat is no longer available.");
         }
-        await input.assertCurrent?.(chat);
-        const policy = await deps.capabilityStore.getChatPolicy(input.chatId);
-        if (policy.botId !== input.botId) {
-          throw new Error("This Bot chat access policy has the wrong owner.");
+        if ((await canonicalChatForBot(input.botId))?.id !== chat.id) {
+          throw new BotHistoricalChatReadOnlyError();
         }
-        await deps.assertChatDeletionAllowed?.(input.botId, input.chatId);
-        const operationId = mintOperationId();
-        let operation = await beginPending({
-          operationId,
-          kind: "delete_chat",
-          botId: input.botId,
-          subject: { chatId: input.chatId },
-        });
-        let deletionMustRollForward = false;
-        try {
-          deps.capabilityStore.invalidateChatAuthority(input.botId, input.chatId);
-          operation = await advance(operation, "authority_fenced");
-          await removeChat(input.chatId, async (current) => {
-            if (!current || current.botId !== input.botId) {
-              throw new Error("The Bot chat changed owner before deletion.");
-            }
-            await input.assertCurrent?.(current);
-          }, () => {
-            deletionMustRollForward = true;
-          });
-          operation = await advance(operation, "chat_deleted");
-          await deps.capabilityStore.deleteChatPolicy({
-            chatId: input.chatId,
-            botId: input.botId,
-          });
-          operation = await advance(operation, "policy_removed");
-          await deps.lifecycleJournal.complete(operationId, "policy_removed");
-        } catch (error) {
-          const visible = await deps.chatStore.get(input.chatId);
-          if (visible) {
-            if (deletionMustRollForward) {
-              // The shared deletion coordinator has already installed its
-              // durable tombstone. Generic startup reconciliation will remove
-              // the visible chat before Bot lifecycle replay; retaining this
-              // pending operation lets replay remove the matching policy too.
-              deps.capabilityStore.invalidateBotAuthority(input.botId);
-              recoveryFailure = error;
-              throw new Error(
-                "A Bot chat deletion crossed its durable cleanup boundary and must finish on restart.",
-              );
-            }
-            if (visible.botId !== input.botId) {
-              throw new Error("The Bot chat changed owner during failed deletion.");
-            }
-            try {
-              await deps.lifecycleJournal.rollback(operationId, operation.stage);
-            } catch (rollbackError) {
-              deps.capabilityStore.invalidateBotAuthority(input.botId);
-              recoveryFailure = rollbackError;
-              throw new Error(
-                "A Bot chat deletion could not be rolled back safely. Restart Aiden to repair it.",
-              );
-            }
-            throw error;
-          }
-          await reconcileVisibleCommit(operation, async () => {
-            if (await deps.chatStore.get(input.chatId)) {
-              throw new Error("The deleted Bot chat reappeared during live recovery.");
-            }
-            try {
-              await deps.capabilityStore.getChatPolicy(input.chatId);
-            } catch (policyError) {
-              if (policyError instanceof BotCapabilityUnavailableError) return;
-              throw policyError;
-            }
-            throw new Error("The deleted Bot chat retained an access policy.");
-          });
-        }
+        throw new BotPersistentChatDeletionError();
       });
     },
 
@@ -1210,6 +1139,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         const chat = await deps.chatStore.get(input.chatId);
         if (!chat || chat.botId !== input.botId) {
           throw new Error("This Bot chat is no longer available.");
+        }
+        if ((await canonicalChatForBot(input.botId))?.id !== chat.id) {
+          throw new BotHistoricalChatReadOnlyError();
         }
         return withInventoryLease(async (assertCurrent) => {
           const snapshot = await snapshotForAudience(
@@ -1304,7 +1236,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         // lifecycle gate returns the stable bot_archived mutation result
         // before any effect; requiring active turn authority here would turn
         // that useful state into an indistinguishable not_found response.
-        if (input.access === "read" || bot.archivedAt !== undefined) return true;
+        if (input.access === "read") return true;
+        if ((await canonicalChatForBot(input.botId))?.id !== input.chatId) {
+          return false;
+        }
+        if (bot.archivedAt !== undefined) return true;
 
         const binding = botPolicy.accessMode === "custom"
           ? await deps.capabilityStore.getBotBinding(input.botId)

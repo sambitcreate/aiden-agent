@@ -227,6 +227,7 @@ struct AidenBotEditorView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var catalog: AidenBotCapabilityCatalog?
     @State private var baselineBot: AidenBotDetail?
     @State private var draft: AidenBotEditorDraft?
@@ -345,9 +346,25 @@ struct AidenBotEditorView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isLoading {
-            ProgressView("Loading Bot settings from your Mac…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if aidenBotUsesColdLoadingPlaceholder(
+            isLoading: isLoading,
+            hasUsableContent: catalog != nil && draft != nil
+        ) {
+            VStack(alignment: .leading, spacing: 16) {
+                AidenBotSkeletonBlock(width: 62, height: 14, radius: 7, reduceMotion: reduceMotion)
+                AidenBotSkeletonBlock(width: nil, height: 180, radius: 18, reduceMotion: reduceMotion)
+                AidenBotSkeletonBlock(width: 80, height: 14, radius: 7, reduceMotion: reduceMotion)
+                AidenBotSkeletonBlock(width: nil, height: 112, radius: 18, reduceMotion: reduceMotion)
+                AidenBotSkeletonBlock(width: 24, height: 14, radius: 7, reduceMotion: reduceMotion)
+                AidenBotSkeletonBlock(width: nil, height: 126, radius: 18, reduceMotion: reduceMotion)
+            }
+            .padding(.horizontal, 30)
+            .padding(.top, 28)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Loading Bot settings")
+        } else if let catalog, draft != nil {
+            editorForm(catalog)
         } else if let loadError {
             ContentUnavailableView {
                 Label("Couldn’t Load Bot Editor", systemImage: "exclamationmark.bubble")
@@ -359,13 +376,18 @@ struct AidenBotEditorView: View {
                     Task { await load(for: expectedSession) }
                 }
             }
-        } else if let catalog, draft != nil {
-            editorForm(catalog)
         }
     }
 
     private func editorForm(_ catalog: AidenBotCapabilityCatalog) -> some View {
         Form {
+            if let loadError {
+                Section {
+                    Label(loadError, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(palette.secondary)
+                        .accessibilityLabel("Bot refresh status: \(loadError)")
+                }
+            }
             identitySection
             accessModeSection(catalog)
             aiSection(catalog)
@@ -816,6 +838,30 @@ struct AidenBotEditorView: View {
             guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
                   context.instanceId == expectedSession.instanceID,
                   context.deviceId == expectedSession.deviceID else { return }
+            if let cached = await AidenBotCache.shared.load(
+                instanceId: context.instanceId,
+                deviceId: context.deviceId
+            ), let cachedCatalog = cached.catalog {
+                let cachedBot: AidenBotDetail?
+                switch mode {
+                case .create:
+                    cachedBot = nil
+                case let .edit(botID):
+                    cachedBot = cached.details.first { $0.id == botID }
+                }
+                if let cachedDraft = try? aidenBotEditorResolvedDraft(
+                    mode: mode,
+                    catalog: cachedCatalog,
+                    bot: cachedBot
+                ) {
+                    guard coordinator.isCurrent(context), sessionIdentity == expectedSession else { return }
+                    catalog = cachedCatalog
+                    baselineBot = cachedBot
+                    draft = cachedDraft
+                    cleanCreateDraft = isCreating ? cachedDraft : nil
+                    isLoading = false
+                }
+            }
             let client = try coordinator.remoteClient(for: context)
             let loadedCatalog: AidenBotCapabilityCatalog
             let loadedBot: AidenBotDetail?
@@ -849,6 +895,25 @@ struct AidenBotEditorView: View {
                     onSaved(updated)
                 }
             }
+            _ = await coordinator.withRetainedInstallationData(for: context) {
+                _ = try? await AidenBotCache.shared.mergeAndStore(
+                    AidenBotCacheSegments(
+                        catalog: loadedCatalog,
+                        notice: loadedCatalog.notice
+                    ),
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId
+                )
+                if let loadedBot {
+                    _ = try? await AidenBotCache.shared.upsertDetailAndStore(
+                        loadedBot,
+                        instanceId: context.instanceId,
+                        deviceId: context.deviceId
+                    )
+                }
+            }
+            guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
+                  !Task.isCancelled else { return }
             isLoading = false
         } catch is CancellationError {
             return

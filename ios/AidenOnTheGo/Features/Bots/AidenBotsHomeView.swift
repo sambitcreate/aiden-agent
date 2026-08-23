@@ -12,6 +12,11 @@ private struct AidenBotsSearchID: Equatable {
     let query: String
 }
 
+private struct AidenBotsHomeScope: Equatable {
+    let instanceID: String
+    let deviceID: String
+}
+
 private enum AidenBotsHomeSheet: Identifiable {
     case editor(AidenBotEditorMode)
     case profile(AidenBotSummary)
@@ -45,6 +50,147 @@ func aidenBotsHomeContentState(
     if totalBotCount == 0 && conversationCount == 0 { return .empty }
     if hasQuery && filteredBotCount == 0 && filteredConversationCount == 0 { return .noResults }
     return .content
+}
+
+func aidenBotUsesColdLoadingPlaceholder(
+    isLoading: Bool,
+    hasUsableContent: Bool
+) -> Bool {
+    isLoading && !hasUsableContent
+}
+
+/// Defensively resolves legacy or stale duplicate projections to one stable
+/// chat per Bot. The Mac contract is authoritative and normally returns one;
+/// newest activity wins, with chat identity as a deterministic tie-breaker.
+func aidenCanonicalBotConversations(
+    _ conversations: [AidenBotConversationItem]
+) -> [AidenBotConversationItem] {
+    var canonicalByBotID: [String: AidenBotConversationItem] = [:]
+    for conversation in conversations {
+        guard let current = canonicalByBotID[conversation.botId] else {
+            canonicalByBotID[conversation.botId] = conversation
+            continue
+        }
+        if conversation.updatedAt > current.updatedAt
+            || (conversation.updatedAt == current.updatedAt
+                && (conversation.createdAt > current.createdAt
+                    || (conversation.createdAt == current.createdAt
+                        && conversation.chatId < current.chatId))) {
+            canonicalByBotID[conversation.botId] = conversation
+        }
+    }
+    return conversations.filter { conversation in
+        canonicalByBotID[conversation.botId]?.chatId == conversation.chatId
+    }
+}
+
+/// A single layout-shaped placeholder shared by the Bot favorites, Bot list,
+/// and chat list during a true cold load. Warm refreshes keep the last-good UI
+/// in place and never show this view.
+private struct AidenBotHomeSkeletonView: View {
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            AidenBotSkeletonBlock(width: 74, height: 16, radius: 8, reduceMotion: reduceMotion)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+
+            ViewThatFits(in: .horizontal) {
+                favoritePlaceholders(diameter: 72, spacing: 18)
+                favoritePlaceholders(diameter: 56, spacing: 12)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 22)
+
+            AidenBotSkeletonBlock(width: 38, height: 16, radius: 8, reduceMotion: reduceMotion)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+
+            ForEach(0..<3, id: \.self) { index in
+                HStack(spacing: 14) {
+                    AidenBotSkeletonBlock(width: 52, height: 52, radius: 26, reduceMotion: reduceMotion)
+                    VStack(alignment: .leading, spacing: 8) {
+                        AidenBotSkeletonBlock(
+                            width: index == 1 ? 126 : 104,
+                            height: 15,
+                            radius: 7.5,
+                            reduceMotion: reduceMotion
+                        )
+                        AidenBotSkeletonBlock(
+                            width: index == 2 ? 160 : 180,
+                            height: 12,
+                            radius: 6,
+                            reduceMotion: reduceMotion
+                        )
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 11)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Bots")
+    }
+
+    private func favoritePlaceholders(diameter: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            ForEach(0..<4, id: \.self) { _ in
+                VStack(spacing: 8) {
+                    AidenBotSkeletonBlock(
+                        width: diameter,
+                        height: diameter,
+                        radius: diameter / 2,
+                        reduceMotion: reduceMotion
+                    )
+                    AidenBotSkeletonBlock(width: 48, height: 10, radius: 5, reduceMotion: reduceMotion)
+                }
+            }
+        }
+    }
+}
+
+struct AidenBotSkeletonBlock: View {
+    @Environment(\.aidenPalette) private var palette
+    let width: CGFloat?
+    let height: CGFloat
+    let radius: CGFloat
+    let reduceMotion: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(palette.raised)
+                .overlay {
+                    if !reduceMotion {
+                        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                            let duration = 1.6
+                            let elapsed = timeline.date.timeIntervalSinceReferenceDate
+                                .truncatingRemainder(dividingBy: duration)
+                            let progress = elapsed / duration
+                            LinearGradient(
+                                colors: [
+                                    .clear,
+                                    palette.foreground.opacity(0.12),
+                                    .clear,
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .frame(width: max(24, proxy.size.width * 0.7))
+                            .offset(x: (-proxy.size.width * 0.85) + (proxy.size.width * 1.7 * progress))
+                            .mask {
+                                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            }
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        }
+        .frame(width: width, height: height)
+        .accessibilityHidden(true)
+    }
 }
 
 func aidenBotCanStartNewChat(health: AidenBotHealth, canWrite: Bool) -> Bool {
@@ -83,8 +229,10 @@ struct AidenBotsHomeView: View {
     let onCreateConversation: (AidenBotSummary) async -> Void
 
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var snapshot: AidenBotCacheSnapshot?
+    @State private var snapshotScope: AidenBotsHomeScope?
     @State private var query = ""
     @State private var remoteSearchResults: [AidenBotConversationItem]?
     @State private var isLoading = false
@@ -152,7 +300,9 @@ struct AidenBotsHomeView: View {
     private var filteredConversations: [AidenBotConversationItem] {
         let conversations = allConversations
         guard !normalizedQuery.isEmpty else { return conversations }
-        if let remoteSearchResults { return remoteSearchResults }
+        if let remoteSearchResults {
+            return aidenCanonicalBotConversations(remoteSearchResults)
+        }
         return conversations.filter { conversation in
             let botName = allBots.first(where: { $0.id == conversation.botId })?.name ?? ""
             return conversation.title.localizedCaseInsensitiveContains(normalizedQuery)
@@ -162,7 +312,7 @@ struct AidenBotsHomeView: View {
     }
 
     private var allConversations: [AidenBotConversationItem] {
-        snapshot?.conversations?.conversations ?? []
+        aidenCanonicalBotConversations(snapshot?.conversations?.conversations ?? [])
     }
 
     private var searchID: AidenBotsSearchID {
@@ -257,19 +407,15 @@ struct AidenBotsHomeView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomDock
         }
-        .confirmationDialog("New Chat", isPresented: $isChoosingBot, titleVisibility: .visible) {
+        .confirmationDialog("Choose a Bot", isPresented: $isChoosingBot, titleVisibility: .visible) {
             ForEach(chatReadyBots) { bot in
                 Button(bot.name) {
-                    isCreatingConversation = true
-                    Task {
-                        await onCreateConversation(bot)
-                        isCreatingConversation = false
-                    }
+                    openOrCreateConversation(for: bot)
                 }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("Choose a Bot to start a new chat.")
+            Text("Open this Bot’s chat. Aiden starts it the first time if needed.")
         }
     }
 
@@ -299,10 +445,6 @@ struct AidenBotsHomeView: View {
             .disabled(!canCreateBot)
             .accessibilityLabel("New Bot")
             .accessibilityHint("Opens the Bot editor. Nothing is created until you save.")
-            if isLoading {
-                ProgressView()
-                    .accessibilityLabel("Refreshing Bots")
-            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
@@ -312,9 +454,7 @@ struct AidenBotsHomeView: View {
     @ViewBuilder
     private var content: some View {
         if contentState == .loading {
-            ProgressView("Loading Bots…")
-                .frame(maxWidth: .infinity)
-                .padding(.top, 80)
+            AidenBotHomeSkeletonView(reduceMotion: reduceMotion)
         } else if contentState == .empty {
             ContentUnavailableView {
                 Label(
@@ -470,8 +610,8 @@ struct AidenBotsHomeView: View {
             )
             .background(.ultraThinMaterial, in: Circle())
             .overlay { Circle().stroke(palette.foreground.opacity(0.12), lineWidth: 0.5) }
-            .accessibilityLabel("New Chat")
-            .accessibilityHint("Choose a Bot to start a new chat.")
+            .accessibilityLabel("Open Bot Chat")
+            .accessibilityHint("Choose a Bot to open its chat.")
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -482,6 +622,21 @@ struct AidenBotsHomeView: View {
         availability.canWrite
             && coordinator.connectionState == .connected
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
+    }
+
+    @MainActor
+    private func openOrCreateConversation(for bot: AidenBotSummary) {
+        guard !isCreatingConversation else { return }
+        isCreatingConversation = true
+        Task {
+            defer { isCreatingConversation = false }
+            if let conversation = allConversations.first(where: { $0.botId == bot.id }) {
+                await onOpenConversation(conversation)
+            } else {
+                await onCreateConversation(bot)
+                await load()
+            }
+        }
     }
 
     private func presentProfile(_ bot: AidenBotSummary) {
@@ -587,6 +742,7 @@ struct AidenBotsHomeView: View {
             availability: availability
         ), expectedLoadID.isBotSurfaceActive else {
             snapshot = nil
+            snapshotScope = nil
             remoteSearchResults = nil
             presentedSheet = nil
             isChoosingBot = false
@@ -597,30 +753,46 @@ struct AidenBotsHomeView: View {
         }
         guard let installation = coordinator.installationStore.activeInstallation else {
             snapshot = nil
+            snapshotScope = nil
             isLoading = false
             return
         }
-        snapshot = nil
+        let scope = AidenBotsHomeScope(
+            instanceID: installation.id,
+            deviceID: installation.deviceId
+        )
+        if snapshotScope != scope {
+            snapshot = nil
+            snapshotScope = scope
+            remoteSearchResults = nil
+        }
         loadError = nil
         isLoading = coordinator.connectionState == .connected
         let activation = await AidenBotCache.shared.activate(
             instanceId: installation.id,
             deviceId: installation.deviceId
         )
-        if coordinator.connectionState != .connected {
-            let cached = await AidenBotCache.shared.load(
-                instanceId: installation.id,
-                deviceId: installation.deviceId
-            )
-            guard coordinator.installationStore.activeInstallation?.id == installation.id,
-                  coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId,
-                  loadGeneration == generation,
-                  loadID == expectedLoadID,
-                  await AidenBotCache.shared.isCurrent(activation),
-                  !Task.isCancelled else { return }
+
+        // Hydrate the device-local projection before making any network
+        // request. This keeps a warm inbox visible while the Mac refreshes.
+        let cached = await AidenBotCache.shared.load(
+            instanceId: installation.id,
+            deviceId: installation.deviceId
+        )
+        guard coordinator.installationStore.activeInstallation?.id == installation.id,
+              coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId,
+              loadGeneration == generation,
+              loadID == expectedLoadID,
+              await AidenBotCache.shared.isCurrent(activation),
+              !Task.isCancelled else { return }
+        if let cached,
+           snapshot == nil || cached.savedAt > (snapshot?.savedAt ?? .distantPast) {
             snapshot = cached
-            validateSelectedBot(in: cached?.list?.bots ?? [])
-            loadError = cached == nil ? nil : "Offline — showing saved Bots"
+        }
+        validateSelectedBot(in: snapshot?.list?.bots ?? [])
+
+        if coordinator.connectionState != .connected {
+            loadError = snapshot == nil ? nil : "Offline — showing saved Bots"
             isLoading = false
             return
         }
@@ -638,19 +810,22 @@ struct AidenBotsHomeView: View {
             let (list, conversations) = try await (listRequest, conversationRequest)
             guard coordinator.isCurrent(context), loadGeneration == generation,
                   loadID == expectedLoadID, !Task.isCancelled else { return }
-            let refreshed = AidenBotCacheSnapshot(
+            let segments = AidenBotCacheSegments(
                 list: list,
-                conversations: conversations,
-                savedAt: Date()
+                conversations: conversations
             )
-            var cacheAccepted = false
+            let refreshedAt = Date()
+            let refreshed = segments.applying(to: snapshot, savedAt: refreshedAt)
+            var persistedSnapshot: AidenBotCacheSnapshot?
             var cacheWriteFailed = false
             let retained = await coordinator.withRetainedInstallationData(for: context) {
                 do {
-                    cacheAccepted = try await AidenBotCache.shared.store(
-                        refreshed,
+                    persistedSnapshot = try await AidenBotCache.shared.mergeAndStore(
+                        segments,
+                        savedAt: refreshedAt,
                         activation: activation
                     )
+                    cacheWriteFailed = persistedSnapshot == nil
                 } catch {
                     cacheWriteFailed = true
                 }
@@ -660,8 +835,8 @@ struct AidenBotsHomeView: View {
                   loadGeneration == generation,
                   loadID == expectedLoadID,
                   await AidenBotCache.shared.isCurrent(activation),
-                  cacheAccepted || cacheWriteFailed else { return }
-            snapshot = refreshed
+                  !Task.isCancelled else { return }
+            snapshot = persistedSnapshot ?? refreshed
             validateSelectedBot(in: list.bots)
             isLoading = false
             if cacheWriteFailed {
@@ -683,10 +858,13 @@ struct AidenBotsHomeView: View {
                   loadID == expectedLoadID,
                   await AidenBotCache.shared.isCurrent(activation),
                   !Task.isCancelled else { return }
-            snapshot = cached
-            validateSelectedBot(in: cached?.list?.bots ?? [])
+            if let cached,
+               snapshot == nil || cached.savedAt > (snapshot?.savedAt ?? .distantPast) {
+                snapshot = cached
+            }
+            validateSelectedBot(in: snapshot?.list?.bots ?? [])
             isLoading = false
-            loadError = cached == nil
+            loadError = snapshot == nil
                 ? error.localizedDescription
                 : "Couldn’t refresh — showing saved Bots"
         }
@@ -735,7 +913,7 @@ struct AidenBotsHomeView: View {
                 pages += 1
             } while cursor != nil && pages < 10 && results.count < 1_000 && !Task.isCancelled
             guard coordinator.isCurrent(context), searchID == expected, !Task.isCancelled else { return }
-            remoteSearchResults = results
+            remoteSearchResults = aidenCanonicalBotConversations(results)
         } catch is CancellationError {
             return
         } catch {

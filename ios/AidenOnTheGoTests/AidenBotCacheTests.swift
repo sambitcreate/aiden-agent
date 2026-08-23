@@ -34,12 +34,131 @@ final class AidenBotCacheTests: XCTestCase {
 
         let staleStored = try await cache.store(stale, activation: firstA)
         let currentStored = try await cache.store(current, activation: secondA)
+        let staleMerged = try await cache.mergeAndStore(
+            AidenBotCacheSegments(list: contract.botList),
+            savedAt: Date(timeIntervalSince1970: 3),
+            activation: firstA
+        )
         let loadedA = await cache.load(instanceId: "instance-a", deviceId: "device-a")
         let loadedB = await cache.load(instanceId: "instance-b", deviceId: "device-b")
         XCTAssertFalse(staleStored)
+        XCTAssertNil(staleMerged)
         XCTAssertTrue(currentStored)
         XCTAssertEqual(loadedA, current)
         XCTAssertNil(loadedB)
+    }
+
+    func testBotCacheSegmentRefreshPreservesLastGoodEditorSegments() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-bot-cache-segments-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenBotCache(root: root)
+        let contract = try fixture()
+        let activation = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let initial = AidenBotCacheSnapshot(
+            list: contract.botList,
+            details: [contract.botDetail],
+            conversations: contract.botConversations,
+            catalog: contract.botCapabilityCatalog,
+            notice: contract.botNotice,
+            savedAt: Date(timeIntervalSince1970: 10)
+        )
+        let stored = try await cache.store(initial, activation: activation)
+        XCTAssertTrue(stored)
+
+        let merged = try await cache.mergeAndStore(
+            AidenBotCacheSegments(
+                list: contract.botList,
+                conversations: contract.botConversations
+            ),
+            savedAt: Date(timeIntervalSince1970: 20),
+            activation: activation
+        )
+        let reloaded = await cache.load(instanceId: "instance-a", deviceId: "device-a")
+
+        XCTAssertEqual(merged?.details, [contract.botDetail])
+        XCTAssertEqual(merged?.catalog, contract.botCapabilityCatalog)
+        XCTAssertEqual(merged?.notice, contract.botNotice)
+        XCTAssertEqual(reloaded, merged)
+        XCTAssertEqual(reloaded?.savedAt, Date(timeIntervalSince1970: 20))
+    }
+
+    func testAuthoritativeBotListPrunesRemovedBotDetailsAndConversation() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-bot-cache-list-prune-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenBotCache(root: root)
+        let contract = try fixture()
+        let emptyList = try AidenRemoteJSONDecoder.decode(
+            AidenBotList.self,
+            from: Data(
+                #"{"bots":[],"maxBots":256,"favorites":{"botIds":[],"revision":"favorites_empty"}}"#.utf8
+            )
+        )
+        let activation = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let initial = AidenBotCacheSnapshot(
+            list: contract.botList,
+            details: [contract.botDetail],
+            conversations: contract.botConversations,
+            catalog: contract.botCapabilityCatalog,
+            savedAt: Date(timeIntervalSince1970: 10)
+        )
+        let stored = try await cache.store(initial, activation: activation)
+        XCTAssertTrue(stored)
+
+        let merged = try await cache.mergeAndStore(
+            AidenBotCacheSegments(list: emptyList),
+            savedAt: Date(timeIntervalSince1970: 20),
+            activation: activation
+        )
+        let reloaded = await cache.load(instanceId: "instance-a", deviceId: "device-a")
+
+        XCTAssertEqual(merged?.list, emptyList)
+        XCTAssertEqual(merged?.details, [])
+        XCTAssertEqual(merged?.conversations?.conversations, [])
+        XCTAssertEqual(reloaded, merged)
+    }
+
+    func testBotCacheRejectsMoreThanOneConversationOwnedByTheSameBot() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-bot-cache-duplicate-chat-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenBotCache(root: root)
+        let contract = try fixture()
+        let conversations = try duplicateConversationPageForFixtureBot()
+        let activation = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let valid = AidenBotCacheSnapshot(
+            list: contract.botList,
+            conversations: contract.botConversations,
+            savedAt: Date(timeIntervalSince1970: 5)
+        )
+        let invalid = AidenBotCacheSnapshot(
+            list: contract.botList,
+            conversations: conversations,
+            savedAt: Date(timeIntervalSince1970: 10)
+        )
+        let validStored = try await cache.store(valid, activation: activation)
+        let stored = try await cache.store(invalid, activation: activation)
+        let merged = try await cache.mergeAndStore(
+            AidenBotCacheSegments(conversations: conversations),
+            savedAt: Date(timeIntervalSince1970: 20),
+            activation: activation
+        )
+        let loaded = await cache.load(instanceId: "instance-a", deviceId: "device-a")
+
+        XCTAssertTrue(validStored)
+        XCTAssertFalse(stored)
+        XCTAssertNil(merged)
+        XCTAssertEqual(loaded, valid)
+    }
+
+    func testBotsHomeDefensivelyChoosesOneCanonicalConversationPerBot() throws {
+        let conversations = try duplicateConversationPageForFixtureBot().conversations
+        let canonical = aidenCanonicalBotConversations(conversations)
+
+        XCTAssertEqual(canonical.count, 1)
+        XCTAssertEqual(canonical.first?.chatId, "chat_bot_fixture_02")
+        XCTAssertEqual(canonical.first?.botId, "bot_fixture_01")
     }
 
     func testBotCachePurgesOnlySelectedInstallationAndInvalidatesItsActivation() async throws {
@@ -183,6 +302,27 @@ final class AidenBotCacheTests: XCTestCase {
         )
 
         XCTAssertFalse(stored)
+    }
+
+    private func duplicateConversationPageForFixtureBot() throws -> AidenBotConversationPage {
+        let url = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "contract", withExtension: "json")
+        )
+        let rootData = try Data(contentsOf: url)
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: rootData) as? [String: Any]
+        )
+        var page = try XCTUnwrap(root["botConversations"] as? [String: Any])
+        let conversations = try XCTUnwrap(page["conversations"] as? [[String: Any]])
+        var second = try XCTUnwrap(conversations.first)
+        second["chatId"] = "chat_bot_fixture_02"
+        second["title"] = "Another chat"
+        second["updatedAt"] = "2026-08-18T20:00:00.000Z"
+        page["conversations"] = conversations + [second]
+        return try AidenRemoteJSONDecoder.decode(
+            AidenBotConversationPage.self,
+            from: JSONSerialization.data(withJSONObject: page)
+        )
     }
 
     func testDraftPurgeInvalidatesSessionAndRemovesOnlyThatInstallation() async throws {

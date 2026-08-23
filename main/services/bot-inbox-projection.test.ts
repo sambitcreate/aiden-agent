@@ -129,11 +129,34 @@ test("projects recent Bot conversations newest-first with one indexed and one bo
   });
 });
 
-test("normal pagination batches only the selected page and uses a stable keyset cursor", async () => {
-  const chats = Array.from({ length: 61 }, (_, index) =>
-    chat(`chat-${String(index).padStart(2, "0")}`, "bot-a", 100 - index),
+test("projects only the deterministic newest canonical chat for each Bot", async () => {
+  const app = fixture({
+    bots: [bot("bot-a"), bot("bot-b")],
+    chats: [
+      chat("legacy-a", "bot-a", 40, { createdAt: 20 }),
+      chat("canonical-a", "bot-a", 50, { createdAt: 10 }),
+      chat("tie-z", "bot-b", 30, { createdAt: 10 }),
+      chat("tie-a", "bot-b", 30, { createdAt: 10 }),
+    ],
+  });
+
+  const page = await app.service.list();
+
+  assert.deepEqual(
+    page.conversations.map((entry) => entry.chatId),
+    ["canonical-a", "tie-a"],
   );
-  const app = fixture({ chats, bots: [bot("bot-a")] });
+  assert.deepEqual(app.calls.requested, [["canonical-a", "tie-a"]]);
+});
+
+test("normal pagination batches only the selected page and uses a stable keyset cursor", async () => {
+  const bots = Array.from({ length: 61 }, (_, index) =>
+    bot(`bot-${String(index).padStart(2, "0")}`),
+  );
+  const chats = bots.map((entry, index) =>
+    chat(`chat-${String(index).padStart(2, "0")}`, entry.id, 100 - index),
+  );
+  const app = fixture({ chats, bots });
 
   const first = await app.service.list({ limit: 10 });
   assert.equal(first.conversations.length, 10);
@@ -163,8 +186,11 @@ test("normal pagination batches only the selected page and uses a stable keyset 
 });
 
 test("search uses one bounded precomputed-preview batch and never requests full histories", async () => {
-  const chats = Array.from({ length: 450 }, (_, index) =>
-    chat(`chat-${String(index).padStart(3, "0")}`, "bot-a", 1_000 - index),
+  const bots = Array.from({ length: 250 }, (_, index) =>
+    bot(`bot-${String(index).padStart(3, "0")}`),
+  );
+  const chats = bots.map((entry, index) =>
+    chat(`chat-${String(index).padStart(3, "0")}`, entry.id, 1_000 - index),
   );
   const previews = Object.fromEntries(
     chats.map((entry, index) => [
@@ -172,7 +198,7 @@ test("search uses one bounded precomputed-preview batch and never requests full 
       index === 199 ? "The unique needle" : "ordinary",
     ]),
   );
-  const app = fixture({ chats, bots: [bot("bot-a")], previews });
+  const app = fixture({ chats, bots, previews });
 
   const page = await app.service.list({ query: "needle", limit: 10 });
 
@@ -205,24 +231,27 @@ test("search uses one bounded precomputed-preview batch and never requests full 
 
 test("search covers safe bot name, purpose, title, and precomputed preview", async () => {
   const bots = [
-    bot("bot-a", { name: "Sherlock", description: "Research outbreaks" }),
+    bot("bot-name", { name: "Sherlock" }),
+    bot("bot-purpose", { description: "Research outbreaks" }),
+    bot("bot-title"),
+    bot("bot-preview"),
   ];
   const chats = [
-    chat("by-name", "bot-a", 40, { title: "One" }),
-    chat("by-purpose", "bot-a", 30, { title: "Two" }),
-    chat("by-title", "bot-a", 20, { title: "Tokyo plan" }),
-    chat("by-preview", "bot-a", 10, { title: "Four" }),
+    chat("by-name", "bot-name", 40, { title: "One" }),
+    chat("by-purpose", "bot-purpose", 30, { title: "Two" }),
+    chat("by-title", "bot-title", 20, { title: "Tokyo plan" }),
+    chat("by-preview", "bot-preview", 10, { title: "Four" }),
   ];
   const previews = { "by-preview": "Make a latte" };
   const app = fixture({ bots, chats, previews });
 
   assert.equal(
     (await app.service.list({ query: "sherlock" })).conversations.length,
-    4,
+    1,
   );
   assert.equal(
     (await app.service.list({ query: "outbreak" })).conversations.length,
-    4,
+    1,
   );
   assert.deepEqual(
     (await app.service.list({ query: "tokyo" })).conversations.map(
@@ -254,18 +283,16 @@ test("bot filters remain disjoint and a cursor is bound to its exact search scop
   assert.equal(first.nextCursor, undefined);
 
   const paged = fixture({
-    bots: [bot("bot-a")],
-    chats: [chat("a-one", "bot-a", 30), chat("a-two", "bot-a", 20)],
+    bots: [bot("bot-a"), bot("bot-b")],
+    chats: [chat("a-one", "bot-a", 30), chat("b-one", "bot-b", 20)],
   });
   const page = await paged.service.list({
-    botId: "bot-a",
     query: "title",
     limit: 1,
   });
   assert.ok(page.nextCursor);
   await assert.rejects(
     paged.service.list({
-      botId: "bot-a",
       query: "different",
       cursor: page.nextCursor,
     }),

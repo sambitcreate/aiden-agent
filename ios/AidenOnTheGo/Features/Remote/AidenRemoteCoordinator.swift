@@ -52,6 +52,13 @@ struct AidenRemoteRequestContext: Equatable, Hashable, Sendable {
 final class AidenRemoteCoordinator {
     typealias ClientFactory = (AidenInstallation, String) throws -> AidenRemoteClient
 
+    private struct ActiveClientKey: Equatable {
+        let instanceId: String
+        let deviceId: String
+        let credentialScope: String
+        let activationGeneration: Int
+    }
+
     let installationStore: AidenInstallationStore
     private let clientFactory: ClientFactory
     private(set) var connectionState: AidenRemoteConnectionState
@@ -68,6 +75,7 @@ final class AidenRemoteCoordinator {
     private var pendingManagedWorktreeDeletionKeys: [String: UUID] = [:]
     private var connectionGeneration = 0
     private var activationGeneration = 0
+    private var cachedActiveClient: (key: ActiveClientKey, client: AidenRemoteClient)?
 
     init() {
         let installationStore = AidenInstallationStore()
@@ -582,7 +590,11 @@ final class AidenRemoteCoordinator {
         credential: String,
         generation: Int
     ) async throws {
-        let client = try clientFactory(installation, credential)
+        let client = try client(
+            for: installation,
+            credential: credential,
+            activationGeneration: activationGeneration
+        )
         async let serverRequest = client.server()
         async let workspaceRequest = client.workspaces()
         let (server, workspaces) = try await (serverRequest, workspaceRequest)
@@ -604,7 +616,30 @@ final class AidenRemoteCoordinator {
               !credential.isEmpty else {
             throw AidenRemoteClientError.missingCredential
         }
-        return try clientFactory(installation, credential)
+        return try client(
+            for: installation,
+            credential: credential,
+            activationGeneration: activationGeneration
+        )
+    }
+
+    private func client(
+        for installation: AidenInstallation,
+        credential: String,
+        activationGeneration: Int
+    ) throws -> AidenRemoteClient {
+        let key = ActiveClientKey(
+            instanceId: installation.id,
+            deviceId: installation.deviceId,
+            credentialScope: installation.credentialScope,
+            activationGeneration: activationGeneration
+        )
+        if let cachedActiveClient, cachedActiveClient.key == key {
+            return cachedActiveClient.client
+        }
+        let client = try clientFactory(installation, credential)
+        cachedActiveClient = (key, client)
+        return client
     }
 
     private func mutate(

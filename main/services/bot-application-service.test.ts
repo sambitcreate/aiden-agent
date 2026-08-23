@@ -16,13 +16,11 @@ import type {
   BotLifecycleStage,
 } from "./bot-lifecycle-journal-core.js";
 import { BotMutationGate } from "./bot-mutation-gate.js";
-import { reconcilePendingChatDeletions } from "./chat-deletion-reconciliation.js";
 import type { Chat } from "./types.js";
 import {
   createBotApplicationService,
   type BotApplicationDependencies,
 } from "./bot-application-service.js";
-import { TELEGRAM_BACKING_CHAT_DELETE_BLOCKED_MESSAGE } from "./telegram/telegram-bot-chat-lifecycle.js";
 
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const CATALOG_REVISION = "catalog:1";
@@ -475,8 +473,8 @@ function fixture(options: {
         catalogRetainedProviders.push(input?.retainedProviders);
         return catalog();
       },
-      async bindCustom(input?: { botId?: string }) {
-        catalogTargets.push(input?.botId);
+      async bindCustom(input?: { botId?: string; snapshot?: BotCapabilityCatalogSnapshot }) {
+        if (!input?.snapshot) catalogTargets.push(input?.botId);
         events.push("catalog:bind-custom");
         return { version: 1 };
       },
@@ -693,7 +691,7 @@ test("Bot access updates use a scoped catalog and publish only a validated priva
 
   assert.equal(customResult.accessMode, "custom");
   assert.deepEqual(customResult.custom, custom.custom);
-  assert.deepEqual(app.catalogTargets, [owner.id, owner.id]);
+  assert.deepEqual(app.catalogTargets, [owner.id]);
   assert.ok(
     app.events.indexOf("catalog:bind-custom") <
       app.events.indexOf("policy:validate-binding") &&
@@ -1076,15 +1074,30 @@ test("Custom Bot chats atomically derive their exact bound provider and model", 
       app.events.indexOf("chat-policy:create"),
   );
 
-  await assert.rejects(
-    app.service.createChat({
-      audienceId: "device:a",
-      botId: owner.id,
-      providerId: "provider:other",
-      model: "model:exact",
-    }),
-    /must use its selected provider and model/u,
-  );
+  const reopened = await app.service.createChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    providerId: "provider:other",
+    model: "model:other",
+    assertCurrent: () => { throw new Error("creation-only provider lease is stale"); },
+  });
+  assert.equal(reopened.id, chat.id);
+  assert.equal(app.chats.size, 1);
+});
+
+test("concurrent opens for one Bot converge on one persistent chat", async () => {
+  const owner = bot("bot:concurrent-open");
+  const app = fixture({ bots: [owner] });
+  await app.service.initialize();
+
+  const [first, second] = await Promise.all([
+    app.service.createChat({ audienceId: "device:a", botId: owner.id }),
+    app.service.createChat({ audienceId: "device:b", botId: owner.id }),
+  ]);
+
+  assert.equal(second.id, first.id);
+  assert.equal(app.chats.size, 1);
+  assert.equal(app.chatPolicies.size, 1);
 });
 
 test("an unrecoverable visible commit fences later Bot mutations until restart", async () => {
@@ -1110,12 +1123,9 @@ test("an unrecoverable visible commit fences later Bot mutations until restart",
   assert.equal(app.pending.size, 1);
 });
 
-test("a post-visible copy journal failure recovers the exact copy without duplication", async () => {
-  const owner = bot("bot:copy-live-recovery");
-  const app = fixture({
-    bots: [owner],
-    failJournalOnceAfter: { method: "complete", stage: "chat_committed" },
-  });
+test("copying a Bot chat reopens the canonical chat without duplication", async () => {
+  const owner = bot("bot:copy-canonical");
+  const app = fixture({ bots: [owner] });
   await app.service.initialize();
   const source: Chat = {
     id: "chat:source-live",
@@ -1138,13 +1148,12 @@ test("a post-visible copy journal failure recovers the exact copy without duplic
 
   const copy = await app.service.copyChat({ botId: owner.id, sourceChatId: source.id });
 
-  assert.notEqual(copy.id, source.id);
-  assert.equal(app.chats.size, 2);
-  assert.equal([...app.chats.values()].filter(({ id }) => id === copy.id).length, 1);
+  assert.equal(copy.id, source.id);
+  assert.equal(app.chats.size, 1);
   assert.equal(app.pending.size, 0);
 });
 
-test("new and copied Bot chats publish policy before chat in the managed home", async () => {
+test("new Bot chats publish policy before chat and later copies reopen it", async () => {
   const app = fixture({ bots: [bot("bot:one")] });
   await app.service.initialize();
   app.events.length = 0;
@@ -1156,8 +1165,9 @@ test("new and copied Bot chats publish policy before chat in the managed home", 
   chat.workspaceId = "legacy-workspace";
   app.events.length = 0;
   const copy = await app.service.copyChat({ botId: "bot:one", sourceChatId: chat.id });
-  assert.equal(copy.workspaceId, WORKSPACE_ID);
-  assert.ok(app.events.indexOf("chat-policy:copy") < app.events.indexOf("chat:copy"));
+  assert.equal(copy.id, chat.id);
+  assert.equal(copy.workspaceId, "legacy-workspace");
+  assert.deepEqual(app.events, []);
 });
 
 test("initialization gives legacy Bot chats inherited policy without moving history", async () => {
@@ -1178,7 +1188,8 @@ test("initialization gives legacy Bot chats inherited policy without moving hist
   assert.equal(app.chats.get(legacy.id)?.messages[0]?.content, "Keep me");
 
   const copy = await app.service.copyChat({ botId: "bot:one", sourceChatId: legacy.id });
-  assert.equal(copy.workspaceId, WORKSPACE_ID);
+  assert.equal(copy.id, legacy.id);
+  assert.equal(copy.workspaceId, "old-visible-workspace");
   assert.equal(copy.messages[0]?.content, "Keep me");
 
   const policyCount = app.chatPolicies.size;
@@ -1429,6 +1440,96 @@ test("archived Bot chats remain readable but reject a new delete mutation", asyn
   assert.deepEqual(app.events, []);
 });
 
+test("legacy duplicate Bot chats keep the newest canonical and older history read-only", async () => {
+  const owner = bot("bot:legacy-duplicates");
+  const app = fixture({ bots: [owner] });
+  await app.service.initialize();
+  const older: Chat = {
+    id: "chat:older",
+    title: "Older history",
+    workspaceId: WORKSPACE_ID,
+    botId: owner.id,
+    createdAt: 10,
+    updatedAt: 20,
+    messages: [{ id: "message:older", role: "user", content: "Keep me", createdAt: 20 }],
+  };
+  const newest: Chat = {
+    id: "chat:newest",
+    title: "Canonical history",
+    workspaceId: WORKSPACE_ID,
+    botId: owner.id,
+    createdAt: 15,
+    updatedAt: 30,
+    messages: [{ id: "message:newest", role: "user", content: "Use me", createdAt: 30 }],
+  };
+  for (const chat of [older, newest]) {
+    app.chats.set(chat.id, chat);
+    app.chatPolicies.set(chat.id, {
+      botId: owner.id,
+      chatId: chat.id,
+      mode: "inherit",
+      revision: `revision:${chat.id}`,
+      botPolicyRevision: app.policies.get(owner.id)!.revision,
+      summary: "Full",
+    });
+  }
+  app.events.length = 0;
+
+  assert.equal((await app.service.getCanonicalChat(owner.id))?.id, newest.id);
+  assert.equal((await app.service.createChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    providerId: "ignored-provider",
+    model: "ignored-model",
+  })).id, newest.id);
+  assert.equal(app.chats.size, 2);
+  assert.equal(app.chats.get(older.id)?.messages[0]?.content, "Keep me");
+  assert.deepEqual(app.events, []);
+
+  assert.equal(await app.service.authorizeRetainedChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    chatId: older.id,
+    access: "read",
+  }), true);
+  assert.equal(await app.service.authorizeRetainedChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    chatId: older.id,
+    access: "write",
+  }), false);
+  await assert.rejects(
+    app.service.updateChatAccess({
+      audienceId: "device:a",
+      botId: owner.id,
+      chatId: older.id,
+      expectedRevision: app.chatPolicies.get(older.id)!.revision,
+      access: {
+        mode: "inherit",
+        catalogRevision: CATALOG_REVISION,
+        expectedBotPolicyRevision: app.policies.get(owner.id)!.revision,
+      },
+    }),
+    /read-only/u,
+  );
+  await assert.rejects(
+    app.service.deleteChat({ botId: owner.id, chatId: older.id }),
+    /read-only/u,
+  );
+  await assert.rejects(
+    app.service.deleteChat({ botId: owner.id, chatId: newest.id }),
+    /persistent chat cannot be deleted independently/u,
+  );
+  assert.equal((await app.service.getCanonicalChat(owner.id))?.id, newest.id);
+  assert.equal(await app.service.authorizeRetainedChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    chatId: older.id,
+    access: "write",
+  }), false);
+  assert.equal(app.chats.size, 2);
+});
+
 test("retained Bot authorization preserves archived handles and admits active writes", async () => {
   const owner = bot("bot:retained");
   const app = fixture({ bots: [owner] });
@@ -1487,131 +1588,31 @@ test("retained Bot authorization preserves archived handles and admits active wr
   }), false);
 });
 
-test("an enabled Telegram backing chat cannot be deleted or resurrected on restart", async () => {
-  const owner = bot("bot:telegram");
+test("a Bot's persistent chat cannot be deleted independently", async () => {
+  const owner = bot("bot:persistent-chat");
   const app = fixture({ bots: [owner] });
   await app.service.initialize();
   const backing = await app.service.createChat({
-    audienceId: "telegram:work",
+    audienceId: "device:a",
     botId: owner.id,
-    chatId: "telegram-bot-11111111-1111-4111-8111-111111111111",
   });
-  app.deps.assertChatDeletionAllowed = async (botId, chatId) => {
-    if (botId === owner.id && chatId === backing.id) {
-      throw new Error(TELEGRAM_BACKING_CHAT_DELETE_BLOCKED_MESSAGE);
-    }
-  };
+  let effectDeletionCalled = false;
+  app.deps.deleteChatWithEffects = async () => { effectDeletionCalled = true; };
   app.events.length = 0;
 
   await assert.rejects(
     app.service.deleteChat({ botId: owner.id, chatId: backing.id }),
-    (error: unknown) => {
-      assert.equal((error as Error).message, TELEGRAM_BACKING_CHAT_DELETE_BLOCKED_MESSAGE);
-      return true;
-    },
+    /persistent chat cannot be deleted independently/u,
   );
   assert.equal(app.chats.has(backing.id), true);
   assert.equal(app.chatPolicies.has(backing.id), true);
   assert.equal(app.pending.size, 0);
+  assert.equal(effectDeletionCalled, false);
   assert.equal(app.events.includes("chat:remove"), false);
 
   const restarted = createBotApplicationService(app.deps);
   await restarted.initialize();
   assert.equal((await restarted.listChats(owner.id)).filter(({ id }) => id === backing.id).length, 1);
-});
-
-test("a stale delete owner leaves chat and policy visible and rolls back its journal", async () => {
-  const app = fixture({ bots: [bot("bot:one")] });
-  await app.service.initialize();
-  const chat: Chat = {
-    id: "chat:stale",
-    title: "Keep",
-    workspaceId: WORKSPACE_ID,
-    botId: "bot:one",
-    createdAt: 1,
-    updatedAt: 1,
-    messages: [],
-  };
-  app.chats.set(chat.id, chat);
-  app.chatPolicies.set(chat.id, {
-    botId: "bot:one",
-    chatId: chat.id,
-    mode: "inherit",
-    revision: "revision:chat:stale",
-    botPolicyRevision: app.policies.get("bot:one")!.revision,
-    summary: "Full",
-  });
-  let assertions = 0;
-  app.events.length = 0;
-  await assert.rejects(
-    app.service.deleteChat({
-      botId: "bot:one",
-      chatId: chat.id,
-      assertCurrent: () => {
-        assertions += 1;
-        if (assertions === 2) throw new Error("owner stale");
-      },
-    }),
-    /owner stale/u,
-  );
-  assert.equal(app.chats.has(chat.id), true);
-  assert.equal(app.chatPolicies.has(chat.id), true);
-  assert.equal(app.pending.size, 0);
-  assert.equal(app.events.includes("chat:remove"), false);
-  assert.equal(app.events[app.events.length - 1], "journal:rollback");
-});
-
-test("a durable deletion tombstone keeps Bot cleanup pending until restart rolls it forward", async () => {
-  const owner = bot("bot:delete-roll-forward");
-  const app = fixture({ bots: [owner] });
-  await app.service.initialize();
-  const chat = await app.service.createChat({ audienceId: "device:a", botId: owner.id });
-  app.events.length = 0;
-  app.deps.deleteChatWithEffects = async (
-    chatId,
-    assertCurrent,
-    onDeletionRollForward,
-  ) => {
-    await assertCurrent(app.chats.get(chatId) ?? null);
-    app.events.push("subagent:tombstone");
-    onDeletionRollForward?.();
-    app.events.push("effects:failed");
-    throw new Error("private effect cleanup failed");
-  };
-
-  await assert.rejects(
-    app.service.deleteChat({ botId: owner.id, chatId: chat.id }),
-    /must finish on restart/u,
-  );
-  assert.equal(app.chats.has(chat.id), true);
-  assert.equal(app.chatPolicies.has(chat.id), true);
-  assert.equal(app.pending.size, 1);
-  assert.equal([...app.pending.values()][0]?.stage, "authority_fenced");
-  assert.equal(app.events.includes("journal:rollback"), false);
-  await assert.rejects(
-    app.service.createChat({ audienceId: "device:a", botId: owner.id }),
-    /changes are paused/u,
-  );
-
-  // Main startup first rolls the durable generic deletion tombstone forward.
-  const tombstones = new Set([chat.id]);
-  await reconcilePendingChatDeletions({
-    pendingChatDeletions: async () => [...tombstones],
-    completeChatDeletion: async (chatId) => { tombstones.delete(chatId); },
-  }, async (chatId) => { app.chats.delete(chatId); });
-  assert.equal(tombstones.size, 0);
-  app.deps.deleteChatWithEffects = async () => {
-    throw new Error("startup Bot replay must not repeat generic private cleanup");
-  };
-  const restarted = createBotApplicationService(app.deps);
-  await restarted.initialize();
-
-  assert.equal(app.pending.size, 0);
-  assert.equal(app.chats.has(chat.id), false);
-  assert.equal(app.chatPolicies.has(chat.id), false);
-  assert.ok(
-    app.events.indexOf("chat-policy:delete") < app.events.lastIndexOf("journal:complete"),
-  );
 });
 
 test("delete-chat recovery is idempotent at every durable checkpoint", async (t) => {

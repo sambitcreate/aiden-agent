@@ -86,6 +86,7 @@ test("generation resolves persisted bot identity and leaves ordinary prompts unc
   assert.match(client, /: baseSystemPrompt;/u);
   assert.match(client, /botRuntimeAuthority\.admit\(\{/u);
   assert.match(client, /prepareBotGeneration\(\{/u);
+  assert.match(client, /selectCanonicalBotChat\([\s\S]{0,100}chatStore\.listByBot/u);
   assert.match(client, /revalidateBeforeEffect\(\)/u);
   assert.match(client, /resolvePiAgentRuntimeContributionSnapshot\(\s*botSystemPrompt,/u);
 });

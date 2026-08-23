@@ -239,6 +239,128 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(models[1].effectiveThinkingLevel, "high")
     }
 
+    func testBotChatModelAuthorityPinsEachChatsPersistedPairInsteadOfCatalogDefaults() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","max"],"defaultThinkingLevel":"max"}]},{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = "bot-life-manager"
+
+        let resolved = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "google",
+            selectedModelId: "gemini-flash",
+            selectedThinkingLevel: "low"
+        )
+        let turn = AidenChatModelAuthority.turnSelection(
+            chat: chat,
+            selectedProviderId: "google",
+            selectedModelId: "gemini-flash",
+            selectedThinkingLevel: resolved.thinkingLevel
+        )
+
+        XCTAssertEqual(resolved.providerId, "openai")
+        XCTAssertEqual(resolved.modelId, "gpt-5.6")
+        XCTAssertEqual(resolved.thinkingLevel, "max")
+        XCTAssertEqual(turn.providerId, "openai")
+        XCTAssertEqual(turn.modelId, "gpt-5.6")
+    }
+
+    func testBotChatModelAuthorityNeverFallsBackWhenPersistedPairIsUnavailable() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = "bot-life-manager"
+        chat.providerId = "saved-provider"
+        chat.modelId = "saved-model"
+
+        let resolved = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "google",
+            selectedModelId: "gemini-flash",
+            selectedThinkingLevel: "high"
+        )
+
+        XCTAssertEqual(resolved.providerId, "saved-provider")
+        XCTAssertEqual(resolved.modelId, "saved-model")
+        XCTAssertNil(resolved.thinkingLevel)
+    }
+
+    func testBotChatModelAuthorityRemainsScopedToEachBotsSingleChat() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6"}]},{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var firstChat = sampleChat()
+        firstChat.botId = "bot-life-manager"
+        firstChat.providerId = "openai"
+        firstChat.modelId = "gpt-5.6"
+        var secondChat = sampleChat()
+        secondChat.botId = "bot-travel"
+        secondChat.providerId = "google"
+        secondChat.modelId = "gemini-flash"
+
+        let firstSelection = AidenChatModelAuthority.resolvedSelection(
+            chat: firstChat,
+            catalog: catalog,
+            selectedProviderId: secondChat.providerId,
+            selectedModelId: secondChat.modelId,
+            selectedThinkingLevel: nil
+        )
+        let secondSelection = AidenChatModelAuthority.resolvedSelection(
+            chat: secondChat,
+            catalog: catalog,
+            selectedProviderId: firstChat.providerId,
+            selectedModelId: firstChat.modelId,
+            selectedThinkingLevel: nil
+        )
+
+        XCTAssertEqual(firstSelection.providerId, "openai")
+        XCTAssertEqual(firstSelection.modelId, "gpt-5.6")
+        XCTAssertEqual(secondSelection.providerId, "google")
+        XCTAssertEqual(secondSelection.modelId, "gemini-flash")
+    }
+
+    func testWorkspaceChatModelAuthorityRetainsExistingCatalogFallbackBehavior() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        let chat = sampleChat()
+
+        let resolved = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "missing-provider",
+            selectedModelId: "missing-model",
+            selectedThinkingLevel: nil
+        )
+        let turn = AidenChatModelAuthority.turnSelection(
+            chat: chat,
+            selectedProviderId: resolved.providerId,
+            selectedModelId: resolved.modelId,
+            selectedThinkingLevel: resolved.thinkingLevel
+        )
+
+        XCTAssertEqual(resolved.providerId, "google")
+        XCTAssertEqual(resolved.modelId, "gemini-flash")
+        XCTAssertEqual(turn.providerId, "google")
+        XCTAssertEqual(turn.modelId, "gemini-flash")
+    }
+
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
@@ -812,6 +934,15 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(
             AidenMessageOutcomePresentation.make(.init(
                 status: .failed,
+                category: "invalid_request",
+                attempts: 1,
+                retryExhausted: false
+            )).detail,
+            "The model provider could not accept this request. Review the selected model in Bot Access."
+        )
+        XCTAssertEqual(
+            AidenMessageOutcomePresentation.make(.init(
+                status: .failed,
                 category: "private-provider-detail",
                 attempts: nil,
                 retryExhausted: nil
@@ -1283,6 +1414,20 @@ final class AidenChatTests: XCTestCase {
     }
 
 #if DEBUG
+    @MainActor
+    func testBotChatViewModelRejectsProviderAndModelPickerMutations() {
+        var chat = sampleChat()
+        chat.botId = "bot-life-manager"
+        let model = AidenChatViewModel(readOnlyFixture: chat)
+
+        model.selectProvider("google")
+        model.selectModel("gemini-flash")
+
+        XCTAssertTrue(model.usesPersistedBotModelAuthority)
+        XCTAssertEqual(model.selectedProviderId, "openai")
+        XCTAssertEqual(model.selectedModelId, "gpt-5.6")
+    }
+
     @MainActor
     func testReadOnlyFixtureChatRejectsEveryLiveEntryPointWithoutMutatingItsChat() async {
         let chat = sampleChat()

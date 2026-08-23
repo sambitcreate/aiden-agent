@@ -663,6 +663,8 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(record(botChatCreateResponseParts[1], "Bot chat response identity").required, ["botId"]);
   assert.equal(operation("/bots", "post")["x-aiden-provider-model-must-be-currently-available"], true);
   assert.equal(operation("/bots/{botId}/chats", "post")["x-aiden-provider-model-must-be-currently-available"], true);
+  assert.equal(operation("/bots/{botId}/chats", "post")["x-aiden-canonical-chat-per-bot"], true);
+  assert.equal(operation("/bots/{botId}/chats", "post")["x-aiden-provider-model-required-only-when-creating"], true);
   const messageProperties = record(record(schemas.Message, "Message").properties, "Message properties");
   assert.equal(record(messageProperties.id, "Message id").minLength, 1);
   assert.equal(record(messageProperties.id, "Message id").maxLength, 128);

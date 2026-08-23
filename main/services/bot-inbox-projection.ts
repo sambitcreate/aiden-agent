@@ -6,6 +6,7 @@ import type {
   AidenRemoteBotConversationQuery,
 } from "./aiden-remote-protocol.js";
 import type { ChatMeta } from "./types.js";
+import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const SAFE_BOT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
@@ -83,6 +84,7 @@ export function mergeBotInboxActivityPreviews(
 }
 
 interface IndexedBotChat {
+  id: string;
   chatId: string;
   botId: string;
   title: string;
@@ -389,6 +391,7 @@ function indexBotChats(
       continue;
     }
     candidates.push({
+      id: chat.id,
       chatId: chat.id,
       botId: chat.botId,
       title: chat.title,
@@ -398,13 +401,25 @@ function indexBotChats(
       ...(typeof chat.preview === "string" ? { preview: chat.preview } : {}),
     });
   }
-  return candidates.sort((left, right) => {
+  const newestFirst = candidates.sort((left, right) => {
     if (left.updatedAt !== right.updatedAt) {
       return right.updatedAt - left.updatedAt;
     }
     if (left.tieBreaker === right.tieBreaker) return 0;
     return left.tieBreaker < right.tieBreaker ? 1 : -1;
   });
+  const byBot = new Map<string, IndexedBotChat[]>();
+  for (const candidate of newestFirst) {
+    const entries = byBot.get(candidate.botId) ?? [];
+    entries.push(candidate);
+    byBot.set(candidate.botId, entries);
+  }
+  const canonicalIds = new Set(
+    [...byBot.values()]
+      .map((entries) => selectCanonicalBotChat(entries)?.chatId)
+      .filter((chatId): chatId is string => chatId !== undefined),
+  );
+  return newestFirst.filter((candidate) => canonicalIds.has(candidate.chatId));
 }
 
 function searchableIdentity(bot: BotDefinition): BotSearchIdentity {

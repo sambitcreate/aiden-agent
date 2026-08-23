@@ -528,6 +528,24 @@ test("ordinary workspace moves always reject Bot chats and preserve managed-home
   assert.equal(app.notifications(), 0);
 });
 
+test("ordinary chat deletion cannot remove a Bot's persistent chat", async () => {
+  const app = fixture(chat({ botId: "bot-1", workspaceId: "bot-home-1" }), {
+    retainedBotChatAuthorizer: () => true,
+  });
+
+  await assert.rejects(
+    app.service.remove(
+      "chat-1",
+      projectAidenRemoteChat(app.current()!).revision,
+    ),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "not_found" &&
+      (error as { status?: number }).status === 404,
+  );
+  assert.equal(app.current()?.id, "chat-1");
+  assert.equal(app.notifications(), 0);
+});
+
 test("Bot chat classification fails closed when its authoritative Bot is unavailable", async () => {
   const app = fixture(chat({ botId: "bot-1" }), { botAvailable: false });
   await assert.rejects(

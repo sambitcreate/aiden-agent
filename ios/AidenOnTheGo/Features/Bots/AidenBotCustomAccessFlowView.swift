@@ -1,5 +1,27 @@
 import SwiftUI
 
+private struct AidenBotAccessSkeletonView: View {
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            AidenBotSkeletonBlock(width: 48, height: 14, radius: 7, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: nil, height: 62, radius: 18, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: 28, height: 14, radius: 7, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: nil, height: 126, radius: 18, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: 52, height: 14, radius: 7, reduceMotion: reduceMotion)
+            ForEach(0..<3, id: \.self) { _ in
+                AidenBotSkeletonBlock(width: nil, height: 58, radius: 18, reduceMotion: reduceMotion)
+            }
+        }
+        .padding(.horizontal, 30)
+        .padding(.top, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Bot access")
+    }
+}
+
 struct AidenBotCustomAccessSessionIdentity: Equatable {
     let instanceID: String?
     let deviceID: String?
@@ -142,11 +164,44 @@ func aidenBotCustomAccessIsDirty(
     draft != nil && draft != cleanDraft
 }
 
+enum AidenBotAccessSaveFailureKind: Equatable {
+    case conflict
+    case retryable
+}
+
+func aidenBotAccessSaveFailureKind(_ error: Error) -> AidenBotAccessSaveFailureKind {
+    guard case let AidenRemoteClientError.server(statusCode, body) = error,
+          statusCode == 409,
+          ["revision_conflict", "operation_stale"].contains(body.code.rawValue) else {
+        return .retryable
+    }
+    return .conflict
+}
+
+func aidenBotVisibleCapabilityOptions(
+    _ options: [AidenBotCapabilityOption],
+    selectedIDs: Set<String>
+) -> [AidenBotCapabilityOption] {
+    options.filter { $0.available || selectedIDs.contains($0.id) }
+}
+
+func aidenBotCapabilityOptionTitle(
+    _ option: AidenBotCapabilityOption,
+    isSelected: Bool
+) -> String {
+    guard !option.available else { return option.label }
+    if isSelected, option.label == "Invalid skill" {
+        return "Previously selected skill — unavailable"
+    }
+    return "\(option.label) — Unavailable"
+}
+
 struct AidenBotCustomAccessFlowView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     var preferredBotID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
 
     @State private var bots: [AidenBotSummary] = []
     @State private var catalog: AidenBotCapabilityCatalog?
@@ -156,7 +211,7 @@ struct AidenBotCustomAccessFlowView: View {
     @State private var cleanDraft: AidenBotCustomAccessDraft?
     @State private var capturedContext: AidenRemoteRequestContext?
     @State private var isLoading = true
-    @State private var isLoadingBot = false
+    @State private var loadingBotRequest: AidenBotCustomAccessDetailRequest?
     @State private var savingRequest: AidenBotCustomAccessSaveRequest?
     @State private var editorMode: AidenBotEditorMode?
     @State private var loadError: String?
@@ -169,9 +224,13 @@ struct AidenBotCustomAccessFlowView: View {
             && coordinator.connectionState == .connected
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
             && selectedBot?.health != .archived
+            && !isLoading
+            && !isLoadingBot
     }
 
     private var isSaving: Bool { savingRequest != nil }
+
+    private var isLoadingBot: Bool { loadingBotRequest != nil }
 
     private var isDirty: Bool {
         aidenBotCustomAccessIsDirty(draft: draft, cleanDraft: cleanDraft)
@@ -229,17 +288,6 @@ struct AidenBotCustomAccessFlowView: View {
             guard let request = detailRequest, !isLoading else { return }
             await loadSelectedBot(request)
         }
-        .alert(
-            "Couldn’t Save Access",
-            isPresented: Binding(
-                get: { saveError != nil },
-                set: { if !$0 { saveError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { saveError = nil }
-        } message: {
-            Text(saveError ?? "The change could not be saved.")
-        }
         .confirmationDialog(
             "Discard access changes?",
             isPresented: Binding(
@@ -257,9 +305,13 @@ struct AidenBotCustomAccessFlowView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isLoading {
-            ProgressView("Loading access from your Mac…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if aidenBotUsesColdLoadingPlaceholder(
+            isLoading: isLoading,
+            hasUsableContent: !bots.isEmpty
+        ) {
+            AidenBotAccessSkeletonView(reduceMotion: reduceMotion)
+        } else if !bots.isEmpty {
+            accessForm
         } else if let loadError {
             ContentUnavailableView {
                 Label("Couldn’t Load Bot Access", systemImage: "exclamationmark.shield")
@@ -284,13 +336,18 @@ struct AidenBotCustomAccessFlowView: View {
                 .disabled(capturedContext.map(coordinator.isCurrent) != true || !canCreateBot)
                 .accessibilityHint("Opens the new Bot editor. Nothing is created until you save.")
             }
-        } else {
-            accessForm
         }
     }
 
     private var accessForm: some View {
         Form {
+            if let loadError {
+                Section {
+                    Label(loadError, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(palette.secondary)
+                        .accessibilityLabel("Bot access refresh status: \(loadError)")
+                }
+            }
             Section {
                 Picker("Bot", selection: selectedBotBinding) {
                     ForEach(bots) { bot in
@@ -304,15 +361,20 @@ struct AidenBotCustomAccessFlowView: View {
                 Text("Custom Access can only reduce what Aiden and your Mac already allow.")
             }
 
-            if isLoadingBot {
+            if isLoadingBot, draft == nil {
                 Section {
-                    HStack {
-                        Spacer()
-                        ProgressView("Loading bot…")
-                        Spacer()
+                    VStack(alignment: .leading) {
+                        AidenBotSkeletonBlock(
+                            width: nil,
+                            height: 44,
+                            radius: 14,
+                            reduceMotion: reduceMotion
+                        )
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Loading selected Bot")
                 }
-            } else if let botError {
+            } else if let botError, draft == nil {
                 Section {
                     Text(botError)
                         .foregroundStyle(.red)
@@ -323,6 +385,20 @@ struct AidenBotCustomAccessFlowView: View {
                     }
                 }
             } else if let catalog, draft != nil {
+                if let botError {
+                    Section {
+                        Label(botError, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(palette.secondary)
+                            .accessibilityLabel("Bot access refresh status: \(botError)")
+                    }
+                }
+                if let saveError {
+                    Section {
+                        Label(saveError, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(palette.secondary)
+                            .accessibilityLabel("Access save status: \(saveError)")
+                    }
+                }
                 aiSection(catalog)
                     .disabled(!canWrite)
                 optionSection(
@@ -372,7 +448,7 @@ struct AidenBotCustomAccessFlowView: View {
     }
 
     private func aiSection(_ catalog: AidenBotCapabilityCatalog) -> some View {
-        Section {
+        return Section {
             Picker("Provider", selection: providerBinding(catalog)) {
                 ForEach(catalog.providers) { provider in
                     Text(optionTitle(provider.label, available: provider.available))
@@ -426,20 +502,30 @@ struct AidenBotCustomAccessFlowView: View {
         options: [AidenBotCapabilityOption],
         keyPath: WritableKeyPath<AidenBotCustomAccessDraft, Set<String>>
     ) -> some View {
-        Section {
-            if options.isEmpty {
+        let selectedIDs = draft?[keyPath: keyPath] ?? []
+        let visibleOptions = aidenBotVisibleCapabilityOptions(
+            options,
+            selectedIDs: selectedIDs
+        )
+        return Section {
+            if visibleOptions.isEmpty {
                 Text("None configured on this Mac")
                     .foregroundStyle(palette.secondary)
             } else {
-                ForEach(options) { option in
+                ForEach(visibleOptions) { option in
+                    let selected = selectedIDs.contains(option.id)
                     Toggle(isOn: optionBinding(
                         id: option.id,
                         available: option.available,
                         keyPath: keyPath
                     )) {
-                        optionLabel(option.label, description: option.description, available: option.available)
+                        optionLabel(
+                            aidenBotCapabilityOptionTitle(option, isSelected: selected),
+                            description: option.available ? option.description : nil,
+                            available: true
+                        )
                     }
-                    .disabled(!option.available && !isSelected(option.id, keyPath: keyPath))
+                    .disabled(!option.available && !selected)
                 }
             }
         } header: {
@@ -569,7 +655,7 @@ struct AidenBotCustomAccessFlowView: View {
         draft = nil
         cleanDraft = nil
         isLoading = true
-        isLoadingBot = false
+        loadingBotRequest = nil
         savingRequest = nil
         loadError = nil
         botError = nil
@@ -588,9 +674,6 @@ struct AidenBotCustomAccessFlowView: View {
         guard sessionIdentity == expectedSession else { return }
         isLoading = true
         loadError = nil
-        selectedBot = nil
-        draft = nil
-        cleanDraft = nil
         var requestContext: AidenRemoteRequestContext?
         do {
             let context = try coordinator.requestContext()
@@ -598,6 +681,28 @@ struct AidenBotCustomAccessFlowView: View {
             guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
                   context.instanceId == expectedSession.instanceID,
                   context.deviceId == expectedSession.deviceID else { return }
+            if let cached = await AidenBotCache.shared.load(
+                instanceId: context.instanceId,
+                deviceId: context.deviceId
+            ), let cachedList = cached.list, let cachedCatalog = cached.catalog {
+                guard coordinator.isCurrent(context), sessionIdentity == expectedSession else { return }
+                bots = cachedList.bots.filter { $0.health != .archived }
+                catalog = cachedCatalog
+                if !bots.contains(where: { $0.id == selectedBotID }) {
+                    selectedBotID = bots.first(where: { $0.id == preferredBotID })?.id ?? bots.first?.id
+                }
+                if let selectedBotID,
+                   let cachedDetail = cached.details.first(where: { $0.id == selectedBotID }),
+                   let cachedDraft = AidenBotCustomAccessDraft(
+                       access: cachedDetail.access,
+                       catalog: cachedCatalog
+                   ) {
+                    selectedBot = cachedDetail
+                    draft = cachedDraft
+                    cleanDraft = cachedDraft
+                    isLoading = false
+                }
+            }
             let client = try coordinator.remoteClient(for: context)
             async let botsRequest = client.bots()
             async let catalogRequest = client.botCapabilityCatalog()
@@ -609,7 +714,22 @@ struct AidenBotCustomAccessFlowView: View {
             if !bots.contains(where: { $0.id == selectedBotID }) {
                 selectedBotID = bots.first(where: { $0.id == preferredBotID })?.id ?? bots.first?.id
             }
+            _ = await coordinator.withRetainedInstallationData(for: context) {
+                _ = try? await AidenBotCache.shared.mergeAndStore(
+                    AidenBotCacheSegments(
+                        catalog: loadedCatalog,
+                        notice: loadedCatalog.notice
+                    ),
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId
+                )
+            }
+            guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
+                  !Task.isCancelled else { return }
             isLoading = false
+            if let request = detailRequest {
+                await loadSelectedBot(request)
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -625,12 +745,19 @@ struct AidenBotCustomAccessFlowView: View {
     @MainActor
     private func loadSelectedBot(_ request: AidenBotCustomAccessDetailRequest) async {
         guard detailRequest == request, coordinator.isCurrent(request.context),
-              let catalog else { return }
-        isLoadingBot = true
+              let catalog, loadingBotRequest != request else { return }
+        loadingBotRequest = request
+        defer {
+            if loadingBotRequest == request {
+                loadingBotRequest = nil
+            }
+        }
         botError = nil
-        selectedBot = nil
-        draft = nil
-        cleanDraft = nil
+        if selectedBot?.id != request.botID || draft == nil {
+            selectedBot = nil
+            draft = nil
+            cleanDraft = nil
+        }
         do {
             let detail = try await coordinator.remoteClient(for: request.context).bot(id: request.botID)
             guard coordinator.isCurrent(request.context), detailRequest == request,
@@ -638,13 +765,22 @@ struct AidenBotCustomAccessFlowView: View {
                   selectedBotID == request.botID else { return }
             guard let loadedDraft = AidenBotCustomAccessDraft(access: detail.access, catalog: catalog) else {
                 botError = "No available AI provider and model can be selected on your Mac."
-                isLoadingBot = false
                 return
             }
             selectedBot = detail
             draft = loadedDraft
             cleanDraft = loadedDraft
-            isLoadingBot = false
+            _ = await coordinator.withRetainedInstallationData(for: request.context) {
+                _ = try? await AidenBotCache.shared.upsertDetailAndStore(
+                    detail,
+                    instanceId: request.context.instanceId,
+                    deviceId: request.context.deviceId
+                )
+            }
+            guard coordinator.isCurrent(request.context), detailRequest == request,
+                  capturedContext == request.context,
+                  selectedBotID == request.botID,
+                  !Task.isCancelled else { return }
         } catch is CancellationError {
             return
         } catch {
@@ -653,7 +789,6 @@ struct AidenBotCustomAccessFlowView: View {
                   capturedContext == request.context,
                   selectedBotID == request.botID else { return }
             botError = error.localizedDescription
-            isLoadingBot = false
         }
     }
 
@@ -699,6 +834,10 @@ struct AidenBotCustomAccessFlowView: View {
             guard coordinator.isCurrent(request.context), savingRequest == request,
                   capturedContext == request.context,
                   selectedBotID == request.botID else { return }
+            guard aidenBotAccessSaveFailureKind(error) == .conflict else {
+                saveError = "Aiden couldn’t save these access changes. Your choices are still here; try again."
+                return
+            }
             do {
                 let client = try coordinator.remoteClient(for: request.context)
                 async let detailRequest = client.bot(id: request.botID)

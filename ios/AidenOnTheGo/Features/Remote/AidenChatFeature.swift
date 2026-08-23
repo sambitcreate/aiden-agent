@@ -288,6 +288,68 @@ enum AidenTurnRequestBuilder {
     }
 }
 
+struct AidenChatModelSelection: Equatable {
+    let providerId: String?
+    let modelId: String?
+    let thinkingLevel: String?
+}
+
+enum AidenChatModelAuthority {
+    static func resolvedSelection(
+        chat: AidenChat,
+        catalog: AidenModelCatalog?,
+        selectedProviderId: String?,
+        selectedModelId: String?,
+        selectedThinkingLevel: String?
+    ) -> AidenChatModelSelection {
+        if chat.isBotChat {
+            let provider = catalog?.providers.first { $0.id == chat.providerId }
+            let model = provider?.models.first { $0.id == chat.modelId }
+            return AidenChatModelSelection(
+                providerId: chat.providerId,
+                modelId: chat.modelId,
+                thinkingLevel: model?.effectiveThinkingLevel
+            )
+        }
+
+        guard let catalog else {
+            return AidenChatModelSelection(
+                providerId: selectedProviderId,
+                modelId: selectedModelId,
+                thinkingLevel: selectedThinkingLevel
+            )
+        }
+        var providerId = selectedProviderId
+        if providerId == nil || !catalog.providers.contains(where: { $0.id == providerId }) {
+            providerId = catalog.defaults["providerId"] ?? catalog.visibleProviders.first?.id
+        }
+        let provider = catalog.providers.first { $0.id == providerId }
+        var modelId = selectedModelId
+        if modelId == nil || provider?.models.contains(where: { $0.id == modelId }) != true {
+            modelId = catalog.defaults["modelId"] ?? provider?.visibleModels.first?.id
+        }
+        let model = provider?.models.first { $0.id == modelId }
+        return AidenChatModelSelection(
+            providerId: providerId,
+            modelId: modelId,
+            thinkingLevel: selectedThinkingLevel ?? model?.effectiveThinkingLevel
+        )
+    }
+
+    static func turnSelection(
+        chat: AidenChat,
+        selectedProviderId: String?,
+        selectedModelId: String?,
+        selectedThinkingLevel: String?
+    ) -> AidenChatModelSelection {
+        AidenChatModelSelection(
+            providerId: chat.isBotChat ? chat.providerId : selectedProviderId,
+            modelId: chat.isBotChat ? chat.modelId : selectedModelId,
+            thinkingLevel: selectedThinkingLevel
+        )
+    }
+}
+
 enum AidenChatTitleReconciliation {
     // Apple Foundation Models titles are deliberately generated off the critical
     // chat path. Keep reconciliation bounded to the server's 15-second title window.
@@ -751,7 +813,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
-            && !isStarting && !isUploadingAttachment && !isStreaming
+            && !isStarting && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
     }
 
     var selectedProvider: AidenProvider? {
@@ -763,6 +825,22 @@ final class AidenChatViewModel {
     }
 
     var visibleProviders: [AidenProvider] { catalog?.visibleProviders ?? [] }
+    var usesPersistedBotModelAuthority: Bool { chat.isBotChat }
+    var selectedModelDisplayLabel: String { selectedModel?.label ?? selectedModelId ?? "Model unavailable" }
+
+    private var turnModelSelection: AidenChatModelSelection {
+        AidenChatModelAuthority.turnSelection(
+            chat: chat,
+            selectedProviderId: selectedProviderId,
+            selectedModelId: selectedModelId,
+            selectedThinkingLevel: selectedThinkingLevel
+        )
+    }
+
+    private var hasTurnModelAuthority: Bool {
+        !chat.isBotChat
+            || (turnModelSelection.providerId != nil && turnModelSelection.modelId != nil)
+    }
 
     func load() async {
         guard !isReadOnlyFixture else { return }
@@ -782,6 +860,7 @@ final class AidenChatViewModel {
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
             guard coordinator.isCurrent(context) else { return }
             chat = cached
+            resolveModelSelection()
         }
         do {
             async let chatRequest = coordinator.remoteClient(for: context).chat(id: chat.id)
@@ -790,7 +869,6 @@ final class AidenChatViewModel {
             guard coordinator.isCurrent(context) else { return }
             catalog = remoteCatalog
             await acceptRemoteChat(remoteChat, context: context)
-            resolveModelSelection()
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
@@ -814,12 +892,14 @@ final class AidenChatViewModel {
     }
 
     func selectProvider(_ providerId: String) {
+        guard !chat.isBotChat else { return }
         selectedProviderId = providerId
         selectedModelId = visibleProviders.first { $0.id == providerId }?.models.first?.id
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
     }
 
     func selectModel(_ modelId: String) {
+        guard !chat.isBotChat else { return }
         selectedModelId = modelId
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
     }
@@ -830,11 +910,12 @@ final class AidenChatViewModel {
         guard canSend else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let submittedAttachments = pendingAttachments
+        let modelSelection = turnModelSelection
         let request = AidenTurnRequestBuilder.make(
             text: text,
-            providerId: selectedProviderId,
-            modelId: selectedModelId,
-            thinkingLevel: selectedThinkingLevel,
+            providerId: modelSelection.providerId,
+            modelId: modelSelection.modelId,
+            thinkingLevel: modelSelection.thinkingLevel,
             attachments: submittedAttachments
         )
         let previousUpdatedAt = chat.updatedAt
@@ -1134,14 +1215,16 @@ final class AidenChatViewModel {
     }
 
     private func resolveModelSelection() {
-        guard let catalog else { return }
-        if selectedProviderId == nil || !catalog.providers.contains(where: { $0.id == selectedProviderId }) {
-            selectedProviderId = catalog.defaults["providerId"] ?? catalog.visibleProviders.first?.id
-        }
-        if selectedModelId == nil || selectedProvider?.models.contains(where: { $0.id == selectedModelId }) != true {
-            selectedModelId = catalog.defaults["modelId"] ?? selectedProvider?.visibleModels.first?.id
-        }
-        if selectedThinkingLevel == nil { selectedThinkingLevel = selectedModel?.effectiveThinkingLevel }
+        let selection = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: selectedProviderId,
+            selectedModelId: selectedModelId,
+            selectedThinkingLevel: selectedThinkingLevel
+        )
+        selectedProviderId = selection.providerId
+        selectedModelId = selection.modelId
+        selectedThinkingLevel = selection.thinkingLevel
     }
 
     private func restoreStreamIfNeeded() async {
@@ -1306,7 +1389,10 @@ final class AidenChatViewModel {
             await restorePendingApproval(streamID: event.streamId, context: context)
         case .error:
             pendingApproval = nil
-            presentedError = payload.message ?? "Aiden could not finish this response."
+            // The terminal chat reconciliation renders the durable, fixed-copy
+            // outcome inline. Avoid covering that actionable state with a
+            // second generic modal alert.
+            presentedError = nil
             streamState = .error
             await liveActivities.finish(
                 instanceID: instanceId,
@@ -1417,6 +1503,7 @@ final class AidenChatViewModel {
     ) async {
         guard coordinator.isCurrent(context) else { return }
         chat = remote
+        resolveModelSelection()
         try? await cache.saveChat(remote, instanceId: instanceId)
         onChatUpdated(remote)
         if scheduleTitleRefresh, remote.isTitlePending {
@@ -2226,7 +2313,7 @@ struct AidenMessageOutcomePresentation: Equatable {
         case "quota":
             detail = "The model provider account has no available quota."
         case "invalid_request":
-            detail = "The model provider could not accept this request."
+            detail = "The model provider could not accept this request. Review the selected model in Bot Access."
         case "context_window":
             detail = "This conversation is too large for the selected model."
         case "output_limit":
@@ -3452,7 +3539,38 @@ private struct AidenComposerView: View {
                     matching: .images
                 )
 
-                if !model.visibleProviders.isEmpty {
+                if model.usesPersistedBotModelAuthority {
+                    HStack(spacing: 4) {
+                        if let provider = model.selectedProvider {
+                            AidenProviderIcon(
+                                providerID: provider.id,
+                                providerLabel: provider.label,
+                                modelID: model.selectedModel?.id,
+                                artwork: provider.artwork,
+                                size: 15,
+                                color: palette.secondary
+                            )
+                        }
+                        Text(model.selectedModelDisplayLabel).lineLimit(1)
+                        if let level = model.selectedThinkingLevel,
+                           model.selectedModel?.thinkingLevels?.isEmpty == false {
+                            Text("· \(level.capitalized)")
+                                .lineLimit(1)
+                                .foregroundStyle(palette.secondary.opacity(0.8))
+                        }
+                        Image(systemName: "lock.fill")
+                            .font(.caption2)
+                            .accessibilityHidden(true)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .frame(maxWidth: 180, alignment: .leading)
+                    .frame(minHeight: 44)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Model")
+                    .accessibilityValue("\(selectedModelAccessibilityValue), set by Bot access")
+                    .accessibilityHint("Change this model in Bot Access.")
+                } else if !model.visibleProviders.isEmpty {
                     Menu {
                         ForEach(model.visibleProviders) { provider in
                             Section {
@@ -3743,7 +3861,7 @@ private struct AidenComposerView: View {
     }
 
     private var selectedModelAccessibilityValue: String {
-        guard let selectedModel = model.selectedModel else { return "Not selected" }
+        guard let selectedModel = model.selectedModel else { return model.selectedModelDisplayLabel }
         guard let level = model.selectedThinkingLevel,
               selectedModel.thinkingLevels?.isEmpty == false
         else { return selectedModel.label }
