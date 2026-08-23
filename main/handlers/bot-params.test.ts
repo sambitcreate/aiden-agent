@@ -13,19 +13,37 @@ test("bot mutation and conversation envelopes are exact and bounded", () => {
     name: "Reviewer",
     description: "Checks work",
     instructions: "Be precise.",
+    openingGreeting: "What should I check?",
     avatar: "prism" as const,
   };
   assert.deepEqual(parseBotCreate(fields), fields);
-  assert.deepEqual(parseBotUpdate({ id: "bot-1", ...fields }), { id: "bot-1", ...fields });
+  assert.deepEqual(parseBotUpdate({
+    id: "bot-1",
+    expectedRevision: "botrev:one",
+    ...fields,
+  }), {
+    id: "bot-1",
+    expectedRevision: "botrev:one",
+    ...fields,
+  });
   assert.deepEqual(parseBotChatCreate({ botId: "bot-1", workspaceId: "workspace-1" }), {
     botId: "bot-1",
-    workspaceId: "workspace-1",
+    providerId: undefined,
+    model: undefined,
+  });
+  assert.deepEqual(parseBotChatCreate({ botId: "bot-1" }), {
+    botId: "bot-1",
     providerId: undefined,
     model: undefined,
   });
   assert.throws(
     () => parseBotCreate({ ...fields, systemPrompt: "forged" }),
     /Invalid bot creation fields/u,
+  );
+  assert.throws(() => parseBotCreate({ ...fields, name: "bad-\ud800-name" }), /bot name/u);
+  assert.throws(
+    () => parseBotUpdate({ id: "../bot", expectedRevision: "botrev:one", ...fields }),
+    /bot id/u,
   );
   assert.throws(
     () =>

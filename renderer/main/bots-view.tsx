@@ -96,7 +96,7 @@ function BotEditor({
         avatar: draft.avatar,
       };
       const saved = bot
-        ? await botsApi.update({ id: bot.id, ...input })
+        ? await botsApi.update({ id: bot.id, expectedRevision: bot.revision, ...input })
         : await botsApi.create(input);
       await qc.invalidateQueries({ queryKey: queryKeys.bots });
       qc.setQueryData(queryKeys.bot(saved.id), saved);
@@ -300,8 +300,8 @@ export function BotsView() {
     setArchiving(true);
     try {
       const next = selected.archivedAt
-        ? await botsApi.restore(selected.id)
-        : await botsApi.archive(selected.id);
+        ? await botsApi.restore({ id: selected.id, expectedRevision: selected.revision })
+        : await botsApi.archive({ id: selected.id, expectedRevision: selected.revision });
       qc.setQueryData(queryKeys.bot(selected.id), next);
       if (!selected.archivedAt) qc.setQueryData(queryKeys.botTelegramBinding(selected.id), null);
       await qc.invalidateQueries({ queryKey: queryKeys.bots });

@@ -112,6 +112,7 @@ import {
   initializeAidenRemoteService,
   stopAidenRemoteServiceAndSettle,
 } from "./services/aiden-remote-service-main.js";
+import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -1558,6 +1559,15 @@ if (!ownsSingleInstanceLock) {
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
+      try {
+        await initializeBotApplicationService();
+      } catch (error) {
+        logger.error(
+          "bots",
+          "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
+          error,
+        );
+      }
       const visibleChatIds = new Set(
         (await chatStore.list()).map((chat) => chat.id),
       );
@@ -1712,6 +1722,9 @@ if (!ownsSingleInstanceLock) {
         return;
       }
       await scheduleService.start();
+      // Ordinary Telegram conversations remain available when Bot storage
+      // needs repair. Bot-bound routes independently revalidate their exact
+      // managed home and access policy before queue admission.
       await telegramService.start();
       appUpdateService.start();
     })

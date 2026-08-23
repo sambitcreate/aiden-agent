@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-test("bot identity has a dedicated main-owned creation path", () => {
+test("bot identity and managed-home chats use the transaction-owned application service", () => {
   const bots = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
   const chats = readFileSync(new URL("./chat-create-params.ts", import.meta.url), "utf8");
   const generation = readFileSync(new URL("./chat-params.ts", import.meta.url), "utf8");
-  assert.match(bots, /botStore\.get\(parsed\.botId\)/u);
-  assert.match(bots, /chatStore\.create\(\{ \.\.\.parsed, assertCurrent \}\)/u);
+  assert.match(bots, /botApplicationService\.createBot/u);
+  assert.match(bots, /botApplicationService\.createChat/u);
+  assert.match(bots, /audienceId: desktopAudienceId/u);
+  assert.doesNotMatch(bots, /chatStore\.create\(\{ \.\.\.parsed, assertCurrent \}\)/u);
   assert.doesNotMatch(chats, /botId|instructions|systemPrompt/u);
   assert.doesNotMatch(generation, /botId|instructions|systemPrompt/u);
   assert.doesNotMatch(generation, /interactionSurface/u);
@@ -22,8 +24,8 @@ test("bot face generation is main-owned and uses only the bounded Pi recipe", ()
   );
   assert.match(bots, /bots:suggestAvatar/u);
   assert.match(bots, /bots:cancelAvatarSuggestion/u);
-  assert.match(bots, /botAvatarOperations\.admit\(owner\.documentId, parsed\.requestId\)/u);
-  assert.match(bots, /botAvatarOperations\.cancel\(owner\.documentId/u);
+  assert.match(bots, /botAvatarOperations\.admit\(\s*owner\.documentId,\s*parsed\.requestId/u);
+  assert.match(bots, /botAvatarOperations\.cancel\(\s*owner\.documentId/u);
   assert.match(bots, /rendererDocumentOwner/u);
   assert.match(params, /AVATAR_SUGGESTION_KEYS/u);
   assert.match(generator, /resolveModelRuntime\(input\.providerId, input\.model/u);
@@ -52,11 +54,11 @@ test("generation resolves persisted bot identity and leaves ordinary prompts unc
   assert.match(client, /resolvePiAgentRuntimeContributionSnapshot\(\s*botSystemPrompt,/u);
 });
 
-test("copy and fork serialize against bot archive and fail closed", () => {
+test("copy, fork, and delete route Bot chats through the transaction-owned service", () => {
   const chats = readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
-  assert.match(chats, /const bot = await botStore\.get\(source\.botId\)/u);
-  assert.match(chats, /Archived bot conversations cannot be copied or forked/u);
-  assert.match(chats, /botMutationGate\.run\(source\.botId, runCopy\)/u);
+  assert.match(chats, /botApplicationService\.copyChat/u);
+  assert.match(chats, /botApplicationService\.deleteChat/u);
+  assert.doesNotMatch(chats, /botMutationGate\.run\(source\.botId, runCopy\)/u);
 });
 
 test("Telegram binding is main-owned, owner-fenced, and creates a bot-tagged backing chat", () => {
@@ -64,7 +66,56 @@ test("Telegram binding is main-owned, owner-fenced, and creates a bot-tagged bac
   assert.match(bots, /profile\.settings\.allowedUserId === undefined/u);
   assert.match(bots, /candidate\.chatId === profile\.settings\.allowedUserId/u);
   assert.match(bots, /telegramBotBindings\.bind/u);
-  assert.match(bots, /id: binding\.backingChatId[\s\S]*botId,/u);
-  assert.match(bots, /telegramBotBindings\.unbind/u);
-  assert.match(bots, /if \(await telegramBotBindings\.get\(botId\)\)/u);
+  assert.match(bots, /botApplicationService\.withBotMutation\(\s*botId/u);
+  assert.match(bots, /operations\.createChat\(\{[\s\S]*chatId: binding\.backingChatId/u);
+  assert.match(bots, /botApplicationService\.getChatAccess\(\s*binding\.backingChatId/u);
+  assert.doesNotMatch(bots, /chatStore\.create\(\{[\s\S]*chatId: binding\.backingChatId/u);
+  assert.match(bots, /telegramBotBindingAuthority[\s\S]*\.disableBot\(botId\)/u);
+  assert.match(bots, /telegramProfileMutationFence\.runBinding\(\s*profileName/u);
+  assert.match(bots, /profileAdmission\.assertCurrent\(\)/u);
+});
+
+test("Telegram profile reset and deletion share the binding incarnation fence", () => {
+  const service = readFileSync(
+    new URL("../services/telegram/telegram-service.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(service, /deleteProfile[\s\S]*telegramProfileMutationFence\.runDestructive\(profile/u);
+  assert.match(service, /resetPairing[\s\S]*telegramProfileMutationFence\.runDestructive\(profile/u);
+  assert.match(service, /deleteProfile[\s\S]*telegramBotBindingAuthority\.disableProfile\(profile\)/u);
+  assert.match(service, /resetPairing[\s\S]*telegramBotBindingAuthority\.disableProfile\(profile\)/u);
+  assert.match(service, /async start\(\): Promise<void> \{\s*await telegramBotBindings\.assertHealthy\(\)/u);
+});
+
+test("Telegram authority reduction stays independent from Bot mutation health", () => {
+  const handlers = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
+  const botMain = readFileSync(
+    new URL("../services/bot-application-service-main.ts", import.meta.url),
+    "utf8",
+  );
+  const bindings = readFileSync(
+    new URL("../services/telegram/telegram-bot-bindings.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(bindings, /authority:\s*\{[\s\S]*createTelegramBotBindingKeychainAnchor/u);
+  assert.match(bindings, /createTelegramBotBindingAuthorityNarrower\(telegramBotBindings\)/u);
+  assert.match(handlers, /bots:unbindTelegram[\s\S]*telegramBotBindingAuthority\.disableBot/u);
+  assert.match(botMain, /disableBinding: \(botId\)[\s\S]*telegramBotBindingAuthority\.disableBot/u);
+  assert.doesNotMatch(botMain, /disableBinding:[\s\S]{0,120}botApplicationService/u);
+});
+
+test("Bot startup migration precedes chat reconciliation projection and deletion preserves runtime cleanup", () => {
+  const index = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+  const botMain = readFileSync(
+    new URL("../services/bot-application-service-main.ts", import.meta.url),
+    "utf8",
+  );
+  assert.ok(
+    index.indexOf("await initializeBotApplicationService()") <
+      index.indexOf("const visibleChatIds = new Set"),
+  );
+  assert.match(
+    botMain,
+    /chatApplicationService\.remove\(chatId, \{ assertCurrent, onDeletionRollForward \}\)/u,
+  );
 });

@@ -94,6 +94,7 @@ export interface SubagentMcpInventoryCoreDependencies {
   cache: SubagentMcpInventoryCache;
   now?: () => number;
   discoveryDeadlineMs?: number;
+  bypassCache?: boolean;
 }
 
 function abortReason(signal: AbortSignal): unknown {
@@ -179,7 +180,9 @@ export async function resolveBoundedSubagentMcpInventory(
           controller.signal,
         );
         fingerprint = subagentMcpConnectionFingerprint(server, credentialRevision);
-        const cached = dependencies.cache.get(server.id, fingerprint, now());
+        const cached = dependencies.bypassCache
+          ? undefined
+          : dependencies.cache.get(server.id, fingerprint, now());
         if (cached === null) return;
         if (cached) {
           completed.push(cached);

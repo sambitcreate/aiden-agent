@@ -26,6 +26,7 @@ import { MAX_VISIBLE_COPY_MESSAGES } from "../../renderer/shared/chat-copy-contr
 import { jsonStringBytesBounded } from "./json-representation.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
+import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
@@ -618,11 +619,20 @@ export function createChatStore(
       botId?: string;
       providerId?: string;
       model?: string;
+      /** Main-owned Bot greeting copied once into the new durable conversation. */
+      initialAssistantMessage?: string;
       assertCurrent?: () => void;
     }): Promise<Chat> {
       return serialized(async () => {
         input.assertCurrent?.();
+        if (
+          input.initialAssistantMessage !== undefined &&
+          !isBoundedBotText(input.initialAssistantMessage, 2_000)
+        ) {
+          throw new Error("Invalid initial Bot greeting.");
+        }
         const now = Date.now();
+        const openingGreeting = input.initialAssistantMessage?.trim();
         const chat: Chat = {
           id: input.id ?? newId(),
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
@@ -632,7 +642,14 @@ export function createChatStore(
           model: input.model,
           createdAt: now,
           updatedAt: now,
-          messages: [],
+          messages: openingGreeting
+            ? [{
+                id: randomUUID(),
+                role: "assistant",
+                content: openingGreeting,
+                createdAt: now,
+              }]
+            : [],
         };
         return installNewChat(chat, input.assertCurrent);
       });
@@ -641,6 +658,10 @@ export function createChatStore(
     /** Copy only visible linear history; private runtime fields never enter the new payload. */
     async copyVisibleHistory(input: {
       sourceChatId: string;
+      /** Main-owned target identity used by recoverable Bot-copy workflows. */
+      targetChatId?: string;
+      /** Main-owned destination for copies that move legacy Bot history into its hidden home. */
+      targetWorkspaceId?: string;
       expectedWorkspaceId?: string;
       throughAssistantMessageId?: string;
       assertCurrent?: () => void;
@@ -704,7 +725,7 @@ export function createChatStore(
           .join("")}${suffix}`;
         chargedBytes += 1_024;
         charge(title);
-        charge(metadata.workspaceId);
+        charge(input.targetWorkspaceId ?? metadata.workspaceId);
         charge(metadata.providerId);
         charge(metadata.model);
         for (let index = 0; index <= throughIndex; index += 1) {
@@ -750,9 +771,10 @@ export function createChatStore(
         const now = Date.now();
         return installNewChat(
           {
-            id: randomUUID(),
+            id: input.targetChatId ?? randomUUID(),
             title,
-            workspaceId: metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            workspaceId:
+              input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
             botId: source.botId,
             providerId: metadata.providerId,
             model: metadata.model,

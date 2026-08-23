@@ -179,8 +179,8 @@ export async function ensureTelegramChat(
   if (existing) {
     if (binding && (
       existing.botId !== binding.botId ||
-      existing.workspaceId !== binding.workspaceId ||
-      workspaceId !== binding.workspaceId
+      existing.workspaceId !== binding.backingWorkspaceId ||
+      workspaceId !== binding.backingWorkspaceId
     )) {
       throw new Error("The Telegram backing chat belongs to a different bot or workspace binding.");
     }

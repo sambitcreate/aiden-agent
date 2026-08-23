@@ -43,8 +43,7 @@ import {
 } from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
-import { botStore } from "../services/bot-store.js";
-import { botMutationGate } from "../services/bot-mutation-gate.js";
+import { botApplicationService } from "../services/bot-application-service-main.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -159,66 +158,85 @@ export function registerChatHistoryHandlers(): void {
       if (!source) throw new Error("The chat is no longer available.");
       const runCopy = async () => {
         if (source.botId) {
-          const bot = await botStore.get(source.botId);
-          if (!bot || bot.archivedAt !== undefined)
-            throw new Error("Archived bot conversations cannot be copied or forked.");
-        }
-      const workspaceId = persistedChatWorkspaceId(source.workspaceId);
-      if (workspaceId === ASSISTANT_WORKSPACE_ID) {
-        throw new Error(
-          "Assistant chats cannot be copied into the main chat surface.",
-        );
-      }
-      const mutationAdmission = workspaceMutationGate.admit(workspaceId);
-      const workspaceOperation = admitRendererOwnedWorkspaceOperation(
-        workspaceOperationRegistry,
-        owner,
-        workspaceId,
-      );
-      const assertCurrent = () => {
-        if (
-          owner.isDestroyed() ||
-          mutationAdmission.signal.aborted ||
-          workspaceOperation.signal.aborted
-        ) {
-          throw new Error("The workspace changed before the chat was copied.");
-        }
-        if (llmClient.requiresAppendReconciliation(owner.documentId)) {
-          throw new Error(appendReconciliationFailureMessage("blocked"));
-        }
-      };
-      try {
-        if (!(await configStore.getWorkspace(workspaceId))) {
-          throw new Error("The chat workspace is no longer available.");
-        }
-        const copied = await chatStore.copyVisibleHistory({
-          sourceChatId: parsed.chatId,
-          expectedWorkspaceId: workspaceId,
-          throughAssistantMessageId: parsed.throughMessageId,
-          assertCurrent,
-        });
-        ipcMain.broadcast("chats:metadata-updated", {
-          chatId: copied.id,
-          title: copied.title,
-          workspaceId: persistedChatWorkspaceId(copied.workspaceId),
-          updatedAt: copied.updatedAt,
-        });
-        return chatForRenderer(copied);
-      } catch (error) {
-        if (isChatCreateReconciliationRequiredError(error)) {
-          llmClient.markAppendReconciliationRequired(owner.documentId);
-          owner.onInvalidated(() => {
-            llmClient.clearAppendReconciliationRequired(owner.documentId);
+          const assertCurrent = () => {
+            if (owner.isDestroyed()) {
+              throw new Error("The application changed before the Bot chat was copied.");
+            }
+            if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+              throw new Error(appendReconciliationFailureMessage("blocked"));
+            }
+          };
+          const copied = await botApplicationService.copyChat({
+            botId: source.botId,
+            sourceChatId: parsed.chatId,
+            throughAssistantMessageId: parsed.throughMessageId,
+            assertCurrent,
           });
-          throw new Error(appendReconciliationFailureMessage("blocked"));
+          ipcMain.broadcast("chats:metadata-updated", {
+            chatId: copied.id,
+            title: copied.title,
+            workspaceId: persistedChatWorkspaceId(copied.workspaceId),
+            updatedAt: copied.updatedAt,
+          });
+          return chatForRenderer(copied);
         }
-        throw error;
-      } finally {
-        workspaceOperation.release();
-        mutationAdmission.release();
-      }
+
+        const workspaceId = persistedChatWorkspaceId(source.workspaceId);
+        if (workspaceId === ASSISTANT_WORKSPACE_ID) {
+          throw new Error(
+            "Assistant chats cannot be copied into the main chat surface.",
+          );
+        }
+        const mutationAdmission = workspaceMutationGate.admit(workspaceId);
+        const workspaceOperation = admitRendererOwnedWorkspaceOperation(
+          workspaceOperationRegistry,
+          owner,
+          workspaceId,
+        );
+        const assertCurrent = () => {
+          if (
+            owner.isDestroyed() ||
+            mutationAdmission.signal.aborted ||
+            workspaceOperation.signal.aborted
+          ) {
+            throw new Error("The workspace changed before the chat was copied.");
+          }
+          if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+            throw new Error(appendReconciliationFailureMessage("blocked"));
+          }
+        };
+        try {
+          if (!(await configStore.getWorkspace(workspaceId))) {
+            throw new Error("The chat workspace is no longer available.");
+          }
+          const copied = await chatStore.copyVisibleHistory({
+            sourceChatId: parsed.chatId,
+            expectedWorkspaceId: workspaceId,
+            throughAssistantMessageId: parsed.throughMessageId,
+            assertCurrent,
+          });
+          ipcMain.broadcast("chats:metadata-updated", {
+            chatId: copied.id,
+            title: copied.title,
+            workspaceId: persistedChatWorkspaceId(copied.workspaceId),
+            updatedAt: copied.updatedAt,
+          });
+          return chatForRenderer(copied);
+        } catch (error) {
+          if (isChatCreateReconciliationRequiredError(error)) {
+            llmClient.markAppendReconciliationRequired(owner.documentId);
+            owner.onInvalidated(() => {
+              llmClient.clearAppendReconciliationRequired(owner.documentId);
+            });
+            throw new Error(appendReconciliationFailureMessage("blocked"));
+          }
+          throw error;
+        } finally {
+          workspaceOperation.release();
+          mutationAdmission.release();
+        }
       };
-      return source.botId ? botMutationGate.run(source.botId, runCopy) : runCopy();
+      return runCopy();
     } finally {
       finishCopy?.();
       chatCopyActive = false;
@@ -336,9 +354,14 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
-  ipcMain.handle("chats:remove", async (_event, id: unknown) =>
-    chatApplicationService.remove(asString(id, "id")),
-  );
+  ipcMain.handle("chats:remove", async (_event, id: unknown) => {
+    const chatId = asString(id, "id");
+    const chat = await chatStore.get(chatId);
+    if (chat?.botId) {
+      return botApplicationService.deleteChat({ botId: chat.botId, chatId });
+    }
+    return chatApplicationService.remove(chatId);
+  });
 
   ipcMain.handle(
     "chats:appendMessage",

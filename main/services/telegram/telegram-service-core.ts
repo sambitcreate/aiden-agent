@@ -91,6 +91,8 @@ export interface TelegramServiceDeps {
   resolveTelegramBotBinding?(input: TelegramBotBindingLookup): Promise<TelegramBotBindingSnapshot | null | undefined>;
   /** Validate that a resolved binding still points to a live, non-archived bot. */
   validateBotBinding?(binding: TelegramBotBindingSnapshot): Promise<TelegramBotBindingValidation> | TelegramBotBindingValidation;
+  /** Fail closed before pairing or ordinary routing when the durable registry is not trustworthy. */
+  assertBotBindingStoreHealthy?(): Promise<void>;
   getToken(): Promise<string | null>;
   now(): number;
   sleep(ms: number, signal?: AbortSignal): Promise<void>;
@@ -225,6 +227,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       binding.ownerUserId,
       binding.botId,
       binding.workspaceId,
+      binding.backingWorkspaceId,
       binding.backingChatId,
     ].join(":");
   }
@@ -263,6 +266,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       resolved.ownerUserId !== expected.ownerUserId ||
       resolved.botId.trim().length === 0 ||
       resolved.workspaceId.trim().length === 0 ||
+      resolved.backingWorkspaceId.trim().length === 0 ||
       resolved.backingChatId.trim().length === 0
     ) {
       throw new Error("Telegram bot binding did not match the source chat exactly.");
@@ -476,6 +480,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     // Restrict to private chats — group/supergroup messages are ignored.
     if (message.chat.type !== "private") return;
 
+    try {
+      await deps.assertBotBindingStoreHealthy?.();
+    } catch (cause) {
+      await rejectBinding(message.chat.id, message.message_thread_id, cause);
+      return;
+    }
+
     const snap = await deps.config.snapshot();
 
     // Authorization / pairing gate (checked before answering callbacks).
@@ -523,7 +534,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     const threadWorkspaceId = message.message_thread_id !== undefined
       ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
       : undefined;
-    const selectedWorkspaceId = binding?.workspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId;
+    const selectedWorkspaceId = binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId;
 
     if (deps.handleExtensionUpdate) {
       const handled = await deps.handleExtensionUpdate(update, {
@@ -669,6 +680,16 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   async function handleReaction(reaction: TelegramMessageReactionUpdated): Promise<void> {
     const from = reaction.user;
     if (!from || from.is_bot || reaction.chat.type !== "private") return;
+    try {
+      await deps.assertBotBindingStoreHealthy?.();
+    } catch (cause) {
+      await rejectBinding(
+        reaction.chat.id,
+        (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number }).message_thread_id,
+        cause,
+      );
+      return;
+    }
     const snap = await deps.config.snapshot();
     if (snap.allowedUserId === undefined || from.id !== snap.allowedUserId) return;
     let binding: TelegramBotBindingSnapshot | undefined;
@@ -696,7 +717,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         chatId: reaction.chat.id,
         threadId: reactionThreadId,
         ownerUserId: from.id,
-        workspaceId: binding?.workspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId,
+        workspaceId: binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId,
       });
       if (handled) return;
     }
@@ -1157,7 +1178,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           chatId: message.chat.id,
           threadId: message.message_thread_id,
           ownerUserId: callback.from.id,
-          workspaceId: binding?.workspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId,
+          workspaceId: binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId,
         });
         if (reply) await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: reply });
       } else {
@@ -1401,13 +1422,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       if (turn.binding && (
         !backingChat ||
         backingChat.botId !== turn.binding.botId ||
-        backingChat.workspaceId !== turn.binding.workspaceId
+        backingChat.workspaceId !== turn.binding.backingWorkspaceId
       )) {
         throw new Error("This bot's Telegram conversation no longer matches its binding.");
       }
-      const workspace = await deps.turn.resolveWorkspace(
-        turn.binding?.workspaceId ?? turn.workspaceId,
-      );
+      const workspace = turn.binding
+        ? { kind: "project" as const, workspaceId: turn.binding.backingWorkspaceId }
+        : await deps.turn.resolveWorkspace(turn.workspaceId);
       const workspaceId = workspace.kind === "project" ? workspace.workspaceId : undefined;
       const chatId = turn.binding?.backingChatId ?? telegramChatId(
         turn.ownerUserId,

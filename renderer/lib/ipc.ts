@@ -755,8 +755,10 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
-  archive: (id: string) => invoke<BotDefinition>("bots:archive", id),
-  restore: (id: string) => invoke<BotDefinition>("bots:restore", id),
+  archive: (input: { id: string; expectedRevision: string }) =>
+    invoke<BotDefinition>("bots:archive", input),
+  restore: (input: { id: string; expectedRevision: string }) =>
+    invoke<BotDefinition>("bots:restore", input),
   listChats: (id: string) => invoke<ChatMeta[]>("bots:listChats", id),
   createChat: (input: {
     botId: string;

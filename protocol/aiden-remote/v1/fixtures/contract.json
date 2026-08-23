@@ -1,5 +1,5 @@
 {
-  "contractRevision": 7,
+  "contractRevision": 8,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -541,6 +541,13 @@
       }
     ],
     "fileScopes": [
+      {
+        "id": "scope.full_mac",
+        "label": "Full Mac",
+        "available": true,
+        "kind": "full_mac",
+        "description": "Files your signed-in Mac account can access."
+      },
       {
         "id": "scope.bot_home",
         "label": "Bot folder",

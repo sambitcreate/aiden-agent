@@ -175,6 +175,7 @@ test("bot-bound Telegram turn omits assistant mode while retaining the Pi admiss
     chatId: 100,
     ownerUserId: 123,
     workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
     backingChatId: "telegram-work-bot-a",
   } as const;
 
@@ -182,7 +183,7 @@ test("bot-bound Telegram turn omits assistant mode while retaining the Pi admiss
     deps,
     binding.backingChatId,
     "bot prompt",
-    { kind: "project", workspaceId: "workspace-a" },
+    { kind: "project", workspaceId: "bot-home-a" },
     undefined,
     undefined,
     { binding },
@@ -190,7 +191,7 @@ test("bot-bound Telegram turn omits assistant mode while retaining the Pi admiss
 
   assert.equal(result.ok, true);
   assert.equal(startedParams?.chatId, binding.backingChatId);
-  assert.equal(startedParams?.workspaceId, "workspace-a");
+  assert.equal(startedParams?.workspaceId, "bot-home-a");
   assert.equal(startedParams?.mode, undefined);
 });
 
@@ -332,12 +333,26 @@ test("ensureTelegramChat tags a bot backing chat with botId", async () => {
     chatId: 123,
     ownerUserId: 123,
     workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
     backingChatId: "telegram-work-bot-a",
   } as const;
 
-  const chatId = await ensureTelegramChat(deps, 123, "Bot A", "openai", "gpt-4o", "work", "work", binding);
+  const chatId = await ensureTelegramChat(
+    deps,
+    123,
+    "Bot A",
+    "openai",
+    "gpt-4o",
+    "bot-home-a",
+    "work",
+    binding,
+  );
   assert.equal(chatId, "telegram-work-bot-a");
-  assert.deepEqual(created, { id: "telegram-work-bot-a", workspaceId: "work", botId: "bot-a" });
+  assert.deepEqual(created, {
+    id: "telegram-work-bot-a",
+    workspaceId: "bot-home-a",
+    botId: "bot-a",
+  });
 });
 
 test("ensureTelegramChat refuses to reuse an untagged or differently tagged bot backing chat", async () => {
@@ -347,6 +362,7 @@ test("ensureTelegramChat refuses to reuse an untagged or differently tagged bot 
     chatId: 123,
     ownerUserId: 123,
     workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
     backingChatId: "telegram-work-bot-a",
   } as const;
   const { deps } = mockDeps({
@@ -364,7 +380,16 @@ test("ensureTelegramChat refuses to reuse an untagged or differently tagged bot 
   });
 
   await assert.rejects(
-    ensureTelegramChat(deps, 123, "Bot A", "openai", "gpt-4o", "work", "work", binding),
+    ensureTelegramChat(
+      deps,
+      123,
+      "Bot A",
+      "openai",
+      "gpt-4o",
+      "bot-home-a",
+      "work",
+      binding,
+    ),
     /different bot or workspace binding/u,
   );
 });

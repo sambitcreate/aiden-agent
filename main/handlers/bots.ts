@@ -1,49 +1,62 @@
 import { ipcMain } from "../platform.js";
-import { botStore } from "../services/bot-store.js";
 import { chatStore } from "../services/chat-store.js";
+import { botApplicationService } from "../services/bot-application-service-main.js";
 import { configStore } from "../services/config-store.js";
 import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
-import {
-  admitRendererOwnedWorkspaceOperation,
-  workspaceOperationRegistry,
-} from "../services/workspace-operation-registry.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { botMutationGate } from "../services/bot-mutation-gate.js";
 import { generateBotAvatarSuggestion } from "../services/bot-avatar-generator.js";
 import { botAvatarOperations } from "../services/bot-avatar-operation-registry.js";
-import { telegramBotBindings } from "../services/telegram/telegram-bot-bindings.js";
+import {
+  telegramBotBindingAuthority,
+  telegramBotBindings,
+} from "../services/telegram/telegram-bot-bindings.js";
 import { telegramService } from "../services/telegram/telegram-service.js";
 import { normalizeTelegramProfileName } from "../services/telegram/telegram-profile-config.js";
+import { telegramProfileMutationFence } from "../services/telegram/telegram-profile-mutation-fence.js";
 import {
   parseBotAvatarSuggestionInput,
   parseBotAvatarRequestId,
   parseBotChatCreate,
   parseBotCreate,
   parseBotId,
+  parseBotRevision,
   parseBotUpdate,
 } from "./bot-params.js";
 
 export function registerBotHandlers(): void {
+  const desktopAudienceId = "desktop:local";
   ipcMain.handle("bots:list", async (_event, includeArchived: unknown) => {
     if (includeArchived !== undefined && typeof includeArchived !== "boolean")
       throw new Error("Invalid bot list fields.");
-    return botStore.list(includeArchived === true);
+    return botApplicationService.list(includeArchived === true);
   });
-  ipcMain.handle("bots:get", async (_event, id: unknown) => botStore.get(parseBotId(id)));
+  ipcMain.handle("bots:get", async (_event, id: unknown) =>
+    botApplicationService.get(parseBotId(id)),
+  );
   ipcMain.handle("bots:create", async (_event, input: unknown) =>
-    botStore.create(parseBotCreate(input)),
+    botApplicationService.createBot({
+      audienceId: desktopAudienceId,
+      bot: parseBotCreate(input),
+    }),
   );
   ipcMain.handle("bots:suggestAvatar", async (event, input: unknown) => {
     const owner = rendererDocumentOwner(
       event,
-      () => new Error("Bot avatar design requires the active application document."),
+      () =>
+        new Error(
+          "Bot avatar design requires the active application document.",
+        ),
     );
     const parsed = parseBotAvatarSuggestionInput(input);
-    const operation = botAvatarOperations.admit(owner.documentId, parsed.requestId);
+    const operation = botAvatarOperations.admit(
+      owner.documentId,
+      parsed.requestId,
+    );
     const unsubscribe = owner.onInvalidated(operation.cancel);
     try {
       return await generateBotAvatarSuggestion(parsed, operation.signal);
@@ -52,33 +65,61 @@ export function registerBotHandlers(): void {
       operation.finish();
     }
   });
-  ipcMain.handle("bots:cancelAvatarSuggestion", async (event, requestId: unknown) => {
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Bot avatar design requires the active application document."),
-    );
-    return botAvatarOperations.cancel(owner.documentId, parseBotAvatarRequestId(requestId));
-  });
+  ipcMain.handle(
+    "bots:cancelAvatarSuggestion",
+    async (event, requestId: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () =>
+          new Error(
+            "Bot avatar design requires the active application document.",
+          ),
+      );
+      return botAvatarOperations.cancel(
+        owner.documentId,
+        parseBotAvatarRequestId(requestId),
+      );
+    },
+  );
   ipcMain.handle("bots:update", async (_event, input: unknown) => {
-    const parsed = parseBotUpdate(input);
-    return botMutationGate.run(parsed.id, () => botStore.update(parsed));
+    return botApplicationService.updateBot(parseBotUpdate(input));
   });
   ipcMain.handle("bots:archive", async (_event, id: unknown) => {
-    const botId = parseBotId(id);
-    return botMutationGate.run(botId, async () => {
-      const archived = await botStore.archive(botId);
-      if (await telegramBotBindings.get(botId)) await telegramBotBindings.unbind(botId);
-      return archived;
+    if (!id || typeof id !== "object" || Array.isArray(id)) {
+      throw new Error("Invalid bot archive fields.");
+    }
+    const input = id as Record<string, unknown>;
+    if (
+      !Object.keys(input).every(
+        (key) => key === "id" || key === "expectedRevision",
+      )
+    ) {
+      throw new Error("Invalid bot archive fields.");
+    }
+    return botApplicationService.archiveBot({
+      botId: parseBotId(input.id),
+      expectedRevision: parseBotRevision(input.expectedRevision),
     });
   });
   ipcMain.handle("bots:restore", async (_event, id: unknown) => {
-    const botId = parseBotId(id);
-    return botMutationGate.run(botId, () => botStore.restore(botId));
+    if (!id || typeof id !== "object" || Array.isArray(id)) {
+      throw new Error("Invalid bot restore fields.");
+    }
+    const input = id as Record<string, unknown>;
+    if (
+      !Object.keys(input).every(
+        (key) => key === "id" || key === "expectedRevision",
+      )
+    ) {
+      throw new Error("Invalid bot restore fields.");
+    }
+    return botApplicationService.restoreBot({
+      botId: parseBotId(input.id),
+      expectedRevision: parseBotRevision(input.expectedRevision),
+    });
   });
   ipcMain.handle("bots:listChats", async (_event, id: unknown) => {
-    const botId = parseBotId(id);
-    if (!(await botStore.get(botId))) throw new Error("This bot is no longer available.");
-    return chatStore.listByBot(botId);
+    return botApplicationService.listChats(parseBotId(id));
   });
   ipcMain.handle("bots:getTelegramBinding", async (_event, id: unknown) =>
     telegramBotBindings.get(parseBotId(id)),
@@ -88,7 +129,9 @@ export function registerBotHandlers(): void {
       telegramService.listProfiles(),
       configStore.listWorkspaces(),
     ]);
-    const workspaceNames = new Map(workspaces.map((workspace) => [workspace.id, workspace.name]));
+    const workspaceNames = new Map(
+      workspaces.map((workspace) => [workspace.id, workspace.name]),
+    );
     const options = [];
     for (const profile of profiles) {
       const paired = profile.settings.allowedUserId !== undefined;
@@ -102,7 +145,9 @@ export function registerBotHandlers(): void {
           enabled: profile.settings.enabled === true,
           chatId: profile.settings.allowedUserId,
           workspaceId,
-          workspaceName: workspaceId ? workspaceNames.get(workspaceId) : undefined,
+          workspaceName: workspaceId
+            ? workspaceNames.get(workspaceId)
+            : undefined,
         });
       }
       for (const target of await telegramService.listTargets(profile.name)) {
@@ -115,7 +160,9 @@ export function registerBotHandlers(): void {
           chatId: target.chatId,
           threadId: target.threadId,
           workspaceId: target.workspaceId,
-          workspaceName: target.workspaceId ? workspaceNames.get(target.workspaceId) : undefined,
+          workspaceName: target.workspaceId
+            ? workspaceNames.get(target.workspaceId)
+            : undefined,
         });
       }
     }
@@ -125,115 +172,160 @@ export function registerBotHandlers(): void {
     if (!input || typeof input !== "object" || Array.isArray(input))
       throw new Error("Invalid Telegram bot binding fields.");
     const raw = input as Record<string, unknown>;
-    if (!Object.keys(raw).every((key) => ["botId", "profile", "threadId"].includes(key)))
+    if (
+      !Object.keys(raw).every((key) =>
+        ["botId", "profile", "threadId"].includes(key),
+      )
+    )
       throw new Error("Invalid Telegram bot binding fields.");
     const botId = parseBotId(raw.botId);
     const profileName = normalizeTelegramProfileName(
       typeof raw.profile === "string" ? raw.profile : "",
     );
-    const threadId = raw.threadId === undefined
-      ? undefined
-      : typeof raw.threadId === "number" && Number.isSafeInteger(raw.threadId) && raw.threadId > 0
-        ? raw.threadId
-        : (() => { throw new Error("Invalid Telegram thread id."); })();
-    return botMutationGate.run(botId, async () => {
-      const bot = await botStore.get(botId);
-      if (!bot || bot.archivedAt !== undefined) throw new Error("Restore this bot before binding Telegram.");
-      const profile = (await telegramService.listProfiles()).find(({ name }) => name === profileName);
-      if (!profile || !profile.hasToken || profile.settings.allowedUserId === undefined)
-        throw new Error("Choose a Telegram profile that has a token and paired owner.");
-      const target = threadId === undefined
-        ? {
-            chatId: profile.settings.allowedUserId,
-            workspaceId: profile.settings.workspaceId,
-          }
-        : (await telegramService.listTargets(profileName)).find(
-            (candidate) => candidate.threadId === threadId && candidate.chatId === profile.settings.allowedUserId,
+    const threadId =
+      raw.threadId === undefined
+        ? undefined
+        : typeof raw.threadId === "number" &&
+            Number.isSafeInteger(raw.threadId) &&
+            raw.threadId > 0
+          ? raw.threadId
+          : (() => {
+              throw new Error("Invalid Telegram thread id.");
+            })();
+    return botApplicationService.withBotMutation(botId, (operations) =>
+      telegramProfileMutationFence.runBinding(
+        profileName,
+        async (profileAdmission) => {
+          const profile = (await telegramService.listProfiles()).find(
+            ({ name }) => name === profileName,
           );
-      if (!target) throw new Error("That Telegram thread is no longer available.");
-      if (!target.workspaceId)
-        throw new Error("Choose a live folder workspace for this Telegram target before binding it.");
-      const workspaceAdmission = workspaceMutationGate.admit(target.workspaceId);
-      try {
-        if (workspaceAdmission.signal.aborted || !(await configStore.getWorkspace(target.workspaceId)))
-          throw new Error("The Telegram target workspace is no longer available.");
-        const binding = await telegramBotBindings.bind({
-          botId,
-          profile: profileName,
-          chatId: target.chatId,
-          ...(threadId === undefined ? {} : { threadId }),
-          ownerUserId: profile.settings.allowedUserId,
-          workspaceId: target.workspaceId,
-        });
-        try {
-          const existing = await chatStore.get(binding.backingChatId);
-          if (existing) {
-            if (existing.botId !== botId || existing.workspaceId !== target.workspaceId)
-              throw new Error("This bot’s Telegram conversation belongs to a different workspace.");
-          } else {
-            await chatStore.create({
-              id: binding.backingChatId,
-              title: `Telegram · ${bot.name}`,
-              workspaceId: target.workspaceId,
+          if (
+            !profile ||
+            !profile.hasToken ||
+            profile.settings.allowedUserId === undefined
+          )
+            throw new Error(
+              "Choose a Telegram profile that has a token and paired owner.",
+            );
+          const target =
+            threadId === undefined
+              ? {
+                  chatId: profile.settings.allowedUserId,
+                  workspaceId: profile.settings.workspaceId,
+                }
+              : (await telegramService.listTargets(profileName)).find(
+                  (candidate) =>
+                    candidate.threadId === threadId &&
+                    candidate.chatId === profile.settings.allowedUserId,
+                );
+          if (!target)
+            throw new Error("That Telegram thread is no longer available.");
+          if (!target.workspaceId)
+            throw new Error(
+              "Choose a live folder workspace for this Telegram target before binding it.",
+            );
+          const workspaceAdmission = workspaceMutationGate.admit(
+            target.workspaceId,
+          );
+          try {
+            if (
+              workspaceAdmission.signal.aborted ||
+              !(await configStore.getWorkspace(target.workspaceId))
+            )
+              throw new Error(
+                "The Telegram target workspace is no longer available.",
+              );
+            profileAdmission.assertCurrent();
+            const binding = await telegramBotBindings.bind({
               botId,
-              providerId: profile.settings.providerId,
-              model: profile.settings.model,
-              assertCurrent: () => {
-                if (workspaceAdmission.signal.aborted)
-                  throw new Error("The Telegram target workspace changed before binding completed.");
-              },
+              profile: profileName,
+              chatId: target.chatId,
+              ...(threadId === undefined ? {} : { threadId }),
+              ownerUserId: profile.settings.allowedUserId,
+              workspaceId: target.workspaceId,
+              backingWorkspaceId: operations.managedWorkspace.workspaceId,
             });
+            try {
+              const existing = await chatStore.get(binding.backingChatId);
+              if (existing) {
+                if (
+                  existing.botId !== botId ||
+                  existing.workspaceId !== binding.backingWorkspaceId
+                ) {
+                  throw new Error(
+                    "This bot’s Telegram conversation has a different backing home.",
+                  );
+                }
+                const policy = await botApplicationService.getChatAccess(
+                  binding.backingChatId,
+                );
+                if (policy.botId !== botId) {
+                  throw new Error(
+                    "This bot’s Telegram conversation has invalid access state.",
+                  );
+                }
+              } else {
+                await operations.createChat({
+                  audienceId: `telegram:${profileName}`,
+                  chatId: binding.backingChatId,
+                  providerId: profile.settings.providerId,
+                  model: profile.settings.model,
+                  assertCurrent: () => {
+                    profileAdmission.assertCurrent();
+                    if (workspaceAdmission.signal.aborted)
+                      throw new Error(
+                        "The Telegram target workspace changed before binding completed.",
+                      );
+                  },
+                });
+              }
+              return binding;
+            } catch (error) {
+              await telegramBotBindingAuthority
+                .disableBot(botId)
+                .catch(() => undefined);
+              throw error;
+            }
+          } finally {
+            workspaceAdmission.release();
           }
-          return binding;
-        } catch (error) {
-          await telegramBotBindings.unbind(botId).catch(() => undefined);
-          throw error;
-        }
-      } finally {
-        workspaceAdmission.release();
-      }
-    });
+        },
+      ),
+    );
   });
   ipcMain.handle("bots:unbindTelegram", async (_event, id: unknown) => {
     const botId = parseBotId(id);
-    return botMutationGate.run(botId, () => telegramBotBindings.unbind(botId));
+    return botMutationGate.run(botId, () =>
+      telegramBotBindingAuthority.disableBot(botId),
+    );
   });
   ipcMain.handle("bots:createChat", async (event, input: unknown) => {
     const parsed = parseBotChatCreate(input);
-    return botMutationGate.run(parsed.botId, async () => {
     const owner = rendererDocumentOwner(
       event,
-      () => new Error("Bot conversations require the active application document."),
+      () =>
+        new Error("Bot conversations require the active application document."),
     );
     if (llmClient.requiresAppendReconciliation(owner.documentId))
       throw new Error(appendReconciliationFailureMessage("blocked"));
-    const bot = await botStore.get(parsed.botId);
-    if (!bot || bot.archivedAt !== undefined)
-      throw new Error("This bot is not available for new conversations.");
-    if (!(await configStore.getWorkspace(parsed.workspaceId)))
-      throw new Error("The selected workspace is no longer available.");
-
-    const mutationAdmission = workspaceMutationGate.admit(parsed.workspaceId);
-    let workspaceOperation:
-      ReturnType<typeof admitRendererOwnedWorkspaceOperation> | undefined;
     const assertCurrent = () => {
-      if (
-        owner.isDestroyed() ||
-        mutationAdmission.signal.aborted ||
-        workspaceOperation?.signal.aborted
-      ) {
-        throw new Error("The workspace changed before the bot conversation was created.");
-      }
+      if (owner.isDestroyed())
+        throw new Error(
+          "The application changed before the Bot conversation was created.",
+        );
       if (llmClient.requiresAppendReconciliation(owner.documentId))
         throw new Error(appendReconciliationFailureMessage("blocked"));
     };
     try {
-      workspaceOperation = admitRendererOwnedWorkspaceOperation(
-        workspaceOperationRegistry,
-        owner,
-        parsed.workspaceId,
+      return chatForRenderer(
+        await botApplicationService.createChat({
+          audienceId: desktopAudienceId,
+          botId: parsed.botId,
+          providerId: parsed.providerId,
+          model: parsed.model,
+          assertCurrent,
+        }),
       );
-      return chatForRenderer(await chatStore.create({ ...parsed, assertCurrent }));
     } catch (error) {
       if (isChatCreateReconciliationRequiredError(error)) {
         llmClient.markAppendReconciliationRequired(owner.documentId);
@@ -243,10 +335,6 @@ export function registerBotHandlers(): void {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
       throw error;
-    } finally {
-      workspaceOperation?.release();
-      mutationAdmission.release();
     }
-    });
   });
 }

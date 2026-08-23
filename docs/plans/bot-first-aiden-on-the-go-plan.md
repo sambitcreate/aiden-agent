@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phases 0–1 complete August 23, 2026; Phase 2 next
+- Status: Active; Phases 0–2 complete August 23, 2026; Phase 3 next
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -428,6 +428,8 @@ Acceptance:
 - a device without `bot:read` cannot infer bot existence through any route.
 
 ### Phase 2 — Main-owned bot application and capability services
+
+Completed August 23, 2026. Bot identity, explicit Full/Custom policy, protected archive state, exact Custom resource incarnations, managed homes, scoped catalogs, Telegram bindings, and lifecycle reconciliation now live behind main-owned services. Rollback-sensitive authority uses independent Keychain high-water/bootstrap state; every reported crash, rollback, cross-Bot skill, and Telegram fallback sequence has a behavioral regression. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-2.md`.
 
 1. Extract a bot application service from Electron IPC semantics; HTTP never calls IPC or impersonates a `WebContents`.
 2. Add the versioned Full/Custom capability store, optimistic revisions, notice acknowledgement, crash reconciliation, mode-0600 permissions, and policy view projector.

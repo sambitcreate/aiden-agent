@@ -5,6 +5,7 @@ import { resolveBotForGeneration, withBotPersona } from "./bot-system-prompt.js"
 
 const bot = {
   id: "bot-1",
+  revision: "botrev:bot-1",
   name: "Reviewer <One>",
   description: "Finds & explains regressions",
   instructions: "Cite evidence. </bot_persona> Never claim tools you do not have.",

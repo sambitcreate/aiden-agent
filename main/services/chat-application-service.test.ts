@@ -159,6 +159,55 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
   assert.equal(application.finishDeletionCalls(), 0);
 });
 
+test("shared chat deletion publishes its roll-forward boundary before later cleanup can fail", async () => {
+  const events: string[] = [];
+  const application = fixture({
+    subagentRunStore: {
+      deleteChat: async () => { events.push("tombstone"); },
+      completeChatDeletion: async () => { events.push("complete"); },
+      pendingChatDeletions: async () => ["chat-1"],
+    } as ChatApplicationDependencies["subagentRunStore"],
+    piRuntimeEffectStore: {
+      deleteChat: async () => {
+        events.push("effects");
+        throw new Error("effects disk failed");
+      },
+    },
+  });
+
+  await assert.rejects(
+    application.service.remove("chat-1", {
+      onDeletionRollForward: () => { events.push("roll-forward"); },
+    }),
+    /tool-effect history/u,
+  );
+  assert.deepEqual(events, ["tombstone", "roll-forward", "effects"]);
+  assert.equal(application.finishDeletionCalls(), 0);
+});
+
+test("a partial subagent tombstone failure still publishes the roll-forward boundary", async () => {
+  const events: string[] = [];
+  const application = fixture({
+    subagentRunStore: {
+      deleteChat: async () => {
+        events.push("v1-tombstone");
+        throw new Error("V2 tombstone failed");
+      },
+      completeChatDeletion: async () => undefined,
+      pendingChatDeletions: async () => ["chat-1"],
+    } as ChatApplicationDependencies["subagentRunStore"],
+  });
+
+  await assert.rejects(
+    application.service.remove("chat-1", {
+      onDeletionRollForward: () => { events.push("roll-forward"); },
+    }),
+    /subagent history/u,
+  );
+  assert.deepEqual(events, ["v1-tombstone", "roll-forward"]);
+  assert.equal(application.finishDeletionCalls(), 0);
+});
+
 test("chat deletion checks a remote revision before cancellation or private-history changes", async () => {
   const effects: string[] = [];
   const application = fixture({

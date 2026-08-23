@@ -31,6 +31,7 @@ export interface TelegramBotBinding {
   readonly threadId?: number;
   readonly ownerUserId: number;
   readonly workspaceId: string;
+  readonly backingWorkspaceId: string;
   readonly backingChatId: string;
   readonly enabled?: boolean;
 }

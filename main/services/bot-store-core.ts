@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DataStore } from "./data-store.js";
 import {
   BOT_LIMITS,
@@ -12,13 +12,27 @@ import {
   type BotUpdateInput,
   type LegacyBotAvatar,
 } from "../../renderer/shared/bots.js";
+import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
 
-type StoredBotDefinition = Omit<BotDefinition, "avatar"> & {
+type StoredBotDefinition = Omit<BotDefinition, "avatar" | "revision"> & {
   /** Kept as a legacy id so the previous release never drops this bot on rollback. */
   avatar: LegacyBotAvatar;
   /** Transitional inline copy migrated into the rollback-safe companion store on read. */
   avatarAppearance?: BotAvatarAppearance;
 };
+
+export class BotIdentityRevisionConflictError extends Error {
+  constructor(readonly currentRevision: string) {
+    super("This Bot changed on another surface. Refresh it and try again.");
+    this.name = "BotIdentityRevisionConflictError";
+  }
+}
+
+function botIdentityRevision(bot: StoredBotDefinition): string {
+  return `botrev_${createHash("sha256")
+    .update(JSON.stringify(bot), "utf8")
+    .digest("base64url")}`;
+}
 
 interface BotState {
   version: 1;
@@ -29,7 +43,21 @@ interface StoredBotAppearance {
   botId: string;
   /** Legacy projection last written with this recipe; detects older-release avatar edits. */
   legacyAvatar: LegacyBotAvatar;
+  /** Commit marker derived only from the primary record's avatar fields. */
+  primaryRevision?: string;
+  /** Written only after the primary record commits the same recipe. */
+  committedRevision?: string;
   avatar: BotAvatarAppearance;
+}
+
+function botAppearanceRecipeRevision(botId: string, avatar: BotAvatarAppearance): string {
+  return `botavatar_${createHash("sha256")
+    .update(JSON.stringify({
+      botId,
+      legacyAvatar: legacyAvatarFor(avatar),
+      avatar,
+    }), "utf8")
+    .digest("base64url")}`;
 }
 
 interface BotAppearanceState {
@@ -51,6 +79,8 @@ function sameStoredAppearance(left: StoredBotAppearance, right: StoredBotAppeara
   return (
     left.botId === right.botId &&
     left.legacyAvatar === right.legacyAvatar &&
+    left.primaryRevision === right.primaryRevision &&
+    left.committedRevision === right.committedRevision &&
     sameAppearance(left.avatar, right.avatar)
   );
 }
@@ -87,13 +117,39 @@ function botForRenderer(
   // The primary record is the commit point. A companion write can survive a crash
   // before that commit, so a compatible inline recipe must remain authoritative.
   const appearance = compatibleInlineAppearance ?? durableAppearance;
-  return { ...stored, avatar: appearance ? { ...appearance } : stored.avatar };
+  return {
+    ...stored,
+    revision: botIdentityRevision(bot),
+    avatar: appearance ? { ...appearance } : stored.avatar,
+  };
 }
 
 function cleanText(value: string, maximum: number, required: boolean): string | undefined {
   const text = value.trim();
-  if ((required && !text) || text.length > maximum) return undefined;
+  if ((required && !text) || (text && !isBoundedBotText(text, maximum))) return undefined;
   return text || undefined;
+}
+
+function assertBotId(id: string): void {
+  if (
+    id.length === 0 ||
+    id.length > BOT_LIMITS.idChars ||
+    id.normalize("NFKC") !== id ||
+    !/^[A-Za-z0-9._:-]+$/u.test(id)
+  ) {
+    throw new Error("Invalid bot id.");
+  }
+}
+
+function nextIdentityTimestamp(previous: number, now: () => number): number {
+  const observed = now();
+  if (!Number.isSafeInteger(observed) || observed < 0) {
+    throw new Error("Bot identity clock is invalid.");
+  }
+  if (!Number.isSafeInteger(previous) || previous >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("Bot identity revision clock is exhausted.");
+  }
+  return Math.max(observed, previous + 1);
 }
 
 function projectBot(value: unknown): StoredBotDefinition | null {
@@ -113,6 +169,9 @@ function projectBot(value: unknown): StoredBotDefinition | null {
           cleanText(bot.description, BOT_LIMITS.descriptionChars, false) !== undefined)) &&
       typeof bot.instructions === "string" &&
       cleanText(bot.instructions, BOT_LIMITS.instructionsChars, true) !== undefined &&
+      (bot.openingGreeting === undefined ||
+        (typeof bot.openingGreeting === "string" &&
+          cleanText(bot.openingGreeting, BOT_LIMITS.openingGreetingChars, false) !== undefined)) &&
       (isLegacyBotAvatar(bot.avatar) || isBotAvatarAppearance(bot.avatar)) &&
       typeof bot.createdAt === "number" &&
       Number.isSafeInteger(bot.createdAt) &&
@@ -131,23 +190,33 @@ function projectBot(value: unknown): StoredBotDefinition | null {
   const avatar = isLegacyBotAvatar(bot.avatar)
     ? bot.avatar
     : legacyAvatarFor(bot.avatar as BotAvatarAppearance);
-  return {
+  const projected = {
     id: bot.id as string,
     name: (bot.name as string).trim(),
     ...("description" in bot && typeof bot.description === "string"
       ? { description: bot.description.trim() }
       : {}),
     instructions: (bot.instructions as string).trim(),
+    ...(typeof bot.openingGreeting === "string"
+      ? { openingGreeting: bot.openingGreeting.trim() }
+      : {}),
     avatar,
     ...(appearance ? { avatarAppearance: { ...appearance } } : {}),
     createdAt: bot.createdAt as number,
     updatedAt: bot.updatedAt as number,
     ...(typeof bot.archivedAt === "number" ? { archivedAt: bot.archivedAt } : {}),
   };
+  return projected;
 }
 
 function normalizeState(value: unknown): BotState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    (value as { version?: unknown }).version !== 1 ||
+    !Array.isArray((value as { bots?: unknown }).bots)
+  ) {
     return { version: 1, bots: [] };
   }
   const raw = value as { bots?: unknown };
@@ -162,6 +231,16 @@ function normalizeState(value: unknown): BotState {
     }
   }
   return { version: 1, bots: bots.slice(0, 256) };
+}
+
+function isSafeBotState(value: unknown): boolean {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { version?: unknown }).version === 1 &&
+    Array.isArray((value as { bots?: unknown }).bots),
+  );
 }
 
 function normalizeAppearanceState(value: unknown): BotAppearanceState {
@@ -188,7 +267,13 @@ function normalizeAppearanceState(value: unknown): BotAppearanceState {
         !/^[A-Za-z0-9._:-]+$/u.test(candidate.botId) ||
         seen.has(candidate.botId) ||
         !legacyAvatar ||
-        !isBotAvatarAppearance(candidate.avatar)
+        !isBotAvatarAppearance(candidate.avatar) ||
+        (candidate.primaryRevision !== undefined &&
+          (typeof candidate.primaryRevision !== "string" ||
+            !/^botavatar_[A-Za-z0-9_-]{43}$/u.test(candidate.primaryRevision))) ||
+        (candidate.committedRevision !== undefined &&
+          (typeof candidate.committedRevision !== "string" ||
+            !/^botavatar_[A-Za-z0-9_-]{43}$/u.test(candidate.committedRevision)))
       ) {
         continue;
       }
@@ -196,6 +281,14 @@ function normalizeAppearanceState(value: unknown): BotAppearanceState {
       appearances.push({
         botId: candidate.botId,
         legacyAvatar,
+        ...(typeof candidate.primaryRevision === "string" &&
+        /^botavatar_[A-Za-z0-9_-]{43}$/u.test(candidate.primaryRevision)
+          ? { primaryRevision: candidate.primaryRevision }
+          : {}),
+        ...(typeof candidate.committedRevision === "string" &&
+        /^botavatar_[A-Za-z0-9_-]{43}$/u.test(candidate.committedRevision)
+          ? { committedRevision: candidate.committedRevision }
+          : {}),
         avatar: { ...candidate.avatar },
       });
     }
@@ -207,12 +300,25 @@ function normalizeInput(input: BotCreateInput): BotCreateInput {
   const name = cleanText(input.name, BOT_LIMITS.nameChars, true);
   const description = cleanText(input.description ?? "", BOT_LIMITS.descriptionChars, false);
   const instructions = cleanText(input.instructions, BOT_LIMITS.instructionsChars, true);
+  const openingGreeting = cleanText(
+    input.openingGreeting ?? "",
+    BOT_LIMITS.openingGreetingChars,
+    false,
+  );
   if (!name) throw new Error("Give this bot a name.");
   if (input.description !== undefined && input.description.trim() && !description)
     throw new Error("Bot description is too long.");
   if (!instructions) throw new Error("Give this bot instructions.");
+  if (input.openingGreeting !== undefined && input.openingGreeting.trim() && !openingGreeting)
+    throw new Error("Bot opening greeting is too long.");
   if (!isBotAvatar(input.avatar)) throw new Error("Choose a valid bot avatar.");
-  return { name, description, instructions, avatar: input.avatar };
+  return {
+    name,
+    description,
+    instructions,
+    ...(openingGreeting ? { openingGreeting } : {}),
+    avatar: input.avatar,
+  };
 }
 
 export function createBotStore(options: {
@@ -226,6 +332,9 @@ export function createBotStore(options: {
     fileMode: 0o600,
     preserveCorruptFile: true,
     normalize: normalizeState,
+    isSafe: isSafeBotState,
+    rejectCorruptWrite: true,
+    rejectUnsafeWrite: true,
   });
   const appearanceStore = new DataStore<BotAppearanceState>(
     "bot-avatar-appearances.json",
@@ -242,16 +351,32 @@ export function createBotStore(options: {
   let migrationPromise: Promise<void> | null = null;
   let mutationTail: Promise<void> = Promise.resolve();
 
+  const loadBotState = async (): Promise<BotState> => {
+    const state = await store.load();
+    if (await store.loadedFromCorruptFile()) {
+      throw new Error("Bot identity storage is unreadable and was preserved.");
+    }
+    if (await store.loadedFromUnsafeFile()) {
+      throw new Error("Bot identity storage has an unsupported version and was preserved.");
+    }
+    return state;
+  };
+
   const appearanceFor = (state: BotAppearanceState, bot: StoredBotDefinition) => {
     const entry = state.appearances.find((candidate) => candidate.botId === bot.id);
-    return entry?.legacyAvatar === bot.avatar ? entry.avatar : undefined;
+    const revision = entry ? botAppearanceRecipeRevision(bot.id, entry.avatar) : undefined;
+    return entry?.legacyAvatar === bot.avatar &&
+      entry.primaryRevision === revision &&
+      entry.committedRevision === revision
+      ? entry.avatar
+      : undefined;
   };
 
   const ensureAppearanceMigration = async () => {
     if (!migrationPromise) {
       migrationPromise = (async () => {
-        const [botState, appearanceState] = await Promise.all([
-          store.load(),
+        let [botState, appearanceState] = await Promise.all([
+          loadBotState(),
           appearanceStore.load(),
         ]);
         const existingByBot = new Map(
@@ -260,7 +385,13 @@ export function createBotStore(options: {
         const primaryBackfills = new Map(
           botState.bots.flatMap((bot): Array<[string, BotAvatarAppearance]> => {
             const existing = existingByBot.get(bot.id);
-            return !bot.avatarAppearance && existing?.legacyAvatar === bot.avatar
+            return !bot.avatarAppearance &&
+              existing?.legacyAvatar === bot.avatar &&
+              ((existing.primaryRevision === undefined &&
+                existing.committedRevision === undefined) ||
+                (existing.primaryRevision === existing.committedRevision &&
+                  existing.primaryRevision ===
+                    botAppearanceRecipeRevision(bot.id, existing.avatar)))
               ? [[bot.id, existing.avatar]]
               : [];
           }),
@@ -276,6 +407,7 @@ export function createBotStore(options: {
               }
             }
           });
+          botState = await loadBotState();
         }
         const reconciled = botState.bots.flatMap((bot): StoredBotAppearance[] => {
           const inline =
@@ -283,16 +415,29 @@ export function createBotStore(options: {
               ? bot.avatarAppearance
               : undefined;
           if (inline) {
+            const revision = botAppearanceRecipeRevision(bot.id, inline);
             return [
               {
                 botId: bot.id,
                 legacyAvatar: bot.avatar,
+                primaryRevision: revision,
+                committedRevision: revision,
                 avatar: { ...inline },
               },
             ];
           }
           const existing = existingByBot.get(bot.id);
-          return existing?.legacyAvatar === bot.avatar ? [existing] : [];
+          return existing?.legacyAvatar === bot.avatar &&
+            ((existing.primaryRevision === undefined &&
+              existing.committedRevision === undefined) ||
+              (existing.primaryRevision === existing.committedRevision &&
+                existing.primaryRevision ===
+                  botAppearanceRecipeRevision(bot.id, existing.avatar)))
+            ? (() => {
+                const revision = botAppearanceRecipeRevision(bot.id, existing.avatar);
+                return [{ ...existing, primaryRevision: revision, committedRevision: revision }];
+              })()
+            : [];
         });
         const unchanged =
           reconciled.length === appearanceState.appearances.length &&
@@ -325,7 +470,11 @@ export function createBotStore(options: {
     return result;
   };
 
-  const setAppearance = async (botId: string, avatar?: BotAvatarAppearance) =>
+  const setAppearance = async (
+    botId: string,
+    avatar?: BotAvatarAppearance,
+    committedRevision?: string,
+  ) =>
     appearanceStore.update((draft) => {
       const index = draft.appearances.findIndex((entry) => entry.botId === botId);
       if (!avatar) {
@@ -335,6 +484,8 @@ export function createBotStore(options: {
       const next = {
         botId,
         legacyAvatar: legacyAvatarFor(avatar),
+        primaryRevision: botAppearanceRecipeRevision(botId, avatar),
+        ...(committedRevision ? { committedRevision } : {}),
         avatar: { ...avatar },
       };
       if (index >= 0) draft.appearances[index] = next;
@@ -346,11 +497,60 @@ export function createBotStore(options: {
       }
     });
 
+  const createWithId = (id: string, input: BotCreateInput): Promise<BotDefinition> =>
+    queueMutation(async () => {
+      assertBotId(id);
+      await ensureAppearanceMigration();
+      const normalized = normalizeInput(input);
+      const existing = (await loadBotState()).bots;
+      if (existing.some((entry) => entry.id === id)) {
+        throw new Error("A bot with this identity already exists.");
+      }
+      if (existing.length >= 256) {
+        throw new Error("Aiden supports up to 256 bots.");
+      }
+      const timestamp = nextIdentityTimestamp(-1, now);
+      const bot: StoredBotDefinition = {
+        id,
+        name: normalized.name,
+        ...(normalized.description ? { description: normalized.description } : {}),
+        instructions: normalized.instructions,
+        ...(normalized.openingGreeting
+          ? { openingGreeting: normalized.openingGreeting }
+          : {}),
+        ...storedAvatar(normalized.avatar),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const appearance = isBotAvatarAppearance(normalized.avatar)
+        ? normalized.avatar
+        : undefined;
+      if (appearance) {
+        await setAppearance(bot.id, appearance);
+      }
+      try {
+        await store.update((draft) => {
+          if (draft.bots.some((entry) => entry.id === id)) {
+            throw new Error("A bot with this identity already exists.");
+          }
+          if (draft.bots.length >= 256) throw new Error("Aiden supports up to 256 bots.");
+          draft.bots.push(bot);
+        });
+        if (appearance) {
+          await setAppearance(bot.id, appearance, botAppearanceRecipeRevision(bot.id, appearance));
+        }
+      } catch (error) {
+        if (appearance) await setAppearance(bot.id).catch(() => undefined);
+        throw error;
+      }
+      return structuredClone(botForRenderer(bot, appearance));
+    });
+
   const list = (includeArchived = false) =>
     queueMutation(async () => {
       await ensureAppearanceMigration();
       const [botState, appearanceState] = await Promise.all([
-        store.load(),
+        loadBotState(),
         appearanceStore.load(),
       ]);
       return structuredClone(botState.bots)
@@ -364,100 +564,122 @@ export function createBotStore(options: {
     async get(id: string): Promise<BotDefinition | null> {
       return (await list(true)).find((bot) => bot.id === id) ?? null;
     },
-    async create(input: BotCreateInput): Promise<BotDefinition> {
-      return queueMutation(async () => {
-        await ensureAppearanceMigration();
-        const normalized = normalizeInput(input);
-        if ((await store.load()).bots.length >= 256) {
-          throw new Error("Aiden supports up to 256 bots.");
-        }
-        const timestamp = now();
-        const bot: StoredBotDefinition = {
-          id: randomUUID(),
-          name: normalized.name,
-          ...(normalized.description ? { description: normalized.description } : {}),
-          instructions: normalized.instructions,
-          ...storedAvatar(normalized.avatar),
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        };
-        const appearance = isBotAvatarAppearance(normalized.avatar)
-          ? normalized.avatar
-          : undefined;
-        if (appearance) await setAppearance(bot.id, appearance);
-        try {
-          await store.update((draft) => {
-            if (draft.bots.length >= 256) throw new Error("Aiden supports up to 256 bots.");
-            draft.bots.push(bot);
-          });
-        } catch (error) {
-          if (appearance) await setAppearance(bot.id).catch(() => undefined);
-          throw error;
-        }
-        return structuredClone(botForRenderer(bot, appearance));
-      });
+    create(input: BotCreateInput): Promise<BotDefinition> {
+      return createWithId(randomUUID(), input);
     },
+    createWithId,
     async update(input: BotUpdateInput): Promise<BotDefinition> {
       return queueMutation(async () => {
         await ensureAppearanceMigration();
         const normalized = normalizeInput(input);
-        if (!(await store.load()).bots.some((entry) => entry.id === input.id)) {
+        if (!(await loadBotState()).bots.some((entry) => entry.id === input.id)) {
           throw new Error("This bot is no longer available.");
         }
         const appearanceState = await appearanceStore.load();
-        const existingBot = (await store.load()).bots.find((entry) => entry.id === input.id)!;
+        const existingBot = (await loadBotState()).bots.find((entry) => entry.id === input.id)!;
+        if (botIdentityRevision(existingBot) !== input.expectedRevision) {
+          throw new BotIdentityRevisionConflictError(botIdentityRevision(existingBot));
+        }
         const previousAppearance = appearanceFor(appearanceState, existingBot);
         const nextAppearance = isBotAvatarAppearance(normalized.avatar)
           ? normalized.avatar
           : undefined;
-        await setAppearance(input.id, nextAppearance);
+        const targetBot: StoredBotDefinition = {
+          ...existingBot,
+          name: normalized.name,
+          instructions: normalized.instructions,
+          ...(normalized.openingGreeting
+            ? { openingGreeting: normalized.openingGreeting }
+            : { openingGreeting: undefined }),
+          ...(normalized.description
+            ? { description: normalized.description }
+            : { description: undefined }),
+          avatar: legacyAvatarFor(normalized.avatar),
+          ...(nextAppearance
+            ? { avatarAppearance: { ...nextAppearance } }
+            : { avatarAppearance: undefined }),
+          updatedAt: nextIdentityTimestamp(existingBot.updatedAt, now),
+        };
+        await setAppearance(
+          input.id,
+          nextAppearance,
+          previousAppearance
+            ? botAppearanceRecipeRevision(input.id, previousAppearance)
+            : undefined,
+        );
         try {
           await options.beforeBotWrite?.();
-          return await store.update((draft) => {
+          const saved = await store.update((draft) => {
             const bot = draft.bots.find((entry) => entry.id === input.id);
             if (!bot) throw new Error("This bot is no longer available.");
+            if (botIdentityRevision(bot) !== input.expectedRevision) {
+              throw new BotIdentityRevisionConflictError(botIdentityRevision(bot));
+            }
             bot.name = normalized.name;
             bot.instructions = normalized.instructions;
+            if (normalized.openingGreeting) bot.openingGreeting = normalized.openingGreeting;
+            else delete bot.openingGreeting;
             if (normalized.description) bot.description = normalized.description;
             else delete bot.description;
             bot.avatar = legacyAvatarFor(normalized.avatar);
             if (nextAppearance) bot.avatarAppearance = { ...nextAppearance };
             else delete bot.avatarAppearance;
-            bot.updatedAt = now();
+            bot.updatedAt = targetBot.updatedAt;
             return structuredClone(botForRenderer(bot, nextAppearance));
           });
+          if (nextAppearance) {
+            await setAppearance(
+              input.id,
+              nextAppearance,
+              botAppearanceRecipeRevision(input.id, nextAppearance),
+            );
+          }
+          return saved;
         } catch (error) {
-          await setAppearance(input.id, previousAppearance).catch(() => undefined);
+          await setAppearance(
+            input.id,
+            previousAppearance,
+            previousAppearance
+              ? botAppearanceRecipeRevision(input.id, previousAppearance)
+              : undefined,
+          ).catch(() => undefined);
           throw error;
         }
       });
     },
-    async archive(id: string): Promise<BotDefinition> {
+    async archive(id: string, expectedRevision: string): Promise<BotDefinition> {
       return queueMutation(async () => {
         await ensureAppearanceMigration();
-        const existingBot = (await store.load()).bots.find((entry) => entry.id === id);
+        const existingBot = (await loadBotState()).bots.find((entry) => entry.id === id);
         if (!existingBot) throw new Error("This bot is no longer available.");
         const appearance = appearanceFor(await appearanceStore.load(), existingBot);
         return store.update((draft) => {
           const bot = draft.bots.find((entry) => entry.id === id);
           if (!bot) throw new Error("This bot is no longer available.");
-          bot.archivedAt = bot.archivedAt ?? now();
-          bot.updatedAt = now();
+          if (botIdentityRevision(bot) !== expectedRevision) {
+            throw new BotIdentityRevisionConflictError(botIdentityRevision(bot));
+          }
+          const timestamp = nextIdentityTimestamp(bot.updatedAt, now);
+          bot.archivedAt = bot.archivedAt ?? timestamp;
+          bot.updatedAt = timestamp;
           return structuredClone(botForRenderer(bot, appearance));
         });
       });
     },
-    async restore(id: string): Promise<BotDefinition> {
+    async restore(id: string, expectedRevision: string): Promise<BotDefinition> {
       return queueMutation(async () => {
         await ensureAppearanceMigration();
-        const existingBot = (await store.load()).bots.find((entry) => entry.id === id);
+        const existingBot = (await loadBotState()).bots.find((entry) => entry.id === id);
         if (!existingBot) throw new Error("This bot is no longer available.");
         const appearance = appearanceFor(await appearanceStore.load(), existingBot);
         return store.update((draft) => {
           const bot = draft.bots.find((entry) => entry.id === id);
           if (!bot) throw new Error("This bot is no longer available.");
+          if (botIdentityRevision(bot) !== expectedRevision) {
+            throw new BotIdentityRevisionConflictError(botIdentityRevision(bot));
+          }
           delete bot.archivedAt;
-          bot.updatedAt = now();
+          bot.updatedAt = nextIdentityTimestamp(bot.updatedAt, now);
           return structuredClone(botForRenderer(bot, appearance));
         });
       });

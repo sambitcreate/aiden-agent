@@ -161,6 +161,7 @@ function fixture(
           ? null
           : {
               id,
+              revision: `botrev:${id}`,
               name: "Fixture bot",
               instructions: "Be helpful.",
               avatar: "spark" as const,

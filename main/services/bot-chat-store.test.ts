@@ -15,7 +15,44 @@ test("bot chats are durable chats excluded only from regular lists", async () =>
     assert.deepEqual((await store.listRegular("workspace-1")).map((chat) => chat.id), [regular.id]);
     assert.deepEqual((await store.listByBot("bot-1")).map((chat) => chat.id), [bot.id]);
     assert.equal((await store.get(bot.id))?.botId, "bot-1");
-    assert.equal((await store.copyVisibleHistory({ sourceChatId: bot.id })).botId, "bot-1");
+    const copied = await store.copyVisibleHistory({
+      sourceChatId: bot.id,
+      targetChatId: "bot-chat-copy-1",
+      expectedWorkspaceId: "workspace-1",
+      targetWorkspaceId: "managed-home-1",
+    });
+    assert.equal(copied.id, "bot-chat-copy-1");
+    assert.equal(copied.botId, "bot-1");
+    assert.equal(copied.workspaceId, "managed-home-1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a main-owned Bot opening greeting is copied once into a new chat", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-bot-greeting-"));
+  try {
+    const store = createChatStore(async () => root);
+    const chat = await store.create({
+      workspaceId: "managed-home-1",
+      botId: "bot-1",
+      title: "Researcher",
+      initialAssistantMessage: "  What should we explore?  ",
+    });
+    assert.equal(chat.messages.length, 1);
+    assert.equal(chat.messages[0]?.role, "assistant");
+    assert.equal(chat.messages[0]?.content, "What should we explore?");
+    const persisted = await store.get(chat.id);
+    assert.equal(persisted?.messages[0]?.content, "What should we explore?");
+    await assert.rejects(
+      store.create({
+        workspaceId: "managed-home-1",
+        botId: "bot-1",
+        initialAssistantMessage: "bad-\ud800-tail",
+      }),
+      /Invalid initial Bot greeting/u,
+    );
+    assert.equal((await store.listByBot("bot-1")).length, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

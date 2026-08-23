@@ -39,10 +39,19 @@ test("bot detail owns one-to-one Telegram bind and unbind controls", () => {
 test("bots UI edits definitions and creates conversations through dedicated IPC", () => {
   const view = source("./bots-view.tsx");
   assert.match(view, /botsApi\.create\(input\)/u);
-  assert.match(view, /botsApi\.update\(\{ id: bot\.id, \.\.\.input \}\)/u);
+  assert.match(
+    view,
+    /botsApi\.update\(\{ id: bot\.id, expectedRevision: bot\.revision, \.\.\.input \}\)/u,
+  );
   assert.match(view, /botsApi\.createChat\(\{ botId: selected\.id, workspaceId: activeId \}\)/u);
-  assert.match(view, /botsApi\.archive\(selected\.id\)/u);
-  assert.match(view, /botsApi\.restore\(selected\.id\)/u);
+  assert.match(
+    view,
+    /botsApi\.archive\(\{ id: selected\.id, expectedRevision: selected\.revision \}\)/u,
+  );
+  assert.match(
+    view,
+    /botsApi\.restore\(\{ id: selected\.id, expectedRevision: selected\.revision \}\)/u,
+  );
   assert.match(view, /maxLength=\{32_000\}/u);
 });
 

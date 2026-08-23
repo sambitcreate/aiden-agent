@@ -288,7 +288,7 @@ export interface AidenRemoteBotCapabilityOption {
 }
 
 export interface AidenRemoteBotFileScopeOption extends AidenRemoteBotCapabilityOption {
-  kind: "bot_home" | "approved_location";
+  kind: "full_mac" | "bot_home" | "approved_location";
 }
 
 export interface AidenRemoteBotModelOption {
@@ -1386,7 +1386,13 @@ function parseChatMessageAttachments(
       throw new Error(`${label} attachment ${index} id is invalid.`);
     }
     const name = boundedText(entry.name, `${label} attachment ${index} name`, 255);
-    if (/[/\\\u0000-\u001F\u007F]/u.test(name)) {
+    const hasUnsafeNameCharacter =
+      /[/\\]/u.test(name) ||
+      Array.from(name).some((character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+      });
+    if (hasUnsafeNameCharacter) {
       throw new Error(`${label} attachment ${index} name is unsafe.`);
     }
     return {
@@ -1599,7 +1605,7 @@ function parseBotFileScopeOption(value: unknown): AidenRemoteBotFileScopeOption 
     ...parseBotCapabilityOption(value, "Bot file scope"),
     kind: enumMember(
       value.kind,
-      ["bot_home", "approved_location"] as const,
+      ["full_mac", "bot_home", "approved_location"] as const,
       "Bot file scope kind",
     ),
   };
@@ -2542,8 +2548,8 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     throw new Error("Aiden Remote contract fixture protocolVersion must be 1.");
   }
   const contractRevision = requiredInteger(value, "contractRevision");
-  if (contractRevision < 7) {
-    throw new Error("The canonical Bot fixture requires contractRevision 7 or newer.");
+  if (contractRevision < 8) {
+    throw new Error("The canonical Bot fixture requires contractRevision 8 or newer.");
   }
   if (value.generated !== false) throw new Error("The canonical fixture must be synthetic.");
   const fixtureNotice = boundedText(value.notice, "Fixture notice", 280);

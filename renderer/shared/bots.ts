@@ -121,6 +121,7 @@ export const BOT_LIMITS = {
   nameChars: 80,
   descriptionChars: 280,
   instructionsChars: 32_000,
+  openingGreetingChars: 2_000,
   avatarPromptChars: 1_200,
   avatarRationaleChars: 280,
   avatarRequestIdChars: 128,
@@ -147,9 +148,13 @@ export function botAvatarSuggestionErrorMessage(error: unknown): string {
 
 export interface BotDefinition {
   id: string;
+  /** Main-owned optimistic concurrency token for identity/archive mutations. */
+  revision: string;
   name: string;
   description?: string;
   instructions: string;
+  /** Copied into a newly created Bot chat once; editing never rewrites history. */
+  openingGreeting?: string;
   avatar: BotAvatar;
   createdAt: number;
   updatedAt: number;
@@ -160,11 +165,13 @@ export interface BotCreateInput {
   name: string;
   description?: string;
   instructions: string;
+  openingGreeting?: string;
   avatar: BotAvatar;
 }
 
 export interface BotUpdateInput extends BotCreateInput {
   id: string;
+  expectedRevision: string;
 }
 
 export interface BotAvatarSuggestionInput {

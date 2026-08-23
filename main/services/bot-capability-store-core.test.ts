@@ -1,0 +1,503 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import test from "node:test";
+import {
+  BOT_FULL_ACCESS_NOTICE_VERSION,
+  BotCapabilityValidationError,
+  parseBotCustomSelection,
+  type BotCapabilityCatalog,
+  type BotCustomSelection,
+} from "../../renderer/shared/bot-capabilities.js";
+import {
+  buildBotCapabilityCatalogSnapshot,
+  type BotCapabilityInventory,
+} from "./bot-capability-catalog-core.js";
+import {
+  bindBotCustomSelection,
+  BotCapabilityBindingDriftError,
+  createBotCapabilityOpaqueIdMint,
+} from "./bot-capability-bindings.js";
+import {
+  BotCapabilityCatalogConflictError,
+  BotCapabilityNoticeRequiredError,
+  BotCapabilityRevisionConflictError,
+  BotCapabilityStateEditor,
+  BotCapabilitySubsetError,
+  BotCapabilityUnavailableError,
+  emptyBotCapabilityState,
+  parseBotCapabilityState,
+  projectBotAccessView,
+  projectBotChatAccessView,
+  projectBotNoticeStatus,
+  type BotCapabilityState,
+} from "./bot-capability-store-core.js";
+
+const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+
+function inventory(): BotCapabilityInventory {
+  return {
+    providers: [{
+      sourceId: "private-provider",
+      label: "Provider",
+      available: true,
+      connectionFingerprint: digest("provider"),
+      models: [{
+        sourceId: "private-model",
+        label: "Model",
+        available: true,
+        modelFingerprint: digest("model"),
+      }],
+    }],
+    fileScopes: [
+      { sourceId: "private-full", label: "Full Mac", available: true, kind: "full_mac", scopeFingerprint: digest("full") },
+      { sourceId: "private-home", label: "Bot folder", available: true, kind: "bot_home", scopeFingerprint: digest("home") },
+      { sourceId: "private-chosen", label: "Chosen folder", available: true, kind: "approved_location", scopeFingerprint: digest("chosen") },
+    ],
+    shell: { available: true, shellFingerprint: digest("shell") },
+    connections: ["Mail", "Calendar"].map((label) => ({
+      sourceId: `private-${label.toLowerCase()}`,
+      label,
+      available: true,
+      connectionFingerprint: digest(`connection-${label}`),
+      tools: [{
+        name: `${label.toLowerCase()}_tool`,
+        inputSchemaFingerprint: digest(`input-${label}`),
+        outputSchemaFingerprint: digest(`output-${label}`),
+        effect: "mutating" as const,
+        effectFingerprint: digest(`effect-${label}`),
+      }],
+    })),
+    skills: ["Writing", "Review"].map((label) => ({
+      sourceId: `private-${label.toLowerCase()}`,
+      label,
+      available: true,
+      identityFingerprint: digest(`identity-${label}`),
+      contentFingerprint: digest(`content-${label}`),
+    })),
+    otherCapabilities: ["web", "schedules"].map((kind) => ({
+      kind: kind as "web" | "schedules",
+      label: kind === "web" ? "Web" : "Schedules",
+      available: true,
+      capabilityFingerprint: digest(`capability-${kind}`),
+    })),
+  };
+}
+
+const opaqueKey = Buffer.alloc(32, 7);
+const snapshot = buildBotCapabilityCatalogSnapshot({
+  inventory: inventory(),
+  notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true },
+  mintOpaqueId: createBotCapabilityOpaqueIdMint(opaqueKey),
+});
+const catalogRevision = snapshot.catalog.revision;
+
+function catalog(revision = catalogRevision): BotCapabilityCatalog {
+  return { ...structuredClone(snapshot.catalog), revision };
+}
+
+function selection(overrides: Partial<BotCustomSelection> = {}): BotCustomSelection {
+  const home = snapshot.catalog.fileScopes.find(({ kind }) => kind === "bot_home")!;
+  const chosen = snapshot.catalog.fileScopes.find(({ kind }) => kind === "approved_location")!;
+  return {
+    providerId: snapshot.catalog.providers[0]!.id,
+    modelId: snapshot.catalog.providers[0]!.models[0]!.id,
+    fileScopeIds: [home.id, chosen.id],
+    shellEnabled: true,
+    connectionIds: snapshot.catalog.connections.map(({ id }) => id),
+    skillIds: snapshot.catalog.skills.map(({ id }) => id),
+    otherCapabilityIds: snapshot.catalog.otherCapabilities.map(({ id }) => id),
+    ...overrides,
+  };
+}
+
+function binding(custom: BotCustomSelection) {
+  return bindBotCustomSelection({ selection: custom, catalogRevision, snapshot });
+}
+
+function fixture(state: BotCapabilityState = emptyBotCapabilityState()) {
+  let timestamp = 1_000;
+  let incarnation = 0;
+  const editor = new BotCapabilityStateEditor(state, {
+    now: () => ++timestamp,
+    mintRevision: (kind, sequence) => `revision:${kind}:${sequence}`,
+    mintIncarnation: () => Buffer.alloc(32, ++incarnation).toString("base64url"),
+  });
+  return { state, editor };
+}
+
+test("strict Custom parsing rejects smuggled bindings, paths, duplicates, and malformed Unicode", () => {
+  assert.throws(
+    () => parseBotCustomSelection({ ...selection(), fingerprint: "secret" }),
+    BotCapabilityValidationError,
+  );
+  assert.throws(
+    () => parseBotCustomSelection({ ...selection(), connectionIds: ["../../secret"] }),
+    BotCapabilityValidationError,
+  );
+  assert.throws(
+    () => parseBotCustomSelection({ ...selection(), skillIds: ["skill:write", "skill:write"] }),
+    BotCapabilityValidationError,
+  );
+  assert.throws(
+    () => parseBotCustomSelection({ ...selection(), providerId: "bad\ud800" }),
+    BotCapabilityValidationError,
+  );
+});
+
+test("Custom policy bindings are mandatory, private in projections, strict on disk, and drift-aware", () => {
+  const { state, editor } = fixture();
+  const custom = selection();
+  assert.throws(
+    () =>
+      editor.createBotPolicy({
+        botId: "bot:unbound",
+        catalog: catalog(),
+        access: { accessMode: "custom", catalogRevision, custom },
+      }),
+    /exact main-owned binding/u,
+  );
+  assert.equal(state.sequence, 0);
+
+  const view = editor.createBotPolicy({
+    botId: "bot:one",
+    catalog: catalog(),
+    access: { accessMode: "custom", catalogRevision, custom },
+    binding: binding(custom),
+  });
+  const publicJson = JSON.stringify(view);
+  assert.doesNotMatch(publicJson, /binding|sourceId|fingerprint|private-/iu);
+  assert.doesNotThrow(() =>
+    editor.assertAuthorityBindingsCurrent({ botId: "bot:one", snapshot }),
+  );
+
+  const changedInventory = inventory();
+  changedInventory.skills[0]!.contentFingerprint = digest("changed-skill-content");
+  const drifted = buildBotCapabilityCatalogSnapshot({
+    inventory: changedInventory,
+    notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true },
+    mintOpaqueId: createBotCapabilityOpaqueIdMint(opaqueKey),
+  });
+  assert.throws(
+    () => editor.assertAuthorityBindingsCurrent({ botId: "bot:one", snapshot: drifted }),
+    BotCapabilityBindingDriftError,
+  );
+
+  const futureBinding = structuredClone(state) as unknown as {
+    policies: Array<{ binding: { version: number } }>;
+  };
+  futureBinding.policies[0]!.binding.version = 99;
+  assert.throws(() => parseBotCapabilityState(futureBinding));
+
+  const corruptBinding = structuredClone(state) as unknown as {
+    policies: Array<{ binding: { provider: { connectionFingerprint: string } } }>;
+  };
+  corruptBinding.policies[0]!.binding.provider.connectionFingerprint = "0".repeat(64);
+  assert.throws(() => parseBotCapabilityState(corruptBinding), /private facts/u);
+});
+
+test("legacy migration writes explicit Full records once and never repairs a later missing record as Full", () => {
+  const { state, editor } = fixture();
+  const migrated = editor.migrateLegacyBotsToFull({
+    botIds: ["bot:legacy-a", "bot:legacy-b"],
+    catalogRevision,
+    confirmedExplicitFull: true,
+  });
+  assert.deepEqual(migrated.map(({ accessMode }) => accessMode), ["full", "full"]);
+  assert.equal(state.policies.every(({ accessMode }) => accessMode === "full"), true);
+  assert.ok(state.legacyMigration);
+  assert.deepEqual(
+    editor.migrateLegacyBotsToFull({
+      botIds: ["bot:legacy-a", "bot:legacy-b"],
+      catalogRevision,
+      confirmedExplicitFull: true,
+    }),
+    migrated,
+  );
+
+  state.policies = state.policies.filter(({ botId }) => botId !== "bot:legacy-b");
+  assert.throws(
+    () =>
+      editor.migrateLegacyBotsToFull({
+        botIds: ["bot:legacy-a", "bot:legacy-b"],
+        catalogRevision,
+        confirmedExplicitFull: true,
+      }),
+    /already sealed/u,
+  );
+  assert.equal(editor.auditBotInventory(["bot:legacy-a", "bot:legacy-b"]).complete, false);
+});
+
+test("legacy migration atomically seals historical chat policies and never widens a lost reduction", () => {
+  const { state, editor } = fixture();
+  editor.migrateLegacyBotsToFull({
+    botIds: ["bot:legacy"],
+    chats: [{ botId: "bot:legacy", chatId: "chat:legacy" }],
+    catalogRevision,
+    confirmedExplicitFull: true,
+  });
+  assert.equal(state.policies[0]?.accessMode, "full");
+  assert.equal(state.chats[0]?.mode, "inherit");
+  assert.ok(state.legacyMigration);
+
+  // Losing a chat policy after the one-time migration could erase a prior
+  // Custom reduction, so restart repair must fail closed instead of inheriting.
+  state.chats = [];
+  assert.throws(
+    () => editor.migrateLegacyBotsToFull({
+      botIds: ["bot:legacy"],
+      chats: [{ botId: "bot:legacy", chatId: "chat:legacy" }],
+      catalogRevision,
+      confirmedExplicitFull: true,
+    }),
+    /already sealed/u,
+  );
+});
+
+test("missing, old, future, rolled-back, duplicate, and widening stored state fails closed", () => {
+  assert.throws(() => parseBotCapabilityState(undefined), BotCapabilityUnavailableError);
+  assert.throws(
+    () => parseBotCapabilityState({ ...emptyBotCapabilityState(), version: 1 }),
+    BotCapabilityUnavailableError,
+  );
+  assert.throws(
+    () => parseBotCapabilityState({ ...emptyBotCapabilityState(), version: 99 }),
+    BotCapabilityUnavailableError,
+  );
+
+  const { state, editor } = fixture();
+  const botCustom = selection();
+  const bot = editor.createBotPolicy({
+    botId: "bot:one",
+    catalog: catalog(),
+    access: { accessMode: "custom", catalogRevision, custom: botCustom },
+    binding: binding(botCustom),
+  });
+  const mailId = snapshot.catalog.connections[0]!.id;
+  const calendarId = snapshot.catalog.connections[1]!.id;
+  const chat = editor.createChatPolicy({
+    chatId: "chat:one",
+    botId: "bot:one",
+    expectedBotPolicyRevision: bot.revision,
+    catalog: catalog(),
+    custom: selection({ connectionIds: [mailId] }),
+  });
+  assert.ok(chat.revision);
+
+  assert.throws(
+    () => parseBotCapabilityState({ ...structuredClone(state), sequence: 0 }),
+    /revision history/u,
+  );
+  const duplicate = structuredClone(state);
+  duplicate.policies.push(structuredClone(duplicate.policies[0]!));
+  assert.throws(() => parseBotCapabilityState(duplicate), /duplicate Bot/u);
+  const widened = structuredClone(state);
+  const child = widened.chats[0]!;
+  if (child.mode !== "custom") assert.fail("expected custom chat");
+  child.custom.connectionIds.push(calendarId);
+  const narrowPolicyCustom = selection({ connectionIds: [mailId] });
+  widened.policies[0] = {
+    ...widened.policies[0]!,
+    accessMode: "custom",
+    custom: narrowPolicyCustom,
+    binding: binding(narrowPolicyCustom),
+  };
+  assert.throws(() => parseBotCapabilityState(widened), /exceeds its stored/u);
+});
+
+test("catalog and optimistic revisions are exact and forged chat widening is rejected", () => {
+  const { state, editor } = fixture();
+  const botCustom = selection();
+  const mailId = snapshot.catalog.connections[0]!.id;
+  const bot = editor.createBotPolicy({
+    botId: "bot:one",
+    catalog: catalog(),
+    access: { accessMode: "custom", catalogRevision, custom: botCustom },
+    binding: binding(botCustom),
+  });
+  assert.throws(
+    () =>
+      editor.updateBotPolicy({
+        botId: "bot:one",
+        expectedRevision: bot.revision,
+        catalog: catalog("catalog:other"),
+        access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+      }),
+    BotCapabilityCatalogConflictError,
+  );
+  assert.throws(
+    () =>
+      editor.updateBotPolicy({
+        botId: "bot:one",
+        expectedRevision: "revision:stale",
+        catalog: catalog(),
+        access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+      }),
+    BotCapabilityRevisionConflictError,
+  );
+
+  const chat = editor.createChatPolicy({
+    chatId: "chat:one",
+    botId: "bot:one",
+    expectedBotPolicyRevision: bot.revision,
+    catalog: catalog(),
+    custom: selection({ shellEnabled: false, connectionIds: [mailId] }),
+  });
+  assert.throws(
+    () =>
+      editor.updateChatPolicy({
+        chatId: "chat:one",
+        expectedRevision: chat.revision,
+        catalog: catalog(),
+        access: {
+          mode: "custom",
+          catalogRevision,
+          expectedBotPolicyRevision: bot.revision,
+          custom: selection({ connectionIds: ["connection:unknown"] }),
+        },
+      }),
+    /unavailable connection/u,
+  );
+
+  const narrowedBotCustom = selection({ shellEnabled: false, connectionIds: [] });
+  const narrowBot = editor.updateBotPolicy({
+    botId: "bot:one",
+    expectedRevision: bot.revision,
+    catalog: catalog(),
+    access: {
+      accessMode: "custom",
+      catalogRevision,
+      custom: narrowedBotCustom,
+    },
+    binding: binding(narrowedBotCustom),
+  });
+  assert.equal(narrowBot.narrowed, true);
+  assert.deepEqual(narrowBot.narrowedChats.map(({ chatId }) => chatId), ["chat:one"]);
+  const reduced = narrowBot.narrowedChats[0];
+  assert.ok(reduced);
+  const reducedView = projectBotChatAccessView(state, "chat:one");
+  assert.equal(reducedView.mode, "custom");
+  if (reducedView.mode !== "custom") assert.fail("expected reduced Custom chat");
+  assert.deepEqual(reducedView.custom.connectionIds, []);
+  assert.equal(reducedView.custom.shellEnabled, false);
+});
+
+test("create rollback removes only an uncommitted identity policy and its impossible chats", () => {
+  const { state, editor } = fixture();
+  const first = editor.createBotPolicy({
+    botId: "bot:first",
+    catalog: catalog(),
+    access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+  });
+  editor.createChatPolicy({
+    chatId: "chat:first",
+    botId: "bot:first",
+    expectedBotPolicyRevision: first.revision,
+    catalog: catalog(),
+  });
+  editor.createBotPolicy({
+    botId: "bot:second",
+    catalog: catalog(),
+    access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+  });
+
+  assert.equal(
+    editor.rollbackUncommittedBotPolicy({ botId: "bot:missing", identityCommitted: false }),
+    false,
+  );
+  assert.equal(state.policies.length, 2);
+  assert.throws(
+    () =>
+      editor.rollbackUncommittedBotPolicy({
+        botId: "bot:first",
+        identityCommitted: true,
+      } as unknown as { botId: string; identityCommitted: false }),
+    /committed Bot identity/u,
+  );
+  assert.equal(state.policies.length, 2);
+  assert.equal(
+    editor.rollbackUncommittedBotPolicy({ botId: "bot:first", identityCommitted: false }),
+    true,
+  );
+  assert.deepEqual(state.policies.map(({ botId }) => botId), ["bot:second"]);
+  assert.deepEqual(state.chats, []);
+});
+
+test("a Custom chat cannot exceed its Bot even with otherwise valid catalog grants", () => {
+  const { editor } = fixture();
+  const mailId = snapshot.catalog.connections[0]!.id;
+  const calendarId = snapshot.catalog.connections[1]!.id;
+  const botCustom = selection({ connectionIds: [mailId] });
+  const bot = editor.createBotPolicy({
+    botId: "bot:one",
+    catalog: catalog(),
+    access: {
+      accessMode: "custom",
+      catalogRevision,
+      custom: botCustom,
+    },
+    binding: binding(botCustom),
+  });
+  assert.throws(
+    () =>
+      editor.createChatPolicy({
+        chatId: "chat:one",
+        botId: "bot:one",
+        expectedBotPolicyRevision: bot.revision,
+        catalog: catalog(),
+        custom: selection({ connectionIds: [mailId, calendarId] }),
+      }),
+    BotCapabilitySubsetError,
+  );
+});
+
+test("notice acknowledgement is isolated by stable audience and action admission never shares it", () => {
+  const { state, editor } = fixture();
+  editor.createBotPolicy({
+    botId: "bot:one",
+    catalog: catalog(),
+    access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+  });
+  assert.throws(
+    () => editor.assertBotMayAct({ audienceId: "device:b", botId: "bot:one" }),
+    BotCapabilityNoticeRequiredError,
+  );
+  const accepted = editor.acknowledgeNotice("device:a", {
+    version: BOT_FULL_ACCESS_NOTICE_VERSION,
+    decision: "continue_full",
+    confirmedForeground: true,
+  });
+  assert.equal(accepted.requiresAcknowledgement, false);
+  assert.equal(projectBotNoticeStatus(state, "device:b").requiresAcknowledgement, true);
+  editor.assertBotMayAct({ audienceId: "device:a", botId: "bot:one" });
+  assert.throws(
+    () => editor.assertBotMayAct({ audienceId: "device:b", botId: "bot:one" }),
+    BotCapabilityNoticeRequiredError,
+  );
+  editor.acknowledgeNotice("device:b", {
+    version: BOT_FULL_ACCESS_NOTICE_VERSION,
+    decision: "customize_first",
+    confirmedForeground: true,
+  });
+  assert.throws(
+    () => editor.assertBotMayAct({ audienceId: "device:b", botId: "bot:one" }),
+    BotCapabilityNoticeRequiredError,
+  );
+  const current = projectBotAccessView(state, "bot:one");
+  const custom = selection({ shellEnabled: false });
+  editor.updateBotPolicy({
+    botId: "bot:one",
+    expectedRevision: current.revision,
+    catalog: catalog(),
+    access: { accessMode: "custom", catalogRevision, custom },
+    binding: binding(custom),
+  });
+  editor.assertBotMayAct({ audienceId: "device:b", botId: "bot:one" });
+  editor.assertBotMayAct({ audienceId: "device:a", botId: "bot:one" });
+  assert.equal(editor.revokeNoticeAudience("device:a"), true);
+  assert.equal(projectBotNoticeStatus(state, "device:a").requiresAcknowledgement, true);
+  assert.throws(
+    () => editor.assertBotMayAct({ audienceId: "device:a", botId: "bot:one" }),
+    BotCapabilityNoticeRequiredError,
+  );
+  editor.assertBotMayAct({ audienceId: "device:b", botId: "bot:one" });
+});

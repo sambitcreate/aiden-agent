@@ -5,9 +5,19 @@ import {
   type BotCreateInput,
   type BotUpdateInput,
 } from "../../renderer/shared/bots.js";
+import {
+  isBoundedBotText,
+  isPathSafeBotCapabilityId,
+} from "../../renderer/shared/bot-capabilities.js";
 
-const CREATE_KEYS = new Set(["avatar", "description", "instructions", "name"]);
-const UPDATE_KEYS = new Set([...CREATE_KEYS, "id"]);
+const CREATE_KEYS = new Set([
+  "avatar",
+  "description",
+  "instructions",
+  "name",
+  "openingGreeting",
+]);
+const UPDATE_KEYS = new Set([...CREATE_KEYS, "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const AVATAR_SUGGESTION_KEYS = new Set([
   "currentAvatar",
@@ -32,17 +42,24 @@ function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
 
 function text(value: unknown, label: string, maximum: number, optional = false) {
   if (value === undefined && optional) return undefined;
-  if (typeof value !== "string" || !value.trim() || value.length > maximum)
+  if (typeof value !== "string" || !value.trim() || !isBoundedBotText(value, maximum))
     throw new Error(`Invalid ${label}.`);
   return value;
 }
 
 function createFields(record: Record<string, unknown>): BotCreateInput {
   if (!isBotAvatar(record.avatar)) throw new Error("Invalid bot avatar.");
+  const openingGreeting = text(
+    record.openingGreeting,
+    "bot opening greeting",
+    BOT_LIMITS.openingGreetingChars,
+    true,
+  );
   return {
     name: text(record.name, "bot name", BOT_LIMITS.nameChars)!,
     description: text(record.description, "bot description", BOT_LIMITS.descriptionChars, true),
     instructions: text(record.instructions, "bot instructions", BOT_LIMITS.instructionsChars)!,
+    ...(openingGreeting === undefined ? {} : { openingGreeting }),
     avatar: record.avatar,
   };
 }
@@ -53,18 +70,36 @@ export function parseBotCreate(value: unknown): BotCreateInput {
 
 export function parseBotUpdate(value: unknown): BotUpdateInput {
   const record = exact(value, UPDATE_KEYS, "bot update fields");
-  return { id: text(record.id, "bot id", BOT_LIMITS.idChars)!, ...createFields(record) };
+  return {
+    id: parseBotId(record.id),
+    expectedRevision: parseBotRevision(record.expectedRevision),
+    ...createFields(record),
+  };
+}
+
+export function parseBotRevision(value: unknown): string {
+  if (!isPathSafeBotCapabilityId(value, 128)) {
+    throw new Error("Invalid bot revision.");
+  }
+  return value;
 }
 
 export function parseBotId(value: unknown): string {
-  return text(value, "bot id", BOT_LIMITS.idChars)!;
+  if (!isPathSafeBotCapabilityId(value, BOT_LIMITS.idChars)) {
+    throw new Error("Invalid bot id.");
+  }
+  return value;
 }
 
 export function parseBotChatCreate(value: unknown) {
   const record = exact(value, CHAT_KEYS, "bot chat creation fields");
+  // Legacy desktop renderers still send the visible workspace selection. Bot
+  // chats now always use their main-owned hidden home, so accept but ignore it.
+  if (record.workspaceId !== undefined) {
+    text(record.workspaceId, "workspace id", 256);
+  }
   return {
     botId: parseBotId(record.botId),
-    workspaceId: text(record.workspaceId, "workspace id", 256)!,
     providerId: text(record.providerId, "provider id", 256, true),
     model: text(record.model, "model id", 512, true),
   };

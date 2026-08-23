@@ -13,8 +13,12 @@
 
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { createTelegramServiceCore } from "./telegram-service-core.js";
+import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -470,6 +474,7 @@ interface HarnessOptions {
   profile?: string;
   resolveBotBinding?: import("./telegram-service-core.js").TelegramServiceDeps["resolveBotBinding"];
   validateBotBinding?: import("./telegram-service-core.js").TelegramServiceDeps["validateBotBinding"];
+  assertBotBindingStoreHealthy?: import("./telegram-service-core.js").TelegramServiceDeps["assertBotBindingStoreHealthy"];
   resolveThreadWorkspace?: (threadId: number) => Promise<string | undefined>;
   clearThreadTargets?: () => Promise<void>;
   listModels?: () => Promise<readonly import("./telegram-controls.js").TelegramModelChoice[]>;
@@ -533,6 +538,7 @@ function harness(o: HarnessOptions = {}) {
     profile: o.profile,
     resolveBotBinding: o.resolveBotBinding,
     validateBotBinding: o.validateBotBinding,
+    assertBotBindingStoreHealthy: o.assertBotBindingStoreHealthy,
     listWorkspaces: async () => o.workspaces ?? [],
     listModels: o.listModels,
     applyModelSelection: o.applyModelSelection,
@@ -685,6 +691,33 @@ test("first message from a non-bot user pairs the owner (sets telegramAllowedUse
     api.sentMessages.some((m) => m.text.includes("paired")),
     "pairing acknowledgement sent",
   );
+});
+
+test("unhealthy binding authority blocks both pairing and ordinary Telegram fallback", async (t) => {
+  for (const allowedUserId of [undefined, 42]) {
+    await t.test(allowedUserId === undefined ? "unpaired" : "paired", async () => {
+      const sender = person(allowedUserId ?? 42, "owner");
+      const { service, api, config, turnMock } = harness({
+        enabled: true,
+        hasToken: true,
+        allowedUserId,
+        assertBotBindingStoreHealthy: async () => {
+          throw new Error("Telegram routing data is unavailable. Open Aiden on the Mac to repair it.");
+        },
+        batches: [[makeUpdate(1, makeMessage(10, sender, "must not fall back"))]],
+        autoStop: true,
+      });
+
+      await service.start();
+      await waitFor(() => api.sentMessages.some(({ text }) =>
+        text.includes("Telegram routing data is unavailable")));
+
+      assert.equal(turnMock.startCalls(), 0);
+      assert.equal(service.queueSize, 0);
+      assert.equal(config.state.allowedUserId, allowedUserId);
+      assert.deepEqual(config.setSettingsCalls, []);
+    });
+  }
 });
 
 test("messages from a user other than the paired owner are ignored", async () => {
@@ -1044,6 +1077,7 @@ test("bot-bound Telegram turns use the profile/bot backing chat and normal Pi mo
     chatId: 100,
     ownerUserId: 42,
     workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
     backingChatId: "telegram-work-bot-a",
   } as const;
   const { service, api, turnMock } = harness({
@@ -1052,7 +1086,7 @@ test("bot-bound Telegram turns use the profile/bot backing chat and normal Pi mo
     profile: "work",
     resolveBotBinding: async (input) => input.profile === "work" ? binding : undefined,
     workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
-    existingChats: [{ id: binding.backingChatId, workspaceId: "work", botId: "bot-a" }],
+    existingChats: [{ id: binding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
     batches: [[makeUpdate(1, makeMessage(10, owner, "bot prompt"))]],
     autoStop: true,
   });
@@ -1062,7 +1096,84 @@ test("bot-bound Telegram turns use the profile/bot backing chat and normal Pi mo
 
   assert.deepEqual(turnMock.createdChats(), []);
   assert.equal(turnMock.startedParams()[0]?.chatId, "telegram-work-bot-a");
+  assert.equal(turnMock.startedParams()[0]?.workspaceId, "bot-home-a");
   assert.equal(turnMock.startedParams()[0]?.mode, undefined);
+});
+
+test("an ordinary unbound route never enters Bot validation or changes fallback routing", async () => {
+  const owner = person(42, "owner");
+  let validationCalls = 0;
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => undefined,
+    validateBotBinding: async () => {
+      validationCalls += 1;
+      return "Bot validation must not run for an unbound route.";
+    },
+    batches: [[makeUpdate(1, makeMessage(10, owner, "ordinary prompt"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(
+    () =>
+      turnMock.startCalls() === 1 &&
+      api.sentMessages.some(({ text }) => text.includes("Mock reply")),
+  );
+
+  assert.equal(validationCalls, 0);
+  assert.equal(turnMock.startedParams()[0]?.chatId, "telegram-work-42");
+  assert.equal(turnMock.startedParams()[0]?.mode, "assistant-unattended");
+});
+
+test("a persisted Bot binding dispatches in its managed home while retaining its external route", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-telegram-binding-dispatch-"));
+  try {
+    const bindings = createTelegramBotBindingStore({
+      root: () => root,
+      now: () => 100,
+      createBackingChatId: () => "telegram-bot-11111111-1111-4111-8111-111111111111",
+    });
+    const binding = await bindings.bind({
+      botId: "bot-a",
+      profile: "work",
+      chatId: 100,
+      ownerUserId: 42,
+      workspaceId: "external-work",
+      backingWorkspaceId: "managed-bot-home",
+    });
+    const owner = person(42, "owner");
+    const { service, api, turnMock } = harness({
+      enabled: true,
+      allowedUserId: 42,
+      profile: "work",
+      resolveBotBinding: (input) => bindings.resolve(
+        input.profile,
+        input.chatId,
+        input.threadId,
+      ),
+      existingChats: [{
+        id: binding.backingChatId,
+        workspaceId: binding.backingWorkspaceId,
+        botId: binding.botId,
+      }],
+      batches: [[makeUpdate(1, makeMessage(10, owner, "managed prompt"))]],
+      autoStop: true,
+    });
+
+    await service.start();
+    await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(
+      ({ text }) => text.includes("Mock reply"),
+    ));
+
+    assert.equal(binding.workspaceId, "external-work");
+    assert.equal(turnMock.startedParams()[0]?.workspaceId, "managed-bot-home");
+    assert.equal(turnMock.startedParams()[0]?.chatId, binding.backingChatId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("bot binding validation rejects archived or missing bot identities before queue admission", async () => {
@@ -1073,6 +1184,7 @@ test("bot binding validation rejects archived or missing bot identities before q
     chatId: 100,
     ownerUserId: 42,
     workspaceId: "work",
+    backingWorkspaceId: "bot-home-archived",
     backingChatId: "telegram-default-archived-bot",
   } as const;
   const { service, api, turnMock } = harness({
@@ -1121,6 +1233,7 @@ test("queued turns retain their captured backing chat when a source is rebound",
     chatId: 100,
     ownerUserId: 42,
     workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
     backingChatId: "telegram-bot-a",
   } as const;
   const second = {
@@ -1129,6 +1242,7 @@ test("queued turns retain their captured backing chat when a source is rebound",
     chatId: 100,
     ownerUserId: 42,
     workspaceId: "work",
+    backingWorkspaceId: "bot-home-b",
     backingChatId: "telegram-bot-b",
   } as const;
   let resolveCalls = 0;
@@ -1139,8 +1253,8 @@ test("queued turns retain their captured backing chat when a source is rebound",
     resolveBotBinding: async () => resolveCalls++ === 0 ? first : second,
     workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
     existingChats: [
-      { id: first.backingChatId, workspaceId: "work", botId: "bot-a" },
-      { id: second.backingChatId, workspaceId: "work", botId: "bot-b" },
+      { id: first.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+      { id: second.backingChatId, workspaceId: "bot-home-b", botId: "bot-b" },
     ],
     batches: [[
       makeUpdate(1, makeMessage(10, owner, "first")),

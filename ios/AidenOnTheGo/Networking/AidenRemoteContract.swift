@@ -1714,7 +1714,7 @@ struct AidenRemoteContractFixture: Decodable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         contractRevision = try values.decode(Int.self, forKey: .contractRevision)
-        guard contractRevision >= 7 else {
+        guard contractRevision >= 8 else {
             throw AidenBotContractError.invalidCombination("contract revision")
         }
         protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)

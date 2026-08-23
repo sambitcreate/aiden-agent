@@ -832,6 +832,7 @@ struct AidenBotCapabilityOption: Codable, Equatable, Identifiable, Sendable {
 }
 
 enum AidenBotFileScopeKind: String, Codable, Sendable {
+    case fullMac = "full_mac"
     case botHome = "bot_home"
     case approvedLocation = "approved_location"
 }
