@@ -163,8 +163,10 @@ func aidenBotEditorIsDirty(
     cleanCreateDraft: AidenBotEditorDraft?,
     baselineBot: AidenBotDetail?,
     catalog: AidenBotCapabilityCatalog?,
-    isCreating: Bool
+    isCreating: Bool,
+    hasAvatarCandidate: Bool = false
 ) -> Bool {
+    if hasAvatarCandidate { return true }
     guard let draft else { return false }
     if isCreating { return draft != cleanCreateDraft }
     guard let baselineBot, let catalog else { return false }
@@ -191,6 +193,10 @@ func aidenBotEditorCreateFailureIsAmbiguous(_ error: Error) -> Bool {
     }
 }
 
+func aidenBotEditorCanSubmitSettings(hasAvatarCandidate: Bool) -> Bool {
+    !hasAvatarCandidate
+}
+
 struct AidenBotEditorView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let mode: AidenBotEditorMode
@@ -209,13 +215,16 @@ struct AidenBotEditorView: View {
     @State private var activeCreateAttempt: AidenBotEditorCreateAttempt?
     @State private var retainedCreateAttempt: AidenBotEditorCreateAttempt?
     @State private var activeEditAttempt: AidenBotEditorEditAttempt?
+    @State private var avatarModel: AidenBotGeneratedAvatarModel?
     @State private var isConfirmingDiscard = false
 
     private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
         AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
     }
 
-    private var isSaving: Bool { activeCreateAttempt != nil || activeEditAttempt != nil }
+    private var isSaving: Bool {
+        activeCreateAttempt != nil || activeEditAttempt != nil || avatarModel?.isBusy == true
+    }
 
     private var isCreating: Bool {
         if case .create = mode { return true }
@@ -228,7 +237,8 @@ struct AidenBotEditorView: View {
             cleanCreateDraft: cleanCreateDraft,
             baselineBot: baselineBot,
             catalog: catalog,
-            isCreating: isCreating
+            isCreating: isCreating,
+            hasAvatarCandidate: avatarModel?.hasCandidate == true
         )
     }
 
@@ -246,7 +256,9 @@ struct AidenBotEditorView: View {
     }
 
     private var canSave: Bool {
-        guard canWrite, !isLoading, !isSaving, let catalog, let draft,
+        guard canWrite, !isLoading, !isSaving,
+              aidenBotEditorCanSubmitSettings(hasAvatarCandidate: avatarModel?.hasCandidate == true),
+              let catalog, let draft,
               draft.isSaveable(catalog: catalog) else { return false }
         if case .edit = mode, let baselineBot {
             let identityChanged = (try? draft.identityPatch(comparedTo: baselineBot)) != nil
@@ -417,7 +429,7 @@ struct AidenBotEditorView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Semantic avatar")
                         .font(.headline)
-                    Text("Edit this anytime. Image Playground will be available in a later step.")
+                    Text("Edit this anytime. A generated photo can sit on top of it without replacing it.")
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
                 }
@@ -438,8 +450,31 @@ struct AidenBotEditorView: View {
                 get: { draft?.avatar.detail ?? AidenBotEditorDraft.defaultAvatar.detail },
                 set: { updateAvatar(detail: $0) }
             ))
+
+            if let avatarModel, let draft {
+                Divider()
+                AidenBotGeneratedAvatarLifecycleView(
+                    model: avatarModel,
+                    semanticAvatar: .recipe(draft.avatar),
+                    botName: draft.name.isEmpty ? "Bot" : draft.name
+                )
+                AidenBotImagePlaygroundView(
+                    identity: .init(name: draft.name, purpose: draft.purpose)
+                ) { copiedURL in
+                    Task { await avatarModel.ingestCopiedCandidate(at: copiedURL) }
+                }
+            } else if isCreating {
+                Label(
+                    "Save this Bot, then choose Edit Bot to create a photo with Apple Image Playground.",
+                    systemImage: "photo.badge.plus"
+                )
+                .font(.caption)
+                .foregroundStyle(palette.secondary)
+            }
         } header: {
             Text("Avatar")
+        } footer: {
+            Text("The semantic avatar remains available even when this Bot has a generated photo.")
         }
     }
 
@@ -741,6 +776,8 @@ struct AidenBotEditorView: View {
         activeCreateAttempt = nil
         retainedCreateAttempt = nil
         activeEditAttempt = nil
+        avatarModel?.clearForDismissal()
+        avatarModel = nil
         isConfirmingDiscard = false
     }
 
@@ -785,6 +822,15 @@ struct AidenBotEditorView: View {
             baselineBot = loadedBot
             draft = loadedDraft
             cleanCreateDraft = isCreating ? loadedDraft : nil
+            if let loadedBot {
+                avatarModel = AidenBotGeneratedAvatarModel(
+                    coordinator: coordinator,
+                    botID: loadedBot.id
+                ) { updated in
+                    baselineBot = updated
+                    onSaved(updated)
+                }
+            }
             isLoading = false
         } catch is CancellationError {
             return

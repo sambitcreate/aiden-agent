@@ -1821,16 +1821,27 @@ struct AidenChatDetailView: View {
                             botSheet = .access
                         }
                     } label: {
-                        VStack(spacing: 1) {
-                            Text(model.chat.title)
-                                .font(.headline)
+                        HStack(spacing: 8) {
+                            if let bot = botToolsModel.bot {
+                                AidenBotCanonicalAvatarView(
+                                    coordinator: coordinator,
+                                    botID: bot.id,
+                                    avatar: bot.avatar,
+                                    name: bot.name,
+                                    size: 30
+                                )
+                            }
+                            VStack(spacing: 1) {
+                                Text(model.chat.title)
+                                    .font(.headline)
+                                    .lineLimit(1)
+                                Text(botToolsModel.summary(
+                                    connected: coordinator.connectionState == .connected
+                                ))
+                                .font(.caption2)
+                                .foregroundStyle(palette.secondary)
                                 .lineLimit(1)
-                            Text(botToolsModel.summary(
-                                connected: coordinator.connectionState == .connected
-                            ))
-                            .font(.caption2)
-                            .foregroundStyle(palette.secondary)
-                            .lineLimit(1)
+                            }
                         }
                     }
                     .buttonStyle(.plain)

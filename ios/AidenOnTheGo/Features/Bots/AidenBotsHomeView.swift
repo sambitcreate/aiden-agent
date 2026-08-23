@@ -551,8 +551,10 @@ struct AidenBotsHomeView: View {
     }
 
     private func botAvatar(_ bot: AidenBotSummary, diameter: CGFloat) -> some View {
-        AidenBotSemanticAvatarView(
-            avatar: bot.avatar.semantic,
+        AidenBotCanonicalAvatarView(
+            coordinator: coordinator,
+            botID: bot.id,
+            avatar: bot.avatar,
             name: bot.name,
             size: diameter
         )

@@ -79,6 +79,7 @@ Evidence for that answer in the current distribution candidate:
 - QR camera frames are processed for pairing and are not uploaded to Aiden's developer.
 - Dictation and read-aloud use Apple system frameworks locally; Aiden does not operate a speech collection endpoint.
 - Photos/files selected by the user are sent directly to their paired Mac and may then be sent to model providers the user configured on that Mac. Aiden's developer cannot access them. Provider processing remains governed by each selected provider and should be described in the public policy.
+- Optional Bot image generation uses Apple's system Image Playground on supported devices and may use Private Cloud Compute. Aiden disables person/Photos personalization and supplies only the visible Bot name and purpose as starting concepts. Aiden's developer runs no image-generation or proxy service and cannot access those concepts, rejected candidates, or results. When the person chooses **Use this image**, the app sends only that normalized image directly to the paired Mac, which stores the canonical Bot photo.
 - Local Network or Tailscale traffic goes directly to the paired installation. Aiden does not run a central account, synchronization service, analytics endpoint, or proxy.
 - Live Activity state is device-local and response excerpts are off by default.
 - External transcript media can contact the media host without forwarding Aiden credentials; the public policy should disclose that a remote host can observe an ordinary network request when its media is displayed.
@@ -114,3 +115,15 @@ Current Apple reference: `https://developer.apple.com/help/app-store-connect/ref
 - Availability, price, territories, and release mode.
 
 Do not replace unresolved values with placeholders in App Store Connect.
+
+## App Review Bot-flow notes draft
+
+Provide these notes only with a reachable, reviewer-safe paired Aiden Agent environment and the final approved contact details:
+
+1. Pair the iPhone or iPad with the supplied Aiden Agent Mac, then tap the Aiden logo and choose **Bots**.
+2. Accept the one-time Full Access notice or choose **Customize first**. Full Access uses only capabilities already enabled on the paired Mac; Custom can reduce Files, commands, Connections, and Skills.
+3. Create a Bot with the built-in semantic avatar, save it, and start a chat. Apple Intelligence is not required for this complete path.
+4. On eligible Apple Intelligence hardware with iOS/iPadOS 18.4 or later, **Create with Apple Intelligence** opens Apple's system Image Playground. Apple controls generation and may use Private Cloud Compute. Aiden disables person/Photos personalization and sends the paired Mac only the image explicitly accepted and saved.
+5. On unsupported hardware, including iPhone 13 Pro, the editor honestly keeps the semantic avatar available and has no dead Image Playground action.
+
+Do not claim successful Image Playground generation in review notes until it has passed on supported physical hardware. Do not include pairing credentials, private prompts, paths, or provider secrets in metadata or notes.

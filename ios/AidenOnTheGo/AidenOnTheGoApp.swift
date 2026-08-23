@@ -13,6 +13,7 @@ struct AidenOnTheGoApp: App {
 
 #if DEBUG
     init() {
+        aidenBotImagePlaygroundCleanupAfterProcessLaunch()
         let configuration = AidenBotFirstPrototypeConfiguration.current
         prototypeConfiguration = configuration
         _remoteCoordinator = State(
@@ -21,6 +22,10 @@ struct AidenOnTheGoApp: App {
         _appearance = State(
             initialValue: configuration == nil ? AidenAppearanceStore() : nil
         )
+    }
+#else
+    init() {
+        aidenBotImagePlaygroundCleanupAfterProcessLaunch()
     }
 #endif
 

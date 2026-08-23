@@ -378,8 +378,10 @@ struct AidenBotProfileView: View {
 
     private func identityHeader(_ detail: AidenBotDetail) -> some View {
         VStack(spacing: 12) {
-            AidenBotSemanticAvatarView(
-                avatar: detail.avatar.semantic,
+            AidenBotCanonicalAvatarView(
+                coordinator: coordinator,
+                botID: detail.id,
+                avatar: detail.avatar,
                 name: detail.name,
                 size: 112
             )

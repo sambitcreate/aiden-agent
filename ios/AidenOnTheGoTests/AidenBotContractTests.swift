@@ -1704,6 +1704,18 @@ final class AidenBotContractTests: XCTestCase {
             catalog: fixture.botCapabilityCatalog,
             isCreating: false
         ))
+        XCTAssertTrue(aidenBotEditorIsDirty(
+            draft: editDraft,
+            cleanCreateDraft: nil,
+            baselineBot: fixture.botDetail,
+            catalog: fixture.botCapabilityCatalog,
+            isCreating: false,
+            hasAvatarCandidate: true
+        ), "An accepted photo preview must require an explicit use or discard decision.")
+        XCTAssertFalse(
+            aidenBotEditorCanSubmitSettings(hasAvatarCandidate: true),
+            "Settings Save must not dismiss and destroy an accepted photo preview."
+        )
         editDraft.purpose += " updated"
         XCTAssertTrue(aidenBotEditorIsDirty(
             draft: editDraft,

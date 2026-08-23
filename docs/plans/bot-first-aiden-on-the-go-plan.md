@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phases 0–6 complete August 23, 2026; Phase 7 in progress
+- Status: Active; Phases 0–6 and Phase 7 implementation complete August 23, 2026; eligible-hardware Phase 7 acceptance remains open; Phase 8 in progress
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -519,6 +519,8 @@ Acceptance:
 - the person can complete notice → create → conversation with Full Access, or choose Custom and selectively disable shell/Files/Connections/Skills, without seeing Pi, JSON, fingerprints, environment variables, managed paths, or “system prompt” as a required concept.
 
 ### Phase 7 — Apple Image Playground and generated-avatar lifecycle
+
+Implementation completed August 23, 2026. The shipping iOS target now has the availability-isolated system sheet, explicit non-personalized style boundary, accepted-image normalization/preview, authenticated canonical paired-Mac upload, exact-device cache, replacement/revert reconciliation, canonical-photo rendering in the Bot inbox/profile/shared chat, process-launch crash-residue cleanup, and updated privacy/App Review copy. The connected physical iPhone 13 Pro proves Apple's runtime reports Image Playground unavailable and the complete fallback renders without invoking a candidate. Independent review closed every actionable P0/P1 finding. Full supported-hardware acceptance remains open because no eligible physical Apple Intelligence iPhone/iPad is available: system generation through the real Mac normalizer, relaunch, replacement/revert, cancellation/refusal/model/network/PCC states, and pixel-equivalence must be proven before release. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-7.md`.
 
 1. Add an iOS 18.1 availability-isolated wrapper around the current SwiftUI Image Playground sheet.
 2. Prefill only visible identity/purpose, explicitly allow Apple's three non-personalized styles, disclose Apple-controlled generation, and support cancel/retry/unavailable/restricted/model-downloading/usage-limit states.

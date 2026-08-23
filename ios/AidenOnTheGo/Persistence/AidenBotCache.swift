@@ -180,6 +180,42 @@ actor AidenBotCache {
         return true
     }
 
+    /// Stores immutable canonical avatar bytes under an exact pairing scope
+    /// without changing the shared cache activation generation. Callers must
+    /// hold `AidenRemoteCoordinator.withRetainedInstallationData` while using
+    /// this entry point so revocation/pairing removal cannot race the write.
+    @discardableResult
+    func storeAvatar(
+        _ content: AidenBotAvatarContent,
+        botId: String,
+        instanceId: String,
+        deviceId: String
+    ) throws -> Bool {
+        guard Self.isCanonicalAvatar(content.data) else { return false }
+        let url = avatarURL(
+            instanceId: instanceId,
+            deviceId: deviceId,
+            botId: botId,
+            assetRevision: content.assetRevision
+        )
+        try createProtectedDirectory(url.deletingLastPathComponent())
+        try content.data.write(
+            to: url,
+            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+        )
+        pruneAvatars(preserving: url)
+        return true
+    }
+
+    /// Removes every cached generated photo for one Bot in one exact pairing.
+    /// The semantic avatar remains available through the ordinary Bot DTO.
+    func removeAvatars(instanceId: String, deviceId: String, botId: String) {
+        let directory = deviceDirectory(instanceId: instanceId, deviceId: deviceId)
+            .appending(path: "avatars", directoryHint: .isDirectory)
+            .appending(path: digest(botId), directoryHint: .isDirectory)
+        try? fileManager.removeItem(at: directory)
+    }
+
     func purge(instanceId: String) {
         if selectedInstanceId == instanceId {
             generation &+= 1
@@ -243,6 +279,10 @@ actor AidenBotCache {
             withIntermediateDirectories: true,
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         )
+        var protectedURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try protectedURL.setResourceValues(values)
     }
 
     private func snapshotURL(instanceId: String, deviceId: String) -> URL {

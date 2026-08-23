@@ -52,6 +52,8 @@ const appSourcePaths = [
   "AidenOnTheGo/ContentView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCustomAccessFlowView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotEditorView.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotImagePlaygroundView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotProfileView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotSemanticAvatarView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift",
@@ -95,6 +97,8 @@ const appSourcePaths = [
 
 const testSources = [
   "AidenBotContractTests.swift",
+  "AidenBotGeneratedAvatarTests.swift",
+  "AidenBotImagePlaygroundTests.swift",
   "AidenBotPrototypeSnapshotTests.swift",
   "AidenBotCacheTests.swift",
   "AidenChatTests.swift",
@@ -156,6 +160,54 @@ test("the iOS tree contains no orphan imported Swift sources", async () => {
   );
 });
 
+test("Bot Image Playground stays Apple-owned, non-personalized, and availability isolated", async () => {
+  const shippingSources = await Promise.all(
+    appSourcePaths.map(async (path) => [path, await readFile(`${iosRoot}${path}`, "utf8")]),
+  );
+  const source = await readFile(
+    `${iosRoot}AidenOnTheGo/Features/Bots/AidenBotImagePlaygroundView.swift`,
+    "utf8",
+  );
+
+  assert.match(source, /@Environment\(\\\.supportsImagePlayground\)/u);
+  assert.match(source, /if #available\(iOS 18\.1, \*\)/u);
+  assert.match(source, /else if #unavailable\(iOS 18\.4\)/u);
+  assert.match(source, /@available\(iOS 18\.4, \*\)[\s\S]*?imagePlaygroundSheet/u);
+  assert.match(source, /in: \[\.animation, \.illustration, \.sketch\]/u);
+  assert.match(source, /imagePlaygroundPersonalizationPolicy\(\.disabled\)/u);
+  assert.match(source, /identity\.conceptTexts\.map\(ImagePlaygroundConcept\.text\)/u);
+  assert.match(source, /may use Private Cloud Compute/u);
+  assert.match(source, /Create with Apple Intelligence/u);
+  assert.match(source, /copyImmediately\(fromSystemCompletionURL: temporaryURL\)/u);
+  assert.match(source, /aidenBotImagePlaygroundCleanupAfterProcessLaunch/u);
+  assert.match(source, /\.isSymbolicLinkKey/u);
+  assert.match(source, /\.protectionKey: FileProtectionType\.complete/u);
+  assert.doesNotMatch(
+    source,
+    /ImageCreator|\.externalProvider|\.all\b|URLSession|\bprint\s*\(|\bLogger\s*\(|\bos_log\b|\bNSLog\b/u,
+  );
+  const app = shippingSources.find(([path]) => path.endsWith("/AidenOnTheGoApp.swift"))?.[1];
+  assert.match(app, /init\(\) \{\s*aidenBotImagePlaygroundCleanupAfterProcessLaunch\(\)/u);
+  assert.doesNotMatch(
+    source,
+    /imagePlaygroundPersonalizationPolicy\(\.(?:automatic|enabled)\)/u,
+  );
+  for (const [path, shippingSource] of shippingSources) {
+    assert.doesNotMatch(
+      shippingSource,
+      /ImageCreator|\.externalProvider|\bsourceImage\s*:|ImagePlaygroundConcept\.(?:sourceImage|image|extracted)/u,
+      `${path} must not bypass the reviewed name/purpose-only Image Playground wrapper`,
+    );
+    if (shippingSource.includes("import ImagePlayground")) {
+      assert.doesNotMatch(
+        shippingSource,
+        /\.all\b/u,
+        `${path} must enumerate the approved Image Playground styles`,
+      );
+    }
+  }
+});
+
 test("the DEBUG Bot regular-width evidence harness is deterministic and fixture-only", async () => {
   const source = await readFile(
     `${iosRoot}AidenOnTheGoTests/AidenBotPrototypeSnapshotTests.swift`,
@@ -191,6 +243,9 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   const app = sourceByPath.get("AidenOnTheGo/AidenOnTheGoApp.swift");
   const content = sourceByPath.get("AidenOnTheGo/ContentView.swift");
   const chat = sourceByPath.get("AidenOnTheGo/Features/Remote/AidenChatFeature.swift");
+  const botHome = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift");
+  const botEditor = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotEditorView.swift");
+  const botProfile = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotProfileView.swift");
   const count = (pattern) => [...allSwift.matchAll(pattern)].length;
 
   assert.equal(count(/\bstruct\s+AidenChatDetailView\b/gu), 1);
@@ -260,6 +315,12 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     chat,
     /guard !model\.isReadOnlyPresentation, autoStartVoice/u,
   );
+  assert.match(botHome, /private var bottomDock:[\s\S]*?TextField\("Search"[\s\S]*?Image\(systemName: "square\.and\.pencil"\)/u);
+  assert.match(botHome, /AidenBotCanonicalAvatarView\(/u);
+  assert.match(botProfile, /AidenBotCanonicalAvatarView\(/u);
+  assert.match(botEditor, /AidenBotGeneratedAvatarLifecycleView\([\s\S]*?AidenBotImagePlaygroundView\(/u);
+  assert.match(botEditor, /private var canSave:[\s\S]*?aidenBotEditorCanSubmitSettings\(hasAvatarCandidate: avatarModel\?\.hasCandidate == true\)/u);
+  assert.match(chat, /AidenBotCanonicalAvatarView\(/u);
   assert.match(
     chat,
     /AidenApprovalCard\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u,
