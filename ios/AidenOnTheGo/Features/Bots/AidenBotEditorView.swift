@@ -197,6 +197,29 @@ func aidenBotEditorCanSubmitSettings(hasAvatarCandidate: Bool) -> Bool {
     !hasAvatarCandidate
 }
 
+func aidenBotEditorResolvedDraft(
+    mode: AidenBotEditorMode,
+    catalog: AidenBotCapabilityCatalog,
+    bot: AidenBotDetail?
+) throws -> AidenBotEditorDraft {
+    switch mode {
+    case let .create(defaultAccess):
+        guard let draft = AidenBotEditorDraft(catalog: catalog, defaultAccess: defaultAccess)
+        else {
+            throw AidenBotContractError.invalidCombination("no available provider and model")
+        }
+        return draft
+    case .edit:
+        guard let bot else {
+            throw AidenBotContractError.invalidCombination("missing bot detail")
+        }
+        guard let draft = AidenBotEditorDraft(detail: bot, catalog: catalog) else {
+            throw AidenBotContractError.invalidCombination("no available provider and model")
+        }
+        return draft
+    }
+}
+
 struct AidenBotEditorView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let mode: AidenBotEditorMode
@@ -807,16 +830,11 @@ struct AidenBotEditorView: View {
             }
             guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
                   !Task.isCancelled else { return }
-            let loadedDraft: AidenBotEditorDraft?
-            switch mode {
-            case let .create(defaultAccess):
-                loadedDraft = AidenBotEditorDraft(catalog: loadedCatalog, defaultAccess: defaultAccess)
-            case .edit:
-                loadedDraft = loadedBot.flatMap { AidenBotEditorDraft(detail: $0, catalog: loadedCatalog) }
-            }
-            guard let loadedDraft else {
-                throw AidenBotContractError.invalidCombination("no available provider and model")
-            }
+            let loadedDraft = try aidenBotEditorResolvedDraft(
+                mode: mode,
+                catalog: loadedCatalog,
+                bot: loadedBot
+            )
             capturedContext = context
             catalog = loadedCatalog
             baselineBot = loadedBot

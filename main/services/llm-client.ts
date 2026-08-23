@@ -78,7 +78,13 @@ import {
   waitForGenerationStateClear,
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
-import { resolveModelRuntime, type ResolvedModelRuntime } from "./model-runtime.js";
+import {
+  preflightBotModelAuth,
+  resolveBotModelRuntime,
+  resolveModelRuntime,
+  type ResolvedModelRuntime,
+} from "./model-runtime.js";
+import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admission-core.js";
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
@@ -1150,10 +1156,26 @@ export const llmClient = {
         (botId) => botStore.get(botId),
       );
       if (authoritativeBot) {
-        const admission = await botRuntimeAuthority.admit({
-          audienceId: options.botAudienceId ?? BOT_DESKTOP_AUDIENCE_ID,
-          botId: authoritativeBot.id,
-          chatId: chat.id,
+        const providerId = chat.providerId;
+        const model = chat.model;
+        const botId = authoritativeBot.id;
+        if (!providerId || !model) {
+          throw new Error(
+            "This Bot chat needs an exact AI connection and model before it can reply.",
+          );
+        }
+        const admission = await admitBotAfterProviderAuthPreflight({
+          signal: initialization.controller.signal,
+          preflightAuth: () => preflightBotModelAuth(
+            providerId,
+            model,
+            initialization.controller.signal,
+          ),
+          admit: () => botRuntimeAuthority.admit({
+            audienceId: options.botAudienceId ?? BOT_DESKTOP_AUDIENCE_ID,
+            botId,
+            chatId: chat.id,
+          }),
         });
         const invalidate = () => {
           active.get(streamId)?.agent.abort();
@@ -1180,7 +1202,7 @@ export const llmClient = {
             model: params.model,
           },
           resolveManagedWorkspace: (botId) => botManagedWorkspace.resolve(botId),
-          resolveRuntime: resolveModelRuntime,
+          resolveRuntime: resolveBotModelRuntime,
           signal: initialization.controller.signal,
         });
         botContext = { admission, prepared };

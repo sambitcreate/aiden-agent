@@ -353,6 +353,9 @@ function fixture(input: {
         : {}),
     lease,
   });
+  const catalogInputs: Array<{
+    retainedProviders?: readonly { sourceProviderId: string; sourceModelId: string }[];
+  }> = [];
   const deps: BotRuntimeAuthorityDependencies = {
     botStore: { async get() { return currentBot; } },
     chatStore: { async get() { return currentChat; } },
@@ -388,7 +391,12 @@ function fixture(input: {
       },
       async assertAuthorityBindingsCurrent() { return undefined; },
     },
-    catalog: { async snapshotForRuntime() { return currentSnapshot; } },
+    catalog: {
+      async snapshotForRuntime(input) {
+        catalogInputs.push(input ?? {});
+        return currentSnapshot;
+      },
+    },
     managedWorkspace: {
       async resolve() { return workspace(); },
       async revalidate() {
@@ -415,6 +423,7 @@ function fixture(input: {
     invalidateInventory() { inventoryLeases.invalidate("settings"); },
     get activeInventoryLeases() { return inventoryLeases.activeCount(); },
     get homeRevalidations() { return homeRevalidations; },
+    get catalogInputs() { return catalogInputs; },
   };
 }
 
@@ -449,6 +458,10 @@ test("Full authority contains only currently available exact resources", async (
   assert.ok(Object.isFrozen(authority));
   assert.ok(Object.isFrozen(authority.connections));
   assert.ok(Object.isFrozen(authority.connections[0]!.tools));
+  assert.deepEqual(app.catalogInputs[0]?.retainedProviders, [{
+    sourceProviderId: "provider-a",
+    sourceModelId: "model-a",
+  }]);
 });
 
 test("legacy chats retain visible workspace identity but receive the managed home", async () => {
@@ -462,6 +475,10 @@ test("legacy chats retain visible workspace identity but receive the managed hom
   assert.equal(authority.managedHome.workspaceId, workspace().workspaceId);
   assert.equal(authority.workingDirectory, workspace().homePath);
   await admission.revalidateBeforeEffect();
+  assert.deepEqual(app.catalogInputs[1]?.retainedProviders, [{
+    sourceProviderId: "provider-a",
+    sourceModelId: "model-a",
+  }]);
 });
 
 test("a Custom chat reduction intersects the Bot ceiling and retains exact tool effects", async () => {

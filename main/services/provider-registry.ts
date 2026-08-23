@@ -28,6 +28,8 @@ import {
   withAidenPiCompatibility,
 } from "./pi-provider-compatibility.js";
 import { piModelMetadataFor } from "./pi-model-metadata.js";
+import { withBotProviderInventoryMutation } from "./bot-runtime-inventory-publication.js";
+import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 
 /** IDs used by Aiden before Pi became the provider authority. */
 const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
@@ -296,27 +298,29 @@ export class ProviderRegistry {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     timeout.unref?.();
-    try {
-      const result = await refreshPiCatalogs({
-        models: this.models,
-        credentials: this.credentials,
-        providerModelsStore: this.providerModelsStore,
-        // Launch revalidation is a stale-only pass over Aiden's cached Pi
-        // overlays. Do not invoke Radius' separate gateway discovery on every
-        // renderer launch. An explicit force refresh retains Pi's full behavior.
-        providerIds: providerIds ?? (force
-          ? undefined
-          : await staleCatalogProviderIds(this.models.getProviders(), this.providerModelsStore)),
-        force,
-        signal: controller.signal,
-      });
-      if (!result.aborted) return result.errors;
-      const errors = new Map(result.errors);
-      errors.set(providerIds?.[0] ?? "provider catalogs", new Error("Model refresh timed out."));
-      return errors;
-    } finally {
-      clearTimeout(timeout);
-    }
+    return withBotProviderInventoryMutation(async () => {
+      try {
+        const result = await refreshPiCatalogs({
+          models: this.models,
+          credentials: this.credentials,
+          providerModelsStore: this.providerModelsStore,
+          // Launch revalidation is a stale-only pass over Aiden's cached Pi
+          // overlays. Do not invoke Radius' separate gateway discovery on every
+          // renderer launch. An explicit force refresh retains Pi's full behavior.
+          providerIds: providerIds ?? (force
+            ? undefined
+            : await staleCatalogProviderIds(this.models.getProviders(), this.providerModelsStore)),
+          force,
+          signal: controller.signal,
+        });
+        if (!result.aborted) return result.errors;
+        const errors = new Map(result.errors);
+        errors.set(providerIds?.[0] ?? "provider catalogs", new Error("Model refresh timed out."));
+        return errors;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }, invalidateBotRuntimeInventoryAuthority);
   }
 
   /** Reject stale/hidden Pi selections before an agent run accepts user input. */

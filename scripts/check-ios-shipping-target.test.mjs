@@ -303,6 +303,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   const chat = sourceByPath.get("AidenOnTheGo/Features/Remote/AidenChatFeature.swift");
   const botHome = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift");
   const botEditor = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotEditorView.swift");
+  const botContract = sourceByPath.get("AidenOnTheGo/Models/AidenBot.swift");
   const botProfile = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotProfileView.swift");
   const count = (pattern) => [...allSwift.matchAll(pattern)].length;
 
@@ -377,6 +378,10 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(botHome, /AidenBotCanonicalAvatarView\(/u);
   assert.match(botProfile, /AidenBotCanonicalAvatarView\(/u);
   assert.match(botEditor, /AidenBotGeneratedAvatarLifecycleView\([\s\S]*?AidenBotImagePlaygroundView\(/u);
+  assert.match(botContract, /enum AidenBotContractError: Error, Equatable, LocalizedError/u);
+  assert.match(botContract, /Settings → Providers/u);
+  assert.match(botContract, /Update Aiden Agent and Aiden On The Go/u);
+  assert.match(botEditor, /loadError = error\.localizedDescription/u);
   assert.match(botEditor, /private var canSave:[\s\S]*?aidenBotEditorCanSubmitSettings\(hasAvatarCandidate: avatarModel\?\.hasCandidate == true\)/u);
   assert.match(chat, /AidenBotCanonicalAvatarView\(/u);
   assert.match(

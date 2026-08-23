@@ -9,6 +9,7 @@ import { invalidateChangedMcpConfigurationLeases } from "./mcp-config-lease.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 import {
   invalidateChangedBotPortableAuthority,
+  invalidateChangedBotProviderModelAuthority,
   invalidateChangedBotSettingsAuthority,
 } from "./bot-runtime-inventory-publication.js";
 
@@ -40,6 +41,24 @@ export const configStores = createPortableConfigStores(
       invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
     afterSettingsWritePublish: (previous, next) =>
       invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
+    beforeProviderModelExternalCacheCommit: (previous, next) =>
+      invalidateChangedBotProviderModelAuthority(
+        previous,
+        next,
+        invalidateBotRuntimeInventoryAuthority,
+      ),
+    beforeProviderModelWritePublish: (previous, next) =>
+      invalidateChangedBotProviderModelAuthority(
+        previous,
+        next,
+        invalidateBotRuntimeInventoryAuthority,
+      ),
+    afterProviderModelWritePublish: (previous, next) =>
+      invalidateChangedBotProviderModelAuthority(
+        previous,
+        next,
+        invalidateBotRuntimeInventoryAuthority,
+      ),
   },
 );
 

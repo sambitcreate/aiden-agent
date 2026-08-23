@@ -68,7 +68,7 @@ export async function preflightBotTurnAuthority(
 
 /** Fresh exact resource snapshot used only for main-owned runtime joins. */
 export async function resolveBotRuntimeCatalogSnapshot(
-  authority: Pick<BotRuntimeEffectiveAuthority, "botId" | "catalogRevision">,
+  authority: Pick<BotRuntimeEffectiveAuthority, "botId" | "catalogRevision" | "provider">,
   signal?: AbortSignal,
 ) {
   await initializeBotApplicationService();
@@ -76,6 +76,10 @@ export async function resolveBotRuntimeCatalogSnapshot(
   const snapshot = await botCapabilityCatalog.snapshotForRuntime({
     botId: authority.botId,
     ...(binding ? { retainedBindings: [binding] } : {}),
+    retainedProviders: [{
+      sourceProviderId: authority.provider.sourceProviderId,
+      sourceModelId: authority.provider.sourceModelId,
+    }],
     signal,
   });
   if (snapshot.catalog.revision !== authority.catalogRevision) {

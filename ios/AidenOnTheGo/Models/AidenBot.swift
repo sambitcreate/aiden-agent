@@ -1,8 +1,33 @@
 import Foundation
 
-enum AidenBotContractError: Error, Equatable {
+enum AidenBotContractError: Error, Equatable, LocalizedError {
     case invalidField(String)
     case invalidCombination(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidCombination("no available provider and model"):
+            String(
+                localized: "Set up a provider and model on your Mac. In Aiden Agent, open Settings → Providers, connect or refresh a provider, and make at least one chat model available. Then tap Try Again."
+            )
+        case .invalidCombination("unavailable custom access"):
+            String(
+                localized: "One or more selected AI, Files, Connections, or Skills are no longer available. Review this Bot’s access choices and try again."
+            )
+        case .invalidCombination("chat access exceeds bot"):
+            String(
+                localized: "This chat is asking for more access than the Bot currently allows. Reduce the chat’s access or expand the Bot’s access, then try again."
+            )
+        case .invalidCombination("full access notice"):
+            String(
+                localized: "Review and accept the Full Access notice before giving this Bot full access."
+            )
+        case .invalidField, .invalidCombination:
+            String(
+                localized: "Aiden Agent returned Bot information this version of Aiden On The Go can’t use. Update Aiden Agent and Aiden On The Go, then try again."
+            )
+        }
+    }
 }
 
 private struct AidenBotDynamicCodingKey: CodingKey {

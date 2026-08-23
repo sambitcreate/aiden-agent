@@ -6,7 +6,7 @@ import { createBotCapabilityInventoryPorts } from "./bot-capability-inventory-po
 import { createBotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import {
   botMcpCredentialSignature,
-  botProviderCredentialSignature,
+  createBotProviderCredentialSignature,
 } from "./bot-capability-credential-signatures.js";
 import { createBotCapabilityOpaqueKeyStore } from "./bot-capability-key-store.js";
 import {
@@ -20,6 +20,7 @@ import { createBotCapabilityStateCheckpoint } from "./bot-capability-state-check
 import { createBotLifecycleJournal } from "./bot-lifecycle-journal.js";
 import { createBotManagedWorkspaceService } from "./bot-managed-workspace.js";
 import { configStore } from "./config-store.js";
+import { listConfiguredProviders } from "./provider-list-main.js";
 import { inspectConfiguredMcpToolsForBotCatalog } from "./mcp.js";
 import {
   resolveBotMcpConnectionIdentities,
@@ -150,17 +151,23 @@ export const botCapabilityMigrationSeal = createBotCapabilityMigrationSeal({
   root: botServiceRoot,
 });
 
+const botProviderCredentialSignature = createBotProviderCredentialSignature();
+
 export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
   createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: () => opaqueKeyStore.load(),
     loadNoticeStatus: (audienceId) =>
       botCapabilityStore.noticeStatus(audienceId),
-    listProviders: () => configStore.listProviders(),
+    // Bots and ordinary chats must see the same main-owned provider authority.
+    // The inventory adapter below removes unconfigured connections and applies
+    // the narrower Bot protocol bounds before anything reaches iOS.
+    listProviders: listConfiguredProviders,
     providerCredentialSignature: async (provider, signal) => {
       if (signal.aborted) throw signal.reason;
       return botProviderCredentialSignature(
         provider,
         await opaqueKeyStore.load(),
+        signal,
       );
     },
     listMcpServers: () => configStore.listMcpServers(),

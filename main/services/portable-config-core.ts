@@ -999,6 +999,18 @@ export function createPortableConfigStores(
       previous: SettingsShape | null,
       next: SettingsShape,
     ) => void;
+    beforeProviderModelExternalCacheCommit?: (
+      previous: ProviderModelCacheShape | null,
+      next: ProviderModelCacheShape,
+    ) => void;
+    beforeProviderModelWritePublish?: (
+      previous: ProviderModelCacheShape | null,
+      next: ProviderModelCacheShape,
+    ) => void;
+    afterProviderModelWritePublish?: (
+      previous: ProviderModelCacheShape | null,
+      next: ProviderModelCacheShape,
+    ) => void;
   } = {},
 ) {
   const portable = new DataStore<PortableConfigShape>(
@@ -1051,7 +1063,12 @@ export function createPortableConfigStores(
     PROVIDER_MODEL_CACHE_FILENAME,
     { byProvider: {} },
     localRoot,
-    { normalize: normalizeProviderModelCacheShape },
+    {
+      normalize: normalizeProviderModelCacheShape,
+      beforeExternalCacheCommit: testHooks.beforeProviderModelExternalCacheCommit,
+      beforeWritePublish: testHooks.beforeProviderModelWritePublish,
+      afterWritePublish: testHooks.afterProviderModelWritePublish,
+    },
   );
 
   let migrationPromise: Promise<boolean> | null = null;

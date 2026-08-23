@@ -24,6 +24,7 @@ import {
   type BoundBotCustomSelection,
   type ReconciledBotCustomSelection,
 } from "./bot-capability-bindings.js";
+import type { BotRetainedProvider } from "./bot-capability-retained-provider.js";
 
 export interface BotApprovedLocationInventory {
   /** Main-only stable root identity. Never a path. */
@@ -58,7 +59,10 @@ export interface BotCapabilityInventoryPorts {
   loadOpaqueSelectionKey(): Promise<Uint8Array>;
   /** Notice acknowledgement is isolated to one authenticated paired principal. */
   loadNoticeStatus(audienceId: string): Promise<BotNoticeStatus>;
-  listProviders(signal: AbortSignal): Promise<readonly BotProviderInventory[]>;
+  listProviders(
+    signal: AbortSignal,
+    retained?: readonly { sourceProviderId: string; sourceModelId: string }[],
+  ): Promise<readonly BotProviderInventory[]>;
   inspectMacFiles(signal: AbortSignal): Promise<BotMacFileInventory>;
   inspectShell(signal: AbortSignal): Promise<BotShellInventory>;
   inspectConnections(signal: AbortSignal): Promise<readonly BotConnectionInventory[]>;
@@ -118,6 +122,7 @@ export class BotCapabilityCatalogMainService {
   private async buildSnapshot(input: {
     notice: BotNoticeStatus | Promise<BotNoticeStatus>;
     retainedBindings?: readonly BoundBotCustomSelection[];
+    retainedProviders?: readonly BotRetainedProvider[];
     signal?: AbortSignal;
     botId?: string;
   }): Promise<BotCapabilityCatalogSnapshot> {
@@ -138,7 +143,16 @@ export class BotCapabilityCatalogMainService {
       ] = await Promise.all([
         this.selectionKey(),
         input.notice,
-        this.ports.listProviders(controller.signal),
+        this.ports.listProviders(
+          controller.signal,
+          [
+            ...(input.retainedBindings?.map(({ provider }) => ({
+              sourceProviderId: provider.sourceProviderId,
+              sourceModelId: provider.sourceModelId,
+            })) ?? []),
+            ...(input.retainedProviders ?? []),
+          ],
+        ),
         this.ports.inspectMacFiles(controller.signal),
         this.ports.inspectShell(controller.signal),
         this.ports.inspectConnections(controller.signal),
@@ -198,6 +212,7 @@ export class BotCapabilityCatalogMainService {
   async snapshot(input: {
     audienceId: string;
     retainedBindings?: readonly BoundBotCustomSelection[];
+    retainedProviders?: readonly BotRetainedProvider[];
     signal?: AbortSignal;
     botId?: string;
   }): Promise<BotCapabilityCatalogSnapshot> {
@@ -206,6 +221,7 @@ export class BotCapabilityCatalogMainService {
     return this.buildSnapshot({
       notice: this.ports.loadNoticeStatus(audienceId),
       retainedBindings: input.retainedBindings,
+      retainedProviders: input.retainedProviders,
       signal: input.signal,
       botId: input.botId,
     });
@@ -218,6 +234,7 @@ export class BotCapabilityCatalogMainService {
   async snapshotForRuntime(
     input: {
       retainedBindings?: readonly BoundBotCustomSelection[];
+      retainedProviders?: readonly BotRetainedProvider[];
       signal?: AbortSignal;
       botId?: string;
     } = {},
@@ -228,6 +245,7 @@ export class BotCapabilityCatalogMainService {
         requiresAcknowledgement: true,
       },
       retainedBindings: input.retainedBindings,
+      retainedProviders: input.retainedProviders,
       signal: input.signal,
       botId: input.botId,
     });

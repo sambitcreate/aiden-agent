@@ -41,6 +41,7 @@ import {
   providerConnectionSnapshot,
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
+import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import type {
   ProviderDeployment,
   ProviderKind,
@@ -228,8 +229,10 @@ async function refreshProviderCatalogs(providerIds?: readonly string[], force = 
 }
 
 export function registerProviderHandlers(): void {
-  forwardCodexProviderStatusChanges(providerRegistry.codex, (channel, event) =>
-    ipcMain.broadcast(channel, event),
+  forwardCodexProviderStatusChanges(
+    providerRegistry.codex,
+    (channel, event) => ipcMain.broadcast(channel, event),
+    () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
   );
 
   ipcMain.handle("providers:list", listProviders);

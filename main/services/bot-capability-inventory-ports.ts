@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { BotNoticeStatus } from "../../renderer/shared/bot-capabilities.js";
+import {
+  BOT_CAPABILITY_LIMITS,
+  type BotNoticeStatus,
+} from "../../renderer/shared/bot-capabilities.js";
+import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
+import { isModelHidden } from "../../renderer/shared/model-visibility.js";
 import type { AppSettings, McpServer, Provider } from "./types.js";
 import type { BotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import {
@@ -19,7 +24,7 @@ export interface BotCapabilityInventoryPortDependencies {
   loadOpaqueSelectionKey(): Promise<Uint8Array>;
   loadNoticeStatus(audienceId: string): Promise<BotNoticeStatus>;
   listProviders(): Promise<readonly Provider[]>;
-  providerCredentialSignature(provider: Provider, signal: AbortSignal): Promise<string>;
+  providerCredentialSignature(provider: Provider, signal: AbortSignal): Promise<string | undefined>;
   listMcpServers(): Promise<readonly McpServer[]>;
   inspectMcpScopes(signal: AbortSignal): Promise<readonly SubagentMcpScopeV2[]>;
   listSkills(target?: BotCapabilityInventoryTarget): Promise<readonly BotResolvedSkill[]>;
@@ -82,7 +87,7 @@ function providerInventory(
     }),
     models: provider.models.flatMap((modelId) => {
       const metadata = provider.modelMetadata?.[modelId];
-      if (!modelId || metadata?.type === "embedding") return [];
+      if (!modelId || isNonChatModel({ model: modelId, metadataType: metadata?.type })) return [];
       return [
         {
           sourceId: modelId,
@@ -97,6 +102,71 @@ function providerInventory(
       ];
     }),
   };
+}
+
+/**
+ * The canonical provider list also contains setup choices that are not usable
+ * yet and can exceed the intentionally smaller Bot wire bounds. Keep the same
+ * authority as ordinary chat while projecting only configured chat models in
+ * stable provider/model order.
+ */
+function botCatalogProviderInputs(
+  providers: readonly Provider[],
+  hiddenModelsByProvider: AppSettings["hiddenModelsByProvider"],
+  retained: readonly { sourceProviderId: string; sourceModelId: string }[] = [],
+): Provider[] {
+  const selected: Provider[] = [];
+  let remainingModels: number = BOT_CAPABILITY_LIMITS.modelsTotal;
+  const providerById = new Map(providers.map((provider) => [provider.id, provider] as const));
+  const retainedModels = new Map<string, string[]>();
+  for (const { sourceProviderId, sourceModelId } of retained) {
+    const provider = providerById.get(sourceProviderId);
+    if (!provider?.models.includes(sourceModelId)) continue;
+    const models = retainedModels.get(sourceProviderId) ?? [];
+    if (!models.includes(sourceModelId)) models.push(sourceModelId);
+    retainedModels.set(sourceProviderId, models);
+  }
+  const orderedProviders = [
+    ...[...retainedModels.keys()].map((sourceProviderId) => providerById.get(sourceProviderId)),
+    ...providers,
+  ].filter((provider, index, values): provider is Provider =>
+    provider !== undefined && values.findIndex((candidate) => candidate?.id === provider.id) === index
+  );
+
+  for (const provider of orderedProviders) {
+    if (selected.length >= BOT_CAPABILITY_LIMITS.providers || remainingModels === 0) break;
+    if (provider.needsKey === true && provider.hasKey !== true) continue;
+
+    const seen = new Set<string>();
+    const models: string[] = [];
+    const orderedModels = [
+      ...(retainedModels.get(provider.id) ?? []),
+      ...provider.models,
+    ];
+    for (const modelId of orderedModels) {
+      if (
+        models.length >= BOT_CAPABILITY_LIMITS.modelsPerProvider ||
+        models.length >= remainingModels
+      ) {
+        break;
+      }
+      if (
+        !modelId ||
+        seen.has(modelId) ||
+        (isModelHidden(hiddenModelsByProvider, provider.id, modelId) &&
+          !(retainedModels.get(provider.id) ?? []).includes(modelId)) ||
+        isNonChatModel({ model: modelId, metadataType: provider.modelMetadata?.[modelId]?.type })
+      ) {
+        continue;
+      }
+      seen.add(modelId);
+      models.push(modelId);
+    }
+    if (models.length === 0) continue;
+    remainingModels -= models.length;
+    selected.push({ ...provider, models });
+  }
+  return selected;
 }
 
 function connectionInventory(
@@ -235,17 +305,35 @@ export function createBotCapabilityInventoryPorts(
   return {
     loadOpaqueSelectionKey: () => dependencies.loadOpaqueSelectionKey(),
     loadNoticeStatus: (audienceId) => dependencies.loadNoticeStatus(audienceId),
-    async listProviders(signal) {
+    async listProviders(signal, retained) {
       if (signal.aborted) throw signal.reason;
-      const configured = await dependencies.listProviders();
+      const [allProviders, settings] = await Promise.all([
+        dependencies.listProviders(),
+        dependencies.getSettings(),
+      ]);
+      const configuredProviders = allProviders.filter(
+        (provider) => provider.needsKey !== true || provider.hasKey === true,
+      );
       const signatures = await Promise.all(
-        configured.map((provider) => dependencies.providerCredentialSignature(provider, signal)),
+        configuredProviders.map(async (provider) => ({
+          provider,
+          signature: await dependencies.providerCredentialSignature(provider, signal),
+        })),
+      );
+      const signatureByProvider = new Map(
+        signatures.flatMap(({ provider, signature }) =>
+          signature === undefined ? [] : [[provider.id, signature] as const]),
+      );
+      const configured = botCatalogProviderInputs(
+        configuredProviders.filter((provider) => signatureByProvider.has(provider.id)),
+        settings.hiddenModelsByProvider,
+        retained,
       );
       const incarnations = await dependencies.incarnations.reconcileNamespace(
         "provider",
-        configured.map((provider, index) => ({
+        configured.map((provider) => ({
           sourceId: provider.id,
-          credentialSignature: signatures[index]!,
+          credentialSignature: signatureByProvider.get(provider.id)!,
         })),
       );
       const byId = new Map(incarnations.map((value) => [value.sourceId, value] as const));

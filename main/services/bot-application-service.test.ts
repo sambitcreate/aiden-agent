@@ -91,6 +91,10 @@ function fixture(options: {
 } = {}) {
   const events: string[] = [];
   const catalogTargets: Array<string | undefined> = [];
+  const catalogRetainedProviders: Array<readonly {
+    sourceProviderId: string;
+    sourceModelId: string;
+  }[] | undefined> = [];
   const bots = [...(options.bots ?? [])];
   const chats = new Map<string, Chat>();
   const policies = new Map<string, BotAccessView>();
@@ -453,13 +457,22 @@ function fixture(options: {
       invalidateChatAuthority() { events.push("chat-policy:fence"); },
     },
     catalog: {
-      async snapshot(input?: { retainedBindings?: readonly unknown[]; botId?: string }) {
+      async snapshot(input?: {
+        retainedBindings?: readonly unknown[];
+        retainedProviders?: readonly { sourceProviderId: string; sourceModelId: string }[];
+        botId?: string;
+      }) {
         catalogTargets.push(input?.botId);
+        catalogRetainedProviders.push(input?.retainedProviders);
         if (input?.retainedBindings?.length) events.push("catalog:retained-binding");
         return catalog();
       },
-      async snapshotForRuntime(input?: { botId?: string }) {
+      async snapshotForRuntime(input?: {
+        botId?: string;
+        retainedProviders?: readonly { sourceProviderId: string; sourceModelId: string }[];
+      }) {
         catalogTargets.push(input?.botId);
+        catalogRetainedProviders.push(input?.retainedProviders);
         return catalog();
       },
       async bindCustom(input?: { botId?: string }) {
@@ -527,6 +540,7 @@ function fixture(options: {
     homes,
     pending,
     catalogTargets,
+    catalogRetainedProviders,
   };
 }
 
@@ -1358,6 +1372,9 @@ test("Bot and chat access catalogs are scoped to their owning Bot while create i
   await app.service.initialize();
   app.catalogTargets.length = 0;
   const chat = await app.service.createChat({ audienceId: "device:a", botId: owner.id });
+  chat.providerId = "provider:late";
+  chat.model = "model:late";
+  app.chats.set(chat.id, chat);
   await app.service.updateChatAccess({
     audienceId: "device:a",
     botId: owner.id,
@@ -1369,6 +1386,10 @@ test("Bot and chat access catalogs are scoped to their owning Bot while create i
       expectedBotPolicyRevision: app.policies.get(owner.id)!.revision,
     },
   });
+  assert.deepEqual(app.catalogRetainedProviders[app.catalogRetainedProviders.length - 1], [{
+    sourceProviderId: chat.providerId,
+    sourceModelId: chat.model,
+  }]);
   await app.service.createBot({
     audienceId: "device:a",
     bot: { name: "New", instructions: "Help.", avatar: "spark" },
@@ -1416,6 +1437,9 @@ test("retained Bot authorization preserves archived handles and admits active wr
     audienceId: "device:a",
     botId: owner.id,
   });
+  chat.providerId = "provider:late";
+  chat.model = "model:late";
+  app.chats.set(chat.id, chat);
   app.events.length = 0;
   assert.equal(await app.service.authorizeRetainedChat({
     audienceId: "device:a",
@@ -1429,6 +1453,10 @@ test("retained Bot authorization preserves archived handles and admits active wr
     chatId: chat.id,
     access: "write",
   }), true);
+  assert.deepEqual(app.catalogRetainedProviders[app.catalogRetainedProviders.length - 1], [{
+    sourceProviderId: chat.providerId,
+    sourceModelId: chat.model,
+  }]);
   assert.deepEqual(
     app.events.filter(
       (event) => event.startsWith("policy:a") || event === "policy:release",

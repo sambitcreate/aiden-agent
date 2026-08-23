@@ -4,13 +4,67 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import type { Credential } from "@earendil-works/pi-ai";
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 import { createBotCapabilityCatalogMainService } from "./bot-capability-catalog-main.js";
+import { createBotProviderCredentialSignatureCore } from "./bot-capability-credential-signatures-core.js";
 import { createBotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import { createBotCapabilityInventoryPorts, type BotResolvedSkill } from "./bot-capability-inventory-ports.js";
 import { createBotCapabilityStore } from "./bot-capability-store.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+
+test("Bot provider signatures bind stored and custom authority while rejecting ambient-only auth", async () => {
+  let stored: Credential | undefined;
+  let custom: unknown;
+  const sign = createBotProviderCredentialSignatureCore({
+    readBuiltinCredential: async () => stored,
+    readCustomCredential: async () => custom,
+  });
+  const key = Buffer.alloc(32, 7);
+  const signal = new AbortController().signal;
+  const builtin = {
+    id: "builtin",
+    kind: "openai" as const,
+    label: "Builtin",
+    baseUrl: "",
+    models: ["chat"],
+    needsKey: true,
+    hasKey: true,
+    isBuiltin: true,
+  };
+  const customProvider = {
+    ...builtin,
+    id: "custom:provider",
+    label: "Custom",
+    isBuiltin: false,
+  };
+
+  stored = { type: "api_key", key: "stored-secret-a" };
+  const apiKeyA = await sign(builtin, key, signal);
+  stored = { type: "api_key", key: "stored-secret-b" };
+  const apiKeyB = await sign(builtin, key, signal);
+  stored = { type: "oauth", access: "oauth-a", refresh: "refresh-a", expires: 1 };
+  const oauth = await sign(builtin, key, signal);
+
+  stored = undefined;
+  assert.equal(await sign(builtin, key, signal), undefined);
+  stored = { type: "api_key", env: { AWS_PROFILE: "ambient-profile" } };
+  assert.equal(await sign(builtin, key, signal), undefined);
+  stored = { type: "api_key", key: "   ", env: { GOOGLE_APPLICATION_CREDENTIALS: "/adc" } };
+  assert.equal(await sign(builtin, key, signal), undefined);
+
+  custom = "custom-secret-a";
+  const customA = await sign(customProvider, key, signal);
+  custom = "custom-secret-b";
+  const customB = await sign(customProvider, key, signal);
+
+  const signatures = [apiKeyA, apiKeyB, oauth, customA, customB];
+  assert.equal(signatures.every((value) => value !== undefined), true);
+  assert.equal(new Set(signatures).size, signatures.length);
+  for (const value of signatures) assert.match(value!, /^[a-f0-9]{64}$/u);
+  assert.doesNotMatch(JSON.stringify(signatures), /stored-secret|oauth-a|custom-secret/u);
+});
 
 test("production-shaped catalogs keep restart identity and rotate exact opaque grants", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-production-catalog-"));
@@ -169,5 +223,28 @@ test("Bot-targeted catalogs isolate managed-home skills and stay stable across r
   assert.deepEqual(
     restartedA.catalog.skills.map(({ id, label }) => ({ id, label })),
     botA.catalog.skills.map(({ id, label }) => ({ id, label })),
+  );
+});
+
+test("shipping Bot inventory is wired to canonical Pi providers and model drift fences", async () => {
+  const services = await fs.readFile(
+    path.join(process.cwd(), "main/services/bot-capability-services-main.ts"),
+    "utf8",
+  );
+  const models = await fs.readFile(
+    path.join(process.cwd(), "main/services/provider-registry.ts"),
+    "utf8",
+  );
+
+  assert.match(services, /import \{ listConfiguredProviders \} from "\.\/provider-list-main\.js";/u);
+  assert.match(services, /listProviders: listConfiguredProviders/u);
+  assert.doesNotMatch(services, /listProviders:\s*\(\)\s*=>\s*configStore\.listProviders\(\)/u);
+  assert.match(
+    models,
+    /withBotProviderInventoryMutation\(async \(\) =>/u,
+  );
+  assert.match(
+    models,
+    /\}, invalidateBotRuntimeInventoryAuthority\)/u,
   );
 });

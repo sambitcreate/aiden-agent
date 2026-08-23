@@ -10,6 +10,10 @@ import type {
   BotUpdateInput,
 } from "../../renderer/shared/bots.js";
 import type { BotCapabilityCatalogMainService } from "./bot-capability-catalog-main.js";
+import {
+  retainedBotProviderForChat,
+  type BotRetainedProvider,
+} from "./bot-capability-retained-provider.js";
 import type { BotCapabilityStore } from "./bot-capability-store.js";
 import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
 import type {
@@ -242,8 +246,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     return current;
   };
 
-  const snapshotForAudience = (audienceId: string, botId?: string) =>
-    deps.catalog.snapshot({ audienceId, botId });
+  const snapshotForAudience = (
+    audienceId: string,
+    botId?: string,
+    retainedProviders?: readonly BotRetainedProvider[],
+  ) => deps.catalog.snapshot({ audienceId, botId, retainedProviders });
 
   const withInventoryLease = async <Result>(
     action: (assertCurrent: () => void) => Promise<Result>,
@@ -1205,7 +1212,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           throw new Error("This Bot chat is no longer available.");
         }
         return withInventoryLease(async (assertCurrent) => {
-          const snapshot = await snapshotForAudience(input.audienceId, input.botId);
+          const snapshot = await snapshotForAudience(
+            input.audienceId,
+            input.botId,
+            retainedBotProviderForChat(chat),
+          );
           assertCurrent();
           return deps.capabilityStore.updateChatPolicy({
             chatId: input.chatId,
@@ -1302,6 +1313,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         const snapshot = await deps.catalog.snapshotForRuntime({
           botId: input.botId,
           ...(binding ? { retainedBindings: [binding] } : {}),
+          retainedProviders: retainedBotProviderForChat(chat),
         });
         const admission = await deps.capabilityStore.admit({
           audienceId: input.audienceId,

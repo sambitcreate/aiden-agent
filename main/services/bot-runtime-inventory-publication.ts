@@ -1,7 +1,28 @@
-import type { PortableConfigShape, SettingsShape } from "./portable-config-core.js";
+import type {
+  PortableConfigShape,
+  ProviderModelCacheShape,
+  SettingsShape,
+} from "./portable-config-core.js";
 import type { BotRuntimeInventoryMutation } from "./bot-runtime-inventory-lease.js";
 
 type Invalidate = (reason: BotRuntimeInventoryMutation) => void;
+
+/**
+ * Fence both sides of a Pi catalog refresh. Its durable store write happens
+ * before Pi publishes the refreshed in-memory models, so either edge alone
+ * leaves a window where a Bot turn could acquire stale authority.
+ */
+export async function withBotProviderInventoryMutation<T>(
+  action: () => Promise<T>,
+  invalidate: Invalidate,
+): Promise<T> {
+  invalidate("provider_configuration");
+  try {
+    return await action();
+  } finally {
+    invalidate("provider_configuration");
+  }
+}
 
 export function invalidateChangedBotPortableAuthority(
   previous: PortableConfigShape | null,
@@ -17,6 +38,16 @@ export function invalidateChangedBotPortableAuthority(
   }
   if (JSON.stringify(previous.skills) !== JSON.stringify(next.skills)) {
     invalidate("skill_configuration");
+  }
+}
+
+export function invalidateChangedBotProviderModelAuthority(
+  previous: ProviderModelCacheShape | null,
+  next: ProviderModelCacheShape,
+  invalidate: Invalidate,
+): void {
+  if (previous && JSON.stringify(previous.byProvider) !== JSON.stringify(next.byProvider)) {
+    invalidate("provider_configuration");
   }
 }
 

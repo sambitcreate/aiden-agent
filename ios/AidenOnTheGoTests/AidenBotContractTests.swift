@@ -50,6 +50,74 @@ final class AidenBotContractTests: XCTestCase {
         )
     }
 
+    func testBotContractErrorsGiveSafeActionableRecoveryCopy() {
+        let providerError = AidenBotContractError.invalidCombination(
+            "no available provider and model"
+        ).localizedDescription
+        XCTAssertTrue(providerError.contains("Settings → Providers"))
+        XCTAssertTrue(providerError.contains("chat model"))
+        XCTAssertTrue(providerError.contains("Try Again"))
+        XCTAssertFalse(providerError.contains("error 1"))
+
+        XCTAssertTrue(
+            AidenBotContractError.invalidCombination("unavailable custom access")
+                .localizedDescription.contains("Review this Bot’s access choices"),
+        )
+        XCTAssertTrue(
+            AidenBotContractError.invalidCombination("chat access exceeds bot")
+                .localizedDescription.contains("Reduce the chat’s access"),
+        )
+        XCTAssertTrue(
+            AidenBotContractError.invalidCombination("full access notice")
+                .localizedDescription.contains("Full Access notice"),
+        )
+
+        let invalidField = AidenBotContractError.invalidField("providerId").localizedDescription
+        let invalidCombination = AidenBotContractError.invalidCombination(
+            "private internal invariant"
+        ).localizedDescription
+        XCTAssertEqual(invalidField, invalidCombination)
+        XCTAssertFalse(invalidField.contains("providerId"))
+        XCTAssertFalse(invalidCombination.contains("private internal invariant"))
+        XCTAssertTrue(invalidField.contains("Update Aiden Agent"))
+    }
+
+    func testBotEditorNoProviderBranchReturnsProviderSetupRecovery() throws {
+        var fixture = try sharedFixtureObject()
+        let decodedFixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: try data(for: fixture)
+        )
+        var catalogObject = try XCTUnwrap(fixture["botCapabilityCatalog"] as? [String: Any])
+        catalogObject["providers"] = []
+        fixture["botCapabilityCatalog"] = catalogObject
+        let catalog = try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self,
+            from: data(for: catalogObject)
+        )
+
+        XCTAssertThrowsError(
+            try aidenBotEditorResolvedDraft(
+                mode: .create(defaultAccess: .recommended),
+                catalog: catalog,
+                bot: nil
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Settings → Providers"))
+            XCTAssertTrue(error.localizedDescription.contains("Try Again"))
+        }
+        XCTAssertThrowsError(
+            try aidenBotEditorResolvedDraft(
+                mode: .edit(botID: decodedFixture.botDetail.id),
+                catalog: catalog,
+                bot: decodedFixture.botDetail
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Settings → Providers"))
+            XCTAssertTrue(error.localizedDescription.contains("Try Again"))
+        }
+    }
+
     func testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() throws {
         let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
         let fixture = try AidenRemoteJSONDecoder.decode(

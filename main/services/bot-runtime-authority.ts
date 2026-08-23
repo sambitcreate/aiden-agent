@@ -15,6 +15,7 @@ import {
   type BoundBotSkill,
 } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogMainService } from "./bot-capability-catalog-main.js";
+import { retainedBotProviderForChat } from "./bot-capability-retained-provider.js";
 import type {
   BotCapabilityCatalogSnapshot,
   BotCatalogConnectionResource,
@@ -500,6 +501,7 @@ export class BotRuntimeAuthorityResolver {
         snapshot = await this.deps.catalog.snapshotForRuntime({
           botId: input.botId,
           retainedBindings: await retainedBinding(this.deps, input.botId),
+          retainedProviders: retainedBotProviderForChat(chat),
         });
       } catch {
         fail("capability_changed");
@@ -566,6 +568,7 @@ export class BotRuntimeAuthorityResolver {
             const currentSnapshot = await this.deps.catalog.snapshotForRuntime({
               botId: input.botId,
               retainedBindings: await retainedBinding(this.deps, input.botId),
+              retainedProviders: retainedBotProviderForChat(current.chat),
             });
             if (currentSnapshot.catalog.revision !== authority.catalogRevision) {
               fail("capability_changed");
