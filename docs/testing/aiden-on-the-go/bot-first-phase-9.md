@@ -33,6 +33,13 @@ Physical XCTest result bundle:
 - Focused tests compiled, signed, installed, and ran on the connected unlocked iPhone 13 Pro (`00008110-00063CD91E98801E`).
 - No simulator was used.
 
+## Internal TestFlight evidence
+
+- Version `0.1.0 (18)` was archived from commit `9691c7d00`, uploaded with the checked-in internal-only export policy, and processed as `VALID`.
+- Exact App Store Connect build: `47ca3b75-24c4-4fa5-bb28-14767a04fbbe`.
+- Assigned only to `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`): `internalBuildState=IN_BETA_TESTING`, `externalBuildState=NOT_APPLICABLE`.
+- App Store Connect reports minimum iOS 18.0 and `usesNonExemptEncryption=false`. No external group, Beta App Review, App Review, metadata, pricing, screenshot, or availability mutation was performed.
+
 ## External/manual gates still open
 
 - Eligible Apple Intelligence hardware for successful Image Playground/PCC acceptance.
