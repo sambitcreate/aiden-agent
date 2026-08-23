@@ -11,7 +11,7 @@ Status: implementation complete; staged rollout and external physical-system acc
 - Existing Mac Bot roster, detail, and shared-chat surfaces now display the canonical photo accepted on iOS over the semantic fallback. The main process projects verified PNG content without exposing a private path. Renderer reads are visibility-gated, selected-Bot prioritized, capped at four concurrent requests, and retained within 64 entries and 32 MiB. Queued work is cancelled when the final row subscriber leaves; already-active work remains bounded.
 - Telegram continues through the shared protected Bot resolver. A regression locks its surface ceiling so Computer Use, subagents, and MCP approval prompts cannot be admitted through Telegram even when a Bot otherwise has Full Access.
 - The desktop onboarding Bots tile now describes the shipped reusable-helper behavior without promising the deferred Mac Messages-style redesign. Its existing dedicated 1024 × 1024 transparent artwork remains unchanged and tested.
-- App Store metadata now identifies version 0.1.0 build 15 as the current processed internal TestFlight candidate.
+- App Store metadata now identifies version 0.1.0 build 17 as the current processed internal TestFlight candidate.
 
 ## Review and remediation
 
@@ -48,6 +48,10 @@ The Bot catalog now reads the same canonical configured-provider inventory as or
 On iOS, the editor's real create/edit draft resolver now throws a tested, localized provider-setup recovery message for an empty provider/model catalog. Recoverable Full Access, Custom Access, and per-chat ceiling errors have their own guidance; unknown contract failures remain redacted behind the compatible-version message.
 
 Final live restart evidence used the existing development profile and pairing: the corrected Mac app restarted Remote on LAN port `49220`; the normal signed Bots-enabled app installed over the existing iPhone 13 Pro app and launched without an uninstall; and the paired device immediately received HTTP 200 responses for `botAccessNotice`, `botConversations`, and `bots`. The user can therefore continue the New Bot editor acceptance from the relaunched app without repairing the connection first.
+
+## Internal TestFlight build 17
+
+After explicit owner authorization, version `0.1.0 (17)` was archived from source commit `3b627fd6377886a36c1eb61945071e599c34dd1b` with the Bots rollout enabled. The release-policy suite passed 20 Ruby tests/42 assertions and 30 Node tests. The exact exported internal-only IPA (`SHA-256 60a985c44c3e3e2c75aa926ea3a2b6d4e99765511af899b37ffab28640de5ef6`) has Apple Distribution signatures for the app and widget, `get-task-allow=false`, the exact approved bundle/App Group identities, `TFInternalTestingOnly=true`, no XCTest content, and a valid strict deep signature. App Store Connect build `b5bf4299-7e86-4304-97e1-77e77af9b09c` processed as `VALID`, was assigned to exact group `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`), reports `IN_BETA_TESTING`, and remains externally `NOT_APPLICABLE`.
 
 ## Rollout and open release acceptance
 
