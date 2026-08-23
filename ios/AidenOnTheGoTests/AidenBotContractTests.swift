@@ -1667,4 +1667,167 @@ final class AidenBotContractTests: XCTestCase {
 
         XCTAssertNil(try draft.identityPatch(comparedTo: fixture.botDetail))
     }
+
+    func testBotEditorDirtyStateDistinguishesCleanCreateAndEditBaselines() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+        let cleanCreate = try XCTUnwrap(
+            AidenBotEditorDraft(catalog: fixture.botCapabilityCatalog, defaultAccess: .custom)
+        )
+        XCTAssertFalse(aidenBotEditorIsDirty(
+            draft: cleanCreate,
+            cleanCreateDraft: cleanCreate,
+            baselineBot: nil,
+            catalog: fixture.botCapabilityCatalog,
+            isCreating: true
+        ))
+        var dirtyCreate = cleanCreate
+        dirtyCreate.name = "Helper"
+        XCTAssertTrue(aidenBotEditorIsDirty(
+            draft: dirtyCreate,
+            cleanCreateDraft: cleanCreate,
+            baselineBot: nil,
+            catalog: fixture.botCapabilityCatalog,
+            isCreating: true
+        ))
+
+        var editDraft = try XCTUnwrap(
+            AidenBotEditorDraft(detail: fixture.botDetail, catalog: fixture.botCapabilityCatalog)
+        )
+        XCTAssertFalse(aidenBotEditorIsDirty(
+            draft: editDraft,
+            cleanCreateDraft: nil,
+            baselineBot: fixture.botDetail,
+            catalog: fixture.botCapabilityCatalog,
+            isCreating: false
+        ))
+        editDraft.purpose += " updated"
+        XCTAssertTrue(aidenBotEditorIsDirty(
+            draft: editDraft,
+            cleanCreateDraft: nil,
+            baselineBot: fixture.botDetail,
+            catalog: fixture.botCapabilityCatalog,
+            isCreating: false
+        ))
+    }
+
+    func testBotEditorCreateFailureFreezesOnlyAmbiguousOutcomes() {
+        XCTAssertTrue(
+            aidenBotEditorCreateFailureIsAmbiguous(URLError(.networkConnectionLost)),
+            "A lost response may follow a committed POST and must retain the exact key."
+        )
+        XCTAssertTrue(
+            aidenBotEditorCreateFailureIsAmbiguous(AidenRemoteClientError.invalidResponse),
+            "A malformed success response is still ambiguous."
+        )
+        XCTAssertTrue(
+            aidenBotEditorCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(503))
+        )
+        XCTAssertFalse(
+            aidenBotEditorCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(409)),
+            "A definite conflict must unlock the draft for correction."
+        )
+        XCTAssertFalse(
+            aidenBotEditorCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(422)),
+            "A validation response must unlock the draft for correction."
+        )
+    }
+
+    func testCustomAccessDirtyStateUsesLoadedOrReconciledBaseline() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let fixture = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+        let clean = try XCTUnwrap(
+            AidenBotCustomAccessDraft(
+                access: fixture.botPolicyUpdate.response,
+                catalog: fixture.botCapabilityCatalog
+            )
+        )
+        XCTAssertFalse(aidenBotCustomAccessIsDirty(draft: clean, cleanDraft: clean))
+        var changed = clean
+        changed.shellEnabled.toggle()
+        XCTAssertTrue(aidenBotCustomAccessIsDirty(draft: changed, cleanDraft: clean))
+        XCTAssertFalse(aidenBotCustomAccessIsDirty(draft: changed, cleanDraft: changed))
+    }
+
+    func testFavoriteOrderSupportsMembershipAndStableReordering() {
+        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b"], moving: "c", .add), ["a", "b", "c"])
+        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .earlier), ["b", "a", "c"])
+        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .later), ["a", "c", "b"])
+        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .remove), ["a", "c"])
+    }
+
+    func testConversationDeletionRequiresIdleActiveWritableBot() throws {
+        var fixture = try sharedFixtureObject()
+        var conversation = try XCTUnwrap(fixture["botConversation"] as? [String: Any])
+        conversation["activityState"] = "idle"
+        conversation["canRespondToApproval"] = false
+        fixture["botConversation"] = conversation
+        let item = try AidenRemoteJSONDecoder.decode(
+            AidenBotConversationItem.self,
+            from: data(for: conversation)
+        )
+
+        XCTAssertTrue(aidenBotConversationCanDelete(item, botHealth: .ready, canWrite: true))
+        XCTAssertFalse(aidenBotConversationCanDelete(item, botHealth: .archived, canWrite: true))
+        XCTAssertFalse(aidenBotConversationCanDelete(item, botHealth: .ready, canWrite: false))
+    }
+
+    func testConversationSelectionAccessibilityExposesSelectedAndArchivedReadOnlyState() {
+        let selected = aidenBotConversationSelectionAccessibility(
+            isSelecting: true,
+            isSelected: true,
+            canDelete: true,
+            botHealth: .ready,
+            canWrite: true,
+            activityState: .idle
+        )
+        XCTAssertEqual(selected.value, "Selected")
+        XCTAssertTrue(selected.isSelected)
+        XCTAssertEqual(selected.hint, "Selects this chat for deletion.")
+
+        let archived = aidenBotConversationSelectionAccessibility(
+            isSelecting: true,
+            isSelected: false,
+            canDelete: false,
+            botHealth: .archived,
+            canWrite: true,
+            activityState: .idle
+        )
+        XCTAssertEqual(archived.value, "Not selected")
+        XCTAssertFalse(archived.isSelected)
+        XCTAssertEqual(archived.hint, "Archived Bot chats are read-only.")
+    }
+
+    func testSemanticAvatarPresentationPreservesRecipeAndMapsLegacyIdentity() {
+        let recipe = AidenBotAvatarRecipe(
+            shape: .hex,
+            color: .coral,
+            eyes: .wink,
+            detail: .antenna
+        )
+        XCTAssertEqual(
+            aidenBotAvatarPresentation(.recipe(recipe)),
+            AidenBotAvatarPresentation(
+                shape: .hex,
+                color: .coral,
+                eyes: .wink,
+                detail: .antenna
+            )
+        )
+        XCTAssertEqual(
+            aidenBotAvatarPresentation(.legacy(.orbit)),
+            AidenBotAvatarPresentation(
+                shape: .orb,
+                color: .lilac,
+                eyes: .focus,
+                detail: .orbit
+            )
+        )
+    }
 }

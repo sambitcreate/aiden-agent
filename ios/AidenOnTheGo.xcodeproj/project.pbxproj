@@ -65,6 +65,9 @@
 		B07600000000000000000001 /* AidenBotCustomAccessFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07600000000000000000011 /* AidenBotCustomAccessFlowView.swift */; };
 		B07700000000000000000001 /* AidenBotsHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07700000000000000000011 /* AidenBotsHomeView.swift */; };
 		B07800000000000000000001 /* AidenBotEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07800000000000000000011 /* AidenBotEditorView.swift */; };
+		B07900000000000000000001 /* AidenBotProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07900000000000000000011 /* AidenBotProfileView.swift */; };
+		B08000000000000000000001 /* AidenBotSemanticAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */; };
+		B07A00000000000000000001 /* AidenBotChatToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07A00000000000000000011 /* AidenBotChatToolsView.swift */; };
 		A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */; };
 		A0E000000000000000000001 /* Core.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000011 /* Core.swift */; };
 		A0E000000000000000000002 /* Lattice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000012 /* Lattice.swift */; };
@@ -161,6 +164,9 @@
 		B07600000000000000000011 /* AidenBotCustomAccessFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCustomAccessFlowView.swift; sourceTree = "<group>"; };
 		B07700000000000000000011 /* AidenBotsHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotsHomeView.swift; sourceTree = "<group>"; };
 		B07800000000000000000011 /* AidenBotEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotEditorView.swift; sourceTree = "<group>"; };
+		B07900000000000000000011 /* AidenBotProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotProfileView.swift; sourceTree = "<group>"; };
+		B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSemanticAvatarView.swift; sourceTree = "<group>"; };
+		B07A00000000000000000011 /* AidenBotChatToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotChatToolsView.swift; sourceTree = "<group>"; };
 		B5A100000000000000000015 /* AidenOnTheGo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AidenOnTheGo.entitlements; sourceTree = "<group>"; };
 		488791F556304AD2AC59BC5D /* ThirdPartyNotices */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ThirdPartyNotices; sourceTree = "<group>"; };
 		A04500000000000000000010 /* AgentRunActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunActivityAttributes.swift; sourceTree = "<group>"; };
@@ -337,6 +343,8 @@
 		B07100000000000000000020 /* Bots */ = {
 			isa = PBXGroup;
 			children = (
+				B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */,
+				B07900000000000000000011 /* AidenBotProfileView.swift */,
 				B07800000000000000000011 /* AidenBotEditorView.swift */,
 				B07600000000000000000011 /* AidenBotCustomAccessFlowView.swift */,
 				B07700000000000000000011 /* AidenBotsHomeView.swift */,
@@ -356,6 +364,7 @@
 		A0D600000000000000000020 /* Remote */ = {
 			isa = PBXGroup;
 			children = (
+				B07A00000000000000000011 /* AidenBotChatToolsView.swift */,
 				B07400000000000000000011 /* AidenProductShellView.swift */,
 				A0DA00000000000000000012 /* AidenScheduledTasksView.swift */,
 				A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */,
@@ -656,6 +665,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B07A00000000000000000001 /* AidenBotChatToolsView.swift in Sources */,
+				B08000000000000000000001 /* AidenBotSemanticAvatarView.swift in Sources */,
+				B07900000000000000000001 /* AidenBotProfileView.swift in Sources */,
 				B07800000000000000000001 /* AidenBotEditorView.swift in Sources */,
 				B07600000000000000000001 /* AidenBotCustomAccessFlowView.swift in Sources */,
 				B07700000000000000000001 /* AidenBotsHomeView.swift in Sources */,

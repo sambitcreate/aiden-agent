@@ -94,6 +94,7 @@ final class AidenProductNavigationStore {
         var selectedWorkspaceByInstance: [String: String] = [:]
         var compactWorkspacePathByInstance: [String: [String]] = [:]
         var compactBotPathByInstance: [String: [String]] = [:]
+        var selectedBotByScope: [String: String]?
     }
 
     private static let snapshotKey = "aiden.product-navigation.v1"
@@ -158,11 +159,30 @@ final class AidenProductNavigationStore {
         setPath(path, in: \Snapshot.compactBotPathByInstance, for: instanceID)
     }
 
+    func selectedBot(for instanceID: String?, deviceID: String?) -> String? {
+        guard let key = Self.scopeKey(instanceID: instanceID, deviceID: deviceID) else { return nil }
+        return snapshot.selectedBotByScope?[key]
+    }
+
+    func setSelectedBot(_ botID: String?, for instanceID: String?, deviceID: String?) {
+        guard let key = Self.scopeKey(instanceID: instanceID, deviceID: deviceID) else { return }
+        var values = snapshot.selectedBotByScope ?? [:]
+        if let botID = Self.safeID(botID) {
+            values[key] = botID
+        } else {
+            values.removeValue(forKey: key)
+        }
+        snapshot.selectedBotByScope = values.isEmpty ? nil : values
+        persist()
+    }
+
     func purge(instanceID: String) {
         snapshot.areasByInstance.removeValue(forKey: instanceID)
         snapshot.selectedWorkspaceByInstance.removeValue(forKey: instanceID)
         snapshot.compactWorkspacePathByInstance.removeValue(forKey: instanceID)
         snapshot.compactBotPathByInstance.removeValue(forKey: instanceID)
+        let prefix = "\(instanceID.unicodeScalars.count):\(instanceID):"
+        snapshot.selectedBotByScope = snapshot.selectedBotByScope?.filter { !$0.key.hasPrefix(prefix) }
         persist()
     }
 
@@ -193,7 +213,7 @@ final class AidenProductNavigationStore {
                 + value.compactWorkspacePathByInstance.keys.compactMap(safeID)
                 + value.compactBotPathByInstance.keys.compactMap(safeID)
         )
-        return instanceIDs.prefix(64).reduce(into: Snapshot()) { result, instanceID in
+        var result = instanceIDs.prefix(64).reduce(into: Snapshot()) { result, instanceID in
             if let area = value.areasByInstance[instanceID] {
                 result.areasByInstance[instanceID] = area
             }
@@ -213,6 +233,12 @@ final class AidenProductNavigationStore {
                 result.compactBotPathByInstance[instanceID] = botPath
             }
         }
+        let selected = (value.selectedBotByScope ?? [:]).reduce(into: [String: String]()) { values, entry in
+            guard values.count < 64, safeID(entry.key) != nil, let botID = safeID(entry.value) else { return }
+            values[entry.key] = botID
+        }
+        result.selectedBotByScope = selected.isEmpty ? nil : selected
+        return result
     }
 
     private static func safeID(_ value: String?) -> String? {
@@ -222,6 +248,11 @@ final class AidenProductNavigationStore {
                       || "._:-".unicodeScalars.contains(scalar)
               }) else { return nil }
         return value
+    }
+
+    private static func scopeKey(instanceID: String?, deviceID: String?) -> String? {
+        guard let instanceID = safeID(instanceID), let deviceID = safeID(deviceID) else { return nil }
+        return "\(instanceID.unicodeScalars.count):\(instanceID):\(deviceID)"
     }
 }
 
@@ -304,6 +335,7 @@ private struct AidenBotShellView: View {
 
     @Environment(\.aidenPalette) private var palette
     @State private var chatsByScope: [PresentationScope: [String: ChatPresentation]] = [:]
+    @State private var retainedCreateAttempt: AidenBotConversationCreateAttempt?
 
     private var presentationScope: PresentationScope? {
         guard let installation = coordinator.installationStore.activeInstallation else { return nil }
@@ -333,6 +365,7 @@ private struct AidenBotShellView: View {
                 coordinator: coordinator,
                 area: area,
                 availability: botsAvailability,
+                navigationStore: navigationStore,
                 onSelectArea: onSelectArea,
                 onOpenConversation: openConversation,
                 onCreateConversation: createConversation
@@ -399,6 +432,9 @@ private struct AidenBotShellView: View {
         .task(id: restorationID) {
             await hydrateRestoredPath()
         }
+        .onChange(of: presentationScope) { _, _ in
+            retainedCreateAttempt = nil
+        }
     }
 
     @MainActor
@@ -413,7 +449,8 @@ private struct AidenBotShellView: View {
             capturedContext = context
             let client = try coordinator.remoteClient(for: context)
             let chat = try await client.chat(id: item.chatId)
-            guard coordinator.isCurrent(context), chat.botId == item.botId else { return }
+            guard coordinator.isCurrent(context), chat.id == item.chatId,
+                  chat.botId == item.botId else { return }
             let allowsMutations = try await allowsMutations(
                 for: chat,
                 client: client,
@@ -443,6 +480,7 @@ private struct AidenBotShellView: View {
     @MainActor
     private func createConversation(_ bot: AidenBotSummary) async {
         var capturedContext: AidenRemoteRequestContext?
+        var sentAttempt: AidenBotConversationCreateAttempt?
         do {
             let context = try coordinator.requestContext()
             capturedContext = context
@@ -456,8 +494,22 @@ private struct AidenBotShellView: View {
                 }
             }
             let request = try AidenBotChatCreateRequest()
-            let chat = try await client.createBotChat(botId: bot.id, request: request)
-            guard coordinator.isCurrent(context) else { return }
+            let attempt = aidenBotConversationCreateAttempt(
+                retaining: retainedCreateAttempt,
+                context: context,
+                botID: bot.id,
+                request: request
+            )
+            retainedCreateAttempt = attempt
+            sentAttempt = attempt
+            let chat = try await client.createBotChat(
+                botId: bot.id,
+                request: request,
+                idempotencyKey: attempt.idempotencyKey
+            )
+            guard coordinator.isCurrent(context), chat.botId == bot.id,
+                  retainedCreateAttempt == attempt else { return }
+            retainedCreateAttempt = nil
             let retained = await coordinator.withRetainedInstallationData(for: context) {
                 try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
             }
@@ -472,8 +524,15 @@ private struct AidenBotShellView: View {
             return
         } catch {
             if let context = capturedContext,
-               await coordinator.handleCredentialRevocation(error, context: context) { return }
+               await coordinator.handleCredentialRevocation(error, context: context) {
+                if retainedCreateAttempt == sentAttempt { retainedCreateAttempt = nil }
+                return
+            }
             guard capturedContext.map({ coordinator.isCurrent($0) }) ?? false else { return }
+            if let sentAttempt, retainedCreateAttempt == sentAttempt,
+               !aidenBotConversationCreateFailureIsAmbiguous(error) {
+                retainedCreateAttempt = nil
+            }
             coordinator.presentedError = error.localizedDescription
         }
     }
@@ -561,11 +620,11 @@ private struct AidenFullAccessNoticeView: View {
                     Text("Bots can use your Mac")
                         .font(.largeTitle.bold())
 
-                    Text("By default, bots can use files your Mac lets Aiden access, run commands, and use connections and skills enabled in Aiden. Each bot starts in a private Aiden folder, but Full Access can work elsewhere when your request needs it. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or change access in Bot Settings anytime.")
+                    Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired Mac. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
                         .font(.body)
 
                     if includesMigrationCopy {
-                        Text("Your existing bots will keep the capabilities they already use. Aiden prepared a private working folder for each.")
+                        Text("Your existing bots will keep the capabilities they already use. You can review or reduce each Bot’s access later.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
@@ -625,6 +684,51 @@ private struct AidenBotNoticeResolutionID: Equatable {
     let availability: AidenBotsAvailability
     let deepLinkedChatID: String?
     let deepLinkedChatRevision: String?
+}
+
+struct AidenBotConversationCreateAttempt: Equatable {
+    let context: AidenRemoteRequestContext
+    let botID: String
+    let request: AidenBotChatCreateRequest
+    let idempotencyKey: UUID
+}
+
+func aidenBotConversationCreateAttempt(
+    retaining existing: AidenBotConversationCreateAttempt?,
+    context: AidenRemoteRequestContext,
+    botID: String,
+    request: AidenBotChatCreateRequest,
+    makeKey: () -> UUID = UUID.init
+) -> AidenBotConversationCreateAttempt {
+    if let existing,
+       existing.context == context,
+       existing.botID == botID,
+       existing.request == request {
+        return existing
+    }
+    return .init(
+        context: context,
+        botID: botID,
+        request: request,
+        idempotencyKey: makeKey()
+    )
+}
+
+func aidenBotConversationCreateFailureIsAmbiguous(_ error: Error) -> Bool {
+    if error is CancellationError || error is URLError { return true }
+    guard let remoteError = error as? AidenRemoteClientError else { return true }
+    switch remoteError {
+    case .invalidResponse:
+        return true
+    case let .server(statusCode, _), let .unexpectedStatus(statusCode):
+        return (200..<300).contains(statusCode)
+            || statusCode == 408
+            || statusCode == 429
+            || statusCode >= 500
+    case .invalidEndpoint, .missingCredential,
+         .missingTrustConfiguration, .installationChanged:
+        return false
+    }
 }
 
 private struct AidenProductNavigationResolutionID: Equatable {

@@ -713,7 +713,7 @@ private struct AidenBotPrototypeFullAccessNoticeView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Bots can use your Mac")
                             .font(.largeTitle.bold())
-                        Text("By default, bots can use files your Mac lets Aiden access, run commands, and use connections and skills enabled in Aiden. Each bot starts in a private Aiden folder, but Full Access can work elsewhere when your request needs it. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or change access in Bot Settings anytime.")
+                        Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired Mac. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
                             .font(.body)
                             .foregroundStyle(palette.secondary)
                     }

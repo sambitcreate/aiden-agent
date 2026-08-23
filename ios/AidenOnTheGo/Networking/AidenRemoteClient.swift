@@ -609,7 +609,9 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     func chat(id: String) async throws -> AidenChat {
-        try await send(method: "GET", path: ["chats", id])
+        let value: AidenChat = try await send(method: "GET", path: ["chats", id])
+        guard value.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return value
     }
 
     func createChat(

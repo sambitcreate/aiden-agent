@@ -36,6 +36,11 @@ private struct AidenBotCustomAccessSaveRequest: Equatable {
     let catalogRevision: String
 }
 
+private enum AidenBotCustomAccessDiscardAction: Equatable {
+    case dismiss
+    case selectBot(String?)
+}
+
 struct AidenBotCustomAccessDraft: Equatable {
     var providerID: String
     var modelID: String
@@ -130,8 +135,16 @@ struct AidenBotCustomAccessDraft: Equatable {
     }
 }
 
+func aidenBotCustomAccessIsDirty(
+    draft: AidenBotCustomAccessDraft?,
+    cleanDraft: AidenBotCustomAccessDraft?
+) -> Bool {
+    draft != nil && draft != cleanDraft
+}
+
 struct AidenBotCustomAccessFlowView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    var preferredBotID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
 
@@ -140,6 +153,7 @@ struct AidenBotCustomAccessFlowView: View {
     @State private var selectedBotID: String?
     @State private var selectedBot: AidenBotDetail?
     @State private var draft: AidenBotCustomAccessDraft?
+    @State private var cleanDraft: AidenBotCustomAccessDraft?
     @State private var capturedContext: AidenRemoteRequestContext?
     @State private var isLoading = true
     @State private var isLoadingBot = false
@@ -148,6 +162,7 @@ struct AidenBotCustomAccessFlowView: View {
     @State private var loadError: String?
     @State private var botError: String?
     @State private var saveError: String?
+    @State private var discardAction: AidenBotCustomAccessDiscardAction?
 
     private var canWrite: Bool {
         capturedContext.map(coordinator.isCurrent) == true
@@ -157,6 +172,10 @@ struct AidenBotCustomAccessFlowView: View {
     }
 
     private var isSaving: Bool { savingRequest != nil }
+
+    private var isDirty: Bool {
+        aidenBotCustomAccessIsDirty(draft: draft, cleanDraft: cleanDraft)
+    }
 
     private var canSave: Bool {
         guard canWrite, !isSaving,
@@ -182,7 +201,7 @@ struct AidenBotCustomAccessFlowView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button("Cancel") { requestDismiss() }
                             .disabled(isSaving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
@@ -193,7 +212,7 @@ struct AidenBotCustomAccessFlowView: View {
                     }
                 }
         }
-        .interactiveDismissDisabled(isSaving)
+        .interactiveDismissDisabled(isSaving || isDirty)
         .sheet(item: $editorMode) { mode in
             AidenBotEditorView(coordinator: coordinator, mode: mode) { created in
                 let expectedSession = sessionIdentity
@@ -220,6 +239,19 @@ struct AidenBotCustomAccessFlowView: View {
             Button("OK", role: .cancel) { saveError = nil }
         } message: {
             Text(saveError ?? "The change could not be saved.")
+        }
+        .confirmationDialog(
+            "Discard access changes?",
+            isPresented: Binding(
+                get: { discardAction != nil },
+                set: { if !$0 { discardAction = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Discard Changes", role: .destructive) { performDiscardAction() }
+            Button("Keep Editing", role: .cancel) { discardAction = nil }
+        } message: {
+            Text("Your unsaved Custom Access changes will be lost.")
         }
     }
 
@@ -384,7 +416,7 @@ struct AidenBotCustomAccessFlowView: View {
         } header: {
             Text("Files and Commands")
         } footer: {
-            Text("A bot begins in its private Aiden folder. Selected file access may let it work elsewhere when your request needs it.")
+            Text("Choose which files this Bot may work with when your requests need them.")
         }
     }
 
@@ -437,7 +469,17 @@ struct AidenBotCustomAccessFlowView: View {
     }
 
     private var selectedBotBinding: Binding<String?> {
-        Binding(get: { selectedBotID }, set: { selectedBotID = $0 })
+        Binding(
+            get: { selectedBotID },
+            set: { nextBotID in
+                guard nextBotID != selectedBotID else { return }
+                if isDirty {
+                    discardAction = .selectBot(nextBotID)
+                } else {
+                    selectedBotID = nextBotID
+                }
+            }
+        )
     }
 
     private func selectedProvider(in catalog: AidenBotCapabilityCatalog) -> AidenBotProviderOption? {
@@ -525,6 +567,7 @@ struct AidenBotCustomAccessFlowView: View {
         selectedBotID = nil
         selectedBot = nil
         draft = nil
+        cleanDraft = nil
         isLoading = true
         isLoadingBot = false
         savingRequest = nil
@@ -532,6 +575,7 @@ struct AidenBotCustomAccessFlowView: View {
         botError = nil
         saveError = nil
         editorMode = nil
+        discardAction = nil
     }
 
     private var canCreateBot: Bool {
@@ -546,6 +590,7 @@ struct AidenBotCustomAccessFlowView: View {
         loadError = nil
         selectedBot = nil
         draft = nil
+        cleanDraft = nil
         var requestContext: AidenRemoteRequestContext?
         do {
             let context = try coordinator.requestContext()
@@ -562,7 +607,7 @@ struct AidenBotCustomAccessFlowView: View {
             bots = list.bots.filter { $0.health != .archived }
             catalog = loadedCatalog
             if !bots.contains(where: { $0.id == selectedBotID }) {
-                selectedBotID = bots.first?.id
+                selectedBotID = bots.first(where: { $0.id == preferredBotID })?.id ?? bots.first?.id
             }
             isLoading = false
         } catch is CancellationError {
@@ -585,6 +630,7 @@ struct AidenBotCustomAccessFlowView: View {
         botError = nil
         selectedBot = nil
         draft = nil
+        cleanDraft = nil
         do {
             let detail = try await coordinator.remoteClient(for: request.context).bot(id: request.botID)
             guard coordinator.isCurrent(request.context), detailRequest == request,
@@ -597,6 +643,7 @@ struct AidenBotCustomAccessFlowView: View {
             }
             selectedBot = detail
             draft = loadedDraft
+            cleanDraft = loadedDraft
             isLoadingBot = false
         } catch is CancellationError {
             return
@@ -652,7 +699,63 @@ struct AidenBotCustomAccessFlowView: View {
             guard coordinator.isCurrent(request.context), savingRequest == request,
                   capturedContext == request.context,
                   selectedBotID == request.botID else { return }
-            saveError = error.localizedDescription
+            do {
+                let client = try coordinator.remoteClient(for: request.context)
+                async let detailRequest = client.bot(id: request.botID)
+                async let catalogRequest = client.botCapabilityCatalog()
+                let (authoritative, refreshedCatalog) = try await (detailRequest, catalogRequest)
+                guard coordinator.isCurrent(request.context), savingRequest == request,
+                      capturedContext == request.context,
+                      selectedBotID == request.botID else { return }
+                let desired = try draft.selection()
+                if authoritative.access.custom == desired {
+                    dismiss()
+                    return
+                }
+                guard let refreshedBaseline = AidenBotCustomAccessDraft(
+                    access: authoritative.access,
+                    catalog: refreshedCatalog
+                ) else {
+                    saveError = "Access may have changed on your Mac. Close and reopen this screen to refresh."
+                    return
+                }
+                selectedBot = authoritative
+                self.catalog = refreshedCatalog
+                cleanDraft = refreshedBaseline
+                saveError = "Aiden refreshed the Bot’s latest access. Review and save any remaining changes."
+            } catch is CancellationError {
+                return
+            } catch {
+                if await coordinator.handleCredentialRevocation(error, context: request.context) { return }
+                guard coordinator.isCurrent(request.context), savingRequest == request,
+                      capturedContext == request.context,
+                      selectedBotID == request.botID else { return }
+                capturedContext = nil
+                saveError = "Aiden could not confirm the Bot’s latest access. Close and reopen this screen before retrying."
+            }
+        }
+    }
+
+    @MainActor
+    private func requestDismiss() {
+        if isDirty {
+            discardAction = .dismiss
+        } else {
+            dismiss()
+        }
+    }
+
+    @MainActor
+    private func performDiscardAction() {
+        let action = discardAction
+        discardAction = nil
+        switch action {
+        case .dismiss:
+            dismiss()
+        case let .selectBot(botID):
+            selectedBotID = botID
+        case nil:
+            break
         }
     }
 }

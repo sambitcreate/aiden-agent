@@ -38,6 +38,7 @@ final class AidenProductShellTests: XCTestCase {
             aidenBotsHomeContentState(
                 hasSnapshot: true,
                 isLoading: false,
+                totalBotCount: 1,
                 activeBotCount: 0,
                 conversationCount: 1,
                 hasQuery: false,
@@ -50,6 +51,20 @@ final class AidenProductShellTests: XCTestCase {
             aidenBotsHomeContentState(
                 hasSnapshot: true,
                 isLoading: false,
+                totalBotCount: 1,
+                activeBotCount: 0,
+                conversationCount: 0,
+                hasQuery: false,
+                filteredBotCount: 0,
+                filteredConversationCount: 0
+            ),
+            .content
+        )
+        XCTAssertEqual(
+            aidenBotsHomeContentState(
+                hasSnapshot: true,
+                isLoading: false,
+                totalBotCount: 0,
                 activeBotCount: 0,
                 conversationCount: 0,
                 hasQuery: false,
@@ -97,6 +112,12 @@ final class AidenProductShellTests: XCTestCase {
         XCTAssertEqual(store.selectedWorkspace(for: "mac-b"), "workspace-b")
         XCTAssertEqual(store.compactWorkspacePath(for: "mac-b"), ["workspace-b"])
         XCTAssertEqual(store.compactBotPath(for: "mac-b"), ["bot-chat-b"])
+
+        store.setSelectedBot("bot-a", for: "mac-a", deviceID: "phone-a")
+        store.setSelectedBot("bot-b", for: "mac-b", deviceID: "phone-b")
+        XCTAssertEqual(store.selectedBot(for: "mac-a", deviceID: "phone-a"), "bot-a")
+        XCTAssertEqual(store.selectedBot(for: "mac-b", deviceID: "phone-b"), "bot-b")
+        XCTAssertNil(store.selectedBot(for: "mac-a", deviceID: "phone-b"))
     }
 
     @MainActor
@@ -107,6 +128,7 @@ final class AidenProductShellTests: XCTestCase {
         let store = AidenProductNavigationStore(defaults: defaults)
         store.select(.workspaces, for: "mac-a", botsAvailable: true)
         store.setCompactBotPath(["chat-a"], for: "mac-a")
+        store.setSelectedBot("bot-a", for: "mac-a", deviceID: "phone-a")
         store.select(.workspaces, for: "mac-b", botsAvailable: true)
         store.setCompactBotPath(["chat-b"], for: "mac-b")
 
@@ -114,8 +136,27 @@ final class AidenProductShellTests: XCTestCase {
 
         XCTAssertEqual(store.area(for: "mac-a", botsAvailable: true), .bots)
         XCTAssertEqual(store.compactBotPath(for: "mac-a"), [])
+        XCTAssertNil(store.selectedBot(for: "mac-a", deviceID: "phone-a"))
         XCTAssertEqual(store.area(for: "mac-b", botsAvailable: true), .workspaces)
         XCTAssertEqual(store.compactBotPath(for: "mac-b"), ["chat-b"])
+    }
+
+    func testBotHealthAndInboxActivityKeepNewChatAndStatusHonest() {
+        XCTAssertTrue(aidenBotCanStartNewChat(health: .ready, canWrite: true))
+        XCTAssertFalse(aidenBotCanStartNewChat(health: .degraded, canWrite: true))
+        XCTAssertFalse(aidenBotCanStartNewChat(health: .unavailable, canWrite: true))
+        XCTAssertEqual(
+            aidenBotInboxActivityStatus(
+                state: .waitingForApproval,
+                canRespondToApproval: false
+            )?.label,
+            "Waiting for approval on Mac"
+        )
+        XCTAssertEqual(
+            aidenBotInboxActivityStatus(state: .running, canRespondToApproval: false)?.label,
+            "Working"
+        )
+        XCTAssertNil(aidenBotInboxActivityStatus(state: .idle, canRespondToApproval: false))
     }
 
     func testResolvedChatAreaUsesMacAuthoredBotIdentity() throws {

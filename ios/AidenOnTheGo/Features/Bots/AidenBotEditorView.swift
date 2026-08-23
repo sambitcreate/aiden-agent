@@ -32,7 +32,7 @@ struct AidenBotEditorDraft: Equatable {
         name = ""
         purpose = ""
         openingGreeting = ""
-        instructions = ""
+        instructions = Self.defaultInstructions
         avatar = Self.defaultAvatar
         switch defaultAccess {
         case .custom:
@@ -66,6 +66,8 @@ struct AidenBotEditorDraft: Equatable {
         eyes: .happy,
         detail: .sparkles
     )
+
+    static let defaultInstructions = "Help clearly, use the selected tools when useful, and keep me in control."
 
     static func fullAccessAccepted(in catalog: AidenBotCapabilityCatalog) -> Bool {
         catalog.notice.acceptedDecision?.rawValue == AidenBotNoticeDecision.continueFull.rawValue
@@ -156,6 +158,39 @@ private struct AidenBotEditorEditAttempt: Equatable {
     let token: UUID
 }
 
+func aidenBotEditorIsDirty(
+    draft: AidenBotEditorDraft?,
+    cleanCreateDraft: AidenBotEditorDraft?,
+    baselineBot: AidenBotDetail?,
+    catalog: AidenBotCapabilityCatalog?,
+    isCreating: Bool
+) -> Bool {
+    guard let draft else { return false }
+    if isCreating { return draft != cleanCreateDraft }
+    guard let baselineBot, let catalog else { return false }
+    let identityChanged = (try? draft.identityPatch(comparedTo: baselineBot)) != nil
+    let accessChanged = (try? draft.changesAccess(comparedTo: baselineBot, catalog: catalog)) == true
+    return identityChanged || accessChanged
+}
+
+func aidenBotEditorCreateFailureIsAmbiguous(_ error: Error) -> Bool {
+    if error is CancellationError || error is URLError { return true }
+    guard let remoteError = error as? AidenRemoteClientError else { return true }
+    switch remoteError {
+    case .invalidResponse:
+        // A canonical success can be committed before a malformed/truncated
+        // response is detected, so preserve the key for authoritative replay.
+        return true
+    case let .server(statusCode, _), let .unexpectedStatus(statusCode):
+        return (200..<300).contains(statusCode)
+            || statusCode == 408
+            || statusCode == 429
+            || statusCode >= 500
+    case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged:
+        return false
+    }
+}
+
 struct AidenBotEditorView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let mode: AidenBotEditorMode
@@ -166,6 +201,7 @@ struct AidenBotEditorView: View {
     @State private var catalog: AidenBotCapabilityCatalog?
     @State private var baselineBot: AidenBotDetail?
     @State private var draft: AidenBotEditorDraft?
+    @State private var cleanCreateDraft: AidenBotEditorDraft?
     @State private var capturedContext: AidenRemoteRequestContext?
     @State private var isLoading = true
     @State private var loadError: String?
@@ -173,12 +209,28 @@ struct AidenBotEditorView: View {
     @State private var activeCreateAttempt: AidenBotEditorCreateAttempt?
     @State private var retainedCreateAttempt: AidenBotEditorCreateAttempt?
     @State private var activeEditAttempt: AidenBotEditorEditAttempt?
+    @State private var isConfirmingDiscard = false
 
     private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
         AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
     }
 
     private var isSaving: Bool { activeCreateAttempt != nil || activeEditAttempt != nil }
+
+    private var isCreating: Bool {
+        if case .create = mode { return true }
+        return false
+    }
+
+    private var isDirty: Bool {
+        aidenBotEditorIsDirty(
+            draft: draft,
+            cleanCreateDraft: cleanCreateDraft,
+            baselineBot: baselineBot,
+            catalog: catalog,
+            isCreating: isCreating
+        )
+    }
 
     private var isCreateDraftFrozen: Bool {
         guard retainedCreateAttempt != nil else { return false }
@@ -211,7 +263,7 @@ struct AidenBotEditorView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button("Cancel") { requestDismiss() }
                             .disabled(isSaving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
@@ -222,7 +274,7 @@ struct AidenBotEditorView: View {
                     }
                 }
         }
-        .interactiveDismissDisabled(isSaving)
+        .interactiveDismissDisabled(isSaving || isDirty)
         .task(id: sessionIdentity) {
             let expectedSession = sessionIdentity
             reset(for: expectedSession)
@@ -243,6 +295,16 @@ struct AidenBotEditorView: View {
             Button("OK", role: .cancel) { saveError = nil }
         } message: {
             Text(saveError ?? "The Bot could not be saved.")
+        }
+        .confirmationDialog(
+            "Discard changes?",
+            isPresented: $isConfirmingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Discard Changes", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) { }
+        } message: {
+            Text("Your unsaved Bot changes will be lost.")
         }
     }
 
@@ -270,7 +332,6 @@ struct AidenBotEditorView: View {
     private func editorForm(_ catalog: AidenBotCapabilityCatalog) -> some View {
         Form {
             identitySection
-            avatarSection
             accessModeSection(catalog)
             aiSection(catalog)
                 .disabled(draft?.usesFullAccess == true)
@@ -297,6 +358,7 @@ struct AidenBotEditorView: View {
                 keyPath: \.otherCapabilityIDs
             )
             .disabled(draft?.usesFullAccess == true)
+            avatarSection
 
             if !canWrite {
                 Section {
@@ -312,6 +374,7 @@ struct AidenBotEditorView: View {
                     .foregroundStyle(palette.secondary)
                 }
             }
+            reviewSection(catalog)
         }
         .scrollContentBackground(.hidden)
         .background(palette.canvas)
@@ -324,21 +387,26 @@ struct AidenBotEditorView: View {
             TextField("Name", text: textBinding(\.name))
                 .textContentType(.name)
                 .accessibilityHint("The name shown for this Bot and its chats.")
-            TextField("One-line purpose", text: textBinding(\.purpose), axis: .vertical)
+            TextField("How should it help?", text: textBinding(\.purpose), axis: .vertical)
                 .lineLimit(2...4)
             TextField("Opening greeting (optional)", text: textBinding(\.openingGreeting), axis: .vertical)
                 .lineLimit(2...6)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Instructions")
-                    .font(.subheadline.weight(.medium))
-                TextEditor(text: textBinding(\.instructions))
-                    .frame(minHeight: 130)
-                    .accessibilityLabel("Bot instructions")
+            DisclosureGroup("Advanced") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Detailed behavior")
+                        .font(.subheadline.weight(.medium))
+                    TextEditor(text: textBinding(\.instructions))
+                        .frame(minHeight: 130)
+                        .accessibilityLabel("Detailed Bot behavior")
+                    Text("The helpful default works for most Bots. Change this only when you need precise behavior.")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                }
             }
         } header: {
             Text("Identity")
         } footer: {
-            Text("Describe what this Bot should do and how it should behave. Its private Aiden workspace is managed automatically.")
+            Text("Describe what this Bot should do and how it should behave.")
         }
     }
 
@@ -440,7 +508,7 @@ struct AidenBotEditorView: View {
         } header: {
             Text("Files and Commands")
         } footer: {
-            Text("The Bot begins in its private Aiden workspace. Selected access may let it inspect other Mac locations when needed.")
+            Text("Choose which files the Bot may work with and whether it may run commands on the paired Mac.")
         }
     }
 
@@ -473,15 +541,41 @@ struct AidenBotEditorView: View {
         }
     }
 
+    private func reviewSection(_ catalog: AidenBotCapabilityCatalog) -> some View {
+        Section {
+            LabeledContent("Name", value: draft?.name.isEmpty == false ? draft?.name ?? "" : "Not entered")
+            LabeledContent(
+                "How it helps",
+                value: draft?.purpose.isEmpty == false ? draft?.purpose ?? "" : "Not entered"
+            )
+            if draft?.usesFullAccess == true {
+                Label(
+                    "Full Access: files, commands, Connections, and Skills allowed by the paired Mac",
+                    systemImage: "checkmark.shield"
+                )
+            } else if let access = draft?.customAccess {
+                LabeledContent("Access", value: "Custom")
+                LabeledContent("Files", value: "\(access.fileScopeIDs.count) selected")
+                LabeledContent("Commands", value: access.shellEnabled ? "Allowed" : "Off")
+                LabeledContent("Connections", value: "\(access.connectionIDs.count) selected")
+                LabeledContent("Skills", value: "\(access.skillIDs.count) selected")
+            }
+        } header: {
+            Text("Review")
+        } footer: {
+            Text("Nothing is created or changed until you choose Save.")
+        }
+        .accessibilityElement(children: .contain)
+    }
+
     private var avatarPreview: some View {
         let recipe = draft?.avatar ?? AidenBotEditorDraft.defaultAvatar
-        return Image(systemName: avatarSymbol(recipe))
-            .font(.system(size: 32, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
-            .frame(width: 72, height: 72)
-            .background(avatarColor(recipe.color).gradient, in: Circle())
-            .overlay { Circle().stroke(.white.opacity(0.35), lineWidth: 1) }
-            .accessibilityLabel("Bot avatar preview")
+        return AidenBotSemanticAvatarView(
+            avatar: .recipe(recipe),
+            name: draft?.name ?? "Bot",
+            size: 72,
+            isDecorative: false
+        )
     }
 
     private func avatarPicker<Value: RawRepresentable & CaseIterable & Hashable>(
@@ -622,29 +716,6 @@ struct AidenBotEditorView: View {
         available ? title : "\(title) — Unavailable"
     }
 
-    private func avatarSymbol(_ recipe: AidenBotAvatarRecipe) -> String {
-        switch recipe.eyes {
-        case .happy: "face.smiling.inverse"
-        case .wink: "face.smiling"
-        case .sleepy: "moon.zzz.fill"
-        case .focus: "scope"
-        case .dots, .wide: "ellipsis"
-        }
-    }
-
-    private func avatarColor(_ color: AidenBotAvatarColor) -> Color {
-        switch color {
-        case .lilac: .purple
-        case .sky: .blue
-        case .mint: .mint
-        case .sun: .yellow
-        case .periwinkle: .indigo
-        case .coral: .pink
-        case .peach: .orange
-        case .aqua: .cyan
-        }
-    }
-
     private var title: String {
         if case .edit = mode { return "Edit Bot" }
         return "New Bot"
@@ -662,6 +733,7 @@ struct AidenBotEditorView: View {
         catalog = nil
         baselineBot = nil
         draft = nil
+        cleanCreateDraft = nil
         capturedContext = nil
         isLoading = true
         loadError = nil
@@ -669,6 +741,7 @@ struct AidenBotEditorView: View {
         activeCreateAttempt = nil
         retainedCreateAttempt = nil
         activeEditAttempt = nil
+        isConfirmingDiscard = false
     }
 
     @MainActor
@@ -711,6 +784,7 @@ struct AidenBotEditorView: View {
             catalog = loadedCatalog
             baselineBot = loadedBot
             draft = loadedDraft
+            cleanCreateDraft = isCreating ? loadedDraft : nil
             isLoading = false
         } catch is CancellationError {
             return
@@ -737,11 +811,21 @@ struct AidenBotEditorView: View {
     }
 
     @MainActor
+    private func requestDismiss() {
+        if isDirty {
+            isConfirmingDiscard = true
+        } else {
+            dismiss()
+        }
+    }
+
+    @MainActor
     private func create(
         draft: AidenBotEditorDraft,
         catalog: AidenBotCapabilityCatalog,
         context: AidenRemoteRequestContext
     ) async {
+        var sentAttempt: AidenBotEditorCreateAttempt?
         do {
             let createRequest = try draft.createRequest(catalog: catalog)
             let attempt: AidenBotEditorCreateAttempt
@@ -758,6 +842,7 @@ struct AidenBotEditorView: View {
             }
             retainedCreateAttempt = attempt
             activeCreateAttempt = attempt
+            sentAttempt = attempt
             saveError = nil
             defer { if activeCreateAttempt == attempt { activeCreateAttempt = nil } }
             guard coordinator.isCurrent(attempt.context), activeCreateAttempt == attempt,
@@ -768,13 +853,21 @@ struct AidenBotEditorView: View {
             )
             guard coordinator.isCurrent(attempt.context), activeCreateAttempt == attempt,
                   capturedContext == attempt.context else { return }
+            retainedCreateAttempt = nil
             onSaved(created)
             dismiss()
         } catch is CancellationError {
             return
         } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            if await coordinator.handleCredentialRevocation(error, context: context) {
+                if retainedCreateAttempt == sentAttempt { retainedCreateAttempt = nil }
+                return
+            }
             guard coordinator.isCurrent(context), capturedContext == context else { return }
+            if let sentAttempt, retainedCreateAttempt == sentAttempt,
+               !aidenBotEditorCreateFailureIsAmbiguous(error) {
+                retainedCreateAttempt = nil
+            }
             saveError = error.localizedDescription
         }
     }

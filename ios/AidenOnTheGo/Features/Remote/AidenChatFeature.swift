@@ -1694,6 +1694,8 @@ struct AidenChatDetailView: View {
     @State private var model: AidenChatViewModel
     @State private var speechPlayback = AidenSpeechPlaybackController()
     @State private var composerHeight: CGFloat = 132
+    @State private var botToolsModel: AidenBotChatToolsModel?
+    @State private var botSheet: AidenBotChatSheet?
     @FocusState private var composerIsFocused: Bool
     @State private var coordinator: AidenRemoteCoordinator?
     let autoStartVoice: Bool
@@ -1713,6 +1715,9 @@ struct AidenChatDetailView: View {
             allowsMutations: allowsMutations,
             onChatUpdated: onChatUpdated
         ))
+        _botToolsModel = State(initialValue: chat.botId.map {
+            AidenBotChatToolsModel(chatID: chat.id, botID: $0)
+        })
         self.autoStartVoice = autoStartVoice
         self.allowsMutations = allowsMutations
     }
@@ -1721,6 +1726,7 @@ struct AidenChatDetailView: View {
     init(readOnlyFixture chat: AidenChat) {
         _coordinator = State(initialValue: nil)
         _model = State(initialValue: AidenChatViewModel(readOnlyFixture: chat))
+        _botToolsModel = State(initialValue: nil)
         autoStartVoice = false
         allowsMutations = false
     }
@@ -1728,6 +1734,15 @@ struct AidenChatDetailView: View {
 
     private var workspace: AidenWorkspace? {
         coordinator?.workspaces.first { $0.id == model.chat.workspaceId }
+    }
+
+    private var botToolsSessionIdentity: AidenBotChatToolsSessionIdentity? {
+        coordinator.map(AidenBotChatToolsSessionIdentity.init)
+    }
+
+    private var effectiveAllowsMutations: Bool {
+        guard let botToolsModel else { return allowsMutations }
+        return allowsMutations && botToolsModel.bot?.health == .ready
     }
 
     var body: some View {
@@ -1792,13 +1807,64 @@ struct AidenChatDetailView: View {
             guard height > 0 else { return }
             composerHeight = height
         }
-        .onChange(of: allowsMutations, initial: true) { _, allowed in
+        .onChange(of: effectiveAllowsMutations, initial: true) { _, allowed in
             model.setAllowsMutations(allowed)
         }
         .navigationTitle(model.chat.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if let coordinator, let workspace, workspace.hasFolder {
+            if let coordinator, let botToolsModel {
+                ToolbarItem(placement: .principal) {
+                    Button {
+                        Task {
+                            _ = await botToolsModel.refresh(coordinator: coordinator)
+                            botSheet = .access
+                        }
+                    } label: {
+                        VStack(spacing: 1) {
+                            Text(model.chat.title)
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text(botToolsModel.summary(
+                                connected: coordinator.connectionState == .connected
+                            ))
+                            .font(.caption2)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        "Access: " + botToolsModel.summary(
+                            connected: coordinator.connectionState == .connected
+                        )
+                    )
+                    .accessibilityHint("Opens Bot defaults and access for this chat")
+                }
+            }
+            if let coordinator,
+               let botToolsModel,
+               botToolsModel.fileGrant(
+                   coordinator: coordinator,
+                   hostAllowsMutations: effectiveAllowsMutations
+               ) != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task {
+                            guard await botToolsModel.refresh(coordinator: coordinator),
+                                  let refreshedGrant = botToolsModel.fileGrant(
+                                      coordinator: coordinator,
+                                      hostAllowsMutations: effectiveAllowsMutations
+                                  ) else { return }
+                            botSheet = .files(refreshedGrant)
+                        }
+                    } label: {
+                        Label("Files", systemImage: "folder")
+                    }
+                    .accessibilityLabel("Bot files")
+                }
+            } else if model.chat.botId == nil,
+                      let coordinator, let workspace, workspace.hasFolder {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
                         AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace)
@@ -1810,6 +1876,32 @@ struct AidenChatDetailView: View {
             }
         }
         .task { await model.load() }
+        .task(id: botToolsSessionIdentity) {
+            guard let coordinator, let botToolsModel else { return }
+            botToolsModel.resetForSessionChange()
+            await botToolsModel.load(coordinator: coordinator)
+        }
+        .sheet(item: $botSheet) { destination in
+            if let coordinator, let botToolsModel {
+                switch destination {
+                case .access:
+                    AidenBotChatAccessSheetView(
+                        coordinator: coordinator,
+                        model: botToolsModel,
+                        hostAllowsMutations: effectiveAllowsMutations
+                    )
+                case .files(let grant):
+                    NavigationStack {
+                        AidenBotConversationFilesView(coordinator: coordinator, grant: grant)
+                            .toolbar {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button("Done") { botSheet = nil }
+                                }
+                            }
+                    }
+                }
+            }
+        }
         .alert("Aiden On The Go", isPresented: Binding(
             get: { model.presentedError != nil },
             set: { if !$0 { model.presentedError = nil } }

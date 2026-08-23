@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phases 0–5 complete August 23, 2026; Phase 6 in progress
+- Status: Active; Phases 0–6 complete August 23, 2026; Phase 7 in progress
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -156,15 +156,15 @@ Use one guided native sheet/Form with progressive sections and a stable Save act
 4. **Look** — live circular preview, Aiden style editor/shuffle, and Create with Apple Intelligence when supported.
 5. **Review** — concise summary of what the bot can access before Save.
 
-The first time a person enters Bots on a given paired installation and policy version, show one blocking notice before any bot can act: Bots start with Full Access to the Mac capabilities already enabled in Aiden; work normally begins in a private Aiden-managed folder; and access can be reduced at any time in Bot settings. Offer **Continue with Full Access** and **Customize first**. Remember acceptance on the Mac, version the notice, and show it again only when the meaning of Full Access materially expands.
+The first time a person enters Bots on a given paired installation and policy version, show one blocking notice before any bot can act: Bots start with Full Access to the Mac capabilities already enabled in Aiden, and access can be reduced at any time in Bot settings. Keep the managed workspace implementation out of this ordinary notice and routine UI; disclose it only when the person asks. Offer **Continue with Full Access** and **Customize first**. Remember acceptance on the Mac, version the notice, and show it again only when the meaning of Full Access materially expands.
 
 Freeze the first notice as policy identifier `bot-full-access-v1` with this copy:
 
 > **Bots can use your Mac**
 >
-> By default, bots can use files your Mac lets Aiden access, run commands, and use connections and skills enabled in Aiden. Each bot starts in a private Aiden folder, but Full Access can work elsewhere when your request needs it. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or change access in Bot Settings anytime.
+> By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired Mac. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.
 
-The actions are **Continue with Full Access** and **Customize first**. Existing-bot migration adds: **Your existing bots will keep the capabilities they already use. Aiden prepared a private working folder for each.** The Mac stores the accepted policy identifier and timestamp for the paired installation; local dismissal never counts as acceptance.
+The actions are **Continue with Full Access** and **Customize first**. Existing-bot migration adds: **Your existing bots will keep the capabilities they already use. You can review or reduce each Bot’s access later.** The Mac stores the accepted policy identifier and timestamp for the paired installation; local dismissal never counts as acceptance.
 
 Other first-release state copy is also fixed so degraded security state does not become a vague spinner:
 
@@ -502,6 +502,8 @@ Acceptance:
 - existing pairing, Workspace navigation, deep links, App Intents, and stream recovery remain green.
 
 ### Phase 6 — Bot inbox, profile, create/edit, and chat access UI
+
+Completed August 23, 2026. The shipping iOS target now has the complete message-first Bot inbox and bottom dock, contact-style profile and lifecycle management, a nontechnical editor with semantic avatars and final review, adaptive exact-device iPad split navigation, and per-chat access/files controls embedded in the existing shared chat view. Exact request, revision, policy, catalog, installation/device, and idempotency fences cover open/create/edit/archive/delete/favorite/file operations; independent review closed every P0/P1 finding. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-6.md`.
 
 1. Build favorites, recent threads, bounded search, edit/reorder/archive/delete, loading/empty/error/offline states, and adaptive iPad split navigation.
 2. Build the contact-like Bot profile.

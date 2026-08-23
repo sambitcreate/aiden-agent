@@ -11,6 +11,18 @@ private struct AidenBotsSearchID: Equatable {
     let query: String
 }
 
+private enum AidenBotsHomeSheet: Identifiable {
+    case editor(AidenBotEditorMode)
+    case profile(AidenBotSummary)
+
+    var id: String {
+        switch self {
+        case let .editor(mode): "editor-\(mode.id)"
+        case let .profile(bot): "profile-\(bot.id)"
+        }
+    }
+}
+
 enum AidenBotsHomeContentState: Equatable {
     case loading
     case empty
@@ -21,6 +33,7 @@ enum AidenBotsHomeContentState: Equatable {
 func aidenBotsHomeContentState(
     hasSnapshot: Bool,
     isLoading: Bool,
+    totalBotCount: Int,
     activeBotCount: Int,
     conversationCount: Int,
     hasQuery: Bool,
@@ -28,28 +41,56 @@ func aidenBotsHomeContentState(
     filteredConversationCount: Int
 ) -> AidenBotsHomeContentState {
     if !hasSnapshot && isLoading { return .loading }
-    if activeBotCount == 0 && conversationCount == 0 { return .empty }
+    if totalBotCount == 0 && conversationCount == 0 { return .empty }
     if hasQuery && filteredBotCount == 0 && filteredConversationCount == 0 { return .noResults }
     return .content
+}
+
+func aidenBotCanStartNewChat(health: AidenBotHealth, canWrite: Bool) -> Bool {
+    canWrite && health == .ready
+}
+
+struct AidenBotInboxActivityStatus: Equatable {
+    let label: String
+    let symbol: String
+}
+
+func aidenBotInboxActivityStatus(
+    state: AidenBotConversationActivityState,
+    canRespondToApproval: Bool
+) -> AidenBotInboxActivityStatus? {
+    switch state {
+    case .idle: nil
+    case .queued: .init(label: "Queued", symbol: "clock")
+    case .running: .init(label: "Working", symbol: "waveform")
+    case .waitingForApproval:
+        canRespondToApproval
+            ? .init(label: "Approval needed", symbol: "checkmark.shield")
+            : .init(label: "Waiting for approval on Mac", symbol: "desktopcomputer")
+    case .reconciling: .init(label: "Updating", symbol: "arrow.triangle.2.circlepath")
+    }
 }
 
 struct AidenBotsHomeView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let area: AidenProductArea
     let availability: AidenBotsAvailability
+    let navigationStore: AidenProductNavigationStore
     let onSelectArea: (AidenProductArea) -> Void
     let onOpenConversation: (AidenBotConversationItem) async -> Void
     let onCreateConversation: (AidenBotSummary) async -> Void
 
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var snapshot: AidenBotCacheSnapshot?
     @State private var query = ""
     @State private var remoteSearchResults: [AidenBotConversationItem]?
     @State private var isLoading = false
     @State private var isChoosingBot = false
     @State private var isCreatingConversation = false
-    @State private var editorMode: AidenBotEditorMode?
+    @State private var presentedSheet: AidenBotsHomeSheet?
     @State private var loadError: String?
+    @State private var loadGeneration: UInt = 0
 
     private var loadID: AidenBotsHomeLoadID {
         AidenBotsHomeLoadID(
@@ -61,6 +102,29 @@ struct AidenBotsHomeView: View {
 
     private var activeBots: [AidenBotSummary] {
         allBots.filter { $0.health != .archived }
+    }
+
+    private var chatReadyBots: [AidenBotSummary] {
+        activeBots.filter { $0.health == .ready }
+    }
+
+    private var selectedBot: AidenBotSummary? {
+        get {
+            let installation = coordinator.installationStore.activeInstallation
+            guard let id = navigationStore.selectedBot(
+                for: installation?.id,
+                deviceID: installation?.deviceId
+            ) else { return nil }
+            return allBots.first { $0.id == id }
+        }
+        nonmutating set {
+            let installation = coordinator.installationStore.activeInstallation
+            navigationStore.setSelectedBot(
+                newValue?.id,
+                for: installation?.id,
+                deviceID: installation?.deviceId
+            )
+        }
     }
 
     private var allBots: [AidenBotSummary] {
@@ -108,6 +172,7 @@ struct AidenBotsHomeView: View {
         aidenBotsHomeContentState(
             hasSnapshot: snapshot != nil,
             isLoading: isLoading,
+            totalBotCount: allBots.count,
             activeBotCount: activeBots.count,
             conversationCount: allConversations.count,
             hasQuery: !normalizedQuery.isEmpty,
@@ -117,6 +182,60 @@ struct AidenBotsHomeView: View {
     }
 
     var body: some View {
+        Group {
+            if horizontalSizeClass == .regular {
+                NavigationSplitView {
+                    homeScroll
+                        .navigationTitle("Bots")
+                        .navigationBarTitleDisplayMode(.inline)
+                } detail: {
+                    if let selectedBot {
+                        AidenBotProfileView(
+                            coordinator: coordinator,
+                            initialSummary: selectedBot,
+                            onOpenConversation: onOpenConversation,
+                            onCreateConversation: onCreateConversation,
+                            onChanged: { Task { await load() } },
+                            showsDismissButton: false
+                        )
+                        .id("\(loadID.instanceID ?? "none")-\(loadID.deviceID ?? "none")-\(selectedBot.id)")
+                    } else {
+                        ContentUnavailableView(
+                            "Choose a Bot",
+                            systemImage: "person.crop.circle.badge.checkmark",
+                            description: Text("Select a Bot to view its profile and recent chats.")
+                        )
+                    }
+                }
+            } else {
+                homeScroll
+            }
+        }
+        .sheet(item: $presentedSheet) { sheet in
+            switch sheet {
+            case let .editor(mode):
+                AidenBotEditorView(coordinator: coordinator, mode: mode) { _ in
+                    Task { await load() }
+                }
+            case let .profile(bot):
+                AidenBotProfileView(
+                    coordinator: coordinator,
+                    initialSummary: bot,
+                    onOpenConversation: onOpenConversation,
+                    onCreateConversation: onCreateConversation,
+                    onChanged: { Task { await load() } }
+                )
+            }
+        }
+        .task(id: loadID) {
+            await load()
+        }
+        .task(id: searchID) {
+            await searchConversations()
+        }
+    }
+
+    private var homeScroll: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
@@ -133,7 +252,7 @@ struct AidenBotsHomeView: View {
             bottomDock
         }
         .confirmationDialog("New Chat", isPresented: $isChoosingBot, titleVisibility: .visible) {
-            ForEach(activeBots) { bot in
+            ForEach(chatReadyBots) { bot in
                 Button(bot.name) {
                     isCreatingConversation = true
                     Task {
@@ -145,17 +264,6 @@ struct AidenBotsHomeView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Choose a Bot to start a new chat.")
-        }
-        .sheet(item: $editorMode) { mode in
-            AidenBotEditorView(coordinator: coordinator, mode: mode) { _ in
-                Task { await load() }
-            }
-        }
-        .task(id: loadID) {
-            await load()
-        }
-        .task(id: searchID) {
-            await searchConversations()
         }
     }
 
@@ -173,7 +281,7 @@ struct AidenBotsHomeView: View {
                 .foregroundStyle(palette.foreground)
             Spacer()
             Button {
-                editorMode = .create(defaultAccess: .recommended)
+                presentedSheet = .editor(.create(defaultAccess: .recommended))
             } label: {
                 Image(systemName: "plus")
                     .font(.title3.weight(.semibold))
@@ -215,7 +323,7 @@ struct AidenBotsHomeView: View {
             } actions: {
                 if coordinator.connectionState == .connected {
                     Button("New Bot") {
-                        editorMode = .create(defaultAccess: .recommended)
+                        presentedSheet = .editor(.create(defaultAccess: .recommended))
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canCreateBot)
@@ -234,19 +342,42 @@ struct AidenBotsHomeView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 18) {
                         ForEach(favoriteBots) { bot in
-                            VStack(spacing: 8) {
-                                botAvatar(name: bot.name, diameter: 72)
-                                Text(bot.name)
-                                    .font(.caption.weight(.medium))
-                                    .lineLimit(1)
-                                    .frame(width: 76)
+                            Button {
+                                presentProfile(bot)
+                            } label: {
+                                VStack(spacing: 8) {
+                                    botAvatar(bot, diameter: 72)
+                                    Text(bot.name)
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(palette.foreground)
+                                        .lineLimit(1)
+                                        .frame(width: 76)
+                                }
                             }
+                            .buttonStyle(.plain)
                             .accessibilityElement(children: .combine)
+                            .accessibilityHint("Opens this Bot’s profile.")
                         }
                     }
                     .padding(.horizontal, 20)
                 }
                 .padding(.bottom, 18)
+            }
+
+            if !filteredBots.isEmpty {
+                Text("Bots")
+                    .font(.headline)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                ForEach(filteredBots) { bot in
+                    Button {
+                        presentProfile(bot)
+                    } label: {
+                        botProfileRow(bot)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens this Bot’s profile.")
+                }
             }
 
             if !filteredConversations.isEmpty {
@@ -267,6 +398,24 @@ struct AidenBotsHomeView: View {
                             ? "Opens this Bot chat."
                             : "Reconnect to open this saved chat."
                     )
+                }
+            }
+
+            let archivedBots = allBots.filter { $0.health == .archived }
+            if normalizedQuery.isEmpty, !archivedBots.isEmpty {
+                Text("Archived")
+                    .font(.headline)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 18)
+                    .padding(.bottom, 8)
+                ForEach(archivedBots) { bot in
+                    Button {
+                        presentProfile(bot)
+                    } label: {
+                        botProfileRow(bot)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens this archived Bot’s read-only profile.")
                 }
             }
         }
@@ -309,7 +458,7 @@ struct AidenBotsHomeView: View {
             .disabled(
                 !availability.canWrite
                     || coordinator.connectionState != .connected
-                    || activeBots.isEmpty
+                    || chatReadyBots.isEmpty
                     || isCreatingConversation
             )
             .background(.ultraThinMaterial, in: Circle())
@@ -328,15 +477,29 @@ struct AidenBotsHomeView: View {
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
     }
 
+    private func presentProfile(_ bot: AidenBotSummary) {
+        if horizontalSizeClass == .regular {
+            selectedBot = bot
+        } else {
+            presentedSheet = .profile(bot)
+        }
+    }
+
     private func conversationRow(_ conversation: AidenBotConversationItem) -> some View {
-        HStack(spacing: 14) {
-            botAvatar(
-                name: allBots.first(where: { $0.id == conversation.botId })?.name ?? "Bot",
-                diameter: 52
-            )
+        let bot = allBots.first(where: { $0.id == conversation.botId })
+        return HStack(spacing: 14) {
+            if let bot {
+                botAvatar(bot, diameter: 52)
+            } else {
+                AidenBotSemanticAvatarView(
+                    avatar: .recipe(AidenBotEditorDraft.defaultAvatar),
+                    name: "Bot",
+                    size: 52
+                )
+            }
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(allBots.first(where: { $0.id == conversation.botId })?.name ?? "Bot")
+                    Text(bot?.name ?? "Bot")
                         .font(.headline)
                     Spacer()
                     Text(conversation.updatedAt, style: .time)
@@ -347,6 +510,14 @@ struct AidenBotsHomeView: View {
                     .font(.body)
                     .foregroundStyle(palette.secondary)
                     .lineLimit(2)
+                if let status = aidenBotInboxActivityStatus(
+                    state: conversation.activityState,
+                    canRespondToApproval: conversation.canRespondToApproval
+                ) {
+                    Label(status.label, systemImage: status.symbol)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(palette.accent)
+                }
             }
             Image(systemName: "chevron.right")
                 .font(.caption.bold())
@@ -357,13 +528,34 @@ struct AidenBotsHomeView: View {
         .contentShape(Rectangle())
     }
 
-    private func botAvatar(name: String, diameter: CGFloat) -> some View {
-        Text(String(name.prefix(2)).uppercased())
-            .font(.system(size: diameter * 0.34, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
-            .frame(width: diameter, height: diameter)
-            .background(Color.accentColor.gradient, in: Circle())
-            .accessibilityHidden(true)
+    private func botProfileRow(_ bot: AidenBotSummary) -> some View {
+        HStack(spacing: 14) {
+            botAvatar(bot, diameter: 52)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(bot.name)
+                    .font(.headline)
+                    .foregroundStyle(palette.foreground)
+                Text(bot.purpose.isEmpty ? (bot.health == .archived ? "Archived" : "Bot") : bot.purpose)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption.bold())
+                .foregroundStyle(palette.secondary.opacity(0.7))
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 11)
+        .contentShape(Rectangle())
+    }
+
+    private func botAvatar(_ bot: AidenBotSummary, diameter: CGFloat) -> some View {
+        AidenBotSemanticAvatarView(
+            avatar: bot.avatar.semantic,
+            name: bot.name,
+            size: diameter
+        )
     }
 
     private func statusBanner(_ message: String) -> some View {
@@ -377,8 +569,12 @@ struct AidenBotsHomeView: View {
 
     @MainActor
     private func load() async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        let expectedLoadID = loadID
         guard let installation = coordinator.installationStore.activeInstallation else {
             snapshot = nil
+            isLoading = false
             return
         }
         snapshot = nil
@@ -395,9 +591,12 @@ struct AidenBotsHomeView: View {
             )
             guard coordinator.installationStore.activeInstallation?.id == installation.id,
                   coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId,
+                  loadGeneration == generation,
+                  loadID == expectedLoadID,
                   await AidenBotCache.shared.isCurrent(activation),
                   !Task.isCancelled else { return }
             snapshot = cached
+            validateSelectedBot(in: cached?.list?.bots ?? [])
             loadError = cached == nil ? nil : "Offline — showing saved Bots"
             isLoading = false
             return
@@ -414,7 +613,8 @@ struct AidenBotsHomeView: View {
             async let listRequest = client.bots(includeArchived: true)
             async let conversationRequest = client.botConversations()
             let (list, conversations) = try await (listRequest, conversationRequest)
-            guard coordinator.isCurrent(context), !Task.isCancelled else { return }
+            guard coordinator.isCurrent(context), loadGeneration == generation,
+                  loadID == expectedLoadID, !Task.isCancelled else { return }
             let refreshed = AidenBotCacheSnapshot(
                 list: list,
                 conversations: conversations,
@@ -434,9 +634,12 @@ struct AidenBotsHomeView: View {
             }
             guard retained,
                   coordinator.isCurrent(context),
+                  loadGeneration == generation,
+                  loadID == expectedLoadID,
                   await AidenBotCache.shared.isCurrent(activation),
                   cacheAccepted || cacheWriteFailed else { return }
             snapshot = refreshed
+            validateSelectedBot(in: list.bots)
             isLoading = false
             if cacheWriteFailed {
                 loadError = "Bots loaded, but this iPhone couldn’t save them for offline use."
@@ -446,19 +649,34 @@ struct AidenBotsHomeView: View {
         } catch {
             if let context = capturedContext,
                await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard loadGeneration == generation, loadID == expectedLoadID else { return }
             let cached = await AidenBotCache.shared.load(
                 instanceId: installation.id,
                 deviceId: installation.deviceId
             )
             guard coordinator.installationStore.activeInstallation?.id == installation.id,
                   coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId,
+                  loadGeneration == generation,
+                  loadID == expectedLoadID,
                   await AidenBotCache.shared.isCurrent(activation),
                   !Task.isCancelled else { return }
             snapshot = cached
+            validateSelectedBot(in: cached?.list?.bots ?? [])
             isLoading = false
             loadError = cached == nil
                 ? error.localizedDescription
                 : "Couldn’t refresh — showing saved Bots"
+        }
+    }
+
+    @MainActor
+    private func validateSelectedBot(in bots: [AidenBotSummary]) {
+        guard let selectedID = navigationStore.selectedBot(
+            for: coordinator.activeInstanceId,
+            deviceID: coordinator.installationStore.activeInstallation?.deviceId
+        ) else { return }
+        if !bots.contains(where: { $0.id == selectedID }) {
+            selectedBot = nil
         }
     }
 
