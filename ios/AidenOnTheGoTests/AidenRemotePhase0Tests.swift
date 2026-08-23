@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 6)
+        XCTAssertEqual(fixture.contractRevision, 7)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
@@ -152,6 +152,12 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertNoThrow(try fixture.pairingBootstrap.validated(at: fixtureReferenceDate))
         XCTAssertNoThrow(try fixture.pairingExchange.validated(against: fixture.pairingBootstrap))
         XCTAssertEqual(fixture.pairingExchange.displayName, "Fixture Aiden")
+        XCTAssertEqual(fixture.chat.botId, "bot_fixture_01")
+        XCTAssertTrue(fixture.server.capabilities.contains(.botRead))
+        XCTAssertEqual(
+            Set(try XCTUnwrap(fixture.server.serverCapabilities)),
+            Set(fixture.capabilities)
+        )
         XCTAssertEqual(fixture.streamStatus.state, .waitingForApproval)
         XCTAssertNil(Mirror(reflecting: fixture.streamStatus).children.first { $0.label == "approval" })
         XCTAssertEqual(fixture.streamApproval.approval?.approvalId, "approval_fixture_01")
@@ -606,6 +612,13 @@ final class AidenRemotePhase0Tests: XCTestCase {
         )
         XCTAssertEqual(capability.rawValue, "future:read")
         XCTAssertEqual(event.rawValue, "future_event")
+        XCTAssertEqual(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorCode.self,
+                from: Data("\"bot_archived\"".utf8)
+            ).rawValue,
+            "bot_archived"
+        )
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
             AidenRemoteErrorCode.self,
             from: Data("\"future_error\"".utf8)

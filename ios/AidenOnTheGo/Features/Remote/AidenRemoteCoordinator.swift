@@ -208,6 +208,7 @@ final class AidenRemoteCoordinator {
             exchange,
             trust: payload.trust,
             name: validatedServer.name,
+            validatedServer: validatedServer,
             connectedAt: Date()
         )
         activationGeneration &+= 1

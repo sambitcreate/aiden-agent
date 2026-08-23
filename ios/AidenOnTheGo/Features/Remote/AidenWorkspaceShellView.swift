@@ -149,6 +149,7 @@ private final class AidenHomeModel {
     var errorMessage: String?
 
     func accept(_ chat: AidenChat) {
+        guard !chat.isBotChat else { return }
         chats.removeAll { $0.id == chat.id }
         chats.append(chat)
         chats.sort { $0.updatedAt > $1.updatedAt }
@@ -168,7 +169,8 @@ private final class AidenHomeModel {
             async let catalogRequest: AidenModelCatalog? = try? await client.modelCatalog()
             let (chats, tasks, catalog) = try await (chatsRequest, tasksRequest, catalogRequest)
             guard coordinator.isCurrent(context) else { return }
-            self.chats = chats.sorted { $0.updatedAt > $1.updatedAt }
+            self.chats = AidenChat.regularWorkspaceChats(from: chats)
+                .sorted { $0.updatedAt > $1.updatedAt }
             scheduledTasks = tasks.sorted {
                 ($0.nextRunAt ?? .distantFuture) < ($1.nextRunAt ?? .distantFuture)
             }
@@ -590,7 +592,9 @@ struct AidenWorkspaceShellView: View {
 
     private var filteredChats: [AidenChat] {
         let activeWorkspaceIDSet = Set(activeWorkspaceIDs)
-        let visibleChats = homeModel.chats.filter { activeWorkspaceIDSet.contains($0.workspaceId) }
+        let visibleChats = homeModel.chats.filter {
+            !$0.isBotChat && activeWorkspaceIDSet.contains($0.workspaceId)
+        }
         guard !searchText.isEmpty else { return visibleChats }
         return visibleChats.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
     }
@@ -948,6 +952,10 @@ struct AidenWorkspaceShellView: View {
         do {
             let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspace.id)
             guard coordinator.isCurrent(context) else { return }
+            guard !chat.isBotChat else {
+                coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
+                return
+            }
             await homeModel.load(coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return }
             navigate(to: workspace.id)
@@ -1055,10 +1063,18 @@ struct AidenWorkspaceShellView: View {
                 }
                 chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspaceId)
                 guard coordinator.isCurrent(context) else { return }
+                guard !chat.isBotChat else {
+                    coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
+                    return
+                }
                 navigate(to: workspaceId)
             case .chat(let chatId):
                 chat = try await coordinator.remoteClient(for: context).chat(id: chatId)
                 guard coordinator.isCurrent(context) else { return }
+                guard !chat.isBotChat else {
+                    coordinator.presentedError = String(localized: "This conversation belongs in Bots and cannot be opened from Workspaces yet.")
+                    return
+                }
                 guard activeWorkspaceIDs.contains(chat.workspaceId) else {
                     if archivedWorkspaceIDs.contains(chat.workspaceId) {
                         coordinator.presentedError = String(localized: "That chat belongs to a workspace archived on this device. Unarchive it from Workspaces to open the chat.")

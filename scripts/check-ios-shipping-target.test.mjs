@@ -72,6 +72,7 @@ const appSourcePaths = [
   "AidenOnTheGo/LiveActivities/AgentRunActivityAttributes.swift",
   "AidenOnTheGo/LiveActivities/AidenDeepLink.swift",
   "AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift",
+  "AidenOnTheGo/Models/AidenBot.swift",
   "AidenOnTheGo/Models/AidenChat.swift",
   "AidenOnTheGo/Models/AidenInstallation.swift",
   "AidenOnTheGo/Models/AidenScheduledTask.swift",
@@ -84,6 +85,7 @@ const appSourcePaths = [
 ];
 
 const testSources = [
+  "AidenBotContractTests.swift",
   "AidenBotPrototypeSnapshotTests.swift",
   "AidenChatTests.swift",
   "AidenNativeIntegrationTests.swift",

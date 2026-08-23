@@ -1,6 +1,6 @@
 # Bot-First Aiden On The Go
 
-- Status: Active; Phase 0 complete August 22, 2026; Phase 1 next
+- Status: Active; Phases 0–1 complete August 23, 2026; Phase 2 next
 - Created: August 22, 2026
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
@@ -59,11 +59,11 @@ The repository UI references reinforce the same approach: stable conversation la
 - On mobile, “New Agent” currently means “create a normal workspace chat.” That label must be retired so “New Bot,” “New Bot Chat,” and “New Workspace Chat” each have one meaning.
 - `AidenChatDetailView` already provides the difficult conversation behavior: resumable SSE, stop, approvals, attachments, voice, Markdown, outcome reconciliation, Live Activity handoff, and offline history.
 
-### Correctness issue that must be fixed first
+### Chat-classification correctness boundary
 
-`AidenRemoteChatService.list()` currently calls the all-chat application list, which includes bot-tagged chats. `projectAidenRemoteChat()` then removes `botId`. Aiden On The Go can therefore receive a bot chat inside its Workspace/home list without knowing that it is a bot chat.
+Before Phase 1, `AidenRemoteChatService.list()` called the all-chat application list, which included bot-tagged chats, while `projectAidenRemoteChat()` removed `botId`. Aiden On The Go could therefore receive a bot chat inside its Workspace/home list without knowing that it was a bot chat.
 
-Phase 1 will add optional `botId` to the wire `Chat` DTO, make normal Workspace lists explicitly regular-only, and put bot conversations behind bot-specific projections. No Bot inbox styling starts until shared TypeScript/Swift fixtures prove that classification.
+Phase 1 resolved this boundary: the wire `Chat` DTO carries an optional bounded `botId`, normal Workspace lists are explicitly regular-only, ordinary chat creation rejects a client-authored bot identity, and every Bot-classified chat/stream/attachment/approval route classifies from main-owned metadata before any payload read or effect. Shared TypeScript/Swift fixtures prove the classification and legacy clients remain on the regular-chat path.
 
 ### Current access must become explicit and controllable
 
@@ -358,7 +358,7 @@ On iPhone/iPad:
 
 On the Mac:
 
-- accept only a dedicated bounded envelope (PNG/JPEG source, at most 8 MiB decoded and 12 MiB including the existing base64 transport overhead);
+- accept only a dedicated bounded envelope (PNG/JPEG source, at most 4 MiB decoded and 6 MiB for the dedicated JSON transport envelope); the phone's 512 × 512 normalization makes the tighter bound sufficient while the Mac still validates every untrusted upload independently;
 - verify signature, completeness, dimensions, decoded pixel bound, and one-frame image content;
 - independently normalize to canonical 512 × 512 PNG with metadata removed;
 - stage and digest-verify the content-addressed asset, atomically write it with mode `0600` under an owned `0700` directory, fsync, swap the manifest revision, then prune the old revision;
@@ -412,6 +412,8 @@ Acceptance:
 - prototype passes owner review at compact iPhone and iPad split widths in Aiden's four themes.
 
 ### Phase 1 — Correct chat classification and freeze Remote API v1 additions
+
+Completed August 23, 2026. Contract revision 7 separates server-supported Bot vocabulary from exact device grants, persists explicit negotiation, adds bounded Bot classification to the shared Chat DTO, and makes Workspace collections regular-only. Main-owned metadata classification now runs before every retained chat/stream/attachment/approval payload read or effect, with normalized not-found/expired failures that do not reveal Bot existence. Swift stores grants and support separately, migrates ambiguous legacy state fail-closed, atomically persists negotiated support during pairing, and uses a new cache namespace so older ambiguous chat projections cannot reappear offline. Evidence: `docs/testing/aiden-on-the-go/bot-first-phase-1.md`.
 
 1. Add `botId?` to TypeScript/Swift Chat DTOs and the shared fixture.
 2. Make Workspace/home chat lists regular-only and prove bot chats cannot leak into them.

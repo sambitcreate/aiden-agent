@@ -815,12 +815,33 @@ export class AidenRemoteStreamService {
     };
   }
 
+  streamChatId(deviceId: string, streamId: string): string {
+    return this.requireStream(deviceId, streamId).chatId;
+  }
+
   pendingApproval(deviceId: string, streamId: string): AidenRemotePendingApproval | null {
     const stream = this.requireStream(deviceId, streamId);
     const approval = this.pendingApprovalForStream(stream.streamId);
     if (!approval) return null;
     const { details: _hostOnly, ...mobile } = approval;
     return { ...mobile, canAllow: approval.details ? false : approval.canAllow };
+  }
+
+  approvalChatId(deviceId: string, approvalId: string): string {
+    this.prune();
+    const approval = this.approvals.get(approvalId);
+    if (
+      !approval ||
+      approval.deviceId !== deviceId ||
+      approval.expiresAt <= this.options.now()
+    ) {
+      throw new AidenRemoteServiceError(
+        "approval_expired",
+        "This approval is no longer available.",
+        409,
+      );
+    }
+    return approval.chatId;
   }
 
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null {

@@ -36,6 +36,13 @@ import {
   MAX_IMAGE_BYTES,
 } from "./attachments.js";
 import type { Chat, ChatMessage, ChatStartParams } from "./types.js";
+import type { BotStore } from "./bot-store-core.js";
+import type { BotMutationGate } from "./bot-mutation-gate.js";
+import {
+  AIDEN_REMOTE_MAX_CHAT_MESSAGES,
+  AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  parseAidenRemoteChatProjection,
+} from "./aiden-remote-protocol.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
@@ -82,6 +89,7 @@ export interface AidenRemoteAttachmentContent {
 export interface AidenRemoteChatProjection {
   id: string;
   workspaceId: string;
+  botId?: string;
   title: string;
   providerId?: string;
   modelId?: string;
@@ -91,6 +99,22 @@ export interface AidenRemoteChatProjection {
   revision: string;
   titlePending?: true;
 }
+
+export interface AidenRemoteChatClassification {
+  botId?: string;
+  botArchived?: true;
+}
+
+export interface AidenRemoteRetainedBotChatAuthorizationRequest {
+  deviceId: string;
+  chatId: string;
+  botId: string;
+  access: "read" | "write";
+}
+
+export type AidenRemoteRetainedBotChatAuthorizer = (
+  request: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
+) => boolean | Promise<boolean>;
 
 function ownRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -106,6 +130,25 @@ function exactKeys(record: Record<string, unknown>, required: string[], optional
 
 function boundedString(value: unknown, maximum: number): value is string {
   return typeof value === "string" && value.length > 0 && Array.from(value).length <= maximum;
+}
+
+/** Return at most `maximum` Unicode scalars without splitting a surrogate pair. */
+function boundedUnicodeScalarPrefix(value: string, maximum: number): string {
+  let end = 0;
+  let scalars = 0;
+  while (end < value.length && scalars < maximum) {
+    const leading = value.charCodeAt(end);
+    const trailing = value.charCodeAt(end + 1);
+    end +=
+      leading >= 0xd800 &&
+      leading <= 0xdbff &&
+      trailing >= 0xdc00 &&
+      trailing <= 0xdfff
+        ? 2
+        : 1;
+    scalars += 1;
+  }
+  return value.slice(0, end);
 }
 
 function safeId(value: string, label: string): string {
@@ -170,12 +213,14 @@ function projectMessageTimeline(message: ChatMessage): GenerationTimeline | unde
 }
 
 function chatRevision(chat: Chat): string {
+  const hasModelSelection = Boolean(chat.providerId && chat.model);
   const visible = {
     id: chat.id,
     workspaceId: persistedChatWorkspaceId(chat.workspaceId),
+    ...(chat.botId ? { botId: chat.botId } : {}),
     title: chat.title,
-    providerId: chat.providerId ?? null,
-    model: chat.model ?? null,
+    providerId: hasModelSelection ? chat.providerId : null,
+    model: hasModelSelection ? chat.model : null,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     messages: chat.messages
@@ -197,32 +242,72 @@ export function projectAidenRemoteChat(
   chat: Chat,
   options: { titlePending?: boolean } = {},
 ): AidenRemoteChatProjection {
-  return {
-    id: chat.id,
-    workspaceId: persistedChatWorkspaceId(chat.workspaceId),
-    title: chat.title.slice(0, 1_024),
-    ...(chat.providerId ? { providerId: chat.providerId } : {}),
-    ...(chat.model ? { modelId: chat.model } : {}),
-    messages: chat.messages.flatMap((message) => {
-      if (message.role !== "user" && message.role !== "assistant") return [];
-      const attachments = projectMessageAttachments(message.attachments);
-      const outcome = projectMessageOutcome(message);
-      const timeline = projectMessageTimeline(message);
-      return [{
-        id: message.id,
-        role: message.role,
-        text: message.content.slice(0, 200_000),
-        createdAt: new Date(message.createdAt).toISOString(),
-        ...(attachments.length > 0 ? { attachments } : {}),
-        ...(outcome ? { outcome } : {}),
-        ...(timeline ? { timeline } : {}),
-      }];
-    }),
-    createdAt: new Date(chat.createdAt).toISOString(),
-    updatedAt: new Date(chat.updatedAt).toISOString(),
-    revision: chatRevision(chat),
-    ...(options.titlePending === true ? { titlePending: true as const } : {}),
-  };
+  try {
+    const visibleMessages = chat.messages.filter(
+      (message): message is ChatMessage & { role: "user" | "assistant" } =>
+        message.role === "user" || message.role === "assistant",
+    );
+    if (visibleMessages.length > AIDEN_REMOTE_MAX_CHAT_MESSAGES) {
+      throw new AidenRemoteServiceError(
+        "payload_too_large",
+        "This chat exceeds the Aiden Remote message limit.",
+        413,
+      );
+    }
+    const projection: AidenRemoteChatProjection = {
+      id: chat.id,
+      workspaceId: persistedChatWorkspaceId(chat.workspaceId),
+      ...(chat.botId ? { botId: chat.botId } : {}),
+      title: boundedUnicodeScalarPrefix(chat.title, 1_024),
+      ...(chat.providerId && chat.model
+        ? { providerId: chat.providerId, modelId: chat.model }
+        : {}),
+      messages: visibleMessages.map((message) => {
+        const attachments = projectMessageAttachments(message.attachments);
+        const outcome = projectMessageOutcome(message);
+        const text = boundedUnicodeScalarPrefix(message.content, 200_000);
+        const storedTimeline = projectMessageTimeline(message);
+        // A stored timeline can be valid for the full assistant message while
+        // pointing beyond the prefix exposed to Remote. Omit it as a unit in
+        // that case instead of clamping or fabricating offsets.
+        const timeline = storedTimeline
+          ? parseGenerationTimeline(storedTimeline, text.length) ?? undefined
+          : undefined;
+        return {
+          id: message.id,
+          role: message.role,
+          text,
+          createdAt: new Date(message.createdAt).toISOString(),
+          ...(attachments.length > 0 ? { attachments } : {}),
+          ...(outcome ? { outcome } : {}),
+          ...(timeline ? { timeline } : {}),
+        };
+      }),
+      createdAt: new Date(chat.createdAt).toISOString(),
+      updatedAt: new Date(chat.updatedAt).toISOString(),
+      revision: chatRevision(chat),
+      ...(options.titlePending === true ? { titlePending: true as const } : {}),
+    };
+    const serialized = JSON.stringify(projection);
+    if (Buffer.byteLength(serialized, "utf8") > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
+      throw new AidenRemoteServiceError(
+        "payload_too_large",
+        "This response exceeds the Aiden Remote JSON limit.",
+        413,
+      );
+    }
+    // aiden-remote-protocol.ts refers back to this projection with an erased
+    // `import type`; keep this as the only runtime dependency direction.
+    parseAidenRemoteChatProjection(projection, "Aiden Remote Chat projection");
+    return projection;
+  } catch (error) {
+    if (error instanceof AidenRemoteServiceError) throw error;
+    throw new AidenRemoteServiceError(
+      "internal_error",
+      "Aiden could not safely project this chat.",
+      500,
+    );
+  }
 }
 
 function parseCreate(input: unknown): { workspaceId: string; providerId?: string; model?: string } {
@@ -347,7 +432,7 @@ export class AidenRemoteChatService {
 
   constructor(
     private readonly options: {
-      application: Pick<ChatApplicationService, "list" | "get" | "create" | "rename" | "moveEmptyToWorkspace" | "remove">;
+      application: Pick<ChatApplicationService, "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyToWorkspace" | "remove">;
       chatStore: {
         get(id: string): Promise<Chat | null>;
         appendMessage(
@@ -384,6 +469,14 @@ export class AidenRemoteChatService {
       };
       streams: AidenRemoteStreamService;
       models: Pick<AidenRemoteModelService, "resolve">;
+      bots: Pick<BotStore, "get">;
+      botMutations: Pick<BotMutationGate, "run">;
+      /**
+       * Phase 2 supplies the main-owned versioned notice and Full/Custom
+       * policy authority. Until then, omission deliberately denies every
+       * retained Bot-chat read and write even when device grants are present.
+       */
+      retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -461,9 +554,90 @@ export class AidenRemoteChatService {
 
   async list(workspaceId?: string): Promise<{ chats: AidenRemoteChatProjection[] }> {
     if (workspaceId) safeId(workspaceId, "workspace");
-    const metadata = await this.options.application.list(workspaceId);
+    const metadata = await this.options.application.listRegular(workspaceId);
     const chats = await Promise.all(metadata.map((entry) => this.chat(entry.id)));
     return { chats: chats.map((chat) => this.project(chat)) };
+  }
+
+  /**
+   * Resolve only immutable chat classification from the main-owned metadata
+   * index. Authorization callers use this before any payload read that could
+   * wait on renderer ownership or expose reconciliation state.
+   */
+  async classify(chatId: string): Promise<AidenRemoteChatClassification> {
+    const id = safeId(chatId, "chat");
+    const metadata = (await this.options.application.list()).find((entry) => entry.id === id);
+    if (!metadata) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    if (!metadata.botId) return {};
+    const bot = await this.options.bots.get(metadata.botId);
+    if (!bot || bot.id !== metadata.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    return {
+      botId: metadata.botId,
+      ...(bot.archivedAt !== undefined ? { botArchived: true as const } : {}),
+    };
+  }
+
+  /**
+   * Consult the main-owned Bot policy authority without exposing policy
+   * details to the transport. Missing, throwing, or non-true authority is a
+   * denial; ordinary chats never call this seam.
+   */
+  async authorizeRetainedBotChat(
+    request: AidenRemoteRetainedBotChatAuthorizationRequest,
+  ): Promise<boolean> {
+    const authorizer = this.options.retainedBotChatAuthorizer;
+    if (!authorizer) return false;
+    try {
+      return (await authorizer({ ...request })) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Serialize a Bot-chat mutation with Bot lifecycle changes, then re-resolve
+   * both chat ownership and archive state inside that shared gate. The initial
+   * classification is supplied by the router only after capability and policy
+   * preflight; policy is then checked again immediately before the effect.
+   */
+  async runMutation<T>(
+    deviceId: string,
+    chatId: string,
+    expected: AidenRemoteChatClassification,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const run = async () => {
+      const current = await this.classify(chatId);
+      if (current.botId !== expected.botId) {
+        throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+      }
+      if (
+        current.botId &&
+        !(await this.authorizeRetainedBotChat({
+          deviceId,
+          chatId,
+          botId: current.botId,
+          access: "write",
+        }))
+      ) {
+        throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+      }
+      if (current.botArchived) {
+        throw new AidenRemoteServiceError(
+          "bot_archived",
+          "Restore this bot before making changes.",
+          409,
+        );
+      }
+      return action();
+    };
+    return expected.botId
+      ? this.options.botMutations.run(expected.botId, run)
+      : run();
   }
 
   async get(chatId: string): Promise<AidenRemoteChatProjection> {
@@ -576,6 +750,12 @@ export class AidenRemoteChatService {
     key: string,
     input: unknown,
   ): Promise<AidenRemoteChatProjection> {
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      // Bot chats are permanently bound to their hidden managed home. The
+      // ordinary workspace move route must never be able to rebind them.
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
     const parsed = parseMove(input);
     try {
       return await this.executeIdempotent(

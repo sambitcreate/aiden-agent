@@ -345,6 +345,7 @@ private enum AidenBotPrototypeFixtures {
         return AidenChat(
             id: "prototype-\(recent.id)",
             workspaceId: "prototype-managed-home-\(bot.id)",
+            botId: bot.id,
             title: bot.name,
             providerId: nil,
             modelId: nil,
@@ -374,6 +375,7 @@ private enum AidenBotPrototypeFixtures {
         return AidenChat(
             id: id,
             workspaceId: "prototype-managed-home-\(bot.id)",
+            botId: bot.id,
             title: bot.name,
             providerId: nil,
             modelId: nil,

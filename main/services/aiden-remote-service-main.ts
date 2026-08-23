@@ -69,6 +69,8 @@ import {
 import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import { usageStore } from "./usage-store.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
+import { botStore } from "./bot-store.js";
+import { botMutationGate } from "./bot-mutation-gate.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
 const OPERATIONS_FILE = "aiden-remote-operations-v1.json";
@@ -299,6 +301,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             },
             streams,
             models,
+            bots: botStore,
+            botMutations: botMutationGate,
+            // Phase 1 intentionally omits retainedBotChatAuthorizer. Phase 2
+            // will inject the versioned notice plus Full/Custom policy owner.
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),

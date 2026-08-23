@@ -5,6 +5,62 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testRemoteChatDecodesOptionalBotIdentityAndWorkspaceProjectionStaysDisjoint() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chats = try decoder.decode(
+            [AidenChat].self,
+            from: Data(
+                """
+                [{"id":"chat-workspace","workspaceId":"workspace-1","title":"Workspace",
+                "messages":[],"createdAt":"2026-08-20T12:00:00Z",
+                "updatedAt":"2026-08-20T12:00:01Z","revision":"rev-workspace"},
+                {"id":"chat-bot","workspaceId":"managed-bot-home","botId":"bot-1",
+                "title":"Bot","messages":[],"createdAt":"2026-08-20T12:00:00Z",
+                "updatedAt":"2026-08-20T12:00:01Z","revision":"rev-bot",
+                "futurePresentation":{"safe":true}}]
+                """.utf8
+            )
+        )
+
+        XCTAssertNil(chats[0].botId)
+        XCTAssertEqual(chats[1].botId, "bot-1")
+        XCTAssertFalse(chats[0].isBotChat)
+        XCTAssertTrue(chats[1].isBotChat)
+        XCTAssertEqual(
+            AidenChat.regularWorkspaceChats(from: chats).map(\.id),
+            ["chat-workspace"]
+        )
+    }
+
+    func testRemoteChatRejectsMalformedPresentBotIdentity() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        for botMember in ["\"botId\":null", "\"botId\":\"\""] {
+            let data = Data(
+                """
+                {"id":"chat-1","workspaceId":"workspace-1",\(botMember),"title":"Bot",
+                "messages":[],"createdAt":"2026-08-20T12:00:00Z",
+                "updatedAt":"2026-08-20T12:00:01Z","revision":"rev-1"}
+                """.utf8
+            )
+            XCTAssertThrowsError(try decoder.decode(AidenChat.self, from: data))
+        }
+
+        let oversizedBotID = String(
+            repeating: "b",
+            count: AidenRemoteProtocol.maxBotIdentifierLength + 1
+        )
+        let oversized = Data(
+            """
+            {"id":"chat-1","workspaceId":"workspace-1","botId":"\(oversizedBotID)",
+            "title":"Bot","messages":[],"createdAt":"2026-08-20T12:00:00Z",
+            "updatedAt":"2026-08-20T12:00:01Z","revision":"rev-1"}
+            """.utf8
+        )
+        XCTAssertThrowsError(try decoder.decode(AidenChat.self, from: oversized))
+    }
+
     func testRemoteChatDecodesPendingBackgroundTitleAndUsesABoundedRetryWindow() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -44,7 +100,7 @@ final class AidenChatTests: XCTestCase {
         let chat = try decoder.decode(
             AidenChat.self,
             from: Data(
-                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Activity","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"target":"README.md"},{"id":"think-1","order":1,"kind":"thinking","startedAt":1500,"updatedAt":2500,"finishedAt":2500,"contentOffset":0,"durationMs":1000},{"id":"tool-2","order":2,"kind":"tool","toolName":"run_command","label":"Run command","status":"completed","startedAt":2500,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"detail":"Run tests"}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Activity","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"target":"README.md"},{"id":"think-1","order":1,"kind":"thinking","startedAt":1500,"updatedAt":2500,"finishedAt":2500,"contentOffset":0,"durationMs":1000},{"id":"tool-2","order":2,"kind":"tool","toolCallId":"call-2","toolName":"run_command","label":"Run command","status":"completed","startedAt":2500,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"detail":"Run tests"}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
             )
         )
 
@@ -456,6 +512,94 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNotNil(retainedChats)
         XCTAssertNotNil(retainedActiveStream)
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyStreamURL.path))
+    }
+
+    func testInstallationPurgeClearsV1AndV2CachesWithoutTouchingAnotherInstallation() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-versioned-chat-cache-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let legacyRoot = base.appending(path: "RemoteChatCache-v1", directoryHint: .isDirectory)
+        let currentRoot = base.appending(path: "RemoteChatCache-v2", directoryHint: .isDirectory)
+        let legacyCache = AidenChatCache(root: legacyRoot)
+        let currentCache = AidenChatCache(root: currentRoot, legacyRoots: [legacyRoot])
+        let chat = sampleChat()
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8))
+        let png = renderer.pngData { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        let attachment = AidenMessageAttachment(
+            id: "attachment-versioned-cache",
+            name: "Versioned.png",
+            mimeType: "image/png",
+            kind: .image,
+            size: png.count
+        )
+
+        for cache in [legacyCache, currentCache] {
+            try await cache.saveChats([chat], instanceId: "instance-a", workspaceId: chat.workspaceId)
+            try await cache.saveChat(chat, instanceId: "instance-a")
+            try await cache.saveActiveStream(
+                .init(deviceId: "device-a", streamId: "stream-a", turnId: "turn-a", lastSequence: 1),
+                instanceId: "instance-a",
+                chatId: chat.id
+            )
+            try await cache.saveAttachmentImage(
+                png,
+                instanceId: "instance-a",
+                deviceId: "device-a",
+                chatId: chat.id,
+                attachment: attachment
+            )
+
+            try await cache.saveChats([chat], instanceId: "instance-b", workspaceId: chat.workspaceId)
+            try await cache.saveChat(chat, instanceId: "instance-b")
+            try await cache.saveActiveStream(
+                .init(deviceId: "device-b", streamId: "stream-b", turnId: "turn-b", lastSequence: 2),
+                instanceId: "instance-b",
+                chatId: chat.id
+            )
+            try await cache.saveAttachmentImage(
+                png,
+                instanceId: "instance-b",
+                deviceId: "device-b",
+                chatId: chat.id,
+                attachment: attachment
+            )
+        }
+
+        await currentCache.purge(instanceId: "instance-a")
+
+        for cache in [legacyCache, currentCache] {
+            let removedList = await cache.loadChats(instanceId: "instance-a", workspaceId: chat.workspaceId)
+            let removedChat = await cache.loadChat(instanceId: "instance-a", chatId: chat.id)
+            let removedStream = await cache.loadActiveStream(instanceId: "instance-a", chatId: chat.id)
+            let removedAttachment = await cache.attachmentImage(
+                instanceId: "instance-a",
+                deviceId: "device-a",
+                chatId: chat.id,
+                attachment: attachment
+            )
+            XCTAssertNil(removedList)
+            XCTAssertNil(removedChat)
+            XCTAssertNil(removedStream)
+            XCTAssertNil(removedAttachment)
+
+            let retainedList = await cache.loadChats(instanceId: "instance-b", workspaceId: chat.workspaceId)
+            let retainedChat = await cache.loadChat(instanceId: "instance-b", chatId: chat.id)
+            let retainedStream = await cache.loadActiveStream(instanceId: "instance-b", chatId: chat.id)
+            let retainedAttachment = await cache.attachmentImage(
+                instanceId: "instance-b",
+                deviceId: "device-b",
+                chatId: chat.id,
+                attachment: attachment
+            )
+            XCTAssertEqual(retainedList, [chat])
+            XCTAssertEqual(retainedChat, chat)
+            XCTAssertEqual(retainedStream?.streamId, "stream-b")
+            XCTAssertEqual(retainedAttachment, png)
+        }
     }
 
     func testTerminalCleanupCannotDeleteANewerActiveStream() async throws {

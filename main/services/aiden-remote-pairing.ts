@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import {
   AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_LEGACY_CAPABILITIES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   assertAidenRemoteEndpoint,
   type AidenRemoteCapability,
@@ -44,6 +45,7 @@ export interface AidenRemotePairingExchangeInput {
   deviceType: AidenRemoteDeviceType;
   clientVersion: string;
   acceptsDisplayName?: boolean;
+  acceptsBotCapabilities?: boolean;
 }
 
 export interface AidenRemotePairingExchangeResponse {
@@ -197,6 +199,7 @@ export function parseAidenRemotePairingExchangeInput(
     "deviceType",
     "clientVersion",
     "acceptsDisplayName",
+    "acceptsBotCapabilities",
   ]);
   if (
     Object.keys(record).length < 4 ||
@@ -207,7 +210,8 @@ export function parseAidenRemotePairingExchangeInput(
     !bounded(record.deviceName, 80) ||
     (record.deviceType !== "iphone" && record.deviceType !== "ipad") ||
     !bounded(record.clientVersion, 40) ||
-    (record.acceptsDisplayName !== undefined && typeof record.acceptsDisplayName !== "boolean")
+    (record.acceptsDisplayName !== undefined && typeof record.acceptsDisplayName !== "boolean") ||
+    (record.acceptsBotCapabilities !== undefined && typeof record.acceptsBotCapabilities !== "boolean")
   ) {
     throw new AidenRemoteServiceError(
       "invalid_request",
@@ -221,6 +225,7 @@ export function parseAidenRemotePairingExchangeInput(
     deviceType: record.deviceType,
     clientVersion: record.clientVersion,
     ...(record.acceptsDisplayName === true ? { acceptsDisplayName: true } : {}),
+    ...(record.acceptsBotCapabilities === true ? { acceptsBotCapabilities: true } : {}),
   };
 }
 
@@ -475,7 +480,10 @@ export class AidenRemotePairingService {
         name: input.deviceName,
         type: input.deviceType,
         clientVersion: input.clientVersion,
-        capabilities: AIDEN_REMOTE_CAPABILITIES,
+        capabilities: input.acceptsBotCapabilities
+          ? AIDEN_REMOTE_CAPABILITIES
+          : AIDEN_REMOTE_LEGACY_CAPABILITIES,
+        acceptsBotCapabilities: input.acceptsBotCapabilities === true,
         authorizeCommit: () => this.window === current && !current.cancelled,
       });
       if (this.window !== current || current.cancelled) {

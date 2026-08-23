@@ -55,6 +55,8 @@
 		A0DB00000000000000000001 /* AidenRemoteLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */; };
 		A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */; };
 		B07200000000000000000001 /* AidenBotPrototypeSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07200000000000000000011 /* AidenBotPrototypeSnapshotTests.swift */; };
+		B07300000000000000000001 /* AidenBot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07300000000000000000011 /* AidenBot.swift */; };
+		B07300000000000000000002 /* AidenBotContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07300000000000000000012 /* AidenBotContractTests.swift */; };
 		A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */; };
 		A0E000000000000000000001 /* Core.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000011 /* Core.swift */; };
 		A0E000000000000000000002 /* Lattice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000012 /* Lattice.swift */; };
@@ -141,6 +143,8 @@
 		1A2B3C4D5E6F7000000000F9 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70000000301 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerVoiceInputController.swift; sourceTree = "<group>"; };
+		B07300000000000000000011 /* AidenBot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBot.swift; sourceTree = "<group>"; };
+		B07300000000000000000012 /* AidenBotContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotContractTests.swift; sourceTree = "<group>"; };
 		B5A100000000000000000015 /* AidenOnTheGo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AidenOnTheGo.entitlements; sourceTree = "<group>"; };
 		488791F556304AD2AC59BC5D /* ThirdPartyNotices */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ThirdPartyNotices; sourceTree = "<group>"; };
 		A04500000000000000000010 /* AgentRunActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunActivityAttributes.swift; sourceTree = "<group>"; };
@@ -250,6 +254,7 @@
 		1A2B3C4D5E6F700000000034 /* AidenOnTheGoTests */ = {
 			isa = PBXGroup;
 			children = (
+				B07300000000000000000012 /* AidenBotContractTests.swift */,
 				B07200000000000000000011 /* AidenBotPrototypeSnapshotTests.swift */,
 				A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */,
 				A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */,
@@ -286,6 +291,7 @@
 		1A2B3C4D5E6F7000000000C2 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				B07300000000000000000011 /* AidenBot.swift */,
 				A0DA00000000000000000011 /* AidenScheduledTask.swift */,
 				A0D900000000000000000011 /* AidenWorkspaceEnvironment.swift */,
 				A0D600000000000000000012 /* AidenInstallation.swift */,
@@ -626,6 +632,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B07300000000000000000001 /* AidenBot.swift in Sources */,
 				B07100000000000000000001 /* BotFirstPrototype.swift in Sources */,
 				A0E000000000000000000001 /* Core.swift in Sources */,
 				A0E000000000000000000002 /* Lattice.swift in Sources */,
@@ -670,6 +677,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B07300000000000000000002 /* AidenBotContractTests.swift in Sources */,
 				B07200000000000000000001 /* AidenBotPrototypeSnapshotTests.swift in Sources */,
 				A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */,
 				A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */,

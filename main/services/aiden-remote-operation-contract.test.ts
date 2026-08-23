@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 import {
   AidenDurableOperationRegistry,
@@ -16,6 +18,31 @@ import {
   MAX_DURABLE_OPERATION_ENTRIES,
   type AidenIdempotencySnapshotEntry,
 } from "./aiden-remote-operation-contract.js";
+import { parseAidenRemoteContractFixture } from "./aiden-remote-protocol.js";
+
+function fixtureRecord(value: unknown, label: string): Record<string, unknown> {
+  assert.ok(value !== null && typeof value === "object" && !Array.isArray(value), label);
+  return value as Record<string, unknown>;
+}
+
+async function readBotContractFixture(): Promise<Record<string, unknown>> {
+  const serialized = await readFile(
+    path.resolve(process.cwd(), "protocol/aiden-remote/v1/fixtures/contract.json"),
+    "utf8",
+  );
+  const parsed: unknown = JSON.parse(serialized);
+  return fixtureRecord(parsed, "canonical Aiden Remote fixture must be an object");
+}
+
+function assertBotFixtureMutationFails(
+  source: Record<string, unknown>,
+  mutate: (fixture: Record<string, unknown>) => void,
+  expected: RegExp,
+): void {
+  const candidate = structuredClone(source);
+  mutate(candidate);
+  assert.throws(() => parseAidenRemoteContractFixture(candidate), expected);
+}
 
 test("idempotency is scoped and replays the original result while rejecting key reuse", async () => {
   const ledger = new AidenIdempotencyLedger();
@@ -863,5 +890,719 @@ test("durable operation registry restores only exact bounded identities and reje
   assert.throws(
     () => valid.start("operation-3", ""),
     (error) => error instanceof AidenOperationContractError && error.code === "internal_error",
+  );
+});
+
+test("canonical revision-7 Bot fixtures parse into explicit bounded contract views", async () => {
+  const source = await readBotContractFixture();
+  const fixture = parseAidenRemoteContractFixture(source);
+
+  assert.equal(fixture.contractRevision, 7);
+  assert.equal(fixture.botList.maxBots, 256);
+  assert.deepEqual(fixture.botList.favorites, fixture.botFavorites);
+  assert.equal(fixture.botSummary.health, "ready");
+  assert.equal(fixture.botDetail.access.botId, fixture.botDetail.id);
+  assert.equal(fixture.botPolicy.accessMode, "full");
+  assert.equal(Object.prototype.hasOwnProperty.call(fixture.botPolicy, "custom"), false);
+  assert.equal(fixture.botIdentity.request.openingGreeting, "");
+  assert.equal(fixture.botCreate.request.access.accessMode, "full");
+  assert.equal(
+    fixture.botCreate.request.access.catalogRevision,
+    fixture.botCapabilityCatalog.revision,
+  );
+  assert.equal(fixture.botChatCreate.response.botId, fixture.botSummary.id);
+  assert.equal(fixture.botChatSubset.chatId, fixture.botConversation.chatId);
+  assert.equal(fixture.botChatSubset.botId, fixture.botConversation.botId);
+  assert.equal(fixture.botConversation.activityState, "waiting_for_approval");
+  assert.equal(fixture.botConversation.canRespondToApproval, true);
+  assert.equal(fixture.botAvatarMetadata.mimeType, "image/png");
+  assert.equal(fixture.botAvatarMetadata.width, 512);
+  assert.equal(fixture.botAvatarMetadata.height, 512);
+
+  assert.equal(fixture.botPolicyUpdate.request.accessMode, "custom");
+  assert.equal(
+    fixture.botPolicyUpdate.request.catalogRevision,
+    fixture.botCapabilityCatalog.revision,
+  );
+  if (fixture.botPolicyUpdate.request.accessMode === "custom") {
+    assert.equal(fixture.botPolicyUpdate.request.custom.providerId, "provider_fixture");
+    assert.equal(fixture.botPolicyUpdate.request.custom.modelId, "model_fixture");
+  }
+  assert.equal(
+    fixture.botChatSubsetUpdate.request.expectedBotPolicyRevision,
+    fixture.botChatSubsetUpdate.response.botPolicyRevision,
+  );
+  assert.equal(fixture.botNotice.requiresAcknowledgement, true);
+  assert.equal(fixture.botNoticeAcknowledgement.response.requiresAcknowledgement, false);
+  if (!fixture.botNoticeAcknowledgement.response.requiresAcknowledgement) {
+    assert.equal(
+      fixture.botNoticeAcknowledgement.response.acceptedDecision,
+      "continue_full",
+    );
+  }
+  const legacyCapabilities: readonly string[] =
+    fixture.legacyNonNegotiating.server.capabilities;
+  assert.equal(legacyCapabilities.includes("bot:read"), false);
+  assert.equal(legacyCapabilities.includes("bot:write"), false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      fixture.legacyNonNegotiating.server,
+      "serverCapabilities",
+    ),
+    false,
+  );
+});
+
+test("Bot fixture parsing tolerates response additions and rejects authority-shaping ambiguity", async () => {
+  const source = await readBotContractFixture();
+
+  const additiveResponse = structuredClone(source);
+  fixtureRecord(additiveResponse.botDetail, "botDetail").futureDisplayHint = "future-safe-value";
+  const additiveParsed = parseAidenRemoteContractFixture(additiveResponse);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(additiveParsed.botDetail, "futureDisplayHint"),
+    false,
+  );
+  const additiveNotice = structuredClone(source);
+  fixtureRecord(additiveNotice.botNotice, "botNotice").futurePresentationHint = true;
+  const additiveNoticeParsed = parseAidenRemoteContractFixture(additiveNotice);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      additiveNoticeParsed.botNotice,
+      "futurePresentationHint",
+    ),
+    false,
+  );
+  for (const privateKey of [
+    "managedHomePath",
+    "managedWorkspacePath",
+    "workspacePath",
+    "botHomePath",
+    "systemPrompt",
+    "skillContent",
+    "skillContents",
+    "skillPath",
+    "skillPaths",
+    "providerCredential",
+    "mcpCredential",
+    "connectionCredential",
+    "authorizationHeader",
+    "providerHeaders",
+    "mcpHeaders",
+    "connectionHeaders",
+    "providerApiKey",
+    "mcpApiKey",
+    "connectionApiKey",
+    "credentialMaterial",
+    "assetFilename",
+    "avatarAssetFilename",
+    "temporaryAssetURL",
+    "temporaryURL",
+    "credential",
+    "secret",
+    "apiKey",
+    "token",
+    "headers",
+    "endpoint",
+    "path",
+    "toolArgs",
+    "toolResult",
+    "reasoning",
+    "provider_api_key",
+    "authorization-header",
+    "skill.path",
+    "temporary asset url",
+    "avatar_asset_filename",
+  ]) {
+    assertBotFixtureMutationFails(
+      source,
+      (fixture) => {
+        fixtureRecord(fixture.botDetail, "botDetail")[privateKey] = "private";
+      },
+      /Forbidden (?:Aiden Remote|private Bot) wire key/u,
+    );
+  }
+
+  for (const [fixtureKey, privateKey] of [
+    ["botSummary", "instructions"],
+    ["botSummary", "openingGreeting"],
+    ["botConversation", "reasoning"],
+  ] as const) {
+    assertBotFixtureMutationFails(
+      source,
+      (fixture) => {
+        fixtureRecord(fixture[fixtureKey], fixtureKey)[privateKey] = "private";
+      },
+      /Forbidden private Bot wire key/u,
+    );
+  }
+
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botCreate, "botCreate");
+      fixtureRecord(operation.request, "botCreate.request").unexpectedAuthority = true;
+    },
+    /Bot create request contains unsupported field/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botIdentity, "botIdentity");
+      fixtureRecord(operation.request, "botIdentity.request").openingGreeting = null;
+    },
+    /openingGreeting/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botChatCreate, "botChatCreate");
+      fixtureRecord(operation.response, "botChatCreate.response").botId = "bot_other";
+    },
+    /conversation identities do not agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botPolicyUpdate, "botPolicyUpdate");
+      const request = fixtureRecord(operation.request, "botPolicyUpdate.request");
+      fixtureRecord(request.custom, "botPolicyUpdate.request.custom").fileScopeIds = [
+        "../private",
+      ];
+    },
+    /path-safe opaque identifiers/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botPolicyUpdate, "botPolicyUpdate");
+      const request = fixtureRecord(operation.request, "botPolicyUpdate.request");
+      delete fixtureRecord(request.custom, "botPolicyUpdate.request.custom").modelId;
+    },
+    /modelId/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const policy = fixtureRecord(fixture.botPolicy, "botPolicy");
+      const update = fixtureRecord(fixture.botPolicyUpdate, "botPolicyUpdate");
+      const request = fixtureRecord(update.request, "botPolicyUpdate.request");
+      policy.custom = structuredClone(request.custom);
+    },
+    /access and custom selection must agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.botNotice, "botNotice").acceptedAt =
+        "2026-08-18T19:03:00.000Z";
+    },
+    /pending Bot access notice/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.botArchive, "botArchive").health = "ready";
+    },
+    /archived health and archivedAt must agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.botAvatarMetadata, "botAvatarMetadata").mimeType = "image/jpeg";
+    },
+    /avatar MIME type/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const conversation = fixtureRecord(fixture.botConversation, "botConversation");
+      conversation.activityState = "idle";
+      conversation.canRespondToApproval = true;
+    },
+    /approval responses require waiting_for_approval/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const legacy = fixtureRecord(fixture.legacyNonNegotiating, "legacyNonNegotiating");
+      fixtureRecord(legacy.server, "legacyNonNegotiating.server").serverCapabilities = [];
+    },
+    /Legacy server projection contains unsupported field/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botChatCreate, "botChatCreate");
+      delete fixtureRecord(operation.request, "botChatCreate.request").modelId;
+    },
+    /providerId and modelId must be supplied together/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botChatCreate, "botChatCreate");
+      delete fixtureRecord(operation.response, "botChatCreate.response").modelId;
+    },
+    /providerId and modelId must be supplied together/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botChatCreate, "botChatCreate");
+      operation.request = {};
+      const catalog = fixtureRecord(fixture.botCapabilityCatalog, "botCapabilityCatalog");
+      const providers = catalog.providers;
+      assert.ok(Array.isArray(providers));
+      fixtureRecord(providers[0], "provider").available = false;
+    },
+    /Bot chat create response contains an unknown or unavailable provider/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const chat = fixtureRecord(fixture.chat, "chat");
+      chat.providerId = "provider_missing";
+      chat.modelId = "model_missing";
+    },
+    /Canonical Bot Chat contains an unknown or unavailable provider/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.botPolicy, "botPolicy").summary = "Contradictory access";
+    },
+    /Canonical Bot policy identities do not agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const avatar = fixtureRecord(fixture.botAvatar, "botAvatar");
+      const semantic = fixtureRecord(avatar.semantic, "botAvatar.semantic");
+      semantic.color = "mint";
+    },
+    /Canonical Bot avatar and detail projections do not agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const list = fixtureRecord(fixture.botList, "botList");
+      const bots = list.bots;
+      assert.ok(Array.isArray(bots));
+      const summary = fixtureRecord(bots[0], "botList.bots[0]");
+      summary.health = "archived";
+      summary.archivedAt = "2026-08-18T18:45:00.000Z";
+    },
+    /Archived Bots cannot remain in favorites/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.botSummary, "botSummary").updatedAt =
+        "2026-08-18T16:59:59.000Z";
+    },
+    /Bot updatedAt must not precede createdAt/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.botConversation, "botConversation").updatedAt =
+        "2026-08-18T18:49:59.000Z";
+    },
+    /Bot conversation updatedAt must not precede createdAt/u,
+  );
+  for (const fixtureKey of ["botSummary", "botConversation", "chat"] as const) {
+    assertBotFixtureMutationFails(
+      source,
+      (fixture) => {
+        const projection = fixtureRecord(fixture[fixtureKey], fixtureKey);
+        projection.createdAt = "2026-08-18T19:00:00.1239Z";
+        projection.updatedAt = "2026-08-18T19:00:00.1230Z";
+      },
+      /updatedAt must not precede createdAt/u,
+    );
+  }
+  const offsetEquivalent = structuredClone(source);
+  const offsetEquivalentChat = fixtureRecord(offsetEquivalent.chat, "chat");
+  offsetEquivalentChat.createdAt = "2026-08-18T20:00:00.1239+01:00";
+  offsetEquivalentChat.updatedAt = "2026-08-18T19:00:00.123900Z";
+  assert.doesNotThrow(() => parseAidenRemoteContractFixture(offsetEquivalent));
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const projection = fixtureRecord(fixture.chat, "chat");
+      projection.createdAt = "2026-08-18T20:00:00.1239+01:00";
+      projection.updatedAt = "2026-08-18T19:00:00.1238Z";
+    },
+    /updatedAt must not precede createdAt/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.botNotice, "botNotice").version = "bot-full-access-v2";
+    },
+    /notice version is unsupported/u,
+  );
+});
+
+test("Bot capability catalogs allow the documented per-provider model bound", async () => {
+  const source = await readBotContractFixture();
+  const catalog = fixtureRecord(source.botCapabilityCatalog, "botCapabilityCatalog");
+  const providers = catalog.providers;
+  assert.ok(Array.isArray(providers));
+  const originalProvider = fixtureRecord(providers[0], "botCapabilityCatalog.providers[0]");
+  const firstProvider = structuredClone(originalProvider);
+  firstProvider.models = Array.from({ length: 256 }, (_, index) => ({
+    id: index === 0 ? "model_fixture" : `model_fixture_${index}`,
+    label: `Model ${index}`,
+    available: true,
+  }));
+  const secondProvider = structuredClone(originalProvider);
+  secondProvider.id = "provider_fixture_two";
+  secondProvider.models = Array.from({ length: 256 }, (_, index) => ({
+    id: `model_fixture_two_${index}`,
+    label: `Second model ${index}`,
+    available: true,
+  }));
+  catalog.providers = [firstProvider, secondProvider];
+
+  const fixture = parseAidenRemoteContractFixture(source);
+  assert.equal(fixture.botCapabilityCatalog.providers.length, 2);
+  assert.equal(fixture.botCapabilityCatalog.providers[0]?.models.length, 256);
+  assert.equal(fixture.botCapabilityCatalog.providers[1]?.models.length, 256);
+
+  catalog.providers = [
+    firstProvider,
+    secondProvider,
+    {
+      ...structuredClone(originalProvider),
+      id: "provider_fixture_three",
+      models: [{ id: "model_fixture_three", label: "Overflow model", available: true }],
+    },
+  ];
+  assert.throws(
+    () => parseAidenRemoteContractFixture(source),
+    /exceeds 512 total provider models/u,
+  );
+});
+
+test("Bot policy mutations bind catalog and Bot-policy revisions without hiding drift", async () => {
+  const source = await readBotContractFixture();
+
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botCreate, "botCreate");
+      delete fixtureRecord(operation.request, "botCreate.request").access;
+    },
+    /Bot access update request must be an object/u,
+  );
+  for (const operationName of ["botCreate", "botPolicyUpdate"] as const) {
+    assertBotFixtureMutationFails(
+      source,
+      (fixture) => {
+        const operation = fixtureRecord(fixture[operationName], operationName);
+        const request = fixtureRecord(operation.request, `${operationName}.request`);
+        const access = operationName === "botCreate"
+          ? fixtureRecord(request.access, "botCreate.request.access")
+          : request;
+        access.catalogRevision = "stale_catalog_revision";
+      },
+      /does not target the canonical catalog revision/u,
+    );
+  }
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botChatSubsetUpdate, "botChatSubsetUpdate");
+      fixtureRecord(operation.request, "botChatSubsetUpdate.request").catalogRevision =
+        "stale_catalog_revision";
+    },
+    /does not target the canonical catalog revision/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const operation = fixtureRecord(fixture.botChatSubsetUpdate, "botChatSubsetUpdate");
+      fixtureRecord(operation.request, "botChatSubsetUpdate.request").expectedBotPolicyRevision =
+        "stale_bot_policy_revision";
+    },
+    /Bot policy revisions do not agree/u,
+  );
+
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const catalog = fixtureRecord(fixture.botCapabilityCatalog, "botCapabilityCatalog");
+      const connections = catalog.connections;
+      assert.ok(Array.isArray(connections));
+      fixtureRecord(connections[0], "connection").available = false;
+    },
+    /contains an unavailable connection/u,
+  );
+
+  const tombstoneResponse = structuredClone(source);
+  const tombstoneCatalog = fixtureRecord(
+    tombstoneResponse.botCapabilityCatalog,
+    "botCapabilityCatalog",
+  );
+  const tombstoneConnections = tombstoneCatalog.connections;
+  assert.ok(Array.isArray(tombstoneConnections));
+  tombstoneConnections.push({
+    id: "connection.removed",
+    label: "Removed connection",
+    available: false,
+  });
+  const detail = fixtureRecord(tombstoneResponse.botDetail, "botDetail");
+  const policyUpdate = fixtureRecord(tombstoneResponse.botPolicyUpdate, "botPolicyUpdate");
+  const policyRequest = fixtureRecord(policyUpdate.request, "botPolicyUpdate.request");
+  const custom = structuredClone(
+    fixtureRecord(policyRequest.custom, "botPolicyUpdate.request.custom"),
+  );
+  custom.connectionIds = ["connection.removed"];
+  detail.access = {
+    botId: detail.id,
+    accessMode: "custom",
+    revision: "bot_policy_revision_drift",
+    policyEpoch: "bot_policy_epoch_drift",
+    summary: "A selected connection is unavailable.",
+    custom,
+  };
+  const driftFixture = parseAidenRemoteContractFixture(tombstoneResponse);
+  assert.equal(driftFixture.botDetail.access.accessMode, "custom");
+  if (driftFixture.botDetail.access.accessMode === "custom") {
+    assert.deepEqual(driftFixture.botDetail.access.custom.connectionIds, [
+      "connection.removed",
+    ]);
+  }
+
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const catalog = fixtureRecord(fixture.botCapabilityCatalog, "botCapabilityCatalog");
+      const scopes = catalog.fileScopes;
+      assert.ok(Array.isArray(scopes));
+      scopes.push({
+        id: "scope.extra",
+        label: "Extra scope",
+        available: true,
+        kind: "approved_location",
+      });
+      const operation = fixtureRecord(fixture.botChatSubsetUpdate, "botChatSubsetUpdate");
+      for (const key of ["request", "response"] as const) {
+        const view = fixtureRecord(operation[key], `botChatSubsetUpdate.${key}`);
+        fixtureRecord(view.custom, `botChatSubsetUpdate.${key}.custom`).fileScopeIds = [
+          "scope.extra",
+        ];
+      }
+    },
+    /exceeds the authoritative Bot access ceiling/u,
+  );
+});
+
+test("canonical Bot operation fixtures preserve exact identities and applied mutations", async () => {
+  const source = await readBotContractFixture();
+
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const list = fixtureRecord(fixture.botList, "botList");
+      const bots = list.bots;
+      assert.ok(Array.isArray(bots));
+      fixtureRecord(bots[0], "botList.bots[0]").name = "Divergent Scout";
+    },
+    /Same-revision Bot summary, list, and detail projections do not agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const page = fixtureRecord(fixture.botConversations, "botConversations");
+      const conversations = page.conversations;
+      assert.ok(Array.isArray(conversations));
+      fixtureRecord(conversations[0], "botConversations.conversations[0]").preview =
+        "Divergent preview";
+    },
+    /Same-revision Bot conversation and page projections do not agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const archive = fixtureRecord(fixture.botArchive, "botArchive");
+      fixtureRecord(archive.avatar, "botArchive.avatar").semantic = "orbit";
+    },
+    /identity and avatar must survive archive and restore unchanged/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const create = fixtureRecord(fixture.botCreate, "botCreate");
+      fixtureRecord(create.response, "botCreate.response").purpose = "Different purpose";
+    },
+    /does not apply the exact requested identity/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const identity = fixtureRecord(fixture.botIdentity, "botIdentity");
+      fixtureRecord(identity.response, "botIdentity.response").openingGreeting =
+        "The clear did not apply";
+    },
+    /does not apply the exact requested patch/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const favorites = fixtureRecord(fixture.botFavoritesUpdate, "botFavoritesUpdate");
+      fixtureRecord(favorites.request, "botFavoritesUpdate.request").botIds = [];
+    },
+    /favorites fixtures do not agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const update = fixtureRecord(fixture.botPolicyUpdate, "botPolicyUpdate");
+      const response = fixtureRecord(update.response, "botPolicyUpdate.response");
+      fixtureRecord(response.custom, "botPolicyUpdate.response.custom").skillIds = [];
+    },
+    /request and response Custom selections do not agree/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const update = fixtureRecord(fixture.botChatSubsetUpdate, "botChatSubsetUpdate");
+      const response = fixtureRecord(update.response, "botChatSubsetUpdate.response");
+      fixtureRecord(response.custom, "botChatSubsetUpdate.response.custom").skillIds = [];
+    },
+    /request and response Custom selections do not agree/u,
+  );
+});
+
+test("canonical Chat fixtures validate bounded classification and every known Message field", async () => {
+  const source = await readBotContractFixture();
+
+  const knownFields = structuredClone(source);
+  const chat = fixtureRecord(knownFields.chat, "chat");
+  const messages = chat.messages;
+  assert.ok(Array.isArray(messages));
+  const message = fixtureRecord(messages[0], "chat.messages[0]");
+  message.attachments = [
+    {
+      id: "attachment.fixture",
+      name: "brief.txt",
+      mimeType: "text/plain",
+      kind: "text",
+      size: 42,
+    },
+  ];
+  message.outcome = {
+    status: "failed",
+    category: "timeout",
+    attempts: 2,
+    retryExhausted: true,
+  };
+  message.timeline = {
+    version: 3,
+    generationId: "generation.fixture",
+    status: "completed",
+    startedAt: 0,
+    finishedAt: 1,
+    steps: [],
+  };
+  chat.futureDisplayHint = true;
+  const knownParsed = parseAidenRemoteContractFixture(knownFields);
+  assert.equal(knownParsed.chat.messages[0]?.attachments?.[0]?.name, "brief.txt");
+  assert.equal(knownParsed.chat.messages[0]?.outcome?.category, "timeout");
+  assert.equal(knownParsed.chat.messages[0]?.timeline?.generationId, "generation.fixture");
+  assert.equal(Object.prototype.hasOwnProperty.call(knownParsed.chat, "futureDisplayHint"), false);
+
+  const regularChat = structuredClone(source);
+  delete fixtureRecord(regularChat.chat, "chat").botId;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(regularChat),
+    /Chat response selections or Bot identity do not agree/u,
+  );
+
+  for (const [field, value, expected] of [
+    ["id", "i".repeat(129), /Chat response id/u],
+    ["workspaceId", "w".repeat(129), /workspaceId/u],
+    ["revision", "r".repeat(129), /revision/u],
+    ["title", "t".repeat(1_025), /title/u],
+    ["providerId", "p".repeat(257), /providerId/u],
+    ["modelId", "m".repeat(513), /modelId/u],
+    ["botId", "../private", /canonical Bot identifier grammar/u],
+    ["title", 42, /title/u],
+  ] as const) {
+    assertBotFixtureMutationFails(
+      source,
+      (fixture) => {
+        fixtureRecord(fixture.chat, "chat")[field] = value;
+      },
+      expected,
+    );
+  }
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const malformedChat = fixtureRecord(fixture.chat, "chat");
+      malformedChat.updatedAt = "2026-08-18T18:00:00.000Z";
+    },
+    /updatedAt must not precede createdAt/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const malformedChat = fixtureRecord(fixture.chat, "chat");
+      const malformedMessages = malformedChat.messages;
+      assert.ok(Array.isArray(malformedMessages));
+      fixtureRecord(malformedMessages[0], "chat.messages[0]").id = "";
+    },
+    /message 0 id/u,
+  );
+  for (const [field, value, expected] of [
+    ["attachments", {}, /attachments must contain at most 20 items/u],
+    ["outcome", { status: "completed" }, /outcome status is invalid/u],
+    ["timeline", {}, /timeline is invalid/u],
+  ] as const) {
+    assertBotFixtureMutationFails(
+      source,
+      (fixture) => {
+        const malformedChat = fixtureRecord(fixture.chat, "chat");
+        const malformedMessages = malformedChat.messages;
+        assert.ok(Array.isArray(malformedMessages));
+        fixtureRecord(malformedMessages[0], "chat.messages[0]")[field] = value;
+      },
+      expected,
+    );
+  }
+
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.chat, "chat").messages = Array.from(
+        { length: 10_001 },
+        () => ({
+          id: "m",
+          role: "user",
+          text: "",
+          createdAt: "2026-01-01T00:00:00Z",
+        }),
+      );
+    },
+    /messages must contain at most 10000 items/u,
+  );
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      fixtureRecord(fixture.chat, "chat").messages = Array.from(
+        { length: 6 },
+        (_, index) => ({
+          id: `message_${index}`,
+          role: "user",
+          text: "x".repeat(200_000),
+          createdAt: "2026-01-01T00:00:00Z",
+        }),
+      );
+    },
+    /exceeds the 1 MiB JSON response ceiling/u,
   );
 });

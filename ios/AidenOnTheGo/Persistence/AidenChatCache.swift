@@ -29,22 +29,35 @@ actor AidenChatCache {
     }
 
     private let root: URL
+    private let legacyRoots: [URL]
     private let fileManager: FileManager
     private let maxCacheFileBytes = 10 * 1_024 * 1_024
     private let maxAttachmentImageCacheBytes = 96 * 1_024 * 1_024
 
-    init(root: URL? = nil, fileManager: FileManager = .default) {
+    init(
+        root: URL? = nil,
+        fileManager: FileManager = .default,
+        legacyRoots: [URL]? = nil
+    ) {
         self.fileManager = fileManager
         if let root {
             self.root = root
+            self.legacyRoots = legacyRoots ?? []
         } else {
             let applicationSupport = fileManager.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask
             ).first ?? fileManager.temporaryDirectory
-            self.root = applicationSupport
+            let namespaceRoot = applicationSupport
                 .appending(path: "AidenOnTheGo", directoryHint: .isDirectory)
-                .appending(path: "RemoteChatCache-v1", directoryHint: .isDirectory)
+            self.root = namespaceRoot
+                // v1 could not distinguish Bot chats from Workspace chats.
+                // Use a fresh namespace so ambiguous offline entries are never
+                // admitted after the wire gained an authoritative botId.
+                .appending(path: "RemoteChatCache-v2", directoryHint: .isDirectory)
+            self.legacyRoots = legacyRoots ?? [
+                namespaceRoot.appending(path: "RemoteChatCache-v1", directoryHint: .isDirectory),
+            ]
         }
     }
 
@@ -119,14 +132,16 @@ actor AidenChatCache {
     }
 
     func purge(instanceId: String) {
-        purgeFiles(kind: "lists", instanceId: instanceId, as: ChatListEnvelope.self) { $0.instanceId }
-        purgeFiles(kind: "chats", instanceId: instanceId, as: ChatEnvelope.self) { $0.instanceId }
-        purgeFiles(kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) { $0.instanceId }
-        try? fileManager.removeItem(at: attachmentInstanceDirectory(instanceId: instanceId))
+        purgeNamespace(root, instanceId: instanceId)
+        for legacyRoot in legacyRoots where legacyRoot.standardizedFileURL != root.standardizedFileURL {
+            purgeNamespace(legacyRoot, instanceId: instanceId)
+        }
     }
 
     func removeActiveStreams(instanceId: String) {
-        purgeFiles(kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) { $0.instanceId }
+        purgeFiles(root: root, kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) {
+            $0.instanceId
+        }
     }
 
     func attachmentImage(
@@ -205,8 +220,11 @@ actor AidenChatCache {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    private func attachmentInstanceDirectory(instanceId: String) -> URL {
-        root
+    private func attachmentInstanceDirectory(
+        cacheRoot: URL? = nil,
+        instanceId: String
+    ) -> URL {
+        (cacheRoot ?? root)
             .appending(path: "attachment-images", directoryHint: .isDirectory)
             .appending(path: digestName(instanceId), directoryHint: .isDirectory)
     }
@@ -262,16 +280,35 @@ actor AidenChatCache {
     private func load<Value: Decodable>(_ type: Value.Type, from url: URL) -> Value? {
         guard let data = try? Data(contentsOf: url),
               data.count <= maxCacheFileBytes else { return nil }
-        return try? JSONDecoder().decode(type, from: data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(type, from: data)
+    }
+
+    private func purgeNamespace(_ cacheRoot: URL, instanceId: String) {
+        purgeFiles(root: cacheRoot, kind: "lists", instanceId: instanceId, as: ChatListEnvelope.self) {
+            $0.instanceId
+        }
+        purgeFiles(root: cacheRoot, kind: "chats", instanceId: instanceId, as: ChatEnvelope.self) {
+            $0.instanceId
+        }
+        purgeFiles(root: cacheRoot, kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) {
+            $0.instanceId
+        }
+        try? fileManager.removeItem(at: attachmentInstanceDirectory(
+            cacheRoot: cacheRoot,
+            instanceId: instanceId
+        ))
     }
 
     private func purgeFiles<Value: Decodable>(
+        root cacheRoot: URL,
         kind: String,
         instanceId: String,
         as type: Value.Type,
         instance: (Value) -> String
     ) {
-        let directory = root.appending(path: kind, directoryHint: .isDirectory)
+        let directory = cacheRoot.appending(path: kind, directoryHint: .isDirectory)
         guard let urls = try? fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -295,7 +332,9 @@ actor AidenChatCache {
     }
 
     private func save<Value: Encodable>(_ value: Value, to url: URL) throws {
-        let data = try JSONEncoder().encode(value)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
         guard data.count <= maxCacheFileBytes else {
             throw CocoaError(.fileWriteOutOfSpace)
         }

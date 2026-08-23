@@ -5,9 +5,243 @@ import type { Chat, ChatMessage } from "./types.js";
 import { AidenRemoteChatService } from "./aiden-remote-chats.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
+import { BotMutationGate } from "./bot-mutation-gate.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+
+async function projectionReadServer(initial: Chat | Chat[]) {
+  let current = structuredClone(Array.isArray(initial) ? initial : [initial]);
+  const streams = new AidenRemoteStreamService({
+    now: Date.now,
+    cancel: () => false,
+    approve: () => false,
+  });
+  const chats = new AidenRemoteChatService({
+    application: {
+      list: async () => structuredClone(current),
+      listRegular: async () => structuredClone(current.filter((chat) => chat.botId === undefined)),
+      get: async (chatId) => ({
+        chat: structuredClone(current.find((chat) => chat.id === chatId) ?? null),
+        reconciliation: null,
+      }),
+      create: async () => structuredClone(current[0]!),
+      rename: async () => structuredClone(current[0]!),
+      moveEmptyToWorkspace: async () => structuredClone(current[0]!),
+      remove: async () => undefined,
+    },
+    chatStore: {
+      get: async (chatId) => structuredClone(current.find((chat) => chat.id === chatId) ?? null),
+      appendMessage: async () => structuredClone(current[0]!),
+    },
+    generation: {
+      beginChatTurn: () => null,
+      start: async () => false,
+    },
+    streams,
+    models: {
+      resolve: async () => ({
+        providerId: "provider-1",
+        modelId: "model-1",
+        thinkingLevels: [],
+      }),
+    },
+    bots: { get: async () => null },
+    botMutations: new BotMutationGate(),
+  });
+  const handler = createAidenRemoteRequestHandler({
+    instanceId: "instance-1",
+    displayName: () => "Studio Mac",
+    appVersion: "0.30.0",
+    devices: {
+      acquireDeviceAuthorization: () => () => undefined,
+      authenticate: async (credential) => credential === "a".repeat(43)
+        ? {
+            id: "device-1",
+            revoked: false,
+            capabilities: new Set(["chat:read"] as const),
+          }
+        : null,
+    },
+    pairing: { exchange: async () => { throw new Error("unused"); } },
+    chats,
+    streams,
+    connectionMode: () => "lan",
+    now: Date.now,
+    log: () => undefined,
+  });
+  const server = createServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("server did not bind");
+  return {
+    base: `http://127.0.0.1:${address.port}/api/aiden/v1`,
+    setChat(chat: Chat) {
+      current = [structuredClone(chat)];
+    },
+    setChats(chats: Chat[]) {
+      current = structuredClone(chats);
+    },
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    }),
+  };
+}
+
+test("HTTP Chat projections reject invalid stored fields before success headers", async () => {
+  const baseChat: Chat = {
+    id: "chat-1",
+    title: "Remote chat",
+    workspaceId: "workspace-1",
+    providerId: "provider-1",
+    model: "model-1",
+    createdAt: 1_000,
+    updatedAt: 2_000,
+    messages: [],
+  };
+  const app = await projectionReadServer(baseChat);
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const invalidChats: Array<{ chat: Chat; forbidden: string }> = [
+      { chat: { ...baseChat, providerId: "p".repeat(257) }, forbidden: "p".repeat(257) },
+      { chat: { ...baseChat, createdAt: 2_000, updatedAt: 1_999 }, forbidden: "Remote chat" },
+      {
+        chat: {
+          ...baseChat,
+          messages: [{
+            id: "i".repeat(129),
+            role: "user",
+            content: "Hello",
+            createdAt: 1_500,
+          }],
+        },
+        forbidden: "i".repeat(129),
+      },
+      {
+        chat: { ...baseChat, title: "private-title-\ud800-tail" },
+        forbidden: "private-title",
+      },
+      {
+        chat: {
+          ...baseChat,
+          messages: [{
+            id: "message-invalid-text",
+            role: "assistant",
+            content: "private-text-\udc00-tail",
+            createdAt: 1_500,
+          }],
+        },
+        forbidden: "private-text",
+      },
+    ];
+    for (const { chat: invalid, forbidden } of invalidChats) {
+      app.setChat(invalid);
+      const response = await fetch(`${app.base}/chats`, { headers });
+      const serialized = await response.text();
+      assert.equal(response.status, 500);
+      assert.equal(JSON.parse(serialized).error.code, "internal_error");
+      assert.equal(serialized.includes(forbidden), false);
+      assert.equal(
+        response.headers.get("content-length"),
+        String(Buffer.byteLength(serialized, "utf8")),
+      );
+    }
+
+    app.setChat(baseChat);
+    const valid = await fetch(`${app.base}/chats`, { headers });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).chats[0].id, "chat-1");
+
+    app.setChat({
+      ...baseChat,
+      messages: [{
+        id: "message-emoji-timeline",
+        role: "assistant",
+        content: "😀",
+        createdAt: 1_500,
+        timeline: {
+          version: 3,
+          generationId: "generation-emoji-timeline",
+          status: "completed",
+          startedAt: 1_000,
+          finishedAt: 1_500,
+          steps: [{
+            id: "think-1",
+            order: 0,
+            kind: "thinking",
+            startedAt: 1_000,
+            updatedAt: 1_500,
+            finishedAt: 1_500,
+            contentOffset: 2,
+          }],
+        },
+      }],
+    });
+    const emojiTimeline = await fetch(`${app.base}/chats`, { headers });
+    assert.equal(emojiTimeline.status, 200);
+    const emojiBody = await emojiTimeline.json() as {
+      chats: Array<{ messages: Array<{ timeline?: { steps: Array<{ contentOffset?: number }> } }> }>;
+    };
+    assert.equal(
+      emojiBody.chats[0]?.messages[0]?.timeline?.steps[0]?.contentOffset,
+      2,
+    );
+
+    const projectedPrefix = "x".repeat(200_000);
+    app.setChats([
+      baseChat,
+      {
+        ...baseChat,
+        id: "chat-over-limit-timeline",
+        title: "Over-limit timeline",
+        messages: [{
+          id: "message-over-limit-timeline",
+          role: "assistant",
+          content: `${projectedPrefix}private-tail`,
+          createdAt: 1_500,
+          timeline: {
+            version: 3,
+            generationId: "generation-over-limit-timeline",
+            status: "completed",
+            startedAt: 1_000,
+            finishedAt: 1_500,
+            steps: [{
+              id: "think-1",
+              order: 0,
+              kind: "thinking",
+              startedAt: 1_000,
+              updatedAt: 1_500,
+              finishedAt: 1_500,
+              contentOffset: projectedPrefix.length + 1,
+            }],
+          },
+        }],
+      },
+    ]);
+    const overLimitTimeline = await fetch(`${app.base}/chats`, { headers });
+    assert.equal(overLimitTimeline.status, 200);
+    const overLimitSerialized = await overLimitTimeline.text();
+    const overLimitBody = JSON.parse(overLimitSerialized) as {
+      chats: Array<{ id: string; messages: Array<{ text: string; timeline?: unknown }> }>;
+    };
+    assert.deepEqual(overLimitBody.chats.map(({ id }) => id), [
+      "chat-1",
+      "chat-over-limit-timeline",
+    ]);
+    const truncated = overLimitBody.chats[1]?.messages[0];
+    assert.equal(truncated?.text, projectedPrefix);
+    assert.equal(truncated?.timeline, undefined);
+    assert.equal(overLimitSerialized.includes("private-tail"), false);
+  } finally {
+    await app.close();
+  }
+});
 
 test("HTTP client resumes, approves, denies, and cancels device-owned mocked turns without duplicate messages", async () => {
   let chat: Chat = {
@@ -51,6 +285,7 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
   const chats = new AidenRemoteChatService({
     application: {
       list: async () => [structuredClone(chat)],
+      listRegular: async () => chat.botId === undefined ? [structuredClone(chat)] : [],
       get: async () => ({ chat: structuredClone(chat), reconciliation: null }),
       create: async () => structuredClone(chat),
       rename: async (_id, title, options) => {
@@ -110,6 +345,8 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     models: {
       resolve: async () => ({ providerId: "provider-1", modelId: "model-1", thinkingLevels: [] }),
     },
+    bots: { get: async () => null },
+    botMutations: new BotMutationGate(),
   });
 
   const handler = createAidenRemoteRequestHandler({

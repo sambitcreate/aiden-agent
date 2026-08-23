@@ -6,10 +6,15 @@ import test from "node:test";
 import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
   AIDEN_REMOTE_ERROR_CODES,
   AIDEN_REMOTE_EVENT_TYPES,
+  AIDEN_REMOTE_MAX_CHAT_MESSAGES,
+  AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
+  type AidenRemoteCapability,
+  parseAidenRemoteChatProjection,
   parseAidenRemoteStreamEvent,
   parseAidenSseFrames,
   reconcileAidenSseFrames,
@@ -80,8 +85,12 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
+  assert.equal(fixture.contractRevision, 7);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
+  assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
+  assert.deepEqual(fixture.server.capabilities, fixture.pairingExchange.capabilities);
+  assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
   assert.deepEqual(
     new Set(fixture.events.map((event) => event.type)),
     new Set(AIDEN_REMOTE_EVENT_TYPES),
@@ -153,6 +162,21 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/attachments",
     "/chats/{chatId}/attachments/{attachmentId}",
     "/chats/{chatId}/attachments/{attachmentId}/content",
+    "/bots",
+    "/bots/{botId}",
+    "/bots/{botId}/restore",
+    "/bot-conversations",
+    "/bots/{botId}/chats",
+    "/bot-capabilities",
+    "/bots/{botId}/capabilities",
+    "/chats/{chatId}/capabilities",
+    "/bot-conversations/{chatId}/files",
+    "/bot-conversations/{chatId}/files/{fileId}",
+    "/bots/{botId}/avatar",
+    "/bots/{botId}/avatar/{assetRevision}",
+    "/bot-favorites",
+    "/bot-access-notice",
+    "/bot-access-notice/acknowledgement",
     "/streams/{streamId}",
     "/streams/{streamId}/events",
     "/streams/{streamId}/approval",
@@ -194,6 +218,38 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     description: "Must be exactly 1.",
   });
   const schemas = record(record(document.components, "components").schemas, "schemas");
+  const pairingRequestProperties = record(
+    record(schemas.PairingExchangeRequest, "PairingExchangeRequest").properties,
+    "PairingExchangeRequest properties",
+  );
+  assert.deepEqual(record(pairingRequestProperties.acceptsBotCapabilities, "acceptsBotCapabilities"), {
+    type: "boolean",
+    description: "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",
+  });
+  const pairingResponseCapabilities = record(
+    record(
+      record(schemas.PairingExchangeResponse, "PairingExchangeResponse").properties,
+      "PairingExchangeResponse properties",
+    ).capabilities,
+    "PairingExchangeResponse capabilities",
+  );
+  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, AIDEN_REMOTE_CAPABILITIES);
+  const serverSchema = record(schemas.Server, "Server");
+  const serverProperties = record(
+    serverSchema.properties,
+    "Server properties",
+  );
+  assert.deepEqual(
+    record(record(serverProperties.capabilities, "device capabilities").items, "device capability items").enum,
+    AIDEN_REMOTE_CAPABILITIES,
+  );
+  assert.deepEqual(
+    record(record(serverProperties.serverCapabilities, "server capabilities").items, "server capability items").enum,
+    AIDEN_REMOTE_CAPABILITIES,
+  );
+  assert.equal((serverSchema.required as unknown[]).includes("serverCapabilities"), false);
+  const chatProperties = record(record(schemas.Chat, "Chat").properties, "Chat properties");
+  assert.equal(record(chatProperties.botId, "Chat botId").maxLength, 160);
   const providerSchema = record(schemas.Provider, "Provider schema");
   const providerModels = record(record(providerSchema.properties, "Provider properties").models, "Provider models");
   const modelProperties = record(record(record(providerModels.items, "Provider model").properties, "Provider model properties"), "Provider model properties");
@@ -260,6 +316,411 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   inspectReferences(document);
 });
 
+test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe routes", async () => {
+  const document = record(await json("openapi.json"), "OpenAPI");
+  const paths = record(document.paths, "paths");
+  const schemas = record(record(document.components, "components").schemas, "schemas");
+  const parameters = record(record(document.components, "components").parameters, "parameters");
+  const operation = (route: string, method: string) =>
+    record(record(paths[route], route)[method], `${method} ${route}`);
+  const responseSchemaRef = (route: string, method: string, status: string) => {
+    const responses = record(operation(route, method).responses, `${method} ${route} responses`);
+    const response = record(responses[status], `${method} ${route} ${status}`);
+    const content = record(response.content, `${method} ${route} ${status} content`);
+    return record(record(content["application/json"], "application/json").schema, "response schema").$ref;
+  };
+  const requestSchemaRef = (route: string, method: string) => {
+    const requestBody = record(operation(route, method).requestBody, `${method} ${route} requestBody`);
+    const content = record(requestBody.content, `${method} ${route} request content`);
+    return record(record(content["application/json"], "application/json").schema, "request schema").$ref;
+  };
+
+  assert.deepEqual(
+    record(document["x-aiden-json-response-emission"], "JSON response emission"),
+    {
+      maximumUtf8Bytes: AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+      overflowStatus: 413,
+      overflowErrorCode: "payload_too_large",
+      atomic: true,
+    },
+  );
+  const privateResponseFields = record(
+    document["x-aiden-context-private-response-fields"],
+    "context-private response fields",
+  );
+  assert.deepEqual(privateResponseFields.appliesTo, ["Chat", "Bot"]);
+  assert.equal(privateResponseFields.recursive, true);
+  assert.equal(
+    privateResponseFields.normalization,
+    "Remove hyphens, underscores, periods, and whitespace, then lowercase before comparison.",
+  );
+  assert.deepEqual(privateResponseFields.allowedSchemaProperties, [
+    "BotDetail.instructions",
+    "BotDetail.openingGreeting",
+  ]);
+  assert.deepEqual(privateResponseFields.forbiddenNormalizedNames, [
+    "credential", "credentials", "secret", "secrets", "apikey", "token",
+    "accesstoken", "refreshtoken", "header", "headers", "endpoint", "path",
+    "prompt", "instructions", "openinggreeting", "argument", "arguments", "args",
+    "toolargument", "toolarguments", "toolargs", "result", "results", "toolresult",
+    "toolresults", "reasoning", "reasoningcontent", "authorization",
+    "credentialdigest", "providerfingerprint", "mcpserverbindings", "folderpath",
+    "repositorypath", "worktreepath", "worktreegitdir", "ownershiptoken",
+    "worktreedevice", "worktreeinode", "createdfromhead", "canonicalpath",
+    "absolutepath", "scriptpath", "managedhomepath", "managedworkspacepath",
+    "workspacepath", "bothomepath", "systemprompt", "skillcontent", "skillcontents",
+    "skillpath", "skillpaths", "providercredential", "mcpcredential",
+    "connectioncredential", "authorizationheader", "providerheaders", "mcpheaders",
+    "connectionheaders", "providerapikey", "mcpapikey", "connectionapikey",
+    "credentialmaterial", "assetfilename", "avatarassetfilename", "temporaryasseturl",
+    "temporaryurl", "environment", "stdout", "stderr",
+  ]);
+
+  const conjunctiveCapabilities = new Map<string, readonly AidenRemoteCapability[]>([
+    ["get /bots", ["bot:read"]],
+    ["post /bots", ["bot:read", "bot:write"]],
+    ["get /bots/{botId}", ["bot:read"]],
+    ["patch /bots/{botId}", ["bot:read", "bot:write"]],
+    ["delete /bots/{botId}", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/restore", ["bot:read", "bot:write"]],
+    ["get /bot-conversations", ["bot:read", "chat:read"]],
+    ["post /bots/{botId}/chats", ["bot:read", "bot:write", "chat:write"]],
+    ["get /bot-capabilities", ["bot:read"]],
+    ["patch /bots/{botId}/capabilities", ["bot:read", "bot:write"]],
+    ["get /chats/{chatId}/capabilities", ["bot:read", "chat:read"]],
+    ["patch /chats/{chatId}/capabilities", ["bot:read", "bot:write", "chat:write"]],
+    ["get /bot-conversations/{chatId}/files", ["bot:read", "files:read"]],
+    ["get /bot-conversations/{chatId}/files/{fileId}", ["bot:read", "files:read"]],
+    ["put /bot-conversations/{chatId}/files/{fileId}", ["bot:read", "bot:write", "files:write"]],
+    ["put /bots/{botId}/avatar", ["bot:read", "bot:write"]],
+    ["delete /bots/{botId}/avatar", ["bot:read", "bot:write"]],
+    ["get /bots/{botId}/avatar/{assetRevision}", ["bot:read"]],
+    ["get /bot-favorites", ["bot:read"]],
+    ["patch /bot-favorites", ["bot:read", "bot:write"]],
+    ["get /bot-access-notice", ["bot:read"]],
+    ["post /bot-access-notice/acknowledgement", ["bot:read", "bot:write"]],
+  ]);
+  for (const [operationKey, expected] of conjunctiveCapabilities) {
+    const separator = operationKey.indexOf(" ");
+    const method = operationKey.slice(0, separator);
+    const route = operationKey.slice(separator + 1);
+    const value = operation(route, method);
+    assert.deepEqual(value["x-aiden-capabilities"], expected, operationKey);
+    assert(expected.includes(value["x-aiden-capability"] as AidenRemoteCapability));
+  }
+  for (const [schemaName, index, field] of [
+    ["PairingExchangeResponse", 0, "capabilities"],
+    ["Server", 0, "capabilities"],
+    ["Server", 1, "serverCapabilities"],
+  ] as const) {
+    const conditions = record(schemas[schemaName], schemaName).allOf as unknown[];
+    const condition = record(conditions[index], `${schemaName} ${field} implication`);
+    const whenProperties = record(record(condition.if, "implication if").properties, "implication if properties");
+    const thenProperties = record(record(condition.then, "implication then").properties, "implication then properties");
+    assert.equal(
+      record(record(whenProperties[field], `${field} write`).contains, `${field} write contains`).const,
+      "bot:write",
+    );
+    assert.equal(
+      record(record(thenProperties[field], `${field} read`).contains, `${field} read contains`).const,
+      "bot:read",
+    );
+  }
+
+  assert.deepEqual(record(record(parameters.BotId, "BotId").schema, "BotId schema"), {
+    type: "string",
+    minLength: 1,
+    maxLength: 160,
+    pattern: "^[A-Za-z0-9._:-]+$",
+  });
+  assert.deepEqual(record(record(parameters.AssetRevision, "AssetRevision").schema, "AssetRevision schema"), {
+    type: "string",
+    minLength: 1,
+    maxLength: 128,
+    pattern: "^[A-Za-z0-9._:-]+$",
+  });
+
+  const closedBotSchemas = [
+    "BotAvatarAsset",
+    "BotAvatarView",
+    "BotSummary",
+    "BotFavoritesView",
+    "BotList",
+    "BotCapabilityOption",
+    "BotFileScopeOption",
+    "BotProviderModelOption",
+    "BotProviderOption",
+    "BotCapabilityCatalog",
+    "BotCustomSelection",
+    "BotDetail",
+    "BotCreateRequest",
+    "BotIdentityPatch",
+    "BotConversationItem",
+    "BotConversationPage",
+    "BotFavoritesUpdateRequest",
+    "BotAccessNoticeAcknowledgementRequest",
+    "BotAvatarUploadRequest",
+  ];
+  for (const name of closedBotSchemas) {
+    assert.equal(record(schemas[name], name).additionalProperties, false, `${name} must be closed`);
+  }
+  for (const name of [
+    "BotAccessNoticeStatus",
+    "BotAccessView",
+    "BotAccessUpdateRequest",
+    "ChatBotAccessView",
+    "ChatBotAccessUpdateRequest",
+    "BotChatCreateRequest",
+  ]) {
+    const variants = record(schemas[name], name).oneOf;
+    assert(Array.isArray(variants));
+    assert.equal(variants.length, 2);
+    variants.forEach((variant, index) => {
+      assert.equal(record(variant, `${name}[${index}]`).additionalProperties, false);
+    });
+  }
+  const avatarVariants = record(schemas.BotSemanticAvatar, "BotSemanticAvatar").oneOf;
+  assert(Array.isArray(avatarVariants));
+  assert.deepEqual(record(avatarVariants[0], "legacy avatar").enum, ["spark", "orbit", "leaf", "prism", "wave", "ember"]);
+  assert.equal(record(avatarVariants[1], "v1 avatar").additionalProperties, false);
+
+  const botSummary = record(schemas.BotSummary, "BotSummary");
+  const botSummaryProperties = record(botSummary.properties, "BotSummary properties");
+  assert.deepEqual(botSummary.required, ["id", "name", "purpose", "avatar", "health", "createdAt", "updatedAt", "revision"]);
+  assert.equal("instructions" in botSummaryProperties, false, "Bot summaries must not expose instructions");
+  assert.equal(record(botSummaryProperties.id, "BotSummary id").maxLength, 160);
+  assert.equal(record(botSummaryProperties.purpose, "BotSummary purpose").maxLength, 280);
+  assert.equal(botSummary["x-aiden-updated-at-not-before-created-at"], true);
+  assert.deepEqual(record(schemas.BotHealth, "BotHealth").enum, ["ready", "degraded", "unavailable", "archived"]);
+  for (const name of ["BotSummary", "BotDetail"]) {
+    const healthCondition = record((record(schemas[name], name).allOf as unknown[])[0], `${name} health condition`);
+    assert.deepEqual(record(healthCondition.then, `${name} archived branch`).required, ["archivedAt"]);
+    assert.deepEqual(record(record(healthCondition.else, `${name} active branch`).not, `${name} active exclusion`).required, ["archivedAt"]);
+  }
+  const botListProperties = record(record(schemas.BotList, "BotList").properties, "BotList properties");
+  assert.equal(record(botListProperties.bots, "Bot list items").maxItems, 256);
+  assert.equal(record(botListProperties.maxBots, "Bot list maximum").const, 256);
+  assert.equal(record(schemas.BotList, "BotList")["x-aiden-favorites-exclude-archived-bots"], true);
+  assert.equal(record(schemas.BotFavoritesView, "BotFavoritesView")["x-aiden-excludes-archived-bots"], true);
+
+  const botDetailProperties = record(record(schemas.BotDetail, "BotDetail").properties, "BotDetail properties");
+  assert.equal(record(schemas.BotDetail, "BotDetail")["x-aiden-updated-at-not-before-created-at"], true);
+  assert.equal(record(botDetailProperties.instructions, "instructions").maxLength, 32_000);
+  assert.equal(record(botDetailProperties.openingGreeting, "openingGreeting").maxLength, 2_000);
+  assert.equal(record(botDetailProperties.access, "Bot access").$ref, "#/components/schemas/BotAccessView");
+  const createRequest = record(schemas.BotCreateRequest, "BotCreateRequest");
+  assert.equal(createRequest["x-aiden-provider-model-must-be-currently-available"], true);
+  assert.deepEqual(createRequest.required, ["name", "purpose", "instructions", "avatar", "access"]);
+  assert.deepEqual(Object.keys(record(createRequest.properties, "BotCreateRequest properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar", "access"]);
+  assert.equal(
+    record(record(createRequest.properties, "BotCreateRequest properties").access, "create access").$ref,
+    "#/components/schemas/BotAccessUpdateRequest",
+  );
+  const identityPatch = record(schemas.BotIdentityPatch, "BotIdentityPatch");
+  assert.equal(identityPatch.minProperties, 1);
+  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar"]);
+
+  const conversationPageProperties = record(record(schemas.BotConversationPage, "BotConversationPage").properties, "BotConversationPage properties");
+  assert.equal(record(conversationPageProperties.conversations, "conversations").maxItems, 50);
+  const conversationProperties = record(record(schemas.BotConversationItem, "BotConversationItem").properties, "BotConversationItem properties");
+  assert.equal(record(schemas.BotConversationItem, "BotConversationItem")["x-aiden-updated-at-not-before-created-at"], true);
+  assert.equal(record(conversationProperties.preview, "preview").maxLength, 500);
+  assert.deepEqual(record(conversationProperties.activityState, "activityState").enum, ["idle", "queued", "running", "waiting_for_approval", "reconciling"]);
+  const approvalCondition = record((record(schemas.BotConversationItem, "BotConversationItem").allOf as unknown[])[0], "approval response condition");
+  const approvalConditionProperties = record(record(approvalCondition.if, "approval condition").properties, "approval condition properties");
+  const approvalConsequenceProperties = record(record(approvalCondition.then, "approval consequence").properties, "approval consequence properties");
+  assert.equal(record(approvalConditionProperties.canRespondToApproval, "canRespondToApproval condition").const, true);
+  assert.equal(record(approvalConsequenceProperties.activityState, "activityState consequence").const, "waiting_for_approval");
+  const conversationParameters = operation("/bot-conversations", "get").parameters as Array<Record<string, unknown>>;
+  const queryParameter = (name: string) => record(conversationParameters.find((parameter) => parameter.name === name), `${name} parameter`);
+  assert.equal(record(queryParameter("query").schema, "query schema").maxLength, 200);
+  assert.equal(record(queryParameter("botId").schema, "botId schema").maxLength, 160);
+  assert.deepEqual(record(queryParameter("limit").schema, "limit schema"), { type: "integer", minimum: 1, maximum: 50, default: 30 });
+
+  const catalogProperties = record(record(schemas.BotCapabilityCatalog, "BotCapabilityCatalog").properties, "BotCapabilityCatalog properties");
+  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skills", "otherCapabilities", "notice"]);
+  assert.equal(record(catalogProperties.providers, "providers").maxItems, 64);
+  assert.equal(
+    record(catalogProperties.providers, "providers")["x-aiden-max-total-models"],
+    512,
+  );
+  assert.equal(record(catalogProperties.connections, "connections").maxItems, 128);
+  assert.equal(record(catalogProperties.skills, "skills").maxItems, 256);
+  assert.equal(record(catalogProperties.notice, "notice").$ref, "#/components/schemas/BotAccessNoticeStatus");
+  const customSelection = record(schemas.BotCustomSelection, "BotCustomSelection");
+  assert.deepEqual(customSelection.required, ["providerId", "modelId", "fileScopeIds", "shellEnabled", "connectionIds", "skillIds", "otherCapabilityIds"]);
+  const customProperties = record(customSelection.properties, "BotCustomSelection properties");
+  for (const field of ["fileScopeIds", "connectionIds", "skillIds", "otherCapabilityIds"]) {
+    assert.equal(record(record(customProperties[field], field).items, `${field} items`).pattern, "^[A-Za-z0-9._:-]+$");
+  }
+  for (const name of ["BotCapabilityOption", "BotFileScopeOption"]) {
+    const optionProperties = record(record(schemas[name], name).properties, `${name} properties`);
+    assert.equal(record(optionProperties.id, `${name} id`).pattern, "^[A-Za-z0-9._:-]+$");
+  }
+  const botAccessVariants = record(schemas.BotAccessView, "BotAccessView").oneOf as unknown[];
+  const fullAccess = record(botAccessVariants[0], "full BotAccessView");
+  const customAccess = record(botAccessVariants[1], "custom BotAccessView");
+  assert.equal(record(record(fullAccess.properties, "full access properties").accessMode, "full mode").const, "full");
+  assert.equal("custom" in record(fullAccess.properties, "full access properties"), false);
+  assert.equal(record(record(customAccess.properties, "custom access properties").accessMode, "custom mode").const, "custom");
+  assert((customAccess.required as unknown[]).includes("custom"));
+  const chatAccessVariants = record(schemas.ChatBotAccessView, "ChatBotAccessView").oneOf as unknown[];
+  const inheritedAccess = record(chatAccessVariants[0], "inherited ChatBotAccessView");
+  const reducedAccess = record(chatAccessVariants[1], "custom ChatBotAccessView");
+  assert.equal(record(record(inheritedAccess.properties, "inherit properties").mode, "inherit mode").const, "inherit");
+  assert.equal("custom" in record(inheritedAccess.properties, "inherit properties"), false);
+  assert.equal(record(record(reducedAccess.properties, "custom chat properties").mode, "custom chat mode").const, "custom");
+  assert((reducedAccess.required as unknown[]).includes("custom"));
+  const botUpdateVariants = record(schemas.BotAccessUpdateRequest, "BotAccessUpdateRequest").oneOf as unknown[];
+  assert.deepEqual(record(botUpdateVariants[0], "full Bot update").required, [
+    "accessMode",
+    "catalogRevision",
+    "confirmedForeground",
+  ]);
+  assert.deepEqual(record(botUpdateVariants[1], "custom Bot update").required, [
+    "accessMode",
+    "catalogRevision",
+    "custom",
+  ]);
+  const chatUpdateVariants = record(schemas.ChatBotAccessUpdateRequest, "ChatBotAccessUpdateRequest").oneOf as unknown[];
+  assert.deepEqual(record(chatUpdateVariants[0], "inherit chat update").required, [
+    "mode",
+    "catalogRevision",
+    "expectedBotPolicyRevision",
+  ]);
+  assert.deepEqual(record(chatUpdateVariants[1], "custom chat update").required, [
+    "mode",
+    "catalogRevision",
+    "expectedBotPolicyRevision",
+    "custom",
+  ]);
+  const botChatCreateVariants = record(schemas.BotChatCreateRequest, "BotChatCreateRequest").oneOf as unknown[];
+  assert.equal(record(schemas.BotChatCreateRequest, "BotChatCreateRequest")["x-aiden-provider-model-must-be-currently-available"], true);
+  assert.equal(record(botChatCreateVariants[0], "inherited Bot chat create").maxProperties, 0);
+  assert.deepEqual(record(botChatCreateVariants[1], "selected Bot chat create").required, [
+    "providerId",
+    "modelId",
+  ]);
+  const noticeVariants = record(schemas.BotAccessNoticeStatus, "BotAccessNoticeStatus").oneOf as unknown[];
+  const pendingNotice = record(noticeVariants[0], "pending notice");
+  const acceptedNotice = record(noticeVariants[1], "accepted notice");
+  assert.equal(record(record(pendingNotice.properties, "pending notice properties").requiresAcknowledgement, "pending acknowledgement").const, true);
+  assert.equal(
+    record(record(pendingNotice.properties, "pending notice properties").version, "pending version").const,
+    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
+  );
+  assert.equal("acceptedAt" in record(pendingNotice.properties, "pending notice properties"), false);
+  assert.equal(record(record(acceptedNotice.properties, "accepted notice properties").requiresAcknowledgement, "accepted acknowledgement").const, false);
+  assert.equal(
+    record(record(acceptedNotice.properties, "accepted notice properties").version, "accepted version").const,
+    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
+  );
+  assert.deepEqual(acceptedNotice.required, ["version", "requiresAcknowledgement", "acceptedAt", "acceptedDecision"]);
+  assert.deepEqual(record(record(acceptedNotice.properties, "accepted notice properties").acceptedDecision, "acceptedDecision").enum, ["continue_full", "customize_first"]);
+  const acknowledgementProperties = record(record(schemas.BotAccessNoticeAcknowledgementRequest, "BotAccessNoticeAcknowledgementRequest").properties, "ack properties");
+  assert.equal(
+    record(acknowledgementProperties.version, "ack version").const,
+    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
+  );
+  assert.deepEqual(record(acknowledgementProperties.decision, "decision").enum, ["continue_full", "customize_first"]);
+  assert.equal(record(acknowledgementProperties.confirmedForeground, "confirmedForeground").const, true);
+
+  const avatarAssetProperties = record(record(schemas.BotAvatarAsset, "BotAvatarAsset").properties, "BotAvatarAsset properties");
+  assert.equal(record(avatarAssetProperties.mimeType, "avatar MIME").const, "image/png");
+  assert.equal(record(avatarAssetProperties.width, "avatar width").const, 512);
+  assert.equal(record(avatarAssetProperties.height, "avatar height").const, 512);
+  assert.equal(record(avatarAssetProperties.byteSize, "avatar bytes").maximum, 4_194_304);
+  const avatarUploadProperties = record(record(schemas.BotAvatarUploadRequest, "BotAvatarUploadRequest").properties, "BotAvatarUploadRequest properties");
+  assert.equal(record(avatarUploadProperties.data, "avatar data").maxLength, 5_592_408);
+  const avatarContent = record(record(operation("/bots/{botId}/avatar/{assetRevision}", "get").responses, "avatar responses")["200"], "avatar 200");
+  const avatarHeaders = record(avatarContent.headers, "avatar headers");
+  assert.deepEqual(Object.keys(record(avatarContent.content, "avatar content")), ["image/png"]);
+  assert.equal(record(record(avatarHeaders["Cache-Control"], "Cache-Control").schema, "Cache-Control schema").const, "no-store");
+  assert.equal(record(record(avatarHeaders["X-Content-Type-Options"], "X-Content-Type-Options").schema, "nosniff schema").const, "nosniff");
+
+  const chatSchema = record(schemas.Chat, "Chat");
+  const chatProperties = record(chatSchema.properties, "Chat properties");
+  for (const field of ["id", "workspaceId", "revision"]) {
+    assert.equal(record(chatProperties[field], `Chat ${field}`).maxLength, 128);
+  }
+  assert.equal(record(chatProperties.title, "Chat title").maxLength, 1_024);
+  assert.equal(record(chatProperties.providerId, "Chat providerId").maxLength, 256);
+  assert.equal(record(chatProperties.modelId, "Chat modelId").maxLength, 512);
+  assert.equal(record(chatProperties.messages, "Chat messages").maxItems, AIDEN_REMOTE_MAX_CHAT_MESSAGES);
+  assert.equal(chatSchema["x-aiden-max-json-response-bytes"], AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES);
+  assert.equal(chatSchema["x-aiden-updated-at-not-before-created-at"], true);
+  assert.deepEqual(chatSchema.dependentRequired, {
+    providerId: ["modelId"],
+    modelId: ["providerId"],
+  });
+  const botChatCreateResponse = record(schemas.BotChatCreateResponse, "BotChatCreateResponse");
+  const botChatCreateResponseParts = botChatCreateResponse.allOf as unknown[];
+  assert.equal(record(botChatCreateResponseParts[0], "Bot chat response Chat").$ref, "#/components/schemas/Chat");
+  assert.deepEqual(record(botChatCreateResponseParts[1], "Bot chat response identity").required, ["botId"]);
+  assert.equal(operation("/bots", "post")["x-aiden-provider-model-must-be-currently-available"], true);
+  assert.equal(operation("/bots/{botId}/chats", "post")["x-aiden-provider-model-must-be-currently-available"], true);
+  const messageProperties = record(record(schemas.Message, "Message").properties, "Message properties");
+  assert.equal(record(messageProperties.id, "Message id").minLength, 1);
+  assert.equal(record(messageProperties.id, "Message id").maxLength, 128);
+
+  for (const [route, method, schema] of [
+    ["/bots", "post", "BotCreateRequest"],
+    ["/bots/{botId}", "patch", "BotIdentityPatch"],
+    ["/bots/{botId}/chats", "post", "BotChatCreateRequest"],
+    ["/bots/{botId}/capabilities", "patch", "BotAccessUpdateRequest"],
+    ["/chats/{chatId}/capabilities", "patch", "ChatBotAccessUpdateRequest"],
+    ["/bots/{botId}/avatar", "put", "BotAvatarUploadRequest"],
+    ["/bot-favorites", "patch", "BotFavoritesUpdateRequest"],
+    ["/bot-access-notice/acknowledgement", "post", "BotAccessNoticeAcknowledgementRequest"],
+  ] as const) {
+    assert.equal(requestSchemaRef(route, method), `#/components/schemas/${schema}`);
+  }
+  for (const [route, method, status, schema] of [
+    ["/bots", "get", "200", "BotList"],
+    ["/bots", "post", "201", "BotDetail"],
+    ["/bots/{botId}", "get", "200", "BotDetail"],
+    ["/bots/{botId}", "patch", "200", "BotDetail"],
+    ["/bots/{botId}", "delete", "200", "BotDetail"],
+    ["/bots/{botId}/restore", "post", "200", "BotDetail"],
+    ["/bot-conversations", "get", "200", "BotConversationPage"],
+    ["/bots/{botId}/chats", "post", "201", "BotChatCreateResponse"],
+    ["/bot-capabilities", "get", "200", "BotCapabilityCatalog"],
+    ["/bots/{botId}/capabilities", "patch", "200", "BotAccessView"],
+    ["/chats/{chatId}/capabilities", "get", "200", "ChatBotAccessView"],
+    ["/chats/{chatId}/capabilities", "patch", "200", "ChatBotAccessView"],
+    ["/bot-conversations/{chatId}/files", "get", "200", "FileIndex"],
+    ["/bot-conversations/{chatId}/files/{fileId}", "get", "200", "FileDocument"],
+    ["/bot-conversations/{chatId}/files/{fileId}", "put", "200", "FileDocument"],
+    ["/bots/{botId}/avatar", "put", "200", "BotAvatarAsset"],
+    ["/bots/{botId}/avatar", "delete", "200", "BotDetail"],
+    ["/bot-favorites", "get", "200", "BotFavoritesView"],
+    ["/bot-favorites", "patch", "200", "BotFavoritesView"],
+    ["/bot-access-notice", "get", "200", "BotAccessNoticeStatus"],
+    ["/bot-access-notice/acknowledgement", "post", "200", "BotAccessNoticeStatus"],
+  ] as const) {
+    assert.equal(responseSchemaRef(route, method, status), `#/components/schemas/${schema}`);
+  }
+  for (const [route, method, archivedAccess] of [
+    ["/bots/{botId}", "get", "readable"],
+    ["/bot-conversations", "get", "readable"],
+    ["/bot-conversations/{chatId}/files/{fileId}", "get", "readable"],
+    ["/bots/{botId}/avatar/{assetRevision}", "get", "readable"],
+    ["/bots/{botId}", "patch", "mutation_blocked"],
+    ["/bots/{botId}/chats", "post", "mutation_blocked"],
+    ["/bots/{botId}/capabilities", "patch", "mutation_blocked"],
+    ["/bot-conversations/{chatId}/files/{fileId}", "put", "mutation_blocked"],
+    ["/bots/{botId}/avatar", "put", "mutation_blocked"],
+    ["/bots/{botId}/restore", "post", "restore"],
+    ["/bot-favorites", "patch", "reject_archived_additions"],
+  ] as const) {
+    assert.equal(
+      operation(route, method)["x-aiden-archived-access"],
+      archivedAccess,
+      `${method} ${route}`,
+    );
+  }
+});
+
 test("mutation contracts require idempotency or revision preconditions", async () => {
   const document = record(await json("openapi.json"), "OpenAPI");
   const paths = record(document.paths, "paths");
@@ -275,6 +736,11 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/chats", "post"],
     ["/chats/{chatId}/move", "post"],
     ["/chats/{chatId}/turns", "post"],
+    ["/bots", "post"],
+    ["/bots/{botId}/restore", "post"],
+    ["/bots/{botId}/chats", "post"],
+    ["/bots/{botId}/avatar", "put"],
+    ["/bot-access-notice/acknowledgement", "post"],
     ["/streams/{streamId}/cancel", "post"],
     ["/approvals/{approvalId}/respond", "post"],
     ["/workspaces/{workspaceId}/git/branches", "post"],
@@ -296,6 +762,14 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/workspaces/{workspaceId}", "delete"],
     ["/chats/{chatId}", "patch"],
     ["/chats/{chatId}", "delete"],
+    ["/bots/{botId}", "patch"],
+    ["/bots/{botId}", "delete"],
+    ["/bots/{botId}/restore", "post"],
+    ["/bots/{botId}/capabilities", "patch"],
+    ["/chats/{chatId}/capabilities", "patch"],
+    ["/bots/{botId}/avatar", "put"],
+    ["/bots/{botId}/avatar", "delete"],
+    ["/bot-favorites", "patch"],
     ["/scheduled-tasks/{taskId}", "patch"],
     ["/scheduled-tasks/{taskId}", "delete"],
     ["/scheduled-tasks/settings", "patch"],
@@ -500,6 +974,30 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   const unknownCapability = clone();
   record(unknownCapability.pairingExchange, "exchange").capabilities = ["admin:everything"];
   assert.throws(() => parseAidenRemoteContractFixture(unknownCapability), /Unknown pairing capability/);
+  const unknownServerCapability = clone();
+  record(unknownServerCapability.server, "server").serverCapabilities = ["admin:everything"];
+  assert.throws(
+    () => parseAidenRemoteContractFixture(unknownServerCapability),
+    /Unknown server-supported capability/,
+  );
+  const widenedDeviceGrant = clone();
+  record(widenedDeviceGrant.server, "server").capabilities = ["bot:write"];
+  assert.throws(
+    () => parseAidenRemoteContractFixture(widenedDeviceGrant),
+    /bot:write capability requires bot:read/,
+  );
+  const writeOnlyPairingGrant = clone();
+  record(writeOnlyPairingGrant.pairingExchange, "exchange").capabilities = ["bot:write"];
+  assert.throws(
+    () => parseAidenRemoteContractFixture(writeOnlyPairingGrant),
+    /bot:write capability requires bot:read/,
+  );
+  const writeOnlyServerSupport = clone();
+  record(writeOnlyServerSupport.server, "server").serverCapabilities = ["bot:write"];
+  assert.throws(
+    () => parseAidenRemoteContractFixture(writeOnlyServerSupport),
+    /bot:write capability requires bot:read/,
+  );
   const unsafeDetails = clone();
   record(record(unsafeDetails.error, "error envelope").error, "error").details = { absolutePath: "/private/secret" };
   assert.throws(() => parseAidenRemoteContractFixture(unsafeDetails), /unsupported field/);
@@ -698,6 +1196,53 @@ test("JSON entry points reject non-finite values, invalid UTF-16, and unsupporte
     () => parseAidenSseFrames('id: 1\ndata: {"😀":1,"\\ud83d\\ude00":2}\n\n'),
     /Malformed Aiden SSE JSON data/,
   );
+});
+
+test("Chat text keeps scalar bounds, validates UTF-16 timeline offsets, and rejects lone surrogates", () => {
+  const projection = {
+    id: "chat-unicode",
+    workspaceId: "workspace-unicode",
+    title: `${"t".repeat(1_023)}😀`,
+    messages: [{
+      id: "message-unicode",
+      role: "assistant",
+      text: "😀",
+      createdAt: "2026-08-23T00:00:00.000Z",
+      timeline: {
+        version: 3,
+        generationId: "generation-unicode",
+        status: "completed",
+        startedAt: 1,
+        finishedAt: 2,
+        steps: [{
+          id: "think-1",
+          order: 0,
+          kind: "thinking",
+          startedAt: 1,
+          updatedAt: 2,
+          finishedAt: 2,
+          contentOffset: 2,
+        }],
+      },
+    }],
+    createdAt: "2026-08-23T00:00:00.000Z",
+    updatedAt: "2026-08-23T00:00:00.000Z",
+    revision: "revision-unicode",
+  };
+
+  const parsed = parseAidenRemoteChatProjection(projection);
+  assert.equal(parsed.title, projection.title);
+  assert.equal(parsed.messages[0]?.timeline?.steps[0]?.contentOffset, 2);
+
+  for (const invalid of [
+    { ...projection, title: "private-title-\ud800-tail" },
+    {
+      ...projection,
+      messages: [{ ...projection.messages[0], text: "private-text-\udc00-tail" }],
+    },
+  ]) {
+    assert.throws(() => parseAidenRemoteChatProjection(invalid), /characters/u);
+  }
 });
 
 test("SSE framing resumes by id, ignores duplicates and unknown nonterminal events, and reconciles gaps", async () => {

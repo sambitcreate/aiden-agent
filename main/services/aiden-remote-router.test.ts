@@ -2,13 +2,26 @@ import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
-import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import type { AidenRemoteRetainedBotChatAuthorizationRequest } from "./aiden-remote-chats.js";
+import {
+  AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  type AidenRemoteCapability,
+} from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 
 async function fixture(options: {
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
+  acceptsBotCapabilities?: boolean;
   authorizationBlocked?: () => boolean;
+  botChat?: boolean;
+  botArchived?: boolean;
+  botChatAuthorization?: (
+    request: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
+  ) => boolean | Promise<boolean>;
+  chatClassification?: "present" | "missing" | "error";
+  chatPayloadError?: "reconciling";
+  oversizedChatResponse?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -25,13 +38,31 @@ async function fixture(options: {
   const chat = {
     id: "chat-1",
     workspaceId: "workspace-1",
+    ...(options.botChat ? { botId: "bot-1" } : {}),
     title: "Chat",
     providerId: "provider-1",
     modelId: "model-1",
-    messages: [],
+    messages: options.oversizedChatResponse
+      ? Array.from({ length: 6 }, (_, index) => ({
+          id: `message-${index}`,
+          role: index % 2 === 0 ? "user" as const : "assistant" as const,
+          text: "x".repeat(190_000),
+          createdAt: new Date(1_100 + index).toISOString(),
+        }))
+      : [],
     createdAt: new Date(1_000).toISOString(),
     updatedAt: new Date(2_000).toISOString(),
     revision: `rev_${"c".repeat(43)}`,
+  };
+  const authorizeRetainedBotChat = async (
+    input: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
+  ): Promise<boolean> => {
+    calls.push(`bot-authorize:${input.access}:${input.deviceId}:${input.chatId}:${input.botId}`);
+    try {
+      return (await options.botChatAuthorization?.(input)) === true;
+    } catch {
+      return false;
+    }
   };
   const handler = createAidenRemoteRequestHandler({
     instanceId: "instance-1",
@@ -55,6 +86,7 @@ async function fixture(options: {
         return {
           id: "device-authorized-12345678",
           revoked: options.authenticate === "revoked",
+          acceptsBotCapabilities: options.acceptsBotCapabilities === true,
           capabilities: new Set(
             options.authenticate === "denied"
               ? []
@@ -106,7 +138,63 @@ async function fixture(options: {
         calls.push(`chat-list:${workspaceId ?? ""}`);
         return { chats: [chat] };
       },
-      get: async (id) => ({ ...chat, id }),
+      classify: async (id) => {
+        calls.push(`chat-classify:${id}`);
+        if (options.chatClassification === "missing") {
+          throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+        }
+        if (options.chatClassification === "error") throw new Error("metadata unavailable");
+        return options.botChat
+          ? {
+              botId: "bot-1",
+              ...(options.botArchived ? { botArchived: true as const } : {}),
+            }
+          : {};
+      },
+      authorizeRetainedBotChat,
+      runMutation: async <T>(
+        deviceId: string,
+        id: string,
+        classification: { botId?: string; botArchived?: true },
+        action: () => Promise<T>,
+      ): Promise<T> => {
+        calls.push(`chat-mutation:${id}`);
+        if (
+          classification.botId &&
+          !(await authorizeRetainedBotChat({
+            deviceId,
+            chatId: id,
+            botId: classification.botId,
+            access: "write",
+          }))
+        ) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This Aiden chat no longer exists.",
+            404,
+          );
+        }
+        if (options.botArchived) {
+          throw new AidenRemoteServiceError(
+            "bot_archived",
+            "Restore this bot before making changes.",
+            409,
+          );
+        }
+        return action();
+      },
+      get: async (id) => {
+        calls.push(`chat-get:${id}`);
+        if (options.chatPayloadError === "reconciling") {
+          throw new AidenRemoteServiceError(
+            "operation_in_progress",
+            "This chat is still reconciling.",
+            409,
+            true,
+          );
+        }
+        return { ...chat, id };
+      },
       create: async (deviceId, key) => {
         calls.push(`chat-create:${deviceId}:${key}`);
         return chat;
@@ -116,6 +204,13 @@ async function fixture(options: {
         return { ...chat, id, title: "Renamed" };
       },
       move: async (deviceId, id, revision, key) => {
+        if (options.botChat) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This Aiden chat no longer exists.",
+            404,
+          );
+        }
         calls.push(`chat-move:${deviceId}:${id}:${revision}:${key}`);
         return { ...chat, id, workspaceId: "workspace-2" };
       },
@@ -135,6 +230,24 @@ async function fixture(options: {
             createdAt: new Date(3_000).toISOString(),
           },
         };
+      },
+      uploadAttachment: async (deviceId, id) => {
+        calls.push(`attachment-upload:${deviceId}:${id}`);
+        return {
+          id: `att_${"a".repeat(43)}`,
+          name: "fixture.png",
+          mimeType: "image/png",
+          kind: "image" as const,
+          size: 12,
+          expiresAt: new Date(60_000).toISOString(),
+        };
+      },
+      removeAttachment: async (deviceId, id, attachmentId) => {
+        calls.push(`attachment-remove:${deviceId}:${id}:${attachmentId}`);
+      },
+      attachmentContent: async (id, attachmentId) => {
+        calls.push(`attachment-content:${id}:${attachmentId}`);
+        return { bytes: Buffer.from("fixture"), mimeType: "image/png" };
       },
     },
     models: {
@@ -160,6 +273,7 @@ async function fixture(options: {
       }),
     },
     streams: {
+      streamChatId: () => "chat-1",
       status: (_deviceId, streamId) => ({
         streamId,
         chatId: "chat-1",
@@ -178,6 +292,7 @@ async function fixture(options: {
         expiresAt: new Date(60_000).toISOString(),
         canAllow: false,
       }),
+      approvalChatId: () => "chat-1",
       cancel: async (deviceId, streamId, _key) => {
         calls.push(`cancel:${deviceId}:${streamId}`);
         return {
@@ -385,7 +500,50 @@ test("health is the only unauthenticated read and server projection requires bot
     assert.equal(server.instanceId, "instance-1");
     assert.equal(server.name, "Studio Mac");
     assert.equal(server.connectionMode, "lan");
+    assert.deepEqual(server.capabilities, ["server:read"]);
+    assert.equal("serverCapabilities" in server, false);
     assert.equal(JSON.stringify(server).includes("credential"), false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Bot-aware server projection separates supported capabilities from device grants", async () => {
+  const app = await fixture({
+    capabilities: ["server:read"],
+    acceptsBotCapabilities: true,
+  });
+  try {
+    const response = await fetch(`${app.base}/server`, {
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+      },
+    });
+    assert.equal(response.status, 200);
+    const server = await response.json();
+    assert.deepEqual(server.capabilities, ["server:read"]);
+    assert.equal(server.serverCapabilities.includes("bot:read"), true);
+    assert.equal(server.serverCapabilities.includes("bot:write"), true);
+    assert.notDeepEqual(server.serverCapabilities, server.capabilities);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Bot grants do not imply support-vocabulary negotiation for a legacy device", async () => {
+  const app = await fixture({ capabilities: ["server:read", "bot:read"] });
+  try {
+    const response = await fetch(`${app.base}/server`, {
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+      },
+    });
+    assert.equal(response.status, 200);
+    const server = await response.json();
+    assert.deepEqual(server.capabilities, ["server:read", "bot:read"]);
+    assert.equal("serverCapabilities" in server, false);
   } finally {
     await app.close();
   }
@@ -532,6 +690,465 @@ test("authenticated chat, model, turn, stream, cancel, and approval routes prese
     assert.equal((await approval.json()).decision, "deny");
   } finally {
     await app.close();
+  }
+});
+
+test("Bot chat routes require both device grants and main-owned policy authority", async () => {
+  const revision = `rev_${"c".repeat(43)}`;
+  const attachmentId = `att_${"a".repeat(43)}`;
+  const baseCapabilities: AidenRemoteCapability[] = [
+    "chat:read",
+    "chat:write",
+    "approval:respond",
+  ];
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+
+  const denied = await fixture({
+    botChat: true,
+    capabilities: baseCapabilities,
+    botChatAuthorization: () => true,
+    chatPayloadError: "reconciling",
+  });
+  try {
+    const chat = await fetch(`${denied.base}/chats/chat-1`, { headers });
+    assert.equal(chat.status, 404);
+    assert.equal((await chat.json()).error.code, "not_found");
+
+    const turn = await fetch(`${denied.base}/chats/chat-1/turns`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "idempotency-key": "bot-turn-denied-0001",
+      },
+      body: JSON.stringify({ text: "Hello" }),
+    });
+    assert.equal(turn.status, 404);
+
+    const stream = await fetch(`${denied.base}/streams/stream-1`, { headers });
+    assert.equal(stream.status, 404);
+
+    const cancel = await fetch(`${denied.base}/streams/stream-1/cancel`, {
+      method: "POST",
+      headers: { ...headers, "idempotency-key": "bot-cancel-denied-01" },
+    });
+    assert.equal(cancel.status, 404);
+
+    const approval = await fetch(`${denied.base}/approvals/approval-1/respond`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "idempotency-key": "bot-approval-denied-01",
+      },
+      body: JSON.stringify({ decision: "deny" }),
+    });
+    assert.equal(approval.status, 409);
+    assert.equal((await approval.json()).error.code, "approval_expired");
+    assert.deepEqual(denied.calls.filter((call) => /^(?:turn|cancel|approval):/u.test(call)), []);
+    assert.equal(
+      denied.calls.some((call) => call.startsWith("chat-get:")),
+      false,
+      "Bot denial must happen from metadata before an effectful/reconciling payload read.",
+    );
+    assert.equal(
+      denied.calls.some((call) => call.startsWith("bot-authorize:")),
+      false,
+      "The policy seam cannot substitute for missing device grants.",
+    );
+  } finally {
+    await denied.close();
+  }
+
+  const noAuthority = await fixture({
+    botChat: true,
+    capabilities: [...baseCapabilities, "bot:read", "bot:write"],
+  });
+  try {
+    const chat = await fetch(`${noAuthority.base}/chats/chat-1`, { headers });
+    assert.equal(chat.status, 404);
+    assert.equal((await chat.json()).error.code, "not_found");
+
+    const turn = await fetch(`${noAuthority.base}/chats/chat-1/turns`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "idempotency-key": "bot-no-authority-0001",
+      },
+      body: JSON.stringify({ text: "Must not run" }),
+    });
+    assert.equal(turn.status, 404);
+    assert.deepEqual(
+      noAuthority.calls.filter((call) => /^(?:chat-get|chat-mutation|turn):/u.test(call)),
+      [],
+      "Bot device grants must remain insufficient without main-owned policy authority.",
+    );
+  } finally {
+    await noAuthority.close();
+  }
+
+  const writeOnly = await fixture({
+    botChat: true,
+    capabilities: [...baseCapabilities, "bot:write"],
+    botChatAuthorization: () => true,
+  });
+  try {
+    const rename = await fetch(`${writeOnly.base}/chats/chat-1`, {
+      method: "PATCH",
+      headers: { ...headers, "content-type": "application/json", "if-match": revision },
+      body: JSON.stringify({ title: "Must stay hidden" }),
+    });
+    assert.equal(rename.status, 404);
+    assert.equal(writeOnly.calls.some((call) => call.startsWith("chat-rename:")), false);
+  } finally {
+    await writeOnly.close();
+  }
+
+  const readOnly = await fixture({
+    botChat: true,
+    capabilities: [...baseCapabilities, "bot:read"],
+    botChatAuthorization: () => true,
+  });
+  try {
+    const chat = await fetch(`${readOnly.base}/chats/chat-1`, { headers });
+    assert.equal(chat.status, 200);
+    assert.equal((await chat.json()).botId, "bot-1");
+
+    const content = await fetch(
+      `${readOnly.base}/chats/chat-1/attachments/${attachmentId}/content`,
+      { headers },
+    );
+    assert.equal(content.status, 200);
+
+    const rename = await fetch(`${readOnly.base}/chats/chat-1`, {
+      method: "PATCH",
+      headers: { ...headers, "content-type": "application/json", "if-match": revision },
+      body: JSON.stringify({ title: "Denied" }),
+    });
+    assert.equal(rename.status, 404);
+
+    const upload = await fetch(`${readOnly.base}/chats/chat-1/attachments`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(upload.status, 404);
+    assert.equal(readOnly.calls.some((call) => call.startsWith("chat-rename:")), false);
+    assert.equal(readOnly.calls.some((call) => call.startsWith("attachment-upload:")), false);
+  } finally {
+    await readOnly.close();
+  }
+
+  const allowed = await fixture({
+    botChat: true,
+    capabilities: [...baseCapabilities, "bot:read", "bot:write"],
+    botChatAuthorization: () => true,
+  });
+  try {
+    const rename = await fetch(`${allowed.base}/chats/chat-1`, {
+      method: "PATCH",
+      headers: { ...headers, "content-type": "application/json", "if-match": revision },
+      body: JSON.stringify({ title: "Allowed" }),
+    });
+    assert.equal(rename.status, 200);
+
+    const turn = await fetch(`${allowed.base}/chats/chat-1/turns`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "idempotency-key": "bot-turn-allowed-0001",
+      },
+      body: JSON.stringify({ text: "Hello" }),
+    });
+    assert.equal(turn.status, 202);
+
+    const cancel = await fetch(`${allowed.base}/streams/stream-1/cancel`, {
+      method: "POST",
+      headers: { ...headers, "idempotency-key": "bot-cancel-allowed-01" },
+    });
+    assert.equal(cancel.status, 202);
+
+    const approval = await fetch(`${allowed.base}/approvals/approval-1/respond`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "idempotency-key": "bot-approval-allowed-01",
+      },
+      body: JSON.stringify({ decision: "deny" }),
+    });
+    assert.equal(approval.status, 200);
+    assert.equal(allowed.calls.some((call) => call.startsWith("chat-rename:")), true);
+    assert.equal(allowed.calls.some((call) => call.startsWith("turn:")), true);
+    assert.equal(allowed.calls.some((call) => call.startsWith("cancel:")), true);
+    assert.equal(allowed.calls.some((call) => call.startsWith("approval:")), true);
+  } finally {
+    await allowed.close();
+  }
+});
+
+test("Bot write authority is rechecked inside the mutation gate before effects", async () => {
+  let writeChecks = 0;
+  const app = await fixture({
+    botChat: true,
+    capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"],
+    botChatAuthorization: (request) => {
+      if (request.access !== "write") return true;
+      writeChecks += 1;
+      return writeChecks === 1;
+    },
+  });
+  try {
+    const response = await fetch(`${app.base}/chats/chat-1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+        "content-type": "application/json",
+        "idempotency-key": "bot-policy-race-0001",
+      },
+      body: JSON.stringify({ text: "Must not run after narrowing" }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "not_found");
+    assert.equal(writeChecks, 2);
+    assert.equal(app.calls.includes("chat-mutation:chat-1"), true);
+    assert.equal(app.calls.some((call) => call.startsWith("turn:")), false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("ordinary move-to-workspace rejects authorized Bot chats", async () => {
+  const app = await fixture({
+    botChat: true,
+    capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"],
+    botChatAuthorization: () => true,
+  });
+  try {
+    const response = await fetch(`${app.base}/chats/chat-1/move`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+        "content-type": "application/json",
+        "if-match": `rev_${"c".repeat(43)}`,
+        "idempotency-key": "bot-move-blocked-0001",
+      },
+      body: JSON.stringify({ workspaceId: "workspace-2", confirmedForeground: true }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "not_found");
+    assert.equal(app.calls.some((call) => call.startsWith("chat-move:")), false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("authorized archived Bot chats preserve reads and reject every retained mutation", async () => {
+  const revision = `rev_${"c".repeat(43)}`;
+  const attachmentId = `att_${"a".repeat(43)}`;
+  const app = await fixture({
+    botChat: true,
+    botArchived: true,
+    capabilities: [
+      "chat:read",
+      "chat:write",
+      "approval:respond",
+      "bot:read",
+      "bot:write",
+    ],
+    botChatAuthorization: () => true,
+  });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+
+  try {
+    for (const path of [
+      "/chats/chat-1",
+      `/chats/chat-1/attachments/${attachmentId}/content`,
+      "/streams/stream-1",
+      "/streams/stream-1/approval",
+      "/streams/stream-1/events",
+    ]) {
+      const response = await fetch(`${app.base}${path}`, { headers });
+      assert.equal(response.status, 200, `${path} remains readable while archived`);
+      await response.arrayBuffer();
+    }
+
+    const mutations: Array<{
+      path: string;
+      method: "PATCH" | "POST" | "DELETE";
+      headers?: Record<string, string>;
+      body?: string;
+    }> = [
+      {
+        path: "/chats/chat-1",
+        method: "PATCH",
+        headers: { "content-type": "application/json", "if-match": revision },
+        body: JSON.stringify({ title: "Archived" }),
+      },
+      {
+        path: "/chats/chat-1",
+        method: "DELETE",
+        headers: { "if-match": revision },
+      },
+      {
+        path: "/chats/chat-1/move",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "if-match": revision,
+          "idempotency-key": "archived-move-0001",
+        },
+        body: JSON.stringify({ workspaceId: "workspace-2", confirmedForeground: true }),
+      },
+      {
+        path: "/chats/chat-1/turns",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "archived-turn-0001",
+        },
+        body: JSON.stringify({ text: "Do not run" }),
+      },
+      {
+        path: "/chats/chat-1/attachments",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      },
+      {
+        path: `/chats/chat-1/attachments/${attachmentId}`,
+        method: "DELETE",
+      },
+      {
+        path: "/streams/stream-1/cancel",
+        method: "POST",
+        headers: { "idempotency-key": "archived-cancel-01" },
+      },
+      {
+        path: "/approvals/approval-1/respond",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "archived-approval-1",
+        },
+        body: JSON.stringify({ decision: "deny" }),
+      },
+    ];
+
+    for (const mutation of mutations) {
+      const response = await fetch(`${app.base}${mutation.path}`, {
+        method: mutation.method,
+        headers: { ...headers, ...mutation.headers },
+        ...(mutation.body !== undefined ? { body: mutation.body } : {}),
+      });
+      assert.equal(response.status, 409, mutation.path);
+      assert.equal((await response.json()).error.code, "bot_archived", mutation.path);
+    }
+
+    assert.deepEqual(
+      app.calls.filter((call) =>
+        /^(?:chat-rename|chat-remove|chat-move|turn|attachment-upload|attachment-remove|cancel|approval):/u.test(call)),
+      [],
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+test("oversized JSON projections fail safely before success headers are committed", async () => {
+  const app = await fixture({
+    capabilities: ["chat:read"],
+    oversizedChatResponse: true,
+  });
+  try {
+    const response = await fetch(`${app.base}/chats/chat-1`, {
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+      },
+    });
+    const body = await response.text();
+    assert.equal(response.status, 413);
+    assert.equal(JSON.parse(body).error.code, "payload_too_large");
+    assert.ok(Buffer.byteLength(body, "utf8") < AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES);
+    assert.equal(response.headers.get("content-length"), String(Buffer.byteLength(body, "utf8")));
+    assert.equal(app.calls.includes("chat-get:chat-1"), true);
+  } finally {
+    await app.close();
+  }
+});
+
+test("chat classification failures normalize retained chat, stream, SSE, and approval identifiers", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const capabilities: AidenRemoteCapability[] = [
+    "chat:read",
+    "chat:write",
+    "approval:respond",
+  ];
+
+  for (const chatClassification of ["missing", "error"] as const) {
+    const app = await fixture({ capabilities, chatClassification });
+    try {
+      const chat = await fetch(`${app.base}/chats/chat-1`, { headers });
+      assert.equal(chat.status, 404);
+      assert.equal((await chat.json()).error.code, "not_found");
+
+      const stream = await fetch(`${app.base}/streams/stream-1`, { headers });
+      assert.equal(stream.status, 404);
+      assert.equal((await stream.json()).error.code, "not_found");
+
+      const events = await fetch(`${app.base}/streams/stream-1/events`, { headers });
+      assert.equal(events.status, 404);
+      assert.equal((await events.json()).error.code, "not_found");
+
+      const approvalSnapshot = await fetch(
+        `${app.base}/streams/stream-1/approval`,
+        { headers },
+      );
+      assert.equal(approvalSnapshot.status, 404);
+      assert.equal((await approvalSnapshot.json()).error.code, "not_found");
+
+      const cancel = await fetch(`${app.base}/streams/stream-1/cancel`, {
+        method: "POST",
+        headers: { ...headers, "idempotency-key": `classification-${chatClassification}-cancel` },
+      });
+      assert.equal(cancel.status, 404);
+      assert.equal((await cancel.json()).error.code, "not_found");
+
+      const approval = await fetch(`${app.base}/approvals/approval-1/respond`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "idempotency-key": `classification-${chatClassification}-approval`,
+        },
+        body: JSON.stringify({ decision: "deny" }),
+      });
+      assert.equal(approval.status, 409);
+      assert.equal((await approval.json()).error.code, "approval_expired");
+
+      assert.equal(app.calls.some((call) => call.startsWith("chat-get:")), false);
+      assert.equal(app.calls.some((call) => call.startsWith("events:")), false);
+      assert.equal(app.calls.some((call) => call.startsWith("cancel:")), false);
+      assert.equal(app.calls.some((call) => call.startsWith("approval:")), false);
+    } finally {
+      await app.close();
+    }
   }
 });
 

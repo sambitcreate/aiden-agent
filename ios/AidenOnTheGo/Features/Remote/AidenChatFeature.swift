@@ -476,7 +476,7 @@ final class AidenWorkspaceChatsModel {
     var isConnected: Bool { coordinator.connectionState == .connected }
 
     func accept(_ chat: AidenChat) {
-        guard chat.workspaceId == workspaceId else { return }
+        guard chat.workspaceId == workspaceId, !chat.isBotChat else { return }
         upsert(chat)
     }
 
@@ -485,7 +485,7 @@ final class AidenWorkspaceChatsModel {
         let instanceId = context.instanceId
         if chats.isEmpty, let cached = await cache.loadChats(instanceId: instanceId, workspaceId: workspaceId) {
             guard coordinator.isCurrent(context) else { return }
-            chats = cached
+            chats = Self.sorted(AidenChat.regularWorkspaceChats(from: cached))
         }
         guard !isLoading else { return }
         isLoading = true
@@ -493,7 +493,7 @@ final class AidenWorkspaceChatsModel {
         do {
             let remote = try await coordinator.remoteClient(for: context).chats(workspaceId: workspaceId)
             guard coordinator.isCurrent(context) else { return }
-            chats = Self.sorted(remote)
+            chats = Self.sorted(AidenChat.regularWorkspaceChats(from: remote))
             try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
         } catch {
             guard coordinator.isCurrent(context) else { return }
@@ -509,6 +509,10 @@ final class AidenWorkspaceChatsModel {
         do {
             let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspaceId)
             guard coordinator.isCurrent(context) else { return nil }
+            guard !chat.isBotChat else {
+                presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
+                return nil
+            }
             upsert(chat)
             try await persist(chat: chat, instanceId: instanceId)
             return chat
@@ -565,6 +569,7 @@ final class AidenWorkspaceChatsModel {
     }
 
     private func upsert(_ chat: AidenChat) {
+        guard !chat.isBotChat else { return }
         chats.removeAll { $0.id == chat.id }
         chats.append(chat)
         chats = Self.sorted(chats)

@@ -31,6 +31,7 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTAssertEqual(object["deviceType"] as? String, "iphone")
             XCTAssertEqual(object["clientVersion"] as? String, "1.0")
             XCTAssertEqual(object["acceptsDisplayName"] as? Bool, true)
+            XCTAssertEqual(object["acceptsBotCapabilities"] as? Bool, true)
             return Self.response(
                 for: request,
                 status: 200,
@@ -42,7 +43,8 @@ final class AidenRemoteClientTests: XCTestCase {
                   "credential": "\(String(repeating: "C", count: 43))",
                   "capabilities": ["server:read", "workspace:read", "workspace:manage"],
                   "endpoint": "https://aiden.test/api/aiden/v1",
-                  "serverSpkiSha256": "\(bootstrap.serverSpkiSha256)"
+                  "serverSpkiSha256": "\(bootstrap.serverSpkiSha256)",
+                  "futurePairingMetadata": {"safe": true}
                 }
                 """
             )
@@ -238,6 +240,7 @@ final class AidenRemoteClientTests: XCTestCase {
             )
             if attempts == 1 {
                 XCTAssertEqual(object["acceptsDisplayName"] as? Bool, true)
+                XCTAssertEqual(object["acceptsBotCapabilities"] as? Bool, true)
                 return Self.response(
                     for: request,
                     status: 400,
@@ -272,6 +275,56 @@ final class AidenRemoteClientTests: XCTestCase {
         )
         XCTAssertEqual(attempts, 2)
         XCTAssertNil(exchange.displayName)
+    }
+
+    func testServerSeparatesDeviceGrantsFromSupportAndIgnoresAdditiveFields() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://aiden.test/api/aiden/v1/server")
+            return Self.response(
+                for: request,
+                status: 200,
+                json: """
+                {
+                  "protocolVersion": 1,
+                  "instanceId": "instance-1",
+                  "name": "Home Mac",
+                  "appVersion": "1.0",
+                  "capabilities": ["server:read", "bot:read"],
+                  "serverCapabilities": ["server:read", "bot:read", "bot:write"],
+                  "connectionMode": "lan",
+                  "serverTime": "2026-08-19T07:00:00.000Z",
+                  "futurePresentation": {"safe": true}
+                }
+                """
+            )
+        }
+
+        let server = try await client.server()
+        XCTAssertEqual(server.capabilities, [.serverRead, .botRead])
+        XCTAssertEqual(server.serverCapabilities, [.serverRead, .botRead, .botWrite])
+    }
+
+    func testServerRequiresValidIdentityAndDeviceGrantFields() throws {
+        let missingIdentity = Data("""
+        {"protocolVersion":1,"name":"Mac","appVersion":"1.0",
+        "capabilities":["server:read"],"connectionMode":"lan",
+        "serverTime":"2026-08-19T07:00:00.000Z"}
+        """.utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenServer.self, from: missingIdentity))
+
+        let missingGrants = Data("""
+        {"protocolVersion":1,"instanceId":"instance-1","name":"Mac","appVersion":"1.0",
+        "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+        """.utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenServer.self, from: missingGrants))
+
+        let nullSupport = Data("""
+        {"protocolVersion":1,"instanceId":"instance-1","name":"Mac","appVersion":"1.0",
+        "capabilities":["server:read"],"serverCapabilities":null,"connectionMode":"lan",
+        "serverTime":"2026-08-19T07:00:00.000Z"}
+        """.utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenServer.self, from: nullSupport))
     }
 
     func testWorkspaceListUsesBearerAndStrictAidenProtocolHeader() async throws {
@@ -1273,6 +1326,87 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testInstallationPersistsExplicitDeviceGrantsAndServerSupportSeparately() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-bot",
+            deviceId: "device-bot",
+            credential: String(repeating: "B", count: 43),
+            capabilities: [.serverRead, .botRead, .botWrite]
+        )
+        let paired = try store.savePairing(
+            exchange,
+            trust: makeSystemTrust(),
+            name: "Bot Mac"
+        )
+
+        XCTAssertEqual(paired.deviceCapabilities, [.serverRead, .botRead, .botWrite])
+        XCTAssertNil(paired.serverCapabilities)
+        XCTAssertFalse(paired.isBotsEligible)
+
+        try store.updateServer(AidenServer(
+            protocolVersion: 1,
+            instanceId: "instance-bot",
+            name: "Bot Mac",
+            appVersion: "1.0",
+            capabilities: [.serverRead, .botRead, .botWrite],
+            serverCapabilities: [.serverRead, .workspaceRead, .botRead, .botWrite],
+            connectionMode: .lan,
+            minimumClientVersion: nil,
+            serverTime: Date()
+        ))
+
+        let refreshed = try XCTUnwrap(store.activeInstallation)
+        XCTAssertEqual(refreshed.deviceCapabilities, [.serverRead, .botRead, .botWrite])
+        XCTAssertEqual(
+            refreshed.serverCapabilities,
+            [.serverRead, .workspaceRead, .botRead, .botWrite]
+        )
+        XCTAssertTrue(refreshed.isBotsEligible)
+        XCTAssertTrue(refreshed.canWriteBots)
+
+        let restored = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+        XCTAssertEqual(restored.deviceCapabilities, refreshed.deviceCapabilities)
+        XCTAssertEqual(restored.serverCapabilities, refreshed.serverCapabilities)
+        XCTAssertTrue(restored.isBotsEligible)
+    }
+
+    @MainActor
+    func testServerRefreshCanNarrowButNeverWidenDeviceGrants() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(
+                instanceId: "instance-limited",
+                deviceId: "device-limited",
+                credential: String(repeating: "L", count: 43)
+            ),
+            trust: makeSystemTrust(),
+            name: "Limited Mac"
+        )
+
+        let server = AidenServer(
+            protocolVersion: 1,
+            instanceId: "instance-limited",
+            name: "Limited Mac",
+            appVersion: "1.0",
+            capabilities: [.serverRead, .workspaceRead, .botRead, .botWrite],
+            serverCapabilities: [.serverRead, .workspaceRead, .botRead, .botWrite],
+            connectionMode: .lan,
+            minimumClientVersion: nil,
+            serverTime: Date()
+        )
+        try store.updateServer(server)
+
+        let refreshed = try XCTUnwrap(store.activeInstallation)
+        XCTAssertEqual(refreshed.deviceCapabilities, [.serverRead, .workspaceRead])
+        XCTAssertEqual(refreshed.serverCapabilities, server.serverCapabilities)
+        XCTAssertFalse(refreshed.isBotsEligible)
+        XCTAssertFalse(refreshed.canWriteBots)
+    }
+
+    @MainActor
     func testServerRenamePersistenceFailureRestoresEntireSortedRegistry() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
@@ -1368,13 +1502,18 @@ final class AidenRemoteClientTests: XCTestCase {
         {"installations":[{"instanceId":"legacy-instance","deviceId":"legacy-device",
         "name":"Legacy Mac","endpoint":"https://aiden.test/api/aiden/v1",
         "serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "capabilities":["server:read"],"createdAt":0}],
+        "capabilities":["server:read","bot:read","bot:write"],
+        "serverCapabilities":["server:read","bot:read","bot:write"],"createdAt":0}],
         "activeInstallationId":"legacy-instance"}
         """
         keychain.values[.remoteInstallations] = legacySnapshot
         let legacyStore = AidenInstallationStore(keychain: keychain)
         let legacyInstallation = try XCTUnwrap(legacyStore.activeInstallation)
         XCTAssertNil(legacyInstallation.pairingTrust)
+        XCTAssertEqual(legacyInstallation.deviceCapabilities, [.serverRead])
+        XCTAssertNil(legacyInstallation.serverCapabilities)
+        XCTAssertFalse(legacyInstallation.isBotsEligible)
+        XCTAssertFalse(legacyInstallation.canWriteBots)
         XCTAssertThrowsError(try AidenRemoteClient(
             installation: legacyInstallation,
             credential: "legacy-credential"
@@ -1464,6 +1603,67 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(removed)
         XCTAssertFalse(coordinator.workspaces.contains(where: { $0.id == updated.id }))
         XCTAssertEqual(workspaceListRequests, 2, "Confirmed removal should reload the canonical registry in case the Mac seeded a default workspace")
+    }
+
+    @MainActor
+    func testSuccessfulStagedPairingPersistsNegotiatedBotSupportBeforeConnecting() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-1",
+            deviceId: "device-bot-aware",
+            credential: String(repeating: "B", count: 43),
+            capabilities: [.serverRead, .workspaceRead, .botRead, .botWrite]
+        )
+        let payload = makePairingPayload(
+            bootstrap: makeBootstrap(now: Date(timeIntervalSince1970: 1_787_100_000))
+        )
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/aiden/v1/server":
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: """
+                    {"protocolVersion":1,"instanceId":"instance-1","name":"Bot Mac",
+                    "appVersion":"1.0.0",
+                    "capabilities":["server:read","workspace:read","bot:read","bot:write"],
+                    "serverCapabilities":["server:read","workspace:read","bot:read","bot:write"],
+                    "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+                    """
+                )
+            case "/api/aiden/v1/workspaces":
+                return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+            default:
+                XCTFail("Unexpected staged-pairing request: \(request.url?.path ?? "nil")")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(
+                    endpoint: installation.endpoint,
+                    credential: credential,
+                    session: session
+                )
+            }
+        )
+
+        try await coordinator.activatePairing(payload: payload, exchange: exchange)
+
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        let active = try XCTUnwrap(store.activeInstallation)
+        XCTAssertEqual(active.deviceCapabilities, exchange.capabilities)
+        XCTAssertEqual(active.serverCapabilities, exchange.capabilities)
+        XCTAssertTrue(active.isBotsEligible)
+        XCTAssertTrue(active.canWriteBots)
+
+        let restored = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+        XCTAssertEqual(restored.deviceCapabilities, exchange.capabilities)
+        XCTAssertEqual(restored.serverCapabilities, exchange.capabilities)
+        XCTAssertTrue(restored.isBotsEligible)
     }
 
     @MainActor
@@ -2007,14 +2207,15 @@ final class AidenRemoteClientTests: XCTestCase {
         instanceId: String,
         deviceId: String,
         credential: String,
-        endpoint: URL = URL(string: "https://aiden.test/api/aiden/v1")!
+        endpoint: URL = URL(string: "https://aiden.test/api/aiden/v1")!,
+        capabilities: [AidenRemoteCapability] = [.serverRead, .workspaceRead]
     ) -> AidenRemoteContractFixture.PairingExchange {
         AidenRemoteContractFixture.PairingExchange(
             protocolVersion: 1,
             instanceId: instanceId,
             deviceId: deviceId,
             credential: credential,
-            capabilities: [.serverRead, .workspaceRead],
+            capabilities: capabilities,
             endpoint: endpoint,
             serverSpkiSha256: "sha256/\(Data(repeating: 7, count: 32).base64EncodedString())"
         )

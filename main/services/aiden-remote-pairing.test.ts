@@ -7,6 +7,10 @@ import {
   parseAidenRemotePairingExchangeInput,
 } from "./aiden-remote-pairing.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import {
+  AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_LEGACY_CAPABILITIES,
+} from "./aiden-remote-protocol.js";
 
 const endpoint = "https://aiden.example.test/api/aiden/v1";
 const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
@@ -14,6 +18,7 @@ const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
 function fixture(options: { issueFails?: boolean } = {}) {
   let now = 1_000;
   let issued = 0;
+  let issuedAcceptsBotCapabilities: boolean | undefined;
   let randomCounter = 0;
   let statusChanges = 0;
   const service = new AidenRemotePairingService(
@@ -21,6 +26,7 @@ function fixture(options: { issueFails?: boolean } = {}) {
     {
       issueDevice: async (input) => {
         issued += 1;
+        issuedAcceptsBotCapabilities = input.acceptsBotCapabilities;
         if (options.issueFails) throw new Error("disk failed");
         return {
           credential: Buffer.alloc(32, 8).toString("base64url"),
@@ -48,6 +54,7 @@ function fixture(options: { issueFails?: boolean } = {}) {
   return {
     service,
     issued: () => issued,
+    issuedAcceptsBotCapabilities: () => issuedAcceptsBotCapabilities,
     statusChanges: () => statusChanges,
     advance: (milliseconds: number) => {
       now += milliseconds;
@@ -55,13 +62,18 @@ function fixture(options: { issueFails?: boolean } = {}) {
   };
 }
 
-function exchange(secret: string, acceptsDisplayName = true) {
+function exchange(
+  secret: string,
+  acceptsDisplayName = true,
+  acceptsBotCapabilities = false,
+) {
   return {
     secret,
     deviceName: "Sambit’s iPhone",
     deviceType: "iphone" as const,
     clientVersion: "1.0",
     ...(acceptsDisplayName ? { acceptsDisplayName: true } : {}),
+    ...(acceptsBotCapabilities ? { acceptsBotCapabilities: true } : {}),
   };
 }
 
@@ -78,6 +90,7 @@ test("pairing opens for exactly five minutes and consumes its 256-bit secret onc
   assert.equal(result.endpoint, endpoint);
   assert.equal(result.displayName, "Studio Mac");
   assert.equal(result.capabilities.includes("workspace:manage"), true);
+  assert.deepEqual(result.capabilities, AIDEN_REMOTE_LEGACY_CAPABILITIES);
   assert.deepEqual(pairing.service.status(), {
     sessionId: opened.sessionId,
     state: "finishing",
@@ -191,6 +204,30 @@ test("pairing emits additive display metadata only to clients that opt in", asyn
     "current-client",
   );
   assert.equal(currentResult.displayName, "Studio Mac");
+});
+
+test("pairing grants Bot authority only to clients that explicitly accept its vocabulary", async () => {
+  const legacy = fixture();
+  const legacyWindow = legacy.service.begin(endpoint, fingerprint);
+  const legacyResult = await legacy.service.exchange(
+    exchange(legacyWindow.bootstrap.secret),
+    "legacy-client",
+  );
+  assert.deepEqual(legacyResult.capabilities, AIDEN_REMOTE_LEGACY_CAPABILITIES);
+  assert.equal((legacyResult.capabilities as readonly string[]).includes("bot:read"), false);
+  assert.equal((legacyResult.capabilities as readonly string[]).includes("bot:write"), false);
+  assert.equal(legacy.issuedAcceptsBotCapabilities(), false);
+
+  const current = fixture();
+  const currentWindow = current.service.begin(endpoint, fingerprint);
+  const currentResult = await current.service.exchange(
+    exchange(currentWindow.bootstrap.secret, true, true),
+    "bot-aware-client",
+  );
+  assert.deepEqual(currentResult.capabilities, AIDEN_REMOTE_CAPABILITIES);
+  assert.equal(currentResult.capabilities.includes("bot:read"), true);
+  assert.equal(currentResult.capabilities.includes("bot:write"), true);
+  assert.equal(current.issuedAcceptsBotCapabilities(), true);
 });
 
 test("an expired, closed, or invalid pairing window fails with stable safe codes", async () => {
@@ -323,6 +360,14 @@ test("a credential issued before bootstrap expiry remains finishing after the sc
 test("pairing DTOs are exact and per-source attempts are rate limited", async () => {
   assert.throws(
     () => parseAidenRemotePairingExchangeInput({ ...exchange("x".repeat(43)), extra: true }),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "invalid_request",
+  );
+  assert.throws(
+    () => parseAidenRemotePairingExchangeInput({
+      ...exchange("x".repeat(43)),
+      acceptsBotCapabilities: "yes",
+    }),
     (error: unknown) =>
       error instanceof AidenRemoteServiceError && error.code === "invalid_request",
   );

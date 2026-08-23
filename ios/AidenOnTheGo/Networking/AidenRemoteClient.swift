@@ -17,10 +17,103 @@ struct AidenServer: Codable, Equatable, Sendable {
     let instanceId: String
     let name: String
     let appVersion: String
+    /// Capabilities granted to the authenticated device.
     let capabilities: [AidenRemoteCapability]
+    /// Full server support inventory. Its absence identifies a legacy,
+    /// capability-ambiguous response and must fail closed for Bots.
+    let serverCapabilities: [AidenRemoteCapability]?
     let connectionMode: AidenConnectionMode
     let minimumClientVersion: String?
     let serverTime: Date
+
+    init(
+        protocolVersion: Int,
+        instanceId: String,
+        name: String,
+        appVersion: String,
+        capabilities: [AidenRemoteCapability],
+        serverCapabilities: [AidenRemoteCapability]? = nil,
+        connectionMode: AidenConnectionMode,
+        minimumClientVersion: String?,
+        serverTime: Date
+    ) {
+        self.protocolVersion = protocolVersion
+        self.instanceId = instanceId
+        self.name = name
+        self.appVersion = appVersion
+        self.capabilities = capabilities
+        self.serverCapabilities = serverCapabilities
+        self.connectionMode = connectionMode
+        self.minimumClientVersion = minimumClientVersion
+        self.serverTime = serverTime
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)
+        instanceId = try values.decode(String.self, forKey: .instanceId)
+        name = try values.decode(String.self, forKey: .name)
+        appVersion = try values.decode(String.self, forKey: .appVersion)
+        capabilities = try values.decode([AidenRemoteCapability].self, forKey: .capabilities)
+        if values.contains(.serverCapabilities) {
+            serverCapabilities = try values.decode(
+                [AidenRemoteCapability].self,
+                forKey: .serverCapabilities
+            )
+        } else {
+            serverCapabilities = nil
+        }
+        connectionMode = try values.decode(AidenConnectionMode.self, forKey: .connectionMode)
+        minimumClientVersion = try values.decodeIfPresent(
+            String.self,
+            forKey: .minimumClientVersion
+        )
+        serverTime = try values.decode(Date.self, forKey: .serverTime)
+
+        guard !instanceId.isEmpty,
+              instanceId.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .instanceId,
+                in: values,
+                debugDescription: "Expected a non-empty bounded server identity."
+            )
+        }
+        try Self.requireUniqueCapabilities(capabilities, forKey: .capabilities, in: values)
+        if let serverCapabilities {
+            try Self.requireUniqueCapabilities(
+                serverCapabilities,
+                forKey: .serverCapabilities,
+                in: values
+            )
+            guard Set(capabilities).isSubset(of: Set(serverCapabilities)) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .serverCapabilities,
+                    in: values,
+                    debugDescription: "Device grants must be a subset of server-supported capabilities."
+                )
+            }
+        }
+    }
+
+    private static func requireUniqueCapabilities(
+        _ capabilities: [AidenRemoteCapability],
+        forKey key: CodingKeys,
+        in values: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        guard Set(capabilities).count == capabilities.count,
+              !capabilities.contains(.botWrite) || capabilities.contains(.botRead) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: values,
+                debugDescription: "Capability grants must be unique and bot:write requires bot:read."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion, instanceId, name, appVersion, capabilities, serverCapabilities
+        case connectionMode, minimumClientVersion, serverTime
+    }
 }
 
 enum AidenWorkspacePermission: String, Codable, CaseIterable, Sendable {
@@ -165,6 +258,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let deviceType: AidenDeviceType
         let clientVersion: String
         let acceptsDisplayName: Bool?
+        let acceptsBotCapabilities: Bool?
     }
 
     private struct WorkspaceList: Decodable {
@@ -268,7 +362,8 @@ final class AidenRemoteClient: @unchecked Sendable {
             deviceName: deviceName,
             deviceType: deviceType,
             clientVersion: clientVersion,
-            acceptsDisplayName: true
+            acceptsDisplayName: true,
+            acceptsBotCapabilities: true
         )
         let exchange: AidenRemoteContractFixture.PairingExchange
         do {
@@ -291,7 +386,8 @@ final class AidenRemoteClient: @unchecked Sendable {
                     deviceName: deviceName,
                     deviceType: deviceType,
                     clientVersion: clientVersion,
-                    acceptsDisplayName: nil
+                    acceptsDisplayName: nil,
+                    acceptsBotCapabilities: nil
                 ),
                 authenticated: false,
                 acceptedStatus: [200]

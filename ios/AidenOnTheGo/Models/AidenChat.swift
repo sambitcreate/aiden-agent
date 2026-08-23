@@ -1,6 +1,15 @@
 import Foundation
 import ImageIO
 
+private func aidenDecodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
+    _ type: Value.Type,
+    from values: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) throws -> Value? {
+    guard values.contains(key) else { return nil }
+    return try values.decode(type, forKey: key)
+}
+
 enum AidenChatRole: String, Codable, Sendable {
     case user
     case assistant
@@ -32,6 +41,46 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.timeline = timeline
         self.createdAt = createdAt
     }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        role = try values.decode(AidenChatRole.self, forKey: .role)
+        text = try values.decode(String.self, forKey: .text)
+        attachments = try aidenDecodeOptionalNonNull(
+            [AidenMessageAttachment].self,
+            from: values,
+            forKey: .attachments
+        )
+        outcome = try aidenDecodeOptionalNonNull(
+            AidenMessageOutcome.self,
+            from: values,
+            forKey: .outcome
+        )
+        timeline = try aidenDecodeOptionalNonNull(
+            AidenGenerationTimeline.self,
+            from: values,
+            forKey: .timeline
+        )
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+    }
+
+    var isWireSafe: Bool {
+        !id.isEmpty
+            && id.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
+            && text.unicodeScalars.count <= AidenRemoteProtocol.maxTextLength
+            && (attachments?.count ?? 0) <= 20
+            && (attachments?.allSatisfy(\.isWireSafe) ?? true)
+            && (outcome?.isWireSafe ?? true)
+            // Generation timelines originate in JavaScript, where String.length
+            // measures UTF-16 code units. Keep that wire offset convention while
+            // retaining Unicode-scalar counting for the independent text bound.
+            && (timeline?.isRendererSafe(contentLength: text.utf16.count) ?? true)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, role, text, attachments, outcome, timeline, createdAt
+    }
 }
 
 enum AidenAgentStepStatus: String, Codable, Sendable {
@@ -59,6 +108,24 @@ enum AidenGenerationTimelineStatus: String, Codable, Sendable {
     case cancelled
 }
 
+enum AidenGenerationCancellationOrigin: String, Codable, Sendable {
+    case userStop = "user_stop"
+    case chatDeletion = "chat_deletion"
+    case workspaceAuthorityChange = "workspace_authority_change"
+    case computerUseDisabled = "computer_use_disabled"
+    case scheduledTaskCancel = "scheduled_task_cancel"
+    case applicationShutdown = "application_shutdown"
+}
+
+struct AidenGenerationClaimCheck: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable {
+        case unverifiedSuccess = "unverified_success"
+    }
+
+    let kind: Kind
+    let stepIds: [String]
+}
+
 struct AidenAgentLineChanges: Codable, Equatable, Sendable {
     let additions: Int
     let deletions: Int
@@ -73,6 +140,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let order: Int
     let kind: Kind
+    let toolCallId: String?
     let toolName: String?
     let label: String?
     let status: AidenAgentStepStatus?
@@ -84,6 +152,76 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let target: String?
     let detail: String?
     let lineChanges: AidenAgentLineChanges?
+
+    init(
+        id: String,
+        order: Int,
+        kind: Kind,
+        toolCallId: String? = nil,
+        toolName: String?,
+        label: String?,
+        status: AidenAgentStepStatus?,
+        startedAt: Double,
+        updatedAt: Double,
+        finishedAt: Double?,
+        contentOffset: Int?,
+        durationMs: Double?,
+        target: String?,
+        detail: String?,
+        lineChanges: AidenAgentLineChanges?
+    ) {
+        self.id = id
+        self.order = order
+        self.kind = kind
+        self.toolCallId = toolCallId
+        self.toolName = toolName
+        self.label = label
+        self.status = status
+        self.startedAt = startedAt
+        self.updatedAt = updatedAt
+        self.finishedAt = finishedAt
+        self.contentOffset = contentOffset
+        self.durationMs = durationMs
+        self.target = target
+        self.detail = detail
+        self.lineChanges = lineChanges
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        order = try values.decode(Int.self, forKey: .order)
+        kind = try values.decode(Kind.self, forKey: .kind)
+        toolCallId = try aidenDecodeOptionalNonNull(
+            String.self,
+            from: values,
+            forKey: .toolCallId
+        )
+        toolName = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .toolName)
+        label = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .label)
+        status = try aidenDecodeOptionalNonNull(
+            AidenAgentStepStatus.self,
+            from: values,
+            forKey: .status
+        )
+        startedAt = try values.decode(Double.self, forKey: .startedAt)
+        updatedAt = try values.decode(Double.self, forKey: .updatedAt)
+        finishedAt = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .finishedAt)
+        contentOffset = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .contentOffset)
+        durationMs = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .durationMs)
+        target = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .target)
+        detail = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .detail)
+        lineChanges = try aidenDecodeOptionalNonNull(
+            AidenAgentLineChanges.self,
+            from: values,
+            forKey: .lineChanges
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
+        case finishedAt, contentOffset, durationMs, target, detail, lineChanges
+    }
 
     var isActive: Bool {
         kind == .thinking ? finishedAt == nil : status?.isActive == true
@@ -97,34 +235,93 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
     let startedAt: Double
     let finishedAt: Double?
     let steps: [AidenAgentStep]
+    let cancellationOrigin: AidenGenerationCancellationOrigin?
+    let claimCheck: AidenGenerationClaimCheck?
+
+    init(
+        version: Int,
+        generationId: String,
+        status: AidenGenerationTimelineStatus,
+        startedAt: Double,
+        finishedAt: Double?,
+        steps: [AidenAgentStep],
+        cancellationOrigin: AidenGenerationCancellationOrigin? = nil,
+        claimCheck: AidenGenerationClaimCheck? = nil
+    ) {
+        self.version = version
+        self.generationId = generationId
+        self.status = status
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.steps = steps
+        self.cancellationOrigin = cancellationOrigin
+        self.claimCheck = claimCheck
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        generationId = try values.decode(String.self, forKey: .generationId)
+        status = try values.decode(AidenGenerationTimelineStatus.self, forKey: .status)
+        startedAt = try values.decode(Double.self, forKey: .startedAt)
+        finishedAt = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .finishedAt)
+        steps = try values.decode([AidenAgentStep].self, forKey: .steps)
+        cancellationOrigin = try aidenDecodeOptionalNonNull(
+            AidenGenerationCancellationOrigin.self,
+            from: values,
+            forKey: .cancellationOrigin
+        )
+        claimCheck = try aidenDecodeOptionalNonNull(
+            AidenGenerationClaimCheck.self,
+            from: values,
+            forKey: .claimCheck
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, generationId, status, startedAt, finishedAt, steps
+        case cancellationOrigin, claimCheck
+    }
 
     var issueCount: Int {
         steps.filter { $0.kind == .tool && $0.status?.isIssue == true }.count
     }
 
     var isRendererSafe: Bool {
+        isRendererSafe(contentLength: nil)
+    }
+
+    func isRendererSafe(contentLength: Int?) -> Bool {
         guard [1, 2, 3].contains(version),
               !generationId.isEmpty,
-              generationId.count <= 128,
+              generationId.unicodeScalars.count <= 128,
+              Self.isSafeIdentifier(generationId),
               steps.count <= 200,
               startedAt.isFinite,
               startedAt >= 0,
-              finishedAt.map({ $0.isFinite && $0 >= 0 }) ?? true
+              finishedAt.map({ $0.isFinite && $0 >= 0 }) ?? true,
+              cancellationOrigin == nil || status == .cancelled
         else { return false }
-        return steps.enumerated().allSatisfy { index, step in
+
+        var previousContentOffset = 0
+        for (index, step) in steps.enumerated() {
             guard step.order == index,
-                  step.id.count <= 128,
+                  (0...199).contains(step.order),
                   step.startedAt.isFinite,
                   step.updatedAt.isFinite,
                   step.startedAt >= 0,
                   step.updatedAt >= 0,
                   step.finishedAt.map({ $0.isFinite && $0 >= 0 }) ?? true,
-                  step.contentOffset.map({ $0 >= 0 }) ?? true,
+                  step.contentOffset.map({
+                      $0 >= 0 && $0 <= AidenRemoteProtocol.maxSafeInteger
+                  }) ?? true,
                   step.durationMs.map({ $0.isFinite && $0 >= 0 }) ?? true,
-                  step.label.map({ !$0.isEmpty && $0.count <= 120 }) ?? true,
-                  step.toolName.map({ !$0.isEmpty && $0.count <= 80 }) ?? true,
+                  step.label.map({ !$0.isEmpty && $0.unicodeScalars.count <= 120 }) ?? true,
+                  step.toolName.map({ !$0.isEmpty && $0.unicodeScalars.count <= 80 }) ?? true,
                   step.detail.map({ value in
-                      !value.isEmpty && value.count <= 120 && !value.contains(where: { $0.isNewline })
+                      !value.isEmpty
+                          && value.unicodeScalars.count <= 120
+                          && value.unicodeScalars.allSatisfy { $0.value >= 32 && $0.value != 127 }
                   }) ?? true,
                   step.target.map({ value in
                       let normalized = value.replacingOccurrences(of: "\\", with: "/")
@@ -132,13 +329,79 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
                           && normalized[normalized.index(after: normalized.startIndex)] == ":"
                           && normalized.first?.isLetter == true
                           && normalized[normalized.index(normalized.startIndex, offsetBy: 2)] == "/"
-                      return !value.isEmpty && value.count <= 240
+                      return !value.isEmpty && value.unicodeScalars.count <= 240
                           && !normalized.hasPrefix("/") && !normalized.hasPrefix("~")
                           && !hasDrivePrefix && !normalized.split(separator: "/").contains("..")
-                  }) ?? true
-            else { return false }
-            return step.kind == .thinking || (step.toolName != nil && step.label != nil && step.status != nil)
+                  }) ?? true,
+                  step.lineChanges.map({ changes in
+                      version == 3
+                          && step.kind == .tool
+                          && (step.toolName == "write_file" || step.toolName == "edit_file")
+                          && step.status == .completed
+                          && (0...100_000_000).contains(changes.additions)
+                          && (0...100_000_000).contains(changes.deletions)
+                  }) ?? true else {
+                return false
+            }
+
+            if version == 3 {
+                guard let contentOffset = step.contentOffset,
+                      contentOffset >= previousContentOffset,
+                      contentLength.map({ contentOffset <= $0 }) ?? true else {
+                    return false
+                }
+                previousContentOffset = contentOffset
+            }
+
+            switch step.kind {
+            case .tool:
+                guard Self.matches(step.id, pattern: #"^tool-[1-9][0-9]*$"#),
+                      step.id.unicodeScalars.count <= 128,
+                      let toolCallId = step.toolCallId,
+                      toolCallId.unicodeScalars.count <= 128,
+                      Self.matches(toolCallId, pattern: #"^call-[1-9][0-9]*$"#),
+                      step.toolName != nil,
+                      step.label != nil,
+                      step.status != nil else {
+                    return false
+                }
+            case .thinking:
+                guard version != 1,
+                      step.id.unicodeScalars.count <= 128,
+                      Self.matches(step.id, pattern: #"^think-[1-9][0-9]*$"#) else {
+                    return false
+                }
+            }
         }
+
+        if let claimCheck {
+            let issueStepIDs = Set(steps.compactMap { step -> String? in
+                guard step.kind == .tool, step.status?.isIssue == true else { return nil }
+                return step.id
+            })
+            guard status != .running,
+                  (1...20).contains(claimCheck.stepIds.count),
+                  Set(claimCheck.stepIds).count == claimCheck.stepIds.count,
+                  claimCheck.stepIds.allSatisfy(issueStepIDs.contains) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func isSafeIdentifier(_ value: String) -> Bool {
+        value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 65...90, 97...122, 45, 46, 58, 95:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private static func matches(_ value: String, pattern: String) -> Bool {
+        value.range(of: pattern, options: .regularExpression) != nil
     }
 }
 
@@ -251,6 +514,52 @@ struct AidenMessageOutcome: Codable, Equatable, Sendable {
     let category: String?
     let attempts: Int?
     let retryExhausted: Bool?
+
+    init(
+        status: AidenMessageOutcomeStatus,
+        category: String?,
+        attempts: Int?,
+        retryExhausted: Bool?
+    ) {
+        self.status = status
+        self.category = category
+        self.attempts = attempts
+        self.retryExhausted = retryExhausted
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        status = try values.decode(AidenMessageOutcomeStatus.self, forKey: .status)
+        category = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .category)
+        attempts = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .attempts)
+        retryExhausted = try aidenDecodeOptionalNonNull(
+            Bool.self,
+            from: values,
+            forKey: .retryExhausted
+        )
+        guard isWireSafe else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .category,
+                in: values,
+                debugDescription: "Message outcome contains an unknown category or invalid attempts count."
+            )
+        }
+    }
+
+    var isWireSafe: Bool {
+        (category.map(Self.categories.contains) ?? true)
+            && (attempts.map({ (0...16).contains($0) }) ?? true)
+    }
+
+    private static let categories: Set<String> = [
+        "network", "timeout", "service_unavailable", "rate_limit", "authentication", "quota",
+        "invalid_request", "context_window", "output_limit", "interrupted", "context_management",
+        "unknown",
+    ]
+
+    private enum CodingKeys: String, CodingKey {
+        case status, category, attempts, retryExhausted
+    }
 }
 
 enum AidenAttachmentKind: String, Codable, Sendable {
@@ -264,6 +573,56 @@ struct AidenMessageAttachment: Codable, Identifiable, Equatable, Sendable {
     let mimeType: String
     let kind: AidenAttachmentKind
     let size: Int
+
+    init(id: String, name: String, mimeType: String, kind: AidenAttachmentKind, size: Int) {
+        self.id = id
+        self.name = name
+        self.mimeType = mimeType
+        self.kind = kind
+        self.size = size
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        mimeType = try values.decode(String.self, forKey: .mimeType)
+        kind = try values.decode(AidenAttachmentKind.self, forKey: .kind)
+        size = try values.decode(Int.self, forKey: .size)
+        guard isWireSafe else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: values,
+                debugDescription: "Message attachment contains an unsafe identity, name, MIME type, or size."
+            )
+        }
+    }
+
+    var isWireSafe: Bool {
+        !id.isEmpty
+            && id.unicodeScalars.count <= 256
+            && id.unicodeScalars.allSatisfy { scalar in
+                switch scalar.value {
+                case 48...57, 65...90, 97...122, 45, 46, 58, 95:
+                    return true
+                default:
+                    return false
+                }
+            }
+            && !name.isEmpty
+            && name.unicodeScalars.count <= 255
+            && name.unicodeScalars.allSatisfy { scalar in
+                scalar.value > 0x1f && scalar.value != 0x7f && scalar != "/" && scalar != "\\"
+            }
+            && !mimeType.isEmpty
+            && mimeType.unicodeScalars.count <= 120
+            && size >= 0
+            && size <= AidenRemoteProtocol.maxSafeInteger
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, mimeType, kind, size
+    }
 }
 
 struct AidenAttachmentContent: Equatable, Sendable {
@@ -393,6 +752,7 @@ enum AidenAttachmentUpload: Encodable, Equatable, Sendable {
 struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     let id: String
     var workspaceId: String
+    var botId: String? = nil
     var title: String
     var providerId: String?
     var modelId: String?
@@ -403,6 +763,183 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     var titlePending: Bool? = nil
 
     var isTitlePending: Bool { titlePending == true }
+    var isBotChat: Bool { botId != nil }
+
+    init(
+        id: String,
+        workspaceId: String,
+        botId: String? = nil,
+        title: String,
+        providerId: String?,
+        modelId: String?,
+        messages: [AidenChatMessage],
+        createdAt: Date,
+        updatedAt: Date,
+        revision: String,
+        titlePending: Bool? = nil
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.botId = botId
+        self.title = title
+        self.providerId = providerId
+        self.modelId = modelId
+        self.messages = messages
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.revision = revision
+        self.titlePending = titlePending
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        workspaceId = try values.decode(String.self, forKey: .workspaceId)
+        if values.contains(.botId) {
+            botId = try values.decode(String.self, forKey: .botId)
+        } else {
+            botId = nil
+        }
+        title = try values.decode(String.self, forKey: .title)
+        providerId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .providerId)
+        modelId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .modelId)
+        messages = try values.decode([AidenChatMessage].self, forKey: .messages)
+        let createdTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
+        createdAt = createdTimestamp.date
+        let updatedTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
+        updatedAt = updatedTimestamp.date
+        revision = try values.decode(String.self, forKey: .revision)
+        titlePending = try aidenDecodeOptionalNonNull(Bool.self, from: values, forKey: .titlePending)
+
+        try Self.requireIdentifier(id, forKey: .id, in: values)
+        try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
+        if let botId {
+            try Self.requireIdentifier(
+                botId,
+                maximumLength: AidenRemoteProtocol.maxBotIdentifierLength,
+                forKey: .botId,
+                in: values
+            )
+            guard Self.isPathSafeOpaqueIdentifier(botId) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .botId,
+                    in: values,
+                    debugDescription: "Bot IDs may contain only ASCII letters, digits, period, colon, underscore, and hyphen."
+                )
+            }
+        }
+        try Self.requireIdentifier(revision, forKey: .revision, in: values)
+        try Self.requireText(title, maximumLength: 1_024, forKey: .title, in: values)
+        guard (providerId == nil) == (modelId == nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: providerId == nil ? .providerId : .modelId,
+                in: values,
+                debugDescription: "Chat providerId and modelId must be supplied together."
+            )
+        }
+        if let providerId {
+            try Self.requireText(
+                providerId,
+                maximumLength: 256,
+                allowEmpty: false,
+                forKey: .providerId,
+                in: values
+            )
+        }
+        if let modelId {
+            try Self.requireText(
+                modelId,
+                maximumLength: 512,
+                allowEmpty: false,
+                forKey: .modelId,
+                in: values
+            )
+        }
+        guard messages.count <= 10_000 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .messages,
+                in: values,
+                debugDescription: "Chat messages exceed the 10,000-item wire bound."
+            )
+        }
+        guard messages.allSatisfy({ $0.isWireSafe }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .messages,
+                in: values,
+                debugDescription: "Chat messages contain an unsafe or out-of-bounds field."
+            )
+        }
+        guard titlePending != false else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .titlePending,
+                in: values,
+                debugDescription: "titlePending may be omitted or true, but never false."
+            )
+        }
+        guard AidenRemoteTimestamp.isOrdered(
+            createdAt: createdTimestamp,
+            updatedAt: updatedTimestamp
+        ) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .updatedAt,
+                in: values,
+                debugDescription: "Chat updatedAt cannot precede createdAt."
+            )
+        }
+    }
+
+    static func regularWorkspaceChats(from chats: [Self]) -> [Self] {
+        chats.filter { !$0.isBotChat }
+    }
+
+    private static func requireIdentifier(
+        _ value: String,
+        maximumLength: Int = AidenRemoteProtocol.maxIdentifierLength,
+        forKey key: CodingKeys,
+        in values: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        guard !value.isEmpty,
+              value.unicodeScalars.count <= maximumLength else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: values,
+                debugDescription: "Expected a non-empty bounded identifier."
+            )
+        }
+    }
+
+    private static func requireText(
+        _ value: String,
+        maximumLength: Int,
+        allowEmpty: Bool = true,
+        forKey key: CodingKeys,
+        in values: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        guard (allowEmpty || !value.isEmpty),
+              value.unicodeScalars.count <= maximumLength else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: values,
+                debugDescription: "Expected a bounded Chat field."
+            )
+        }
+    }
+
+    private static func isPathSafeOpaqueIdentifier(_ value: String) -> Bool {
+        value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 65...90, 97...122, 45, 46, 58, 95:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, workspaceId, botId, title, providerId, modelId, messages
+        case createdAt, updatedAt, revision, titlePending
+    }
 }
 
 struct AidenModel: Codable, Identifiable, Equatable, Sendable {
