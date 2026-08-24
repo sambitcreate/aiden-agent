@@ -77,6 +77,41 @@ test("remote device credentials persist only digests and authenticate with capab
   assert.equal(await state.registry.authenticate("x".repeat(43)), null);
 });
 
+test("paired device display names can refresh without changing device identity", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  const issued = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1.0",
+  });
+  const writesAfterPairing = state.writes.length;
+
+  const updated = await state.registry.updateDeviceName(
+    issued.device.id,
+    "  Sambit’s   iPhone  ",
+  );
+  assert.equal(updated?.id, issued.device.id);
+  assert.equal(updated?.name, "Sambit’s iPhone");
+  assert.equal(state.stored().devices[0]?.name, "Sambit’s iPhone");
+  assert.equal(state.writes.length, writesAfterPairing + 1);
+
+  const unchanged = await state.registry.updateDeviceName(
+    issued.device.id,
+    "Sambit’s iPhone",
+  );
+  assert.equal(unchanged?.name, "Sambit’s iPhone");
+  assert.equal(state.writes.length, writesAfterPairing + 1);
+  assert.equal(
+    await state.registry.updateDeviceName("device_missing", "Other iPhone"),
+    null,
+  );
+  await assert.rejects(
+    state.registry.updateDeviceName(issued.device.id, "Bad\u0000Name"),
+    /visible characters/u,
+  );
+});
+
 test("Bot vocabulary negotiation persists independently from device authority", async () => {
   const state = fixture();
   const issued = await state.registry.issueDevice({
