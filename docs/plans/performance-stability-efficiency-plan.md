@@ -1,15 +1,16 @@
 # Performance, Stability, Battery, and Efficiency Master Plan
 
-Status: planned; source audit complete, implementation not started  
+Status: planned; coordinated Phase 0–5 implementation not started  
 Date: 2026-07-27  
-Audit snapshot: dirty working tree on `feature/aiden-assistant-plan-777723` at `7299340282f84fb816f1615f54a27bf97390f6fe`; findings refer to the current filesystem, not only `HEAD`  
-Scope: Electron main/preload, React renderer, native helpers, storage, IPC, networking, background services, packaging, and macOS lifecycle
+Current-state re-audit: [docs/performance-efficiency-audit.md](../performance-efficiency-audit.md) (2026-08-24, `94e612a` on `feature/bots-and-ios`)  
+Audit snapshot (original): dirty working tree on `feature/aiden-assistant-plan-777723` at `7299340282f84fb816f1615f54a27bf97390f6fe`; findings below refer to that filesystem unless the re-audit says otherwise  
+Scope: Electron main/preload, React renderer, native helpers, storage, IPC, networking, background services, packaging, macOS lifecycle, plus iOS/Remote/Telegram/bots added in the re-audit
 
 ## Executive verdict
 
-Aiden has several good foundations: renderer sandboxing and typed IPC boundaries, bounded updater cadence, generation abort bookkeeping, terminal cleanup on renderer destruction, error boundaries, and a broad passing test suite. The performance problem is not one bad framework choice. It is a set of unbounded or always-on paths that compound:
+Aiden has several good foundations: renderer sandboxing and typed IPC boundaries, bounded updater cadence, generation abort bookkeeping, terminal cleanup on renderer destruction, error boundaries, and a broad passing test suite. Independent of this plan, atomic chat/index writes, attachment ingest caps, main-owned generation history, and MCP connect single-flight have since landed; see the 2026-08-24 re-audit. The remaining performance problem is not one bad framework choice. It is a set of unbounded or always-on paths that compound:
 
-1. **Release-blocking durability and memory risks:** chat JSON is overwritten in place, unreadable state can silently fall back to defaults, attachments and recordings lack aggregate bounds, and chat history repeatedly carries base64 attachment payloads.
+1. **Release-blocking durability and memory risks:** chat/index writes are now atomic, but chats still pretty-rewrite unbounded history with inline base64 attachments; voice IPC and several soft JSON stores remain uncapped; some non-chat stores can still replace a corrupt file with defaults.
 2. **Proven idle battery work:** a completed streaming message can retain a perpetual animation-frame loop, while a normal folder-backed chat can launch approximately six Git subprocesses every five seconds.
 3. **Main-thread responsiveness risks:** local transcription loads and runs a roughly 600 MB native recognizer synchronously in Electron main; repository search and some helper/network paths lack complete cancellation and deadlines.
 4. **Renderer scaling costs:** streaming repeatedly copies and reparses growing strings, transcript scrolling has overlapping layout triggers, and closed or high-cardinality surfaces still do catalog/list work.
