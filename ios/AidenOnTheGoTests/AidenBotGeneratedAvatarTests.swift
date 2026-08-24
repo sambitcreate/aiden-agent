@@ -4,6 +4,33 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenBotGeneratedAvatarTests: XCTestCase {
+    func testCanonicalAvatarCacheIdentityChangesOnlyWithScopeOrAssetRevision() {
+        let original = AidenBotCanonicalAvatarCacheKey(
+            instanceID: "mac-a",
+            deviceID: "phone-a",
+            botID: "bot-a",
+            assetRevision: "avatar-1"
+        )
+        XCTAssertEqual(
+            original,
+            AidenBotCanonicalAvatarCacheKey(
+                instanceID: "mac-a",
+                deviceID: "phone-a",
+                botID: "bot-a",
+                assetRevision: "avatar-1"
+            )
+        )
+        XCTAssertNotEqual(
+            original,
+            AidenBotCanonicalAvatarCacheKey(
+                instanceID: "mac-a",
+                deviceID: "phone-a",
+                botID: "bot-a",
+                assetRevision: "avatar-2"
+            )
+        )
+    }
+
     override func setUp() {
         super.setUp()
         AidenAvatarURLProtocol.reset()

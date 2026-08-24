@@ -5,57 +5,17 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
-    func testBotComposerKeepsSendVisibleForTemporarilyUnsendableContent() {
-        XCTAssertEqual(
-            aidenBotComposerTrailingControl(
-                isStreaming: false,
-                isListening: false,
-                draft: "Testing",
-                attachmentCount: 0,
-                canSend: false
-            ),
-            .send(isEnabled: false)
-        )
-        XCTAssertEqual(
-            aidenBotComposerTrailingControl(
-                isStreaming: false,
-                isListening: false,
-                draft: "",
-                attachmentCount: 1,
-                canSend: true
-            ),
-            .send(isEnabled: true)
-        )
-        XCTAssertEqual(
-            aidenBotComposerTrailingControl(
-                isStreaming: false,
-                isListening: false,
-                draft: "   ",
-                attachmentCount: 0,
-                canSend: false
-            ),
-            .startVoiceInput
-        )
-        XCTAssertEqual(
-            aidenBotComposerTrailingControl(
-                isStreaming: true,
-                isListening: true,
-                draft: "Testing",
-                attachmentCount: 0,
-                canSend: false
-            ),
-            .stopResponse
-        )
-        XCTAssertEqual(
-            aidenBotComposerTrailingControl(
-                isStreaming: false,
-                isListening: true,
-                draft: "Testing",
-                attachmentCount: 0,
-                canSend: false
-            ),
-            .stopVoiceInput
-        )
+    func testBotBubbleTailIsOneContinuousFilledShape() {
+        let rect = CGRect(x: 0, y: 0, width: 100, height: 50)
+        let outgoing = AidenBotMessageBubbleShape(isOutgoing: true, showsTail: true)
+            .path(in: rect)
+        let incoming = AidenBotMessageBubbleShape(isOutgoing: false, showsTail: true)
+            .path(in: rect)
+
+        XCTAssertTrue(outgoing.contains(CGPoint(x: 91, y: 44)))
+        XCTAssertTrue(outgoing.contains(CGPoint(x: 96, y: 48)))
+        XCTAssertTrue(incoming.contains(CGPoint(x: 9, y: 44)))
+        XCTAssertTrue(incoming.contains(CGPoint(x: 4, y: 48)))
     }
 
     func testBotMessageGroupingOnlyJoinsNearbyMessagesFromTheSameSpeaker() {

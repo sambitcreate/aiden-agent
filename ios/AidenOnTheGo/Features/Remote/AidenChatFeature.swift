@@ -503,27 +503,6 @@ enum AidenChatPresentationStyle: Equatable {
     }
 }
 
-enum AidenBotComposerTrailingControl: Equatable {
-    case stopResponse
-    case stopVoiceInput
-    case send(isEnabled: Bool)
-    case startVoiceInput
-}
-
-func aidenBotComposerTrailingControl(
-    isStreaming: Bool,
-    isListening: Bool,
-    draft: String,
-    attachmentCount: Int,
-    canSend: Bool
-) -> AidenBotComposerTrailingControl {
-    if isStreaming { return .stopResponse }
-    if isListening { return .stopVoiceInput }
-    let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || attachmentCount > 0
-    return hasContent ? .send(isEnabled: canSend) : .startVoiceInput
-}
-
 func aidenMessagesJoin(
     _ previous: AidenChatMessage?,
     _ message: AidenChatMessage,
@@ -544,6 +523,14 @@ struct AidenBotMessageBubbleShape: Shape {
     let showsTail: Bool
 
     func path(in rect: CGRect) -> Path {
+        guard showsTail else {
+            return Path(
+                roundedRect: rect,
+                cornerRadius: 18,
+                style: .continuous
+            )
+        }
+
         let tailWidth: CGFloat = showsTail ? 7 : 0
         let body = CGRect(
             x: isOutgoing ? rect.minX : rect.minX + tailWidth,
@@ -551,40 +538,66 @@ struct AidenBotMessageBubbleShape: Shape {
             width: rect.width - tailWidth,
             height: rect.height
         )
-        var path = Path(
-            roundedRect: body,
-            cornerRadius: 18,
-            style: .continuous
-        )
-        guard showsTail else { return path }
-
-        var tail = Path()
+        let radius = min(18, body.width / 2, body.height / 2)
+        var path = Path()
         if isOutgoing {
-            tail.move(to: CGPoint(x: body.maxX - 10, y: body.maxY - 4))
-            tail.addCurve(
+            path.move(to: CGPoint(x: body.minX + radius, y: body.minY))
+            path.addLine(to: CGPoint(x: body.maxX - radius, y: body.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: body.maxX, y: body.minY + radius),
+                control: CGPoint(x: body.maxX, y: body.minY)
+            )
+            path.addLine(to: CGPoint(x: body.maxX, y: body.maxY - 13))
+            path.addCurve(
                 to: CGPoint(x: rect.maxX, y: rect.maxY),
-                control1: CGPoint(x: body.maxX - 2, y: body.maxY - 2),
+                control1: CGPoint(x: body.maxX, y: body.maxY - 6),
                 control2: CGPoint(x: rect.maxX - 2, y: rect.maxY - 1)
             )
-            tail.addCurve(
-                to: CGPoint(x: body.maxX - 1, y: body.maxY - 13),
-                control1: CGPoint(x: rect.maxX - 5, y: rect.maxY - 5),
-                control2: CGPoint(x: body.maxX, y: body.maxY - 9)
+            path.addCurve(
+                to: CGPoint(x: body.maxX - 14, y: body.maxY),
+                control1: CGPoint(x: rect.maxX - 5, y: rect.maxY - 2),
+                control2: CGPoint(x: body.maxX - 7, y: body.maxY)
+            )
+            path.addLine(to: CGPoint(x: body.minX + radius, y: body.maxY))
+            path.addQuadCurve(
+                to: CGPoint(x: body.minX, y: body.maxY - radius),
+                control: CGPoint(x: body.minX, y: body.maxY)
+            )
+            path.addLine(to: CGPoint(x: body.minX, y: body.minY + radius))
+            path.addQuadCurve(
+                to: CGPoint(x: body.minX + radius, y: body.minY),
+                control: CGPoint(x: body.minX, y: body.minY)
             )
         } else {
-            tail.move(to: CGPoint(x: body.minX + 10, y: body.maxY - 4))
-            tail.addCurve(
+            path.move(to: CGPoint(x: body.maxX - radius, y: body.minY))
+            path.addLine(to: CGPoint(x: body.minX + radius, y: body.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: body.minX, y: body.minY + radius),
+                control: CGPoint(x: body.minX, y: body.minY)
+            )
+            path.addLine(to: CGPoint(x: body.minX, y: body.maxY - 13))
+            path.addCurve(
                 to: CGPoint(x: rect.minX, y: rect.maxY),
-                control1: CGPoint(x: body.minX + 2, y: body.maxY - 2),
+                control1: CGPoint(x: body.minX, y: body.maxY - 6),
                 control2: CGPoint(x: rect.minX + 2, y: rect.maxY - 1)
             )
-            tail.addCurve(
-                to: CGPoint(x: body.minX + 1, y: body.maxY - 13),
-                control1: CGPoint(x: rect.minX + 5, y: rect.maxY - 5),
-                control2: CGPoint(x: body.minX, y: body.maxY - 9)
+            path.addCurve(
+                to: CGPoint(x: body.minX + 14, y: body.maxY),
+                control1: CGPoint(x: rect.minX + 5, y: rect.maxY - 2),
+                control2: CGPoint(x: body.minX + 7, y: body.maxY)
+            )
+            path.addLine(to: CGPoint(x: body.maxX - radius, y: body.maxY))
+            path.addQuadCurve(
+                to: CGPoint(x: body.maxX, y: body.maxY - radius),
+                control: CGPoint(x: body.maxX, y: body.maxY)
+            )
+            path.addLine(to: CGPoint(x: body.maxX, y: body.minY + radius))
+            path.addQuadCurve(
+                to: CGPoint(x: body.maxX - radius, y: body.minY),
+                control: CGPoint(x: body.maxX, y: body.minY)
             )
         }
-        path.addPath(tail)
+        path.closeSubpath()
         return path
     }
 }
@@ -3799,10 +3812,7 @@ private struct AidenComposerView: View {
                 .accessibilityLabel("Attachments")
             }
 
-            if model.chat.isBotChat {
-                botMessageControls
-            } else {
-                TextField("Message Aiden", text: $model.draft, axis: .vertical)
+            TextField("Message Aiden", text: $model.draft, axis: .vertical)
                     .lineLimit(1...6)
                     .padding(.horizontal, 4)
                     .padding(.top, 5)
@@ -3981,7 +3991,6 @@ private struct AidenComposerView: View {
                     .disabled(!model.canSend)
                     .accessibilityLabel("Send message")
                 }
-                }
             }
 
             if let error = voiceInput.errorMessage, !voiceInput.isListening {
@@ -3990,21 +3999,15 @@ private struct AidenComposerView: View {
                     .foregroundStyle(.red)
             }
         }
-        .padding(.horizontal, model.chat.isBotChat ? 0 : 12)
-        .padding(.top, model.chat.isBotChat ? 2 : 8)
-        .padding(.bottom, model.chat.isBotChat ? 0 : 4)
-        .aidenComposerGlass(enabled: !model.chat.isBotChat)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .aidenComposerGlass()
         .overlay {
-            if !model.chat.isBotChat {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(palette.secondary.opacity(0.35), lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(palette.secondary.opacity(0.35), lineWidth: 0.5)
         }
-        .shadow(
-            color: model.chat.isBotChat ? .clear : .black.opacity(0.12),
-            radius: model.chat.isBotChat ? 0 : 14,
-            y: model.chat.isBotChat ? 0 : 6
-        )
+        .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
         .task {
             guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
@@ -4091,117 +4094,6 @@ private struct AidenComposerView: View {
             attachmentPreparationTask?.cancel()
             attachmentPreparationTask = nil
             isPreparingAttachments = false
-        }
-    }
-
-    private var botMessageControls: some View {
-        HStack(alignment: .bottom, spacing: 7) {
-            AidenUIKitMenuButton {
-                if model.isUploadingAttachment || isPreparingAttachments {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 44, height: 44)
-                } else {
-                    Image(systemName: "plus")
-                        .font(.title3.weight(.medium))
-                        .frame(width: 44, height: 44)
-                }
-            } menu: {
-                attachmentMenu()
-            }
-            .disabled(
-                !model.isConnected || model.isStreaming || model.isUploadingAttachment
-                    || isPreparingAttachments || model.pendingAttachments.count >= 10
-            )
-            .aidenBotComposerCircle()
-            .accessibilityLabel("Add attachment")
-            .accessibilityHint("Attach an image or bounded text file")
-            .photosPicker(
-                isPresented: $isPhotoPickerPresented,
-                selection: $selectedPhotos,
-                maxSelectionCount: max(1, attachmentCapacity),
-                matching: .images
-            )
-
-            HStack(alignment: .bottom, spacing: 4) {
-                TextField("Message \(model.chat.title)", text: $model.draft, axis: .vertical)
-                    .lineLimit(1...5)
-                    .focused(composerFocus)
-                    .submitLabel(.send)
-                    .padding(.leading, 6)
-                    .padding(.vertical, 7)
-                    .onSubmit {
-                        guard !model.isStreaming else { return }
-                        voiceInput.stopBeforeSubmittingDraft()
-                        Task { await model.send() }
-                    }
-
-                switch aidenBotComposerTrailingControl(
-                    isStreaming: model.isStreaming,
-                    isListening: voiceInput.isListening,
-                    draft: model.draft,
-                    attachmentCount: model.pendingAttachments.count,
-                    canSend: model.canSend
-                ) {
-                case .stopResponse:
-                    Button { Task { await model.stop() } } label: {
-                        Image(systemName: "stop.fill")
-                            .frame(width: 30, height: 30)
-                            .background(palette.foreground, in: Circle())
-                            .foregroundStyle(palette.canvas)
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.isReadOnlyPresentation)
-                    .accessibilityLabel("Stop response")
-                case .stopVoiceInput:
-                    Button {
-                        Task {
-                            await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
-                        }
-                    } label: {
-                        AidenListeningWaveform(isAnimated: !reduceMotion)
-                            .frame(width: 44, height: 44)
-                    }
-                    .disabled(model.isReadOnlyPresentation || voiceInput.isRequestingPermission)
-                    .accessibilityLabel("Stop voice input")
-                case let .send(isEnabled):
-                    Button {
-                        voiceInput.stopBeforeSubmittingDraft()
-                        Task { await model.send() }
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.headline.bold())
-                            .frame(width: 30, height: 30)
-                            .background(sendButtonBackground, in: Circle())
-                            .foregroundStyle(sendButtonForeground)
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!isEnabled)
-                    .accessibilityLabel("Send message")
-                case .startVoiceInput:
-                    Button {
-                        Task {
-                            guard !model.isReadOnlyPresentation else { return }
-                            await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
-                        }
-                    } label: {
-                        Image(systemName: "mic")
-                            .font(.body.weight(.medium))
-                        .frame(width: 44, height: 44)
-                    }
-                    .disabled(
-                        model.isReadOnlyPresentation
-                            || voiceInput.isRequestingPermission
-                    )
-                    .accessibilityLabel("Start voice input")
-                }
-            }
-            .padding(.leading, 6)
-            .padding(.trailing, 2)
-            .frame(minHeight: 44)
-            .aidenBotComposerCapsule()
         }
     }
 
@@ -4422,46 +4314,6 @@ private struct AidenComposerGlassModifier: ViewModifier {
 private extension View {
     func aidenComposerGlass(enabled: Bool = true) -> some View {
         modifier(AidenComposerGlassModifier(enabled: enabled))
-    }
-
-    func aidenBotComposerCircle() -> some View {
-        modifier(AidenBotComposerCircleModifier())
-    }
-
-    func aidenBotComposerCapsule() -> some View {
-        modifier(AidenBotComposerCapsuleModifier())
-    }
-}
-
-private struct AidenBotComposerCircleModifier: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.aidenPalette) private var palette
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(palette.raised, in: Circle())
-        } else {
-            content
-                .background(.regularMaterial, in: Circle())
-                .overlay(Circle().stroke(palette.foreground.opacity(0.12), lineWidth: 0.5))
-        }
-    }
-}
-
-private struct AidenBotComposerCapsuleModifier: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.aidenPalette) private var palette
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(palette.raised, in: Capsule())
-        } else {
-            content
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().stroke(palette.foreground.opacity(0.12), lineWidth: 0.5))
-        }
     }
 }
 

@@ -34,6 +34,7 @@ Date: August 23, 2026
 - Independent post-fix source-and-test re-review: no remaining P0/P1 findings; focused integrated review gates passed 121/121.
 - Contact-flow shipping-source checks and Bot message-grouping XCTest coverage: passed on August 23, 2026.
 - Final contact-flow selection on the physical iPhone 13 Pro passed the Bot contract, shared-chat, and product-shell suites, including stale optimistic-favorite fencing, one-section-per-Bot projection, and content-aware send/microphone behavior. The signed build was installed and visually checked against the supplied Messages geometry while retaining Aiden's prior composer spacing.
+- Follow-up physical acceptance restored the complete pre-flow shared Aiden composer from `68e13c877`, replaced the overlapping two-path bubble tail with one continuous filled outline, and added a bounded decoded-avatar cache keyed by installation, device, Bot, and immutable asset revision. The focused shared-chat and generated-avatar selection passed 76/76 tests on the iPhone 13 Pro.
 
 Physical XCTest result bundle:
 

@@ -1075,6 +1075,45 @@ private struct AidenBotCanonicalAvatarLoadIdentity: Equatable {
     }
 }
 
+struct AidenBotCanonicalAvatarCacheKey: Hashable {
+    let instanceID: String
+    let deviceID: String
+    let botID: String
+    let assetRevision: String
+}
+
+/// Keeps already-decoded canonical photos stable across SwiftUI view
+/// reconstruction. The immutable asset revision is part of the key, so an
+/// avatar changes only when the Mac publishes a new canonical revision.
+@MainActor
+private final class AidenBotCanonicalAvatarMemoryCache {
+    static let shared = AidenBotCanonicalAvatarMemoryCache()
+
+    private let maximumCount = 64
+    private var images: [AidenBotCanonicalAvatarCacheKey: UIImage] = [:]
+    private var recency: [AidenBotCanonicalAvatarCacheKey] = []
+
+    func image(for key: AidenBotCanonicalAvatarCacheKey) -> UIImage? {
+        guard let image = images[key] else { return nil }
+        touch(key)
+        return image
+    }
+
+    func insert(_ image: UIImage, for key: AidenBotCanonicalAvatarCacheKey) {
+        images[key] = image
+        touch(key)
+        while recency.count > maximumCount, let oldest = recency.first {
+            recency.removeFirst()
+            images.removeValue(forKey: oldest)
+        }
+    }
+
+    private func touch(_ key: AidenBotCanonicalAvatarCacheKey) {
+        recency.removeAll { $0 == key }
+        recency.append(key)
+    }
+}
+
 /// Drop-in avatar renderer for Bot home/profile/chat rows. It paints the
 /// semantic identity immediately, then overlays only canonical bytes scoped to
 /// the exact installation, pairing device, Bot, and immutable asset revision.
@@ -1087,6 +1126,7 @@ struct AidenBotCanonicalAvatarView: View {
     var isDecorative = true
 
     @State private var canonicalImage: UIImage?
+    @State private var loadedCacheKey: AidenBotCanonicalAvatarCacheKey?
 
     private var loadIdentity: AidenBotCanonicalAvatarLoadIdentity {
         AidenBotCanonicalAvatarLoadIdentity(
@@ -1118,22 +1158,43 @@ struct AidenBotCanonicalAvatarView: View {
         .task(id: loadIdentity) {
             await loadCanonicalImage(expected: loadIdentity)
         }
-        .onDisappear { canonicalImage = nil }
     }
 
     @MainActor
     private func loadCanonicalImage(expected: AidenBotCanonicalAvatarLoadIdentity) async {
-        canonicalImage = nil
         guard let asset = avatar.asset,
               let instanceID = expected.instanceID,
-              let deviceID = expected.deviceID else { return }
+              let deviceID = expected.deviceID else {
+            canonicalImage = nil
+            loadedCacheKey = nil
+            return
+        }
+        let cacheKey = AidenBotCanonicalAvatarCacheKey(
+            instanceID: instanceID,
+            deviceID: deviceID,
+            botID: botID,
+            assetRevision: asset.assetRevision
+        )
+        if loadedCacheKey == cacheKey, canonicalImage != nil { return }
+        if let cachedImage = AidenBotCanonicalAvatarMemoryCache.shared.image(for: cacheKey) {
+            canonicalImage = cachedImage
+            loadedCacheKey = cacheKey
+            return
+        }
+        if loadedCacheKey != cacheKey {
+            canonicalImage = nil
+            loadedCacheKey = nil
+        }
         if let cached = await AidenBotCache.shared.avatar(
             instanceId: instanceID,
             deviceId: deviceID,
             botId: botID,
             assetRevision: asset.assetRevision
-        ), loadIdentity == expected, !Task.isCancelled {
-            canonicalImage = UIImage(data: cached)
+        ), loadIdentity == expected, !Task.isCancelled,
+           let image = UIImage(data: cached) {
+            AidenBotCanonicalAvatarMemoryCache.shared.insert(image, for: cacheKey)
+            canonicalImage = image
+            loadedCacheKey = cacheKey
             return
         }
         guard expected.connection == "connected" else { return }
@@ -1150,7 +1211,9 @@ struct AidenBotCanonicalAvatarView: View {
                   content.data.count == asset.byteSize,
                   coordinator.isCurrent(captured), loadIdentity == expected,
                   !Task.isCancelled, let image = UIImage(data: content.data) else { return }
+            AidenBotCanonicalAvatarMemoryCache.shared.insert(image, for: cacheKey)
             canonicalImage = image
+            loadedCacheKey = cacheKey
             _ = await coordinator.withRetainedInstallationData(for: captured) {
                 _ = try? await AidenBotCache.shared.storeAvatar(
                     content,
@@ -1161,6 +1224,7 @@ struct AidenBotCanonicalAvatarView: View {
             }
             guard coordinator.isCurrent(captured), loadIdentity == expected else {
                 canonicalImage = nil
+                loadedCacheKey = nil
                 return
             }
         } catch is CancellationError {
@@ -1171,6 +1235,7 @@ struct AidenBotCanonicalAvatarView: View {
             }
             guard loadIdentity == expected else { return }
             canonicalImage = nil
+            loadedCacheKey = nil
         }
     }
 }

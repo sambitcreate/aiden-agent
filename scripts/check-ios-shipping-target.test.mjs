@@ -305,6 +305,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   const botEditor = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotEditorView.swift");
   const botContract = sourceByPath.get("AidenOnTheGo/Models/AidenBot.swift");
   const botProfile = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotProfileView.swift");
+  const botAvatar = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift");
   const count = (pattern) => [...allSwift.matchAll(pattern)].length;
 
   assert.equal(count(/\bstruct\s+AidenChatDetailView\b/gu), 1);
@@ -396,13 +397,22 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   );
   assert.match(chat, /Image\(systemName: AidenChromeSymbols\.overflowMenu\)/u);
   assert.match(chat, /buttonBorderShape\(\.circle\)/u);
-  assert.ok(chat.includes('TextField("Message \\(model.chat.title)"'));
+  assert.ok(chat.includes('TextField("Message Aiden"'));
   assert.match(
     chat,
     /padding\(\.horizontal, 16\)[\s\S]*?padding\(\.bottom, 10\)/u,
   );
-  assert.match(chat, /HStack\(alignment: \.bottom, spacing: 7\)[\s\S]*?frame\(minHeight: 44\)/u);
-  assert.match(chat, /aidenBotComposerTrailingControl\([\s\S]*?case let \.send\(isEnabled\):[\s\S]*?disabled\(!isEnabled\)/u);
+  assert.match(
+    chat,
+    /TextField\("Message Aiden"[\s\S]*?HStack\(alignment: \.center, spacing: 10\)[\s\S]*?padding\(\.horizontal, 12\)[\s\S]*?aidenComposerGlass\(\)/u,
+  );
+  assert.doesNotMatch(chat, /private var botMessageControls|aidenBotComposerCapsule/u);
+  assert.match(chat, /path\.closeSubpath\(\)/u);
+  assert.match(
+    botAvatar,
+    /AidenBotCanonicalAvatarMemoryCache[\s\S]*?assetRevision[\s\S]*?loadedCacheKey == cacheKey[\s\S]*?canonicalImage != nil[\s\S]*?return/u,
+  );
+  assert.doesNotMatch(botAvatar, /\.onDisappear \{ canonicalImage = nil \}/u);
   assert.match(
     chat,
     /AidenApprovalCard\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u,
