@@ -270,7 +270,8 @@ const featureBentos: FeatureBento[] = [
     id: "vision",
     group: "extend",
     title: "Attachments & Vision",
-    description: "Attach text and images for vision-capable models to inspect in conversation.",
+    description:
+      "Attach images directly to vision models, or explicitly choose an image-understanding companion for a text-only Bot.",
     icon: Eye,
     imageUrl: FEATURE_ILLUSTRATIONS.vision,
     size: "standard",
@@ -316,7 +317,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Reusable Bots",
     description:
-      "Create reusable teammates with durable instructions, separate conversations, access controls, and Telegram control.",
+      "Create reusable teammates with durable instructions, one persistent chat, explicit image understanding, access controls, and Telegram control.",
     icon: Bot,
     imageUrl: FEATURE_ILLUSTRATIONS.bots,
     size: "standard",

@@ -40,6 +40,8 @@ import {
   type StoredBotModelAuthority,
 } from "./bot-capability-store-core.js";
 import {
+  boundBotProviderModelFingerprint,
+  parseBoundBotProviderModel,
   parseBoundBotCustomSelection,
   type BoundBotCustomSelection,
 } from "./bot-capability-bindings.js";
@@ -85,6 +87,7 @@ export interface BotCapabilityAdmission {
   chat?: StoredBotChatCapabilityPolicy;
   effectiveCustom?: import("../../renderer/shared/bot-capabilities.js").BotCustomSelection;
   modelAuthority?: StoredBotModelAuthority;
+  visionModelAuthority?: StoredBotModelAuthority;
   lease: BotCapabilityAuthorityLease;
 }
 
@@ -320,12 +323,20 @@ export class BotCapabilityStore {
     );
   }
 
+  async getBotVisionModelAuthority(botId: string): Promise<StoredBotModelAuthority | undefined> {
+    this.requireInitialized();
+    return this.serialized(async () =>
+      this.editor(await this.persistence.load()).getBotVisionModelAuthority(botId),
+    );
+  }
+
   async createBotPolicy(input: {
     botId: string;
     catalog: BotCapabilityCatalog;
     access: unknown;
     binding?: unknown;
     modelBinding?: unknown;
+    visionModelBinding?: unknown;
     assertCurrent?: () => void;
   }): Promise<BotAccessView> {
     this.requireInitialized();
@@ -348,6 +359,7 @@ export class BotCapabilityStore {
     access: unknown;
     binding?: unknown;
     modelBinding?: unknown;
+    visionModelBinding?: unknown;
     canonicalChatId?: string;
     assertCurrent?: () => void;
   }): Promise<BotAccessView> {
@@ -386,7 +398,19 @@ export class BotCapabilityStore {
       const narrowing = botPolicyTransitionNarrows(policy, access);
       const mayChangeFullModel =
         access.accessMode === "full" && access.providerId !== undefined;
-      if (narrowing || mayChangeFullModel) this.leases.invalidateBot(policy.botId);
+      const companionChanges = (() => {
+        if (access.visionModel === undefined) return false;
+        if (access.visionModel === null) return policy.visionModel !== undefined;
+        if (!policy.visionModel || input.visionModelBinding === undefined) return true;
+        const nextBinding = parseBoundBotProviderModel(input.visionModelBinding);
+        return policy.visionModel.selection.providerId !== access.visionModel.providerId ||
+          policy.visionModel.selection.modelId !== access.visionModel.modelId ||
+          boundBotProviderModelFingerprint(policy.visionModel.binding) !==
+            boundBotProviderModelFingerprint(nextBinding);
+      })();
+      if (narrowing || mayChangeFullModel || companionChanges) {
+        this.leases.invalidateBot(policy.botId);
+      }
       const result = await this.persistence.update((draft) => {
         input.assertCurrent?.();
         return this.editor(draft).updateBotPolicy(input);
@@ -553,7 +577,8 @@ export class BotCapabilityStore {
       const editor = this.editor(state);
       const authority = editor.assertBotMayAct(input);
       const modelAuthority = editor.getBotModelAuthority(input.botId);
-      if (authority.effectiveCustom || modelAuthority) {
+      const visionModelAuthority = editor.getBotVisionModelAuthority(input.botId);
+      if (authority.effectiveCustom || modelAuthority || visionModelAuthority) {
         if (!input.snapshot) {
           throw new BotCapabilityUnavailableError(
             "Current Bot capability bindings are required for Bot access.",
@@ -576,7 +601,12 @@ export class BotCapabilityStore {
             }
           : {}),
       });
-      return { ...authority, ...(modelAuthority ? { modelAuthority } : {}), lease };
+      return {
+        ...authority,
+        ...(modelAuthority ? { modelAuthority } : {}),
+        ...(visionModelAuthority ? { visionModelAuthority } : {}),
+        lease,
+      };
     });
   }
 

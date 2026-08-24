@@ -9,6 +9,7 @@ export type UsageRequestSource =
   | "chat"
   | "chat-title"
   | "bot-avatar"
+  | "vision"
   | "voice-transcription"
   | "scheduled"
   | "subagent"
@@ -76,6 +77,7 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "chat",
   "chat-title",
   "bot-avatar",
+  "vision",
   "voice-transcription",
   "scheduled",
   "subagent",

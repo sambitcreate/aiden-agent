@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import type { ChatMessage, ChatStartParams } from "./types.js";
+import { visionAttachmentAlias } from "./vision-attachment-reference.js";
 
 const ZERO_USAGE = {
   input: 0,
@@ -38,8 +39,18 @@ function userMessage(
         `Attached file: ${attachment.name}\n\`\`\`\n${attachment.text}\n\`\`\``,
     )
     .join("\n\n");
+  const imageReferences = supportsImages
+    ? ""
+    : attachments
+        .filter((attachment) => attachment.kind === "image" && attachment.data)
+        .map((attachment) =>
+          `Attached image reference: ${visionAttachmentAlias(attachment)} (${attachment.name}).`,
+        )
+        .join("\n");
   const combinedText = (
-    contentFirst ? [content, textPrefix] : [textPrefix, content]
+    contentFirst
+      ? [content, textPrefix, imageReferences]
+      : [textPrefix, content, imageReferences]
   )
     .filter(Boolean)
     .join("\n\n");

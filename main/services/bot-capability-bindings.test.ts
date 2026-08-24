@@ -14,10 +14,12 @@ import {
   assertBoundBotCustomSelectionOpaqueIds,
   assertBoundBotCustomSelectionCurrent,
   bindBotCustomSelection,
+  botProviderModelDrift,
   botCustomSelectionDrift,
   boundBotCustomSelectionFingerprint,
   createBotCapabilityOpaqueIdMint,
   parseBoundBotCustomSelection,
+  parseBoundBotProviderModel,
   reconcileBoundBotCustomSelection,
   withBotCapabilityTombstones,
   type BoundBotCustomSelection,
@@ -370,6 +372,20 @@ test("strict private binding reload preserves exact drift tombstones across rest
     )?.available,
     true,
   );
+});
+
+test("legacy provider bindings without image metadata do not drift after capability discovery", () => {
+  const source = inventory();
+  source.providers[0]!.models[0]!.supportsImages = true;
+  const current = snapshot(source);
+  const serialized = structuredClone(binding(current).provider) as ReturnType<
+    typeof parseBoundBotProviderModel
+  >;
+  delete serialized.modelOption.supportsImages;
+
+  const legacy = parseBoundBotProviderModel(serialized);
+  assert.equal(legacy.modelOption.supportsImages, undefined);
+  assert.deepEqual(botProviderModelDrift(legacy, current), []);
 });
 
 test("strict private binding parser rejects extras, derived-fact tampering, unsafe labels, and forged opaque ids", () => {

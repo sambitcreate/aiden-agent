@@ -88,6 +88,12 @@ test("bot editor owns access mode, model selection, and capability toggles", () 
   assert.match(view, /aria-label="AI provider for this bot"/u);
   assert.match(view, /aria-label="AI model for this bot"/u);
   assert.match(view, /Credentials stay on your Mac/u);
+  assert.match(view, /Image understanding/u);
+  assert.match(view, /aria-label="Image understanding provider for this bot"/u);
+  assert.match(view, /aria-label="Image understanding model for this bot"/u);
+  assert.match(view, /The attached image and a focused question go to this provider/u);
+  assert.match(view, /No image-capable model is connected/u);
+  assert.match(view, /Settings → Providers/u);
   // Capability toggles with Full-mode disabling, matching the iOS sections.
   assert.match(view, /aria-label=\{`Allow \$\{option\.label\} for this bot`\}/u);
   assert.match(view, /aria-label="Allow run commands for this bot"/u);
@@ -128,6 +134,8 @@ test("Bot editor retries preserve only deliberate identity and access edits", ()
     usesFullAccess: false,
     providerId: "provider:a",
     modelId: "model:a",
+    visionProviderId: "provider:vision",
+    visionModelId: "model:vision",
     fileScopeIds: ["scope:home"],
     shellEnabled: false,
     connectionIds: [],
@@ -143,6 +151,20 @@ test("Bot editor retries preserve only deliberate identity and access edits", ()
   assert.deepEqual(
     rebaseBotEditorAccessDraft(userAccess, baselineAccess, authoritativeAccess),
     { ...authoritativeAccess, modelId: "model:user" },
+  );
+
+  const userVisionAccess = {
+    ...baselineAccess,
+    visionProviderId: "provider:vision-2",
+    visionModelId: "model:vision-2",
+  };
+  assert.deepEqual(
+    rebaseBotEditorAccessDraft(userVisionAccess, baselineAccess, authoritativeAccess),
+    {
+      ...authoritativeAccess,
+      visionProviderId: "provider:vision-2",
+      visionModelId: "model:vision-2",
+    },
   );
 
   const concurrentProviderChange = {

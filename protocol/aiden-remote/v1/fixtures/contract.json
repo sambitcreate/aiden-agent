@@ -1,5 +1,5 @@
 {
-  "contractRevision": 8,
+  "contractRevision": 9,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -302,6 +302,10 @@
       "providerId": "provider_fixture",
       "modelId": "model_fixture"
     },
+    "visionModelSelection": {
+      "providerId": "provider_fixture",
+      "modelId": "vision_model_fixture"
+    },
     "createdAt": "2026-08-18T17:00:00.000Z",
     "updatedAt": "2026-08-18T18:45:00.000Z",
     "revision": "bot_revision_7"
@@ -540,7 +544,18 @@
         "label": "Fixture Provider",
         "available": true,
         "models": [
-          { "id": "model_fixture", "label": "Fixture Model", "available": true }
+          {
+            "id": "model_fixture",
+            "label": "Fixture Model",
+            "available": true,
+            "supportsImages": false
+          },
+          {
+            "id": "vision_model_fixture",
+            "label": "Fixture Vision Model",
+            "available": true,
+            "supportsImages": true
+          }
         ]
       }
     ],
@@ -613,6 +628,10 @@
         "connectionIds": ["connection.calendar"],
         "skillIds": ["skill.research"],
         "otherCapabilityIds": ["capability.web"]
+      },
+      "visionModel": {
+        "providerId": "provider_fixture",
+        "modelId": "vision_model_fixture"
       }
     },
     "response": {

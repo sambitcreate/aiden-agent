@@ -316,6 +316,7 @@ test("public catalog enforces its aggregate UTF-8 byte ceiling", () => {
       id: `model_${providerIndex}_${modelIndex}`,
       label: emojiModelLabel,
       available: true,
+      supportsImages: false,
     })),
   }));
   const options = (count: number, prefix: string) =>

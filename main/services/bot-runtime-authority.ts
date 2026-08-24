@@ -15,7 +15,10 @@ import {
   type BoundBotSkill,
 } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogMainService } from "./bot-capability-catalog-main.js";
-import { retainedBotProviderForChat } from "./bot-capability-retained-provider.js";
+import {
+  retainedBotProviderForChat,
+  type BotRetainedProvider,
+} from "./bot-capability-retained-provider.js";
 import type {
   BotCapabilityCatalogSnapshot,
   BotCatalogConnectionResource,
@@ -150,6 +153,7 @@ export interface BotRuntimeEffectiveAuthority {
   }>;
   readonly catalogRevision: string;
   readonly provider: Readonly<BotRuntimeProviderAuthority>;
+  readonly visionProvider?: Readonly<BotRuntimeProviderAuthority>;
   readonly files: Readonly<BotRuntimeFileAuthority>;
   readonly shell: Readonly<{
     enabled: boolean;
@@ -181,7 +185,11 @@ type CapabilityStorePort = Pick<
   | "getBotPolicy"
   | "getChatPolicy"
   | "assertAuthorityBindingsCurrent"
->;
+> & {
+  getBotVisionModelAuthority?(
+    botId: string,
+  ): ReturnType<BotCapabilityStore["getBotVisionModelAuthority"]>;
+};
 type CatalogPort = Pick<BotCapabilityCatalogMainService, "snapshotForRuntime">;
 type ManagedWorkspacePort = Pick<BotManagedWorkspaceCore, "resolve" | "revalidate">;
 
@@ -403,6 +411,9 @@ function buildAuthority(input: {
     },
     catalogRevision: snapshot.catalog.revision,
     provider,
+    ...(admission.visionModelAuthority
+      ? { visionProvider: providerAuthority(admission.visionModelAuthority.binding) }
+      : {}),
     files,
     shell,
     connections,
@@ -464,6 +475,23 @@ async function retainedBinding(
   return binding ? [binding] : undefined;
 }
 
+async function retainedProviders(
+  deps: BotRuntimeAuthorityDependencies,
+  botId: string,
+  chat: Chat,
+): Promise<readonly BotRetainedProvider[]> {
+  const vision = await deps.capabilityStore.getBotVisionModelAuthority?.(botId);
+  return [
+    ...retainedBotProviderForChat(chat),
+    ...(vision
+      ? [{
+          sourceProviderId: vision.binding.sourceProviderId,
+          sourceModelId: vision.binding.sourceModelId,
+        }]
+      : []),
+  ];
+}
+
 /** Main-owned turn/effect admission resolver. This service must never be exposed over IPC. */
 export class BotRuntimeAuthorityResolver {
   constructor(private readonly deps: BotRuntimeAuthorityDependencies) {}
@@ -492,7 +520,7 @@ export class BotRuntimeAuthorityResolver {
         snapshot = await this.deps.catalog.snapshotForRuntime({
           botId: input.botId,
           retainedBindings: await retainedBinding(this.deps, input.botId),
-          retainedProviders: retainedBotProviderForChat(chat),
+          retainedProviders: await retainedProviders(this.deps, input.botId, chat),
         });
       } catch {
         fail("capability_changed");
@@ -559,7 +587,7 @@ export class BotRuntimeAuthorityResolver {
             const currentSnapshot = await this.deps.catalog.snapshotForRuntime({
               botId: input.botId,
               retainedBindings: await retainedBinding(this.deps, input.botId),
-              retainedProviders: retainedBotProviderForChat(current.chat),
+              retainedProviders: await retainedProviders(this.deps, input.botId, current.chat),
             });
             if (currentSnapshot.catalog.revision !== authority.catalogRevision) {
               fail("capability_changed");

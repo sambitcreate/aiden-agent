@@ -49,7 +49,7 @@ export interface BotTurnAuthorityPreflightInput {
  */
 export async function preflightBotTurnAuthority(
   input: Readonly<BotTurnAuthorityPreflightInput>,
-): Promise<void> {
+): Promise<{ supportsCompanionImages: boolean }> {
   const admission = await botRuntimeAuthority.admit({
     audienceId: input.audienceId,
     botId: input.botId,
@@ -61,6 +61,7 @@ export async function preflightBotTurnAuthority(
       model: input.model,
     });
     await admission.revalidateBeforeEffect();
+    return { supportsCompanionImages: admission.authority.visionProvider !== undefined };
   } finally {
     admission.release();
   }
@@ -68,7 +69,10 @@ export async function preflightBotTurnAuthority(
 
 /** Fresh exact resource snapshot used only for main-owned runtime joins. */
 export async function resolveBotRuntimeCatalogSnapshot(
-  authority: Pick<BotRuntimeEffectiveAuthority, "botId" | "catalogRevision" | "provider">,
+  authority: Pick<
+    BotRuntimeEffectiveAuthority,
+    "botId" | "catalogRevision" | "provider" | "visionProvider"
+  >,
   signal?: AbortSignal,
 ) {
   await initializeBotApplicationService();
@@ -76,10 +80,18 @@ export async function resolveBotRuntimeCatalogSnapshot(
   const snapshot = await botCapabilityCatalog.snapshotForRuntime({
     botId: authority.botId,
     ...(binding ? { retainedBindings: [binding] } : {}),
-    retainedProviders: [{
-      sourceProviderId: authority.provider.sourceProviderId,
-      sourceModelId: authority.provider.sourceModelId,
-    }],
+    retainedProviders: [
+      {
+        sourceProviderId: authority.provider.sourceProviderId,
+        sourceModelId: authority.provider.sourceModelId,
+      },
+      ...(authority.visionProvider
+        ? [{
+            sourceProviderId: authority.visionProvider.sourceProviderId,
+            sourceModelId: authority.visionProvider.sourceModelId,
+          }]
+        : []),
+    ],
     signal,
   });
   if (snapshot.catalog.revision !== authority.catalogRevision) {

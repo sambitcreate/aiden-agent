@@ -105,7 +105,7 @@ export interface TelegramTurnDeps {
     chatId: string;
     providerId: string;
     model: string;
-  }): Promise<void>;
+  }): Promise<unknown>;
 }
 
 export type TelegramWorkspaceResolution =

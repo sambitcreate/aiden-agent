@@ -217,6 +217,7 @@ export type AidenRemoteBotDetail = AidenRemoteBotSummary & {
   instructions: string;
   access: AidenRemoteBotAccessView;
   modelSelection?: { providerId: string; modelId: string };
+  visionModelSelection?: { providerId: string; modelId: string };
   openingGreeting?: string;
 };
 
@@ -296,6 +297,7 @@ export interface AidenRemoteBotModelOption {
   id: string;
   label: string;
   available: boolean;
+  supportsImages: boolean;
 }
 
 export interface AidenRemoteBotProviderOption {
@@ -342,11 +344,13 @@ export type AidenRemoteBotAccessUpdateRequest =
       confirmedForeground: true;
       providerId?: string;
       modelId?: string;
+      visionModel?: { providerId: string; modelId: string } | null;
     }
   | {
       accessMode: "custom";
       catalogRevision: string;
       custom: AidenRemoteBotCustomSelection;
+      visionModel?: { providerId: string; modelId: string } | null;
     };
 
 export interface AidenRemoteBotChatAccessViewBase {
@@ -1636,6 +1640,10 @@ function parseBotProviderOption(value: unknown): AidenRemoteBotProviderOption {
         model.available,
         `Bot provider model ${index} available`,
       ),
+      supportsImages: requiredBooleanValue(
+        model.supportsImages,
+        `Bot provider model ${index} supportsImages`,
+      ),
     };
   });
   if (new Set(models.map((model) => model.id)).size !== models.length) {
@@ -2002,6 +2010,18 @@ export function parseAidenRemoteBotAccessView(value: unknown): AidenRemoteBotAcc
     : { ...base, accessMode };
 }
 
+function parseRemoteNullableModelSelection(
+  value: unknown,
+): { providerId: string; modelId: string } | null {
+  if (value === null) return null;
+  if (!isRecord(value)) throw new Error("Bot companion vision model must be an object or null.");
+  assertExactKeys(value, ["providerId", "modelId"], "Bot companion vision model");
+  return {
+    providerId: boundedOpaqueSelectionId(value.providerId, "Bot companion providerId"),
+    modelId: boundedText(value.modelId, "Bot companion modelId", 512),
+  };
+}
+
 export function parseAidenRemoteBotDetail(value: unknown): AidenRemoteBotDetail {
   if (!isRecord(value)) throw new Error("Bot detail must be an object.");
   const summary = parseAidenRemoteBotSummary(value);
@@ -2020,6 +2040,19 @@ export function parseAidenRemoteBotDetail(value: unknown): AidenRemoteBotDetail 
             return {
               providerId: boundedText(selection.providerId, "Bot model providerId", 256),
               modelId: boundedText(selection.modelId, "Bot model modelId", 512),
+            };
+          })(),
+        }
+      : {}),
+    ...(hasOwn(value, "visionModelSelection")
+      ? {
+          visionModelSelection: (() => {
+            const selection = value.visionModelSelection;
+            if (!isRecord(selection)) throw new Error("Bot vision model selection must be an object.");
+            assertExactKeys(selection, ["providerId", "modelId"], "Bot vision model selection");
+            return {
+              providerId: boundedText(selection.providerId, "Bot vision providerId", 256),
+              modelId: boundedText(selection.modelId, "Bot vision modelId", 512),
             };
           })(),
         }
@@ -2046,7 +2079,14 @@ export function parseAidenRemoteBotAccessUpdateRequest(
     const hasModelId = hasOwn(value, "modelId");
     assertExactKeys(
       value,
-      ["accessMode", "catalogRevision", "confirmedForeground", "providerId", "modelId"],
+      [
+        "accessMode",
+        "catalogRevision",
+        "confirmedForeground",
+        "providerId",
+        "modelId",
+        "visionModel",
+      ],
       "Full Bot access update",
     );
     if (value.confirmedForeground !== true || hasProviderId !== hasModelId) {
@@ -2065,12 +2105,15 @@ export function parseAidenRemoteBotAccessUpdateRequest(
             modelId: boundedText(value.modelId, "Full Bot modelId", 512),
           }
         : {}),
+      ...(hasOwn(value, "visionModel")
+        ? { visionModel: parseRemoteNullableModelSelection(value.visionModel) }
+        : {}),
     };
   }
   if (value.accessMode === "custom") {
     assertExactKeys(
       value,
-      ["accessMode", "catalogRevision", "custom"],
+      ["accessMode", "catalogRevision", "custom", "visionModel"],
       "Custom Bot access update",
     );
     return {
@@ -2080,6 +2123,9 @@ export function parseAidenRemoteBotAccessUpdateRequest(
         "Custom Bot access catalogRevision",
       ),
       custom: parseBotCustomSelection(value.custom, true),
+      ...(hasOwn(value, "visionModel")
+        ? { visionModel: parseRemoteNullableModelSelection(value.visionModel) }
+        : {}),
     };
   }
   throw new Error("Bot access update mode is invalid.");

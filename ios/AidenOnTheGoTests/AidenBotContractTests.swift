@@ -454,7 +454,7 @@ final class AidenBotContractTests: XCTestCase {
 
     func testSharedFixtureBindsRevisionPairingAndInstallationIdentity() throws {
         var futureFixture = try sharedFixtureObject()
-        futureFixture["contractRevision"] = 8
+        futureFixture["contractRevision"] = 9
         XCTAssertNoThrow(
             try AidenRemoteJSONDecoder.decode(
                 AidenRemoteContractFixture.self,
@@ -707,7 +707,7 @@ final class AidenBotContractTests: XCTestCase {
           }
         }
         """#.utf8)
-        guard case let .custom(catalogRevision, selection) = try AidenRemoteJSONDecoder.decode(
+        guard case let .custom(catalogRevision, selection, visionSelection) = try AidenRemoteJSONDecoder.decode(
             AidenBotAccessUpdate.self,
             from: custom
         ) else {
@@ -715,6 +715,7 @@ final class AidenBotContractTests: XCTestCase {
         }
         XCTAssertEqual(catalogRevision, "catalog_revision")
         XCTAssertFalse(selection.shellEnabled)
+        XCTAssertNil(visionSelection)
 
         let nestedExtra = Data(#"""
         {
@@ -1444,7 +1445,12 @@ final class AidenBotContractTests: XCTestCase {
 
     func testCatalogEnforces512AggregateModelCeiling() throws {
         let models: [[String: Any]] = (0..<256).map {
-            ["id": "model_\($0)", "label": "Model \($0)", "available": true]
+            [
+                "id": "model_\($0)",
+                "label": "Model \($0)",
+                "available": true,
+                "supportsImages": false,
+            ]
         }
         let catalog: [String: Any] = [
             "revision": "catalog_revision",
@@ -1474,7 +1480,12 @@ final class AidenBotContractTests: XCTestCase {
             "id": "provider_three",
             "label": "Three",
             "available": true,
-            "models": [["id": "model_extra", "label": "Extra", "available": true]],
+            "models": [[
+                "id": "model_extra",
+                "label": "Extra",
+                "available": true,
+                "supportsImages": false,
+            ]],
         ])
         oversizedCatalog["providers"] = providers
         XCTAssertThrowsError(
@@ -1552,6 +1563,7 @@ final class AidenBotContractTests: XCTestCase {
                     "id": "model_tombstone",
                     "label": "Unavailable model",
                     "available": false,
+                    "supportsImages": false,
                 ]],
             ])
             catalog["providers"] = providers
@@ -1754,11 +1766,12 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertEqual(request.openingGreeting, "What should we investigate?")
         XCTAssertEqual(request.instructions, "Verify important claims before answering.")
         XCTAssertEqual(request.avatar, .recipe(AidenBotEditorDraft.defaultAvatar))
-        guard case let .custom(revision, selection) = request.access else {
+        guard case let .custom(revision, selection, visionSelection) = request.access else {
             return XCTFail("Customize First must create a Custom Bot")
         }
         XCTAssertEqual(revision, fixture.botCapabilityCatalog.revision)
         XCTAssertTrue(fixture.botCapabilityCatalog.containsAvailable(selection))
+        XCTAssertEqual(visionSelection, fixture.botDetail.visionModelSelection)
     }
 
     func testBotEditorIdentityDraftDoesNotCreateEmptyPatch() throws {
@@ -1783,7 +1796,12 @@ final class AidenBotContractTests: XCTestCase {
         var providers = try XCTUnwrap(catalog["providers"] as? [[String: Any]])
         var provider = try XCTUnwrap(providers.first)
         var models = try XCTUnwrap(provider["models"] as? [[String: Any]])
-        models.append(["id": "model_fixture_2", "label": "Fixture Model 2", "available": true])
+        models.append([
+            "id": "model_fixture_2",
+            "label": "Fixture Model 2",
+            "available": true,
+            "supportsImages": true,
+        ])
         provider["models"] = models
         providers[0] = provider
         catalog["providers"] = providers
@@ -1814,11 +1832,12 @@ final class AidenBotContractTests: XCTestCase {
             comparedTo: fixture.botDetail,
             catalog: fixture.botCapabilityCatalog
         ))
-        guard case let .full(_, selection) = try draft.accessUpdate(catalog: fixture.botCapabilityCatalog) else {
+        guard case let .full(_, selection, visionSelection) = try draft.accessUpdate(catalog: fixture.botCapabilityCatalog) else {
             return XCTFail("Full Access must carry the model selected in Edit Bot")
         }
         XCTAssertEqual(selection?.providerId, "provider_fixture")
         XCTAssertEqual(selection?.modelId, "model_fixture_2")
+        XCTAssertNil(visionSelection)
     }
 
     func testBotEditorConflictRebasePreservesOnlyUserEditedFields() throws {
@@ -1829,7 +1848,12 @@ final class AidenBotContractTests: XCTestCase {
         var providers = try XCTUnwrap(originalCatalog["providers"] as? [[String: Any]])
         var provider = try XCTUnwrap(providers.first)
         var models = try XCTUnwrap(provider["models"] as? [[String: Any]])
-        models.append(["id": "model_fixture_2", "label": "Fixture Model 2", "available": true])
+        models.append([
+            "id": "model_fixture_2",
+            "label": "Fixture Model 2",
+            "available": true,
+            "supportsImages": true,
+        ])
         provider["models"] = models
         providers[0] = provider
         originalCatalog["providers"] = providers

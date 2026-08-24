@@ -1527,7 +1527,7 @@ struct AidenRemoteContractFixture: Decodable {
                 guard response.access.accessMode == .full else {
                     throw AidenBotContractError.invalidCombination("bot create access fixture")
                 }
-            case let .custom(_, selection):
+            case let .custom(_, selection, _):
                 guard response.access.accessMode == .custom,
                       let responseSelection = response.access.custom,
                       aidenBotSelectionsSemanticallyEqual(selection, responseSelection) else {
@@ -1554,7 +1554,7 @@ struct AidenRemoteContractFixture: Decodable {
                 guard response.accessMode == .full else {
                     throw AidenBotContractError.invalidCombination("bot policy fixture")
                 }
-            case let .custom(_, selection):
+            case let .custom(_, selection, _):
                 guard response.accessMode == .custom,
                       let responseSelection = response.custom,
                       aidenBotSelectionsSemanticallyEqual(selection, responseSelection) else {
@@ -1714,7 +1714,7 @@ struct AidenRemoteContractFixture: Decodable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         contractRevision = try values.decode(Int.self, forKey: .contractRevision)
-        guard contractRevision >= 8 else {
+        guard contractRevision >= 9 else {
             throw AidenBotContractError.invalidCombination("contract revision")
         }
         protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)

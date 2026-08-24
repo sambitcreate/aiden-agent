@@ -1100,6 +1100,10 @@ final class AidenRemoteClientTests: XCTestCase {
 
     @MainActor
     func testBotChatToolsNarrowAccessReconcileFilesAndRevokeWithinExactGrant() async throws {
+        let cacheRoot = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-bot-chat-tools-cache-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let botCache = AidenBotCache(root: cacheRoot)
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
         let exchange = makeExchange(
@@ -1222,11 +1226,18 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
 
-        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID)
+        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, cache: botCache)
         await tools.load(coordinator: coordinator)
         XCTAssertEqual(tools.access?.mode, .inherit)
         XCTAssertFalse(tools.isDirty)
         XCTAssertTrue(tools.hasFiles)
+        let cachedAfterRefresh = await botCache.load(
+            instanceId: "instance-bot-tools",
+            deviceId: "device-bot-tools"
+        )
+        XCTAssertEqual(cachedAfterRefresh?.details.first?.visionModelSelection,
+                       tools.bot?.visionModelSelection)
+        XCTAssertEqual(cachedAfterRefresh?.catalog, tools.catalog)
 
         tools.draft?.mode = .custom
         tools.draft?.skillIDs.removeAll()
@@ -1311,6 +1322,8 @@ final class AidenRemoteClientTests: XCTestCase {
         let refreshedAfterOrdinaryFailure = await tools.refresh(coordinator: coordinator)
         XCTAssertFalse(refreshedAfterOrdinaryFailure)
         XCTAssertNil(tools.access, "A failed authoritative refresh must not keep displaying stale Access.")
+        XCTAssertNotNil(tools.bot, "A failed refresh should retain device-scoped cached Bot capability state.")
+        XCTAssertNotNil(tools.catalog, "A failed refresh should retain the cached model capability catalog.")
         XCTAssertNotNil(store.activeInstallation)
         failBotLoad = false
         await tools.load(coordinator: coordinator)

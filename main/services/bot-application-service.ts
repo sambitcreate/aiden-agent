@@ -89,7 +89,7 @@ type CapabilityStorePort = Pick<
   | "rollbackUncommittedBotPolicy"
   | "invalidateBotAuthority"
   | "invalidateChatAuthority"
->;
+> & Partial<Pick<BotCapabilityStore, "getBotVisionModelAuthority">>;
 
 type ManagedWorkspacePort = Pick<
   BotManagedWorkspaceCore,
@@ -110,7 +110,7 @@ type LifecycleJournalPort = Pick<
 type CatalogPort = Pick<
   BotCapabilityCatalogMainService,
   "snapshot" | "snapshotForRuntime" | "bindCustom"
->;
+> & Partial<Pick<BotCapabilityCatalogMainService, "bindProviderModel">>;
 
 export interface BotApplicationDependencies {
   botStore: BotStorePort;
@@ -280,6 +280,23 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     retainedProviders?: readonly BotRetainedProvider[],
   ) => deps.catalog.snapshot({ audienceId, botId, retainedProviders });
 
+  const retainedVisionProvider = async (botId: string): Promise<BotRetainedProvider[]> => {
+    const vision = await deps.capabilityStore.getBotVisionModelAuthority?.(botId);
+    return vision
+      ? [{
+          sourceProviderId: vision.binding.sourceProviderId,
+          sourceModelId: vision.binding.sourceModelId,
+        }]
+      : [];
+  };
+
+  const bindVisionModel = async (input: Parameters<BotCapabilityCatalogMainService["bindProviderModel"]>[0]) => {
+    if (!deps.catalog.bindProviderModel) {
+      throw new Error("The companion vision model binder is unavailable.");
+    }
+    return deps.catalog.bindProviderModel(input);
+  };
+
   const withInventoryLease = async <Result>(
     action: (assertCurrent: () => void) => Promise<Result>,
   ): Promise<Result> => {
@@ -377,7 +394,17 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           snapshot,
         })).provider
       : undefined;
-    return { snapshot, access, binding, modelBinding };
+    const visionModelBinding = access.visionModel
+      ? await bindVisionModel({
+          audienceId,
+          providerId: access.visionModel.providerId,
+          modelId: access.visionModel.modelId,
+          catalogRevision: access.catalogRevision,
+          requireImages: true,
+          snapshot,
+        })
+      : undefined;
+    return { snapshot, access, binding, modelBinding, visionModelBinding };
   };
 
   const createPolicy = async (
@@ -386,7 +413,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     requested?: BotAccessUpdate,
   ) => {
     return withInventoryLease(async (assertCurrent) => {
-      const { snapshot, access, binding, modelBinding } = await accessForCreate(
+      const { snapshot, access, binding, modelBinding, visionModelBinding } = await accessForCreate(
         audienceId,
         requested,
       );
@@ -397,6 +424,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         access,
         ...(binding ? { binding } : {}),
         ...(modelBinding ? { modelBinding } : {}),
+        ...(visionModelBinding ? { visionModelBinding } : {}),
         assertCurrent,
       });
     });
@@ -1155,7 +1183,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           const snapshot = await snapshotForAudience(
             input.audienceId,
             input.botId,
-            currentChat ? retainedBotProviderForChat(currentChat) : undefined,
+            [
+              ...(currentChat ? retainedBotProviderForChat(currentChat) : []),
+              ...(await retainedVisionProvider(input.botId)),
+            ],
           );
           // Audience-safe IDs are revalidated against this exact fresh snapshot.
           // A stale client revision can therefore be rebased without accepting a
@@ -1190,6 +1221,17 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
                 snapshot,
               })).provider
             : undefined;
+          const visionModelBinding = access.visionModel
+            ? await bindVisionModel({
+                audienceId: input.audienceId,
+                botId: input.botId,
+                providerId: access.visionModel.providerId,
+                modelId: access.visionModel.modelId,
+                catalogRevision: access.catalogRevision,
+                requireImages: true,
+                snapshot,
+              })
+            : undefined;
           const currentModel = await deps.capabilityStore.getBotModelAuthority(input.botId);
           const selectedProvider = binding?.provider ?? modelBinding ?? currentModel?.binding;
           const needsMirror = Boolean(
@@ -1218,6 +1260,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               access,
               ...(binding ? { binding } : {}),
               ...(modelBinding ? { modelBinding } : {}),
+              ...(visionModelBinding ? { visionModelBinding } : {}),
               ...(currentChat ? { canonicalChatId: currentChat.id } : {}),
               assertCurrent,
             });
@@ -1417,10 +1460,19 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
             }
             return deps.capabilityStore.getBotBinding(botId);
           })();
+      const chat = botId === undefined ? undefined : await canonicalChatForBot(botId);
       const snapshot = await deps.catalog.snapshot({
         audienceId,
         botId,
         ...(binding ? { retainedBindings: [binding] } : {}),
+        ...(botId === undefined
+          ? {}
+          : {
+              retainedProviders: [
+                ...(chat ? retainedBotProviderForChat(chat) : []),
+                ...(await retainedVisionProvider(botId)),
+              ],
+            }),
       });
       return snapshot.catalog;
     },
@@ -1441,6 +1493,14 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       }
       void audienceId;
       return { ...authority.selection };
+    },
+
+    async visionModelSelection(audienceId: string, botId: string) {
+      await ensureOperational();
+      if (!(await deps.botStore.get(botId))) throw new Error("This Bot is no longer available.");
+      const authority = await deps.capabilityStore.getBotVisionModelAuthority?.(botId);
+      void audienceId;
+      return authority ? { ...authority.selection } : undefined;
     },
 
     async getChatAccess(chatId: string) {
