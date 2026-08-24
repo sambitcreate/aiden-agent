@@ -16,21 +16,27 @@ import { BotAvatar } from "../components/bot-avatar";
 import { BotFaceStudio } from "../components/bot-face-studio";
 import {
   Button,
+  Callout,
   Dialog,
   EmptyState,
+  Field,
+  FieldSet,
   Input,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Text,
   Textarea,
   toast,
 } from "../components/ui";
-import { botsApi } from "../lib/ipc";
+import { botsApi, type BotAccessState } from "../lib/ipc";
 import {
   queryKeys,
+  useBotAccess,
+  useBotCapabilityCatalog,
   useBotChats,
   useBots,
   useBotTelegramBinding,
@@ -43,6 +49,14 @@ import {
   type BotAvatarAppearance,
   type BotDefinition,
 } from "../shared/bots";
+import {
+  BOT_ACCESS_SUMMARIES,
+  BOT_FULL_ACCESS_NOTICE_VERSION,
+  type BotAccessUpdate,
+  type BotCapabilityCatalog,
+  type BotCapabilityOption,
+  type BotNoticeDecision,
+} from "../shared/bot-capabilities";
 
 type BotDraft = {
   name: string;
@@ -65,10 +79,154 @@ function draftFromBot(bot: BotDefinition | null): BotDraft {
       }
     : emptyDraft();
 }
+
+/** Mirrors the iOS editor draft: one model selection for Full and Custom. */
+type BotAccessDraft = {
+  usesFullAccess: boolean;
+  providerId: string | undefined;
+  modelId: string | undefined;
+  fileScopeIds: string[];
+  shellEnabled: boolean;
+  connectionIds: string[];
+  skillIds: string[];
+  otherCapabilityIds: string[];
+};
+
+function botFullAccessAccepted(catalog: BotCapabilityCatalog): boolean {
+  return catalog.notice.requiresAcknowledgement === false
+    && catalog.notice.acceptedDecision === "continue_full";
+}
+
+function firstAvailableModel(catalog: BotCapabilityCatalog) {
+  const provider = catalog.providers.find(
+    (candidate) => candidate.available && candidate.models.some((model) => model.available),
+  );
+  const model = provider?.models.find((candidate) => candidate.available);
+  return provider && model ? { providerId: provider.id, modelId: model.id } : undefined;
+}
+
+function accessDraftFromState(
+  state: BotAccessState | null | undefined,
+  catalog: BotCapabilityCatalog,
+): BotAccessDraft {
+  const fallback = firstAvailableModel(catalog);
+  const selected = state?.modelSelection
+    && catalog.providers.some((provider) =>
+      provider.id === state.modelSelection!.providerId
+      && provider.models.some((model) => model.id === state.modelSelection!.modelId))
+      ? state.modelSelection
+      : undefined;
+  return {
+    usesFullAccess: state ? state.access.accessMode === "full" : botFullAccessAccepted(catalog),
+    providerId: selected?.providerId ?? fallback?.providerId,
+    modelId: selected?.modelId ?? fallback?.modelId,
+    fileScopeIds: state?.access.custom ? [...state.access.custom.fileScopeIds] : [],
+    shellEnabled: state?.access.custom?.shellEnabled ?? false,
+    connectionIds: state?.access.custom ? [...state.access.custom.connectionIds] : [],
+    skillIds: state?.access.custom ? [...state.access.custom.skillIds] : [],
+    otherCapabilityIds: state?.access.custom ? [...state.access.custom.otherCapabilityIds] : [],
+  };
+}
+
+function buildBotAccessUpdate(
+  draft: BotAccessDraft,
+  catalog: BotCapabilityCatalog,
+): BotAccessUpdate {
+  const provider = catalog.providers.find((candidate) => candidate.id === draft.providerId);
+  const model = provider?.models.find((candidate) => candidate.id === draft.modelId);
+  if (!provider?.available || !model?.available) {
+    throw new Error("Choose an available provider and model for this bot.");
+  }
+  if (draft.usesFullAccess) {
+    if (!botFullAccessAccepted(catalog)) {
+      throw new Error("Review the Full Access notice before saving.");
+    }
+    return {
+      accessMode: "full",
+      catalogRevision: catalog.revision,
+      confirmedForeground: true,
+      providerId: provider.id,
+      modelId: model.id,
+    };
+  }
+  const assertAvailable = (options: BotCapabilityOption[], selected: string[], label: string) => {
+    for (const id of selected) {
+      if (!options.some((option) => option.id === id && option.available)) {
+        throw new Error(`A selected ${label} is no longer available. Review the access choices.`);
+      }
+    }
+  };
+  assertAvailable(catalog.fileScopes, draft.fileScopeIds, "file access");
+  assertAvailable(catalog.connections, draft.connectionIds, "connection");
+  assertAvailable(catalog.skills, draft.skillIds, "skill");
+  assertAvailable(catalog.otherCapabilities, draft.otherCapabilityIds, "capability");
+  if (draft.shellEnabled && !catalog.shellAvailable) {
+    throw new Error("Run commands is not currently available on this Mac.");
+  }
+  return {
+    accessMode: "custom",
+    catalogRevision: catalog.revision,
+    custom: {
+      providerId: provider.id,
+      modelId: model.id,
+      fileScopeIds: [...draft.fileScopeIds],
+      shellEnabled: draft.shellEnabled,
+      connectionIds: [...draft.connectionIds],
+      skillIds: [...draft.skillIds],
+      otherCapabilityIds: [...draft.otherCapabilityIds],
+    },
+  };
+}
+
+function sameIdSet(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id) => right.includes(id));
+}
+
+function botAccessDiffers(
+  update: BotAccessUpdate,
+  state: BotAccessState | null | undefined,
+): boolean {
+  if (!state) return true;
+  if (update.accessMode !== state.access.accessMode) return true;
+  if (update.accessMode === "full") {
+    return state.modelSelection?.providerId !== update.providerId
+      || state.modelSelection?.modelId !== update.modelId;
+  }
+  if (state.access.accessMode === "full") return true;
+  const current = state.access.custom;
+  const next = update.custom;
+  return current.providerId !== next.providerId
+    || current.modelId !== next.modelId
+    || current.shellEnabled !== next.shellEnabled
+    || !sameIdSet(current.fileScopeIds, next.fileScopeIds)
+    || !sameIdSet(current.connectionIds, next.connectionIds)
+    || !sameIdSet(current.skillIds, next.skillIds)
+    || !sameIdSet(current.otherCapabilityIds, next.otherCapabilityIds);
+}
+
+function botModelLabel(
+  catalog: BotCapabilityCatalog | undefined,
+  state: BotAccessState | null | undefined,
+): string | null {
+  const selection = state?.modelSelection;
+  if (!selection) return null;
+  const provider = catalog?.providers.find((candidate) => candidate.id === selection.providerId);
+  const model = provider?.models.find((candidate) => candidate.id === selection.modelId);
+  return provider && model ? `${provider.label} · ${model.label}` : null;
+}
 const botChatDateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
 });
+
+/** Wizard pages for the New/Edit Bot dialog; the last page is the review/confirm step. */
+const BOT_EDITOR_STEPS = [
+  { title: "Identity", description: "Name this bot and describe how it should work." },
+  { title: "Access", description: "Choose how much of this Mac this bot may use." },
+  { title: "Model", description: "Pick the provider and model this bot uses in every chat." },
+  { title: "Capabilities", description: "Review the files, commands, connections, and skills it may use." },
+  { title: "Review", description: "Check every choice, then confirm to save this bot." },
+] as const;
 
 function BotEditor({
   bot,
@@ -82,10 +240,46 @@ function BotEditor({
   const [draft, setDraft] = React.useState<BotDraft>(() => draftFromBot(bot));
   const [generatingAvatar, setGeneratingAvatar] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [noticing, setNoticing] = React.useState(false);
   const savingRef = React.useRef(false);
+  const catalogQuery = useBotCapabilityCatalog(true);
+  const accessQuery = useBotAccess(bot?.id);
+  const catalog = catalogQuery.data;
+  const [accessDraft, setAccessDraft] = React.useState<BotAccessDraft | null>(null);
+  const [step, setStep] = React.useState(0);
+  const pageTopRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!catalog || accessDraft) return;
+    if (bot && !accessQuery.isSuccess) return;
+    setAccessDraft(accessDraftFromState(bot ? accessQuery.data : undefined, catalog));
+  }, [catalog, accessDraft, bot, accessQuery.isSuccess, accessQuery.data]);
+
+  const acknowledgeNotice = async (decision: BotNoticeDecision) => {
+    if (!catalog || noticing) return;
+    setNoticing(true);
+    try {
+      await botsApi.acknowledgeAccessNotice({
+        version: BOT_FULL_ACCESS_NOTICE_VERSION,
+        decision,
+        confirmedForeground: true,
+      });
+      await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+      if (decision === "customize_first") {
+        setAccessDraft((current) => current ? { ...current, usesFullAccess: false } : current);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Aiden could not save your access decision.",
+      );
+    } finally {
+      setNoticing(false);
+    }
+  };
 
   const save = async () => {
     if (savingRef.current) return;
+    if (!catalog || !accessDraft) return;
     savingRef.current = true;
     setSaving(true);
     try {
@@ -98,6 +292,22 @@ function BotEditor({
       const saved = bot
         ? await botsApi.update({ id: bot.id, expectedRevision: bot.revision, ...input })
         : await botsApi.create(input);
+      // Access is a separate revisioned mutation; re-read the authoritative
+      // policy first so a fresh revision is always used.
+      const state = bot && accessQuery.data
+        ? accessQuery.data
+        : await botsApi.getBotAccess(saved.id);
+      if (!state) throw new Error("This bot’s access policy could not be read.");
+      const update = buildBotAccessUpdate(accessDraft, catalog);
+      if (botAccessDiffers(update, state)) {
+        await botsApi.updateBotAccess({
+          botId: saved.id,
+          expectedRevision: state.access.revision,
+          access: update,
+        });
+        await qc.invalidateQueries({ queryKey: queryKeys.botAccess(saved.id) });
+        await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+      }
       await qc.invalidateQueries({ queryKey: queryKeys.bots });
       qc.setQueryData(queryKeys.bot(saved.id), saved);
       onOpenChange(false);
@@ -110,22 +320,101 @@ function BotEditor({
     }
   };
 
+  const accessUnavailable = catalogQuery.isError || (!catalogQuery.isLoading && !catalog);
+  const fullAccepted = catalog ? botFullAccessAccepted(catalog) : false;
+  const selectedProvider = catalog?.providers.find(
+    (provider) => provider.id === accessDraft?.providerId,
+  );
+  const toggleId = (
+    key: "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds",
+    id: string,
+    checked: boolean,
+  ) =>
+    setAccessDraft((current) => {
+      if (!current) return current;
+      const ids = new Set(current[key]);
+      if (checked) ids.add(id);
+      else ids.delete(id);
+      return { ...current, [key]: [...ids] };
+    });
+
+  const isLastStep = step === BOT_EDITOR_STEPS.length - 1;
+  const identityReady = Boolean(draft.name.trim() && draft.instructions.trim()) && !generatingAvatar;
+  // Each page gates its own Next button; the review page re-checks everything
+  // so Confirm can never run against an incomplete draft.
+  const stepValid = [
+    identityReady,
+    Boolean(!accessUnavailable && catalog && accessDraft && !(accessDraft.usesFullAccess && !fullAccepted)),
+    Boolean(!accessUnavailable && accessDraft?.providerId && accessDraft?.modelId),
+    true,
+    identityReady && Boolean(!accessUnavailable && catalog && accessDraft),
+  ];
+  const goNext = () => {
+    if (!stepValid[step]) return;
+    setStep((current) => Math.min(current + 1, BOT_EDITOR_STEPS.length - 1));
+  };
+  React.useEffect(() => {
+    if (step === 0) return;
+    pageTopRef.current?.focus();
+  }, [step]);
+  const selectedModel = selectedProvider?.models.find(
+    (model) => model.id === accessDraft?.modelId,
+  );
+  const summaryRow = (label: string, value: string) => (
+    <div className="flex items-baseline justify-between gap-4">
+      <dt className="shrink-0 text-small text-tertiary">{label}</dt>
+      <dd className="min-w-0 truncate text-right text-small text-primary">{value}</dd>
+    </div>
+  );
+
   return (
     <Dialog
       open
       onOpenChange={onOpenChange}
       title={bot ? `Edit ${bot.name}` : "Create a bot"}
-      description="Give this Pi-powered teammate a durable identity and working style. Workspace permissions and tools still come from each conversation."
-      confirmLabel={bot ? "Save changes" : "Create bot"}
-      confirmDisabled={
-        !draft.name.trim() || !draft.instructions.trim() || generatingAvatar || saving
-      }
+      description={BOT_EDITOR_STEPS[step]!.description}
+      confirmLabel={isLastStep ? (bot ? "Save changes" : "Create bot") : "Next"}
+      confirmDisabled={saving || !stepValid[step]}
       busy={saving}
-      onConfirm={save}
+      onConfirm={isLastStep ? save : goNext}
       size="large"
     >
-      <div className="space-y-5">
-        <div className="grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
+      <div
+        key={step}
+        ref={pageTopRef}
+        tabIndex={-1}
+        className="aiden-bot-wizard-page space-y-5 pr-1 pb-2 outline-none scroll-pb-6"
+        role="group"
+        aria-label={`${BOT_EDITOR_STEPS[step]!.title} step`}
+      >
+        <div className="flex items-center justify-between gap-4">
+          {step > 0 ? (
+            <Button
+              size="small"
+              variant="transparent"
+              disabled={saving}
+              onClick={() => setStep((current) => Math.max(0, current - 1))}
+            >
+              <ArrowLeft /> Back
+            </Button>
+          ) : (
+            <span aria-hidden="true" />
+          )}
+          <div className="flex items-center gap-2" aria-hidden="true">
+            {BOT_EDITOR_STEPS.map((_candidate, index) => (
+              <span
+                key={index}
+                className={`size-2 rounded-full ${index === step ? "bg-accent" : "bg-control-hover"}`}
+              />
+            ))}
+          </div>
+          <Text as="p" variant="small" color="tertiary" className="tabular-nums" aria-live="polite">
+            Step {step + 1} of {BOT_EDITOR_STEPS.length}
+          </Text>
+        </div>
+        {step === 0 ? (
+          <>
+            <div className="grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
           <label className="block">
             <Text variant="small-strong">Name</Text>
             <Input
@@ -179,6 +468,311 @@ function BotEditor({
             }
           />
         </label>
+          </>
+        ) : null}
+
+        {step === 1 ? (
+          <>
+        {catalogQuery.isLoading || (bot && accessQuery.isLoading) ? (
+          <Text as="p" variant="small" color="secondary">
+            Loading access choices…
+          </Text>
+        ) : accessUnavailable ? (
+          <Callout title="Access choices are unavailable">
+            <div className="space-y-3">
+              <Text as="p" variant="small" color="secondary">
+                Aiden could not read this Mac’s Bot capability list, so access cannot be saved.
+              </Text>
+              <Button size="small" variant="filled" onClick={() => void catalogQuery.refetch()}>
+                Try again
+              </Button>
+            </div>
+          </Callout>
+        ) : catalog && accessDraft ? (
+          <FieldSet>
+            <Field description="Custom Access can reduce the capabilities this bot may use.">
+              <div className="flex gap-2" role="group" aria-label="Bot access mode">
+                <Button
+                  size="small"
+                  variant={accessDraft.usesFullAccess ? "accent" : "filled"}
+                  disabled={saving || (!fullAccepted && !accessDraft.usesFullAccess)}
+                  aria-pressed={accessDraft.usesFullAccess}
+                  onClick={() =>
+                    setAccessDraft((current) =>
+                      current ? { ...current, usesFullAccess: true } : current)
+                  }
+                >
+                  Full
+                </Button>
+                <Button
+                  size="small"
+                  variant={!accessDraft.usesFullAccess ? "accent" : "filled"}
+                  disabled={saving}
+                  aria-pressed={!accessDraft.usesFullAccess}
+                  onClick={() =>
+                    setAccessDraft((current) =>
+                      current ? { ...current, usesFullAccess: false } : current)
+                  }
+                >
+                  Custom
+                </Button>
+              </div>
+            </Field>
+            {accessDraft.usesFullAccess && !fullAccepted ? (
+              <Callout title="Review Full Access">
+                <div className="space-y-3">
+                  <Text as="p" variant="small" color="secondary">
+                    Full Access lets this bot use everything Aiden and your Mac currently allow,
+                    including the shell, enabled connections, and skills. Credentials stay on your
+                    Mac.
+                  </Text>
+                  <div className="flex gap-2">
+                    <Button
+                      size="small"
+                      variant="accent"
+                      disabled={noticing}
+                      onClick={() => void acknowledgeNotice("continue_full")}
+                    >
+                      Continue with Full Access
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="filled"
+                      disabled={noticing}
+                      onClick={() => void acknowledgeNotice("customize_first")}
+                    >
+                      Customize first
+                    </Button>
+                  </div>
+                </div>
+              </Callout>
+            ) : null}
+          </FieldSet>
+        ) : null}
+          </>
+        ) : null}
+
+        {step === 2 ? (
+          <>
+            {catalogQuery.isLoading || (bot && accessQuery.isLoading) ? (
+              <Text as="p" variant="small" color="secondary">
+                Loading access choices…
+              </Text>
+            ) : accessUnavailable ? (
+              <Text as="p" variant="small" color="secondary">
+                Aiden could not read this Mac’s Bot capability list yet. Go back and try again.
+              </Text>
+            ) : catalog && accessDraft ? (
+            <Field
+              orientation="vertical"
+              label="AI provider and model"
+              description="This bot uses this provider and model in every chat. Credentials stay on your Mac."
+            >
+              <div className="grid gap-3">
+                <Select
+                  value={accessDraft.providerId ?? ""}
+                  disabled={saving}
+                  onValueChange={(providerId) => {
+                    const provider = catalog.providers.find(
+                      (candidate) => candidate.id === providerId,
+                    );
+                    const model = provider?.models.find((candidate) => candidate.available);
+                    setAccessDraft((current) =>
+                      current
+                        ? { ...current, providerId, modelId: model?.id ?? current.modelId }
+                        : current);
+                  }}
+                >
+                  <SelectTrigger aria-label="AI provider for this bot">
+                    <SelectValue placeholder="Provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {catalog.providers.map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id} disabled={!provider.available}>
+                        {provider.label}
+                        {provider.available ? "" : " (unavailable)"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={accessDraft.modelId ?? ""}
+                  disabled={saving}
+                  onValueChange={(modelId) =>
+                    setAccessDraft((current) =>
+                      current ? { ...current, modelId } : current)
+                  }
+                >
+                  <SelectTrigger aria-label="AI model for this bot">
+                    <SelectValue placeholder="Model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(selectedProvider?.models ?? []).map((model) => (
+                      <SelectItem key={model.id} value={model.id} disabled={!model.available}>
+                        {model.label}
+                        {model.available ? "" : " (unavailable)"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </Field>
+            ) : null}
+          </>
+        ) : null}
+
+        {step === 3 ? (
+          <>
+            {accessDraft?.usesFullAccess ? (
+              <Text as="p" variant="small" color="secondary">
+                Full Access already allows every capability below. Switch to Custom on the Access
+                step to choose specific ones.
+              </Text>
+            ) : null}
+            {catalog && accessDraft ? (
+              <FieldSet>
+            <Field
+              orientation="vertical"
+              label="Files and commands"
+              description="Choose which files the bot may work with and whether it may run commands on this Mac."
+            >
+              <ul className="space-y-1">
+                {catalog.fileScopes
+                  .filter((option) => option.available || accessDraft.fileScopeIds.includes(option.id))
+                  .map((option) => {
+                  const selected = accessDraft.fileScopeIds.includes(option.id);
+                  return (
+                    <li
+                      key={option.id}
+                      className="flex items-center justify-between gap-4 rounded-control px-3 py-2.5"
+                    >
+                      <span className="min-w-0">
+                        <Text variant="small-strong">{option.label}</Text>
+                        {option.description ? (
+                          <Text as="p" variant="small" color="tertiary">
+                            {option.description}
+                          </Text>
+                        ) : null}
+                      </span>
+                      <Switch
+                        checked={selected}
+                        disabled={saving || accessDraft.usesFullAccess || (!option.available && !selected)}
+                        onCheckedChange={(checked) => toggleId("fileScopeIds", option.id, checked)}
+                        aria-label={`Allow ${option.label} for this bot`}
+                      />
+                    </li>
+                  );
+                })}
+                <li className="flex items-center justify-between gap-4 rounded-control px-3 py-2.5">
+                  <span className="min-w-0">
+                    <Text variant="small-strong">Run commands</Text>
+                    <Text as="p" variant="small" color="tertiary">
+                      Allows Aiden’s existing shell tool for this bot.
+                    </Text>
+                  </span>
+                  <Switch
+                    checked={accessDraft.usesFullAccess || accessDraft.shellEnabled}
+                    disabled={saving || accessDraft.usesFullAccess || (!catalog.shellAvailable && !accessDraft.shellEnabled)}
+                    onCheckedChange={(shellEnabled) =>
+                      setAccessDraft((current) =>
+                        current ? { ...current, shellEnabled } : current)
+                    }
+                    aria-label="Allow run commands for this bot"
+                  />
+                </li>
+              </ul>
+            </Field>
+            {([
+              ["Connections", "Services and accounts this bot may use.", catalog.connections, "connectionIds"],
+              ["Skills", "Aiden skills this bot may use.", catalog.skills, "skillIds"],
+              ["Other capabilities", "Additional capabilities available on this Mac.", catalog.otherCapabilities, "otherCapabilityIds"],
+            ] as const).map(([title, description, options, key]) => {
+              // Match iOS: hide unusable, unselected tombstones (e.g. skills
+              // whose metadata failed validation) instead of surfacing rows
+              // that can never be enabled.
+              const visible = options.filter(
+                (option) => option.available || accessDraft[key].includes(option.id),
+              );
+              return (
+              <Field key={title} orientation="vertical" label={title} description={description}>
+                {visible.length === 0 ? (
+                  <Text as="p" variant="small" color="tertiary">
+                    None available yet.
+                  </Text>
+                ) : (
+                  <ul className="space-y-1">
+                    {visible.map((option) => {
+                      const selected = accessDraft[key].includes(option.id);
+                      return (
+                        <li
+                          key={option.id}
+                          className="flex items-center justify-between gap-4 rounded-control px-3 py-2.5"
+                        >
+                          <span className="min-w-0">
+                            <Text variant="small-strong">{option.label}</Text>
+                            {option.description ? (
+                              <Text as="p" variant="small" color="tertiary">
+                                {option.description}
+                              </Text>
+                            ) : null}
+                          </span>
+                          <Switch
+                            checked={selected}
+                            disabled={saving || accessDraft.usesFullAccess || (!option.available && !selected)}
+                            onCheckedChange={(checked) => toggleId(key, option.id, checked)}
+                            aria-label={`Allow ${option.label} for this bot`}
+                          />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </Field>
+              );
+            })}
+              </FieldSet>
+            ) : null}
+          </>
+        ) : null}
+
+        {step === 4 && catalog && accessDraft ? (
+          <div className="space-y-4">
+            <dl className="space-y-3">
+              {summaryRow("Name", draft.name.trim())}
+              {draft.description.trim() ? summaryRow("Description", draft.description.trim()) : null}
+              {summaryRow(
+                "Access",
+                accessDraft.usesFullAccess ? "Full Access" : "Custom Access",
+              )}
+              {selectedProvider && selectedModel
+                ? summaryRow("Model", `${selectedProvider.label} · ${selectedModel.label}`)
+                : null}
+              {accessDraft.usesFullAccess
+                ? summaryRow("Capabilities", "Everything Aiden and this Mac allow")
+                : summaryRow(
+                    "Capabilities",
+                    `${accessDraft.fileScopeIds.length} file scopes · `
+                      + `${accessDraft.connectionIds.length} connections · `
+                      + `${accessDraft.skillIds.length} skills`
+                      + `${accessDraft.otherCapabilityIds.length
+                        ? ` · ${accessDraft.otherCapabilityIds.length} other`
+                        : ""}`,
+                  )}
+              {accessDraft.usesFullAccess || catalog.shellAvailable
+                ? summaryRow(
+                    "Commands",
+                    accessDraft.usesFullAccess || accessDraft.shellEnabled ? "Allowed" : "Off",
+                  )
+                : null}
+            </dl>
+            <Text as="p" variant="small" color="tertiary">
+              {bot
+                ? "Saving applies these choices to every new turn with this bot."
+                : "Creating applies these choices to every turn with this bot."}
+              {" "}Credentials stay on your Mac.
+            </Text>
+          </div>
+        ) : null}
       </div>
     </Dialog>
   );
@@ -246,6 +840,40 @@ function Roster({ bots, onCreate }: { bots: BotDefinition[]; onCreate(): void })
         ) : null,
       )}
     </div>
+  );
+}
+
+function BotAccessSummary({ botId }: { botId: string }) {
+  const accessQuery = useBotAccess(botId);
+  const catalogQuery = useBotCapabilityCatalog(true);
+  const state = accessQuery.data;
+  const model = botModelLabel(catalogQuery.data, state);
+  if (!state) return null;
+  return (
+    <section className="mt-6" aria-labelledby="bot-access-title">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Text id="bot-access-title" as="h2" variant="small-strong" color="secondary">
+          Access
+        </Text>
+        <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
+          {state.access.accessMode === "full" ? "Full Access" : "Custom Access"}
+        </span>
+        {model ? (
+          <Text as="p" variant="small" color="secondary">
+            {model}
+          </Text>
+        ) : null}
+      </div>
+      {state.access.accessMode === "custom" ? (
+        <Text as="p" variant="small" color="tertiary" className="mt-1">
+          {BOT_ACCESS_SUMMARIES.custom}
+        </Text>
+      ) : (
+        <Text as="p" variant="small" color="tertiary" className="mt-1">
+          {BOT_ACCESS_SUMMARIES.full}
+        </Text>
+      )}
+    </section>
   );
 }
 
@@ -393,6 +1021,7 @@ export function BotsView() {
                   continue work until restored.
                 </div>
               ) : null}
+              <BotAccessSummary botId={selected.id} />
               <section className="mt-10" aria-labelledby="bot-conversations-title">
                 <div className="flex items-center justify-between gap-4">
                   <div>

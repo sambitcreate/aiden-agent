@@ -60,6 +60,126 @@ test("bots UI edits definitions and creates conversations through dedicated IPC"
   assert.match(view, /maxLength=\{32_000\}/u);
 });
 
+test("bot editor owns access mode, model selection, and capability toggles", () => {
+  const view = source("./bots-view.tsx");
+  const queries = source("../lib/queries.ts");
+  // Access draft mirrors the iOS editor: one model selection for both modes.
+  assert.match(view, /type BotAccessDraft = \{/u);
+  assert.match(view, /usesFullAccess: boolean;/u);
+  assert.match(view, /function botFullAccessAccepted\(catalog/u);
+  assert.match(view, /function buildBotAccessUpdate\(/u);
+  assert.match(view, /function botAccessDiffers\(/u);
+  // Notice gating before Full Access can be saved.
+  assert.match(view, /acknowledgeAccessNotice\(\{/u);
+  assert.match(view, /decision,\s*confirmedForeground: true/u);
+  assert.match(view, /BOT_FULL_ACCESS_NOTICE_VERSION/u);
+  assert.match(view, /Continue with Full Access/u);
+  assert.match(view, /Customize first/u);
+  // Catalog-driven provider and model pickers.
+  assert.match(view, /aria-label="AI provider for this bot"/u);
+  assert.match(view, /aria-label="AI model for this bot"/u);
+  assert.match(view, /Credentials stay on your Mac/u);
+  // Capability toggles with Full-mode disabling, matching the iOS sections.
+  assert.match(view, /aria-label=\{`Allow \$\{option\.label\} for this bot`\}/u);
+  assert.match(view, /aria-label="Allow run commands for this bot"/u);
+  assert.match(view, /accessDraft\.usesFullAccess/u);
+  // Save re-reads the authoritative policy revision before updating access.
+  assert.match(view, /await botsApi\.getBotAccess\(saved\.id\)/u);
+  assert.match(
+    view,
+    /botsApi\.updateBotAccess\(\{\s*botId: saved\.id,\s*expectedRevision: state\.access\.revision,\s*access: update,/u,
+  );
+  assert.match(view, /invalidateQueries\(\{ queryKey: queryKeys\.botAccess\(saved\.id\) \}\)/u);
+  assert.match(view, /invalidateQueries\(\{ queryKey: queryKeys\.botCapabilityCatalog \}\)/u);
+  assert.match(queries, /botCapabilityCatalog: \["bot-capability-catalog"\] as const/u);
+  assert.match(queries, /useBotCapabilityCatalog\(enabled: boolean\)/u);
+  assert.match(queries, /useBotAccess\(botId: string \| undefined\)/u);
+});
+
+test("bot detail surfaces the current access mode and bound model", () => {
+  const view = source("./bots-view.tsx");
+  assert.match(view, /function BotAccessSummary\(/u);
+  assert.match(view, /Full Access/u);
+  assert.match(view, /Custom Access/u);
+  assert.match(view, /botModelLabel\(catalogQuery\.data, state\)/u);
+  assert.match(view, /BOT_ACCESS_SUMMARIES\.full/u);
+  assert.match(view, /BOT_ACCESS_SUMMARIES\.custom/u);
+});
+
+test("bot editor is a five-page wizard with gated Next, Back, and a review Confirm", () => {
+  const view = source("./bots-view.tsx");
+  const styles = source("../styles.css");
+  // Page inventory: identity, access, model, capabilities, review.
+  assert.match(view, /const BOT_EDITOR_STEPS = \[/u);
+  assert.match(view, /title: "Identity"/u);
+  assert.match(view, /title: "Access"/u);
+  assert.match(view, /title: "Model"/u);
+  assert.match(view, /title: "Capabilities"/u);
+  assert.match(view, /title: "Review"/u);
+  // The dialog's primary action advances pages and only confirms on the last.
+  assert.match(view, /confirmLabel=\{isLastStep \? \(bot \? "Save changes" : "Create bot"\) : "Next"\}/u);
+  assert.match(view, /onConfirm=\{isLastStep \? save : goNext\}/u);
+  assert.match(view, /confirmDisabled=\{saving \|\| !stepValid\[step\]\}/u);
+  // Per-page gating, including the review page re-checking every prior page.
+  assert.match(view, /const stepValid = \[/u);
+  assert.match(
+    view,
+    /identityReady && Boolean\(!accessUnavailable && catalog && accessDraft\),\s*\];/u,
+  );
+  assert.match(view, /if \(!stepValid\[step\]\) return;/u);
+  // Back navigation and an announced step counter.
+  assert.match(view, /<ArrowLeft \/> Back/u);
+  assert.match(view, /setStep\(\(current\) => Math\.max\(0, current - 1\)\)/u);
+  assert.match(view, /aria-live="polite"[\s\S]*Step \{step \+ 1\} of \{BOT_EDITOR_STEPS\.length\}/u);
+  // Focus moves to the page heading after Next for keyboard users.
+  assert.match(view, /pageTopRef\.current\?\.focus\(\)/u);
+  // Review page summarizes every choice before Confirm.
+  assert.match(view, /summaryRow\("Name", draft\.name\.trim\(\)\)/u);
+  assert.match(view, /summaryRow\(\s*"Access",\s*accessDraft\.usesFullAccess \? "Full Access" : "Custom Access",/u);
+  assert.match(view, /Everything Aiden and this Mac allow/u);
+  assert.match(view, /Credentials stay on your Mac/u);
+  // Page swap motion is quiet and disabled under reduced motion.
+  assert.match(view, /aiden-bot-wizard-page/u);
+  assert.match(styles, /\.aiden-bot-wizard-page \{/u);
+  assert.match(styles, /aiden-bot-wizard-page-in 220ms/u);
+  assert.match(
+    styles,
+    /\.aiden-bot-wizard-page \{\s*animation: none;\s*\}/u,
+  );
+});
+
+test("bot wizard pages stay visually aligned and hide dead capability rows", () => {
+  const view = source("./bots-view.tsx");
+  // No per-page h3: the dialog description and step counter already identify
+  // the page, and a second heading misaligned with card labels.
+  assert.doesNotMatch(view, /<h3/u);
+  assert.match(view, /ref=\{pageTopRef\}\s*\n?\s*tabIndex=\{-1\}/u);
+  // One Access label, not two: the access card carries only a description.
+  assert.doesNotMatch(view, /label="Access"/u);
+  assert.match(view, /<Field description="Custom Access can reduce/u);
+  // Model picks stack full-width so long model names never truncate.
+  assert.match(view, /orientation="vertical"\s*\n?\s*label="AI provider and model"/u);
+  assert.match(view, /<div className="grid gap-3">/u);
+  // Capability lists are vertical and hide unavailable, unselected tombstones
+  // (e.g. "Invalid skill" rows) the same way iOS does.
+  assert.match(
+    view,
+    /option\.available \|\| accessDraft\[key\]\.includes\(option\.id\)/u,
+  );
+  assert.match(
+    view,
+    /option\.available \|\| accessDraft\.fileScopeIds\.includes\(option\.id\)/u,
+  );
+  assert.match(view, /orientation="vertical"\s*\n?\s*label="Files and commands"/u);
+  assert.match(view, /orientation="vertical" label=\{title\} description=\{description\}/u);
+  // Rows get contained hover-target styling instead of floating bare rows.
+  assert.match(view, /rounded-control px-3 py-2\.5/u);
+  // Bigger, higher-contrast step dots and a roomier nav row.
+  assert.match(view, /size-2 rounded-full/u);
+  assert.match(view, /index === step \? "bg-accent" : "bg-control-hover"/u);
+  assert.match(view, /justify-between gap-4/u);
+});
+
 test("bot avatars migrate durable ids into layered mouthless face recipes", () => {
   const avatar = source("../components/bot-avatar.tsx");
   const contract = source("../shared/bots.ts");
