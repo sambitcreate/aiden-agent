@@ -110,6 +110,7 @@ async function fixture(options: {
         }
         return {
           id: "device-authorized-12345678",
+          name: "iPhone",
           revoked: options.authenticate === "revoked",
           acceptsBotCapabilities: options.acceptsBotCapabilities === true,
           capabilities: new Set(
@@ -117,6 +118,18 @@ async function fixture(options: {
               ? []
               : (options.capabilities ?? ["server:read" as const]),
           ),
+        };
+      },
+      updateDeviceName: async (deviceId, name) => {
+        calls.push(`device-identity:${deviceId}:${name}`);
+        return {
+          id: deviceId,
+          name,
+          type: "iphone" as const,
+          clientVersion: "1.0",
+          capabilities: options.capabilities ?? ["server:read" as const],
+          createdAt: 500,
+          lastSeenAt: 1_000,
         };
       },
     },
@@ -669,6 +682,7 @@ test("health is the only unauthenticated read and server projection requires bot
     assert.equal(server.name, "Studio Mac");
     assert.equal(server.connectionMode, "lan");
     assert.deepEqual(server.capabilities, ["server:read"]);
+    assert.equal(server.deviceName, "iPhone");
     assert.equal("serverCapabilities" in server, false);
     assert.equal(JSON.stringify(server).includes("credential"), false);
   } finally {
@@ -694,6 +708,43 @@ test("Bot-aware server projection separates supported capabilities from device g
     assert.equal(server.serverCapabilities.includes("bot:read"), true);
     assert.equal(server.serverCapabilities.includes("bot:write"), true);
     assert.notDeepEqual(server.serverCapabilities, server.capabilities);
+  } finally {
+    await app.close();
+  }
+});
+
+test("an authenticated client can refresh only its own display identity", async () => {
+  const app = await fixture();
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  try {
+    const response = await fetch(`${app.base}/device/identity`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ name: "  Sambit’s   iPhone  " }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { name: "Sambit’s iPhone" });
+    assert.deepEqual(app.calls, [
+      "device-identity:device-authorized-12345678:Sambit’s iPhone",
+    ]);
+
+    const unexpectedField = await fetch(`${app.base}/device/identity`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ name: "Phone", cloudId: "not-accepted" }),
+    });
+    assert.equal(unexpectedField.status, 400);
+
+    const controlCharacter = await fetch(`${app.base}/device/identity`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ name: "Bad\u0000Name" }),
+    });
+    assert.equal(controlCharacter.status, 400);
   } finally {
     await app.close();
   }
