@@ -829,7 +829,7 @@ private struct AidenBotPrototypeWorkspacesView: View {
                             ForEach(AidenBotPrototypeState.allCases) { state in Text(state.title).tag(state) }
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Image(systemName: AidenChromeSymbols.overflowMenu)
                     }
                     .accessibilityLabel("Prototype controls")
                 }
@@ -1016,7 +1016,7 @@ private struct AidenBotPrototypeInboxView: View {
                     ForEach(AidenBotPrototypeState.allCases) { state in Text(state.title).tag(state) }
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: AidenChromeSymbols.overflowMenu)
             }
             .accessibilityLabel("Prototype controls")
         }
@@ -1208,7 +1208,7 @@ private struct AidenBotPrototypeInboxView: View {
                                                 Label("Archive Bot", systemImage: "archivebox")
                                             }
                                         } label: {
-                                            Image(systemName: "ellipsis")
+                                            Image(systemName: AidenChromeSymbols.overflowMenu)
                                                 .frame(width: 28, height: 28)
                                         }
                                     }
@@ -1574,7 +1574,7 @@ private struct AidenBotPrototypeProfileView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: AidenChromeSymbols.overflowMenu)
                 }
                 .disabled(!allowsMutations)
                 .accessibilityLabel("Bot actions")

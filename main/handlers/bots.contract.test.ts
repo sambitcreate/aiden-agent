@@ -7,6 +7,8 @@ test("bot identity and managed-home chats use the transaction-owned application 
   const chats = readFileSync(new URL("./chat-create-params.ts", import.meta.url), "utf8");
   const generation = readFileSync(new URL("./chat-params.ts", import.meta.url), "utf8");
   assert.match(bots, /botApplicationService\.createBot/u);
+  assert.match(bots, /parseBotCreateWithAccess/u);
+  assert.match(bots, /bot: parsed\.bot,\s*access: parsed\.access/u);
   assert.match(bots, /botApplicationService\.createChat/u);
   assert.match(bots, /audienceId: desktopAudienceId/u);
   assert.doesNotMatch(bots, /chatStore\.create\(\{ \.\.\.parsed, assertCurrent \}\)/u);

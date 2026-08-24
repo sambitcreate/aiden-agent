@@ -46,9 +46,17 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import {
   DEFAULT_BOT_AVATAR,
   resolveBotAvatar,
-  type BotAvatarAppearance,
+  type BotCreateInput,
   type BotDefinition,
 } from "../shared/bots";
+import {
+  botEditorIdentityDiffers,
+  botEditorIdentityDraftFromDefinition,
+  rebaseBotEditorAccessDraft,
+  rebaseBotEditorIdentityDraft,
+  type BotEditorAccessDraft,
+  type BotEditorIdentityDraft,
+} from "../shared/bot-editor-save";
 import {
   BOT_ACCESS_SUMMARIES,
   BOT_FULL_ACCESS_NOTICE_VERSION,
@@ -58,39 +66,36 @@ import {
   type BotNoticeDecision,
 } from "../shared/bot-capabilities";
 
-type BotDraft = {
-  name: string;
-  description: string;
-  instructions: string;
-  avatar: BotAvatarAppearance;
-};
+type BotDraft = BotEditorIdentityDraft;
 
 function emptyDraft(): BotDraft {
   return { name: "", description: "", instructions: "", avatar: { ...DEFAULT_BOT_AVATAR } };
 }
 
 function draftFromBot(bot: BotDefinition | null): BotDraft {
-  return bot
-    ? {
-        name: bot.name,
-        description: bot.description ?? "",
-        instructions: bot.instructions,
-        avatar: resolveBotAvatar(bot.avatar),
-      }
-    : emptyDraft();
+  return bot ? botEditorIdentityDraftFromDefinition(bot, resolveBotAvatar) : emptyDraft();
+}
+
+function createInputFromDraft(draft: BotDraft): BotCreateInput {
+  return {
+    name: draft.name.trim(),
+    description: draft.description.trim() || undefined,
+    instructions: draft.instructions.trim(),
+    avatar: draft.avatar,
+  };
+}
+
+function updateInputFromDraft(draft: BotDraft, authoritative: BotDefinition): BotCreateInput {
+  return {
+    ...createInputFromDraft(draft),
+    ...(authoritative.openingGreeting
+      ? { openingGreeting: authoritative.openingGreeting }
+      : {}),
+  };
 }
 
 /** Mirrors the iOS editor draft: one model selection for Full and Custom. */
-type BotAccessDraft = {
-  usesFullAccess: boolean;
-  providerId: string | undefined;
-  modelId: string | undefined;
-  fileScopeIds: string[];
-  shellEnabled: boolean;
-  connectionIds: string[];
-  skillIds: string[];
-  otherCapabilityIds: string[];
-};
+type BotAccessDraft = BotEditorAccessDraft;
 
 function botFullAccessAccepted(catalog: BotCapabilityCatalog): boolean {
   return catalog.notice.requiresAcknowledgement === false
@@ -238,6 +243,8 @@ function BotEditor({
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [draft, setDraft] = React.useState<BotDraft>(() => draftFromBot(bot));
+  const [identityBaseline, setIdentityBaseline] = React.useState<BotDraft>(() => draftFromBot(bot));
+  const [committedBot, setCommittedBot] = React.useState<BotDefinition | null>(bot);
   const [generatingAvatar, setGeneratingAvatar] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [noticing, setNoticing] = React.useState(false);
@@ -246,13 +253,16 @@ function BotEditor({
   const accessQuery = useBotAccess(bot?.id);
   const catalog = catalogQuery.data;
   const [accessDraft, setAccessDraft] = React.useState<BotAccessDraft | null>(null);
+  const [accessBaseline, setAccessBaseline] = React.useState<BotAccessDraft | null>(null);
   const [step, setStep] = React.useState(0);
   const pageTopRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     if (!catalog || accessDraft) return;
     if (bot && !accessQuery.isSuccess) return;
-    setAccessDraft(accessDraftFromState(bot ? accessQuery.data : undefined, catalog));
+    const initial = accessDraftFromState(bot ? accessQuery.data : undefined, catalog);
+    setAccessDraft(initial);
+    setAccessBaseline(initial);
   }, [catalog, accessDraft, bot, accessQuery.isSuccess, accessQuery.data]);
 
   const acknowledgeNotice = async (decision: BotNoticeDecision) => {
@@ -283,30 +293,63 @@ function BotEditor({
     savingRef.current = true;
     setSaving(true);
     try {
-      const input = {
-        name: draft.name,
-        description: draft.description.trim() || undefined,
-        instructions: draft.instructions,
-        avatar: draft.avatar,
-      };
-      const saved = bot
-        ? await botsApi.update({ id: bot.id, expectedRevision: bot.revision, ...input })
-        : await botsApi.create(input);
-      // Access is a separate revisioned mutation; re-read the authoritative
-      // policy first so a fresh revision is always used.
-      const state = bot && accessQuery.data
-        ? accessQuery.data
-        : await botsApi.getBotAccess(saved.id);
-      if (!state) throw new Error("This bot’s access policy could not be read.");
-      const update = buildBotAccessUpdate(accessDraft, catalog);
-      if (botAccessDiffers(update, state)) {
-        await botsApi.updateBotAccess({
-          botId: saved.id,
-          expectedRevision: state.access.revision,
-          access: update,
+      let saved: BotDefinition;
+      if (!committedBot) {
+        // Creation is one main-owned transaction: identity, workspace, model,
+        // and access either become visible together or are rolled back together.
+        saved = await botsApi.create({
+          bot: createInputFromDraft(draft),
+          access: buildBotAccessUpdate(accessDraft, catalog),
         });
-        await qc.invalidateQueries({ queryKey: queryKeys.botAccess(saved.id) });
-        await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+        setCommittedBot(saved);
+        setIdentityBaseline(draftFromBot(saved));
+      } else {
+        const authoritativeBot = await botsApi.get(committedBot.id);
+        if (!authoritativeBot) throw new Error("This bot is no longer available.");
+        const authoritativeIdentity = draftFromBot(authoritativeBot);
+        const rebasedIdentity = rebaseBotEditorIdentityDraft(
+          draft,
+          identityBaseline,
+          authoritativeIdentity,
+        );
+        setDraft(rebasedIdentity);
+        setIdentityBaseline(authoritativeIdentity);
+        saved = botEditorIdentityDiffers(rebasedIdentity, authoritativeIdentity)
+          ? await botsApi.update({
+              id: authoritativeBot.id,
+              expectedRevision: authoritativeBot.revision,
+              ...updateInputFromDraft(rebasedIdentity, authoritativeBot),
+            })
+          : authoritativeBot;
+        setCommittedBot(saved);
+        setIdentityBaseline(draftFromBot(saved));
+
+        // Rebase only fields edited in this dialog onto the latest policy and
+        // catalog. Unrelated changes from iOS or another Mac surface survive.
+        const [state, latestCatalog] = await Promise.all([
+          botsApi.getBotAccess(saved.id),
+          botsApi.getCapabilityCatalog(),
+        ]);
+        if (!state) throw new Error("This bot’s access policy could not be read.");
+        const authoritativeAccess = accessDraftFromState(state, latestCatalog);
+        const rebasedAccess = rebaseBotEditorAccessDraft(
+          accessDraft,
+          accessBaseline ?? accessDraft,
+          authoritativeAccess,
+        );
+        setAccessDraft(rebasedAccess);
+        setAccessBaseline(authoritativeAccess);
+        qc.setQueryData(queryKeys.botCapabilityCatalog, latestCatalog);
+        const update = buildBotAccessUpdate(rebasedAccess, latestCatalog);
+        if (botAccessDiffers(update, state)) {
+          await botsApi.updateBotAccess({
+            botId: saved.id,
+            expectedRevision: state.access.revision,
+            access: update,
+          });
+          await qc.invalidateQueries({ queryKey: queryKeys.botAccess(saved.id) });
+          await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+        }
       }
       await qc.invalidateQueries({ queryKey: queryKeys.bots });
       qc.setQueryData(queryKeys.bot(saved.id), saved);
@@ -325,6 +368,9 @@ function BotEditor({
   const selectedProvider = catalog?.providers.find(
     (provider) => provider.id === accessDraft?.providerId,
   );
+  const selectedModel = selectedProvider?.models.find(
+    (model) => model.id === accessDraft?.modelId,
+  );
   const toggleId = (
     key: "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds",
     id: string,
@@ -340,14 +386,27 @@ function BotEditor({
 
   const isLastStep = step === BOT_EDITOR_STEPS.length - 1;
   const identityReady = Boolean(draft.name.trim() && draft.instructions.trim()) && !generatingAvatar;
+  const accessModeReady = Boolean(
+    !accessUnavailable && catalog && accessDraft && !(accessDraft.usesFullAccess && !fullAccepted),
+  );
+  const modelReady = Boolean(selectedProvider?.available && selectedModel?.available);
+  const settingsReady = (() => {
+    if (!catalog || !accessDraft || !accessModeReady || !modelReady) return false;
+    try {
+      buildBotAccessUpdate(accessDraft, catalog);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
   // Each page gates its own Next button; the review page re-checks everything
   // so Confirm can never run against an incomplete draft.
   const stepValid = [
     identityReady,
-    Boolean(!accessUnavailable && catalog && accessDraft && !(accessDraft.usesFullAccess && !fullAccepted)),
-    Boolean(!accessUnavailable && accessDraft?.providerId && accessDraft?.modelId),
-    true,
-    identityReady && Boolean(!accessUnavailable && catalog && accessDraft),
+    accessModeReady,
+    modelReady,
+    settingsReady,
+    identityReady && settingsReady,
   ];
   const goNext = () => {
     if (!stepValid[step]) return;
@@ -357,9 +416,6 @@ function BotEditor({
     if (step === 0) return;
     pageTopRef.current?.focus();
   }, [step]);
-  const selectedModel = selectedProvider?.models.find(
-    (model) => model.id === accessDraft?.modelId,
-  );
   const summaryRow = (label: string, value: string) => (
     <div className="flex items-baseline justify-between gap-4">
       <dt className="shrink-0 text-small text-tertiary">{label}</dt>
@@ -579,7 +635,7 @@ function BotEditor({
                     const model = provider?.models.find((candidate) => candidate.available);
                     setAccessDraft((current) =>
                       current
-                        ? { ...current, providerId, modelId: model?.id ?? current.modelId }
+                        ? { ...current, providerId, modelId: model?.id }
                         : current);
                   }}
                 >
@@ -655,7 +711,7 @@ function BotEditor({
                         ) : null}
                       </span>
                       <Switch
-                        checked={selected}
+                        checked={accessDraft.usesFullAccess || selected}
                         disabled={saving || accessDraft.usesFullAccess || (!option.available && !selected)}
                         onCheckedChange={(checked) => toggleId("fileScopeIds", option.id, checked)}
                         aria-label={`Allow ${option.label} for this bot`}
@@ -717,7 +773,7 @@ function BotEditor({
                             ) : null}
                           </span>
                           <Switch
-                            checked={selected}
+                            checked={accessDraft.usesFullAccess || selected}
                             disabled={saving || accessDraft.usesFullAccess || (!option.available && !selected)}
                             onCheckedChange={(checked) => toggleId(key, option.id, checked)}
                             aria-label={`Allow ${option.label} for this bot`}

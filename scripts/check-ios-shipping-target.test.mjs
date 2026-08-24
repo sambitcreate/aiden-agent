@@ -559,7 +559,7 @@ test("iOS onboarding reuses the reviewed Mac feature artwork byte for byte", asy
 });
 
 test("the Aiden home, onboarding, composer, schedules, and activity retain the reviewed product shell", async () => {
-  const [shell, productShell, pairing, content, chat, scheduledTasks, widget, project, logoDefinition, logoArtwork] = await Promise.all([
+  const [shell, productShell, pairing, content, chat, scheduledTasks, widget, project, logoDefinition, logoArtwork, shippingSources] = await Promise.all([
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenProductShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
@@ -570,6 +570,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     readFile(projectPath, "utf8"),
     readFile(`${sidebarLogoPath}Contents.json`, "utf8"),
     readFile(`${sidebarLogoPath}aiden-sidebar-logo.png`),
+    Promise.all(appSourcePaths.map((path) => readFile(`${iosRoot}${path}`, "utf8"))),
   ]);
 
   const scheduledIndex = shell.indexOf('title: "Scheduled Tasks"');
@@ -581,7 +582,14 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.ok(usageIndex < workspacesIndex);
   assert.ok(homeNavigationIndex >= 0 && homeNavigationIndex < chatsIndex);
   assert.match(shell, /AidenProductSwitcherButton\([\s\S]*?searchChrome/u);
-  assert.match(productShell, /Menu \{[\s\S]*?areaButton\(\.bots\)[\s\S]*?areaButton\(\.workspaces\)[\s\S]*?Image\("AidenAppIcon"\)/u);
+  assert.match(productShell, /Menu \{[\s\S]*?areaButton\(\.bots\)[\s\S]*?areaButton\(\.workspaces\)[\s\S]*?HStack\(spacing: 4\)[\s\S]*?Image\("AidenAppIcon"\)[\s\S]*?AidenChromeSymbols\.productSwitcherDisclosure/u);
+  assert.match(
+    productShell,
+    /AidenProductSwitcherGlassModifier[\s\S]*?content\.buttonStyle\(\.glass\)[\s\S]*?background\(\.ultraThinMaterial, in: Capsule\(\)\)/u,
+  );
+  for (const source of shippingSources) {
+    assert.doesNotMatch(source, /ellipsis\.circle/u);
+  }
   assert.match(
     productShell,
     /popover\(isPresented: isCoachmarkPresented, arrowEdge: \.top\)[\s\S]*?AidenBotSwitcherCoachmarkView[\s\S]*?presentationCompactAdaptation\(\.popover\)/u,
@@ -590,7 +598,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     /private struct AidenBotSwitcherCoachmarkView:[\s\S]*?private struct AidenBotShellView:/u,
   )?.[0];
   assert.ok(coachmark, "expected a bounded Bot switcher coachmark");
-  assert.match(coachmark, /Tap the Aiden logo to switch anytime\./u);
+  assert.match(coachmark, /Tap the Aiden menu to switch anytime\./u);
   assert.match(coachmark, /aidenBotSwitcherCoachmarkDetail\(canWrite: canWrite\)/u);
   assert.match(
     productShell,

@@ -19,6 +19,7 @@ const CREATE_KEYS = new Set([
   "name",
   "openingGreeting",
 ]);
+const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
 const UPDATE_KEYS = new Set([...CREATE_KEYS, "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
@@ -69,6 +70,17 @@ function createFields(record: Record<string, unknown>): BotCreateInput {
 
 export function parseBotCreate(value: unknown): BotCreateInput {
   return createFields(exact(value, CREATE_KEYS, "bot creation fields"));
+}
+
+export function parseBotCreateWithAccess(value: unknown): {
+  bot: BotCreateInput;
+  access: BotAccessUpdate;
+} {
+  const record = exact(value, CREATE_WITH_ACCESS_KEYS, "bot creation fields");
+  return {
+    bot: parseBotCreate(record.bot),
+    access: parseBotAccessUpdate(record.access),
+  };
 }
 
 export function parseBotUpdate(value: unknown): BotUpdateInput {

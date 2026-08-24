@@ -317,7 +317,7 @@ struct AidenPairingView: View {
                                 Label("Appearance", systemImage: "circle.lefthalf.filled")
                             }
                         } label: {
-                            Image(systemName: "ellipsis")
+                            Image(systemName: AidenChromeSymbols.overflowMenu)
                         }
                         .accessibilityLabel("More pairing options")
                     } else {

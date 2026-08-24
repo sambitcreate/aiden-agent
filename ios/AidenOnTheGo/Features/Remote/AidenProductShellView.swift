@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum AidenChromeSymbols {
+    static let overflowMenu = "ellipsis"
+    static let productSwitcherDisclosure = "chevron.down"
+}
+
 enum AidenProductArea: String, Codable, CaseIterable, Identifiable, Sendable {
     case bots
     case workspaces
@@ -387,13 +392,24 @@ struct AidenProductSwitcherButton: View {
             areaButton(.bots)
             areaButton(.workspaces)
         } label: {
-            Image("AidenAppIcon")
-                .resizable()
-                .scaledToFit()
-                .contentShape(Circle())
+            HStack(spacing: 4) {
+                Image("AidenAppIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 28, height: 28)
+
+                Image(systemName: AidenChromeSymbols.productSwitcherDisclosure)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(palette.secondary)
+            }
+            .padding(.leading, 7)
+            .padding(.trailing, 9)
+            .frame(minHeight: 40)
+            .contentShape(Capsule())
         }
         .menuOrder(.fixed)
-        .buttonStyle(.plain)
+        .buttonBorderShape(.capsule)
+        .modifier(AidenProductSwitcherGlassModifier())
         .accessibilityLabel("Aiden. Current area: \(area.title)")
         .accessibilityHint(accessibilityHint)
         .popover(isPresented: isCoachmarkPresented, arrowEdge: .top) {
@@ -430,6 +446,28 @@ struct AidenProductSwitcherButton: View {
     }
 }
 
+private struct AidenProductSwitcherGlassModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            content.buttonStyle(.glass)
+        } else if reduceTransparency {
+            content
+                .buttonStyle(.plain)
+                .background(palette.raised, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.16), lineWidth: 0.5))
+        } else {
+            content
+                .buttonStyle(.plain)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
+        }
+    }
+}
+
 private struct AidenBotSwitcherCoachmarkView: View {
     @Environment(\.aidenPalette) private var palette
 
@@ -448,7 +486,7 @@ private struct AidenBotSwitcherCoachmarkView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Bots or Workspaces")
                         .font(.headline)
-                    Text("Tap the Aiden logo to switch anytime.")
+                    Text("Tap the Aiden menu to switch anytime.")
                         .font(.subheadline)
                         .foregroundStyle(palette.secondary)
                 }

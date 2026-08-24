@@ -427,7 +427,7 @@ struct AidenBotsHomeView: View {
                 isCoachmarkPresented: $isShowingSwitcherCoachmark,
                 onSelect: onSelectArea
             )
-            .frame(width: 52, height: 52)
+            .frame(width: 68, height: 52)
 
             Text("Bots")
                 .font(.largeTitle.bold())

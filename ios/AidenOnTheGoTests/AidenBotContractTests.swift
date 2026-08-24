@@ -1803,6 +1803,62 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertEqual(selection?.modelId, "model_fixture_2")
     }
 
+    func testBotEditorConflictRebasePreservesOnlyUserEditedFields() throws {
+        var originalObject = try sharedFixtureObject()
+        var originalCatalog = try XCTUnwrap(
+            originalObject["botCapabilityCatalog"] as? [String: Any]
+        )
+        var providers = try XCTUnwrap(originalCatalog["providers"] as? [[String: Any]])
+        var provider = try XCTUnwrap(providers.first)
+        var models = try XCTUnwrap(provider["models"] as? [[String: Any]])
+        models.append(["id": "model_fixture_2", "label": "Fixture Model 2", "available": true])
+        provider["models"] = models
+        providers[0] = provider
+        originalCatalog["providers"] = providers
+        originalObject["botCapabilityCatalog"] = originalCatalog
+        let original = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: data(for: originalObject)
+        )
+        var userDraft = try XCTUnwrap(
+            AidenBotEditorDraft(
+                detail: original.botDetail,
+                catalog: original.botCapabilityCatalog
+            )
+        )
+        userDraft.name = "User-edited Scout"
+
+        var authoritativeObject = originalObject
+        var authoritativeBot = try XCTUnwrap(
+            authoritativeObject["botDetail"] as? [String: Any]
+        )
+        authoritativeBot["purpose"] = "Purpose changed on the Mac"
+        authoritativeBot["instructions"] = "Instructions changed on the Mac."
+        authoritativeBot["revision"] = "bot_revision_8"
+        authoritativeBot["modelSelection"] = [
+            "providerId": "provider_fixture",
+            "modelId": "model_fixture_2",
+        ]
+        authoritativeObject["botDetail"] = authoritativeBot
+        let authoritative = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: data(for: authoritativeObject)
+        )
+
+        let rebased = try aidenBotEditorRebasedDraft(
+            userDraft,
+            baseline: original.botDetail,
+            baselineCatalog: original.botCapabilityCatalog,
+            authoritative: authoritative.botDetail,
+            authoritativeCatalog: authoritative.botCapabilityCatalog
+        )
+
+        XCTAssertEqual(rebased.name, "User-edited Scout")
+        XCTAssertEqual(rebased.purpose, "Purpose changed on the Mac")
+        XCTAssertEqual(rebased.instructions, "Instructions changed on the Mac.")
+        XCTAssertEqual(rebased.customAccess.modelID, "model_fixture_2")
+    }
+
     func testBotEditorDirtyStateDistinguishesCleanCreateAndEditBaselines() throws {
         let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
         let fixture = try AidenRemoteJSONDecoder.decode(

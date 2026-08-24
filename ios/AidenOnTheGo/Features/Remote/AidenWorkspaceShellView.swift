@@ -1653,7 +1653,7 @@ private struct AidenWorkspaceDetailView: View {
                         Label("Workspace Settings", systemImage: "gearshape")
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: AidenChromeSymbols.overflowMenu)
                 }
                 .accessibilityLabel("Workspace menu")
             }

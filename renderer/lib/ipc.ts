@@ -773,7 +773,8 @@ export const botsApi = {
   get: (id: string) => invoke<BotDefinition | null>("bots:get", id),
   getCanonicalPhoto: (id: string) =>
     invoke<BotRendererCanonicalPhoto | null>("bots:getCanonicalPhoto", id),
-  create: (input: BotCreateInput) => invoke<BotDefinition>("bots:create", input),
+  create: (input: { bot: BotCreateInput; access: BotAccessUpdate }) =>
+    invoke<BotDefinition>("bots:create", input),
   suggestAvatar: async (input: BotAvatarSuggestionInput) => {
     try {
       return await invoke<BotAvatarSuggestion>("bots:suggestAvatar", input);

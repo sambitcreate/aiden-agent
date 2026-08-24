@@ -16,6 +16,7 @@ import {
 import {
   BotApplicationUnavailableError,
 } from "../services/bot-application-service.js";
+import { BotRuntimeInventoryLeaseInvalidError } from "../services/bot-runtime-inventory-lease.js";
 import {
   BotCapabilityCatalogConflictError,
   BotCapabilityRevisionConflictError,
@@ -43,7 +44,7 @@ import {
   parseBotAvatarSuggestionInput,
   parseBotAvatarRequestId,
   parseBotChatCreate,
-  parseBotCreate,
+  parseBotCreateWithAccess,
   parseBotId,
   parseBotRevision,
   parseBotUpdate,
@@ -136,12 +137,18 @@ export function registerBotHandlers(): void {
       avatar: createMainBotAvatarApplicationAdapter(instanceId),
     });
   });
-  ipcMain.handle("bots:create", async (_event, input: unknown) =>
-    botApplicationService.createBot({
-      audienceId: desktopAudienceId,
-      bot: parseBotCreate(input),
-    }),
-  );
+  ipcMain.handle("bots:create", async (_event, input: unknown) => {
+    const parsed = parseBotCreateWithAccess(input);
+    try {
+      return await botApplicationService.createBot({
+        audienceId: desktopAudienceId,
+        bot: parsed.bot,
+        access: parsed.access,
+      });
+    } catch (error) {
+      throw botAccessUpdateRendererError(error);
+    }
+  });
   ipcMain.handle("bots:suggestAvatar", async (event, input: unknown) => {
     const owner = rendererDocumentOwner(
       event,
@@ -469,6 +476,9 @@ export function registerBotHandlers(): void {
  * editor can reconcile instead of showing a raw service error.
  */
 function botAccessUpdateRendererError(error: unknown): unknown {
+  if (error instanceof BotRuntimeInventoryLeaseInvalidError) {
+    return new Error("Bot capabilities kept changing. Review the latest choices and try again.");
+  }
   if (error instanceof BotApplicationUnavailableError) {
     return new Error(
       error.reason === "archived"

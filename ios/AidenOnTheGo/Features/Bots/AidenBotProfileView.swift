@@ -585,7 +585,7 @@ struct AidenBotProfileView: View {
                 .disabled(!canWrite)
             }
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: AidenChromeSymbols.overflowMenu)
         }
         .disabled(isMutating)
         .accessibilityLabel("Bot actions")

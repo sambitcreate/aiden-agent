@@ -3,6 +3,12 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenProductShellTests: XCTestCase {
+    func testProductChromeUsesVisibleSwitcherDisclosureAndPlainOverflowSymbol() {
+        XCTAssertEqual(AidenChromeSymbols.productSwitcherDisclosure, "chevron.down")
+        XCTAssertEqual(AidenChromeSymbols.overflowMenu, "ellipsis")
+        XCTAssertFalse(AidenChromeSymbols.overflowMenu.contains("circle"))
+    }
+
     func testBotsHomeUsesSkeletonOnlyForTrueColdLoad() {
         XCTAssertEqual(
             aidenBotsHomeContentState(

@@ -6,6 +6,7 @@ import {
   parseBotAvatarSuggestionInput,
   parseBotChatCreate,
   parseBotCreate,
+  parseBotCreateWithAccess,
   parseBotUpdate,
 } from "./bot-params.js";
 
@@ -18,6 +19,17 @@ test("bot mutation and conversation envelopes are exact and bounded", () => {
     avatar: "prism" as const,
   };
   assert.deepEqual(parseBotCreate(fields), fields);
+  const fullAccess = {
+    accessMode: "full" as const,
+    catalogRevision: "bot_catalog_deadbeef",
+    confirmedForeground: true,
+    providerId: "bc_provider_9zzLPOGDo0Cdjuvu6xdhjutPM",
+    modelId: "bc_model_I_zCzuPPxmjgUmte8tPqPAs1",
+  };
+  assert.deepEqual(parseBotCreateWithAccess({ bot: fields, access: fullAccess }), {
+    bot: fields,
+    access: fullAccess,
+  });
   assert.deepEqual(parseBotUpdate({
     id: "bot-1",
     expectedRevision: "botrev:one",
@@ -39,6 +51,10 @@ test("bot mutation and conversation envelopes are exact and bounded", () => {
   });
   assert.throws(
     () => parseBotCreate({ ...fields, systemPrompt: "forged" }),
+    /Invalid bot creation fields/u,
+  );
+  assert.throws(
+    () => parseBotCreateWithAccess({ bot: fields, access: fullAccess, extra: true }),
     /Invalid bot creation fields/u,
   );
   assert.throws(() => parseBotCreate({ ...fields, name: "bad-\ud800-name" }), /bot name/u);

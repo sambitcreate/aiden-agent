@@ -6,6 +6,13 @@ import {
   BOT_CANONICAL_PHOTO_MAX_CONCURRENT,
   BotCanonicalPhotoCache,
 } from "../lib/bot-canonical-photo-cache";
+import {
+  rebaseBotEditorAccessDraft,
+  rebaseBotEditorIdentityDraft,
+  type BotEditorAccessDraft,
+  type BotEditorIdentityDraft,
+} from "../shared/bot-editor-save";
+import { DEFAULT_BOT_AVATAR } from "../shared/bots";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -43,11 +50,12 @@ test("bot detail owns one-to-one Telegram bind and unbind controls", () => {
 
 test("bots UI edits definitions and creates conversations through dedicated IPC", () => {
   const view = source("./bots-view.tsx");
-  assert.match(view, /botsApi\.create\(input\)/u);
+  assert.match(view, /botsApi\.create\(\{\s*bot: createInputFromDraft\(draft\),\s*access:/u);
   assert.match(
     view,
-    /botsApi\.update\(\{ id: bot\.id, expectedRevision: bot\.revision, \.\.\.input \}\)/u,
+    /botsApi\.update\(\{\s*id: authoritativeBot\.id,\s*expectedRevision: authoritativeBot\.revision,/u,
   );
+  assert.match(view, /openingGreeting: authoritative\.openingGreeting/u);
   assert.match(view, /botsApi\.createChat\(\{ botId: selected\.id, workspaceId: activeId \}\)/u);
   assert.match(
     view,
@@ -63,9 +71,10 @@ test("bots UI edits definitions and creates conversations through dedicated IPC"
 test("bot editor owns access mode, model selection, and capability toggles", () => {
   const view = source("./bots-view.tsx");
   const queries = source("../lib/queries.ts");
+  const saveHelpers = source("../shared/bot-editor-save.ts");
   // Access draft mirrors the iOS editor: one model selection for both modes.
-  assert.match(view, /type BotAccessDraft = \{/u);
-  assert.match(view, /usesFullAccess: boolean;/u);
+  assert.match(view, /type BotAccessDraft = BotEditorAccessDraft/u);
+  assert.match(saveHelpers, /usesFullAccess: boolean;/u);
   assert.match(view, /function botFullAccessAccepted\(catalog/u);
   assert.match(view, /function buildBotAccessUpdate\(/u);
   assert.match(view, /function botAccessDiffers\(/u);
@@ -83,8 +92,9 @@ test("bot editor owns access mode, model selection, and capability toggles", () 
   assert.match(view, /aria-label=\{`Allow \$\{option\.label\} for this bot`\}/u);
   assert.match(view, /aria-label="Allow run commands for this bot"/u);
   assert.match(view, /accessDraft\.usesFullAccess/u);
-  // Save re-reads the authoritative policy revision before updating access.
-  assert.match(view, /await botsApi\.getBotAccess\(saved\.id\)/u);
+  // Save re-reads and three-way rebases the authoritative policy before updating access.
+  assert.match(view, /botsApi\.getBotAccess\(saved\.id\)/u);
+  assert.match(view, /rebaseBotEditorAccessDraft\(/u);
   assert.match(
     view,
     /botsApi\.updateBotAccess\(\{\s*botId: saved\.id,\s*expectedRevision: state\.access\.revision,\s*access: update,/u,
@@ -94,6 +104,56 @@ test("bot editor owns access mode, model selection, and capability toggles", () 
   assert.match(queries, /botCapabilityCatalog: \["bot-capability-catalog"\] as const/u);
   assert.match(queries, /useBotCapabilityCatalog\(enabled: boolean\)/u);
   assert.match(queries, /useBotAccess\(botId: string \| undefined\)/u);
+});
+
+test("Bot editor retries preserve only deliberate identity and access edits", () => {
+  const baselineIdentity: BotEditorIdentityDraft = {
+    name: "Planner",
+    description: "Plans projects",
+    instructions: "Plan carefully",
+    avatar: { ...DEFAULT_BOT_AVATAR },
+  };
+  const userIdentity = { ...baselineIdentity, name: "Launch Planner" };
+  const authoritativeIdentity = {
+    ...baselineIdentity,
+    description: "Changed from another surface",
+    instructions: "New Mac instructions",
+  };
+  assert.deepEqual(
+    rebaseBotEditorIdentityDraft(userIdentity, baselineIdentity, authoritativeIdentity),
+    { ...authoritativeIdentity, name: "Launch Planner" },
+  );
+
+  const baselineAccess: BotEditorAccessDraft = {
+    usesFullAccess: false,
+    providerId: "provider:a",
+    modelId: "model:a",
+    fileScopeIds: ["scope:home"],
+    shellEnabled: false,
+    connectionIds: [],
+    skillIds: ["skill:a"],
+    otherCapabilityIds: [],
+  };
+  const userAccess = { ...baselineAccess, modelId: "model:user" };
+  const authoritativeAccess = {
+    ...baselineAccess,
+    shellEnabled: true,
+    skillIds: ["skill:mac"],
+  };
+  assert.deepEqual(
+    rebaseBotEditorAccessDraft(userAccess, baselineAccess, authoritativeAccess),
+    { ...authoritativeAccess, modelId: "model:user" },
+  );
+
+  const concurrentProviderChange = {
+    ...authoritativeAccess,
+    providerId: "provider:mac",
+    modelId: "model:mac",
+  };
+  assert.deepEqual(
+    rebaseBotEditorAccessDraft(userAccess, baselineAccess, concurrentProviderChange),
+    { ...concurrentProviderChange, providerId: "provider:a", modelId: "model:user" },
+  );
 });
 
 test("bot detail surfaces the current access mode and bound model", () => {
@@ -124,7 +184,7 @@ test("bot editor is a five-page wizard with gated Next, Back, and a review Confi
   assert.match(view, /const stepValid = \[/u);
   assert.match(
     view,
-    /identityReady && Boolean\(!accessUnavailable && catalog && accessDraft\),\s*\];/u,
+    /identityReady && settingsReady,\s*\];/u,
   );
   assert.match(view, /if \(!stepValid\[step\]\) return;/u);
   // Back navigation and an announced step counter.

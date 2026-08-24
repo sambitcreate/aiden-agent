@@ -58,6 +58,14 @@ Final model-authority XCTest result bundle:
 - `internalBuildState=READY_FOR_BETA_TESTING` for `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`), `externalBuildState=NOT_APPLICABLE`; App Store Connect reports minimum iOS 18.0 and `usesNonExemptEncryption=false`.
 - The iOS binary carries the same Bot contract as build 18 at the bumped build number; the paired Mac gains resilient Bot access saves, desktop capability/access IPC, and the five-page Mac bot editor wizard. No external group, Beta App Review, App Review, metadata, pricing, screenshot, or availability mutation was performed.
 
+## Post-build 19 save hardening
+
+- Desktop New Bot now sends identity and access through the main-owned atomic creation transaction, so an access failure cannot leave an identity-only Bot behind.
+- Bot and chat access saves no longer ignore runtime inventory invalidation. They retry the entire snapshot/bind/write transaction under a fresh lease up to three times, then fail closed without publishing policy if the inventory keeps changing.
+- Mac and iOS Edit Bot retries use a three-way merge: only fields deliberately changed from the editor baseline survive, while unrelated authoritative edits from another surface are adopted. Provider and model remain one indivisible binding during that merge.
+- `npm run test:bots`: 414 passed, 0 failed. `npm run type-check`: passed. The focused iOS conflict-rebase test built and executed on the physical iPhone 13 Pro (`00008110-00063CD91E98801E`): 1 passed, 0 failed.
+- These changes postdate TestFlight build 19 and require a later build before they can be claimed in TestFlight.
+
 ## External/manual gates still open
 
 - Eligible Apple Intelligence hardware for successful Image Playground/PCC acceptance.

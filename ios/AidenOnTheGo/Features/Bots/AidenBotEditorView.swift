@@ -238,6 +238,64 @@ func aidenBotEditorResolvedDraft(
     }
 }
 
+/// Three-way merge used after a revision conflict or ambiguous edit response.
+/// Fields unchanged by the person adopt the Mac's authoritative value; fields
+/// deliberately edited in this sheet remain as the retry draft.
+func aidenBotEditorRebasedDraft(
+    _ draft: AidenBotEditorDraft,
+    baseline: AidenBotDetail,
+    baselineCatalog: AidenBotCapabilityCatalog,
+    authoritative: AidenBotDetail,
+    authoritativeCatalog: AidenBotCapabilityCatalog
+) throws -> AidenBotEditorDraft {
+    guard let baselineDraft = AidenBotEditorDraft(detail: baseline, catalog: baselineCatalog),
+          var rebased = AidenBotEditorDraft(
+              detail: authoritative,
+              catalog: authoritativeCatalog
+          ) else {
+        throw AidenBotContractError.invalidCombination("no available provider and model")
+    }
+
+    if let identityPatch = try draft.identityPatch(comparedTo: baseline) {
+        if identityPatch.name != nil { rebased.name = draft.name }
+        if identityPatch.purpose != nil { rebased.purpose = draft.purpose }
+        if identityPatch.openingGreeting != nil {
+            rebased.openingGreeting = draft.openingGreeting
+        }
+        if identityPatch.instructions != nil { rebased.instructions = draft.instructions }
+        if identityPatch.avatar != nil { rebased.avatar = draft.avatar }
+    }
+
+    if draft.usesFullAccess != baselineDraft.usesFullAccess {
+        rebased.usesFullAccess = draft.usesFullAccess
+    }
+    // Provider and model are one binding. Never combine a user-edited model
+    // with a concurrently changed provider (or the inverse).
+    let modelBindingChanged =
+        draft.customAccess.providerID != baselineDraft.customAccess.providerID
+        || draft.customAccess.modelID != baselineDraft.customAccess.modelID
+    if modelBindingChanged {
+        rebased.customAccess.providerID = draft.customAccess.providerID
+        rebased.customAccess.modelID = draft.customAccess.modelID
+    }
+    if draft.customAccess.fileScopeIDs != baselineDraft.customAccess.fileScopeIDs {
+        rebased.customAccess.fileScopeIDs = draft.customAccess.fileScopeIDs
+    }
+    if draft.customAccess.shellEnabled != baselineDraft.customAccess.shellEnabled {
+        rebased.customAccess.shellEnabled = draft.customAccess.shellEnabled
+    }
+    if draft.customAccess.connectionIDs != baselineDraft.customAccess.connectionIDs {
+        rebased.customAccess.connectionIDs = draft.customAccess.connectionIDs
+    }
+    if draft.customAccess.skillIDs != baselineDraft.customAccess.skillIDs {
+        rebased.customAccess.skillIDs = draft.customAccess.skillIDs
+    }
+    if draft.customAccess.otherCapabilityIDs != baselineDraft.customAccess.otherCapabilityIDs {
+        rebased.customAccess.otherCapabilityIDs = draft.customAccess.otherCapabilityIDs
+    }
+    return rebased
+}
+
 struct AidenBotEditorView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let mode: AidenBotEditorMode
@@ -1110,9 +1168,20 @@ struct AidenBotEditorView: View {
                 async let catalogRequest = client.botCapabilityCatalog()
                 let (authoritative, refreshedCatalog) = try await (detailRequest, catalogRequest)
                 guard isCurrent(attempt) else { return }
+                let rebasedDraft = try aidenBotEditorRebasedDraft(
+                    draft,
+                    baseline: baselineBot,
+                    baselineCatalog: catalog,
+                    authoritative: authoritative,
+                    authoritativeCatalog: refreshedCatalog
+                )
                 self.baselineBot = authoritative
                 self.catalog = refreshedCatalog
-                if (try? draft.isSatisfied(by: authoritative, catalog: refreshedCatalog)) == true {
+                self.draft = rebasedDraft
+                if (try? rebasedDraft.isSatisfied(
+                    by: authoritative,
+                    catalog: refreshedCatalog
+                )) == true {
                     onSaved(authoritative)
                     dismiss()
                 } else {
