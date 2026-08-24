@@ -23,6 +23,8 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Full server support inventory. Its absence identifies a legacy,
     /// capability-ambiguous response and must fail closed for Bots.
     let serverCapabilities: [AidenRemoteCapability]?
+    /// Presentation-only label the Mac currently stores for this client.
+    let deviceName: String?
     let connectionMode: AidenConnectionMode
     let minimumClientVersion: String?
     let serverTime: Date
@@ -34,6 +36,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         appVersion: String,
         capabilities: [AidenRemoteCapability],
         serverCapabilities: [AidenRemoteCapability]? = nil,
+        deviceName: String? = nil,
         connectionMode: AidenConnectionMode,
         minimumClientVersion: String?,
         serverTime: Date
@@ -44,6 +47,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         self.appVersion = appVersion
         self.capabilities = capabilities
         self.serverCapabilities = serverCapabilities
+        self.deviceName = deviceName
         self.connectionMode = connectionMode
         self.minimumClientVersion = minimumClientVersion
         self.serverTime = serverTime
@@ -64,6 +68,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         } else {
             serverCapabilities = nil
         }
+        deviceName = try values.decodeIfPresent(String.self, forKey: .deviceName)
         connectionMode = try values.decode(AidenConnectionMode.self, forKey: .connectionMode)
         minimumClientVersion = try values.decodeIfPresent(
             String.self,
@@ -94,6 +99,20 @@ struct AidenServer: Codable, Equatable, Sendable {
                 )
             }
         }
+        if let deviceName {
+            guard !deviceName.isEmpty,
+                  deviceName.count <= 80,
+                  !deviceName.unicodeScalars.contains(where: { scalar in
+                      scalar.properties.generalCategory == .control
+                          || scalar.properties.generalCategory == .format
+                  }) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .deviceName,
+                    in: values,
+                    debugDescription: "Expected a bounded visible client-device label."
+                )
+            }
+        }
     }
 
     private static func requireUniqueCapabilities(
@@ -112,7 +131,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case protocolVersion, instanceId, name, appVersion, capabilities, serverCapabilities
+        case protocolVersion, instanceId, name, appVersion, capabilities, serverCapabilities, deviceName
         case connectionMode, minimumClientVersion, serverTime
     }
 }
@@ -260,6 +279,14 @@ final class AidenRemoteClient: @unchecked Sendable {
         let clientVersion: String
         let acceptsDisplayName: Bool?
         let acceptsBotCapabilities: Bool?
+    }
+
+    private struct DeviceIdentityRequest: Encodable {
+        let name: String
+    }
+
+    private struct DeviceIdentityResponse: Decodable {
+        let name: String
     }
 
     private struct WorkspaceList: Decodable {
@@ -518,6 +545,17 @@ final class AidenRemoteClient: @unchecked Sendable {
             throw AidenRemoteContractError.invalidProtocolVersion
         }
         return value
+    }
+
+    func updateDeviceIdentity(name: String) async throws {
+        let response: DeviceIdentityResponse = try await send(
+            method: "PATCH",
+            path: ["device", "identity"],
+            body: DeviceIdentityRequest(name: name)
+        )
+        guard response.name == name else {
+            throw AidenRemoteClientError.invalidResponse
+        }
     }
 
     func workspaces() async throws -> [AidenWorkspace] {
