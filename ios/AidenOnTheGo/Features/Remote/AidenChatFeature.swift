@@ -942,6 +942,7 @@ final class AidenChatViewModel {
     var visibleProviders: [AidenProvider] { catalog?.visibleProviders ?? [] }
     var usesPersistedBotModelAuthority: Bool { chat.isBotChat }
     var showsComposerModelControl: Bool { !chat.isBotChat }
+    var acceptsImageAttachments: Bool { selectedModel?.acceptsImageInput ?? true }
     var selectedModelDisplayLabel: String { selectedModel?.label ?? selectedModelId ?? "Model unavailable" }
 
     private var turnModelSelection: AidenChatModelSelection {
@@ -1024,6 +1025,12 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
+        guard acceptsImageAttachments || !pendingAttachments.contains(where: { $0.kind == .image }) else {
+            presentedError = chat.isBotChat
+                ? String(localized: "This Bot’s saved model can’t read images. Choose an image-capable model in Edit Bot, then try again.")
+                : String(localized: "The selected model can’t read images. Choose an image-capable model, then try again.")
+            return
+        }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let submittedAttachments = pendingAttachments
         let modelSelection = turnModelSelection
@@ -3871,7 +3878,9 @@ private struct AidenComposerView: View {
                         || isPreparingAttachments || model.pendingAttachments.count >= 10
                 )
                 .accessibilityLabel("Add attachment")
-                .accessibilityHint("Attach an image or bounded text file")
+                .accessibilityHint(model.acceptsImageAttachments
+                    ? "Attach an image or bounded text file"
+                    : "Attach a bounded text file. This model cannot read images")
                 .photosPicker(
                     isPresented: $isPhotoPickerPresented,
                     selection: $selectedPhotos,
@@ -4082,7 +4091,7 @@ private struct AidenComposerView: View {
         }
         .fileImporter(
             isPresented: $isFileImporterPresented,
-            allowedContentTypes: [.image, .plainText, .sourceCode, .json, .xml, .commaSeparatedText],
+            allowedContentTypes: allowedAttachmentContentTypes,
             allowsMultipleSelection: true
         ) { result in
             guard !model.isReadOnlyPresentation else { return }
@@ -4131,7 +4140,8 @@ private struct AidenComposerView: View {
         UIMenu(children: [
             UIAction(
                 title: String(localized: "Photo Library"),
-                image: UIImage(systemName: "photo.on.rectangle")
+                image: UIImage(systemName: "photo.on.rectangle"),
+                attributes: model.acceptsImageAttachments ? [] : [.disabled]
             ) { _ in
                 Task { @MainActor in
                     composerFocus.wrappedValue = false
@@ -4152,6 +4162,11 @@ private struct AidenComposerView: View {
 
     private var attachmentCapacity: Int {
         max(0, 10 - model.pendingAttachments.count)
+    }
+
+    private var allowedAttachmentContentTypes: [UTType] {
+        let textTypes: [UTType] = [.plainText, .sourceCode, .json, .xml, .commaSeparatedText]
+        return model.acceptsImageAttachments ? [.image] + textTypes : textTypes
     }
 
     private func presentAttachmentFailures(_ count: Int) {

@@ -5857,7 +5857,8 @@
               "type": "object",
               "required": [
                 "id",
-                "label"
+                "label",
+                "supportsImages"
               ],
               "properties": {
                 "id": {
@@ -5865,6 +5866,10 @@
                 },
                 "label": {
                   "type": "string"
+                },
+                "supportsImages": {
+                  "type": "boolean",
+                  "description": "Whether this configured model accepts image input."
                 },
                 "thinkingLevels": {
                   "type": "array",

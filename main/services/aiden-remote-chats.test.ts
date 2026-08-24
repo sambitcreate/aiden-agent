@@ -45,6 +45,7 @@ function fixture(
     botAvailable?: boolean;
     retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
+    modelSupportsImages?: () => boolean;
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -163,6 +164,7 @@ function fixture(
         providerId: providerId ?? "provider-1",
         modelId: modelId ?? "model-1",
         thinkingLevels: ["low", "high"],
+        supportsImages: fixtureOptions.modelSupportsImages?.() ?? true,
       }),
     },
     bots: {
@@ -873,6 +875,49 @@ test("remote Bot turn preflights protected runtime authority before reserving or
   assert.equal(app.appends(), 1);
   assert.equal(app.begins(), 1);
   assert.equal(app.starts(), 1);
+});
+
+test("remote turns reject images for text-only models without consuming the attachment", async () => {
+  let supportsImages = false;
+  const attachments = new AidenRemoteAttachmentStore({
+    now: () => 10_000,
+    randomId: () => `att_${"V".repeat(43)}`,
+  });
+  const app = fixture(chat({ botId: "bot-1" }), {
+    attachments,
+    retainedBotChatAuthorizer: () => true,
+    modelSupportsImages: () => supportsImages,
+  });
+  const image = await app.service.uploadAttachment("device-1", "chat-1", {
+    name: "visible.png",
+    mimeType: "image/png",
+    kind: "image",
+    data: ONE_PIXEL_PNG,
+  });
+
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "text-only-image-0001", {
+      text: "Can you see this?",
+      attachmentIds: [image.id],
+    }),
+    (error: unknown) =>
+      (error as { code?: string; status?: number; message?: string }).code === "invalid_request" &&
+      (error as { status?: number }).status === 400 &&
+      /Edit Bot/u.test((error as { message?: string }).message ?? ""),
+  );
+  assert.equal(app.appends(), 0);
+  assert.equal(app.begins(), 0);
+  assert.equal(app.starts(), 0);
+
+  supportsImages = true;
+  const accepted = await app.service.startTurn(
+    "device-1",
+    "chat-1",
+    "vision-image-0001",
+    { text: "Can you see this?", attachmentIds: [image.id] },
+  );
+  assert.equal(accepted.status, "accepted");
+  assert.equal(app.appends(), 1);
 });
 
 test("a provider setup failure after append returns the one accepted message with a terminal error stream", async () => {

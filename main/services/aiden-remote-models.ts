@@ -24,6 +24,7 @@ const REMOTE_MODEL_CATALOG_RESERVE_BYTES = 4 * 1024;
 export interface AidenRemoteModelProjection {
   id: string;
   label: string;
+  supportsImages: boolean;
   thinkingLevels?: string[];
   defaultThinkingLevel?: string;
   thinkingCanDisable?: boolean;
@@ -123,6 +124,7 @@ export class AidenRemoteModelService {
         const model: AidenRemoteModelProjection = {
           id,
           label: bounded(metadata?.name ?? id, 256),
+          supportsImages: metadata?.vision === true,
           ...(isModelHidden(settings.hiddenModelsByProvider, provider.id, id)
             ? { hidden: true }
             : {}),
@@ -171,7 +173,12 @@ export class AidenRemoteModelService {
   async resolve(
     providerId?: string,
     modelId?: string,
-  ): Promise<{ providerId: string; modelId: string; thinkingLevels: readonly string[] }> {
+  ): Promise<{
+    providerId: string;
+    modelId: string;
+    thinkingLevels: readonly string[];
+    supportsImages: boolean;
+  }> {
     const projection = await this.list();
     const provider = providerId
       ? projection.providers.find((candidate) => candidate.id === providerId)
@@ -192,6 +199,7 @@ export class AidenRemoteModelService {
       providerId: provider.id,
       modelId: model.id,
       thinkingLevels: model.thinkingLevels ?? [],
+      supportsImages: model.supportsImages,
     };
   }
 }

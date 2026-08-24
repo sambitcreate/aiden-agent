@@ -279,6 +279,29 @@ export class AidenRemoteAttachmentStore {
 
   consume(deviceId: string, chatId: string, input: unknown): Attachment[] | undefined {
     if (input === undefined) return undefined;
+    const { selected, now } = this.select(deviceId, chatId, input);
+    const attachments = selected.map((record) => structuredClone(record.attachment));
+    if (attachmentInlineBytes(attachments) > MAX_ATTACHMENT_INLINE_BYTES) {
+      throw new AidenRemoteServiceError("payload_too_large", "The attachments exceed the turn limit.", 413);
+    }
+    for (const record of selected) this.removeRecord(record);
+    this.prune(now);
+    return attachments;
+  }
+
+  /** Validate one-shot references without consuming them during model admission. */
+  requiresImageInput(deviceId: string, chatId: string, input: unknown): boolean {
+    if (input === undefined) return false;
+    return this.select(deviceId, chatId, input).selected.some(
+      (record) => record.attachment.kind === "image",
+    );
+  }
+
+  private select(
+    deviceId: string,
+    chatId: string,
+    input: unknown,
+  ): { selected: PendingAttachmentRecord[]; now: number } {
     if (
       !Array.isArray(input) ||
       input.length === 0 ||
@@ -315,13 +338,7 @@ export class AidenRemoteAttachmentStore {
       }
       selected.push(record);
     }
-    const attachments = selected.map((record) => structuredClone(record.attachment));
-    if (attachmentInlineBytes(attachments) > MAX_ATTACHMENT_INLINE_BYTES) {
-      throw new AidenRemoteServiceError("payload_too_large", "The attachments exceed the turn limit.", 413);
-    }
-    for (const record of selected) this.removeRecord(record);
-    this.prune(now);
-    return attachments;
+    return { selected, now };
   }
 
   remove(deviceId: string, chatId: string, id: string): void {

@@ -855,6 +855,18 @@ export class AidenRemoteChatService {
           ) {
             throw new AidenRemoteServiceError("invalid_request", "That thinking level is unavailable.", 400);
           }
+          if (
+            this.attachments.requiresImageInput(deviceId, chatId, parsed.attachmentIds) &&
+            !selection.supportsImages
+          ) {
+            throw new AidenRemoteServiceError(
+              "invalid_request",
+              authoritative.botId
+                ? "This Bot’s saved model can’t read images. Choose an image-capable model in Edit Bot, then try again."
+                : "The selected model can’t read images. Choose an image-capable model, then try again.",
+              400,
+            );
+          }
           const turnId = `turn_${randomUUID()}`;
           const streamId = `stream_${randomUUID()}`;
           const owner = this.options.streams.create(deviceId, streamId, chatId, turnId);

@@ -290,7 +290,11 @@ async function fixture(options: {
     },
     models: {
       list: async () => ({
-        providers: [{ id: "provider-1", label: "Provider", models: [{ id: "model-1", label: "Model" }] }],
+        providers: [{
+          id: "provider-1",
+          label: "Provider",
+          models: [{ id: "model-1", label: "Model", supportsImages: true }],
+        }],
         defaults: { providerId: "provider-1", modelId: "model-1" },
       }),
     },

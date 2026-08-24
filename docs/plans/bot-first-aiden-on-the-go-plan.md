@@ -16,6 +16,8 @@ The Aiden logo at the top of the existing mobile home becomes the switcher. Tapp
 
 The Bots area adapts the attached Messages references without copying Apple's product chrome. It leads with large bot identities, pinned favorites, one contact row per remaining Bot, search, and simple create/edit actions. It continues to use Aiden's own appearance presets, semantic colors, shared chat renderer, streaming, attachments, approvals, and motion language.
 
+Image attachments are admitted only when the Bot's saved model is explicitly image-capable. The paired Mac checks the pending attachment kinds before consuming their one-shot handles or appending the turn, while iOS disables photo selection for a known text-only model and directs model changes back to Edit Bot.
+
 A bot remains a thin, reusable identity over Aiden's existing Pi-backed chat runtime. The phone will not host a second agent engine. Bot definitions, each Bot's one persistent chat, access policies, generated avatars, provider selection, managed workspaces, and every tool decision remain authoritative on the paired Mac. Every bot gets a durable Aiden-managed home workspace for its chat and artifacts, but that implementation detail stays out of the ordinary UI unless the person asks about it.
 
 ## Owner decisions captured by this plan

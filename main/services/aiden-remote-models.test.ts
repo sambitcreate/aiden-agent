@@ -39,6 +39,7 @@ test("model projection includes only configured chat models and no connection se
     {
       id: "chat-model",
       label: "Chat Model",
+      supportsImages: false,
       thinkingLevels: ["low", "high"],
       defaultThinkingLevel: "high",
       thinkingCanDisable: false,
@@ -70,6 +71,7 @@ test("model selection rejects missing providers and models", async () => {
     providerId: "provider-1",
     modelId: "chat-model",
     thinkingLevels: ["low", "high"],
+    supportsImages: false,
   });
   await assert.rejects(
     service.resolve("provider-1", "missing"),
@@ -102,13 +104,14 @@ test("hidden models are projected for clients, skipped by defaults, and remain r
     modelId: "visible-model",
   });
   assert.deepEqual(projection.providers[0]?.models, [
-    { id: "hidden-model", label: "Hidden Model", hidden: true },
-    { id: "visible-model", label: "Visible Model" },
+    { id: "hidden-model", label: "Hidden Model", supportsImages: false, hidden: true },
+    { id: "visible-model", label: "Visible Model", supportsImages: false },
   ]);
   assert.deepEqual(await service.resolve("provider-1", "hidden-model"), {
     providerId: "provider-1",
     modelId: "hidden-model",
     thinkingLevels: [],
+    supportsImages: false,
   });
 });
 
@@ -172,6 +175,7 @@ test("OpenCode Go projects remotely refreshed Ox Alpha metadata and thinking cho
   assert.deepEqual((await service.list()).providers[0]?.models, [{
     id: "ox-alpha-free",
     label: "Ox Alpha Free (Unlimited)",
+    supportsImages: false,
     thinkingLevels: ["low", "high", "max"],
     defaultThinkingLevel: "max",
     thinkingCanDisable: false,

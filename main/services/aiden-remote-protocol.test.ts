@@ -273,6 +273,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   assert.deepEqual(Object.keys(modelProperties), [
     "id",
     "label",
+    "supportsImages",
     "thinkingLevels",
     "defaultThinkingLevel",
     "thinkingCanDisable",

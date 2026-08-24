@@ -945,12 +945,14 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
 struct AidenModel: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let label: String
+    var supportsImages: Bool?
     let thinkingLevels: [String]?
     let defaultThinkingLevel: String?
     let thinkingCanDisable: Bool?
     let hidden: Bool?
 
     var isHidden: Bool { hidden == true }
+    var acceptsImageInput: Bool { supportsImages != false }
 
     var effectiveThinkingLevel: String? {
         guard let thinkingLevels, !thinkingLevels.isEmpty else { return nil }

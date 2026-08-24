@@ -44,6 +44,7 @@ async function projectionReadServer(initial: Chat | Chat[]) {
         providerId: "provider-1",
         modelId: "model-1",
         thinkingLevels: [],
+        supportsImages: true,
       }),
     },
     bots: { get: async () => null },
@@ -343,7 +344,12 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     },
     streams,
     models: {
-      resolve: async () => ({ providerId: "provider-1", modelId: "model-1", thinkingLevels: [] }),
+      resolve: async () => ({
+        providerId: "provider-1",
+        modelId: "model-1",
+        thinkingLevels: [],
+        supportsImages: true,
+      }),
     },
     bots: { get: async () => null },
     botMutations: new BotMutationGate(),

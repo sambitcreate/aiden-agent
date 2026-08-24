@@ -272,13 +272,15 @@ final class AidenChatTests: XCTestCase {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
             from: Data(
-                #"{"providers":[{"id":"opencode-go","label":"OpenCode Go","models":[{"id":"ox-alpha-free","label":"Ox Alpha","thinkingLevels":["low","high","max"],"defaultThinkingLevel":"high","thinkingCanDisable":false},{"id":"legacy","label":"Legacy","thinkingLevels":["low","high"]}]}],"defaults":{}}"#.utf8
+                #"{"providers":[{"id":"opencode-go","label":"OpenCode Go","models":[{"id":"ox-alpha-free","label":"Ox Alpha","supportsImages":false,"thinkingLevels":["low","high","max"],"defaultThinkingLevel":"high","thinkingCanDisable":false},{"id":"legacy","label":"Legacy","supportsImages":true,"thinkingLevels":["low","high"]}]}],"defaults":{}}"#.utf8
             )
         )
 
         let models = try XCTUnwrap(catalog.providers.first?.models)
         XCTAssertEqual(models[0].effectiveThinkingLevel, "high")
         XCTAssertEqual(models[0].thinkingLabel(for: "off"), "Hide")
+        XCTAssertFalse(models[0].acceptsImageInput)
+        XCTAssertTrue(models[1].acceptsImageInput)
         XCTAssertEqual(models[1].effectiveThinkingLevel, "high")
     }
 
