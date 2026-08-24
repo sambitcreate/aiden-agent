@@ -37,3 +37,7 @@ Two post-implementation reviews were completed:
 2. Product/contract review: fixed cache-first Bot image authority, fail-closed unknown state, direct Edit Bot recovery for raced sends, complete second-provider disclosure, and no-provider empty states.
 
 No P0 findings remained after remediation, and all affected gates were rerun successfully.
+
+## Internal TestFlight
+
+Version `0.1.0` build `22` was archived from implementation commit `50f9967f4`, uploaded with the checked-in internal-only export policy, processed as `VALID`, and assigned to `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`). Exact build `f31801d1-91c1-4c79-8086-24bfec4c8078` reports `internalBuildState=IN_BETA_TESTING` and `externalBuildState=NOT_APPLICABLE`.
