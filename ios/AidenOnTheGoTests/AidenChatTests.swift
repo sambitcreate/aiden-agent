@@ -5,17 +5,14 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
-    func testBotBubbleTailIsOneContinuousFilledShape() {
+    func testBotBubbleIsRoundedWithoutATail() {
         let rect = CGRect(x: 0, y: 0, width: 100, height: 50)
-        let outgoing = AidenBotMessageBubbleShape(isOutgoing: true, showsTail: true)
-            .path(in: rect)
-        let incoming = AidenBotMessageBubbleShape(isOutgoing: false, showsTail: true)
-            .path(in: rect)
+        let bubble = AidenBotMessageBubbleShape().path(in: rect)
 
-        XCTAssertTrue(outgoing.contains(CGPoint(x: 91, y: 44)))
-        XCTAssertTrue(outgoing.contains(CGPoint(x: 96, y: 48)))
-        XCTAssertTrue(incoming.contains(CGPoint(x: 9, y: 44)))
-        XCTAssertTrue(incoming.contains(CGPoint(x: 4, y: 48)))
+        XCTAssertEqual(bubble.boundingRect, rect)
+        XCTAssertTrue(bubble.contains(CGPoint(x: 50, y: 25)))
+        XCTAssertFalse(bubble.contains(CGPoint(x: 1, y: 1)))
+        XCTAssertFalse(bubble.contains(CGPoint(x: 99, y: 49)))
     }
 
     func testBotMessageGroupingOnlyJoinsNearbyMessagesFromTheSameSpeaker() {

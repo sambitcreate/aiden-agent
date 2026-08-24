@@ -1,4 +1,3 @@
-import AVFoundation
 import Accessibility
 import CoreTransferable
 import CryptoKit
@@ -519,86 +518,8 @@ func aidenMessagesJoin(
 }
 
 struct AidenBotMessageBubbleShape: Shape {
-    let isOutgoing: Bool
-    let showsTail: Bool
-
     func path(in rect: CGRect) -> Path {
-        guard showsTail else {
-            return Path(
-                roundedRect: rect,
-                cornerRadius: 18,
-                style: .continuous
-            )
-        }
-
-        let tailWidth: CGFloat = showsTail ? 7 : 0
-        let body = CGRect(
-            x: isOutgoing ? rect.minX : rect.minX + tailWidth,
-            y: rect.minY,
-            width: rect.width - tailWidth,
-            height: rect.height
-        )
-        let radius = min(18, body.width / 2, body.height / 2)
-        var path = Path()
-        if isOutgoing {
-            path.move(to: CGPoint(x: body.minX + radius, y: body.minY))
-            path.addLine(to: CGPoint(x: body.maxX - radius, y: body.minY))
-            path.addQuadCurve(
-                to: CGPoint(x: body.maxX, y: body.minY + radius),
-                control: CGPoint(x: body.maxX, y: body.minY)
-            )
-            path.addLine(to: CGPoint(x: body.maxX, y: body.maxY - 13))
-            path.addCurve(
-                to: CGPoint(x: rect.maxX, y: rect.maxY),
-                control1: CGPoint(x: body.maxX, y: body.maxY - 6),
-                control2: CGPoint(x: rect.maxX - 2, y: rect.maxY - 1)
-            )
-            path.addCurve(
-                to: CGPoint(x: body.maxX - 14, y: body.maxY),
-                control1: CGPoint(x: rect.maxX - 5, y: rect.maxY - 2),
-                control2: CGPoint(x: body.maxX - 7, y: body.maxY)
-            )
-            path.addLine(to: CGPoint(x: body.minX + radius, y: body.maxY))
-            path.addQuadCurve(
-                to: CGPoint(x: body.minX, y: body.maxY - radius),
-                control: CGPoint(x: body.minX, y: body.maxY)
-            )
-            path.addLine(to: CGPoint(x: body.minX, y: body.minY + radius))
-            path.addQuadCurve(
-                to: CGPoint(x: body.minX + radius, y: body.minY),
-                control: CGPoint(x: body.minX, y: body.minY)
-            )
-        } else {
-            path.move(to: CGPoint(x: body.maxX - radius, y: body.minY))
-            path.addLine(to: CGPoint(x: body.minX + radius, y: body.minY))
-            path.addQuadCurve(
-                to: CGPoint(x: body.minX, y: body.minY + radius),
-                control: CGPoint(x: body.minX, y: body.minY)
-            )
-            path.addLine(to: CGPoint(x: body.minX, y: body.maxY - 13))
-            path.addCurve(
-                to: CGPoint(x: rect.minX, y: rect.maxY),
-                control1: CGPoint(x: body.minX, y: body.maxY - 6),
-                control2: CGPoint(x: rect.minX + 2, y: rect.maxY - 1)
-            )
-            path.addCurve(
-                to: CGPoint(x: body.minX + 14, y: body.maxY),
-                control1: CGPoint(x: rect.minX + 5, y: rect.maxY - 2),
-                control2: CGPoint(x: body.minX + 7, y: body.maxY)
-            )
-            path.addLine(to: CGPoint(x: body.maxX - radius, y: body.maxY))
-            path.addQuadCurve(
-                to: CGPoint(x: body.maxX, y: body.maxY - radius),
-                control: CGPoint(x: body.maxX, y: body.maxY)
-            )
-            path.addLine(to: CGPoint(x: body.maxX, y: body.minY + radius))
-            path.addQuadCurve(
-                to: CGPoint(x: body.maxX - radius, y: body.minY),
-                control: CGPoint(x: body.maxX, y: body.minY)
-            )
-        }
-        path.closeSubpath()
-        return path
+        Path(roundedRect: rect, cornerRadius: 18, style: .continuous)
     }
 }
 
@@ -1914,7 +1835,6 @@ struct AidenChatDetailView: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
     @State private var model: AidenChatViewModel
-    @State private var speechPlayback = AidenSpeechPlaybackController()
     @State private var composerHeight: CGFloat = 132
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
@@ -2050,17 +1970,12 @@ struct AidenChatDetailView: View {
 
     private func messageRow(_ message: AidenChatMessage, at index: Int) -> some View {
         let previous = index > 0 ? model.chat.messages[index - 1] : nil
-        let next = index + 1 < model.chat.messages.count ? model.chat.messages[index + 1] : nil
         let isBotMessage = presentationStyle == .botMessages
-        let joinsNext = next.map { aidenMessagesJoin(message, $0) } ?? false
-        let showsTail = isBotMessage && !joinsNext
         let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
 
         return AidenMessageView(
             message: message,
             presentationStyle: presentationStyle,
-            showsTail: showsTail,
-            speechPlayback: speechPlayback,
             loadAttachmentImage: { attachment in
                 await model.attachmentImageData(for: attachment)
             }
@@ -2292,8 +2207,6 @@ private struct AidenMessageView: View {
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
     let presentationStyle: AidenChatPresentationStyle
-    let showsTail: Bool
-    let speechPlayback: AidenSpeechPlaybackController
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
 
     var body: some View {
@@ -2393,16 +2306,6 @@ private struct AidenMessageView: View {
             if message.role == .assistant, let outcome = message.outcome {
                 AidenMessageOutcomeView(outcome: outcome)
             }
-            if message.role == .assistant, !message.text.isEmpty {
-                Button {
-                    speechPlayback.speak(message.text)
-                } label: {
-                    Label("Read aloud", systemImage: "speaker.wave.2")
-                }
-                .font(.caption)
-                .buttonStyle(.plain)
-                .foregroundStyle(palette.secondary)
-            }
         }
     }
 
@@ -2412,10 +2315,6 @@ private struct AidenMessageView: View {
             content: .text
         )
         let usesBotBubble = presentationStyle == .botMessages
-        let bubbleShowsTail = showsTail
-            && message.attachments?.isEmpty != false
-            && message.outcome == nil
-            && message.timeline?.steps.isEmpty != false
         return AidenMessageTextView(role: message.role, content: message.text)
             .foregroundStyle(
                 usesBotBubble && message.role == .user
@@ -2425,10 +2324,7 @@ private struct AidenMessageView: View {
             .padding(usesWorkspaceBubble || usesBotBubble ? 12 : 0)
             .background {
                 if usesBotBubble {
-                    AidenBotMessageBubbleShape(
-                        isOutgoing: message.role == .user,
-                        showsTail: bubbleShowsTail
-                    )
+                    AidenBotMessageBubbleShape()
                     .fill(
                         message.role == .user
                             ? palette.accent
@@ -3458,10 +3354,7 @@ private struct AidenLiveResponseView: View {
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
                         if presentationStyle == .botMessages {
-                            AidenBotMessageBubbleShape(
-                                isOutgoing: false,
-                                showsTail: false
-                            )
+                            AidenBotMessageBubbleShape()
                             .fill(Color(uiColor: .secondarySystemFill))
                         }
                     }
@@ -4314,21 +4207,5 @@ private struct AidenComposerGlassModifier: ViewModifier {
 private extension View {
     func aidenComposerGlass(enabled: Bool = true) -> some View {
         modifier(AidenComposerGlassModifier(enabled: enabled))
-    }
-}
-
-@MainActor
-final class AidenSpeechPlaybackController {
-    private let synthesizer = AVSpeechSynthesizer()
-
-    func speak(_ text: String) {
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return }
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-        }
-        let utterance = AVSpeechUtterance(string: String(cleaned.prefix(8_000)))
-        utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.language.languageCode?.identifier)
-        synthesizer.speak(utterance)
     }
 }

@@ -407,7 +407,8 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /TextField\("Message Aiden"[\s\S]*?HStack\(alignment: \.center, spacing: 10\)[\s\S]*?padding\(\.horizontal, 12\)[\s\S]*?aidenComposerGlass\(\)/u,
   );
   assert.doesNotMatch(chat, /private var botMessageControls|aidenBotComposerCapsule/u);
-  assert.match(chat, /path\.closeSubpath\(\)/u);
+  assert.match(chat, /Path\(roundedRect: rect, cornerRadius: 18, style: \.continuous\)/u);
+  assert.doesNotMatch(chat, /showsTail|Read aloud|AidenSpeechPlaybackController|AVSpeech/u);
   assert.match(
     botAvatar,
     /AidenBotCanonicalAvatarMemoryCache[\s\S]*?assetRevision[\s\S]*?loadedCacheKey == cacheKey[\s\S]*?canonicalImage != nil[\s\S]*?return/u,
