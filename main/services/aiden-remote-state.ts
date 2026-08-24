@@ -83,6 +83,7 @@ export interface AidenRemoteDeviceProjection {
 
 export interface AidenRemoteAuthenticatedDevice {
   id: string;
+  name: string;
   capabilities: ReadonlySet<AidenRemoteCapability>;
   acceptsBotCapabilities: boolean;
   revoked: boolean;
@@ -596,6 +597,25 @@ export class AidenRemoteStateRegistry {
     return document.devices.map(projectDevice);
   }
 
+  async updateDeviceName(
+    deviceId: string,
+    name: string,
+  ): Promise<AidenRemoteDeviceProjection | null> {
+    if (!boundedString(deviceId, 128)) return null;
+    const normalizedName = normalizeAidenRemoteDisplayName(name);
+    return this.mutateIfChanged((draft) => {
+      const device = draft.devices.find((candidate) => candidate.id === deviceId);
+      if (!device || device.revokedAt !== undefined) {
+        return { changed: false, value: null };
+      }
+      if (device.name === normalizedName) {
+        return { changed: false, value: projectDevice(device) };
+      }
+      device.name = normalizedName;
+      return { changed: true, value: projectDevice(device) };
+    });
+  }
+
   async issueDevice(input: {
     name: string;
     type: AidenRemoteDeviceType;
@@ -698,6 +718,7 @@ export class AidenRemoteStateRegistry {
       if (!capabilities) return { changed: false, value: null };
       const authenticated: AidenRemoteAuthenticatedDevice = {
         id: current.id,
+        name: current.name,
         capabilities: new Set(capabilities),
         acceptsBotCapabilities: current.acceptsBotCapabilities === true,
         revoked: current.revokedAt !== undefined,
