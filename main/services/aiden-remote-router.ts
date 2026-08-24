@@ -21,6 +21,7 @@ import type {
   AidenRemoteConnectionMode,
   AidenRemoteStateRegistry,
 } from "./aiden-remote-state.js";
+import { normalizeAidenRemoteDisplayName } from "./aiden-remote-state.js";
 import type { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import type { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
 import type {
@@ -53,6 +54,8 @@ export interface AidenRemoteServerProjection {
   capabilities: AidenRemoteCapability[];
   /** Server-supported inventory, emitted only to explicitly Bot-aware devices. */
   serverCapabilities?: AidenRemoteCapability[];
+  /** Presentation-only label currently stored for the authenticated device. */
+  deviceName?: string;
   connectionMode: AidenRemoteConnectionMode;
   minimumClientVersion?: string;
   serverTime: string;
@@ -60,10 +63,12 @@ export interface AidenRemoteServerProjection {
 
 type AidenRemoteRouterAuthenticatedDevice = Omit<
   AidenRemoteAuthenticatedDevice,
-  "acceptsBotCapabilities"
+  "acceptsBotCapabilities" | "name"
 > & {
   /** Omitted by legacy dependency adapters and treated as not negotiated. */
   acceptsBotCapabilities?: boolean;
+  /** Omitted by legacy dependency adapters. */
+  name?: string;
 };
 
 type AidenRemoteRouterDeviceRegistry = {
@@ -71,6 +76,7 @@ type AidenRemoteRouterDeviceRegistry = {
     credential: string,
   ): Promise<AidenRemoteRouterAuthenticatedDevice | null>;
   acquireDeviceAuthorization: AidenRemoteStateRegistry["acquireDeviceAuthorization"];
+  updateDeviceName?: AidenRemoteStateRegistry["updateDeviceName"];
 };
 
 export interface AidenRemoteRouterDependencies {
@@ -136,6 +142,7 @@ export interface AidenRemoteRouterDependencies {
       | "pairingManualBootstrap"
       | "pairingExchange"
       | "server"
+      | "deviceIdentity"
       | "botAccessNotice"
       | "bots"
       | "bot"
@@ -177,6 +184,33 @@ export interface AidenRemoteRouterDependencies {
 
 function requestId(): string {
   return `req_${randomBytes(18).toString("base64url")}`;
+}
+
+function parseDeviceIdentityRequest(value: unknown): { name: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The device identity must contain one valid name.",
+      400,
+    );
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 1 || !("name" in record)) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The device identity must contain one valid name.",
+      400,
+    );
+  }
+  try {
+    return { name: normalizeAidenRemoteDisplayName(record.name) };
+  } catch {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The device identity name must be 1–80 visible characters.",
+      400,
+    );
+  }
 }
 
 function hasAsciiControl(value: string): boolean {
@@ -829,6 +863,7 @@ export function createAidenRemoteRequestHandler(
           name: dependencies.displayName(),
           appVersion: dependencies.appVersion,
           capabilities: [...device.capabilities],
+          ...(device.name ? { deviceName: device.name } : {}),
           ...(device.acceptsBotCapabilities === true
             ? { serverCapabilities: [...AIDEN_REMOTE_CAPABILITIES] }
             : {}),
@@ -836,6 +871,30 @@ export function createAidenRemoteRequestHandler(
           serverTime: new Date(dependencies.now()).toISOString(),
         };
         writeJson(response, 200, projection);
+        return;
+      }
+      if (request.method === "PATCH" && path === "/device/identity") {
+        requireNoQuery(query);
+        route = "deviceIdentity";
+        const device = await authenticate(request, dependencies.devices, "server:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.devices.updateDeviceName) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This endpoint is unavailable.",
+            404,
+          );
+        }
+        const input = parseDeviceIdentityRequest(await readJsonBody(request, 1_024));
+        const updated = await dependencies.devices.updateDeviceName(device.id, input.name);
+        if (!updated) {
+          throw new AidenRemoteServiceError(
+            "credential_revoked",
+            "This device is no longer available.",
+            403,
+          );
+        }
+        writeJson(response, 200, { name: updated.name });
         return;
       }
       if (request.method === "GET" && path === "/bot-access-notice") {
