@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAssistantSystemPrompt } from "./system-prompt.js";
+import {
+  PI_CHAT_SYSTEM_PROMPT,
+  RESPONSE_FORMAT_GUIDANCE,
+} from "../response-format-guidance.js";
 
 const base = {
   settingsSections: ["providers", "appearance"],
@@ -16,6 +20,18 @@ test("introduces Aiden as an app assistant without granting dock coding access",
   assert.match(prompt, /Aiden Agent/u);
   assert.match(prompt, /cannot read or change project files/u);
   assert.match(prompt, /future scheduled project or MCP automation/u);
+});
+
+test("shares restrained response-structure guidance across conversational surfaces", () => {
+  const prompt = buildAssistantSystemPrompt(base);
+  assert.match(prompt, /Use short paragraphs/u);
+  assert.match(prompt, /bullets for genuinely parallel items/u);
+  assert.match(prompt, /numbered lists only when order matters/u);
+  assert.match(prompt, /headings only when a longer response benefits/u);
+  assert.match(prompt, /do not turn every response into a checklist/u);
+  assert.ok(prompt.includes(RESPONSE_FORMAT_GUIDANCE));
+  assert.ok(PI_CHAT_SYSTEM_PROMPT.includes(RESPONSE_FORMAT_GUIDANCE));
+  assert.match(PI_CHAT_SYSTEM_PROMPT, /using Markdown for formatting/u);
 });
 
 test("grounds the prompt in settings sections without disclosing workspace inventory", () => {
