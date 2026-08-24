@@ -1,6 +1,6 @@
 # Aiden On The Go Plan
 
-Status: Active foundation — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 20 is `VALID` and `IN_BETA_TESTING` for Internal Testers with the hardened Bots-first experience; physical-iPad and external/public-release acceptance remain open. The approved bot-first extension is now governed by `bot-first-aiden-on-the-go-plan.md`.
+Status: Active foundation — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 21 is `VALID` and `IN_BETA_TESTING` for Internal Testers with final-only Bot replies and expandable intermediate activity; physical-iPad and external/public-release acceptance remain open. The approved bot-first extension is now governed by `bot-first-aiden-on-the-go-plan.md`.
 Date: 2026-08-18
 Owners: Aiden Electron main process and the SwiftUI app under `ios/`
 
@@ -812,3 +812,9 @@ The complete repository suite, type-check, lint, production build, generic iPhon
 Connected iPhone and iPad clients now publish a bounded presentation identity instead of relying on UIKit's privacy-era generic `iPhone`/`iPad` value. iOS prefers a specific user-assigned device name, falls back to the cleaned local hostname, and finally uses a stable typed display suffix derived from the vendor-scoped installation identifier. The authenticated server projection returns the Mac's current label for only the calling device; a newer client refreshes it only when stale through `PATCH /device/identity`, so existing pairings heal without repeated state writes or re-pairing.
 
 This label never becomes an authentication key. Remote `deviceId` and credential identity remain Mac-pair-specific. Future iCloud sync should reconcile an account-scoped display record separately, as recorded beside the iOS identity builder, without widening or replacing Remote authentication.
+
+## Bot final-reply projection follow-up — 2026-08-24
+
+Bot chats now separate the persisted assistant transcript at the last tool activity boundary: intermediate narration is deduplicated and kept inside the collapsed activity disclosure, while only the terminal answer is rendered as a normal assistant bubble or copied from the Bot reply. Direct Bot answers without tool activity remain visible. Workspace chats preserve their existing completed and streaming presentation.
+
+The Remote stream projection can reset before sending a cumulative replacement. Bot reconciliation now clears the old ephemeral accumulator at that reset so replacement text cannot be appended to an earlier copy. Three focused projection tests cover UTF-16 boundaries, repeated progress, direct replies, and Bot-versus-Workspace copy behavior; the focused physical-device chat suite passes 63/63 and the complete physical iPhone 13 Pro suite passes 281 tests with six expected environment-gated skips and zero failures. Version `0.1.0 (21)` was archived from commit `e457df9d8`, uploaded with the internal-only policy, processed as `VALID`, and assigned only to Internal Testers as `IN_BETA_TESTING`; external testing remains `NOT_APPLICABLE`.

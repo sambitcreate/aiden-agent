@@ -72,6 +72,15 @@ Final model-authority XCTest result bundle:
 - Assigned only to `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`): `internalBuildState=IN_BETA_TESTING`, `externalBuildState=NOT_APPLICABLE`; App Store Connect reports minimum iOS 18.0 and `usesNonExemptEncryption=false`.
 - Build 20 contains the post-build-19 save hardening, contact-first Bot flow, stable avatar cache, restored shared composer, rounded tail-free bubbles, removal of Read Aloud, and immediate exact-cache Bot chat hydration with layout-shaped cold skeletons. No external group, Beta App Review, App Review, metadata, pricing, screenshot, or availability mutation was performed.
 
+## Internal TestFlight evidence — build 21
+
+- Version `0.1.0 (21)` was archived from source commit `e457df9d8`, uploaded with the checked-in internal-only policy, and processed as `VALID`.
+- Exact App Store Connect build: `79c1ac3f-329e-4a4b-8585-0b156657fba1`.
+- Assigned only to `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`): `internalBuildState=IN_BETA_TESTING`, `externalBuildState=NOT_APPLICABLE`; App Store Connect reports minimum iOS 18.0 and `usesNonExemptEncryption=false`.
+- Bot messages now show only the terminal answer by default. Intermediate assistant narration and tool steps are available through the collapsed activity disclosure; projection resets replace rather than append cumulative Bot stream text.
+- Validation: 63/63 focused chat tests passed, including three new projection regressions; 30/30 iOS release checks passed; the complete connected iPhone 13 Pro suite executed 281 tests with six expected environment-gated skips and zero failures. Visual inspection of the originally affected Bot chat showed one collapsed activity row and only the final answer bubble.
+- No external group, Beta App Review, App Review, metadata, pricing, screenshot, or availability mutation was performed. The Xcode managed upload retained no local exported IPA, so no IPA digest is claimed.
+
 ## Post-build 19 save hardening
 
 - Desktop New Bot now sends identity and access through the main-owned atomic creation transaction, so an access failure cannot leave an identity-only Bot behind.
