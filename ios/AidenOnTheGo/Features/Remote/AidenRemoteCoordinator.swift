@@ -2,6 +2,62 @@ import Foundation
 import Observation
 import UIKit
 
+struct AidenClientDeviceIdentity {
+    static func displayName(
+        userAssignedName: String,
+        hostName: String,
+        deviceType: AidenDeviceType,
+        vendorIdentifier: UUID?
+    ) -> String {
+        if let name = usableName(userAssignedName, stripsLocalSuffix: false) {
+            return name
+        }
+        if let name = usableName(hostName, stripsLocalSuffix: true) {
+            return name
+        }
+
+        let kind = deviceType == .ipad ? "iPad" : "iPhone"
+        if let vendorIdentifier {
+            let suffix = vendorIdentifier.uuidString
+                .filter { $0.isHexDigit }
+                .prefix(6)
+                .uppercased()
+            if !suffix.isEmpty {
+                return "\(kind) · \(suffix)"
+            }
+        }
+        return "\(kind) for Aiden"
+    }
+
+    private static func usableName(
+        _ value: String,
+        stripsLocalSuffix: Bool
+    ) -> String? {
+        var normalized = value
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        if stripsLocalSuffix {
+            normalized = normalized.replacingOccurrences(
+                of: #"\.local\.?$"#,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+        normalized = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty,
+              !normalized.unicodeScalars.contains(where: { scalar in
+                  scalar.properties.generalCategory == .control
+                      || scalar.properties.generalCategory == .format
+              }) else { return nil }
+
+        let genericKey = normalized.lowercased().filter { $0.isLetter || $0.isNumber }
+        guard ![
+            "iphone", "ipad", "aidenonthego", "localhost", "localhostlocaldomain"
+        ].contains(genericKey), UUID(uuidString: normalized) == nil else { return nil }
+        return String(normalized.prefix(80))
+    }
+}
+
 actor AidenInstallationDataGate {
     private var held = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -606,6 +662,18 @@ final class AidenRemoteCoordinator {
         self.server = server
         applyWorkspaceSnapshot(workspaces, instanceId: installation.id)
         connectionState = .connected
+        await refreshDeviceIdentity(using: client, currentName: server.deviceName)
+    }
+
+    private func refreshDeviceIdentity(
+        using client: AidenRemoteClient,
+        currentName: String?
+    ) async {
+        let name = Self.deviceName
+        guard let currentName, currentName != name else { return }
+        // Older Macs do not expose this additive route. A failed label refresh
+        // must never make a valid authenticated connection fail.
+        try? await client.updateDeviceIdentity(name: name)
     }
 
     private func activeClient() throws -> AidenRemoteClient {
@@ -776,8 +844,15 @@ final class AidenRemoteCoordinator {
     }
 
     private static var deviceName: String {
-        let name = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String((name.isEmpty ? "Aiden On The Go" : name).prefix(80))
+        // Future iCloud sync should reconcile this user-visible label through
+        // an account-scoped device record. Never reuse that cloud identity for
+        // Remote authentication: deviceId and its credential stay Mac-specific.
+        AidenClientDeviceIdentity.displayName(
+            userAssignedName: UIDevice.current.name,
+            hostName: ProcessInfo.processInfo.hostName,
+            deviceType: deviceType,
+            vendorIdentifier: UIDevice.current.identifierForVendor
+        )
     }
 
     private static var clientVersion: String {
