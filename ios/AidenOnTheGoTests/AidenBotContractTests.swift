@@ -454,7 +454,7 @@ final class AidenBotContractTests: XCTestCase {
 
     func testSharedFixtureBindsRevisionPairingAndInstallationIdentity() throws {
         var futureFixture = try sharedFixtureObject()
-        futureFixture["contractRevision"] = 8
+        futureFixture["contractRevision"] = 9
         XCTAssertNoThrow(
             try AidenRemoteJSONDecoder.decode(
                 AidenRemoteContractFixture.self,

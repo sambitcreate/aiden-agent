@@ -32,7 +32,7 @@ Description draft:
 
 > Aiden On The Go is the native iPhone and iPad companion for Aiden Agent on your Mac. Pair directly with a Mac you control over your local network or Tailscale, then continue Aiden chats and manage workspaces from your mobile device.
 >
-> Review conversations, stream responses, handle approval requests, inspect workspace files, work with supported Git flows, and manage scheduled tasks. App Intents provide quick navigation, Live Activities show bounded run status, and optional voice dictation and read-aloud stay on device.
+> Review conversations, stream responses, handle approval requests, inspect workspace files, work with supported Git flows, and manage scheduled tasks. App Intents provide quick navigation, Live Activities show bounded run status, and optional voice dictation can use the device's native recognizer or a local speech model on your paired Mac. Read-aloud stays on device.
 >
 > Your Mac remains the execution authority. Remote Access is off by default, each mobile device uses a revocable credential, and provider credentials remain on the Mac.
 
@@ -77,7 +77,7 @@ Evidence for that answer in the current distribution candidate:
 - The app contains no analytics, advertising, crash-reporting, account, or Aiden-hosted relay SDK.
 - Pairing credentials and custom headers stay in Keychain. Cached chats/settings stay on the user's device; authoritative chats/files remain on the Mac the user pairs.
 - QR camera frames are processed for pairing and are not uploaded to Aiden's developer.
-- Dictation and read-aloud use Apple system frameworks locally; Aiden does not operate a speech collection endpoint.
+- Dictation uses either Apple’s native recognizer or, only when the person selects **Paired Mac**, a bounded recording sent directly over the authenticated pinned-TLS connection to the Mac-local Parakeet model. Neither endpoint retains that recording. Read-aloud uses Apple system frameworks locally. Aiden's developer operates no speech collection service.
 - Photos/files selected by the user are sent directly to their paired Mac and may then be sent to model providers the user configured on that Mac. Aiden's developer cannot access them. Provider processing remains governed by each selected provider and should be described in the public policy.
 - Optional Bot image generation uses Apple's system Image Playground on supported devices and may use Private Cloud Compute. Aiden disables person/Photos personalization and supplies only the visible Bot name and purpose as starting concepts. Aiden's developer runs no image-generation or proxy service and cannot access those concepts, rejected candidates, or results. When the person chooses **Use this image**, the app sends only that normalized image directly to the paired Mac, which stores the canonical Bot photo.
 - Local Network or Tailscale traffic goes directly to the paired installation. Aiden does not run a central account, synchronization service, analytics endpoint, or proxy.

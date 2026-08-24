@@ -736,6 +736,8 @@ private struct AidenBotPrototypeFullAccessNoticeView: View {
                 VStack(spacing: 10) {
                     Button("Continue with Full Access", action: onContinue)
                         .buttonStyle(.borderedProminent)
+                        .tint(palette.accent)
+                        .foregroundStyle(palette.onAccent)
                         .controlSize(.large)
                         .frame(maxWidth: .infinity)
                     Button("Customize first", action: onCustomize)
@@ -1519,6 +1521,8 @@ private struct AidenBotPrototypeProfileView: View {
                             .padding(.vertical, 11)
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(palette.accent)
+                    .foregroundStyle(palette.onAccent)
                     .disabled(!allowsBotChanges)
 
                     HStack(spacing: 12) {
@@ -2348,6 +2352,8 @@ private struct AidenBotPrototypeEmptyView: View {
                 .frame(maxWidth: 330)
             Button(actionTitle, action: action)
                 .buttonStyle(.borderedProminent)
+                .tint(palette.accent)
+                .foregroundStyle(palette.onAccent)
         }
         .padding(28)
         .frame(maxWidth: .infinity)

@@ -561,6 +561,8 @@ struct AidenBotsHomeView: View {
                         presentedSheet = .editor(.create(defaultAccess: .recommended))
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(palette.accent)
+                    .foregroundStyle(palette.onAccent)
                     .disabled(!canCreateBot)
                 }
             }

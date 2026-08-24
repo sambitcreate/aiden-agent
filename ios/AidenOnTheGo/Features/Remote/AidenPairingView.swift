@@ -552,10 +552,12 @@ struct AidenPairingView: View {
         let button = Button(action: action) {
             label()
                 .frame(maxWidth: .infinity)
+                .foregroundStyle(palette.onAccent)
         }
         .font(.headline)
         .frame(maxWidth: .infinity)
         .controlSize(.large)
+        .tint(palette.accent)
 
         if #available(iOS 26, *) {
             button.buttonStyle(.glassProminent)

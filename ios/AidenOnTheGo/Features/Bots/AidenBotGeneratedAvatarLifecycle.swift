@@ -988,6 +988,8 @@ struct AidenBotGeneratedAvatarLifecycleView: View {
                         Task { await model.useCandidate() }
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(palette.accent)
+                    .foregroundStyle(palette.onAccent)
                     .disabled(!model.canUseCandidate)
                 }
             } else if model.hasGeneratedAvatar {

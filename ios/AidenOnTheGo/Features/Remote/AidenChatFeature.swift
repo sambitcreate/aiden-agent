@@ -945,6 +945,33 @@ final class AidenChatViewModel {
     var acceptsImageAttachments: Bool { selectedModel?.acceptsImageInput ?? true }
     var selectedModelDisplayLabel: String { selectedModel?.label ?? selectedModelId ?? "Model unavailable" }
 
+    func transcribeMacSpeech(_ pcm16: Data) async throws -> String {
+        guard !isReadOnlyFixture else { throw AidenRemoteClientError.invalidResponse }
+        let context = try coordinator.requestContext(for: instanceId)
+        let client = try coordinator.remoteClient(for: context)
+        let status = try await client.speechStatus()
+        guard status.engine.ready else {
+            throw NSError(
+                domain: "AidenVoiceInput",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: status.engine.error ?? String(localized: "The Mac speech engine is unavailable.")]
+            )
+        }
+        guard let model = status.models.first(where: { $0.id == status.selectedModelId && $0.installed })
+            ?? status.models.first(where: { $0.installed && $0.recommended })
+            ?? status.models.first(where: { $0.installed }) else {
+            throw NSError(
+                domain: "AidenVoiceInput",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a Mac speech model in App Settings before using this option.")]
+            )
+        }
+        if status.selectedModelId != model.id { _ = try await client.selectSpeechModel(model.id) }
+        let result = try await client.transcribeSpeech(pcm16: pcm16, modelId: model.id)
+        guard coordinator.isCurrent(context) else { throw CancellationError() }
+        return result.text
+    }
+
     private var turnModelSelection: AidenChatModelSelection {
         AidenChatModelAuthority.turnSelection(
             chat: chat,
@@ -1912,6 +1939,7 @@ struct AidenChatDetailView: View {
     @State private var composerHeight: CGFloat = 132
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
+    @State private var isScrolledAwayFromLatest = false
     @FocusState private var composerIsFocused: Bool
     @State private var coordinator: AidenRemoteCoordinator?
     let autoStartVoice: Bool
@@ -2009,15 +2037,44 @@ struct AidenChatDetailView: View {
                 messageList
             }
             .scrollDismissesKeyboard(.interactively)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                aidenChatIsScrolledAwayFromLatest(
+                    contentOffsetY: geometry.contentOffset.y,
+                    containerHeight: geometry.containerSize.height,
+                    contentHeight: geometry.contentSize.height,
+                    bottomInset: geometry.contentInsets.bottom
+                )
+            } action: { _, isAwayFromLatest in
+                isScrolledAwayFromLatest = isAwayFromLatest
+            }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
             )
-            .onChange(of: model.chat.messages.count) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: model.liveText) { _, _ in scrollToBottom(proxy) }
+            .overlay(alignment: .bottom) {
+                if isScrolledAwayFromLatest {
+                    AidenChatJumpToLatestButton {
+                        isScrolledAwayFromLatest = false
+                        scrollToBottom(proxy)
+                    }
+                    .padding(.bottom, composerHeight + 10)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                }
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isScrolledAwayFromLatest)
+            .onChange(of: model.chat.messages.count) { _, _ in
+                guard !isScrolledAwayFromLatest else { return }
+                scrollToBottom(proxy)
+            }
+            .onChange(of: model.liveText) { _, _ in
+                guard !isScrolledAwayFromLatest else { return }
+                scrollToBottom(proxy)
+            }
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
                 guard approvalID != nil else { return }
                 composerIsFocused = false
-                scrollToBottom(proxy)
+                if !isScrolledAwayFromLatest {
+                    scrollToBottom(proxy)
+                }
             }
         }
     }
@@ -2265,6 +2322,58 @@ struct AidenChatDetailView: View {
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
             proxy.scrollTo("chat-bottom", anchor: .bottom)
+        }
+    }
+}
+
+func aidenChatIsScrolledAwayFromLatest(
+    contentOffsetY: CGFloat,
+    containerHeight: CGFloat,
+    contentHeight: CGFloat,
+    bottomInset: CGFloat,
+    threshold: CGFloat = 72
+) -> Bool {
+    guard containerHeight > 0, contentHeight > containerHeight else { return false }
+    let viewportBottom = contentOffsetY + containerHeight
+    let contentBottom = contentHeight + max(0, bottomInset)
+    return contentBottom - viewportBottom > threshold
+}
+
+private struct AidenChatJumpToLatestButton: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(palette.foreground)
+                .frame(width: 34, height: 34)
+                .contentShape(Circle())
+                .modifier(AidenChatJumpToLatestGlassModifier(reduceTransparency: reduceTransparency))
+        }
+        .buttonStyle(.plain)
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel("Jump to latest")
+        .accessibilityHint("Scrolls to the newest message")
+    }
+}
+
+private struct AidenChatJumpToLatestGlassModifier: ViewModifier {
+    @Environment(\.aidenPalette) private var palette
+    let reduceTransparency: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            content.glassEffect(.regular.interactive(), in: Circle())
+        } else if reduceTransparency {
+            content.background(palette.raised, in: Circle())
+        } else {
+            content.background(.ultraThinMaterial, in: Circle())
         }
     }
 }
@@ -3811,6 +3920,7 @@ private struct AidenComposerView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable var model: AidenChatViewModel
     let autoStartVoice: Bool
     let composerFocus: FocusState<Bool>.Binding
@@ -3854,6 +3964,7 @@ private struct AidenComposerView: View {
                     .padding(.horizontal, 4)
                     .padding(.top, 5)
                     .focused(composerFocus)
+                    .disabled(voiceInput.isBusy)
                     .submitLabel(.send)
                     .onSubmit {
                         guard !model.isStreaming else { return }
@@ -3987,7 +4098,11 @@ private struct AidenComposerView: View {
                 Button {
                     Task {
                         guard !model.isReadOnlyPresentation else { return }
-                        await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
+                        await voiceInput.toggle(
+                            currentDraft: model.draft,
+                            updateDraft: { model.draft = $0 },
+                            macTranscriber: model.transcribeMacSpeech
+                        )
                     }
                 } label: {
                     Group {
@@ -4000,7 +4115,10 @@ private struct AidenComposerView: View {
                     }
                     .frame(width: 44, height: 44)
                 }
-                .disabled(model.isReadOnlyPresentation || model.isStreaming || voiceInput.isRequestingPermission)
+                .disabled(
+                    model.isReadOnlyPresentation || model.isStreaming
+                        || (voiceInput.isBusy && !voiceInput.isListening)
+                )
                 .accessibilityLabel(voiceInput.isListening ? "Stop voice input" : "Start voice input")
 
                 if model.isStreaming {
@@ -4050,7 +4168,11 @@ private struct AidenComposerView: View {
         .task {
             guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
-            await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
+            await voiceInput.toggle(
+                currentDraft: model.draft,
+                updateDraft: { model.draft = $0 },
+                macTranscriber: model.transcribeMacSpeech
+            )
         }
         .onChange(of: selectedPhotos) { _, items in
             guard !model.isReadOnlyPresentation, !items.isEmpty, !isPreparingAttachments else { return }
@@ -4129,10 +4251,15 @@ private struct AidenComposerView: View {
             }
         }
         .onDisappear {
-            voiceInput.stopKeepingTranscript()
+            voiceInput.cancelDiscardingRecording()
             attachmentPreparationTask?.cancel()
             attachmentPreparationTask = nil
             isPreparingAttachments = false
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: phase) {
+                voiceInput.cancelDiscardingRecording()
+            }
         }
     }
 
@@ -4208,6 +4335,12 @@ private struct AidenComposerView: View {
               model.selectedModelId == candidate.id
         else { return false }
         return thinkingLevel == nil || model.selectedThinkingLevel == thinkingLevel
+    }
+}
+
+enum AidenVoiceCaptureLifecyclePolicy {
+    static func shouldDiscardRecording(for phase: ScenePhase) -> Bool {
+        phase == .background
     }
 }
 

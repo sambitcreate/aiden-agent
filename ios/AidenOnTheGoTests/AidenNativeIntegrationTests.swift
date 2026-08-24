@@ -1,4 +1,5 @@
 import ActivityKit
+import AVFoundation
 import Foundation
 import XCTest
 @testable import AidenOnTheGo
@@ -513,6 +514,63 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(AidenMobileOnboardingLayout.actionHorizontalPadding, 24)
         XCTAssertEqual(AidenMobileOnboardingLayout.actionBottomPadding, 12)
+    }
+
+    func testVoiceInputModeDefaultsAndLabelsRemainStable() {
+        XCTAssertEqual(AidenVoiceInputMode.defaultsKey, "aiden.voiceInput.mode")
+        XCTAssertEqual(AidenVoiceInputMode.allCases, [.onDevice, .pairedMac])
+        XCTAssertEqual(AidenVoiceInputMode.onDevice.title, "On this device")
+        XCTAssertEqual(AidenVoiceInputMode.pairedMac.title, "Paired Mac")
+    }
+
+    func testVoiceSessionFenceRejectsCallbacksFromAnInvalidatedSession() {
+        var fence = ComposerVoiceSessionFence()
+        let first = fence.advance()
+        XCTAssertTrue(fence.accepts(first))
+
+        let second = fence.advance()
+        XCTAssertFalse(fence.accepts(first))
+        XCTAssertTrue(fence.accepts(second))
+    }
+
+    func testVoiceDraftSessionStopsAcceptingResultsAfterCancellation() {
+        var session = ComposerVoiceDraftUpdateSession()
+        session.begin(baseDraft: "Keep")
+        XCTAssertEqual(session.composedDraft(for: "this"), "Keep this")
+
+        session.stopAcceptingUpdates()
+        XCTAssertNil(session.composedDraft(for: "stale result"))
+    }
+
+    func testVoiceCaptureLifecycleAllowsPermissionPromptsButStopsInBackground() {
+        XCTAssertFalse(AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: .active))
+        XCTAssertFalse(AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: .inactive))
+        XCTAssertTrue(AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: .background))
+    }
+
+    func testMacSpeechAccumulatorProducesBoundedLittleEndian16kPCM() throws {
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4))
+        buffer.frameLength = 4
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        channel[0] = -1
+        channel[1] = 0
+        channel[2] = 0.5
+        channel[3] = 1
+
+        let accumulator = ComposerMacSpeechPCMAccumulator()
+        accumulator.append(buffer)
+        let pcm = accumulator.data
+        XCTAssertEqual(pcm.count, 8)
+        XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: Int16.self) }, -32_767)
+        XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: Int16.self) }, 0)
+        XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: Int16.self) }, 16_383)
+        XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: Int16.self) }, 32_767)
     }
 }
 

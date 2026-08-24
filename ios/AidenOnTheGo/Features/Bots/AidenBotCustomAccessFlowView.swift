@@ -333,6 +333,8 @@ struct AidenBotCustomAccessFlowView: View {
                     editorMode = .create(defaultAccess: .custom)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(palette.accent)
+                .foregroundStyle(palette.onAccent)
                 .disabled(capturedContext.map(coordinator.isCurrent) != true || !canCreateBot)
                 .accessibilityHint("Opens the new Bot editor. Nothing is created until you save.")
             }

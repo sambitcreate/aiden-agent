@@ -133,6 +133,8 @@ struct AidenPalette: Equatable, Sendable {
     var foreground: Color { Color(aidenHex: foregroundHex) }
     var secondary: Color { Color(aidenHex: secondaryHex) }
     var accent: Color { Color(aidenHex: accentHex) }
+    /// Foreground for controls filled with the theme accent.
+    var onAccent: Color { canvas }
     var success: Color { Color(aidenHex: successHex) }
     var warning: Color { Color(aidenHex: warningHex) }
     var danger: Color { Color(aidenHex: dangerHex) }

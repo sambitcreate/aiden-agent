@@ -136,13 +136,17 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 8)
+        XCTAssertEqual(fixture.contractRevision, 9)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertEqual(Set(fixture.capabilities), Set(AidenRemoteCapability.v1Known))
         XCTAssertEqual(Set(fixture.events.map(\.type)), Set(AidenRemoteEventType.v1Known))
         XCTAssertTrue(fixture.botCapabilityCatalog.fileScopes.contains { $0.kind == .fullMac })
+        XCTAssertEqual(fixture.speechStatus.selectedModelId, "parakeet-v3")
+        XCTAssertEqual(fixture.speechStatus.input.sampleRate, 16_000)
+        XCTAssertFalse(fixture.speechStatus.input.partialResults)
+        XCTAssertEqual(fixture.speechTranscription.modelId, "parakeet-v3")
         XCTAssertEqual(fixture.pairingBootstrap.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertEqual(fixture.pairingBootstrap.endpoint.scheme, "https")
         XCTAssertGreaterThanOrEqual(fixture.pairingBootstrap.secret.count, 32)

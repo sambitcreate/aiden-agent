@@ -13,6 +13,62 @@ enum AidenConnectionMode: String, Codable, Sendable {
     case both
 }
 
+struct AidenSpeechEngine: Codable, Equatable, Sendable {
+    let ready: Bool
+    let error: String?
+}
+
+struct AidenSpeechDownload: Codable, Equatable, Sendable {
+    let id: String
+    let percentage: Int
+    let phase: String
+    let status: String
+    let error: String?
+}
+
+struct AidenSpeechModel: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let description: String
+    let sizeLabel: String
+    let languagesLabel: String
+    let recommended: Bool
+    let installed: Bool
+    let download: AidenSpeechDownload?
+}
+
+struct AidenSpeechInputContract: Codable, Equatable, Sendable {
+    let encoding: String
+    let sampleRate: Int
+    let channels: Int
+    let maximumSeconds: Int
+    let partialResults: Bool
+}
+
+struct AidenSpeechStatus: Codable, Equatable, Sendable {
+    let engine: AidenSpeechEngine
+    let selectedModelId: String?
+    let models: [AidenSpeechModel]
+    let input: AidenSpeechInputContract
+}
+
+struct AidenSpeechTranscription: Codable, Equatable, Sendable {
+    let text: String
+    let modelId: String
+}
+
+private struct AidenSpeechSelectionRequest: Encodable {
+    let modelId: String
+}
+
+private struct AidenSpeechTranscriptionRequest: Encodable {
+    let encoding = "pcm_s16le"
+    let sampleRate = 16_000
+    let channels = 1
+    let pcmBase64: String
+    let modelId: String
+}
+
 struct AidenServer: Codable, Equatable, Sendable {
     let protocolVersion: Int
     let instanceId: String
@@ -1201,6 +1257,47 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    func speechStatus() async throws -> AidenSpeechStatus {
+        try await send(method: "GET", path: ["speech"])
+    }
+
+    func selectSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus {
+        try await send(
+            method: "PATCH",
+            path: ["speech"],
+            body: AidenSpeechSelectionRequest(modelId: modelId)
+        )
+    }
+
+    func downloadSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus {
+        try await send(
+            method: "POST",
+            path: ["speech", "models", modelId, "download"],
+            acceptedStatus: [202]
+        )
+    }
+
+    func cancelSpeechModelDownload(_ modelId: String) async throws -> AidenSpeechStatus {
+        try await send(method: "DELETE", path: ["speech", "models", modelId, "download"])
+    }
+
+    func deleteSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus {
+        try await send(method: "DELETE", path: ["speech", "models", modelId])
+    }
+
+    func transcribeSpeech(pcm16: Data, modelId: String) async throws -> AidenSpeechTranscription {
+        try await send(
+            method: "POST",
+            path: ["speech", "transcriptions"],
+            body: AidenSpeechTranscriptionRequest(
+                pcmBase64: pcm16.base64EncodedString(),
+                modelId: modelId
+            ),
+            timeoutInterval: 120,
+            maximumResponseBytes: 64 * 1_024
+        )
+    }
+
     func workspaceFiles(workspaceId: String) async throws -> AidenWorkspaceFileIndex {
         let value: AidenWorkspaceFileIndex = try await send(
             method: "GET",
@@ -1573,10 +1670,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         headers: [String: String] = [:],
         authenticated: Bool = true,
         acceptedStatus: Set<Int> = [200],
+        timeoutInterval: TimeInterval? = nil,
         maximumResponseBytes: Int = AidenRemoteProtocol.maxJSONBodyBytes
     ) async throws -> Response {
         let encodedBody = try JSONEncoder().encode(body)
-        let request = try makeRequest(
+        var request = try makeRequest(
             method: method,
             path: path,
             query: query,
@@ -1584,6 +1682,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: headers,
             authenticated: authenticated
         )
+        if let timeoutInterval { request.timeoutInterval = timeoutInterval }
         let (data, response) = try await boundedData(
             for: request,
             maximumBytes: maximumResponseBytes

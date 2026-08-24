@@ -5,6 +5,41 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testJumpToLatestThresholdOnlyAppearsWhenTranscriptIsMeaningfullyAboveBottom() {
+        XCTAssertFalse(
+            aidenChatIsScrolledAwayFromLatest(
+                contentOffsetY: 0,
+                containerHeight: 700,
+                contentHeight: 650,
+                bottomInset: 0
+            )
+        )
+        XCTAssertFalse(
+            aidenChatIsScrolledAwayFromLatest(
+                contentOffsetY: 220,
+                containerHeight: 700,
+                contentHeight: 980,
+                bottomInset: 0
+            )
+        )
+        XCTAssertTrue(
+            aidenChatIsScrolledAwayFromLatest(
+                contentOffsetY: 100,
+                containerHeight: 700,
+                contentHeight: 980,
+                bottomInset: 0
+            )
+        )
+        XCTAssertTrue(
+            aidenChatIsScrolledAwayFromLatest(
+                contentOffsetY: 180,
+                containerHeight: 700,
+                contentHeight: 980,
+                bottomInset: 24
+            )
+        )
+    }
+
     func testBotBubbleIsRoundedWithoutATail() {
         let rect = CGRect(x: 0, y: 0, width: 100, height: 50)
         let bubble = AidenBotMessageBubbleShape().path(in: rect)

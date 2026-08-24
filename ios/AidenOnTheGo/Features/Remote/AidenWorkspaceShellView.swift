@@ -2247,6 +2247,7 @@ private struct AidenAppSettingsView: View {
     @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
+    @AppStorage(AidenVoiceInputMode.defaultsKey) private var voiceInputModeRaw = AidenVoiceInputMode.onDevice.rawValue
 
     var body: some View {
         NavigationStack {
@@ -2280,6 +2281,29 @@ private struct AidenAppSettingsView: View {
                     Text("These are app-wide defaults. Permission, files, Git, and other workspace-specific options remain in each workspace’s ••• menu.")
                 }
 
+                Section {
+                    Picker("Transcription", selection: $voiceInputModeRaw) {
+                        ForEach(AidenVoiceInputMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    if voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue {
+                        NavigationLink {
+                            AidenMacTranscriptionSettingsView(coordinator: coordinator)
+                        } label: {
+                            Label("Mac speech model", systemImage: "desktopcomputer")
+                        }
+                    }
+                } header: {
+                    Text("Voice Input")
+                } footer: {
+                    Text(
+                        voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
+                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed by Parakeet on your paired Mac, and not retained. Text appears after you stop recording."
+                            : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
+                    )
+                }
+
                 Section("About") {
                     Link(destination: AppConfig.privacyPolicyURL) {
                         Label("Privacy Policy", systemImage: "hand.raised")
@@ -2310,6 +2334,119 @@ private struct AidenAppSettingsView: View {
         .sheet(isPresented: $isShowingAppearance) {
             AidenAppearanceSettingsView(appearance: appearance)
         }
+    }
+}
+
+private struct AidenMacTranscriptionSettingsView: View {
+    @Bindable var coordinator: AidenRemoteCoordinator
+    @State private var status: AidenSpeechStatus?
+    @State private var errorMessage: String?
+    @State private var isLoading = false
+
+    private var downloadPollKey: String {
+        status?.models.compactMap { model in
+            model.download?.status == "downloading" ? "\(model.id):\(model.download?.percentage ?? 0)" : nil
+        }.joined(separator: ",") ?? ""
+    }
+
+    var body: some View {
+        List {
+            if let status {
+                Section {
+                    LabeledContent("Engine", value: status.engine.ready ? "Ready" : "Unavailable")
+                    if let engineError = status.engine.error {
+                        Text(engineError).font(.caption).foregroundStyle(.red)
+                    }
+                }
+                Section("Models") {
+                    ForEach(status.models) { model in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(model.name).font(.body.weight(.semibold))
+                                    Text("\(model.sizeLabel) · \(model.languagesLabel)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                modelAction(model, status: status)
+                            }
+                            if let download = model.download, download.status == "downloading" {
+                                ProgressView(value: Double(download.percentage), total: 100)
+                                Text(download.phase == "extract" ? "Installing…" : "Downloading… \(download.percentage)%")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(model.description).font(.caption).foregroundStyle(.secondary)
+                            if let failure = model.download?.error {
+                                Text(failure).font(.caption).foregroundStyle(.red)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            } else if isLoading {
+                ProgressView("Loading Mac speech models…")
+            }
+            if let errorMessage {
+                Section { Text(errorMessage).foregroundStyle(.red) }
+            }
+        }
+        .navigationTitle("Mac Transcription")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await refresh() }
+        .task(id: downloadPollKey) {
+            guard !downloadPollKey.isEmpty else { return }
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            await refresh()
+        }
+        .refreshable { await refresh() }
+    }
+
+    @ViewBuilder
+    private func modelAction(_ model: AidenSpeechModel, status: AidenSpeechStatus) -> some View {
+        if model.download?.status == "downloading" {
+            Button("Cancel") { Task { await cancel(model.id) } }
+        } else if model.installed && status.selectedModelId == model.id {
+            Text("Selected").font(.caption.weight(.semibold)).foregroundStyle(.tint)
+        } else if model.installed {
+            Button("Use") { Task { await select(model.id) } }
+        } else {
+            Button("Download") { Task { await download(model.id) } }
+        }
+    }
+
+    private func client() throws -> AidenRemoteClient {
+        let context = try coordinator.requestContext()
+        return try coordinator.remoteClient(for: context)
+    }
+
+    @MainActor
+    private func refresh() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            status = try await client().speechStatus()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor private func download(_ id: String) async {
+        do { status = try await client().downloadSpeechModel(id); errorMessage = nil }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func cancel(_ id: String) async {
+        do { status = try await client().cancelSpeechModelDownload(id); errorMessage = nil }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func select(_ id: String) async {
+        do { status = try await client().selectSpeechModel(id); errorMessage = nil }
+        catch { errorMessage = error.localizedDescription }
     }
 }
 

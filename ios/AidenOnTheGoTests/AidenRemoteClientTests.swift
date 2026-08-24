@@ -1414,6 +1414,56 @@ final class AidenRemoteClientTests: XCTestCase {
         )
     }
 
+    func testSpeechSetupAndTranscriptionUseCanonicalBoundedRoutes() async throws {
+        let client = makeClient()
+        let statusJSON = """
+        {
+          "engine":{"ready":true,"error":null},
+          "selectedModelId":"parakeet-v3",
+          "models":[{
+            "id":"parakeet-v3","name":"Parakeet","description":"Local speech",
+            "sizeLabel":"620 MB","quant":"int8","languagesLabel":"25 languages",
+            "accuracy":0.8,"speed":0.85,"recommended":true,"installed":true
+          }],
+          "input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}
+        }
+        """
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            switch (request.httpMethod, request.url?.path) {
+            case ("GET", "/api/aiden/v1/speech"):
+                return Self.response(for: request, status: 200, json: statusJSON)
+            case ("POST", "/api/aiden/v1/speech/models/parakeet-v3/download"):
+                return Self.response(for: request, status: 202, json: statusJSON)
+            case ("POST", "/api/aiden/v1/speech/transcriptions"):
+                let body = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any]
+                )
+                XCTAssertEqual(body["encoding"] as? String, "pcm_s16le")
+                XCTAssertEqual(body["sampleRate"] as? Int, 16_000)
+                XCTAssertEqual(body["channels"] as? Int, 1)
+                XCTAssertEqual(body["modelId"] as? String, "parakeet-v3")
+                XCTAssertEqual(body["pcmBase64"] as? String, "AAA=")
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: #"{"text":"Hello from the Mac","modelId":"parakeet-v3"}"#
+                )
+            default:
+                XCTFail("Unexpected speech request \(request.httpMethod ?? "") \(request.url?.path ?? "")")
+                return Self.response(for: request, status: 404, json: #"{"error":{"code":"not_found","message":"Unexpected route."}}"#)
+            }
+        }
+
+        let status = try await client.speechStatus()
+        XCTAssertTrue(status.engine.ready)
+        XCTAssertFalse(status.input.partialResults)
+        let downloadStatus = try await client.downloadSpeechModel("parakeet-v3")
+        XCTAssertEqual(downloadStatus.selectedModelId, "parakeet-v3")
+        let transcript = try await client.transcribeSpeech(pcm16: Data([0, 0]), modelId: "parakeet-v3")
+        XCTAssertEqual(transcript.text, "Hello from the Mac")
+    }
+
     func testWorkspaceCreateUpdateAndDeleteCarryMutationPreconditions() async throws {
         let client = makeClient()
         var step = 0

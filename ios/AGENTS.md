@@ -39,9 +39,9 @@ For bot behavior, the bot-first plan supersedes the older plan only where it say
 ## Product boundaries
 
 - Retain native Hermex UI/behavior only where `PROJECT_SPEC.md` maps it to Aiden 1:1.
-- Remove Kanban and every Hermes-only panel, profile/personality concept, server voice upload path, and Cloudflare-specific onboarding during the designated cleanup phases.
+- Remove Kanban and every Hermes-only panel, profile/personality concept, generic voice-note upload path, and Cloudflare-specific onboarding during the designated cleanup phases. The only permitted remote speech path is explicit composer dictation to the paired Mac's local model through the bounded Aiden Remote speech contract.
 - Workspace permission belongs in Workspace Settings opened from the conversation-toolbar ellipsis, never in the composer.
-- App Intents are App-Group-cache-only navigation. Live Activities are bounded last-known state without cloud push. Voice is on-device dictation/read-aloud only.
+- App Intents are App-Group-cache-only navigation. Live Activities are bounded last-known state without cloud push. Dictation may use native on-device recognition or the explicitly selected paired-Mac local model; read-aloud remains on-device.
 - Redesign the iPhone/iPad experience now around the Aiden-logo Workspaces/Bots switcher. Mac UI redesign is deferred; Mac changes in this scope are runtime/persistence integration and canonical bot-photo display in existing surfaces.
 - Reuse the existing `AidenChatDetailView` and its chat feature/view-model path for every Bot conversation. Add bot-specific title, identity, and Access affordances around it; never fork, copy, or build a second transcript, composer, streaming, approval, attachment, or reconciliation implementation.
 - Give every bot exactly one hidden Aiden-managed home. It is not initialized as a Git repository, shell starts there, and ordinary artifacts are saved there. Under Full Access, the bot may inspect other OS-accessible Mac locations when the task needs it. Only the Mac resolves and injects the private path and operating instructions.

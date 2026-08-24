@@ -432,6 +432,7 @@ struct AidenProductSwitcherButton: View {
                 canWrite: botsAvailability.canWrite,
                 onContinue: { isCoachmarkPresented.wrappedValue = false }
             )
+            .presentationBackground(.clear)
             .presentationCompactAdaptation(.popover)
         }
     }
@@ -520,12 +521,34 @@ private struct AidenBotSwitcherCoachmarkView: View {
 
             Button("Got it", action: onContinue)
                 .buttonStyle(.borderedProminent)
+                .tint(palette.accent)
+                .foregroundStyle(palette.onAccent)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .foregroundStyle(palette.foreground)
         .padding(20)
         .frame(idealWidth: 330, maxWidth: 360)
+        .modifier(AidenBotSwitcherCoachmarkGlassModifier())
+        .padding(8)
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct AidenBotSwitcherCoachmarkGlassModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    private let shape = RoundedRectangle(cornerRadius: 28, style: .continuous)
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            content.glassEffect(.regular, in: shape)
+        } else if reduceTransparency {
+            content.background(palette.raised, in: shape)
+        } else {
+            content.background(.regularMaterial, in: shape)
+        }
     }
 }
 
@@ -1047,6 +1070,8 @@ private struct AidenBotChatSkeletonView: View {
 }
 
 private struct AidenFullAccessNoticeView: View {
+    @Environment(\.aidenPalette) private var palette
+
     let includesMigrationCopy: Bool
     let isSaving: Bool
     let onContinue: () -> Void
@@ -1079,6 +1104,8 @@ private struct AidenFullAccessNoticeView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(palette.accent)
+                        .foregroundStyle(palette.onAccent)
 
                         Button(action: onCustomize) {
                             Text("Customize first")
