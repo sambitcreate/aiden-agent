@@ -77,6 +77,7 @@ import {
   PiCompactionCoordinator,
   type PiCompactionEvent,
 } from "./pi-compaction-core.js";
+import { PI_CHAT_SYSTEM_PROMPT } from "./response-format-guidance.js";
 import {
   appendPiMessages,
   piCompactionSessionStore,
@@ -352,8 +353,7 @@ async function buildSystemPrompt(
   skillSnapshot?: SkillRegistrySnapshot,
   availableToolNames?: ReadonlySet<string>,
 ): Promise<string> {
-  const base =
-    "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
+  const base = PI_CHAT_SYSTEM_PROMPT;
   const skillsText =
     skillsAvailable && skillSnapshot
       ? formatAvailableSkills(skillSnapshot, availableToolNames)
