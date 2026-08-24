@@ -112,7 +112,7 @@ export function StreamingMarkdownReveal({
       {visible.map((block) => {
         if (block.kind === "prose") {
           return (
-            <p key={block.id} className="my-2 first:mt-0 last:mb-0">
+            <p key={block.id} className="my-3 max-w-[72ch] first:mt-0 last:mb-0">
               {block.units.map((unit) => {
                 const parts = splitStreamingRevealUnit(unit.text);
                 return (
