@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Check, Loader2, Plus, Save, Search, Sparkles, Undo2, X } from "lucide-react";
+import { Check, Loader2, Plus, Save, Search, Undo2, X } from "lucide-react";
+import { AidenIcon } from "../aiden-icon";
 import { Badge, Button, Field, FieldSet, Input, Text, toast } from "../ui";
 import { ProviderIcon } from "../provider-icon";
 import { createModelEntries, encodeSelection, type ModelEntry } from "../../lib/model-picker-data";
@@ -372,7 +373,7 @@ export function ModelPadSettings() {
             onClick={suggestUnplaced}
             disabled={!artificialAnalysis.data?.ready || suggestionCount === 0}
           >
-            <Sparkles />
+            <AidenIcon className="size-4" />
             Suggest unplaced
           </Button>
         </div>
