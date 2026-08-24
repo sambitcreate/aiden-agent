@@ -774,7 +774,18 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     chat,
     /Image\(uiImage: image\)[\s\S]{0,240}?\.aspectRatio\(contentMode: contentMode\)[\s\S]{0,240}?\.clipShape\(RoundedRectangle\([\s\S]{0,240}?\.frame\(maxWidth: \.infinity, maxHeight: \.infinity, alignment: imageAlignment\)/u,
   );
-  assert.match(chat, /if !model\.liveText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = model\.liveText/u);
+  assert.match(
+    chat,
+    /AidenBotReplyProjection\.resolve\([\s\S]*?isActive: model\.isStreaming[\s\S]*?if !visibleText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = visibleText/u,
+  );
+  assert.match(
+    chat,
+    /case \.snapshot:[\s\S]*?if chat\.isBotChat \{[\s\S]*?liveText = ""[\s\S]*?reasoning = ""/u,
+  );
+  assert.match(
+    chat,
+    /AidenActivityFeed\([\s\S]*?progressText: botReply\?\.progressText[\s\S]*?showsRunningRowsWhenCollapsed: presentationStyle != \.botMessages/u,
+  );
   assert.match(
     scheduledTasks,
     /Picker\("Provider"[\s\S]*?AidenProviderIcon\([\s\S]*?providerID: provider\.id/u,

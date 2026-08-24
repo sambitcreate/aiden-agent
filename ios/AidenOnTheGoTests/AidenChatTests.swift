@@ -504,6 +504,90 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenMessageActionContent.copyText(for: emptyAssistant))
     }
 
+    func testBotReplyKeepsOnlyPostToolFinalTextVisible() {
+        let progress = "Checking the workspace 🍎\n\nI found the destination.\n\n"
+        let final = "## Done\n\nThe repository is ready."
+        let timeline = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-1",
+            status: .completed,
+            startedAt: 1_000,
+            finishedAt: 2_000,
+            steps: [
+                AidenAgentStep(
+                    id: "tool-1", order: 0, kind: .tool, toolName: "list_dir",
+                    label: "List directory", status: .completed,
+                    startedAt: 1_000, updatedAt: 1_500, finishedAt: 1_500,
+                    contentOffset: 0, durationMs: nil, target: nil,
+                    detail: nil, lineChanges: nil
+                ),
+                AidenAgentStep(
+                    id: "tool-2", order: 1, kind: .tool, toolName: "run_command",
+                    label: "Run command", status: .completed,
+                    startedAt: 1_500, updatedAt: 2_000, finishedAt: 2_000,
+                    contentOffset: progress.utf16.count, durationMs: nil, target: nil,
+                    detail: "Clone repository", lineChanges: nil
+                )
+            ]
+        )
+
+        let projection = AidenBotReplyProjection.resolve(
+            text: progress + final,
+            timeline: timeline,
+            isActive: false
+        )
+
+        XCTAssertEqual(projection.progressText, progress.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertEqual(projection.finalText, final)
+
+        let message = AidenChatMessage(
+            id: "assistant-bot",
+            role: .assistant,
+            text: progress + final,
+            timeline: timeline,
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertEqual(
+            AidenMessageActionContent.copyText(for: message, presentationStyle: .botMessages),
+            final
+        )
+        XCTAssertEqual(
+            AidenMessageActionContent.copyText(for: message, presentationStyle: .workspace),
+            progress + final
+        )
+    }
+
+    func testActiveBotReplyCollapsesAndDeduplicatesProgressUntilTerminal() {
+        let repeated = "Locating the workspace.\n\nLocating   the workspace.\n\nRunning the clone."
+        let projection = AidenBotReplyProjection.resolve(
+            text: repeated,
+            timeline: nil,
+            isActive: true
+        )
+
+        XCTAssertEqual(projection.finalText, "")
+        XCTAssertEqual(projection.progressText, "Locating the workspace.\n\nRunning the clone.")
+    }
+
+    func testBotReplyWithoutToolActivityRemainsAVisibleFinalAnswer() {
+        let timeline = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-plain",
+            status: .completed,
+            startedAt: 1_000,
+            finishedAt: 1_100,
+            steps: []
+        )
+        let projection = AidenBotReplyProjection.resolve(
+            text: "A direct answer.",
+            timeline: timeline,
+            isActive: false
+        )
+
+        XCTAssertEqual(projection.finalText, "A direct answer.")
+        XCTAssertEqual(projection.progressText, "")
+    }
+
     func testMarkdownDocumentParsesHeadingsListsAndInlineEmphasis() {
         let markdown = """
         I'll explore the repository to understand what it is.

@@ -502,6 +502,66 @@ enum AidenChatPresentationStyle: Equatable {
     }
 }
 
+struct AidenBotReplyProjection: Equatable {
+    let finalText: String
+    let progressText: String
+
+    static func resolve(
+        text: String,
+        timeline: AidenGenerationTimeline?,
+        isActive: Bool
+    ) -> Self {
+        let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedText.isEmpty else {
+            return Self(finalText: "", progressText: "")
+        }
+        guard !isActive,
+              let timeline,
+              let boundary = timeline.steps
+                .filter({ $0.kind == .tool })
+                .compactMap(\.contentOffset)
+                .max(),
+              let splitIndex = stringIndex(atUTF16Offset: boundary, in: text)
+        else {
+            return isActive
+                ? Self(finalText: "", progressText: deduplicatedProgress(text))
+                : Self(finalText: cleanedText, progressText: "")
+        }
+
+        let progress = String(text[..<splitIndex])
+        let final = String(text[splitIndex...])
+        return Self(
+            finalText: final.trimmingCharacters(in: .whitespacesAndNewlines),
+            progressText: deduplicatedProgress(progress)
+        )
+    }
+
+    private static func stringIndex(atUTF16Offset offset: Int, in text: String) -> String.Index? {
+        guard offset >= 0, offset <= text.utf16.count else { return nil }
+        var candidate = text.utf16.index(text.utf16.startIndex, offsetBy: offset)
+        while candidate > text.utf16.startIndex {
+            if let index = String.Index(candidate, within: text) { return index }
+            candidate = text.utf16.index(before: candidate)
+        }
+        return text.startIndex
+    }
+
+    private static func deduplicatedProgress(_ text: String) -> String {
+        var seen = Set<String>()
+        let paragraphs = text.components(separatedBy: "\n\n")
+        return paragraphs.compactMap { paragraph in
+            let cleaned = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return nil }
+            let identity = cleaned
+                .split(whereSeparator: \.isWhitespace)
+                .joined(separator: " ")
+            guard seen.insert(identity).inserted else { return nil }
+            return cleaned
+        }
+        .joined(separator: "\n\n")
+    }
+}
+
 func aidenMessagesJoin(
     _ previous: AidenChatMessage?,
     _ message: AidenChatMessage,
@@ -1411,6 +1471,13 @@ final class AidenChatViewModel {
         switch event.type {
         case .snapshot:
             streamState = .reconciling
+            if chat.isBotChat {
+                // A projection reset is followed by a cumulative replacement.
+                // Bot progress is disclosure-only, so discard the old ephemeral
+                // copy before accepting that replacement instead of appending it.
+                liveText = ""
+                reasoning = ""
+            }
             await reconcileChat(context: context)
         case .status:
             if let value = payload.state, let state = AidenStreamState(rawValue: value) {
@@ -2209,6 +2276,19 @@ private struct AidenMessageView: View {
     let presentationStyle: AidenChatPresentationStyle
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
 
+    private var botReply: AidenBotReplyProjection? {
+        guard presentationStyle == .botMessages, message.role == .assistant else { return nil }
+        return AidenBotReplyProjection.resolve(
+            text: message.text,
+            timeline: message.timeline,
+            isActive: false
+        )
+    }
+
+    private var visibleText: String {
+        botReply?.finalText ?? message.text
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 0) {
             if message.role == .user {
@@ -2228,7 +2308,10 @@ private struct AidenMessageView: View {
         }
         .frame(maxWidth: .infinity)
         .contextMenu {
-            if let copyText = AidenMessageActionContent.copyText(for: message) {
+            if let copyText = AidenMessageActionContent.copyText(
+                for: message,
+                presentationStyle: presentationStyle
+            ) {
                 Button {
                     UIPasteboard.general.string = copyText
                 } label: {
@@ -2237,7 +2320,10 @@ private struct AidenMessageView: View {
             }
         }
         .accessibilityActions {
-            if let copyText = AidenMessageActionContent.copyText(for: message) {
+            if let copyText = AidenMessageActionContent.copyText(
+                for: message,
+                presentationStyle: presentationStyle
+            ) {
                 Button("Copy response") {
                     UIPasteboard.general.string = copyText
                 }
@@ -2253,9 +2339,14 @@ private struct AidenMessageView: View {
             spacing: 10
         ) {
             if message.role == .assistant, let timeline = message.timeline, !timeline.steps.isEmpty {
-                AidenActivityFeed(timeline: timeline, active: false)
+                AidenActivityFeed(
+                    timeline: timeline,
+                    active: false,
+                    progressText: botReply?.progressText,
+                    showsRunningRowsWhenCollapsed: presentationStyle != .botMessages
+                )
             }
-            if !message.text.isEmpty {
+            if !visibleText.isEmpty {
                 messageText
             }
             if let attachments = message.attachments, !attachments.isEmpty {
@@ -2315,7 +2406,7 @@ private struct AidenMessageView: View {
             content: .text
         )
         let usesBotBubble = presentationStyle == .botMessages
-        return AidenMessageTextView(role: message.role, content: message.text)
+        return AidenMessageTextView(role: message.role, content: visibleText)
             .foregroundStyle(
                 usesBotBubble && message.role == .user
                     ? Color.white
@@ -2343,6 +2434,8 @@ private struct AidenActivityFeed: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let timeline: AidenGenerationTimeline
     let active: Bool
+    let progressText: String?
+    let showsRunningRowsWhenCollapsed: Bool
     @State private var isExpanded = false
 
     private var rows: [AidenAgentStep] { Array(timeline.steps.suffix(3)) }
@@ -2355,9 +2448,12 @@ private struct AidenActivityFeed: View {
                     isExpanded.toggle()
                 }
             } label: {
-                HStack(alignment: isRunning && !isExpanded ? .bottom : .center, spacing: 8) {
+                HStack(
+                    alignment: isRunning && !isExpanded && showsRunningRowsWhenCollapsed ? .bottom : .center,
+                    spacing: 8
+                ) {
                     Group {
-                        if isRunning && !isExpanded {
+                        if isRunning && !isExpanded && showsRunningRowsWhenCollapsed {
                             VStack(alignment: .leading, spacing: 0) {
                                 ForEach(rows) { step in
                                     AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
@@ -2399,6 +2495,19 @@ private struct AidenActivityFeed: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(timeline.steps) { step in
                         AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                    }
+                    if let progressText, !progressText.isEmpty {
+                        Divider()
+                            .padding(.vertical, 4)
+                        Text("Updates")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.secondary)
+                        Text(verbatim: progressText)
+                            .font(.caption)
+                            .foregroundStyle(palette.secondary)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .padding(.top, 1)
                     }
                 }
                 .padding(.top, 2)
@@ -3161,9 +3270,19 @@ enum AidenPhotoLibrarySaving {
 }
 
 enum AidenMessageActionContent {
-    static func copyText(for message: AidenChatMessage) -> String? {
+    static func copyText(
+        for message: AidenChatMessage,
+        presentationStyle: AidenChatPresentationStyle = .workspace
+    ) -> String? {
         guard message.role == .assistant, !message.text.isEmpty else { return nil }
-        return message.text
+        let text = presentationStyle == .botMessages
+            ? AidenBotReplyProjection.resolve(
+                text: message.text,
+                timeline: message.timeline,
+                isActive: false
+            ).finalText
+            : message.text
+        return text.isEmpty ? nil : text
     }
 }
 
@@ -3294,6 +3413,19 @@ private struct AidenLiveResponseView: View {
     @Bindable var model: AidenChatViewModel
     let presentationStyle: AidenChatPresentationStyle
 
+    private var botReply: AidenBotReplyProjection? {
+        guard presentationStyle == .botMessages else { return nil }
+        return AidenBotReplyProjection.resolve(
+            text: model.liveText,
+            timeline: model.activityTimeline,
+            isActive: model.isStreaming
+        )
+    }
+
+    private var visibleText: String {
+        botReply?.finalText ?? model.liveText
+    }
+
     private var activity: (label: String, orb: OrbState) {
         if model.streamState == .waitingForApproval {
             return ("Waiting for approval", .listening)
@@ -3332,7 +3464,12 @@ private struct AidenLiveResponseView: View {
             }
 
             if let timeline = model.activityTimeline, !timeline.steps.isEmpty {
-                AidenActivityFeed(timeline: timeline, active: model.isStreaming)
+                AidenActivityFeed(
+                    timeline: timeline,
+                    active: model.isStreaming,
+                    progressText: botReply?.progressText,
+                    showsRunningRowsWhenCollapsed: presentationStyle != .botMessages
+                )
                     .transition(.opacity)
             } else if !model.tools.isEmpty {
                 AidenToolActivityCard(tools: model.tools)
@@ -3349,8 +3486,8 @@ private struct AidenLiveResponseView: View {
                 .id(approval.id)
             }
 
-            if !model.liveText.isEmpty {
-                AidenMarkdownView(content: model.liveText)
+            if !visibleText.isEmpty {
+                AidenMarkdownView(content: visibleText)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
                         if presentationStyle == .botMessages {
@@ -3364,14 +3501,14 @@ private struct AidenLiveResponseView: View {
                     )
                     .contextMenu {
                         Button {
-                            UIPasteboard.general.string = model.liveText
+                            UIPasteboard.general.string = visibleText
                         } label: {
                             Label("Copy", systemImage: "doc.on.doc")
                         }
                     }
                     .accessibilityActions {
                         Button("Copy response") {
-                            UIPasteboard.general.string = model.liveText
+                            UIPasteboard.general.string = visibleText
                         }
                     }
             }
