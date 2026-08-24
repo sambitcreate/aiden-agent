@@ -10,11 +10,15 @@ enum AidenBotChatAccessScope: String, CaseIterable, Identifiable {
 
 enum AidenBotChatSheet: Identifiable {
     case access
+    case profile(AidenBotSummary)
+    case edit(String)
     case files(AidenBotConversationFileGrant)
 
     var id: String {
         switch self {
         case .access: "access"
+        case .profile(let bot): "profile-\(bot.id)"
+        case .edit(let botID): "edit-\(botID)"
         case .files: "files"
         }
     }

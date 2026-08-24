@@ -12,9 +12,63 @@ private struct AidenBotsSearchID: Equatable {
     let query: String
 }
 
-private struct AidenBotsHomeScope: Equatable {
+struct AidenBotsHomeScope: Equatable {
     let instanceID: String
     let deviceID: String
+}
+
+struct AidenBotsFavoriteMutation: Equatable {
+    let id: UUID
+    let scope: AidenBotsHomeScope
+    let botID: String
+}
+
+struct AidenBotsFavoriteMutationFinish: Equatable {
+    let favoriteOverride: [String]?
+    let favoriteError: String?
+}
+
+func aidenBotsFinishFavoriteMutation(
+    current: AidenBotsFavoriteMutation?,
+    finishing mutation: AidenBotsFavoriteMutation,
+    restoring override: [String]?,
+    error: String? = nil
+) -> AidenBotsFavoriteMutationFinish? {
+    guard current == mutation else { return nil }
+    return AidenBotsFavoriteMutationFinish(
+        favoriteOverride: override,
+        favoriteError: error
+    )
+}
+
+struct AidenBotContactSectionIDs: Equatable {
+    let favorites: [String]
+    let others: [String]
+}
+
+/// Produces the one-contact-per-Bot projection used by the inbox. Favorites
+/// are a placement, not a duplicate copy, and search intentionally collapses
+/// the screen into one ordered result list.
+func aidenBotContactSectionIDs(
+    matchingBotIDs: [String],
+    activeBotIDs: [String],
+    favoriteIDs: [String],
+    isSearching: Bool
+) -> AidenBotContactSectionIDs {
+    guard !isSearching else {
+        return AidenBotContactSectionIDs(favorites: [], others: matchingBotIDs)
+    }
+
+    let activeSet = Set(activeBotIDs)
+    var seenFavorites = Set<String>()
+    let visibleFavorites = favoriteIDs.filter { id in
+        activeSet.contains(id) && seenFavorites.insert(id).inserted
+    }
+    let favoriteSet = Set(visibleFavorites)
+    return AidenBotContactSectionIDs(
+        favorites: visibleFavorites,
+        others: matchingBotIDs.filter { !favoriteSet.contains($0) }
+    )
 }
 
 private enum AidenBotsHomeSheet: Identifiable {
@@ -238,8 +292,11 @@ struct AidenBotsHomeView: View {
     @State private var isLoading = false
     @State private var isChoosingBot = false
     @State private var isCreatingConversation = false
+    @State private var favoriteOverride: [String]?
+    @State private var favoriteMutation: AidenBotsFavoriteMutation?
     @State private var presentedSheet: AidenBotsHomeSheet?
     @State private var loadError: String?
+    @State private var favoriteError: String?
     @State private var loadGeneration: UInt = 0
 
     private var loadID: AidenBotsHomeLoadID {
@@ -289,39 +346,62 @@ struct AidenBotsHomeView: View {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var filteredBots: [AidenBotSummary] {
-        guard !normalizedQuery.isEmpty else { return activeBots }
-        return activeBots.filter {
-            $0.name.localizedCaseInsensitiveContains(normalizedQuery)
-                || $0.purpose.localizedCaseInsensitiveContains(normalizedQuery)
-        }
-    }
-
-    private var filteredConversations: [AidenBotConversationItem] {
-        let conversations = allConversations
-        guard !normalizedQuery.isEmpty else { return conversations }
-        if let remoteSearchResults {
-            return aidenCanonicalBotConversations(remoteSearchResults)
-        }
-        return conversations.filter { conversation in
-            let botName = allBots.first(where: { $0.id == conversation.botId })?.name ?? ""
-            return conversation.title.localizedCaseInsensitiveContains(normalizedQuery)
-                || (conversation.preview?.localizedCaseInsensitiveContains(normalizedQuery) == true)
-                || botName.localizedCaseInsensitiveContains(normalizedQuery)
-        }
-    }
-
     private var allConversations: [AidenBotConversationItem] {
         aidenCanonicalBotConversations(snapshot?.conversations?.conversations ?? [])
+    }
+
+    private var conversationByBotID: [String: AidenBotConversationItem] {
+        Dictionary(uniqueKeysWithValues: allConversations.map { ($0.botId, $0) })
     }
 
     private var searchID: AidenBotsSearchID {
         AidenBotsSearchID(loadID: loadID, query: normalizedQuery)
     }
 
+    private var favoriteIDs: [String] {
+        favoriteOverride ?? snapshot?.list?.favorites.botIds ?? []
+    }
+
+    private var favoriteIDSet: Set<String> { Set(favoriteIDs) }
+
+    private var matchingBots: [AidenBotSummary] {
+        let remoteConversationBotIDs = Set(remoteSearchResults?.map(\.botId) ?? [])
+        let candidates = allBots.filter { bot in
+            guard !normalizedQuery.isEmpty else { return true }
+            let conversation = conversationByBotID[bot.id]
+            return bot.name.localizedCaseInsensitiveContains(normalizedQuery)
+                || bot.purpose.localizedCaseInsensitiveContains(normalizedQuery)
+                || (conversation?.title.localizedCaseInsensitiveContains(normalizedQuery) == true)
+                || (conversation?.preview?.localizedCaseInsensitiveContains(normalizedQuery) == true)
+                || remoteConversationBotIDs.contains(bot.id)
+        }
+        return candidates.sorted { lhs, rhs in
+            let leftDate = conversationByBotID[lhs.id]?.updatedAt ?? lhs.updatedAt
+            let rightDate = conversationByBotID[rhs.id]?.updatedAt ?? rhs.updatedAt
+            if leftDate != rightDate { return leftDate > rightDate }
+            let nameOrder = lhs.name.localizedStandardCompare(rhs.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private var contactSectionIDs: AidenBotContactSectionIDs {
+        aidenBotContactSectionIDs(
+            matchingBotIDs: matchingBots.map(\.id),
+            activeBotIDs: activeBots.map(\.id),
+            favoriteIDs: favoriteIDs,
+            isSearching: !normalizedQuery.isEmpty
+        )
+    }
+
     private var favoriteBots: [AidenBotSummary] {
-        let ids = snapshot?.list?.favorites.botIds ?? []
-        return ids.compactMap { id in filteredBots.first(where: { $0.id == id }) }
+        let activeByID = Dictionary(uniqueKeysWithValues: activeBots.map { ($0.id, $0) })
+        return contactSectionIDs.favorites.compactMap { activeByID[$0] }
+    }
+
+    private var otherBots: [AidenBotSummary] {
+        let matchingByID = Dictionary(uniqueKeysWithValues: matchingBots.map { ($0.id, $0) })
+        return contactSectionIDs.others.compactMap { matchingByID[$0] }
     }
 
     private var contentState: AidenBotsHomeContentState {
@@ -332,8 +412,8 @@ struct AidenBotsHomeView: View {
             activeBotCount: activeBots.count,
             conversationCount: allConversations.count,
             hasQuery: !normalizedQuery.isEmpty,
-            filteredBotCount: filteredBots.count,
-            filteredConversationCount: filteredConversations.count
+            filteredBotCount: matchingBots.count,
+            filteredConversationCount: 0
         )
     }
 
@@ -388,6 +468,14 @@ struct AidenBotsHomeView: View {
         }
         .task(id: searchID) {
             await searchConversations()
+        }
+        .alert("Couldn’t Update Favorites", isPresented: Binding(
+            get: { favoriteError != nil },
+            set: { if !$0 { favoriteError = nil } }
+        )) {
+            Button("OK", role: .cancel) { favoriteError = nil }
+        } message: {
+            Text(favoriteError ?? "The operation could not be completed.")
         }
     }
 
@@ -464,7 +552,7 @@ struct AidenBotsHomeView: View {
             } description: {
                 Text(
                     coordinator.connectionState == .connected
-                        ? "Create a Bot to give a familiar helper its own conversations and capabilities."
+                        ? "Create a Bot to give a familiar helper one persistent conversation and its own capabilities."
                         : "Reconnect to your Mac to load Bots."
                 )
             } actions: {
@@ -490,7 +578,7 @@ struct AidenBotsHomeView: View {
                     HStack(spacing: 18) {
                         ForEach(favoriteBots) { bot in
                             Button {
-                                presentProfile(bot)
+                                openOrCreateConversation(for: bot)
                             } label: {
                                 VStack(spacing: 8) {
                                     botAvatar(bot, diameter: 72)
@@ -502,8 +590,17 @@ struct AidenBotsHomeView: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            .contextMenu { botContextMenu(bot) }
                             .accessibilityElement(children: .combine)
-                            .accessibilityHint("Opens this Bot’s profile.")
+                            .accessibilityLabel("\(bot.name), favorite")
+                            .accessibilityHint(openHint(for: bot))
+                            .accessibilityActions {
+                                if canUpdateFavorite(bot, adding: false) {
+                                    Button("Unpin from Favorites") {
+                                        updateFavoriteFromAccessibility(bot, move: .remove)
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
@@ -511,58 +608,31 @@ struct AidenBotsHomeView: View {
                 .padding(.bottom, 18)
             }
 
-            if !filteredBots.isEmpty {
+            if !otherBots.isEmpty {
                 Text("Bots")
                     .font(.headline)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 8)
-                ForEach(filteredBots) { bot in
+                ForEach(otherBots) { bot in
                     Button {
-                        presentProfile(bot)
+                        openOrCreateConversation(for: bot)
                     } label: {
-                        botProfileRow(bot)
+                        botContactRow(bot)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityHint("Opens this Bot’s profile.")
-                }
-            }
-
-            if !filteredConversations.isEmpty {
-                Text("Chats")
-                    .font(.headline)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                ForEach(filteredConversations) { conversation in
-                    Button {
-                        Task { await onOpenConversation(conversation) }
-                    } label: {
-                        conversationRow(conversation)
+                    .contextMenu { botContextMenu(bot) }
+                    .accessibilityHint(openHint(for: bot))
+                    .accessibilityActions {
+                        let isFavorite = favoriteIDSet.contains(bot.id)
+                        if canUpdateFavorite(bot, adding: !isFavorite) {
+                            Button(isFavorite ? "Unpin from Favorites" : "Pin to Favorites") {
+                                updateFavoriteFromAccessibility(
+                                    bot,
+                                    move: isFavorite ? .remove : .add
+                                )
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(coordinator.connectionState != .connected)
-                    .accessibilityHint(
-                        coordinator.connectionState == .connected
-                            ? "Opens this Bot chat."
-                            : "Reconnect to open this saved chat."
-                    )
-                }
-            }
-
-            let archivedBots = allBots.filter { $0.health == .archived }
-            if normalizedQuery.isEmpty, !archivedBots.isEmpty {
-                Text("Archived")
-                    .font(.headline)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 18)
-                    .padding(.bottom, 8)
-                ForEach(archivedBots) { bot in
-                    Button {
-                        presentProfile(bot)
-                    } label: {
-                        botProfileRow(bot)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Opens this archived Bot’s read-only profile.")
                 }
             }
         }
@@ -579,7 +649,7 @@ struct AidenBotsHomeView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
-                    .accessibilityLabel("Search Bots and chats")
+                    .accessibilityLabel("Search Bots")
                 if !query.isEmpty {
                     Button { query = "" } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -624,9 +694,170 @@ struct AidenBotsHomeView: View {
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
     }
 
+    private func canOpen(_ bot: AidenBotSummary) -> Bool {
+        guard coordinator.connectionState == .connected else { return false }
+        if conversationByBotID[bot.id] != nil { return true }
+        return bot.health == .ready && canCreateBot
+    }
+
+    private func openHint(for bot: AidenBotSummary) -> String {
+        guard coordinator.connectionState == .connected else {
+            return "Reconnect to open this Bot’s saved conversation."
+        }
+        if conversationByBotID[bot.id] != nil {
+            return "Opens this Bot’s conversation."
+        }
+        if bot.health == .ready, canCreateBot {
+            return "Starts this Bot’s conversation."
+        }
+        return "Open Bot Details to review why this Bot cannot start a conversation."
+    }
+
+    private func canUpdateFavorite(_ bot: AidenBotSummary, adding: Bool) -> Bool {
+        guard bot.health != .archived,
+              favoriteMutation == nil,
+              canCreateBot else { return false }
+        return !adding || favoriteIDs.count < AidenBotFavorites.maximumCount
+    }
+
+    private func updateFavoriteFromAccessibility(
+        _ bot: AidenBotSummary,
+        move: AidenBotFavoriteOrderMove
+    ) {
+        let adding = move == .add
+        guard canUpdateFavorite(bot, adding: adding) else { return }
+        Task { await updateFavorite(bot, move: move) }
+    }
+
+    @MainActor
+    private func updateFavorite(
+        _ bot: AidenBotSummary,
+        move: AidenBotFavoriteOrderMove
+    ) async {
+        let adding = move == .add
+        guard canUpdateFavorite(bot, adding: adding),
+              let installation = coordinator.installationStore.activeInstallation,
+              let list = snapshot?.list else { return }
+        let scope = AidenBotsHomeScope(
+            instanceID: installation.id,
+            deviceID: installation.deviceId
+        )
+        let mutation = AidenBotsFavoriteMutation(id: UUID(), scope: scope, botID: bot.id)
+        let currentFavorites = list.favorites
+        let nextIDs = aidenBotFavoriteOrder(favoriteIDs, moving: bot.id, move)
+        guard nextIDs != favoriteIDs else { return }
+
+        var capturedContext: AidenRemoteRequestContext?
+        let previousOverride = favoriteOverride
+        favoriteMutation = mutation
+        favoriteOverride = nextIDs
+        favoriteError = nil
+
+        do {
+            let context = try coordinator.requestContext()
+            capturedContext = context
+            let request = try AidenBotFavoritesUpdateRequest(botIds: nextIDs)
+            let updated = try await coordinator.remoteClient(for: context).updateBotFavorites(
+                request,
+                revision: currentFavorites.revision
+            )
+            guard coordinator.isCurrent(context),
+                  coordinator.installationStore.activeInstallation?.id == installation.id,
+                  coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId else {
+                finishFavoriteMutation(mutation, restoring: nil)
+                return
+            }
+            try await publishFavorites(updated, list: list, context: context)
+            finishFavoriteMutation(mutation, restoring: nil)
+        } catch is CancellationError {
+            finishFavoriteMutation(mutation, restoring: previousOverride)
+        } catch {
+            if let context = capturedContext,
+               await coordinator.handleCredentialRevocation(error, context: context) {
+                finishFavoriteMutation(mutation, restoring: previousOverride)
+                return
+            }
+            guard let context = capturedContext, coordinator.isCurrent(context) else {
+                finishFavoriteMutation(mutation, restoring: nil)
+                return
+            }
+            do {
+                let authoritative = try await coordinator.remoteClient(for: context).botFavorites()
+                guard coordinator.isCurrent(context) else {
+                    finishFavoriteMutation(mutation, restoring: nil)
+                    return
+                }
+                try await publishFavorites(authoritative, list: list, context: context)
+                finishFavoriteMutation(
+                    mutation,
+                    restoring: nil,
+                    error: "Aiden refreshed the latest Favorites. Try your change again."
+                )
+            } catch {
+                finishFavoriteMutation(
+                    mutation,
+                    restoring: previousOverride,
+                    error: "Aiden couldn’t update Favorites. Reconnect and try again."
+                )
+            }
+        }
+    }
+
+    private func finishFavoriteMutation(
+        _ mutation: AidenBotsFavoriteMutation,
+        restoring override: [String]?,
+        error: String? = nil
+    ) {
+        guard let finish = aidenBotsFinishFavoriteMutation(
+            current: favoriteMutation,
+            finishing: mutation,
+            restoring: override,
+            error: error
+        ) else { return }
+        favoriteMutation = nil
+        favoriteOverride = finish.favoriteOverride
+        favoriteError = finish.favoriteError
+    }
+
+    private func resetFavoriteMutationState() {
+        favoriteMutation = nil
+        favoriteOverride = nil
+        favoriteError = nil
+    }
+
+    @MainActor
+    private func publishFavorites(
+        _ favorites: AidenBotFavorites,
+        list: AidenBotList,
+        context: AidenRemoteRequestContext
+    ) async throws {
+        // Keep any Bot-list refresh that completed while this mutation was in
+        // flight; only the revisioned Favorites projection is replaced.
+        let updatedList = try (snapshot?.list ?? list).replacingFavorites(favorites)
+        guard coordinator.isCurrent(context) else { return }
+        let savedAt = Date()
+        var updatedSnapshot = snapshot ?? AidenBotCacheSnapshot(savedAt: savedAt)
+        updatedSnapshot.list = updatedList
+        updatedSnapshot.savedAt = savedAt
+        snapshot = updatedSnapshot
+        let retained = await coordinator.withRetainedInstallationData(for: context) {
+            _ = try? await AidenBotCache.shared.mergeAndStore(
+                AidenBotCacheSegments(list: updatedList),
+                savedAt: savedAt,
+                instanceId: context.instanceId,
+                deviceId: context.deviceId
+            )
+        }
+        guard retained, coordinator.isCurrent(context) else { return }
+    }
+
     @MainActor
     private func openOrCreateConversation(for bot: AidenBotSummary) {
         guard !isCreatingConversation else { return }
+        guard canOpen(bot) else {
+            presentProfile(bot)
+            return
+        }
         isCreatingConversation = true
         Task {
             defer { isCreatingConversation = false }
@@ -647,69 +878,90 @@ struct AidenBotsHomeView: View {
         }
     }
 
-    private func conversationRow(_ conversation: AidenBotConversationItem) -> some View {
-        let bot = allBots.first(where: { $0.id == conversation.botId })
+    private func botContactRow(_ bot: AidenBotSummary) -> some View {
+        let conversation = conversationByBotID[bot.id]
+        let preview = botContactPreview(bot, conversation: conversation)
         return HStack(spacing: 14) {
-            if let bot {
-                botAvatar(bot, diameter: 52)
-            } else {
-                AidenBotSemanticAvatarView(
-                    avatar: .recipe(AidenBotEditorDraft.defaultAvatar),
-                    name: "Bot",
-                    size: 52
-                )
-            }
+            botAvatar(bot, diameter: 52)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(bot?.name ?? "Bot")
+                    Text(bot.name)
                         .font(.headline)
+                        .foregroundStyle(palette.foreground)
                     Spacer()
-                    Text(conversation.updatedAt, style: .time)
-                        .font(.subheadline)
-                        .foregroundStyle(palette.secondary)
+                    if let conversation {
+                        AidenRelativeTimestampView(date: conversation.updatedAt)
+                            .font(.subheadline)
+                            .foregroundStyle(palette.secondary)
+                    }
                 }
-                Text(conversation.preview ?? conversation.title)
+                Text(preview)
                     .font(.body)
                     .foregroundStyle(palette.secondary)
                     .lineLimit(2)
-                if let status = aidenBotInboxActivityStatus(
-                    state: conversation.activityState,
-                    canRespondToApproval: conversation.canRespondToApproval
-                ) {
+                if let conversation,
+                   let status = aidenBotInboxActivityStatus(
+                       state: conversation.activityState,
+                       canRespondToApproval: conversation.canRespondToApproval
+                   ) {
                     Label(status.label, systemImage: status.symbol)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(palette.accent)
                 }
             }
-            Image(systemName: "chevron.right")
-                .font(.caption.bold())
-                .foregroundStyle(palette.secondary.opacity(0.7))
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(botContactAccessibilityLabel(bot, conversation: conversation, preview: preview))
     }
 
-    private func botProfileRow(_ bot: AidenBotSummary) -> some View {
-        HStack(spacing: 14) {
-            botAvatar(bot, diameter: 52)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(bot.name)
-                    .font(.headline)
-                    .foregroundStyle(palette.foreground)
-                Text(bot.purpose.isEmpty ? (bot.health == .archived ? "Archived" : "Bot") : bot.purpose)
-                    .font(.subheadline)
-                    .foregroundStyle(palette.secondary)
-                    .lineLimit(2)
-            }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption.bold())
-                .foregroundStyle(palette.secondary.opacity(0.7))
+    private func botContactPreview(
+        _ bot: AidenBotSummary,
+        conversation: AidenBotConversationItem?
+    ) -> String {
+        let base = conversation?.preview ?? conversation?.title ?? bot.purpose
+        let fallback = base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Start a conversation"
+            : base
+        return bot.health == .archived ? "Archived · \(fallback)" : fallback
+    }
+
+    private func botContactAccessibilityLabel(
+        _ bot: AidenBotSummary,
+        conversation: AidenBotConversationItem?,
+        preview: String
+    ) -> String {
+        var parts = [bot.name, preview]
+        if let conversation,
+           let status = aidenBotInboxActivityStatus(
+               state: conversation.activityState,
+               canRespondToApproval: conversation.canRespondToApproval
+           ) {
+            parts.append(status.label)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 11)
-        .contentShape(Rectangle())
+        return parts.joined(separator: ", ")
+    }
+
+    @ViewBuilder
+    private func botContextMenu(_ bot: AidenBotSummary) -> some View {
+        let isFavorite = favoriteIDSet.contains(bot.id)
+        Button {
+            Task { await updateFavorite(bot, move: isFavorite ? .remove : .add) }
+        } label: {
+            Label(
+                isFavorite ? "Unpin from Favorites" : "Pin to Favorites",
+                systemImage: isFavorite ? "pin.slash" : "pin"
+            )
+        }
+        .disabled(!canUpdateFavorite(bot, adding: !isFavorite))
+
+        Button {
+            presentProfile(bot)
+        } label: {
+            Label("Bot Details", systemImage: "info.circle")
+        }
     }
 
     private func botAvatar(_ bot: AidenBotSummary, diameter: CGFloat) -> some View {
@@ -747,6 +999,7 @@ struct AidenBotsHomeView: View {
             presentedSheet = nil
             isChoosingBot = false
             isCreatingConversation = false
+            resetFavoriteMutationState()
             loadError = nil
             isLoading = false
             return
@@ -754,6 +1007,7 @@ struct AidenBotsHomeView: View {
         guard let installation = coordinator.installationStore.activeInstallation else {
             snapshot = nil
             snapshotScope = nil
+            resetFavoriteMutationState()
             isLoading = false
             return
         }
@@ -765,6 +1019,7 @@ struct AidenBotsHomeView: View {
             snapshot = nil
             snapshotScope = scope
             remoteSearchResults = nil
+            resetFavoriteMutationState()
         }
         loadError = nil
         isLoading = coordinator.connectionState == .connected

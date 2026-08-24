@@ -351,6 +351,24 @@ final class AidenBotContractTests: XCTestCase {
         )
     }
 
+    func testReplacingFavoritesPreservesTheCurrentBotProjectionAndRevalidatesMembership() throws {
+        let fixture = try sharedFixtureObject()
+        let listObject = try XCTUnwrap(fixture["botList"] as? [String: Any])
+        let list = try AidenRemoteJSONDecoder.decode(AidenBotList.self, from: data(for: listObject))
+        let emptyFavorites = try AidenBotFavorites(botIds: [], revision: "favorites-next")
+        let updated = try list.replacingFavorites(emptyFavorites)
+
+        XCTAssertEqual(updated.bots, list.bots)
+        XCTAssertEqual(updated.maxBots, list.maxBots)
+        XCTAssertEqual(updated.favorites, emptyFavorites)
+
+        let unknownFavorites = try AidenBotFavorites(
+            botIds: ["bot-not-in-current-list"],
+            revision: "favorites-invalid"
+        )
+        XCTAssertThrowsError(try list.replacingFavorites(unknownFavorites))
+    }
+
     func testRequiredIdentityRevisionEpochAndPathSafeGrantFieldsFailClosed() throws {
         let fixture = try sharedFixtureObject()
         var summary = try XCTUnwrap(fixture["botSummary"] as? [String: Any])

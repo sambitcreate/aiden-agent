@@ -5,6 +5,92 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testBotComposerKeepsSendVisibleForTemporarilyUnsendableContent() {
+        XCTAssertEqual(
+            aidenBotComposerTrailingControl(
+                isStreaming: false,
+                isListening: false,
+                draft: "Testing",
+                attachmentCount: 0,
+                canSend: false
+            ),
+            .send(isEnabled: false)
+        )
+        XCTAssertEqual(
+            aidenBotComposerTrailingControl(
+                isStreaming: false,
+                isListening: false,
+                draft: "",
+                attachmentCount: 1,
+                canSend: true
+            ),
+            .send(isEnabled: true)
+        )
+        XCTAssertEqual(
+            aidenBotComposerTrailingControl(
+                isStreaming: false,
+                isListening: false,
+                draft: "   ",
+                attachmentCount: 0,
+                canSend: false
+            ),
+            .startVoiceInput
+        )
+        XCTAssertEqual(
+            aidenBotComposerTrailingControl(
+                isStreaming: true,
+                isListening: true,
+                draft: "Testing",
+                attachmentCount: 0,
+                canSend: false
+            ),
+            .stopResponse
+        )
+        XCTAssertEqual(
+            aidenBotComposerTrailingControl(
+                isStreaming: false,
+                isListening: true,
+                draft: "Testing",
+                attachmentCount: 0,
+                canSend: false
+            ),
+            .stopVoiceInput
+        )
+    }
+
+    func testBotMessageGroupingOnlyJoinsNearbyMessagesFromTheSameSpeaker() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let first = AidenChatMessage(
+            id: "first",
+            role: .assistant,
+            text: "First",
+            createdAt: start
+        )
+        let nearby = AidenChatMessage(
+            id: "nearby",
+            role: .assistant,
+            text: "Second",
+            createdAt: start.addingTimeInterval(30)
+        )
+        let later = AidenChatMessage(
+            id: "later",
+            role: .assistant,
+            text: "Later",
+            createdAt: start.addingTimeInterval(61)
+        )
+        let reply = AidenChatMessage(
+            id: "reply",
+            role: .user,
+            text: "Reply",
+            createdAt: start.addingTimeInterval(15)
+        )
+
+        XCTAssertTrue(aidenMessagesJoin(first, nearby))
+        XCTAssertFalse(aidenMessagesJoin(first, later))
+        XCTAssertFalse(aidenMessagesJoin(first, reply))
+        XCTAssertFalse(aidenMessagesJoin(nil, nearby))
+    }
+
     func testFailedSendRestoresSubmittedTextWithoutClobberingTheNextDraft() {
         XCTAssertEqual(
             AidenDraftSendReconciliation.failedDraft(submitted: "First message", current: ""),

@@ -494,6 +494,127 @@ enum AidenMessageContentSurface {
     }
 }
 
+enum AidenChatPresentationStyle: Equatable {
+    case workspace
+    case botMessages
+
+    init(chat: AidenChat) {
+        self = chat.isBotChat ? .botMessages : .workspace
+    }
+}
+
+enum AidenBotComposerTrailingControl: Equatable {
+    case stopResponse
+    case stopVoiceInput
+    case send(isEnabled: Bool)
+    case startVoiceInput
+}
+
+func aidenBotComposerTrailingControl(
+    isStreaming: Bool,
+    isListening: Bool,
+    draft: String,
+    attachmentCount: Int,
+    canSend: Bool
+) -> AidenBotComposerTrailingControl {
+    if isStreaming { return .stopResponse }
+    if isListening { return .stopVoiceInput }
+    let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || attachmentCount > 0
+    return hasContent ? .send(isEnabled: canSend) : .startVoiceInput
+}
+
+func aidenMessagesJoin(
+    _ previous: AidenChatMessage?,
+    _ message: AidenChatMessage,
+    maximumGap: TimeInterval = 60
+) -> Bool {
+    guard let previous,
+          previous.role == message.role,
+          previous.attachments?.isEmpty != false,
+          message.attachments?.isEmpty != false,
+          previous.outcome == nil,
+          message.outcome == nil else { return false }
+    let gap = message.createdAt.timeIntervalSince(previous.createdAt)
+    return gap >= 0 && gap <= maximumGap
+}
+
+struct AidenBotMessageBubbleShape: Shape {
+    let isOutgoing: Bool
+    let showsTail: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let tailWidth: CGFloat = showsTail ? 7 : 0
+        let body = CGRect(
+            x: isOutgoing ? rect.minX : rect.minX + tailWidth,
+            y: rect.minY,
+            width: rect.width - tailWidth,
+            height: rect.height
+        )
+        var path = Path(
+            roundedRect: body,
+            cornerRadius: 18,
+            style: .continuous
+        )
+        guard showsTail else { return path }
+
+        var tail = Path()
+        if isOutgoing {
+            tail.move(to: CGPoint(x: body.maxX - 10, y: body.maxY - 4))
+            tail.addCurve(
+                to: CGPoint(x: rect.maxX, y: rect.maxY),
+                control1: CGPoint(x: body.maxX - 2, y: body.maxY - 2),
+                control2: CGPoint(x: rect.maxX - 2, y: rect.maxY - 1)
+            )
+            tail.addCurve(
+                to: CGPoint(x: body.maxX - 1, y: body.maxY - 13),
+                control1: CGPoint(x: rect.maxX - 5, y: rect.maxY - 5),
+                control2: CGPoint(x: body.maxX, y: body.maxY - 9)
+            )
+        } else {
+            tail.move(to: CGPoint(x: body.minX + 10, y: body.maxY - 4))
+            tail.addCurve(
+                to: CGPoint(x: rect.minX, y: rect.maxY),
+                control1: CGPoint(x: body.minX + 2, y: body.maxY - 2),
+                control2: CGPoint(x: rect.minX + 2, y: rect.maxY - 1)
+            )
+            tail.addCurve(
+                to: CGPoint(x: body.minX + 1, y: body.maxY - 13),
+                control1: CGPoint(x: rect.minX + 5, y: rect.maxY - 5),
+                control2: CGPoint(x: body.minX, y: body.maxY - 9)
+            )
+        }
+        path.addPath(tail)
+        return path
+    }
+}
+
+private struct AidenBotHeaderNameGlassModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            content.glassEffect(.regular.interactive(), in: Capsule())
+        } else if reduceTransparency {
+            content
+                .background(palette.raised, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.16), lineWidth: 0.5))
+        } else {
+            content
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
+        }
+    }
+}
+
+private extension View {
+    func aidenBotHeaderNameGlass() -> some View {
+        modifier(AidenBotHeaderNameGlassModifier())
+    }
+}
+
 enum AidenMissingStreamResolution: Equatable {
     case complete
     case failed
@@ -1833,63 +1954,12 @@ struct AidenChatDetailView: View {
         return allowsMutations && botToolsModel.bot?.health == .ready
     }
 
-    var body: some View {
-        ZStack(alignment: .bottom) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        ForEach(model.chat.messages) { message in
-                            AidenMessageView(
-                                message: message,
-                                speechPlayback: speechPlayback,
-                                loadAttachmentImage: { attachment in
-                                    await model.attachmentImageData(for: attachment)
-                                }
-                            )
-                        }
-                        if model.isStreaming || !model.liveText.isEmpty {
-                            AidenLiveResponseView(model: model)
-                        }
-                        Color.clear
-                            .frame(height: max(96, composerHeight + 12))
-                            .accessibilityHidden(true)
-                        Color.clear.frame(height: 1).id("chat-bottom")
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 20)
-                }
-                .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        composerIsFocused = false
-                    }
-                )
-                .onChange(of: model.chat.messages.count) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: model.liveText) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: model.pendingApproval?.id) { _, approvalID in
-                    guard approvalID != nil else { return }
-                    composerIsFocused = false
-                    scrollToBottom(proxy)
-                }
-            }
+    private var presentationStyle: AidenChatPresentationStyle {
+        AidenChatPresentationStyle(chat: model.chat)
+    }
 
-            AidenComposerView(
-                model: model,
-                autoStartVoice: autoStartVoice,
-                composerFocus: $composerIsFocused
-            )
-                .disabled(model.isReadOnlyPresentation)
-                .padding(.horizontal)
-                .padding(.bottom, 10)
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: AidenComposerHeightPreferenceKey.self,
-                            value: proxy.size.height
-                        )
-                    }
-                }
-        }
+    var body: some View {
+        chatStack
         .background(palette.canvas.ignoresSafeArea())
         .onPreferenceChange(AidenComposerHeightPreferenceKey.self) { height in
             guard height > 0 else { return }
@@ -1898,109 +1968,17 @@ struct AidenChatDetailView: View {
         .onChange(of: effectiveAllowsMutations, initial: true) { _, allowed in
             model.setAllowsMutations(allowed)
         }
-        .navigationTitle(model.chat.title)
+        .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if let coordinator, let botToolsModel {
-                ToolbarItem(placement: .principal) {
-                    Button {
-                        Task {
-                            _ = await botToolsModel.refresh(coordinator: coordinator)
-                            botSheet = .access
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if let bot = botToolsModel.bot {
-                                AidenBotCanonicalAvatarView(
-                                    coordinator: coordinator,
-                                    botID: bot.id,
-                                    avatar: bot.avatar,
-                                    name: bot.name,
-                                    size: 30
-                                )
-                            }
-                            VStack(spacing: 1) {
-                                Text(model.chat.title)
-                                    .font(.headline)
-                                    .lineLimit(1)
-                                Text(botToolsModel.summary(
-                                    connected: coordinator.connectionState == .connected
-                                ))
-                                .font(.caption2)
-                                .foregroundStyle(palette.secondary)
-                                .lineLimit(1)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(
-                        "Access: " + botToolsModel.summary(
-                            connected: coordinator.connectionState == .connected
-                        )
-                    )
-                    .accessibilityHint("Opens Bot defaults and access for this chat")
-                }
-            }
-            if let coordinator,
-               let botToolsModel,
-               botToolsModel.fileGrant(
-                   coordinator: coordinator,
-                   hostAllowsMutations: effectiveAllowsMutations
-               ) != nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task {
-                            guard await botToolsModel.refresh(coordinator: coordinator),
-                                  let refreshedGrant = botToolsModel.fileGrant(
-                                      coordinator: coordinator,
-                                      hostAllowsMutations: effectiveAllowsMutations
-                                  ) else { return }
-                            botSheet = .files(refreshedGrant)
-                        }
-                    } label: {
-                        Label("Files", systemImage: "folder")
-                    }
-                    .accessibilityLabel("Bot files")
-                }
-            } else if model.chat.botId == nil,
-                      let coordinator, let workspace, workspace.hasFolder {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace)
-                    } label: {
-                        Label("Files", systemImage: "folder")
-                    }
-                    .accessibilityLabel("Workspace files")
-                }
-            }
-        }
+        .toolbar { chatToolbar }
+        .safeAreaInset(edge: .top, spacing: 0) { botIdentityInset }
         .task { await model.load() }
         .task(id: botToolsSessionIdentity) {
             guard let coordinator, let botToolsModel else { return }
             botToolsModel.resetForSessionChange()
             await botToolsModel.load(coordinator: coordinator)
         }
-        .sheet(item: $botSheet) { destination in
-            if let coordinator, let botToolsModel {
-                switch destination {
-                case .access:
-                    AidenBotChatAccessSheetView(
-                        coordinator: coordinator,
-                        model: botToolsModel,
-                        hostAllowsMutations: effectiveAllowsMutations
-                    )
-                case .files(let grant):
-                    NavigationStack {
-                        AidenBotConversationFilesView(coordinator: coordinator, grant: grant)
-                            .toolbar {
-                                ToolbarItem(placement: .cancellationAction) {
-                                    Button("Done") { botSheet = nil }
-                                }
-                            }
-                    }
-                }
-            }
-        }
+        .sheet(item: $botSheet) { botSheetContent($0) }
         .alert("Aiden On The Go", isPresented: Binding(
             get: { model.presentedError != nil },
             set: { if !$0 { model.presentedError = nil } }
@@ -2008,6 +1986,277 @@ struct AidenChatDetailView: View {
             Button("OK", role: .cancel) { model.presentedError = nil }
         } message: {
             Text(model.presentedError ?? "The operation could not be completed.")
+        }
+    }
+
+    private var chatStack: some View {
+        ZStack(alignment: .bottom) {
+            transcript
+            composer
+        }
+    }
+
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                messageList
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(
+                TapGesture().onEnded { composerIsFocused = false }
+            )
+            .onChange(of: model.chat.messages.count) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: model.liveText) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: model.pendingApproval?.id) { _, approvalID in
+                guard approvalID != nil else { return }
+                composerIsFocused = false
+                scrollToBottom(proxy)
+            }
+        }
+    }
+
+    private var messageList: some View {
+        LazyVStack(
+            alignment: .leading,
+            spacing: presentationStyle == .botMessages ? 3 : 18
+        ) {
+            ForEach(Array(model.chat.messages.enumerated()), id: \.element.id) { index, message in
+                messageRow(message, at: index)
+            }
+            if model.isStreaming || !model.liveText.isEmpty {
+                AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
+            }
+            Color.clear
+                .frame(height: max(96, composerHeight + 12))
+                .accessibilityHidden(true)
+            Color.clear.frame(height: 1).id("chat-bottom")
+        }
+        .padding(.horizontal)
+        .padding(.top, 20)
+    }
+
+    private func messageRow(_ message: AidenChatMessage, at index: Int) -> some View {
+        let previous = index > 0 ? model.chat.messages[index - 1] : nil
+        let next = index + 1 < model.chat.messages.count ? model.chat.messages[index + 1] : nil
+        let isBotMessage = presentationStyle == .botMessages
+        let joinsNext = next.map { aidenMessagesJoin(message, $0) } ?? false
+        let showsTail = isBotMessage && !joinsNext
+        let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
+
+        return AidenMessageView(
+            message: message,
+            presentationStyle: presentationStyle,
+            showsTail: showsTail,
+            speechPlayback: speechPlayback,
+            loadAttachmentImage: { attachment in
+                await model.attachmentImageData(for: attachment)
+            }
+        )
+        .padding(.top, topPadding)
+    }
+
+    private var composer: some View {
+        AidenComposerView(
+            model: model,
+            autoStartVoice: autoStartVoice,
+            composerFocus: $composerIsFocused
+        )
+        .disabled(model.isReadOnlyPresentation)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: AidenComposerHeightPreferenceKey.self,
+                    value: proxy.size.height
+                )
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var chatToolbar: some ToolbarContent {
+        if let coordinator, let botToolsModel {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        openBotProfile(coordinator: coordinator, model: botToolsModel)
+                    } label: {
+                        Label("Bot Details", systemImage: "person.crop.circle")
+                    }
+
+                    Button {
+                        botSheet = .edit(botToolsModel.botID)
+                    } label: {
+                        Label("Edit Bot", systemImage: "pencil")
+                    }
+                    .disabled(!canEditBotFromChat)
+
+                    Button {
+                        openBotAccess(coordinator: coordinator, model: botToolsModel)
+                    } label: {
+                        Label("Access", systemImage: "switch.2")
+                    }
+
+                    if botToolsModel.fileGrant(
+                        coordinator: coordinator,
+                        hostAllowsMutations: effectiveAllowsMutations
+                    ) != nil {
+                        Button {
+                            openBotFiles(coordinator: coordinator, model: botToolsModel)
+                        } label: {
+                            Label("Files", systemImage: "folder")
+                        }
+                    }
+                } label: {
+                    Image(systemName: AidenChromeSymbols.overflowMenu)
+                        .font(.body.weight(.semibold))
+                        .contentShape(Circle())
+                }
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("Bot actions")
+            }
+        } else if model.chat.botId == nil,
+                  let coordinator, let workspace, workspace.hasFolder {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace)
+                } label: {
+                    Label("Files", systemImage: "folder")
+                }
+                .accessibilityLabel("Workspace files")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var botIdentityInset: some View {
+        if let coordinator, let botToolsModel {
+            ZStack(alignment: .top) {
+                Button {
+                    openBotProfile(coordinator: coordinator, model: botToolsModel)
+                } label: {
+                    VStack(spacing: -8) {
+                        if let bot = botToolsModel.bot {
+                            AidenBotCanonicalAvatarView(
+                                coordinator: coordinator,
+                                botID: bot.id,
+                                avatar: bot.avatar,
+                                name: bot.name,
+                                size: 60
+                            )
+                        } else {
+                            Image(systemName: "person.crop.circle.fill")
+                                .font(.system(size: 54))
+                                .foregroundStyle(palette.secondary)
+                                .frame(width: 60, height: 60)
+                        }
+
+                        HStack(spacing: 5) {
+                            Text(botToolsModel.bot?.name ?? model.chat.title)
+                                .font(.headline.weight(.semibold))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(palette.secondary)
+                        }
+                        .foregroundStyle(palette.foreground)
+                        .padding(.horizontal, 14)
+                        .frame(minWidth: 92, maxWidth: 210, minHeight: 34)
+                        .aidenBotHeaderNameGlass()
+                    }
+                    .fixedSize(horizontal: true, vertical: true)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Bot details for \(botToolsModel.bot?.name ?? model.chat.title)")
+                .accessibilityHint("Opens this Bot’s settings and profile")
+                .offset(y: -17)
+            }
+            .frame(height: 13)
+            .zIndex(2)
+        }
+    }
+
+    private var canEditBotFromChat: Bool {
+        guard coordinator?.connectionState == .connected,
+              coordinator?.installationStore.activeInstallation?.canWriteBots == true,
+              let bot = botToolsModel?.bot else { return false }
+        return bot.health != .archived
+    }
+
+    @ViewBuilder
+    private func botSheetContent(_ destination: AidenBotChatSheet) -> some View {
+        if let coordinator, let botToolsModel {
+            switch destination {
+            case .access:
+                AidenBotChatAccessSheetView(
+                    coordinator: coordinator,
+                    model: botToolsModel,
+                    hostAllowsMutations: effectiveAllowsMutations
+                )
+            case .profile(let bot):
+                AidenBotProfileView(
+                    coordinator: coordinator,
+                    initialSummary: bot,
+                    onOpenConversation: { _ in },
+                    onCreateConversation: { _ in },
+                    onChanged: {
+                        Task { await botToolsModel.load(coordinator: coordinator) }
+                    },
+                    showsDismissButton: true,
+                    showsConversationAction: false,
+                    showsFavoriteControls: false
+                )
+            case .edit(let botID):
+                AidenBotEditorView(coordinator: coordinator, mode: .edit(botID: botID)) { _ in
+                    Task { await botToolsModel.load(coordinator: coordinator) }
+                }
+            case .files(let grant):
+                NavigationStack {
+                    AidenBotConversationFilesView(coordinator: coordinator, grant: grant)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { botSheet = nil }
+                            }
+                        }
+                }
+            }
+        }
+    }
+
+    private func openBotProfile(
+        coordinator: AidenRemoteCoordinator,
+        model: AidenBotChatToolsModel
+    ) {
+        Task {
+            guard await model.refresh(coordinator: coordinator),
+                  let bot = model.bot else { return }
+            botSheet = .profile(AidenBotSummary(detail: bot))
+        }
+    }
+
+    private func openBotAccess(
+        coordinator: AidenRemoteCoordinator,
+        model: AidenBotChatToolsModel
+    ) {
+        Task {
+            guard await model.refresh(coordinator: coordinator) else { return }
+            botSheet = .access
+        }
+    }
+
+    private func openBotFiles(
+        coordinator: AidenRemoteCoordinator,
+        model: AidenBotChatToolsModel
+    ) {
+        Task {
+            guard await model.refresh(coordinator: coordinator),
+                  let grant = model.fileGrant(
+                      coordinator: coordinator,
+                      hostAllowsMutations: effectiveAllowsMutations
+                  ) else { return }
+            botSheet = .files(grant)
         }
     }
 
@@ -2029,18 +2278,26 @@ private struct AidenComposerHeightPreferenceKey: PreferenceKey {
 private struct AidenMessageView: View {
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
+    let presentationStyle: AidenChatPresentationStyle
+    let showsTail: Bool
     let speechPlayback: AidenSpeechPlaybackController
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
+        HStack(alignment: .bottom, spacing: 0) {
             if message.role == .user {
-                Spacer(minLength: 48)
+                Spacer(minLength: presentationStyle == .botMessages ? 72 : 48)
                 messageContent
             } else {
                 messageContent
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(
+                        maxWidth: presentationStyle == .botMessages ? 620 : .infinity,
+                        alignment: .leading
+                    )
                     .layoutPriority(1)
+                if presentationStyle == .botMessages {
+                    Spacer(minLength: 72)
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -2073,18 +2330,7 @@ private struct AidenMessageView: View {
                 AidenActivityFeed(timeline: timeline, active: false)
             }
             if !message.text.isEmpty {
-                AidenMessageTextView(role: message.role, content: message.text)
-                    .padding(AidenMessageContentSurface.usesRaisedBubble(
-                        role: message.role,
-                        content: .text
-                    ) ? 12 : 0)
-                    .background(
-                        AidenMessageContentSurface.usesRaisedBubble(
-                            role: message.role,
-                            content: .text
-                        ) ? palette.raised : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
+                messageText
             }
             if let attachments = message.attachments, !attachments.isEmpty {
                 let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
@@ -2145,6 +2391,41 @@ private struct AidenMessageView: View {
                 .foregroundStyle(palette.secondary)
             }
         }
+    }
+
+    private var messageText: some View {
+        let usesWorkspaceBubble = AidenMessageContentSurface.usesRaisedBubble(
+            role: message.role,
+            content: .text
+        )
+        let usesBotBubble = presentationStyle == .botMessages
+        let bubbleShowsTail = showsTail
+            && message.attachments?.isEmpty != false
+            && message.outcome == nil
+            && message.timeline?.steps.isEmpty != false
+        return AidenMessageTextView(role: message.role, content: message.text)
+            .foregroundStyle(
+                usesBotBubble && message.role == .user
+                    ? Color.white
+                    : palette.foreground
+            )
+            .padding(usesWorkspaceBubble || usesBotBubble ? 12 : 0)
+            .background {
+                if usesBotBubble {
+                    AidenBotMessageBubbleShape(
+                        isOutgoing: message.role == .user,
+                        showsTail: bubbleShowsTail
+                    )
+                    .fill(
+                        message.role == .user
+                            ? palette.accent
+                            : Color(uiColor: .secondarySystemFill)
+                    )
+                } else if usesWorkspaceBubble {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(palette.raised)
+                }
+            }
     }
 }
 
@@ -3102,6 +3383,7 @@ private struct AidenLiveResponseView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Bindable var model: AidenChatViewModel
+    let presentationStyle: AidenChatPresentationStyle
 
     private var activity: (label: String, orb: OrbState) {
         if model.streamState == .waitingForApproval {
@@ -3160,6 +3442,20 @@ private struct AidenLiveResponseView: View {
 
             if !model.liveText.isEmpty {
                 AidenMarkdownView(content: model.liveText)
+                    .padding(presentationStyle == .botMessages ? 12 : 0)
+                    .background {
+                        if presentationStyle == .botMessages {
+                            AidenBotMessageBubbleShape(
+                                isOutgoing: false,
+                                showsTail: false
+                            )
+                            .fill(Color(uiColor: .secondarySystemFill))
+                        }
+                    }
+                    .frame(
+                        maxWidth: presentationStyle == .botMessages ? 620 : .infinity,
+                        alignment: .leading
+                    )
                     .contextMenu {
                         Button {
                             UIPasteboard.general.string = model.liveText
@@ -3503,19 +3799,22 @@ private struct AidenComposerView: View {
                 .accessibilityLabel("Attachments")
             }
 
-            TextField("Message Aiden", text: $model.draft, axis: .vertical)
-                .lineLimit(1...6)
-                .padding(.horizontal, 4)
-                .padding(.top, 5)
-                .focused(composerFocus)
-                .submitLabel(.send)
-                .onSubmit {
-                    guard !model.isStreaming else { return }
-                    voiceInput.stopBeforeSubmittingDraft()
-                    Task { await model.send() }
-                }
+            if model.chat.isBotChat {
+                botMessageControls
+            } else {
+                TextField("Message Aiden", text: $model.draft, axis: .vertical)
+                    .lineLimit(1...6)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 5)
+                    .focused(composerFocus)
+                    .submitLabel(.send)
+                    .onSubmit {
+                        guard !model.isStreaming else { return }
+                        voiceInput.stopBeforeSubmittingDraft()
+                        Task { await model.send() }
+                    }
 
-            HStack(alignment: .center, spacing: 10) {
+                HStack(alignment: .center, spacing: 10) {
                 AidenUIKitMenuButton {
                     if model.isUploadingAttachment || isPreparingAttachments {
                         ProgressView().controlSize(.small).frame(width: 44, height: 44)
@@ -3682,6 +3981,7 @@ private struct AidenComposerView: View {
                     .disabled(!model.canSend)
                     .accessibilityLabel("Send message")
                 }
+                }
             }
 
             if let error = voiceInput.errorMessage, !voiceInput.isListening {
@@ -3690,15 +3990,21 @@ private struct AidenComposerView: View {
                     .foregroundStyle(.red)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
-        .aidenComposerGlass()
+        .padding(.horizontal, model.chat.isBotChat ? 0 : 12)
+        .padding(.top, model.chat.isBotChat ? 2 : 8)
+        .padding(.bottom, model.chat.isBotChat ? 0 : 4)
+        .aidenComposerGlass(enabled: !model.chat.isBotChat)
         .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(palette.secondary.opacity(0.35), lineWidth: 0.5)
+            if !model.chat.isBotChat {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(palette.secondary.opacity(0.35), lineWidth: 0.5)
+            }
         }
-        .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+        .shadow(
+            color: model.chat.isBotChat ? .clear : .black.opacity(0.12),
+            radius: model.chat.isBotChat ? 0 : 14,
+            y: model.chat.isBotChat ? 0 : 6
+        )
         .task {
             guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
@@ -3785,6 +4091,117 @@ private struct AidenComposerView: View {
             attachmentPreparationTask?.cancel()
             attachmentPreparationTask = nil
             isPreparingAttachments = false
+        }
+    }
+
+    private var botMessageControls: some View {
+        HStack(alignment: .bottom, spacing: 7) {
+            AidenUIKitMenuButton {
+                if model.isUploadingAttachment || isPreparingAttachments {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 44, height: 44)
+                } else {
+                    Image(systemName: "plus")
+                        .font(.title3.weight(.medium))
+                        .frame(width: 44, height: 44)
+                }
+            } menu: {
+                attachmentMenu()
+            }
+            .disabled(
+                !model.isConnected || model.isStreaming || model.isUploadingAttachment
+                    || isPreparingAttachments || model.pendingAttachments.count >= 10
+            )
+            .aidenBotComposerCircle()
+            .accessibilityLabel("Add attachment")
+            .accessibilityHint("Attach an image or bounded text file")
+            .photosPicker(
+                isPresented: $isPhotoPickerPresented,
+                selection: $selectedPhotos,
+                maxSelectionCount: max(1, attachmentCapacity),
+                matching: .images
+            )
+
+            HStack(alignment: .bottom, spacing: 4) {
+                TextField("Message \(model.chat.title)", text: $model.draft, axis: .vertical)
+                    .lineLimit(1...5)
+                    .focused(composerFocus)
+                    .submitLabel(.send)
+                    .padding(.leading, 6)
+                    .padding(.vertical, 7)
+                    .onSubmit {
+                        guard !model.isStreaming else { return }
+                        voiceInput.stopBeforeSubmittingDraft()
+                        Task { await model.send() }
+                    }
+
+                switch aidenBotComposerTrailingControl(
+                    isStreaming: model.isStreaming,
+                    isListening: voiceInput.isListening,
+                    draft: model.draft,
+                    attachmentCount: model.pendingAttachments.count,
+                    canSend: model.canSend
+                ) {
+                case .stopResponse:
+                    Button { Task { await model.stop() } } label: {
+                        Image(systemName: "stop.fill")
+                            .frame(width: 30, height: 30)
+                            .background(palette.foreground, in: Circle())
+                            .foregroundStyle(palette.canvas)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isReadOnlyPresentation)
+                    .accessibilityLabel("Stop response")
+                case .stopVoiceInput:
+                    Button {
+                        Task {
+                            await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
+                        }
+                    } label: {
+                        AidenListeningWaveform(isAnimated: !reduceMotion)
+                            .frame(width: 44, height: 44)
+                    }
+                    .disabled(model.isReadOnlyPresentation || voiceInput.isRequestingPermission)
+                    .accessibilityLabel("Stop voice input")
+                case let .send(isEnabled):
+                    Button {
+                        voiceInput.stopBeforeSubmittingDraft()
+                        Task { await model.send() }
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.headline.bold())
+                            .frame(width: 30, height: 30)
+                            .background(sendButtonBackground, in: Circle())
+                            .foregroundStyle(sendButtonForeground)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isEnabled)
+                    .accessibilityLabel("Send message")
+                case .startVoiceInput:
+                    Button {
+                        Task {
+                            guard !model.isReadOnlyPresentation else { return }
+                            await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
+                        }
+                    } label: {
+                        Image(systemName: "mic")
+                            .font(.body.weight(.medium))
+                        .frame(width: 44, height: 44)
+                    }
+                    .disabled(
+                        model.isReadOnlyPresentation
+                            || voiceInput.isRequestingPermission
+                    )
+                    .accessibilityLabel("Start voice input")
+                }
+            }
+            .padding(.leading, 6)
+            .padding(.trailing, 2)
+            .frame(minHeight: 44)
+            .aidenBotComposerCapsule()
         }
     }
 
@@ -3982,12 +4399,18 @@ private struct AidenComposerGlassModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
 
+    let enabled: Bool
     private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            content.glassEffect(.regular.interactive(), in: shape)
+        if !enabled {
+            content
+        } else if #available(iOS 26, *), !reduceTransparency {
+            // The whole composer is a stable surface containing its own
+            // interactive controls. Marking the container interactive causes
+            // Liquid Glass to recompute multiple times during streamed updates.
+            content.glassEffect(.regular, in: shape)
         } else if reduceTransparency {
             content.background(palette.raised, in: shape)
         } else {
@@ -3997,8 +4420,48 @@ private struct AidenComposerGlassModifier: ViewModifier {
 }
 
 private extension View {
-    func aidenComposerGlass() -> some View {
-        modifier(AidenComposerGlassModifier())
+    func aidenComposerGlass(enabled: Bool = true) -> some View {
+        modifier(AidenComposerGlassModifier(enabled: enabled))
+    }
+
+    func aidenBotComposerCircle() -> some View {
+        modifier(AidenBotComposerCircleModifier())
+    }
+
+    func aidenBotComposerCapsule() -> some View {
+        modifier(AidenBotComposerCapsuleModifier())
+    }
+}
+
+private struct AidenBotComposerCircleModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(palette.raised, in: Circle())
+        } else {
+            content
+                .background(.regularMaterial, in: Circle())
+                .overlay(Circle().stroke(palette.foreground.opacity(0.12), lineWidth: 0.5))
+        }
+    }
+}
+
+private struct AidenBotComposerCapsuleModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(palette.raised, in: Capsule())
+        } else {
+            content
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.12), lineWidth: 0.5))
+        }
     }
 }
 

@@ -15,6 +15,8 @@ Date: August 23, 2026
 - New/Edit Bot are the only Bot provider/model controls. Full and Custom settings resolve audience-safe catalog IDs into revisioned, durable Bot-owned model authority. The one persistent chat is a recoverable execution mirror, so model changes preserve its history and any reduced Files, shell, connection, skill, or other grants; Bot composers and access-reduction sheets have no model selector, while Workspace composers remain unchanged.
 - Safe New Bot two-step retry: a retained Bot creation result and independent chat idempotency key prevent duplicate Bots if opening the one persistent chat fails after identity creation.
 - Actionable stale-model failure copy, inline durable failure presentation, and legacy stream-journal repair.
+- Contact-first Bot navigation: Favorites plus one non-duplicated Bot list, long-press Pin/Unpin actions with optimistic revision reconciliation, and every row resuming the Bot's one persistent chat.
+- Messages-inspired Bot presentation inside the existing shared chat view: grouped bubbles, Aiden's established plus-and-message composer, a measured 60-point centered avatar above the compact Bot-name capsule, Back leading, and a plain three-dot settings menu trailing. Bot identity opens the contact-style settings surface and model selection remains exclusively in New/Edit Bot.
 
 ## Automated evidence
 
@@ -30,6 +32,8 @@ Date: August 23, 2026
 - Scoped ESLint: passed.
 - `git diff --check`: passed.
 - Independent post-fix source-and-test re-review: no remaining P0/P1 findings; focused integrated review gates passed 121/121.
+- Contact-flow shipping-source checks and Bot message-grouping XCTest coverage: passed on August 23, 2026.
+- Final contact-flow selection on the physical iPhone 13 Pro passed the Bot contract, shared-chat, and product-shell suites, including stale optimistic-favorite fencing, one-section-per-Bot projection, and content-aware send/microphone behavior. The signed build was installed and visually checked against the supplied Messages geometry while retaining Aiden's prior composer spacing.
 
 Physical XCTest result bundle:
 

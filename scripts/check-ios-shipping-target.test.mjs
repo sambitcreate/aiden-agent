@@ -374,7 +374,11 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     chat,
     /guard !model\.isReadOnlyPresentation, autoStartVoice/u,
   );
-  assert.match(botHome, /private var bottomDock:[\s\S]*?TextField\("Search"[\s\S]*?Image\(systemName: "square\.and\.pencil"\)/u);
+  assert.match(botHome, /private var bottomDock:[\s\S]*?TextField\("Search"[\s\S]*?accessibilityLabel\("Search Bots"\)[\s\S]*?Image\(systemName: "square\.and\.pencil"\)/u);
+  assert.doesNotMatch(botHome, /Text\("Chats"\)/u);
+  assert.match(botHome, /Text\("Favorites"\)[\s\S]*?Text\("Bots"\)/u);
+  assert.match(botHome, /contextMenu[\s\S]*?Pin to Favorites[\s\S]*?Unpin from Favorites/u);
+  assert.match(botHome, /openOrCreateConversation\(for: bot\)/u);
   assert.match(botHome, /AidenBotCanonicalAvatarView\(/u);
   assert.match(botProfile, /AidenBotCanonicalAvatarView\(/u);
   assert.match(botEditor, /AidenBotGeneratedAvatarLifecycleView\([\s\S]*?AidenBotImagePlaygroundView\(/u);
@@ -384,6 +388,21 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(botEditor, /loadError = error\.localizedDescription/u);
   assert.match(botEditor, /private var canSave:[\s\S]*?aidenBotEditorCanSubmitSettings\(hasAvatarCandidate: avatarModel\?\.hasCandidate == true\)/u);
   assert.match(chat, /AidenBotCanonicalAvatarView\(/u);
+  assert.match(chat, /enum AidenChatPresentationStyle[\s\S]*?case botMessages/u);
+  assert.match(chat, /struct AidenBotMessageBubbleShape: Shape/u);
+  assert.match(
+    chat,
+    /safeAreaInset\(edge: \.top[\s\S]*?VStack\(spacing: -8\)[\s\S]{0,800}?AidenBotCanonicalAvatarView[\s\S]{0,800}?size: 60[\s\S]{0,800}?Text\(botToolsModel\.bot\?\.name \?\? model\.chat\.title\)[\s\S]{0,500}?frame\(minWidth: 92, maxWidth: 210, minHeight: 34\)[\s\S]{0,300}?aidenBotHeaderNameGlass[\s\S]{0,500}?offset\(y: -17\)[\s\S]{0,200}?frame\(height: 13\)/u,
+  );
+  assert.match(chat, /Image\(systemName: AidenChromeSymbols\.overflowMenu\)/u);
+  assert.match(chat, /buttonBorderShape\(\.circle\)/u);
+  assert.ok(chat.includes('TextField("Message \\(model.chat.title)"'));
+  assert.match(
+    chat,
+    /padding\(\.horizontal, 16\)[\s\S]*?padding\(\.bottom, 10\)/u,
+  );
+  assert.match(chat, /HStack\(alignment: \.bottom, spacing: 7\)[\s\S]*?frame\(minHeight: 44\)/u);
+  assert.match(chat, /aidenBotComposerTrailingControl\([\s\S]*?case let \.send\(isEnabled\):[\s\S]*?disabled\(!isEnabled\)/u);
   assert.match(
     chat,
     /AidenApprovalCard\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u,
@@ -766,7 +785,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(chat, /Label\("Approval needed", systemImage: "hand\.raised"\)/u);
   assert.doesNotMatch(chat, /Button\("Deny", role: \.destructive\)/u);
   assert.match(chat, /ZStack\(alignment: \.bottom\)[\s\S]*?frame\(height: max\(96, composerHeight \+ 12\)\)[\s\S]*?AidenComposerView/u);
-  assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: shape\)/u);
+  assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(chat, /sendButtonBackground[\s\S]*?palette\.accent[\s\S]*?sendButtonForeground[\s\S]*?palette\.canvas/u);
   assert.match(chat, /@FocusState private var composerIsFocused: Bool[\s\S]*?scrollDismissesKeyboard\(\.interactively\)[\s\S]*?TapGesture\(\)\.onEnded[\s\S]*?composerIsFocused = false/u);
   assert.match(chat, /composerFocus: \$composerIsFocused[\s\S]*?\.focused\(composerFocus\)/u);

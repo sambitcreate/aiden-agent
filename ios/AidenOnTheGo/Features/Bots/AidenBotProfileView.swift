@@ -201,6 +201,8 @@ struct AidenBotProfileView: View {
     let onCreateConversation: (AidenBotSummary) async -> Void
     var onChanged: () -> Void = { }
     var showsDismissButton = true
+    var showsConversationAction = true
+    var showsFavoriteControls = true
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -363,8 +365,12 @@ struct AidenBotProfileView: View {
                     .buttonStyle(.bordered)
                 }
                 actionBar(detail)
-                favoriteOrderCard(detail)
-                conversationCard
+                if showsFavoriteControls {
+                    favoriteOrderCard(detail)
+                }
+                if showsConversationAction {
+                    conversationCard
+                }
                 identityDetails(detail)
             }
             .frame(maxWidth: 680)
@@ -404,24 +410,26 @@ struct AidenBotProfileView: View {
 
     private func actionBar(_ detail: AidenBotDetail) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            profileAction(
-                conversations.isEmpty ? "Start Chat" : "Open Chat",
-                systemImage: "message"
-            ) {
-                guard detail.health == .ready else { return }
-                if showsDismissButton { dismiss() }
-                if let conversation = conversations.first {
-                    Task { await onOpenConversation(conversation) }
-                } else {
-                    Task { await onCreateConversation(initialSummary) }
+            if showsConversationAction {
+                profileAction(
+                    conversations.isEmpty ? "Start Chat" : "Open Chat",
+                    systemImage: "message"
+                ) {
+                    guard detail.health == .ready else { return }
+                    if showsDismissButton { dismiss() }
+                    if let conversation = conversations.first {
+                        Task { await onOpenConversation(conversation) }
+                    } else {
+                        Task { await onCreateConversation(initialSummary) }
+                    }
                 }
+                .disabled(!aidenBotCanStartNewChat(health: detail.health, canWrite: canWrite))
+                .accessibilityHint(
+                    detail.health == .ready
+                        ? "Opens this Bot’s persistent conversation."
+                        : "Repair this Bot’s access on the paired Mac before starting its conversation."
+                )
             }
-            .disabled(!aidenBotCanStartNewChat(health: detail.health, canWrite: canWrite))
-            .accessibilityHint(
-                detail.health == .ready
-                    ? "Starts a new chat with this Bot."
-                    : "Repair this Bot’s access on the paired Mac before starting a new chat."
-            )
 
             profileAction("Edit Bot", systemImage: "pencil") {
                 presentedSheet = .edit(detail.id)
@@ -433,13 +441,15 @@ struct AidenBotProfileView: View {
             }
             .disabled(!canWrite || detail.health == .archived)
 
-            profileAction(
-                isFavorite ? "Unfavorite" : "Favorite",
-                systemImage: isFavorite ? "star.fill" : "star"
-            ) {
-                Task { await updateFavorite(isFavorite ? .remove : .add) }
+            if showsFavoriteControls {
+                profileAction(
+                    isFavorite ? "Unpin" : "Pin",
+                    systemImage: isFavorite ? "pin.slash" : "pin"
+                ) {
+                    Task { await updateFavorite(isFavorite ? .remove : .add) }
+                }
+                .disabled(!canWrite || detail.health == .archived || favorites == nil)
             }
-            .disabled(!canWrite || detail.health == .archived || favorites == nil)
         }
     }
 

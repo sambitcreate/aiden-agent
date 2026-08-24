@@ -349,6 +349,18 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     let revision: String
     let archivedAt: Date?
 
+    init(detail: AidenBotDetail) {
+        id = detail.id
+        name = detail.name
+        purpose = detail.purpose
+        avatar = detail.avatar
+        health = detail.health
+        createdAt = detail.createdAt
+        updatedAt = detail.updatedAt
+        revision = detail.revision
+        archivedAt = detail.archivedAt
+    }
+
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try AidenBotWire.identifier(
@@ -391,6 +403,29 @@ struct AidenBotList: Codable, Equatable, Sendable {
     let bots: [AidenBotSummary]
     let maxBots: Int
     let favorites: AidenBotFavorites
+
+    init(
+        bots: [AidenBotSummary],
+        maxBots: Int = AidenBotWire.maxBots,
+        favorites: AidenBotFavorites
+    ) throws {
+        let archivedBotIDs = Set(bots.lazy.filter { $0.health == .archived }.map(\.id))
+        guard bots.count <= AidenBotWire.maxBots,
+              maxBots == AidenBotWire.maxBots,
+              bots.count <= maxBots,
+              Set(bots.map(\.id)).count == bots.count,
+              Set(favorites.botIds).isSubset(of: Set(bots.map(\.id))),
+              Set(favorites.botIds).isDisjoint(with: archivedBotIDs) else {
+            throw AidenBotContractError.invalidField("bots")
+        }
+        self.bots = bots
+        self.maxBots = maxBots
+        self.favorites = favorites
+    }
+
+    func replacingFavorites(_ favorites: AidenBotFavorites) throws -> Self {
+        try Self(bots: bots, maxBots: maxBots, favorites: favorites)
+    }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -1395,6 +1430,8 @@ enum AidenBotChatAccessUpdate: Codable, Equatable, Sendable {
 }
 
 struct AidenBotFavorites: Codable, Equatable, Sendable {
+    static let maximumCount = AidenBotWire.maxFavorites
+
     let botIds: [String]
     let revision: String
 

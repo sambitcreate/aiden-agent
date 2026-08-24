@@ -14,7 +14,7 @@ Aiden On The Go will have two clear product areas:
 
 The Aiden logo at the top of the existing mobile home becomes the switcher. Tapping it opens exactly those two choices, marks the current choice, and returns the person to the last place they visited in each area. Bots becomes the default after a paired Mac supports and grants the new bot capability; Workspaces remains the safe fallback for older installations.
 
-The Bots area will adapt the attached Messages references without copying Apple's product chrome. It will lead with large bot identities, favorites, recent conversations, search, and simple create/edit actions. It will continue to use Aiden's own appearance presets, semantic colors, chat renderer, streaming, attachments, approvals, and motion language.
+The Bots area adapts the attached Messages references without copying Apple's product chrome. It leads with large bot identities, pinned favorites, one contact row per remaining Bot, search, and simple create/edit actions. It continues to use Aiden's own appearance presets, semantic colors, shared chat renderer, streaming, attachments, approvals, and motion language.
 
 A bot remains a thin, reusable identity over Aiden's existing Pi-backed chat runtime. The phone will not host a second agent engine. Bot definitions, each Bot's one persistent chat, access policies, generated avatars, provider selection, managed workspaces, and every tool decision remain authoritative on the paired Mac. Every bot gets a durable Aiden-managed home workspace for its chat and artifacts, but that implementation detail stays out of the ordinary UI unless the person asks about it.
 
@@ -122,16 +122,16 @@ The first screen is a calm inbox, not a configuration dashboard:
 
 1. Header: **Edit**, the Aiden logo switcher with centered **Bots** title, and **+** for New Bot.
 2. Favorites: horizontally scrolling circular bot avatars and visible names.
-3. Recent chats: one flat row per bot with bot avatar, bot name, bounded last-message preview, honest activity state, and relative time.
+3. Bots: one flat contact row per remaining Bot with bot avatar, bot name, bounded preview from its one persistent chat, honest activity state, and relative time. There is no duplicate Chats section.
 4. Bottom dock: an iMessage-inspired Search capsule and a separate circular New Chat button remain anchored above the safe area. New Chat chooses a bot and opens its one chat, creating it only when absent. **+** always creates a new bot.
 
 Rules:
 
-- tapping a favorite opens its bot profile; it never silently sends or creates work;
-- tapping a recent row opens that exact persisted chat;
+- tapping a favorite or Bot row resumes its one persistent chat, creating that chat only when absent;
+- pressing and holding a Bot exposes **Pin to Favorites** or **Unpin from Favorites**, plus Bot details; the optimistic change reconciles against the Mac's revisioned favorite order;
 - no fake unread badge is introduced. A ring/badge is shown only for real streaming, waiting-for-approval, failed, or locally known new activity;
 - the bottom Search field covers bot name, purpose, conversation title, and the bounded previews actually returned by the Mac;
-- Edit supports favorite ordering and bot archive entry points without permanent red-minus decorations over every avatar; the Bot's persistent chat is not independently deletable;
+- favorite management and bot archive entry points avoid permanent red-minus decorations over every avatar; the Bot's persistent chat is not independently deletable;
 - empty, loading, retryable error, no-result, offline-cache, archived, and capability-degraded states each have distinct copy and actions.
 
 ### 3. Bot profile
@@ -190,12 +190,13 @@ An optional opening greeting is copied once into each newly created chat. Editin
 
 Reuse `AidenChatDetailView` and its view model rather than fork the transcript/runtime. Add only a bot presentation layer:
 
-- avatar and bot name in the conversation title/contact affordance;
+- a centered contact affordance matching the reference hierarchy: Bot avatar above Bot name, with Back leading and a plain three-dot menu trailing;
+- tapping the centered identity opens Bot details/edit settings; the three-dot menu exposes Bot details, Edit Bot, Access, and Files when available;
 - compact access summary such as **Full Access** or **Custom · Shell off · 3 connections**;
 - a toolbar sheet for **Bot defaults** versus **This chat**;
 - Files entry only when that chat has Files access;
 - keep the conversation visually message-first: do not add workspace pickers, branch/worktree chrome, Review tabs, or a persistent terminal; capability availability and per-chat reductions live in the Access sheet, while actual tool activity and approvals use the existing shared chat presentation;
-- existing provider/model, attachment, dictation, send/stop, approval, streaming, and reconciliation behavior stays shared.
+- the Bot composer is message-first and has no provider/model selector; New/Edit Bot exclusively own that durable choice, while attachment, dictation, send/stop, approval, streaming, and reconciliation behavior stays shared.
 
 Changing access while a turn is active invalidates its authority lease. Removed access blocks the next effect immediately; newly added access is unavailable until the next turn. The UI explains that access changed rather than presenting a generic provider failure.
 

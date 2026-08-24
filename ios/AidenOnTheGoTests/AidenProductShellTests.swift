@@ -63,6 +63,63 @@ final class AidenProductShellTests: XCTestCase {
         )
     }
 
+    func testBotContactSectionsNeverDuplicateFavoritesAndSearchUsesOneList() {
+        let sections = aidenBotContactSectionIDs(
+            matchingBotIDs: ["bot-b", "bot-a", "bot-c"],
+            activeBotIDs: ["bot-a", "bot-b", "bot-c"],
+            favoriteIDs: ["bot-a", "bot-a", "bot-archived", "bot-c"],
+            isSearching: false
+        )
+        XCTAssertEqual(sections.favorites, ["bot-a", "bot-c"])
+        XCTAssertEqual(sections.others, ["bot-b"])
+        XCTAssertTrue(Set(sections.favorites).isDisjoint(with: sections.others))
+
+        let searchSections = aidenBotContactSectionIDs(
+            matchingBotIDs: ["bot-c", "bot-a"],
+            activeBotIDs: ["bot-a", "bot-b", "bot-c"],
+            favoriteIDs: ["bot-a", "bot-c"],
+            isSearching: true
+        )
+        XCTAssertEqual(searchSections.favorites, [])
+        XCTAssertEqual(searchSections.others, ["bot-c", "bot-a"])
+    }
+
+    func testStaleFavoriteMutationCannotFinishNewerOptimisticState() {
+        let scope = AidenBotsHomeScope(instanceID: "mac-a", deviceID: "phone-a")
+        let oldMutation = AidenBotsFavoriteMutation(
+            id: UUID(),
+            scope: scope,
+            botID: "bot-a"
+        )
+        let currentMutation = AidenBotsFavoriteMutation(
+            id: UUID(),
+            scope: scope,
+            botID: "bot-b"
+        )
+
+        XCTAssertNil(
+            aidenBotsFinishFavoriteMutation(
+                current: currentMutation,
+                finishing: oldMutation,
+                restoring: ["bot-a"],
+                error: "stale"
+            )
+        )
+
+        XCTAssertEqual(
+            aidenBotsFinishFavoriteMutation(
+                current: currentMutation,
+                finishing: currentMutation,
+                restoring: ["bot-b"],
+                error: nil
+            ),
+            AidenBotsFavoriteMutationFinish(
+                favoriteOverride: ["bot-b"],
+                favoriteError: nil
+            )
+        )
+    }
+
     func testArchivedBotChatsRemainReadOnlyForFullAndCustomAccess() {
         XCTAssertFalse(
             aidenBotChatAllowsMutations(
