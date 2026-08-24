@@ -49,6 +49,8 @@ These files are not named in any `package.json` script, including nested `npm ru
 
 Playwright specs under `tests/e2e/*.spec.ts` are **not** listed file-by-file in `package.json`. That is fine: `npm run test:e2e` uses `playwright.config.ts`. Do not “register” them as `tsx --test` files.
 
+Naive scanners that match `.test.ts` before `.test.tsx` will report the renderer component files as missing. They are registered as `.tsx` in `test`, `test:preflight`, `test:onboarding`, `test:aiden-remote`, `test:bots`, and `test:subagents`. Do not “fix” those paths. A useful CI guard is: every path after `tsx --test` / `node --test` must exist on disk, matching `tsx` before `ts`.
+
 ### 3.2 Suites registered but not on the `npm test` path
 
 These run only if someone remembers the extra script, or `npm run test:coverage` / `pretest:coverage`:
@@ -119,6 +121,9 @@ Priority:
 | Local voice / dictation main-thread load | `local-voice.ts`, `dictation.ts`, `parakeet.ts` | Do not load the recognizer in unit tests; test that bounds, cancellation, and cache keys fail closed |
 | Telegram handler surface | `main/handlers/telegram.ts`; core Telegram files are well tested | Handler-level grant/ceiling so Computer Use/subagents cannot enter via IPC the way the Bot-first plan forbids on Telegram |
 | Subagent IPC handler | `main/handlers/subagents.ts` | Control-plane parse already has some core tests; handler registration and document-owner checks need an explicit contract like `bots.contract.test.ts` |
+| Chat handler semantics | `main/handlers/chat.ts`, `chats.ts` | `chat:cancel` origin; `chat:approve` decisions; `chats:remove` during generation; `chats:abandonTurn`; `chats:export` size; `chats:copyVisibleHistory` redaction |
+| Computer Use / schedule / shortcut / profile IPC | `computer-use.ts`, `scheduled-tasks.ts`, `shortcuts.ts`, `profile.ts` | Enable/disable + session lifecycle; CRUD + run-now vs `schedule-service`; global shortcut conflicts; `profile:shareImage` validation |
+| Artificial Analysis fetch gate | `main/handlers/artificial-analysis.ts` | Must not auto-contact models.dev; only explicit user fetch |
 
 ### 5.3 P1 — Aiden Remote HTTP
 
@@ -132,6 +137,9 @@ Missing or thin:
 | `GET /models` artwork budget under concurrent iOS chat opens | Catalog is truncated at 900 KiB; no test that iOS opening 3 chats does not refetch/decode artwork every time |
 | `GET /usage` after Workspace home chats | Home loads chats+tasks+catalog, **then** usage. No test that usage failure does not blank chats |
 | SSE `Last-Event-ID` / `after` resume across process death | Stream tests exist; iOS `AidenSSEParser` has no dedicated XCTest file |
+| Router HTTP matrix vs OpenAPI | `aiden-remote-router.test.ts` is large but does not assert `POST /scheduled-tasks/preview`, `PATCH /scheduled-tasks/settings`, `POST /scheduled-tasks/{id}/resume`, or the full git route set at HTTP level (service tests exist) |
+| Isolated attachment staging store | `aiden-remote-attachments.ts` has no sibling file; TTL, 10-minute expiry, per-device/chat caps, one-use consume |
+| IPC contract is inventory, not semantics | `ipc-contract.test.ts` proves channel allowlists. It does not run `chats:remove` during generation, `chat:approve` decisions, telegram handlers, or Artificial Analysis’s explicit-fetch gate |
 | Conditional GET / collection revision | Not implemented; when added, tests must prove stale 304 vs capability change (device grant dropped) never serves a 304 |
 | `Cache-Control: no-store` on immutable avatar/attachment GETs | Today correct for privacy-by-default; a future immutable cache must still purge on revocation |
 | `aiden-remote-service-main.ts`, `aiden-remote-errors.ts`, `aiden-remote-workspace-owners.ts` | Wiring/main adapters; test through the service, but error-code mapping deserves a table test |
@@ -188,9 +196,11 @@ The performance plan already flags ~6 Git subprocesses per info call. There is n
 
 | Missing case | Notes |
 | --- | --- |
-| Playwright: Bots mode | E2E covers onboarding, chat shell, attachments, terminal, model picker, assistant scheduled profile, Remote Access enable/health. No Bot create/archive/favorite |
-| Playwright: Telegram, Computer Use UI, subagent panel, compaction UI | Computer Use has packaged/native tests; no window-level E2E |
+| Playwright: Bots mode | E2E covers onboarding, chat shell, attachments, terminal, model picker, assistant scheduled profile, Remote Access enable/health. No Bot create/archive/favorite/chat |
+| Playwright: Subagent spawn/approve/kill | No Playwright spec; panel tests live in tsx units |
+| Playwright: Telegram, Computer Use UI, compaction UI | Computer Use has packaged/native tests; no window-level E2E |
 | Playwright: Remote pairing QR/manual | Lifecycle spec only toggles the setting and hits `/health` |
+| Playwright: Git commit/push/review | Service tests exist; no window-level flow |
 | `test:e2e:live:lmstudio` | Manual/live; keep it out of default CI |
 | Packaging scripts | Many `scripts/*.test.mjs` are on `npm test`; keep it that way when adding scripts |
 

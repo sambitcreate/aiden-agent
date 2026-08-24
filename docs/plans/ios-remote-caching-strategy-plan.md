@@ -118,6 +118,22 @@ Bytes are already keyed by opaque id + revision. iOS stores them as files. Do **
 
 Providers auth, MCP OAuth, secrets, Computer Use, terminals, dictation, local models, Telegram pairing, subagent control, profile share, Artificial Analysis fetch. iOS must not grow equivalents. Mac React Query is a separate performance track (`docs/plans/performance-stability-efficiency-plan.md`); Git 4–5s polling is Mac-only.
 
+There is **no Remote catalog-push or invalidation channel**. Desktop `chats:changed` / `bots:changed` stay IPC-only. iOS stays SWR + SSE for the open stream. Do not invent a second event bus in v1 of this plan.
+
+### 2.10 First-paint blockers (coordinator + shells)
+
+These are client sequencing bugs on top of fat payloads:
+
+| Step | What happens | Effect |
+| --- | --- | --- |
+| Connect | `GET /server` and `GET /workspaces` in parallel (`AidenRemoteCoordinator.connect`) | Correct |
+| Workspaces shell | Overlay **“Connecting to Aiden Agent…”** until `session?.isConnected` | Cached chats/tasks stay hidden even if disk is warm |
+| Bots shell | Overlay until `session?.isConnected` **or** `botAccessNotice != nil` | Same |
+| Bots notice | `prepareBotAccess()` can wait on live `GET /bot-capabilities` before the shell paints | Cache-first notice (Phase 1) |
+| Chat open | Feature `load()` does `GET /chats/{id}`, then bot/capabilities, then **another** `GET /chats/{id}` plus `GET /models` | Duplicate round trips on a path that already has a disk snapshot |
+
+Opaque workspace-browser handles expire in **2–10 minutes**. Never persist them as long-lived cache keys; treat them like capability leases (existing A→B tests).
+
 ## 3. Launch / load sequence today
 
 ### Cold start, already paired
@@ -154,6 +170,8 @@ Workspaces: home `load` bails unless connected, so offline does not show last ch
 - Replacing Bot conversation pages with full chat list semantics
 - Computer Use or generic shell on iOS
 - SQLite migration unless file envelopes exceed measured budgets (Bot envelope already 4 MiB, chat files 10 MiB)
+- A composite `/mobile-bootstrap` mega-GET unless Phase 0 traces show handshake RTT dominating payload size. Prefer additive summaries + a session snapshot over a new kitchen-sink route
+- Remote catalog-push / invalidation SSE for lists (stay SWR + open-stream SSE)
 
 ## 5. Design principles
 
@@ -247,7 +265,7 @@ Skeleton only when there is no snapshot (already the Bot rule; `AidenProductShel
 ### 7.3 Chat detail
 
 1. Paint cached `AidenChat` immediately (already)
-2. Fetch `GET /chats/{id}` if revision differs or cache missing
+2. Skip `GET /chats/{id}` when the disk `revision` matches the list/summary revision **and** no stream is live; otherwise fetch **once** (today `AidenChatFeature.load` can hit the same chat twice after bot/capabilities)
 3. Do **not** fetch `/models` if the session catalog is current
 4. Restore SSE from cached cursor (already)
 
@@ -302,7 +320,8 @@ iOS:
 - Workspace home hydrates chat cache + schedule cache before network
 - Call summary list scoped by `workspaceId` (stop unscoped `GET /chats`)
 - Usage non-blocking
-- Tests: cache-first, Bot chats excluded, 413/timeout keeps last-good, A→B→A drop
+- Hydrate `AidenBotAccessNotice` from the last capabilities snapshot so Bots home is not blocked on a live capabilities GET
+- Tests: cache-first, Bot chats excluded, 413/timeout keeps last-good, A→B→A drop, notice cache-first
 
 ### Phase 2 — Collection revisions
 
@@ -320,10 +339,10 @@ iOS:
 
 ### Phase 4 — Prefetch and connect paint
 
-- Paint Bots/Workspaces chrome while `connectionState == .connecting` if snapshot exists
+- Paint Bots/Workspaces chrome while `connectionState == .connecting` if snapshot exists; do not hide the shell behind “Connecting to Aiden Agent…”
 - Prefetch favorite avatars
 - Optional: prefetch active workspace summaries after Bot home
-- Tests: no mutation while connecting; prefetch cancelled on switch Mac
+- Tests: no mutation while connecting; prefetch cancelled on switch Mac; cached lists visible before `isConnected`
 
 ### Phase 5 — Transcript windowing (only if Phase 0/1 traces still show pain)
 
