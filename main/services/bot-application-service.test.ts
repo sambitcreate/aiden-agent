@@ -98,6 +98,9 @@ function fixture(options: {
   failModelWriteOnce?: boolean;
   failJournalOnceAfter?: { method: "checkpoint" | "complete"; stage: BotLifecycleStage };
   failPendingReadAfterEvent?: string;
+  invalidateInventoryLeaseDuringUpdate?: boolean;
+  /** Sequential catalog revisions per snapshot call; last value repeats. */
+  catalogRevisionPlan?: string[];
 } = {}) {
   const events: string[] = [];
   const catalogTargets: Array<string | undefined> = [];
@@ -124,6 +127,16 @@ function fixture(options: {
   let journalFailureRemaining = options.failJournalOnceAfter ? 1 : 0;
   let modelWriteFailureRemaining = options.failModelWriteOnce ? 1 : 0;
   let migrationSealed = options.migrationSealed === true;
+  // Sequential revisions handed to audience-facing catalog snapshots; the
+  // final value repeats. Simulates per-build revision churn from live
+  // credential probes without touching runtime-snapshot consumers.
+  const revisionPlan = [...(options.catalogRevisionPlan ?? [])];
+  const plannedCatalog = (): BotCapabilityCatalogSnapshot => {
+    if (revisionPlan.length === 0) return catalog();
+    if (revisionPlan.length > 1) revisionPlan.shift();
+    const snapshot = catalog();
+    return { ...snapshot, catalog: { ...snapshot.catalog, revision: revisionPlan[0]! } };
+  };
 
   const botPolicy = (botId: string): BotAccessView => ({
     botId,
@@ -552,7 +565,7 @@ function fixture(options: {
         catalogTargets.push(input?.botId);
         catalogRetainedProviders.push(input?.retainedProviders);
         if (input?.retainedBindings?.length) events.push("catalog:retained-binding");
-        return catalog();
+        return plannedCatalog();
       },
       async snapshotForRuntime(input?: {
         botId?: string;
@@ -609,6 +622,33 @@ function fixture(options: {
       },
     },
     mutationGate: new BotMutationGate(),
+    ...(options.invalidateInventoryLeaseDuringUpdate
+      ? (() => {
+          // Track acquire/release pairs. The first N acquires (for createChat,
+          // initialization, etc.) succeed; later acquires (for updateBotAccess)
+          // simulate an already-invalidated lease.
+          let acquireCount = 0;
+          const threshold = 2;
+          return {
+            inventoryLeases: {
+              acquire() {
+                acquireCount += 1;
+                const alreadyInvalidated = acquireCount > threshold;
+                return {
+                  assertCurrent() {
+                    if (alreadyInvalidated) {
+                      const error = new Error("Bot runtime capabilities changed.");
+                      error.name = "BotRuntimeInventoryLeaseInvalidError";
+                      throw error;
+                    }
+                  },
+                  release() {},
+                };
+              },
+            },
+          };
+        })()
+      : {}),
     mintBotId: () => "bot:new",
     mintChatId: (() => {
       let sequence = 0;
@@ -911,6 +951,122 @@ test("an interrupted Bot model mirror is recovered from durable Bot settings", a
   assert.equal(app.chats.get(chat.id)?.model, "model:exact");
   assert.equal(app.pending.size, 0);
   assert.equal(app.events.filter((event) => event === "chat:model-update").length, 1);
+});
+
+test("Bot model save tolerates a spurious runtime inventory invalidation", async () => {
+  const owner = bot("bot:inventory-race");
+  const app = fixture({ bots: [owner], invalidateInventoryLeaseDuringUpdate: true });
+  await app.service.initialize();
+  app.modelAuthorities.set(owner.id, {
+    selection: { providerId: "provider:old", modelId: "model:old" },
+    binding: { sourceProviderId: "provider:old", sourceModelId: "model:old" },
+  });
+  await app.service.createChat({
+    audienceId: "device:a",
+    botId: owner.id,
+    providerId: "provider:old",
+    model: "model:old",
+  });
+
+  // The inventory lease is already invalidated (assertCurrent always throws).
+  // The save must still succeed because the provider/model was resolved
+  // against a valid catalog snapshot and the catalog revision is checked
+  // separately inside updateBotPolicy.
+  const result = await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "full",
+      catalogRevision: CATALOG_REVISION,
+      confirmedForeground: true,
+      providerId: "provider:opaque",
+      modelId: "model:opaque",
+    },
+  });
+
+  assert.equal(result.accessMode, "full");
+  assert.ok(app.events.includes("policy:update"));
+  assert.ok(app.events.includes("chat:model-update"));
+});
+
+test("Bot access save re-bases a stale client catalog revision onto the current snapshot", async () => {
+  const owner = bot("bot:stale-catalog");
+  const app = fixture({
+    bots: [owner],
+    // The client loaded CATALOG_REVISION, then a live credential probe churned
+    // the catalog. The save's first snapshot sees the churned revision; the
+    // re-read converges back to the client's revision.
+    catalogRevisionPlan: ["catalog:churned", CATALOG_REVISION],
+  });
+  await app.service.initialize();
+  app.modelAuthorities.set(owner.id, {
+    selection: { providerId: "provider:old", modelId: "model:old" },
+    binding: { sourceProviderId: "provider:old", sourceModelId: "model:old" },
+  });
+  app.chats.set("chat:canonical", {
+    id: "chat:canonical",
+    title: "Canonical",
+    botId: owner.id,
+    providerId: "provider:old",
+    model: "model:old",
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  } as unknown as Chat);
+  app.chatPolicies.set("chat:canonical", {
+    botId: owner.id,
+    chatId: "chat:canonical",
+    mode: "inherit",
+    revision: "revision:chat:seed",
+    botPolicyRevision: app.policies.get(owner.id)!.revision,
+    summary: "Full",
+  } as (typeof app.chatPolicies) extends Map<string, infer V> ? V : never);
+
+  const result = await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "full",
+      catalogRevision: CATALOG_REVISION,
+      confirmedForeground: true,
+      providerId: "provider:opaque",
+      modelId: "model:opaque",
+    },
+  });
+
+  assert.equal(result.accessMode, "full");
+  // Exactly two audience snapshots after initialize: the churned read plus the re-base read.
+  assert.deepEqual(app.catalogTargets.slice(-2), [owner.id, owner.id]);
+  assert.equal(app.chats.get("chat:canonical")?.providerId, "provider:exact");
+  assert.equal(app.chats.get("chat:canonical")?.model, "model:exact");
+  assert.equal(app.events.filter((event) => event === "chat:model-update").length, 1);
+});
+
+test("Bot access save still re-bases and commits when catalog churn persists", async () => {
+  const owner = bot("bot:churning-catalog");
+  const app = fixture({
+    bots: [owner],
+    // Every fresh snapshot differs from the client's revision; the save must
+    // still commit against the last snapshot it actually read.
+    catalogRevisionPlan: ["catalog:churn-a", "catalog:churn-b"],
+  });
+  await app.service.initialize();
+
+  const result = await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "full",
+      catalogRevision: CATALOG_REVISION,
+      confirmedForeground: true,
+    },
+  });
+
+  assert.equal(result.accessMode, "full");
+  assert.deepEqual(app.catalogTargets.slice(-2), [owner.id, owner.id]);
 });
 
 test("sealed policy or managed-home loss blocks instead of reminting Full authority", async () => {

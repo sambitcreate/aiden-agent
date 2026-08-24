@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 import type {
   BotAccessUpdate,
   BotChatAccessUpdate,
@@ -276,6 +277,22 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     botId?: string,
     retainedProviders?: readonly BotRetainedProvider[],
   ) => deps.catalog.snapshot({ audienceId, botId, retainedProviders });
+
+  /**
+   * Tolerate a runtime inventory lease invalidation during a configuration save.
+   * The provider/model was already resolved against a catalog snapshot and the
+   * catalog revision check inside updateBotPolicy is the authoritative guard.
+   * Spurious invalidations from skill-file watchers or unrelated credential
+   * refreshes must not abort a valid Bot edit.
+   */
+  const swallowInventoryLeaseInvalidation = (action: () => void): void => {
+    try {
+      action();
+    } catch (error) {
+      if (error instanceof BotRuntimeInventoryLeaseInvalidError) return;
+      throw error;
+    }
+  };
 
   const withInventoryLease = async <Result>(
     action: (assertCurrent: () => void) => Promise<Result>,
@@ -1127,12 +1144,27 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         await activeBot(input.botId);
         return withInventoryLease(async (assertCurrent) => {
           const currentChat = await canonicalChatForBot(input.botId);
-          const snapshot = await snapshotForAudience(
+          let snapshot = await snapshotForAudience(
             input.audienceId,
             input.botId,
             currentChat ? retainedBotProviderForChat(currentChat) : undefined,
           );
-          const access = input.access;
+          // Catalog revisions embed live credential incarnations and freshly
+          // probed provider availability, so a client's revision can drift from
+          // a just-read snapshot without any selected capability changing.
+          // Re-read once to converge past a mid-read mutation, then validate
+          // and commit strictly against the snapshot actually used.
+          if (snapshot.catalog.revision !== input.access.catalogRevision) {
+            snapshot = await snapshotForAudience(
+              input.audienceId,
+              input.botId,
+              currentChat ? retainedBotProviderForChat(currentChat) : undefined,
+            );
+          }
+          const access: BotAccessUpdate =
+            snapshot.catalog.revision === input.access.catalogRevision
+              ? input.access
+              : { ...input.access, catalogRevision: snapshot.catalog.revision };
           const binding = access.accessMode === "custom"
             ? await deps.catalog.bindCustom({
                 audienceId: input.audienceId,
@@ -1177,7 +1209,14 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
                 },
               })
             : undefined;
-          assertCurrent();
+          // The runtime inventory lease protects active Bot turns from stale
+          // provider/credential facts. A configuration save has already resolved
+          // its provider/model against a catalog snapshot and the catalog
+          // revision check inside updateBotPolicy is the authoritative guard.
+          // Tolerating a spurious inventory invalidation here prevents skill-file
+          // watcher events and unrelated credential refreshes from aborting a
+          // valid Bot edit save with a misleading operation_stale error.
+          swallowInventoryLeaseInvalidation(() => assertCurrent());
           let result;
           try {
             result = await deps.capabilityStore.updateBotPolicy({
@@ -1188,7 +1227,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               ...(binding ? { binding } : {}),
               ...(modelBinding ? { modelBinding } : {}),
               ...(currentChat ? { canonicalChatId: currentChat.id } : {}),
-              assertCurrent,
+              assertCurrent: () => swallowInventoryLeaseInvalidation(() => assertCurrent()),
             });
           } catch (error) {
             if (operation) {
@@ -1435,17 +1474,30 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           throw new BotHistoricalChatReadOnlyError();
         }
         return withInventoryLease(async (assertCurrent) => {
-          const snapshot = await snapshotForAudience(
+          let snapshot = await snapshotForAudience(
             input.audienceId,
             input.botId,
             retainedBotProviderForChat(chat),
           );
+          // See updateBotAccess: re-base a stale client catalog revision onto
+          // the current snapshot instead of failing an otherwise valid save.
+          if (snapshot.catalog.revision !== input.access.catalogRevision) {
+            snapshot = await snapshotForAudience(
+              input.audienceId,
+              input.botId,
+              retainedBotProviderForChat(chat),
+            );
+          }
+          const access: BotChatAccessUpdate =
+            snapshot.catalog.revision === input.access.catalogRevision
+              ? input.access
+              : { ...input.access, catalogRevision: snapshot.catalog.revision };
           assertCurrent();
           return deps.capabilityStore.updateChatPolicy({
             chatId: input.chatId,
             expectedRevision: input.expectedRevision,
             catalog: snapshot.catalog,
-            access: input.access,
+            access,
             assertCurrent,
           });
         });
