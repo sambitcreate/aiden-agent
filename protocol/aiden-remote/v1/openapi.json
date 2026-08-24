@@ -217,6 +217,42 @@
         }
       }
     },
+    "/device/identity": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "patch": {
+        "operationId": "updateDeviceIdentity",
+        "x-aiden-capability": "server:read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceIdentityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated presentation-only client-device label",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceIdentityResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/workspaces": {
       "parameters": [
         {
@@ -3460,6 +3496,12 @@
             },
             "uniqueItems": true
           },
+          "deviceName": {
+            "type": "string",
+            "description": "Presentation-only label currently stored for the authenticated client device.",
+            "minLength": 1,
+            "maxLength": 80
+          },
           "connectionMode": {
             "enum": [
               "lan",
@@ -3502,6 +3544,34 @@
             }
           }
         ],
+        "additionalProperties": false
+      },
+      "DeviceIdentityRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeviceIdentityResponse": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
         "additionalProperties": false
       },
       "UsageTokens": {
