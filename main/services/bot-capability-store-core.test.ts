@@ -13,6 +13,7 @@ import {
   type BotCapabilityInventory,
 } from "./bot-capability-catalog-core.js";
 import {
+  bindBotProviderModel,
   bindBotCustomSelection,
   BotCapabilityBindingDriftError,
   createBotCapabilityOpaqueIdMint,
@@ -50,6 +51,7 @@ function inventory(): BotCapabilityInventory {
         sourceId: "private-model-next",
         label: "Model Next",
         available: true,
+        supportsImages: true,
         modelFingerprint: digest("model-next"),
       }],
     }],
@@ -545,6 +547,102 @@ test("Full model authority bumps revisions and rebases only the canonical reduce
     }),
     BotCapabilityRevisionConflictError,
   );
+});
+
+test("companion vision authority is exact, revisioned, preserved when omitted, and explicitly clearable", () => {
+  const { editor } = fixture();
+  const provider = snapshot.catalog.providers[0]!;
+  const textModel = provider.models.find((model) => model.supportsImages !== true)!;
+  const visionModel = provider.models.find((model) => model.supportsImages === true)!;
+  const primary = selection({ modelId: textModel.id });
+  const vision = selection({ modelId: visionModel.id });
+  assert.throws(
+    () => bindBotProviderModel({
+      providerId: primary.providerId,
+      modelId: primary.modelId,
+      catalogRevision,
+      snapshot,
+      requireImages: true,
+    }),
+    /must support image input/u,
+  );
+  const created = editor.createBotPolicy({
+    botId: "bot:vision-companion",
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      providerId: primary.providerId,
+      modelId: primary.modelId,
+      visionModel: { providerId: vision.providerId, modelId: vision.modelId },
+    },
+    modelBinding: binding(primary).provider,
+    visionModelBinding: bindBotProviderModel({
+      providerId: vision.providerId,
+      modelId: vision.modelId,
+      catalogRevision,
+      snapshot,
+      requireImages: true,
+    }),
+  });
+  assert.deepEqual(editor.getBotVisionModelAuthority(created.botId)?.selection, {
+    providerId: vision.providerId,
+    modelId: vision.modelId,
+  });
+  const lostVisionInventory = inventory();
+  const sourceVision = lostVisionInventory.providers[0]!.models.find(
+    (model) => model.supportsImages === true,
+  )!;
+  sourceVision.supportsImages = false;
+  const lostVisionSnapshot = buildBotCapabilityCatalogSnapshot({
+    inventory: lostVisionInventory,
+    notice: snapshot.catalog.notice,
+    mintOpaqueId: createBotCapabilityOpaqueIdMint(opaqueKey),
+  });
+  assert.throws(
+    () => editor.assertAuthorityBindingsCurrent({
+      botId: created.botId,
+      snapshot: lostVisionSnapshot,
+    }),
+    BotCapabilityBindingDriftError,
+  );
+
+  const preserved = editor.updateBotPolicy({
+    botId: created.botId,
+    expectedRevision: created.revision,
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      providerId: primary.providerId,
+      modelId: primary.modelId,
+    },
+    modelBinding: binding(primary).provider,
+  });
+  assert.equal(preserved.authorityChanged, false);
+  assert.deepEqual(editor.getBotVisionModelAuthority(created.botId)?.selection, {
+    providerId: vision.providerId,
+    modelId: vision.modelId,
+  });
+
+  const cleared = editor.updateBotPolicy({
+    botId: created.botId,
+    expectedRevision: preserved.view.revision,
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      providerId: primary.providerId,
+      modelId: primary.modelId,
+      visionModel: null,
+    },
+    modelBinding: binding(primary).provider,
+  });
+  assert.equal(cleared.authorityChanged, true);
+  assert.equal(editor.getBotVisionModelAuthority(created.botId), undefined);
 });
 
 test("create rollback removes only an uncommitted identity policy and its impossible chats", () => {

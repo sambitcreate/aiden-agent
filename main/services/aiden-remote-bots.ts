@@ -290,6 +290,10 @@ type BotApplicationPort = {
     audienceId: string,
     botId: string,
   ): Promise<{ providerId: string; modelId: string } | undefined>;
+  visionModelSelection?(
+    audienceId: string,
+    botId: string,
+  ): Promise<{ providerId: string; modelId: string } | undefined>;
   updateBotAccess(input: {
     audienceId: string;
     botId: string;
@@ -538,12 +542,15 @@ export class AidenRemoteBotService {
     bot: BotDefinition,
     audienceId?: string,
   ): Promise<AidenRemoteBotDetail> {
-    const [summary, access, modelSelection] = await Promise.all([
+    const [summary, access, modelSelection, visionModelSelection] = await Promise.all([
       this.summary(bot),
       this.options.application.getBotAccess(bot.id),
       audienceId === undefined || !this.options.application.modelSelection
         ? Promise.resolve(undefined)
         : this.options.application.modelSelection(audienceId, bot.id),
+      audienceId === undefined || !this.options.application.visionModelSelection
+        ? Promise.resolve(undefined)
+        : this.options.application.visionModelSelection(audienceId, bot.id),
     ]);
     return parseAidenRemoteBotDetail({
       ...summary,
@@ -551,6 +558,7 @@ export class AidenRemoteBotService {
       ...(bot.openingGreeting === undefined ? {} : { openingGreeting: bot.openingGreeting }),
       access: parseAidenRemoteBotAccessView(access),
       ...(modelSelection ? { modelSelection } : {}),
+      ...(visionModelSelection ? { visionModelSelection } : {}),
     });
   }
 

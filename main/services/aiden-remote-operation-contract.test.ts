@@ -893,7 +893,7 @@ test("durable operation registry restores only exact bounded identities and reje
   );
 });
 
-test("canonical revision-8 Bot fixtures parse into explicit bounded contract views", async () => {
+test("canonical revision-9 Bot fixtures parse into explicit bounded contract views", async () => {
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
@@ -1256,6 +1256,7 @@ test("Bot capability catalogs allow the documented per-provider model bound", as
     id: index === 0 ? "model_fixture" : `model_fixture_${index}`,
     label: `Model ${index}`,
     available: true,
+    supportsImages: index === 0,
   }));
   const secondProvider = structuredClone(originalProvider);
   secondProvider.id = "provider_fixture_two";
@@ -1263,6 +1264,7 @@ test("Bot capability catalogs allow the documented per-provider model bound", as
     id: `model_fixture_two_${index}`,
     label: `Second model ${index}`,
     available: true,
+    supportsImages: false,
   }));
   catalog.providers = [firstProvider, secondProvider];
 
@@ -1277,7 +1279,12 @@ test("Bot capability catalogs allow the documented per-provider model bound", as
     {
       ...structuredClone(originalProvider),
       id: "provider_fixture_three",
-      models: [{ id: "model_fixture_three", label: "Overflow model", available: true }],
+      models: [{
+        id: "model_fixture_three",
+        label: "Overflow model",
+        available: true,
+        supportsImages: false,
+      }],
     },
   ];
   assert.throws(

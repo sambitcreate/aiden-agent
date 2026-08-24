@@ -353,15 +353,27 @@ function storedProviderOption(value: unknown): Omit<BotProviderOption, "models">
 }
 
 function storedModelOption(value: unknown): BotModelOption {
-  const model = storedRecord(value, "Bot bound model", ["id", "label", "available"]);
+  const model = storedRecord(value, "Bot bound model", [
+    "id",
+    "label",
+    "available",
+  ], ["supportsImages"]);
   if (
     !isPathSafeBotCapabilityId(model.id) ||
     !isBoundedBotText(model.label, 160) ||
-    model.available !== true
+    model.available !== true ||
+    (model.supportsImages !== undefined && typeof model.supportsImages !== "boolean")
   ) {
     throw new Error("Bot bound model is not a valid selected public option.");
   }
-  return { id: model.id, label: model.label, available: true };
+  return {
+    id: model.id,
+    label: model.label,
+    available: true,
+    ...(model.supportsImages === undefined
+      ? {}
+      : { supportsImages: model.supportsImages }),
+  };
 }
 
 function exactFacts(stored: string, calculated: unknown, label: string): string {
@@ -461,7 +473,9 @@ export function botProviderModelDrift(
   if (
     !model ||
     model.sourceId !== binding.sourceModelId ||
-    model.exactFingerprint !== binding.modelExactFingerprint
+    model.exactFingerprint !== binding.modelExactFingerprint ||
+    (binding.modelOption.supportsImages !== undefined &&
+      model.option.supportsImages !== binding.modelOption.supportsImages)
   ) {
     issues.push(issue("model", binding.modelOption.id, "changed_or_removed"));
   } else if (!model.option.available) {
@@ -961,6 +975,36 @@ function bindProvider(
   };
 }
 
+/** Bind one renderer-safe provider/model pair without granting any other capability. */
+export function bindBotProviderModel(input: {
+  providerId: string;
+  modelId: string;
+  catalogRevision: string;
+  snapshot: BotCapabilityCatalogSnapshot;
+  requireImages?: boolean;
+}): BoundBotProviderModel {
+  if (input.catalogRevision !== input.snapshot.catalog.revision) {
+    throw new BotCapabilityValidationError(
+      "Bot capability choices changed. Review the current choices and try again.",
+    );
+  }
+  const binding = bindProvider({
+    providerId: input.providerId,
+    modelId: input.modelId,
+    fileScopeIds: [],
+    shellEnabled: false,
+    connectionIds: [],
+    skillIds: [],
+    otherCapabilityIds: [],
+  }, input.snapshot);
+  if (input.requireImages === true && binding.modelOption.supportsImages !== true) {
+    throw new BotCapabilityValidationError(
+      "The companion model must support image input.",
+    );
+  }
+  return binding;
+}
+
 /** Bind renderer-safe positive selections to exact current main-owned facts. */
 export function bindBotCustomSelection(input: {
   selection: unknown;
@@ -1127,7 +1171,8 @@ export function botCustomSelectionDrift(
   if (
     !model ||
     model.sourceId !== binding.provider.sourceModelId ||
-    model.exactFingerprint !== binding.provider.modelExactFingerprint
+    model.exactFingerprint !== binding.provider.modelExactFingerprint ||
+    model.option.supportsImages !== binding.provider.modelOption.supportsImages
   ) {
     issues.push(issue("model", binding.provider.modelOption.id, "changed_or_removed"));
   } else if (!model.option.available) {

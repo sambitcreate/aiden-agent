@@ -39,6 +39,11 @@ export type BotChatAccessMode = "inherit" | "custom";
 export type BotNoticeDecision = "continue_full" | "customize_first";
 export type BotFileScopeKind = "full_mac" | "bot_home" | "approved_location";
 
+export interface BotModelSelection {
+  providerId: string;
+  modelId: string;
+}
+
 export interface BotCapabilityOption {
   /** Opaque, main-minted grant id. It is not a provider/server/skill id. */
   id: string;
@@ -55,6 +60,7 @@ export interface BotModelOption {
   id: string;
   label: string;
   available: boolean;
+  supportsImages?: boolean;
 }
 
 export interface BotProviderOption {
@@ -108,11 +114,15 @@ export type BotAccessUpdate =
       /** Optional Bot model authority. Older clients omit this pair. */
       providerId?: string;
       modelId?: string;
+      /** Omitted preserves, null clears, and an object exact-binds a companion. */
+      visionModel?: BotModelSelection | null;
     }
   | {
       accessMode: "custom";
       catalogRevision: string;
       custom: BotCustomSelection;
+      /** Omitted preserves, null clears, and an object exact-binds a companion. */
+      visionModel?: BotModelSelection | null;
     };
 
 export interface BotAccessViewBase {
@@ -299,6 +309,26 @@ export function parseBotCustomSelection(value: unknown): BotCustomSelection {
   };
 }
 
+function validOptionalModelSelection(
+  value: Record<string, unknown>,
+  key: string,
+): boolean {
+  if (!Object.prototype.hasOwnProperty.call(value, key) || value[key] === null) return true;
+  const selection = value[key];
+  return isRecord(selection) && hasOnlyKeys(selection, ["providerId", "modelId"])
+    && Object.keys(selection).length === 2
+    && isBoundedBotText(selection.providerId, BOT_CAPABILITY_LIMITS.providerIdChars)
+    && isBoundedBotText(selection.modelId, BOT_CAPABILITY_LIMITS.modelIdChars);
+}
+
+function parseNullableModelSelection(value: unknown): BotModelSelection | null {
+  if (value === null) return null;
+  if (!isRecord(value) || !validOptionalModelSelection({ selection: value }, "selection")) {
+    throw new BotCapabilityValidationError("Invalid Bot companion vision model.");
+  }
+  return { providerId: value.providerId as string, modelId: value.modelId as string };
+}
+
 export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
   if (!isRecord(value)) {
     throw new BotCapabilityValidationError("Invalid Bot access update.");
@@ -313,13 +343,15 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
         "confirmedForeground",
         "providerId",
         "modelId",
+        "visionModel",
       ]) ||
       value.confirmedForeground !== true ||
       hasProviderId !== hasModelId ||
       (hasProviderId && (
         !isBoundedBotText(value.providerId, BOT_CAPABILITY_LIMITS.providerIdChars) ||
         !isBoundedBotText(value.modelId, BOT_CAPABILITY_LIMITS.modelIdChars)
-      ))
+      )) ||
+      !validOptionalModelSelection(value, "visionModel")
     ) {
       throw new BotCapabilityValidationError("Full Access requires foreground confirmation.");
     }
@@ -333,12 +365,20 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
             modelId: value.modelId as string,
           }
         : {}),
+      ...(Object.prototype.hasOwnProperty.call(value, "visionModel")
+        ? { visionModel: parseNullableModelSelection(value.visionModel) }
+        : {}),
     };
   }
   if (
     value.accessMode !== "custom" ||
-    !hasOnlyKeys(value, ["accessMode", "catalogRevision", "custom"]) ||
-    Object.keys(value).length !== 3
+    !hasOnlyKeys(value, [
+      "accessMode",
+      "catalogRevision",
+      "custom",
+      "visionModel",
+    ]) ||
+    !validOptionalModelSelection(value, "visionModel")
   ) {
     throw new BotCapabilityValidationError("Invalid Bot access update.");
   }
@@ -346,6 +386,9 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
     accessMode: "custom",
     catalogRevision: assertBotRevision(value.catalogRevision, "catalog revision"),
     custom: parseBotCustomSelection(value.custom),
+    ...(Object.prototype.hasOwnProperty.call(value, "visionModel")
+      ? { visionModel: parseNullableModelSelection(value.visionModel) }
+      : {}),
   };
 }
 
@@ -529,4 +572,18 @@ export function validateSelectionAgainstCatalog(
   requireOptions(selection.connectionIds, catalog.connections, "connection");
   requireOptions(selection.skillIds, catalog.skills, "skill");
   requireOptions(selection.otherCapabilityIds, catalog.otherCapabilities, "capability");
+}
+
+export function validateVisionSelectionAgainstCatalog(
+  selection: BotModelSelection | null | undefined,
+  catalog: BotCapabilityCatalog,
+): void {
+  if (!selection) return;
+  const provider = catalog.providers.find(({ id }) => id === selection.providerId);
+  const model = provider?.models.find(({ id }) => id === selection.modelId);
+  if (!provider?.available || !model?.available || model.supportsImages !== true) {
+    throw new BotCapabilityValidationError(
+      "Choose an available image-capable model for image understanding.",
+    );
+  }
 }

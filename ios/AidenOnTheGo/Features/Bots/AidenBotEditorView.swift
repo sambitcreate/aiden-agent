@@ -26,6 +26,8 @@ struct AidenBotEditorDraft: Equatable {
     var avatar: AidenBotAvatarRecipe
     var usesFullAccess: Bool
     var customAccess: AidenBotCustomAccessDraft
+    var visionProviderID: String?
+    var visionModelID: String?
 
     init?(catalog: AidenBotCapabilityCatalog, defaultAccess: AidenBotEditorDefaultAccess) {
         guard let customAccess = AidenBotCustomAccessDraft(catalog: catalog) else { return nil }
@@ -43,6 +45,9 @@ struct AidenBotEditorDraft: Equatable {
             usesFullAccess = Self.fullAccessAccepted(in: catalog)
         }
         self.customAccess = customAccess
+        let vision = Self.suggestedVisionSelection(catalog: catalog, primary: customAccess)
+        visionProviderID = vision?.providerId
+        visionModelID = vision?.modelId
     }
 
     init?(detail: AidenBotDetail, catalog: AidenBotCapabilityCatalog) {
@@ -64,6 +69,10 @@ struct AidenBotEditorDraft: Equatable {
         }
         usesFullAccess = detail.access.accessMode.rawValue == AidenBotAccessMode.full.rawValue
         self.customAccess = customAccess
+        let vision = detail.visionModelSelection
+            ?? Self.suggestedVisionSelection(catalog: catalog, primary: customAccess)
+        visionProviderID = vision?.providerId
+        visionModelID = vision?.modelId
     }
 
     static let defaultAvatar = AidenBotAvatarRecipe(
@@ -77,6 +86,57 @@ struct AidenBotEditorDraft: Equatable {
 
     static func fullAccessAccepted(in catalog: AidenBotCapabilityCatalog) -> Bool {
         catalog.notice.acceptedDecision?.rawValue == AidenBotNoticeDecision.continueFull.rawValue
+    }
+
+    private static func suggestedVisionSelection(
+        catalog: AidenBotCapabilityCatalog,
+        primary: AidenBotCustomAccessDraft
+    ) -> AidenBotModelSelection? {
+        guard catalog.model(providerId: primary.providerID, modelId: primary.modelID)?.supportsImages != true
+        else { return nil }
+        let preferred = catalog.providers.first(where: { provider in
+            provider.id == primary.providerID && provider.available
+                && provider.models.contains(where: { $0.available && $0.supportsImages })
+        }) ?? catalog.providers.first(where: { provider in
+            provider.available && provider.models.contains(where: { $0.available && $0.supportsImages })
+        })
+        guard let provider = preferred,
+              let model = provider.models.first(where: { $0.available && $0.supportsImages }) else {
+            return nil
+        }
+        return AidenBotModelSelection(providerId: provider.id, modelId: model.id)
+    }
+
+    func visionSelection(catalog: AidenBotCapabilityCatalog) throws -> AidenBotModelSelection? {
+        guard catalog.model(
+            providerId: customAccess.providerID,
+            modelId: customAccess.modelID
+        )?.supportsImages != true else { return nil }
+        guard let visionProviderID, let visionModelID,
+              let model = catalog.model(providerId: visionProviderID, modelId: visionModelID),
+              model.available, model.supportsImages,
+              catalog.providers.first(where: { $0.id == visionProviderID })?.available == true else {
+            throw AidenBotContractError.invalidCombination("image-capable companion model")
+        }
+        return AidenBotModelSelection(providerId: visionProviderID, modelId: visionModelID)
+    }
+
+    mutating func reconcileVisionSelection(catalog: AidenBotCapabilityCatalog) {
+        if catalog.model(
+            providerId: customAccess.providerID,
+            modelId: customAccess.modelID
+        )?.supportsImages == true {
+            visionProviderID = nil
+            visionModelID = nil
+            return
+        }
+        if let visionProviderID, let visionModelID,
+           catalog.model(providerId: visionProviderID, modelId: visionModelID)?.supportsImages == true {
+            return
+        }
+        let suggestion = Self.suggestedVisionSelection(catalog: catalog, primary: customAccess)
+        visionProviderID = suggestion?.providerId
+        visionModelID = suggestion?.modelId
     }
 
     func accessUpdate(catalog: AidenBotCapabilityCatalog) throws -> AidenBotAccessUpdate {
@@ -94,13 +154,21 @@ struct AidenBotEditorDraft: Equatable {
             guard Self.fullAccessAccepted(in: catalog) else {
                 throw AidenBotContractError.invalidCombination("full access notice")
             }
-            return .full(catalogRevision: catalog.revision, selection: modelSelection)
+            return .full(
+                catalogRevision: catalog.revision,
+                selection: modelSelection,
+                visionSelection: try visionSelection(catalog: catalog)
+            )
         }
         let selection = try customAccess.selection()
         guard catalog.containsAvailable(selection) else {
             throw AidenBotContractError.invalidCombination("unavailable custom access")
         }
-        return .custom(catalogRevision: catalog.revision, selection: selection)
+        return .custom(
+            catalogRevision: catalog.revision,
+            selection: selection,
+            visionSelection: try visionSelection(catalog: catalog)
+        )
     }
 
     func createRequest(catalog: AidenBotCapabilityCatalog) throws -> AidenBotCreateRequest {
@@ -136,12 +204,14 @@ struct AidenBotEditorDraft: Equatable {
     func changesAccess(comparedTo detail: AidenBotDetail, catalog: AidenBotCapabilityCatalog) throws -> Bool {
         let next = try accessUpdate(catalog: catalog)
         switch next {
-        case let .full(_, selection):
+        case let .full(_, selection, visionSelection):
             return detail.access.accessMode.rawValue != AidenBotAccessMode.full.rawValue
                 || detail.modelSelection != selection
-        case let .custom(_, selection):
+                || detail.visionModelSelection != visionSelection
+        case let .custom(_, selection, visionSelection):
             return detail.access.accessMode.rawValue != AidenBotAccessMode.custom.rawValue
                 || detail.access.custom != selection
+                || detail.visionModelSelection != visionSelection
         }
     }
 
@@ -277,6 +347,12 @@ func aidenBotEditorRebasedDraft(
     if modelBindingChanged {
         rebased.customAccess.providerID = draft.customAccess.providerID
         rebased.customAccess.modelID = draft.customAccess.modelID
+    }
+    let visionBindingChanged = draft.visionProviderID != baselineDraft.visionProviderID
+        || draft.visionModelID != baselineDraft.visionModelID
+    if visionBindingChanged {
+        rebased.visionProviderID = draft.visionProviderID
+        rebased.visionModelID = draft.visionModelID
     }
     if draft.customAccess.fileScopeIDs != baselineDraft.customAccess.fileScopeIDs {
         rebased.customAccess.fileScopeIDs = draft.customAccess.fileScopeIDs
@@ -635,12 +711,51 @@ struct AidenBotEditorView: View {
             .accessibilityHint("Select the AI provider this Bot always uses.")
             Picker("Model", selection: modelBinding(catalog)) {
                 ForEach(selectedProvider(in: catalog)?.models ?? []) { model in
-                    Text(optionTitle(model.label, available: model.available))
+                    Text(optionTitle(
+                        "\(model.label) · \(model.supportsImages ? "Vision" : "Text only")",
+                        available: model.available
+                    ))
                         .tag(model.id)
                         .disabled(!model.available)
                 }
             }
             .accessibilityHint("Select the AI model this Bot always uses.")
+
+            if selectedPrimaryModel(in: catalog)?.supportsImages == false {
+                Label(
+                    "This model reads text only. Choose a vision model for photos and screenshots.",
+                    systemImage: "eye"
+                )
+                .foregroundStyle(palette.secondary)
+
+                if visionProviders(in: catalog).isEmpty {
+                    Label(
+                        "No image-capable model is connected. Add one in Aiden Agent on your Mac, then refresh this Bot.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(palette.secondary)
+                } else {
+                    Picker("Image Provider", selection: visionProviderBinding(catalog)) {
+                        ForEach(visionProviders(in: catalog)) { provider in
+                            Text(optionTitle(provider.label, available: provider.available))
+                                .tag(provider.id)
+                        }
+                    }
+                    Picker("Image Model", selection: visionModelBinding(catalog)) {
+                        ForEach(selectedVisionProvider(in: catalog)?.models.filter {
+                            $0.available && $0.supportsImages
+                        } ?? []) { model in
+                            Text(model.label).tag(model.id)
+                        }
+                    }
+                }
+                Text("The attached image and a focused question are sent to this model. The Bot’s replies still use the primary model above.")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            } else if let model = selectedPrimaryModel(in: catalog) {
+                Label("Images are handled directly by \(model.label).", systemImage: "photo")
+                    .foregroundStyle(palette.secondary)
+            }
         } header: {
             Text("AI Provider and Model")
         } footer: {
@@ -717,6 +832,14 @@ struct AidenBotEditorView: View {
                 LabeledContent("Commands", value: access.shellEnabled ? "Allowed" : "Off")
                 LabeledContent("Connections", value: "\(access.connectionIDs.count) selected")
                 LabeledContent("Skills", value: "\(access.skillIDs.count) selected")
+            }
+            if let primary = selectedPrimaryModel(in: catalog) {
+                if primary.supportsImages {
+                    LabeledContent("Images", value: "Handled by \(primary.label)")
+                } else if let provider = selectedVisionProvider(in: catalog),
+                          let model = provider.models.first(where: { $0.id == draft?.visionModelID }) {
+                    LabeledContent("Images", value: "\(model.label) via \(provider.label)")
+                }
             }
         } header: {
             Text("Review")
@@ -795,12 +918,57 @@ struct AidenBotEditorView: View {
         catalog.providers.first { $0.id == draft?.customAccess.providerID }
     }
 
+    private func selectedPrimaryModel(in catalog: AidenBotCapabilityCatalog) -> AidenBotModelOption? {
+        selectedProvider(in: catalog)?.models.first { $0.id == draft?.customAccess.modelID }
+    }
+
+    private func visionProviders(in catalog: AidenBotCapabilityCatalog) -> [AidenBotProviderOption] {
+        catalog.providers.filter { provider in
+            provider.available && provider.models.contains(where: { $0.available && $0.supportsImages })
+        }
+    }
+
+    private func selectedVisionProvider(in catalog: AidenBotCapabilityCatalog) -> AidenBotProviderOption? {
+        catalog.providers.first { $0.id == draft?.visionProviderID }
+    }
+
+    private func visionProviderBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
+        Binding(
+            get: { draft?.visionProviderID ?? "" },
+            set: { providerID in
+                guard let provider = visionProviders(in: catalog).first(where: { $0.id == providerID }),
+                      let model = provider.models.first(where: { $0.available && $0.supportsImages }),
+                      var next = draft else { return }
+                next.visionProviderID = provider.id
+                next.visionModelID = model.id
+                draft = next
+                retainedCreateAttempt = nil
+            }
+        )
+    }
+
+    private func visionModelBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
+        Binding(
+            get: { draft?.visionModelID ?? "" },
+            set: { modelID in
+                guard let provider = selectedVisionProvider(in: catalog),
+                      provider.models.contains(where: {
+                          $0.id == modelID && $0.available && $0.supportsImages
+                      }), var next = draft else { return }
+                next.visionModelID = modelID
+                draft = next
+                retainedCreateAttempt = nil
+            }
+        )
+    }
+
     private func providerBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
         Binding(
             get: { draft?.customAccess.providerID ?? "" },
             set: { providerID in
                 guard var next = draft else { return }
                 next.customAccess.selectProvider(providerID, catalog: catalog)
+                next.reconcileVisionSelection(catalog: catalog)
                 draft = next
                 retainedCreateAttempt = nil
             }
@@ -815,6 +983,7 @@ struct AidenBotEditorView: View {
                       provider.models.contains(where: { $0.id == modelID && $0.available }),
                       var next = draft else { return }
                 next.customAccess.modelID = modelID
+                next.reconcileVisionSelection(catalog: catalog)
                 draft = next
                 retainedCreateAttempt = nil
             }

@@ -93,6 +93,7 @@ function providerInventory(
           sourceId: modelId,
           label: metadata?.name ?? modelId,
           available,
+          supportsImages: metadata?.vision === true,
           modelFingerprint: botCapabilityFactsFingerprint({
             providerId: provider.id,
             modelId,

@@ -4797,11 +4797,12 @@
       },
       "BotProviderModelOption": {
         "type": "object",
-        "required": ["id", "label", "available"],
+        "required": ["id", "label", "available", "supportsImages"],
         "properties": {
           "id": { "type": "string", "minLength": 1, "maxLength": 512 },
           "label": { "type": "string", "minLength": 1, "maxLength": 160 },
-          "available": { "type": "boolean" }
+          "available": { "type": "boolean" },
+          "supportsImages": { "type": "boolean" }
         },
         "additionalProperties": false
       },
@@ -4963,7 +4964,13 @@
               "catalogRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
               "confirmedForeground": { "const": true },
               "providerId": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "modelId": { "type": "string", "minLength": 1, "maxLength": 512 }
+              "modelId": { "type": "string", "minLength": 1, "maxLength": 512 },
+              "visionModel": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/BotModelSelection" },
+                  { "type": "null" }
+                ]
+              }
             },
             "dependentRequired": {
               "providerId": ["modelId"],
@@ -4977,7 +4984,13 @@
             "properties": {
               "accessMode": { "const": "custom" },
               "catalogRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "custom": { "$ref": "#/components/schemas/BotCustomSelection" }
+              "custom": { "$ref": "#/components/schemas/BotCustomSelection" },
+              "visionModel": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/BotModelSelection" },
+                  { "type": "null" }
+                ]
+              }
             },
             "additionalProperties": false
           }
@@ -5076,6 +5089,7 @@
             },
             "additionalProperties": false
           },
+          "visionModelSelection": { "$ref": "#/components/schemas/BotModelSelection" },
           "createdAt": { "type": "string", "format": "date-time" },
           "updatedAt": { "type": "string", "format": "date-time" },
           "archivedAt": { "type": "string", "format": "date-time" },
@@ -5091,6 +5105,15 @@
             "else": { "not": { "required": ["archivedAt"] } }
           }
         ],
+        "additionalProperties": false
+      },
+      "BotModelSelection": {
+        "type": "object",
+        "required": ["providerId", "modelId"],
+        "properties": {
+          "providerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "modelId": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
         "additionalProperties": false
       },
       "BotCreateRequest": {

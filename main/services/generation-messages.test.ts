@@ -75,6 +75,7 @@ test("keeps images only when the generation's effective model accepts them", () 
   );
   assert.equal(JSON.stringify(text.content).includes("note.txt"), true);
   assert.equal(JSON.stringify(text.content).includes("IMAGE_SENTINEL"), false);
+  assert.match(JSON.stringify(text.content), /Attached image reference: image_image \(capture\.png\)/u);
 });
 
 test("matches Pi's installed tool-result image serialization gate", () => {

@@ -121,6 +121,7 @@ export interface BotProviderModelInventory {
   sourceId: string;
   label: string;
   available: boolean;
+  supportsImages?: boolean;
   /** Main-only digest covering the exact model identity/runtime metadata. */
   modelFingerprint: string;
 }
@@ -545,9 +546,9 @@ function parseProviders(
       const model = assertPlainRecord(
         rawModel,
         `Bot provider ${providerIndex} model ${modelIndex}`,
-        ["sourceId", "label", "available", "modelFingerprint"],
+        ["sourceId", "label", "available", "supportsImages", "modelFingerprint"],
       );
-      if (Object.keys(model).length !== 4) {
+      if (![4, 5].includes(Object.keys(model).length)) {
         throw new Error(`Bot provider ${providerIndex} model ${modelIndex} is incomplete.`);
       }
       const sourceModelId = privateIdentity(
@@ -576,6 +577,10 @@ function parseProviders(
           available: booleanValue(
             model.available,
             `Bot provider ${providerIndex} model ${modelIndex} availability`,
+          ),
+          supportsImages: booleanValue(
+            model.supportsImages === true,
+            `Bot provider ${providerIndex} model ${modelIndex} image capability`,
           ),
         },
       };
@@ -1097,17 +1102,18 @@ export function assertSafeBotCapabilityCatalogProjection(
       const projected = assertPlainRecord(
         model,
         `Bot capability provider ${providerIndex} model ${modelIndex}`,
-        ["id", "label", "available"],
+        ["id", "label", "available", "supportsImages"],
       );
       if (
-        Object.keys(projected).length !== 3 ||
+        Object.keys(projected).length !== 4 ||
         !isPathSafeBotCapabilityId(projected.id) ||
         publicText(
           projected.label,
           `Bot capability provider ${providerIndex} model ${modelIndex} label`,
           160,
         ) !== projected.label ||
-        typeof projected.available !== "boolean"
+        typeof projected.available !== "boolean" ||
+        typeof projected.supportsImages !== "boolean"
       ) {
         throw new Error(`Bot capability provider ${providerIndex} model ${modelIndex} is unsafe.`);
       }

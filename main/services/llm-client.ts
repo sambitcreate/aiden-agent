@@ -18,6 +18,10 @@ import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
 import {
+  createVisionAnalysisTool,
+  INSPECT_IMAGE_TOOL_NAME,
+} from "./vision-analysis-tool.js";
+import {
   APPROVAL_TOOL_NAMES,
   DISCLOSURE_APPROVAL_TOOL_NAMES,
   buildPinnedCodingTools,
@@ -888,6 +892,18 @@ async function prepareGeneration(
           }
         : undefined,
       includeCodingTools: !botContext,
+      imageInspectionTool:
+        botContext && !supportsImages && botContext.admission.authority.visionProvider
+          ? createVisionAnalysisTool({
+              attachments: chat.messages.flatMap((message) => message.attachments ?? []),
+              authority: {
+                providerId:
+                  botContext.admission.authority.visionProvider.sourceProviderId,
+                modelId: botContext.admission.authority.visionProvider.sourceModelId,
+                revalidateBeforeEffect: () => botContext.admission.revalidateBeforeEffect(),
+              },
+            })
+          : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   const botMutatingToolNames = new Set<string>();
@@ -964,6 +980,8 @@ async function prepareGeneration(
     tools = tools.flatMap((tool) => {
       const allowed = botSkillToolNames.has(tool.name)
         ? true
+        : tool.name === INSPECT_IMAGE_TOOL_NAME
+          ? !supportsImages && Boolean(authority.visionProvider)
         : mcpToolNames.has(tool.name)
           ? true
           : tool.name === "web_search"

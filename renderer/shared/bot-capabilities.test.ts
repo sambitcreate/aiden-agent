@@ -56,6 +56,28 @@ test("Full Bot access accepts only an exact optional provider/model pair", () =>
     confirmedForeground: true,
     providerId: "provider:opaque",
   }), /Full Access/u);
+
+  assert.deepEqual(parseBotAccessUpdate({
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+    providerId: "provider:opaque",
+    modelId: "model/text",
+    visionModel: { providerId: "provider:vision", modelId: "model/vision" },
+  }), {
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+    providerId: "provider:opaque",
+    modelId: "model/text",
+    visionModel: { providerId: "provider:vision", modelId: "model/vision" },
+  });
+  assert.throws(() => parseBotAccessUpdate({
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+    visionModel: { providerId: "provider:vision" },
+  }), /foreground confirmation/u);
 });
 
 test("file-scope intersection preserves a chat reduction below Full Mac", () => {

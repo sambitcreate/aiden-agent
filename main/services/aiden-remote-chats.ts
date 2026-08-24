@@ -126,7 +126,7 @@ export interface AidenRemoteBotTurnAuthorityPreflightRequest {
 
 export type AidenRemoteBotTurnAuthorityPreflight = (
   request: Readonly<AidenRemoteBotTurnAuthorityPreflightRequest>,
-) => Promise<void>;
+) => Promise<{ supportsCompanionImages: boolean } | void>;
 
 function ownRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -835,18 +835,20 @@ export class AidenRemoteChatService {
               400,
             );
           }
+          let supportsCompanionImages = false;
           if (authoritative.botId) {
             const preflight = this.options.botTurnAuthorityPreflight;
             if (!preflight) {
               throw new Error("Bot turn authority is unavailable.");
             }
-            await preflight({
+            const preflightResult = await preflight({
               audienceId: deviceId,
               botId: authoritative.botId,
               chatId: authoritative.id,
               providerId: selection.providerId,
               model: selection.modelId,
             });
+            supportsCompanionImages = preflightResult?.supportsCompanionImages === true;
           }
           if (
             parsed.thinkingLevel &&
@@ -857,12 +859,12 @@ export class AidenRemoteChatService {
           }
           if (
             this.attachments.requiresImageInput(deviceId, chatId, parsed.attachmentIds) &&
-            !selection.supportsImages
+            !selection.supportsImages && !supportsCompanionImages
           ) {
             throw new AidenRemoteServiceError(
               "invalid_request",
               authoritative.botId
-                ? "This Bot’s saved model can’t read images. Choose an image-capable model in Edit Bot, then try again."
+                ? "This Bot needs an image model before it can read photos. Open Edit Bot, choose Image Understanding, then try again."
                 : "The selected model can’t read images. Choose an image-capable model, then try again.",
               400,
             );

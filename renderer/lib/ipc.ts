@@ -83,6 +83,7 @@ import type {
 export interface BotAccessState {
   access: BotAccessView;
   modelSelection?: { providerId: string; modelId: string };
+  visionModelSelection?: { providerId: string; modelId: string };
 }
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";

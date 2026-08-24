@@ -1600,6 +1600,32 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testBotImageAuthorityFailsClosedAndUsesSetupRecoveryForPendingImages() {
+        var chat = sampleChat()
+        chat.botId = "bot-life-manager"
+        let model = AidenChatViewModel(readOnlyFixture: chat)
+
+        XCTAssertFalse(model.acceptsImageAttachments)
+        XCTAssertEqual(
+            aidenImageSendRecovery(
+                isBotChat: true,
+                acceptsImages: model.acceptsImageAttachments,
+                hasPendingImage: true
+            ),
+            .configureBotVision
+        )
+
+        model.setBotVisionModelSelection(AidenBotModelSelection(
+            providerId: "provider-vision",
+            modelId: "model-vision"
+        ))
+        XCTAssertTrue(model.acceptsImageAttachments)
+        model.setBotVisionModelSelection(nil)
+        model.setBotPrimarySupportsImages(true)
+        XCTAssertTrue(model.acceptsImageAttachments)
+    }
+
+    @MainActor
     func testReadOnlyFixtureChatRejectsEveryLiveEntryPointWithoutMutatingItsChat() async {
         let chat = sampleChat()
         let model = AidenChatViewModel(readOnlyFixture: chat)

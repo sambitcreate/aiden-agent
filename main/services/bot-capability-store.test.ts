@@ -53,6 +53,7 @@ function inventory(): BotCapabilityInventory {
         sourceId: "private-model-next",
         label: "Model Next",
         available: true,
+        supportsImages: true,
         modelFingerprint: digest("model-next"),
       }],
     }],
@@ -416,6 +417,75 @@ test("staged DataStore publication rechecks inventory leases for Bot and chat po
   );
   assert.deepEqual(durable.policies.map(({ botId }) => botId), ["bot:staged"]);
   assert.deepEqual(durable.chats, []);
+});
+
+test("companion replacement fences an active Bot lease before durable publication", async (t) => {
+  const root = await temporaryRoot(t);
+  const staged = stagedCapabilityPersistence(root);
+  let timestamp = 25_000;
+  let incarnation = 0;
+  const leases = new BotCapabilityLeaseRegistry();
+  const store = createBotCapabilityStore({
+    persistence: staged.persistence,
+    leases,
+    now: () => ++timestamp,
+    mintRevision: (kind, sequence) => `revision:${kind}:${sequence}`,
+    mintIncarnation: () => Buffer.alloc(32, ++incarnation).toString("base64url"),
+  });
+  await store.initialize();
+  await store.acknowledgeNotice("device:a", acknowledgement());
+  const primary = selectionForModel(0);
+  const companionModel = snapshot.catalog.providers[0]!.models.find(
+    ({ supportsImages }) => supportsImages,
+  )!;
+  const companion = selection({ modelId: companionModel.id });
+  const policy = await store.createBotPolicy({
+    botId: "bot:vision-fence",
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      providerId: primary.providerId,
+      modelId: primary.modelId,
+      visionModel: {
+        providerId: companion.providerId,
+        modelId: companion.modelId,
+      },
+    },
+    modelBinding: modelBinding(0),
+    visionModelBinding: binding(companion).provider,
+  });
+  await store.createChatPolicy({
+    chatId: "chat:vision-fence",
+    botId: policy.botId,
+    expectedBotPolicyRevision: policy.revision,
+    catalog: catalog(),
+  });
+  const admitted = await store.admit({
+    audienceId: "device:a",
+    botId: policy.botId,
+    chatId: "chat:vision-fence",
+    snapshot,
+  });
+
+  const publication = staged.arm();
+  const update = store.updateBotPolicy({
+    botId: policy.botId,
+    expectedRevision: policy.revision,
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      visionModel: null,
+    },
+  });
+  await publication.entered;
+  assert.equal(admitted.lease.signal.aborted, true);
+  assert.throws(() => admitted.lease.assertCurrent(), /access changed/u);
+  publication.release();
+  await update;
 });
 
 test("Custom bindings survive restart, stay out of public views, and gate drift before leasing", async (t) => {

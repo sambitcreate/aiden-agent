@@ -17,6 +17,7 @@ import {
 import {
   assertBoundBotCustomSelectionOpaqueIds,
   assertBoundBotCustomSelectionCurrent,
+  bindBotProviderModel,
   bindBotCustomSelection,
   createBotCapabilityOpaqueIdMint,
   reconcileBoundBotCustomSelection,
@@ -274,6 +275,32 @@ export class BotCapabilityCatalogMainService {
       selection: input.selection,
       catalogRevision: input.catalogRevision,
       snapshot,
+    });
+  }
+
+  async bindProviderModel(input: {
+    audienceId: string;
+    providerId: string;
+    modelId: string;
+    catalogRevision: string;
+    requireImages?: boolean;
+    retainedBindings?: readonly BoundBotCustomSelection[];
+    signal?: AbortSignal;
+    botId?: string;
+    snapshot?: BotCapabilityCatalogSnapshot;
+  }) {
+    const snapshot = input.snapshot ?? (await this.snapshot({
+      audienceId: input.audienceId,
+      retainedBindings: input.retainedBindings,
+      signal: input.signal,
+      botId: input.botId,
+    }));
+    return bindBotProviderModel({
+      providerId: input.providerId,
+      modelId: input.modelId,
+      catalogRevision: input.catalogRevision,
+      snapshot,
+      requireImages: input.requireImages,
     });
   }
 

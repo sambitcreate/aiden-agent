@@ -454,6 +454,7 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     let health: AidenBotHealth
     let access: AidenBotAccessView
     let modelSelection: AidenBotModelSelection?
+    let visionModelSelection: AidenBotModelSelection?
     let createdAt: Date
     let updatedAt: Date
     let revision: String
@@ -491,6 +492,11 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
             AidenBotModelSelection.self,
             from: values,
             forKey: .modelSelection
+        )
+        visionModelSelection = try AidenBotWire.optional(
+            AidenBotModelSelection.self,
+            from: values,
+            forKey: .visionModelSelection
         )
         let createdTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
         createdAt = createdTimestamp.date
@@ -964,12 +970,14 @@ struct AidenBotModelOption: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let label: String
     let available: Bool
+    let supportsImages: Bool
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try AidenBotWire.requiredString(values, forKey: .id, maxLength: 512)
         label = try AidenBotWire.requiredString(values, forKey: .label, maxLength: 160)
         available = try values.decode(Bool.self, forKey: .available)
+        supportsImages = try values.decode(Bool.self, forKey: .supportsImages)
     }
 }
 
@@ -1041,6 +1049,11 @@ struct AidenBotCapabilityCatalog: Codable, Equatable, Sendable {
             && Set(selection.connectionIds).isSubset(of: Set(connections.map(\.id)))
             && Set(selection.skillIds).isSubset(of: Set(skills.map(\.id)))
             && Set(selection.otherCapabilityIds).isSubset(of: Set(otherCapabilities.map(\.id)))
+    }
+
+    func model(providerId: String, modelId: String) -> AidenBotModelOption? {
+        providers.first(where: { $0.id == providerId })?
+            .models.first(where: { $0.id == modelId })
     }
 
     func containsAvailable(_ selection: AidenBotCustomSelection) -> Bool {
@@ -1218,12 +1231,20 @@ struct AidenBotAccessView: Codable, Equatable, Sendable {
 }
 
 enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
-    case full(catalogRevision: String, selection: AidenBotModelSelection? = nil)
-    case custom(catalogRevision: String, selection: AidenBotCustomSelection)
+    case full(
+        catalogRevision: String,
+        selection: AidenBotModelSelection? = nil,
+        visionSelection: AidenBotModelSelection? = nil
+    )
+    case custom(
+        catalogRevision: String,
+        selection: AidenBotCustomSelection,
+        visionSelection: AidenBotModelSelection? = nil
+    )
 
     var catalogRevision: String {
         switch self {
-        case let .full(catalogRevision, _), let .custom(catalogRevision, _):
+        case let .full(catalogRevision, _, _), let .custom(catalogRevision, _, _):
             return catalogRevision
         }
     }
@@ -1232,8 +1253,14 @@ enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
         switch self {
         case .full:
             return nil
-        case let .custom(_, selection):
+        case let .custom(_, selection, _):
             return selection
+        }
+    }
+
+    var visionSelection: AidenBotModelSelection? {
+        switch self {
+        case let .full(_, _, selection), let .custom(_, _, selection): selection
         }
     }
 
@@ -1261,7 +1288,11 @@ enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
                 catalogRevision: catalogRevision,
                 selection: providerId.flatMap { provider in
                     modelId.map { AidenBotModelSelection(providerId: provider, modelId: $0) }
-                }
+                },
+                visionSelection: try values.decodeIfPresent(
+                    AidenBotModelSelection.self,
+                    forKey: .visionModel
+                )
             )
         case .custom:
             guard !values.contains(.confirmedForeground),
@@ -1273,6 +1304,10 @@ enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
                 catalogRevision: catalogRevision,
                 selection: try AidenBotCustomSelection.decodeRequest(
                     from: values.superDecoder(forKey: .custom)
+                ),
+                visionSelection: try values.decodeIfPresent(
+                    AidenBotModelSelection.self,
+                    forKey: .visionModel
                 )
             )
         }
@@ -1281,21 +1316,23 @@ enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .full(catalogRevision, selection):
+        case let .full(catalogRevision, selection, visionSelection):
             try values.encode(AidenBotAccessMode.full, forKey: .accessMode)
             try values.encode(catalogRevision, forKey: .catalogRevision)
             try values.encode(true, forKey: .confirmedForeground)
             try values.encodeIfPresent(selection?.providerId, forKey: .providerId)
             try values.encodeIfPresent(selection?.modelId, forKey: .modelId)
-        case let .custom(catalogRevision, selection):
+            try values.encode(visionSelection, forKey: .visionModel)
+        case let .custom(catalogRevision, selection, visionSelection):
             try values.encode(AidenBotAccessMode.custom, forKey: .accessMode)
             try values.encode(catalogRevision, forKey: .catalogRevision)
             try values.encode(selection, forKey: .custom)
+            try values.encode(visionSelection, forKey: .visionModel)
         }
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case accessMode, catalogRevision, confirmedForeground, custom, providerId, modelId
+        case accessMode, catalogRevision, confirmedForeground, custom, providerId, modelId, visionModel
     }
 }
 
@@ -1636,7 +1673,7 @@ struct AidenBotCreateContractFixture: Codable, Equatable, Sendable {
             guard response.access.accessMode == .full else {
                 throw AidenBotContractError.invalidCombination("bot create access fixture")
             }
-        case let .custom(_, selection):
+        case let .custom(_, selection, _):
             guard response.access.accessMode == .custom,
                   response.access.custom == selection else {
                 throw AidenBotContractError.invalidCombination("bot create access fixture")
@@ -1700,7 +1737,7 @@ struct AidenBotPolicyUpdateContractFixture: Codable, Equatable, Sendable {
             guard response.accessMode == .full else {
                 throw AidenBotContractError.invalidCombination("bot policy fixture")
             }
-        case let .custom(_, selection):
+        case let .custom(_, selection, _):
             guard response.accessMode == .custom, response.custom == selection else {
                 throw AidenBotContractError.invalidCombination("bot policy fixture")
             }

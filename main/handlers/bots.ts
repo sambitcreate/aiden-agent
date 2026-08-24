@@ -194,11 +194,12 @@ export function registerBotHandlers(): void {
   );
   ipcMain.handle("bots:getBotAccess", async (_event, id: unknown) => {
     const botId = parseBotId(id);
-    const [access, modelSelection] = await Promise.all([
+    const [access, modelSelection, visionModelSelection] = await Promise.all([
       botApplicationService.getBotAccess(botId),
       botApplicationService.modelSelection(desktopAudienceId, botId),
+      botApplicationService.visionModelSelection(desktopAudienceId, botId),
     ]);
-    return { access, modelSelection };
+    return { access, modelSelection, visionModelSelection };
   });
   ipcMain.handle("bots:updateBotAccess", async (_event, input: unknown) => {
     const parsed = parseBotAccessUpdateInput(input);

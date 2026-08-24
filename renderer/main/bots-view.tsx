@@ -110,6 +110,19 @@ function firstAvailableModel(catalog: BotCapabilityCatalog) {
   return provider && model ? { providerId: provider.id, modelId: model.id } : undefined;
 }
 
+function firstAvailableVisionModel(catalog: BotCapabilityCatalog, preferredProviderId?: string) {
+  const providers = [
+    ...catalog.providers.filter((provider) => provider.id === preferredProviderId),
+    ...catalog.providers.filter((provider) => provider.id !== preferredProviderId),
+  ];
+  const provider = providers.find(
+    (candidate) => candidate.available
+      && candidate.models.some((model) => model.available && model.supportsImages),
+  );
+  const model = provider?.models.find((candidate) => candidate.available && candidate.supportsImages);
+  return provider && model ? { providerId: provider.id, modelId: model.id } : undefined;
+}
+
 function accessDraftFromState(
   state: BotAccessState | null | undefined,
   catalog: BotCapabilityCatalog,
@@ -121,10 +134,24 @@ function accessDraftFromState(
       && provider.models.some((model) => model.id === state.modelSelection!.modelId))
       ? state.modelSelection
       : undefined;
+  const selectedModel = catalog.providers.find(({ id }) => id === (selected?.providerId ?? fallback?.providerId))
+    ?.models.find(({ id }) => id === (selected?.modelId ?? fallback?.modelId));
+  const visionFallback = selectedModel?.supportsImages
+    ? undefined
+    : firstAvailableVisionModel(catalog, selected?.providerId ?? fallback?.providerId);
+  const visionSelected = state?.visionModelSelection
+    && catalog.providers.some((provider) =>
+      provider.id === state.visionModelSelection!.providerId
+      && provider.models.some((model) =>
+        model.id === state.visionModelSelection!.modelId && model.supportsImages))
+      ? state.visionModelSelection
+      : visionFallback;
   return {
     usesFullAccess: state ? state.access.accessMode === "full" : botFullAccessAccepted(catalog),
     providerId: selected?.providerId ?? fallback?.providerId,
     modelId: selected?.modelId ?? fallback?.modelId,
+    visionProviderId: visionSelected?.providerId,
+    visionModelId: visionSelected?.modelId,
     fileScopeIds: state?.access.custom ? [...state.access.custom.fileScopeIds] : [],
     shellEnabled: state?.access.custom?.shellEnabled ?? false,
     connectionIds: state?.access.custom ? [...state.access.custom.connectionIds] : [],
@@ -142,6 +169,20 @@ function buildBotAccessUpdate(
   if (!provider?.available || !model?.available) {
     throw new Error("Choose an available provider and model for this bot.");
   }
+  const visionProvider = catalog.providers.find(
+    (candidate) => candidate.id === draft.visionProviderId,
+  );
+  const visionModel = visionProvider?.models.find(
+    (candidate) => candidate.id === draft.visionModelId,
+  );
+  if (!model.supportsImages && (
+    !visionProvider?.available || !visionModel?.available || !visionModel.supportsImages
+  )) {
+    throw new Error("Choose an available vision model for photos and screenshots.");
+  }
+  const visionSelection = model.supportsImages
+    ? null
+    : { providerId: visionProvider!.id, modelId: visionModel!.id };
   if (draft.usesFullAccess) {
     if (!botFullAccessAccepted(catalog)) {
       throw new Error("Review the Full Access notice before saving.");
@@ -152,6 +193,7 @@ function buildBotAccessUpdate(
       confirmedForeground: true,
       providerId: provider.id,
       modelId: model.id,
+      visionModel: visionSelection,
     };
   }
   const assertAvailable = (options: BotCapabilityOption[], selected: string[], label: string) => {
@@ -180,6 +222,7 @@ function buildBotAccessUpdate(
       skillIds: [...draft.skillIds],
       otherCapabilityIds: [...draft.otherCapabilityIds],
     },
+    visionModel: visionSelection,
   };
 }
 
@@ -195,7 +238,9 @@ function botAccessDiffers(
   if (update.accessMode !== state.access.accessMode) return true;
   if (update.accessMode === "full") {
     return state.modelSelection?.providerId !== update.providerId
-      || state.modelSelection?.modelId !== update.modelId;
+      || state.modelSelection?.modelId !== update.modelId
+      || state.visionModelSelection?.providerId !== update.visionModel?.providerId
+      || state.visionModelSelection?.modelId !== update.visionModel?.modelId;
   }
   if (state.access.accessMode === "full") return true;
   const current = state.access.custom;
@@ -206,7 +251,9 @@ function botAccessDiffers(
     || !sameIdSet(current.fileScopeIds, next.fileScopeIds)
     || !sameIdSet(current.connectionIds, next.connectionIds)
     || !sameIdSet(current.skillIds, next.skillIds)
-    || !sameIdSet(current.otherCapabilityIds, next.otherCapabilityIds);
+    || !sameIdSet(current.otherCapabilityIds, next.otherCapabilityIds)
+    || state.visionModelSelection?.providerId !== update.visionModel?.providerId
+    || state.visionModelSelection?.modelId !== update.visionModel?.modelId;
 }
 
 function botModelLabel(
@@ -371,6 +418,15 @@ function BotEditor({
   const selectedModel = selectedProvider?.models.find(
     (model) => model.id === accessDraft?.modelId,
   );
+  const selectedVisionProvider = catalog?.providers.find(
+    (provider) => provider.id === accessDraft?.visionProviderId,
+  );
+  const selectedVisionModel = selectedVisionProvider?.models.find(
+    (model) => model.id === accessDraft?.visionModelId,
+  );
+  const availableVisionProviders = catalog?.providers.filter((provider) =>
+    provider.available
+    && provider.models.some((model) => model.available && model.supportsImages)) ?? [];
   const toggleId = (
     key: "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds",
     id: string,
@@ -389,7 +445,14 @@ function BotEditor({
   const accessModeReady = Boolean(
     !accessUnavailable && catalog && accessDraft && !(accessDraft.usesFullAccess && !fullAccepted),
   );
-  const modelReady = Boolean(selectedProvider?.available && selectedModel?.available);
+  const modelReady = Boolean(
+    selectedProvider?.available && selectedModel?.available
+      && (selectedModel.supportsImages || (
+        selectedVisionProvider?.available
+        && selectedVisionModel?.available
+        && selectedVisionModel.supportsImages
+      )),
+  );
   const settingsReady = (() => {
     if (!catalog || !accessDraft || !accessModeReady || !modelReady) return false;
     try {
@@ -635,7 +698,18 @@ function BotEditor({
                     const model = provider?.models.find((candidate) => candidate.available);
                     setAccessDraft((current) =>
                       current
-                        ? { ...current, providerId, modelId: model?.id }
+                        ? (() => {
+                            const vision = model?.supportsImages
+                              ? undefined
+                              : firstAvailableVisionModel(catalog, providerId);
+                            return {
+                              ...current,
+                              providerId,
+                              modelId: model?.id,
+                              visionProviderId: vision?.providerId,
+                              visionModelId: vision?.modelId,
+                            };
+                          })()
                         : current);
                   }}
                 >
@@ -654,10 +728,26 @@ function BotEditor({
                 <Select
                   value={accessDraft.modelId ?? ""}
                   disabled={saving}
-                  onValueChange={(modelId) =>
-                    setAccessDraft((current) =>
-                      current ? { ...current, modelId } : current)
-                  }
+                  onValueChange={(modelId) => {
+                    const model = selectedProvider?.models.find((candidate) => candidate.id === modelId);
+                    setAccessDraft((current) => {
+                      if (!current) return current;
+                      const vision = model?.supportsImages
+                        ? undefined
+                        : (current.visionProviderId && current.visionModelId
+                            ? {
+                                providerId: current.visionProviderId,
+                                modelId: current.visionModelId,
+                              }
+                            : firstAvailableVisionModel(catalog, selectedProvider?.id));
+                      return {
+                        ...current,
+                        modelId,
+                        visionProviderId: vision?.providerId,
+                        visionModelId: vision?.modelId,
+                      };
+                    });
+                  }}
                 >
                   <SelectTrigger aria-label="AI model for this bot">
                     <SelectValue placeholder="Model" />
@@ -665,12 +755,87 @@ function BotEditor({
                   <SelectContent>
                     {(selectedProvider?.models ?? []).map((model) => (
                       <SelectItem key={model.id} value={model.id} disabled={!model.available}>
-                        {model.label}
+                        {model.label} · {model.supportsImages ? "Vision" : "Text only"}
                         {model.available ? "" : " (unavailable)"}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {selectedModel?.supportsImages === false ? (
+                  <Callout title="Image understanding">
+                    <div className="grid gap-3">
+                      <Text as="p" variant="small" color="secondary">
+                        {selectedModel.label} reads text only. Attached photos and screenshots will
+                        be sent to the vision model you choose below; replies still come from the
+                        primary model.
+                      </Text>
+                      {availableVisionProviders.length > 0 ? (
+                        <>
+                          <Select
+                            value={accessDraft.visionProviderId ?? ""}
+                            disabled={saving}
+                            onValueChange={(providerId) => {
+                              const provider = catalog.providers.find(({ id }) => id === providerId);
+                              const model = provider?.models.find(
+                                (candidate) => candidate.available && candidate.supportsImages,
+                              );
+                              setAccessDraft((current) => current ? {
+                                ...current,
+                                visionProviderId: providerId,
+                                visionModelId: model?.id,
+                              } : current);
+                            }}
+                          >
+                            <SelectTrigger aria-label="Image understanding provider for this bot">
+                              <SelectValue placeholder="Image provider" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {availableVisionProviders.map((provider) => (
+                                <SelectItem key={provider.id} value={provider.id}>
+                                  {provider.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Select
+                            value={accessDraft.visionModelId ?? ""}
+                            disabled={saving}
+                            onValueChange={(visionModelId) =>
+                              setAccessDraft((current) => current
+                                ? { ...current, visionModelId }
+                                : current)}
+                          >
+                            <SelectTrigger aria-label="Image understanding model for this bot">
+                              <SelectValue placeholder="Image model" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(selectedVisionProvider?.models ?? []).filter(
+                                (model) => model.available && model.supportsImages,
+                              ).map((model) => (
+                                <SelectItem key={model.id} value={model.id}>{model.label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </>
+                      ) : (
+                        <Text as="p" variant="small" color="secondary">
+                          No image-capable model is connected. Add one in Settings → Providers,
+                          then refresh this Bot.
+                        </Text>
+                      )}
+                      <Text as="p" variant="small" color="tertiary">
+                        The attached image and a focused question go to this provider. Credentials
+                        stay on your Mac.
+                      </Text>
+                    </div>
+                  </Callout>
+                ) : selectedModel?.supportsImages ? (
+                  <Callout title="Native image understanding">
+                    <Text as="p" variant="small" color="secondary">
+                      {selectedModel.label} handles attached images directly.
+                    </Text>
+                  </Callout>
+                ) : null}
               </div>
             </Field>
             ) : null}
@@ -803,6 +968,14 @@ function BotEditor({
               {selectedProvider && selectedModel
                 ? summaryRow("Model", `${selectedProvider.label} · ${selectedModel.label}`)
                 : null}
+              {selectedModel?.supportsImages
+                ? summaryRow("Images", `Handled by ${selectedModel.label}`)
+                : selectedVisionProvider && selectedVisionModel
+                  ? summaryRow(
+                      "Images",
+                      `${selectedVisionProvider.label} · ${selectedVisionModel.label}`,
+                    )
+                  : null}
               {accessDraft.usesFullAccess
                 ? summaryRow("Capabilities", "Everything Aiden and this Mac allow")
                 : summaryRow(

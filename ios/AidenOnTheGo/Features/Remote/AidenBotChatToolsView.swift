@@ -191,10 +191,12 @@ final class AidenBotChatToolsModel {
     private var loadIdentity: AidenBotChatAccessLoadIdentity?
     private var savedDraft: AidenBotChatAccessDraft?
     private var loadToken: UUID?
+    private let cache: AidenBotCache
 
-    init(chatID: String, botID: String) {
+    init(chatID: String, botID: String, cache: AidenBotCache = .shared) {
         self.chatID = chatID
         self.botID = botID
+        self.cache = cache
     }
 
     func summary(connected: Bool) -> String {
@@ -286,6 +288,16 @@ final class AidenBotChatToolsModel {
         defer {
             if loadToken == token { isLoading = false }
         }
+        if let installation = coordinator.installationStore.activeInstallation,
+           let cached = await cache.load(
+               instanceId: installation.id,
+               deviceId: installation.deviceId
+           ), loadToken == token,
+           coordinator.installationStore.activeInstallation?.id == installation.id,
+           coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId {
+            bot = cached.details.first(where: { $0.id == botID })
+            catalog = cached.catalog
+        }
         do {
             let context = try coordinator.requestContext()
             capturedContext = context
@@ -310,6 +322,23 @@ final class AidenBotChatToolsModel {
                   ) else {
                 throw AidenRemoteClientError.invalidResponse
             }
+            let retained = await coordinator.withRetainedInstallationData(for: context) {
+                let existing = await cache.load(
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId
+                )
+                var details = existing?.details ?? []
+                details.removeAll { $0.id == loadedBot.id }
+                details.append(loadedBot)
+                _ = try? await cache.mergeAndStore(
+                    AidenBotCacheSegments(details: details, catalog: loadedCatalog),
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId
+                )
+            }
+            guard retained, loadToken == token, coordinator.isCurrent(context) else {
+                throw CancellationError()
+            }
             loadIdentity = identity
             bot = loadedBot
             access = loadedAccess
@@ -326,7 +355,10 @@ final class AidenBotChatToolsModel {
             }
             guard loadToken == token,
                   capturedContext.map(coordinator.isCurrent) ?? true else { return }
-            clearLoadedState()
+            loadIdentity = nil
+            access = nil
+            draft = nil
+            savedDraft = nil
             errorMessage = error.localizedDescription
         }
     }

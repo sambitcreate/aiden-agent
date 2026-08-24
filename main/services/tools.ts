@@ -139,6 +139,8 @@ export interface ToolContext {
   includeCodingTools?: boolean;
   /** Main-owned Bot assembly may withhold skills until exact grants are joined. */
   includeSkillTools?: boolean;
+  /** Host-constructed, current-generation image tool. Never accepts paths or URLs. */
+  imageInspectionTool?: AgentTool;
 }
 
 export function buildSchedulingTools(
@@ -231,6 +233,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   }
 
   const tools: AgentTool[] = [];
+  if (ctx.imageInspectionTool) tools.push(ctx.imageInspectionTool);
   if (ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
   tools.push(...buildSchedulingTools(ctx));

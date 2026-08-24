@@ -11,6 +11,8 @@ export interface BotEditorAccessDraft {
   usesFullAccess: boolean;
   providerId: string | undefined;
   modelId: string | undefined;
+  visionProviderId?: string;
+  visionModelId?: string;
   fileScopeIds: string[];
   shellEnabled: boolean;
   connectionIds: string[];
@@ -75,6 +77,16 @@ export function rebaseBotEditorAccessDraft(
       : draft.usesFullAccess,
     providerId: modelBindingChanged ? draft.providerId : authoritative.providerId,
     modelId: modelBindingChanged ? draft.modelId : authoritative.modelId,
+    visionProviderId:
+      draft.visionProviderId !== baseline.visionProviderId
+      || draft.visionModelId !== baseline.visionModelId
+        ? draft.visionProviderId
+        : authoritative.visionProviderId,
+    visionModelId:
+      draft.visionProviderId !== baseline.visionProviderId
+      || draft.visionModelId !== baseline.visionModelId
+        ? draft.visionModelId
+        : authoritative.visionModelId,
     fileScopeIds: sameIds(draft.fileScopeIds, baseline.fileScopeIds)
       ? authoritative.fileScopeIds
       : draft.fileScopeIds,

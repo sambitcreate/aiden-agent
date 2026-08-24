@@ -7,8 +7,23 @@ import Observation
 import Photos
 import PhotosUI
 import SwiftUI
-import UniformTypeIdentifiers
 import UIKit
+import UniformTypeIdentifiers
+
+enum AidenImageSendRecovery: Equatable {
+    case proceed
+    case configureBotVision
+    case chooseImageCapableModel
+}
+
+func aidenImageSendRecovery(
+    isBotChat: Bool,
+    acceptsImages: Bool,
+    hasPendingImage: Bool
+) -> AidenImageSendRecovery {
+    guard hasPendingImage, !acceptsImages else { return .proceed }
+    return isBotChat ? .configureBotVision : .chooseImageCapableModel
+}
 
 enum AidenAttachmentPreparationError: LocalizedError, Equatable {
     case invalidImage
@@ -942,7 +957,15 @@ final class AidenChatViewModel {
     var visibleProviders: [AidenProvider] { catalog?.visibleProviders ?? [] }
     var usesPersistedBotModelAuthority: Bool { chat.isBotChat }
     var showsComposerModelControl: Bool { !chat.isBotChat }
-    var acceptsImageAttachments: Bool { selectedModel?.acceptsImageInput ?? true }
+    private(set) var botPrimarySupportsImages: Bool?
+    private(set) var botVisionModelSelection: AidenBotModelSelection?
+    var needsBotVisionSetup = false
+    var acceptsImageAttachments: Bool {
+        if chat.isBotChat {
+            return botPrimarySupportsImages == true || botVisionModelSelection != nil
+        }
+        return selectedModel?.acceptsImageInput ?? true
+    }
     var selectedModelDisplayLabel: String { selectedModel?.label ?? selectedModelId ?? "Model unavailable" }
 
     func transcribeMacSpeech(_ pcm16: Data) async throws -> String {
@@ -1048,14 +1071,37 @@ final class AidenChatViewModel {
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
     }
 
+    func setBotVisionModelSelection(_ selection: AidenBotModelSelection?) {
+        botVisionModelSelection = selection
+        if selection != nil { needsBotVisionSetup = false }
+    }
+
+    func setBotPrimarySupportsImages(_ supportsImages: Bool?) {
+        botPrimarySupportsImages = supportsImages
+        if supportsImages == true { needsBotVisionSetup = false }
+    }
+
+    func requestBotVisionSetup() {
+        guard chat.isBotChat, !acceptsImageAttachments else { return }
+        needsBotVisionSetup = true
+    }
+
     func send() async {
         guard !isReadOnlyPresentation else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
-        guard acceptsImageAttachments || !pendingAttachments.contains(where: { $0.kind == .image }) else {
-            presentedError = chat.isBotChat
-                ? String(localized: "This Bot’s saved model can’t read images. Choose an image-capable model in Edit Bot, then try again.")
-                : String(localized: "The selected model can’t read images. Choose an image-capable model, then try again.")
+        switch aidenImageSendRecovery(
+            isBotChat: chat.isBotChat,
+            acceptsImages: acceptsImageAttachments,
+            hasPendingImage: pendingAttachments.contains(where: { $0.kind == .image })
+        ) {
+        case .proceed:
+            break
+        case .configureBotVision:
+                needsBotVisionSetup = true
+            return
+        case .chooseImageCapableModel:
+            presentedError = String(localized: "The selected model can’t read images. Choose an image-capable model, then try again.")
             return
         }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
@@ -1984,6 +2030,16 @@ struct AidenChatDetailView: View {
         coordinator.map(AidenBotChatToolsSessionIdentity.init)
     }
 
+    private var botPrimarySupportsImages: Bool? {
+        guard let bot = botToolsModel?.bot,
+              let selection = bot.modelSelection,
+              let catalog = botToolsModel?.catalog else { return nil }
+        return catalog.model(
+            providerId: selection.providerId,
+            modelId: selection.modelId
+        )?.supportsImages
+    }
+
     private var effectiveAllowsMutations: Bool {
         guard let botToolsModel else { return allowsMutations }
         return allowsMutations && botToolsModel.bot?.health == .ready
@@ -2003,6 +2059,12 @@ struct AidenChatDetailView: View {
         .onChange(of: effectiveAllowsMutations, initial: true) { _, allowed in
             model.setAllowsMutations(allowed)
         }
+        .onChange(of: botToolsModel?.bot?.visionModelSelection, initial: true) { _, selection in
+            model.setBotVisionModelSelection(selection)
+        }
+        .onChange(of: botPrimarySupportsImages, initial: true) { _, supportsImages in
+            model.setBotPrimarySupportsImages(supportsImages)
+        }
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
@@ -2021,6 +2083,14 @@ struct AidenChatDetailView: View {
             Button("OK", role: .cancel) { model.presentedError = nil }
         } message: {
             Text(model.presentedError ?? "The operation could not be completed.")
+        }
+        .alert("Set Up Image Understanding", isPresented: $model.needsBotVisionSetup) {
+            if let botID = model.chat.botId {
+                Button("Edit Bot") { botSheet = .edit(botID) }
+            }
+            Button("Not Now", role: .cancel) { }
+        } message: {
+            Text("This Bot’s primary model reads text only. Choose a vision model for photos and screenshots; attached images and a focused question will go to that model, while replies keep using the current primary model.")
         }
     }
 
@@ -4268,9 +4338,13 @@ private struct AidenComposerView: View {
             UIAction(
                 title: String(localized: "Photo Library"),
                 image: UIImage(systemName: "photo.on.rectangle"),
-                attributes: model.acceptsImageAttachments ? [] : [.disabled]
+                attributes: (!model.chat.isBotChat && !model.acceptsImageAttachments) ? [.disabled] : []
             ) { _ in
                 Task { @MainActor in
+                    if model.chat.isBotChat && !model.acceptsImageAttachments {
+                        model.requestBotVisionSetup()
+                        return
+                    }
                     composerFocus.wrappedValue = false
                     isPhotoPickerPresented = true
                 }

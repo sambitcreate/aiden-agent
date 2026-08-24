@@ -879,6 +879,7 @@ test("remote Bot turn preflights protected runtime authority before reserving or
 
 test("remote turns reject images for text-only models without consuming the attachment", async () => {
   let supportsImages = false;
+  let supportsCompanionImages = false;
   const attachments = new AidenRemoteAttachmentStore({
     now: () => 10_000,
     randomId: () => `att_${"V".repeat(43)}`,
@@ -887,6 +888,7 @@ test("remote turns reject images for text-only models without consuming the atta
     attachments,
     retainedBotChatAuthorizer: () => true,
     modelSupportsImages: () => supportsImages,
+    botTurnAuthorityPreflight: async () => ({ supportsCompanionImages }),
   });
   const image = await app.service.uploadAttachment("device-1", "chat-1", {
     name: "visible.png",
@@ -909,7 +911,7 @@ test("remote turns reject images for text-only models without consuming the atta
   assert.equal(app.begins(), 0);
   assert.equal(app.starts(), 0);
 
-  supportsImages = true;
+  supportsCompanionImages = true;
   const accepted = await app.service.startTurn(
     "device-1",
     "chat-1",
@@ -918,6 +920,7 @@ test("remote turns reject images for text-only models without consuming the atta
   );
   assert.equal(accepted.status, "accepted");
   assert.equal(app.appends(), 1);
+  assert.equal(supportsImages, false, "the companion route must not pretend the primary is multimodal");
 });
 
 test("a provider setup failure after append returns the one accepted message with a terminal error stream", async () => {
