@@ -371,6 +371,44 @@ final class AidenProductShellTests: XCTestCase {
         )
     }
 
+    func testBotFastPathAdmitsOnlyTheExactCachedBotConversation() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let bot = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-bot","workspaceId":"managed-home","botId":"bot-1","title":"Bot","messages":[],"createdAt":"2026-08-23T12:00:00Z","updatedAt":"2026-08-23T12:00:01Z","revision":"rev-2"}"#.utf8
+            )
+        )
+        let workspace = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-workspace","workspaceId":"workspace-1","title":"Workspace","messages":[],"createdAt":"2026-08-23T12:00:00Z","updatedAt":"2026-08-23T12:00:01Z","revision":"rev-1"}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(
+            aidenAdmittedCachedBotChat(bot, chatID: "chat-bot", botID: "bot-1"),
+            bot
+        )
+        XCTAssertEqual(
+            aidenAdmittedCachedBotChat(bot, chatID: "chat-bot"),
+            bot
+        )
+        XCTAssertNil(
+            aidenAdmittedCachedBotChat(bot, chatID: "another-chat", botID: "bot-1")
+        )
+        XCTAssertNil(
+            aidenAdmittedCachedBotChat(bot, chatID: "chat-bot", botID: "bot-2")
+        )
+        XCTAssertNil(
+            aidenAdmittedCachedBotChat(workspace, chatID: "chat-workspace")
+        )
+        XCTAssertNil(
+            aidenAdmittedCachedBotChat(nil, chatID: "chat-bot", botID: "bot-1")
+        )
+    }
+
     func testBotsAvailabilityHonorsRolloutAndNegotiatedAccess() throws {
         let unsupported = try installation(device: [.serverRead], server: [.serverRead])
         let notGranted = try installation(
