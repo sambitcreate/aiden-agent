@@ -18,8 +18,8 @@ import {
   ChartScatter,
   Info,
   Clock3,
-  Sparkles,
 } from "lucide-react";
+import { AidenIcon } from "../components/aiden-icon";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
 import { SkillsSettings } from "../components/settings/skills-settings";
@@ -51,7 +51,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   mcp: <Plug className="size-5" />,
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
-  assistant: <Sparkles className="size-5" />,
+  assistant: <AidenIcon className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
