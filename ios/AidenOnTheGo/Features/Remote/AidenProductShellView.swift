@@ -155,6 +155,21 @@ func aidenBotChatAllowsMutations(
     return chatAccessMode == .custom || botAccessMode == .custom
 }
 
+/// Only an exact, Mac-authored Bot chat may cross the fast local-cache path.
+/// The optional Bot identity is supplied by inbox navigation; restored paths
+/// still require the cached chat to carry an authoritative Bot identity.
+func aidenAdmittedCachedBotChat(
+    _ chat: AidenChat?,
+    chatID: String,
+    botID: String? = nil
+) -> AidenChat? {
+    guard let chat,
+          chat.id == chatID,
+          chat.isBotChat,
+          botID == nil || chat.botId == botID else { return nil }
+    return chat
+}
+
 @Observable
 final class AidenProductNavigationStore {
     static let shared = AidenProductNavigationStore()
@@ -603,6 +618,8 @@ private struct AidenBotShellView: View {
                             )
                         }
                     )
+                } else if isBotSurfaceActive {
+                    AidenBotChatSkeletonView()
                 } else {
                     ContentUnavailableView(
                         "Conversation Unavailable",
@@ -674,41 +691,88 @@ private struct AidenBotShellView: View {
             area: area,
             availability: botsAvailability
         ) else { return }
-        guard coordinator.connectionState == .connected else {
-            coordinator.presentedError = "Reconnect to your Mac to open this Bot chat."
-            return
-        }
         var capturedContext: AidenRemoteRequestContext?
         do {
             let context = try coordinator.requestContext()
             capturedContext = context
+            let scope = PresentationScope(instanceID: context.instanceId, deviceID: context.deviceId)
+            guard presentationScope == scope else { return }
+
+            // Navigation is intentionally first. A warm cache will replace the
+            // layout-shaped skeleton on the next actor hop; a cold request can
+            // keep showing the same stable chat chrome until the Mac replies.
+            path = [item.chatId]
+
+            let cached = aidenAdmittedCachedBotChat(
+                await AidenChatCache.shared.loadChat(
+                    instanceId: context.instanceId,
+                    chatId: item.chatId
+                ),
+                chatID: item.chatId,
+                botID: item.botId
+            )
+            guard coordinator.isCurrent(context), presentationScope == scope,
+                  path.last == item.chatId else { return }
+            if let cached {
+                chatsByScope[scope, default: [:]][cached.id] = ChatPresentation(
+                    chat: cached,
+                    allowsMutations: false
+                )
+            }
+
+            guard coordinator.connectionState == .connected else {
+                if cached == nil {
+                    path = []
+                    coordinator.presentedError = "Reconnect to your Mac to open this Bot chat."
+                }
+                return
+            }
+
             let client = try coordinator.remoteClient(for: context)
-            let chat = try await client.chat(id: item.chatId)
+            let chat = if let cached {
+                cached
+            } else {
+                try await client.chat(id: item.chatId)
+            }
             guard coordinator.isCurrent(context), chat.id == item.chatId,
-                  chat.botId == item.botId else { return }
+                  chat.botId == item.botId, presentationScope == scope,
+                  path.last == item.chatId else { return }
+            if cached == nil {
+                let retained = await coordinator.withRetainedInstallationData(for: context) {
+                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
+                }
+                guard retained, coordinator.isCurrent(context), presentationScope == scope,
+                      path.last == item.chatId else { return }
+                chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
+                    chat: chat,
+                    allowsMutations: false
+                )
+            }
             let allowsMutations = try await allowsMutations(
                 for: chat,
                 client: client,
                 context: context
             )
-            guard coordinator.isCurrent(context) else { return }
-            let retained = await coordinator.withRetainedInstallationData(for: context) {
-                try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
-            }
-            guard retained, coordinator.isCurrent(context) else { return }
-            let scope = PresentationScope(instanceID: context.instanceId, deviceID: context.deviceId)
+            guard coordinator.isCurrent(context), presentationScope == scope,
+                  path.last == item.chatId else { return }
             chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
                 chat: chat,
                 allowsMutations: allowsMutations
             )
-            path = [chat.id]
         } catch is CancellationError {
             return
         } catch {
             if let context = capturedContext,
                await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard capturedContext.map({ coordinator.isCurrent($0) }) ?? false else { return }
-            coordinator.presentedError = error.localizedDescription
+            guard let context = capturedContext,
+                  coordinator.isCurrent(context) else { return }
+            let scope = PresentationScope(instanceID: context.instanceId, deviceID: context.deviceId)
+            if chatsByScope[scope]?[item.chatId] != nil {
+                coordinator.presentedError = "Couldn’t refresh this Bot chat. Showing the saved conversation."
+            } else {
+                if path.last == item.chatId { path = [] }
+                coordinator.presentedError = error.localizedDescription
+            }
         }
     }
 
@@ -822,8 +886,7 @@ private struct AidenBotShellView: View {
             retainedCreateAttempt = nil
             return
         }
-        guard coordinator.connectionState == .connected,
-              let chatID = path.last,
+        guard let chatID = path.last,
               let scope = presentationScope,
               chatsByScope[scope]?[chatID] == nil else { return }
         var capturedContext: AidenRemoteRequestContext?
@@ -831,14 +894,51 @@ private struct AidenBotShellView: View {
             let context = try coordinator.requestContext()
             capturedContext = context
             guard context.instanceId == scope.instanceID, context.deviceId == scope.deviceID else { return }
+
+            let cached = aidenAdmittedCachedBotChat(
+                await AidenChatCache.shared.loadChat(
+                    instanceId: context.instanceId,
+                    chatId: chatID
+                ),
+                chatID: chatID
+            )
+            guard coordinator.isCurrent(context), presentationScope == scope,
+                  path.last == chatID else { return }
+            if let cached {
+                chatsByScope[scope, default: [:]][cached.id] = ChatPresentation(
+                    chat: cached,
+                    allowsMutations: false
+                )
+            }
+            guard coordinator.connectionState == .connected else {
+                if cached == nil { path = [] }
+                return
+            }
+
             let client = try coordinator.remoteClient(for: context)
-            let chat = try await client.chat(id: chatID)
+            let chat = if let cached {
+                cached
+            } else {
+                try await client.chat(id: chatID)
+            }
             guard coordinator.isCurrent(context), chat.isBotChat else {
                 path = []
                 return
             }
+            if cached == nil {
+                let retained = await coordinator.withRetainedInstallationData(for: context) {
+                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
+                }
+                guard retained, coordinator.isCurrent(context), presentationScope == scope,
+                      path.last == chatID else { return }
+                chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
+                    chat: chat,
+                    allowsMutations: false
+                )
+            }
             let allowed = try await allowsMutations(for: chat, client: client, context: context)
-            guard coordinator.isCurrent(context), presentationScope == scope else { return }
+            guard coordinator.isCurrent(context), presentationScope == scope,
+                  path.last == chatID else { return }
             chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
                 chat: chat,
                 allowsMutations: allowed
@@ -850,9 +950,99 @@ private struct AidenBotShellView: View {
                await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard presentationScope == scope,
                   capturedContext.map({ coordinator.isCurrent($0) }) ?? false else { return }
-            path = []
-            coordinator.presentedError = "The saved Bot chat is no longer available."
+            if chatsByScope[scope]?[chatID] != nil {
+                coordinator.presentedError = "Couldn’t refresh this Bot chat. Showing the saved conversation."
+            } else {
+                path = []
+                coordinator.presentedError = "The saved Bot chat is no longer available."
+            }
         }
+    }
+}
+
+/// Matches the stable Bot chat chrome closely enough that a cache miss does
+/// not cause a blank screen or layout jump while the Mac returns the chat.
+private struct AidenBotChatSkeletonView: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(spacing: 5) {
+                    AidenBotSkeletonBlock(
+                        width: 60,
+                        height: 60,
+                        radius: 30,
+                        reduceMotion: reduceMotion
+                    )
+                    AidenBotSkeletonBlock(
+                        width: 118,
+                        height: 30,
+                        radius: 15,
+                        reduceMotion: reduceMotion
+                    )
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 16)
+
+                AidenBotSkeletonBlock(
+                    width: 206,
+                    height: 48,
+                    radius: 20,
+                    reduceMotion: reduceMotion
+                )
+                AidenBotSkeletonBlock(
+                    width: 252,
+                    height: 70,
+                    radius: 20,
+                    reduceMotion: reduceMotion
+                )
+                HStack {
+                    Spacer(minLength: 72)
+                    AidenBotSkeletonBlock(
+                        width: 164,
+                        height: 48,
+                        radius: 20,
+                        reduceMotion: reduceMotion
+                    )
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 104)
+
+            HStack(spacing: 10) {
+                AidenBotSkeletonBlock(
+                    width: 46,
+                    height: 46,
+                    radius: 23,
+                    reduceMotion: reduceMotion
+                )
+                AidenBotSkeletonBlock(
+                    width: nil,
+                    height: 64,
+                    radius: 24,
+                    reduceMotion: reduceMotion
+                )
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+        }
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Image(systemName: AidenChromeSymbols.overflowMenu)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Bot conversation")
     }
 }
 
