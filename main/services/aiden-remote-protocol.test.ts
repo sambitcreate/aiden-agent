@@ -154,6 +154,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/pairing/manual-bootstrap",
     "/pairing/exchange",
     "/server",
+    "/device/identity",
     "/workspaces",
     "/workspaces/{workspaceId}",
     "/workspace-browser/roots",
@@ -252,6 +253,18 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     AIDEN_REMOTE_CAPABILITIES,
   );
   assert.equal((serverSchema.required as unknown[]).includes("serverCapabilities"), false);
+  assert.equal((serverSchema.required as unknown[]).includes("deviceName"), false);
+  assert.deepEqual(record(serverProperties.deviceName, "device name"), {
+    type: "string",
+    description: "Presentation-only label currently stored for the authenticated client device.",
+    minLength: 1,
+    maxLength: 80,
+  });
+  const identityPatch = record(
+    record(paths["/device/identity"], "device identity").patch,
+    "device identity patch",
+  );
+  assert.equal(identityPatch["x-aiden-capability"], "server:read");
   const chatProperties = record(record(schemas.Chat, "Chat").properties, "Chat properties");
   assert.equal(record(chatProperties.botId, "Chat botId").maxLength, 160);
   const providerSchema = record(schemas.Provider, "Provider schema");
