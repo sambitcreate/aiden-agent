@@ -15,6 +15,91 @@ final class AidenRemoteClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testClientDeviceIdentityPrefersSpecificUserAssignedName() {
+        XCTAssertEqual(
+            AidenClientDeviceIdentity.displayName(
+                userAssignedName: "  Sambit’s   iPhone ",
+                hostName: "fallback-phone.local",
+                deviceType: .iphone,
+                vendorIdentifier: nil
+            ),
+            "Sambit’s iPhone"
+        )
+    }
+
+    func testClientDeviceIdentityUsesHostnameWhenUIKitNameIsGeneric() {
+        XCTAssertEqual(
+            AidenClientDeviceIdentity.displayName(
+                userAssignedName: "iPhone",
+                hostName: "Sambits-iPhone.local.",
+                deviceType: .iphone,
+                vendorIdentifier: nil
+            ),
+            "Sambits-iPhone"
+        )
+    }
+
+    func testClientDeviceIdentityUsesStableTypedFallbackWhenNamesAreGeneric() {
+        let identifier = UUID(uuidString: "12345678-90AB-CDEF-1234-567890ABCDEF")
+        XCTAssertEqual(
+            AidenClientDeviceIdentity.displayName(
+                userAssignedName: "iPad",
+                hostName: "localhost",
+                deviceType: .ipad,
+                vendorIdentifier: identifier
+            ),
+            "iPad · 123456"
+        )
+        XCTAssertEqual(
+            AidenClientDeviceIdentity.displayName(
+                userAssignedName: "Aiden On The Go",
+                hostName: "iPhone.local",
+                deviceType: .iphone,
+                vendorIdentifier: nil
+            ),
+            "iPhone for Aiden"
+        )
+    }
+
+    func testClientDeviceIdentityRejectsInvisibleNamesAndBoundsVisibleNames() {
+        XCTAssertEqual(
+            AidenClientDeviceIdentity.displayName(
+                userAssignedName: "Unsafe\u{0000}Name",
+                hostName: String(repeating: "A", count: 100),
+                deviceType: .iphone,
+                vendorIdentifier: nil
+            ).count,
+            80
+        )
+    }
+
+    func testAuthenticatedDeviceIdentityRefreshUsesBoundedRoute() async throws {
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.absoluteString,
+                "https://aiden.test/api/aiden/v1/device/identity"
+            )
+            XCTAssertEqual(request.httpMethod, "PATCH")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(String(repeating: "C", count: 43))")
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any]
+            )
+            XCTAssertEqual(object as NSDictionary, ["name": "Sambit’s iPhone"] as NSDictionary)
+            return Self.response(
+                for: request,
+                status: 200,
+                json: #"{"name":"Sambit’s iPhone"}"#
+            )
+        }
+        let client = AidenRemoteClient(
+            endpoint: try XCTUnwrap(URL(string: "https://aiden.test/api/aiden/v1")),
+            credential: String(repeating: "C", count: 43),
+            session: session
+        )
+        try await client.updateDeviceIdentity(name: "Sambit’s iPhone")
+    }
+
     func testPairingUsesBootstrapSecretWithoutBearerAndValidatesExchange() async throws {
         let now = Date(timeIntervalSince1970: 1_787_100_000)
         let bootstrap = makeBootstrap(now: now)
@@ -329,6 +414,7 @@ final class AidenRemoteClientTests: XCTestCase {
                   "appVersion": "1.0",
                   "capabilities": ["server:read", "bot:read"],
                   "serverCapabilities": ["server:read", "bot:read", "bot:write"],
+                  "deviceName": "Sambit’s iPhone",
                   "connectionMode": "lan",
                   "serverTime": "2026-08-19T07:00:00.000Z",
                   "futurePresentation": {"safe": true}
@@ -340,6 +426,7 @@ final class AidenRemoteClientTests: XCTestCase {
         let server = try await client.server()
         XCTAssertEqual(server.capabilities, [.serverRead, .botRead])
         XCTAssertEqual(server.serverCapabilities, [.serverRead, .botRead, .botWrite])
+        XCTAssertEqual(server.deviceName, "Sambit’s iPhone")
     }
 
     func testServerRequiresValidIdentityAndDeviceGrantFields() throws {
@@ -2499,6 +2586,7 @@ final class AidenRemoteClientTests: XCTestCase {
 
         let session = makeSession()
         var workspaceListRequests = 0
+        var identityRefreshRequests = 0
         AidenRemoteMockURLProtocol.handler = { request in
             switch (request.httpMethod, request.url?.path) {
             case ("GET", "/api/aiden/v1/server"):
@@ -2508,9 +2596,18 @@ final class AidenRemoteClientTests: XCTestCase {
                     json: """
                     {"protocolVersion":1,"instanceId":"instance-1","name":"Home Mac",
                     "appVersion":"1.0.0","capabilities":["server:read","workspace:read","workspace:manage"],
+                    "deviceName":"iPhone",
                     "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
                     """
                 )
+            case ("PATCH", "/api/aiden/v1/device/identity"):
+                identityRefreshRequests += 1
+                let body = try Self.jsonBody(request)
+                let name = try XCTUnwrap(body["name"] as? String)
+                XCTAssertFalse(name.isEmpty)
+                XCTAssertNotEqual(name, "iPhone")
+                let data = try JSONSerialization.data(withJSONObject: ["name": name])
+                return Self.response(for: request, status: 200, data: data)
             case ("GET", "/api/aiden/v1/workspaces"):
                 workspaceListRequests += 1
                 return Self.response(
@@ -2553,6 +2650,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(coordinator.server?.name, "Home Mac")
         XCTAssertEqual(store.activeInstallation?.name, "Home Mac")
         XCTAssertEqual(coordinator.workspaces.map(\.name), ["Zulu", "Alpha"])
+        XCTAssertEqual(identityRefreshRequests, 1)
 
         let createdResult = await coordinator.createWorkspace(.folderless(name: "New Workspace"))
         let created = try XCTUnwrap(createdResult)
