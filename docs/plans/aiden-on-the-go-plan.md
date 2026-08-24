@@ -806,3 +806,9 @@ The inline deck now preserves the sender-side spatial anchor during interaction:
 The fitted-image mask is applied before the sender-aligned layout frame expands. Portrait and landscape images therefore keep all four continuous corners instead of allowing the frame boundary to square off the edge opposite the sender.
 
 The complete repository suite, type-check, lint, production build, generic iPhoneOS build, iOS release policy, Remote Access and attachment suites, and the full Apple Development-signed XCTest target pass. The final native run used the connected physical iPhone 13 Pro; no simulator or iPhone 16 Pro Max was used.
+
+## Client-device identity follow-up — 2026-08-24
+
+Connected iPhone and iPad clients now publish a bounded presentation identity instead of relying on UIKit's privacy-era generic `iPhone`/`iPad` value. iOS prefers a specific user-assigned device name, falls back to the cleaned local hostname, and finally uses a stable typed display suffix derived from the vendor-scoped installation identifier. The authenticated server projection returns the Mac's current label for only the calling device; a newer client refreshes it only when stale through `PATCH /device/identity`, so existing pairings heal without repeated state writes or re-pairing.
+
+This label never becomes an authentication key. Remote `deviceId` and credential identity remain Mac-pair-specific. Future iCloud sync should reconcile an account-scoped display record separately, as recorded beside the iOS identity builder, without widening or replacing Remote authentication.
