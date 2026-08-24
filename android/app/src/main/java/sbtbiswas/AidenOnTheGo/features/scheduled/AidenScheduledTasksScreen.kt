@@ -13,12 +13,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,7 +50,7 @@ fun AidenScheduledTasksScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Scheduled Tasks", fontWeight = FontWeight.Bold) },
+                title = { Text("Scheduled Tasks", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = palette.foreground)
@@ -64,20 +68,40 @@ fun AidenScheduledTasksScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(vertical = 8.dp)
+                .padding(horizontal = AidenUi.ScreenGutter),
+            contentPadding = PaddingValues(vertical = 12.dp)
         ) {
+            if (isLoading) {
+                item {
+                    Box(
+                        modifier = Modifier.fillParentMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                    }
+                }
+            } else if (tasks.isEmpty()) {
+                item {
+                    AidenEmptyState(
+                        icon = Icons.Default.Schedule,
+                        title = "No scheduled tasks",
+                        body = "Tasks you schedule from Aiden on your Mac will appear here.",
+                        modifier = Modifier.fillParentMaxHeight()
+                    )
+                }
+            }
+
             items(tasks) { task ->
-                Card(
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(12.dp)
+                        .clip(RoundedCornerShape(14.dp)),
+                    color = Color.Transparent,
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier.padding(vertical = AidenUi.RowVerticalPadding)
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -121,10 +145,12 @@ fun AidenScheduledTasksScreen(
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color.White,
                                 checkedTrackColor = palette.accent
-                            )
+                            ),
+                            modifier = Modifier.semantics { contentDescription = "Enable ${task.name}" }
                         )
                     }
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }

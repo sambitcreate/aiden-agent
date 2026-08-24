@@ -1,15 +1,15 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
-import android.app.Activity
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -42,7 +42,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -50,9 +52,18 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbSize
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbState
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.ThinkingOrb
@@ -63,7 +74,6 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.io.File
-import java.util.Locale
 import kotlin.math.abs
 
 enum class MessageClusterPosition {
@@ -77,17 +87,21 @@ fun AidenChatDetailScreen(
     coordinator: AidenRemoteCoordinator,
     chatCache: AidenChatCache,
     draftStore: AidenChatDraftStore,
+    voiceInputStore: AidenVoiceInputStore,
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val haptics = LocalHapticFeedback.current
     val uriHandler = LocalUriHandler.current
 
-    val viewModel = remember(chatId) {
-        AidenChatViewModel(chatId, coordinator, chatCache, draftStore)
-    }
+    val viewModel: AidenChatViewModel = viewModel(
+        key = "chat:${coordinator.activeInstanceId}:${coordinator.installationStore.activeInstallation?.deviceId}:$chatId",
+        factory = AidenChatViewModel.factory(chatId, coordinator, chatCache, draftStore)
+    )
 
     val chat by viewModel.chat.collectAsState()
     val streamState by viewModel.streamState.collectAsState()
@@ -100,55 +114,91 @@ fun AidenChatDetailScreen(
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
+    val voiceInputMode by voiceInputStore.mode.collectAsState()
 
     val listState = rememberLazyListState()
 
-    val voiceController = remember { ComposerVoiceInputController(context) }
-    val voiceState by voiceController.state.collectAsState()
-    val isVoiceListening = voiceState is VoiceInputState.Listening
-    val voiceAmplitude by voiceController.audioAmplitude.collectAsState()
+    val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var pendingVoiceStart by remember { mutableStateOf(false) }
+    val currentDraft by rememberUpdatedState(draft)
+    val currentVoiceMode by rememberUpdatedState(voiceInputMode)
 
-    // Voice recognition fallback launcher
-    val speechLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-            if (!spokenText.isNullOrEmpty()) {
-                val newDraft = if (draft.isEmpty()) spokenText else "$draft $spokenText"
-                viewModel.updateDraft(newDraft)
-            }
+    DisposableEffect(voiceInput, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) voiceInput.cancelDiscardingRecording()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            voiceInput.destroy()
         }
     }
 
-    // Document & Image picker launcher
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
-    ) { uris: List<Uri> ->
+    fun dismissComposerKeyboard() {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+    }
+
+    val preparePickedUris: (List<Uri>) -> Unit = { selectedUris ->
+        val remainingCapacity = (10 - pendingAttachments.size).coerceAtLeast(0)
+        val uris = selectedUris.take(remainingCapacity)
         if (uris.isNotEmpty()) {
             scope.launch {
-                val uploads = mutableListOf<AidenAttachmentUpload>()
                 for (uri in uris) {
                     try {
                         val displayName = getFileName(context, uri) ?: "Attachment"
-                        val inputStream = context.contentResolver.openInputStream(uri)
-                        val bytes = inputStream?.readBytes() ?: continue
                         val isImage = context.contentResolver.getType(uri)?.startsWith("image/") == true ||
-                                isImageExtension(displayName)
-                        if (isImage) {
-                            uploads.add(AidenAttachmentPreparation.imageUpload(bytes, displayName))
+                            isImageExtension(displayName)
+                        val limit = if (isImage) {
+                            AidenAttachmentPreparation.MAXIMUM_SOURCE_IMAGE_BYTES
+                        } else {
+                            AidenAttachmentPreparation.MAXIMUM_TEXT_BYTES
+                        }
+                        val bytes = readContentUriBounded(context, uri, limit) ?: continue
+                        val upload = if (isImage) {
+                            AidenAttachmentPreparation.imageUpload(bytes, displayName)
                         } else {
                             val mime = context.contentResolver.getType(uri) ?: "text/plain"
-                            uploads.add(AidenAttachmentPreparation.textUpload(bytes, displayName, mime))
+                            AidenAttachmentPreparation.textUpload(bytes, displayName, mime)
                         }
-                    } catch (_: Exception) {}
-                }
-                if (uploads.isNotEmpty()) {
-                    viewModel.upload(uploads)
+                        viewModel.upload(listOf(upload))
+                    } catch (_: Exception) {
+                        // A provider can return stale or misleading MIME metadata. Keep
+                        // successfully prepared selections and skip only the invalid URI.
+                    }
                 }
             }
         }
     }
+
+    fun startVoiceInput() {
+        voiceInput.start(
+            mode = currentVoiceMode,
+            currentDraft = currentDraft,
+            client = coordinator.client.value,
+            updateDraft = viewModel::updateDraft
+        )
+    }
+
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (pendingVoiceStart) {
+            pendingVoiceStart = false
+            if (granted) startVoiceInput() else voiceInput.reportPermissionDenied()
+        }
+    }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(10),
+        onResult = preparePickedUris
+    )
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+        onResult = preparePickedUris
+    )
 
     val isScrolledUp by remember {
         derivedStateOf {
@@ -186,8 +236,7 @@ fun AidenChatDetailScreen(
                 actions = {
                     if (isStreaming) {
                         IconButton(
-                            onClick = { viewModel.cancelTurn() },
-                            modifier = Modifier.tactilePress { viewModel.cancelTurn() }
+                            onClick = { viewModel.cancelTurn() }
                         ) {
                             Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
                         }
@@ -203,8 +252,12 @@ fun AidenChatDetailScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(palette.canvas)
-                    .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    // MainActivity uses adjustNothing, so this is the one IME owner.
+                    // Insets consumption contributes only the IME delta beyond the
+                    // navigation bar and keeps the whole composer above the keyboard.
+                    .imePadding()
+                    .zIndex(1f)
             ) {
                 // Pending Approval Banner
                 AnimatedVisibility(
@@ -219,8 +272,7 @@ fun AidenChatDetailScreen(
                                 .padding(horizontal = 16.dp, vertical = 6.dp)
                                 .shadow(elevation = 8.dp, shape = RoundedCornerShape(16.dp)),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.dp, palette.warning.copy(alpha = 0.4f))
+                            shape = RoundedCornerShape(16.dp)
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -244,10 +296,13 @@ fun AidenChatDetailScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.End
                                 ) {
-                                    OutlinedButton(
+                                    Button(
                                         onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY) },
                                         shape = RoundedCornerShape(10.dp),
-                                        border = BorderStroke(1.dp, palette.danger.copy(alpha = 0.5f))
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                                            contentColor = palette.danger
+                                        )
                                     ) {
                                         Text("Deny", color = palette.danger, fontWeight = FontWeight.SemiBold)
                                     }
@@ -296,36 +351,58 @@ fun AidenChatDetailScreen(
                 AidenComposerView(
                     draft = draft,
                     onDraftChange = { viewModel.updateDraft(it) },
-                    onSend = { viewModel.send() },
+                    onSend = {
+                        voiceInput.stopBeforeSubmittingDraft()
+                        viewModel.send()
+                    },
                     onStop = { viewModel.cancelTurn() },
                     canSend = viewModel.canSend,
                     isStreaming = isStreaming,
-                    isVoiceListening = isVoiceListening,
+                    isVoiceListening = voiceInput.isListening,
+                    isVoiceBusy = voiceInput.isBusy,
                     onToggleVoice = {
-                        if (isVoiceListening) {
-                            voiceController.stop()
-                        } else {
-                            try {
-                                voiceController.start(draft) { updated ->
-                                    viewModel.updateDraft(updated)
-                                }
-                            } catch (_: Exception) {
-                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                                }
-                                try { speechLauncher.launch(intent) } catch (_: Exception) {}
+                        dismissComposerKeyboard()
+                        if (voiceInput.isListening) {
+                            voiceInput.stopKeepingTranscript()
+                        } else if (!voiceInput.isBusy) {
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                startVoiceInput()
+                            } else {
+                                pendingVoiceStart = true
+                                microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
                         }
                     },
-                    pendingAttachments = pendingAttachments.map { 
-                        AidenAttachmentUpload.Text(name = it.name, mimeType = it.mimeType, text = "") 
+                    pendingAttachments = pendingAttachments.map {
+                        if (it.kind == AidenAttachmentKind.IMAGE) {
+                            AidenAttachmentUpload.Image(name = it.name, mimeType = it.mimeType, data = "")
+                        } else {
+                            AidenAttachmentUpload.Text(name = it.name, mimeType = it.mimeType, text = "")
+                        }
                     },
                     onRemoveAttachment = { att ->
                         val target = pendingAttachments.firstOrNull { it.name == att.name }
                         if (target != null) viewModel.removePendingAttachment(target.id)
                     },
-                    onAddAttachment = { filePickerLauncher.launch("*/*") },
+                    onAddImage = {
+                        dismissComposerKeyboard()
+                        imagePickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    onAddFile = {
+                        dismissComposerKeyboard()
+                        filePickerLauncher.launch(
+                            arrayOf(
+                                "image/*",
+                                "text/*",
+                                "application/json",
+                                "application/xml",
+                                "application/yaml",
+                                "application/javascript"
+                            )
+                        )
+                    },
                     selectedProvider = null,
                     selectedModel = null,
                     selectedThinkingLevel = null,
@@ -333,6 +410,7 @@ fun AidenChatDetailScreen(
                     onSelectModel = null,
                     placeholder = if (chat?.isBotChat == true) "Message ${chat?.title ?: "Bot"}" else "Message Aiden",
                     isReadOnly = false,
+                    voiceErrorMessage = voiceInput.errorMessage,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -345,7 +423,9 @@ fun AidenChatDetailScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                // Keep the transcript beneath the floating composer. The list's
+                // own bottom inset still makes the latest message fully reachable.
+                .padding(top = padding.calculateTopPadding())
         ) {
             LazyColumn(
                 reverseLayout = true,
@@ -354,7 +434,10 @@ fun AidenChatDetailScreen(
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 16.dp)
+                contentPadding = PaddingValues(
+                    top = 16.dp,
+                    bottom = padding.calculateBottomPadding() + 12.dp
+                )
             ) {
                 // When streaming, active generation is the latest item (index 0 in reverse layout)
                 if (isStreaming) {
@@ -383,6 +466,7 @@ fun AidenChatDetailScreen(
                             message = message,
                             position = pos,
                             palette = palette,
+                            loadAttachmentImage = viewModel::attachmentImageData,
                             onCopy = { text -> copyToClipboard(context, text) },
                             onShare = { text -> shareText(context, text) },
                             onReply = { text -> viewModel.updateDraft("> $text\n") }
@@ -394,6 +478,7 @@ fun AidenChatDetailScreen(
                             isLastInCluster = isLastInCluster,
                             isBotChat = isBotChat,
                             palette = palette,
+                            loadAttachmentImage = viewModel::attachmentImageData,
                             onCopy = { text -> copyToClipboard(context, text) },
                             onShare = { text -> shareText(context, text) },
                             onReply = { text -> viewModel.updateDraft("> $text\n") },
@@ -406,7 +491,6 @@ fun AidenChatDetailScreen(
             // Jump to Bottom Floating Capsule Button
             AidenJumpToBottom(
                 visible = isScrolledUp,
-                isStreaming = isStreaming,
                 onClick = {
                     scope.launch {
                         listState.animateScrollToItem(0)
@@ -414,7 +498,7 @@ fun AidenChatDetailScreen(
                 },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 16.dp)
+                    .padding(bottom = padding.calculateBottomPadding() + 8.dp)
             )
         }
     }
@@ -444,6 +528,7 @@ private fun UserMessageRow(
     message: AidenChatMessage,
     position: MessageClusterPosition,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
     onReply: (String) -> Unit
@@ -455,60 +540,65 @@ private fun UserMessageRow(
         MessageClusterPosition.LAST -> RoundedCornerShape(20.dp, 6.dp, 20.dp, 20.dp)
     }
 
-    Row(
+    val attachments = message.attachments.orEmpty()
+    val imageAttachments = aidenEligibleImageAttachments(attachments)
+    val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
+    val fallbackAttachments = attachments.filterNot { it.id in imageIds }
+
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        AidenMessageActionContainer(
-            onCopy = { onCopy(message.text) },
-            onShare = { onShare(message.text) },
-            onReply = { onReply(message.text) }
-        ) {
-            Surface(
-                color = palette.accent,
-                shape = shape,
-                modifier = Modifier.widthIn(max = 320.dp)
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    if (message.text.isNotEmpty()) {
-                        Text(
-                            text = message.text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = Color.White
-                        )
-                    }
-                    message.attachments?.let { atts ->
-                        if (atts.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            for (att in atts) {
-                                Surface(
-                                    color = Color.White.copy(alpha = 0.18f),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.padding(vertical = 2.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Attachment,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = att.name,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color.White
-                                        )
-                                    }
+        if (message.text.isNotEmpty() || fallbackAttachments.isNotEmpty()) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                AidenMessageActionContainer(
+                    onCopy = { onCopy(message.text) },
+                    onShare = { onShare(message.text) },
+                    onReply = { onReply(message.text) }
+                ) {
+                    Surface(
+                        color = palette.accent,
+                        shape = shape,
+                        modifier = Modifier.widthIn(max = 320.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            if (message.text.isNotEmpty()) {
+                                Text(
+                                    text = message.text,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Color.White
+                                )
+                            }
+                            fallbackAttachments.forEach { att ->
+                                if (message.text.isNotEmpty()) Spacer(modifier = Modifier.height(6.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.Attachment,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = att.name,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White,
+                                        maxLines = 1
+                                    )
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+        if (imageAttachments.isNotEmpty()) {
+            AidenMessageImageAttachments(
+                attachments = imageAttachments,
+                edge = AidenMessageMediaEdge.TRAILING,
+                loadData = loadAttachmentImage
+            )
         }
     }
 }
@@ -520,6 +610,7 @@ private fun AssistantMessageRow(
     isLastInCluster: Boolean,
     isBotChat: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
     onReply: (String) -> Unit,
@@ -531,13 +622,10 @@ private fun AssistantMessageRow(
 
     val displayText = projection?.finalText ?: message.text
     val progressText = projection?.progressText ?: ""
-
-    val shape = when (position) {
-        MessageClusterPosition.SINGLE -> RoundedCornerShape(4.dp, 20.dp, 20.dp, 20.dp)
-        MessageClusterPosition.FIRST -> RoundedCornerShape(4.dp, 20.dp, 20.dp, 6.dp)
-        MessageClusterPosition.MIDDLE -> RoundedCornerShape(6.dp, 20.dp, 20.dp, 6.dp)
-        MessageClusterPosition.LAST -> RoundedCornerShape(6.dp, 20.dp, 20.dp, 20.dp)
-    }
+    val attachments = message.attachments.orEmpty()
+    val imageAttachments = aidenEligibleImageAttachments(attachments)
+    val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
+    val fallbackAttachments = attachments.filterNot { it.id in imageIds }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         // Step Timeline items if present
@@ -575,7 +663,7 @@ private fun AssistantMessageRow(
             }
         }
 
-        // Assistant Message Bubble with Long-Press Menu
+        // Assistant output reads as editorial content; only user messages are bubbled.
         if (displayText.isNotEmpty()) {
             AidenMessageActionContainer(
                 onCopy = { onCopy(displayText) },
@@ -583,12 +671,11 @@ private fun AssistantMessageRow(
                 onReply = { onReply(displayText) }
             ) {
                 Surface(
-                    color = palette.raised,
-                    shape = shape,
-                    border = BorderStroke(0.5.dp, palette.secondary.copy(alpha = 0.12f)),
+                    color = Color.Transparent,
+                    shape = RoundedCornerShape(0.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = 2.dp, vertical = 8.dp)) {
                         RichFormattedMessage(
                             text = displayText,
                             palette = palette,
@@ -596,6 +683,40 @@ private fun AssistantMessageRow(
                             onOpenUrl = onOpenUrl
                         )
                     }
+                }
+            }
+        }
+        if (imageAttachments.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            AidenMessageImageAttachments(
+                attachments = imageAttachments,
+                edge = AidenMessageMediaEdge.LEADING,
+                loadData = loadAttachmentImage
+            )
+        }
+        fallbackAttachments.forEach { attachment ->
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = palette.raised,
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Attachment,
+                        contentDescription = null,
+                        tint = palette.secondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = attachment.name,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.foreground,
+                        maxLines = 1
+                    )
                 }
             }
         }
@@ -612,12 +733,10 @@ private fun ActiveStreamingCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
     Surface(
-        color = palette.raised,
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.35f)),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(16.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(elevation = 6.dp, shape = RoundedCornerShape(20.dp))
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             // Reasoning
@@ -706,7 +825,6 @@ private fun AidenTimelineCollapsibleCard(
     Surface(
         color = palette.raised.copy(alpha = 0.7f),
         shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(0.5.dp, palette.secondary.copy(alpha = 0.18f)),
         modifier = Modifier
             .fillMaxWidth()
             .animateContentSize(AidenMotion.spatialExpressiveSpring<IntSize>())
@@ -892,4 +1010,24 @@ private fun getFileName(context: android.content.Context, uri: Uri): String? {
 private fun isImageExtension(name: String): Boolean {
     val ext = File(name).extension.lowercase()
     return ext in setOf("png", "jpg", "jpeg", "heic", "heif", "webp")
+}
+
+private suspend fun readContentUriBounded(
+    context: android.content.Context,
+    uri: Uri,
+    maximumBytes: Int
+): ByteArray? = withContext(Dispatchers.IO) {
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        val output = java.io.ByteArrayOutputStream(minOf(maximumBytes, 64 * 1024))
+        val buffer = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            total += read
+            if (total > maximumBytes) return@withContext null
+            output.write(buffer, 0, read)
+        }
+        output.toByteArray()
+    }
 }

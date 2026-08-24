@@ -7,7 +7,11 @@ import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
+import sbtbiswas.AidenOnTheGo.features.workspaces.aidenRelativeTimestamp
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsHomeContentState
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotsHomeContentState
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 class AidenProductShellTest {
     @get:Rule
@@ -49,26 +53,49 @@ class AidenProductShellTest {
         assertFalse(store.hasSeenCoachmark(instance1, "bots_welcome"))
     }
 
-    enum class BotsHomeContentState { LOADING, CONTENT, EMPTY }
+    @Test
+    fun testUnsupportedBotsFallbackDoesNotErasePerInstallationPreference() {
+        val store = AidenProductNavigationStore(tempFolder.root)
+        store.setSelectedArea("mac_1", AidenProductArea.BOTS)
+
+        store.activateSelectedArea("mac_1", botsAvailable = false)
+        assertEquals(AidenProductArea.WORKSPACES, store.activeArea.value)
+        assertEquals(AidenProductArea.BOTS, store.selectedArea("mac_1"))
+
+        store.activateSelectedArea("mac_1", botsAvailable = true)
+        assertEquals(AidenProductArea.BOTS, store.activeArea.value)
+    }
+
+    @Test
+    fun testWorkspaceHomeRelativeTimestampsMatchIosBoundaries() {
+        val now = Instant.parse("2026-08-24T12:00:00Z")
+        assertEquals("just now", aidenRelativeTimestamp(now.minus(59, ChronoUnit.SECONDS), now))
+        assertEquals("1m", aidenRelativeTimestamp(now.minus(60, ChronoUnit.SECONDS), now))
+        assertEquals("59m", aidenRelativeTimestamp(now.minus(59, ChronoUnit.MINUTES), now))
+        assertEquals("1h", aidenRelativeTimestamp(now.minus(60, ChronoUnit.MINUTES), now))
+        assertEquals("1d", aidenRelativeTimestamp(now.minus(24, ChronoUnit.HOURS), now))
+    }
 
     @Test
     fun testBotsHomeContentStates() {
-        fun resolveState(isLoading: Boolean, hasCache: Boolean, botCount: Int): BotsHomeContentState {
-            if (isLoading && !hasCache) return BotsHomeContentState.LOADING
-            return if (botCount > 0) BotsHomeContentState.CONTENT else BotsHomeContentState.EMPTY
-        }
+        fun resolve(hasSnapshot: Boolean, loading: Boolean, bots: Int, error: Boolean = false) =
+            aidenBotsHomeContentState(
+                hasSnapshot = hasSnapshot,
+                isLoading = loading,
+                totalBotCount = bots,
+                activeBotCount = bots,
+                conversationCount = 0,
+                hasQuery = false,
+                filteredBotCount = bots,
+                filteredConversationCount = 0,
+                hasError = error
+            )
 
-        // Cold load -> LOADING
-        assertEquals(BotsHomeContentState.LOADING, resolveState(isLoading = true, hasCache = false, botCount = 0))
-
-        // Warm load with cache -> CONTENT
-        assertEquals(BotsHomeContentState.CONTENT, resolveState(isLoading = true, hasCache = true, botCount = 3))
-
-        // Completed with 0 bots -> EMPTY
-        assertEquals(BotsHomeContentState.EMPTY, resolveState(isLoading = false, hasCache = true, botCount = 0))
-
-        // Completed with bots -> CONTENT
-        assertEquals(BotsHomeContentState.CONTENT, resolveState(isLoading = false, hasCache = true, botCount = 2))
+        assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, true, 0))
+        assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, false, 0))
+        assertEquals(AidenBotsHomeContentState.ERROR, resolve(false, false, 0, error = true))
+        assertEquals(AidenBotsHomeContentState.EMPTY, resolve(true, false, 0))
+        assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, false, 2))
     }
 
     @Test

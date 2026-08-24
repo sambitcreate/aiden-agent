@@ -230,6 +230,7 @@ fun AidenBotCustomAccessFlowScreen(
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(bots) { b ->
                                 FilterChip(
+                                    border = null,
                                     selected = selectedBotId == b.id,
                                     onClick = {
                                         if (selectedBotId != b.id) {

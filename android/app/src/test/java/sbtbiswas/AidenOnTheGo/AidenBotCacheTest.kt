@@ -17,6 +17,7 @@ class AidenBotCacheTest {
     @Test
     fun testBotListAndAvatarCaching() {
         val cache = AidenBotCache(tempFolder.root)
+        cache.activate("mac_1", "device_1")
 
         val recipe = AidenBotAvatarRecipe(
             shape = AidenBotAvatarShape.ORB,
@@ -53,6 +54,7 @@ class AidenBotCacheTest {
     @Test
     fun testBotCachePreservesDetailsAcrossListRefresh() {
         val cache = AidenBotCache(tempFolder.root)
+        cache.activate("mac_1", "device_1")
 
         val detail = AidenBotDetail(
             id = "bot_1",
@@ -143,10 +145,43 @@ class AidenBotCacheTest {
         )
 
         val cache = AidenBotCache(tempFolder.root)
+        cache.activate("mac_1", "device_1")
         cache.putBotList(AidenBotList(bots = listOf(archivedBot), favorites = AidenBotFavorites(botIds = emptyList(), revision = "fav_1")))
         cache.putBotConversations(AidenBotConversationPage(conversations = listOf(conversation)))
 
         assertEquals(1, cache.botConversations.value?.conversations?.size)
         assertEquals("chat_archived", cache.botConversations.value?.conversations?.first()?.chatId)
+    }
+
+    @Test
+    fun testBotCacheIsIsolatedByInstallationAndDevice() {
+        val cache = AidenBotCache(tempFolder.root)
+        val summary = AidenBotSummary(
+            id = "bot_1",
+            name = "Mac A Bot",
+            purpose = "Scoped helper",
+            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT)),
+            health = AidenBotHealth.READY,
+            createdAt = Instant.now(),
+            updatedAt = Instant.now(),
+            revision = "rev_1"
+        )
+
+        cache.activate("mac_a", "device_a")
+        cache.putBotList(
+            AidenBotList(
+                bots = listOf(summary),
+                favorites = AidenBotFavorites(botIds = emptyList(), revision = "fav_a")
+            )
+        )
+
+        cache.activate("mac_b", "device_b")
+        assertNull(cache.botList.value)
+
+        cache.activate("mac_a", "device_a")
+        assertEquals("Mac A Bot", cache.botList.value?.bots?.single()?.name)
+
+        cache.activate("mac_a", "device_repaired")
+        assertNull(cache.botList.value)
     }
 }

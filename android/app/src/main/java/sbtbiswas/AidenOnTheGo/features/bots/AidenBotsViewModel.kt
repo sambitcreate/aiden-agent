@@ -1,17 +1,24 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import java.util.UUID
 
 class AidenBotsViewModel(
@@ -21,7 +28,9 @@ class AidenBotsViewModel(
     private val _botList = MutableStateFlow<AidenBotList?>(botCache?.botList?.value)
     val botList: StateFlow<AidenBotList?> = _botList.asStateFlow()
 
-    private val _conversations = MutableStateFlow<List<AidenBotConversationItem>>(emptyList())
+    private val _conversations = MutableStateFlow(
+        aidenCanonicalBotConversations(botCache?.botConversations?.value?.conversations.orEmpty())
+    )
     val conversations: StateFlow<List<AidenBotConversationItem>> = _conversations.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
@@ -44,34 +53,72 @@ class AidenBotsViewModel(
 
     private var activeFavoriteMutation: AidenBotsFavoriteMutation? = null
     private var searchJob: Job? = null
+    private var loadedClient: AidenRemoteClient? = null
+    private var loadingClient: AidenRemoteClient? = null
 
     init {
-        loadBots()
+        viewModelScope.launch {
+            combine(coordinator.client, coordinator.connectionState) { client, state -> client to state }
+                .collect { (client, state) ->
+                    if (client != null && state == AidenConnectionState.CONNECTED) loadBots()
+                }
+        }
     }
 
-    fun loadBots() {
+    fun loadBots(force: Boolean = false) {
         val client = coordinator.client.value
         if (client == null) {
             _isLoading.value = false
             return
         }
+        if (loadedClient !== client && loadingClient !== client) {
+            _botList.value = botCache?.botList?.value
+            _conversations.value = aidenCanonicalBotConversations(
+                botCache?.botConversations?.value?.conversations.orEmpty()
+            )
+            _remoteSearchResults.value = emptyList()
+        }
+        if (loadingClient === client) return
+        if (!force && loadedClient === client) return
+        loadingClient = client
         viewModelScope.launch {
-            _isLoading.value = true
+            _isLoading.value = _botList.value == null
             try {
-                val list = client.bots()
-                _botList.value = list
-                botCache?.putBotList(list)
-                val page = client.botConversations()
-                _conversations.value = aidenCanonicalBotConversations(page.conversations)
-                _errorMessage.value = null
+                supervisorScope {
+                    val botsRequest = async { request { client.bots(includeArchived = true) } }
+                    val conversationsRequest = async { request { client.botConversations() } }
+                    val botsResult = botsRequest.await()
+                    val conversationsResult = conversationsRequest.await()
+                    if (coordinator.client.value !== client) return@supervisorScope
+                    botsResult.onSuccess { list ->
+                        _botList.value = list
+                        botCache?.putBotList(list)
+                    }
+                    conversationsResult.onSuccess { page ->
+                        _conversations.value = aidenCanonicalBotConversations(page.conversations)
+                        botCache?.putBotConversations(page)
+                    }
+                    val failure = botsResult.exceptionOrNull() ?: conversationsResult.exceptionOrNull()
+                    _errorMessage.value = failure?.message
+                    if (failure == null) loadedClient = client
+                }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
                     _errorMessage.value = e.message
                 }
             } finally {
+                if (loadingClient === client) loadingClient = null
                 _isLoading.value = false
             }
         }
+    }
+
+    private suspend fun <T> request(block: suspend () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        Result.failure(error)
     }
 
     fun updateSearchQuery(query: String) {
@@ -165,6 +212,28 @@ class AidenBotsViewModel(
             detail
         } catch (_: Exception) {
             botCache?.getBotDetail(botId)
+        }
+    }
+
+    fun acceptConversation(conversation: AidenBotConversationItem) {
+        val accepted = aidenCanonicalBotConversations(
+            _conversations.value.filterNot { it.chatId == conversation.chatId } + conversation
+        )
+        _conversations.value = accepted
+        botCache?.botConversations?.value?.let { page ->
+            botCache.putBotConversations(page.copy(conversations = accepted))
+        }
+    }
+
+    companion object {
+        fun factory(
+            coordinator: AidenRemoteCoordinator,
+            botCache: AidenBotCache? = coordinator.botCache
+        ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return AidenBotsViewModel(coordinator, botCache) as T
+            }
         }
     }
 }

@@ -76,6 +76,13 @@ class AidenProductNavigationStore(private val storageDir: File) {
     fun selectedArea(instanceId: String): AidenProductArea =
         _state.value.activeAreas[instanceId] ?: AidenProductArea.BOTS
 
+    fun activateSelectedArea(instanceId: String, botsAvailable: Boolean) {
+        val stored = selectedArea(instanceId)
+        _activeArea.value = if (stored == AidenProductArea.BOTS && !botsAvailable) {
+            AidenProductArea.WORKSPACES
+        } else stored
+    }
+
     fun setSelectedArea(instanceId: String, area: AidenProductArea) {
         _state.value = _state.value.copy(
             activeAreas = _state.value.activeAreas + (instanceId to area)

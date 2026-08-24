@@ -1,7 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.compose.animation.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -26,17 +25,21 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AidenWorkspaceShellScreen(
+fun AidenWorkspaceDirectoryScreen(
     coordinator: AidenRemoteCoordinator,
+    onNavigateBack: () -> Unit,
     onNavigateToChat: (String) -> Unit,
     onNavigateToFiles: (String) -> Unit,
-    onNavigateToGit: (String) -> Unit
+    onNavigateToGit: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
@@ -98,6 +101,7 @@ fun AidenWorkspaceShellScreen(
     }
 
     Scaffold(
+        modifier = modifier,
         floatingActionButton = {
             if (selectedWorkspace != null) {
                 FloatingActionButton(
@@ -114,13 +118,14 @@ fun AidenWorkspaceShellScreen(
                     },
                     containerColor = palette.accent,
                     contentColor = Color.White,
-                    shape = RoundedCornerShape(16.dp)
+                    shape = CircleShape
                 ) {
-                    Icon(Icons.Default.AddComment, contentDescription = "New Chat")
+                    Icon(Icons.Default.Add, contentDescription = "New Chat")
                 }
             }
         },
-        containerColor = palette.canvas
+        containerColor = palette.canvas,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { padding ->
         Column(
             modifier = Modifier
@@ -135,7 +140,7 @@ fun AidenWorkspaceShellScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
                 ) {
                     IconButton(onClick = { selectedWorkspace = null }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back to Workspaces", tint = palette.foreground)
@@ -276,18 +281,17 @@ fun AidenWorkspaceShellScreen(
                     }
 
                     items(workspaceChats) { chat ->
-                        Card(
+                        Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(14.dp))
                                 .clickable { onNavigateToChat(chat.id) },
-                            colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(12.dp)
+                            color = Color.Transparent,
+                            shape = RoundedCornerShape(14.dp)
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(14.dp)
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = AidenUi.RowVerticalPadding)
                             ) {
                                 Icon(Icons.Default.Chat, contentDescription = null, tint = palette.accent)
                                 Spacer(modifier = Modifier.width(12.dp))
@@ -314,6 +318,23 @@ fun AidenWorkspaceShellScreen(
                 }
             } else {
                 // Workspace Directory View
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                ) {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back to Workspace home", tint = palette.foreground)
+                    }
+                    Text(
+                        text = "Workspaces",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.foreground,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 // 1:1 Parity iOS Glass Search & Action Dock
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -324,10 +345,9 @@ fun AidenWorkspaceShellScreen(
                 ) {
                     // Search Glass Capsule
                     Surface(
-                        shape = RoundedCornerShape(27.dp),
-                        color = palette.raised.copy(alpha = 0.94f),
-                        border = BorderStroke(0.5.dp, palette.secondary.copy(alpha = 0.18f)),
-                        shadowElevation = 6.dp,
+                    shape = RoundedCornerShape(27.dp),
+                    color = palette.raised.copy(alpha = 0.94f),
+                    shadowElevation = 3.dp,
                         modifier = Modifier
                             .weight(1f)
                             .height(54.dp)
@@ -387,10 +407,9 @@ fun AidenWorkspaceShellScreen(
                         Surface(
                             shape = CircleShape,
                             color = palette.accent,
-                            shadowElevation = 8.dp,
+                            shadowElevation = 3.dp,
                             modifier = Modifier
                                 .size(54.dp)
-                                .tactilePress { showCreateMenu = true }
                         ) {
                             IconButton(
                                 onClick = { showCreateMenu = true },
@@ -434,11 +453,10 @@ fun AidenWorkspaceShellScreen(
 
                 // Filter Segmented Pill (Active vs Archived)
                 Surface(
-                    color = palette.raised,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
                     shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.dp, palette.secondary.copy(alpha = 0.12f)),
                     modifier = Modifier
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .padding(horizontal = AidenUi.ScreenGutter, vertical = 4.dp)
                         .fillMaxWidth()
                 ) {
                     Row(
@@ -446,11 +464,10 @@ fun AidenWorkspaceShellScreen(
                     ) {
                         // Active Tab
                         Surface(
-                            color = if (selectedTab == 0) palette.accent else Color.Transparent,
+                            onClick = { selectedTab = 0 },
+                            color = if (selectedTab == 0) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
                             shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .tactilePress { selectedTab = 0 }
+                            modifier = Modifier.weight(1f)
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
@@ -460,18 +477,17 @@ fun AidenWorkspaceShellScreen(
                                     text = "Active (${activeWorkspaces.size})",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (selectedTab == 0) Color.White else palette.secondary
+                                    color = if (selectedTab == 0) palette.accent else palette.secondary
                                 )
                             }
                         }
 
                         // Archived Tab
                         Surface(
-                            color = if (selectedTab == 1) palette.accent else Color.Transparent,
+                            onClick = { selectedTab = 1 },
+                            color = if (selectedTab == 1) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
                             shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .tactilePress { selectedTab = 1 }
+                            modifier = Modifier.weight(1f)
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
@@ -481,7 +497,7 @@ fun AidenWorkspaceShellScreen(
                                     text = "Archived (${archivedWorkspaces.size})",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (selectedTab == 1) Color.White else palette.secondary
+                                    color = if (selectedTab == 1) palette.accent else palette.secondary
                                 )
                             }
                         }
@@ -496,45 +512,31 @@ fun AidenWorkspaceShellScreen(
                 ) {
                     if (currentList.isEmpty()) {
                         item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(40.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(
-                                        imageVector = if (selectedTab == 0) Icons.Default.FolderOpen else Icons.Default.Archive,
-                                        contentDescription = null,
-                                        tint = palette.secondary,
-                                        modifier = Modifier.size(48.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Text(
-                                        text = if (selectedTab == 0) "No active workspaces found" else "No archived workspaces",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = palette.secondary
-                                    )
-                                }
-                            }
+                            AidenEmptyState(
+                                icon = if (selectedTab == 0) Icons.Default.FolderOpen else Icons.Default.Archive,
+                                title = if (selectedTab == 0) "No active workspaces" else "No archived workspaces",
+                                body = if (selectedTab == 0)
+                                    "Create a workspace or add an approved folder from your Mac."
+                                else
+                                    "Workspaces archived on this device will appear here."
+                            )
                         }
                     }
 
                     items(currentList) { ws ->
                         var showRowMenu by remember { mutableStateOf(false) }
 
-                        Card(
+                        Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(14.dp))
                                 .clickable { selectedWorkspace = ws },
-                            colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(12.dp)
+                            color = Color.Transparent,
+                            shape = RoundedCornerShape(14.dp)
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(14.dp)
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = AidenUi.RowVerticalPadding)
                             ) {
                                 Box(
                                     modifier = Modifier
@@ -707,7 +709,8 @@ fun AidenWorkspaceShellScreen(
                 Column {
                     Text("Enter a name for the new folderless workspace:")
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
+                    TextField(
+                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = newWorkspaceName,
                         onValueChange = { newWorkspaceName = it },
                         placeholder = { Text("Workspace name") },
@@ -781,7 +784,8 @@ fun AidenWorkspaceShellScreen(
             title = { Text("Rename Workspace", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
-                    OutlinedTextField(
+                    TextField(
+                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = renameInput,
                         onValueChange = { renameInput = it },
                         label = { Text("Workspace Name") },
@@ -1225,7 +1229,8 @@ fun AidenWorkspaceSettingsSheet(
         Spacer(modifier = Modifier.height(16.dp))
 
         // Name
-        OutlinedTextField(
+        TextField(
+            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
             value = nameInput,
             onValueChange = { nameInput = it },
             label = { Text("Workspace Name") },

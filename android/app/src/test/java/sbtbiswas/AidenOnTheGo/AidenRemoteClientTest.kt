@@ -1,7 +1,13 @@
 package sbtbiswas.AidenOnTheGo
 
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -16,11 +22,14 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import java.time.Instant
+import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class AidenRemoteClientTest {
     private lateinit var server: MockWebServer
     private lateinit var client: AidenRemoteClient
+    private lateinit var httpClient: OkHttpClient
 
     @Before
     fun setup() {
@@ -39,10 +48,11 @@ class AidenRemoteClientTest {
             createdAt = Instant.now()
         )
 
+        httpClient = OkHttpClient.Builder().build()
         client = AidenRemoteClient(
             installation = installation,
             credential = "test_credential_123",
-            customOkHttpClient = OkHttpClient.Builder().build()
+            customOkHttpClient = httpClient
         )
     }
 
@@ -141,6 +151,31 @@ class AidenRemoteClientTest {
         assertEquals(AidenRemoteEventType.TEXT_DELTA, events[1].type)
         assertEquals(AidenRemoteEventType.DONE, events[2].type)
         assertTrue(events[2].type.isTerminal)
+    }
+
+    @Test
+    fun testCancellingSSECollectorCancelsOkHttpCall() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody(": keep-alive\n".repeat(2_000))
+                .throttleBody(1, 100, TimeUnit.MILLISECONDS)
+                .setResponseCode(200)
+        )
+
+        val collector = launch { client.openStream("chat_1", "stream_cancel").collect() }
+        yield()
+        withTimeout(5_000) {
+            while (server.requestCount == 0) delay(10)
+        }
+        assertEquals("/api/aiden/v1/streams/stream_cancel/events", server.takeRequest().path)
+        collector.cancelAndJoin()
+
+        repeat(20) {
+            if (httpClient.dispatcher.runningCallsCount() == 0) return@repeat
+            delay(25)
+        }
+        assertEquals(0, httpClient.dispatcher.runningCallsCount())
     }
 
     @Test
@@ -289,5 +324,77 @@ class AidenRemoteClientTest {
         assertEquals(15, usage.totals.requests)
         assertEquals(2350, usage.totals.tokens.total)
     }
-}
 
+    @Test
+    fun testMacSpeechStatusAndTranscriptionContract() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""
+            {
+              "engine":{"ready":true,"error":null},
+              "selectedModelId":"parakeet-v3",
+              "models":[{
+                "id":"parakeet-v3","name":"Parakeet","description":"Local speech",
+                "sizeLabel":"620 MB","languagesLabel":"25 languages",
+                "recommended":true,"installed":true
+              }],
+              "input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}
+            }
+        """.trimIndent()))
+        val status = client.speechStatus()
+        assertTrue(status.engine.ready)
+        assertFalse(status.input.partialResults)
+        assertEquals("/api/aiden/v1/speech", server.takeRequest().path)
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"text":"Hello from the Mac","modelId":"parakeet-v3"}"""
+        ))
+        val result = client.transcribeSpeech("AAA=", "parakeet-v3")
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/aiden/v1/speech/transcriptions", request.path)
+        assertTrue(request.body.readUtf8().contains("\"encoding\":\"pcm_s16le\""))
+        assertEquals("Hello from the Mac", result.text)
+    }
+
+    @Test
+    fun testAttachmentContentUsesAuthenticatedBoundedImageRequest() = runBlocking {
+        val png = Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "image/png")
+                .setBody(okio.Buffer().write(png))
+        )
+
+        val content = client.attachmentContent("chat-1", "image-1")
+        val request = server.takeRequest()
+        assertArrayEquals(png, content.data)
+        assertEquals("image/png", content.mimeType)
+        assertEquals("/api/aiden/v1/chats/chat-1/attachments/image-1/content", request.path)
+        assertEquals("image/jpeg, image/png", request.getHeader("Accept"))
+        assertEquals("Bearer test_credential_123", request.getHeader("Authorization"))
+    }
+
+    @Test
+    fun testAttachmentContentRejectsUnsupportedMimeAndOversizedBodies() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "image/gif").setBody("GIF89a")
+        )
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
+            runBlocking { client.attachmentContent("chat-1", "gif-1") }
+        }
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "image/png")
+                .setBody("x")
+                .setHeader("Content-Length", AidenAttachmentImageValidation.MAXIMUM_BYTES + 1)
+        )
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
+            runBlocking { client.attachmentContent("chat-1", "large-1") }
+        }
+        Unit
+    }
+}

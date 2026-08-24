@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import sbtbiswas.AidenOnTheGo.auth.AndroidAidenSecureStore
 import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
+import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotEditorScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotProfileScreen
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatDetailScreen
@@ -40,9 +41,9 @@ class MainActivity : ComponentActivity() {
         val installationStore = AidenInstallationStore(filesDir, secureStore)
         val chatCache = AidenChatCache(filesDir)
         val draftStore = AidenChatDraftStore(filesDir)
-        val botCache = AidenBotCache(filesDir)
         val navigationStore = AidenProductNavigationStore(filesDir)
         val appearanceStore = AidenAppearanceStore(filesDir)
+        val voiceInputStore = AidenVoiceInputStore(applicationContext)
         val coordinator = AidenRemoteCoordinator(installationStore, filesDir)
 
         setContent {
@@ -87,7 +88,9 @@ class MainActivity : ComponentActivity() {
                                     coordinator = coordinator,
                                     navigationStore = navigationStore,
                                     installationStore = installationStore,
+                                    chatCache = chatCache,
                                     appearanceStore = appearanceStore,
+                                    voiceInputStore = voiceInputStore,
                                     onNavigateToChat = { chatId -> currentScreen = AidenScreen.ChatDetail(chatId) },
                                     onNavigateToBotProfile = { botId -> currentScreen = AidenScreen.BotProfile(botId) },
                                     onNavigateToBotEditor = { botId -> currentScreen = AidenScreen.BotEditor(botId) },
@@ -101,6 +104,7 @@ class MainActivity : ComponentActivity() {
                                     coordinator = coordinator,
                                     chatCache = chatCache,
                                     draftStore = draftStore,
+                                    voiceInputStore = voiceInputStore,
                                     onNavigateBack = { currentScreen = AidenScreen.ProductShell }
                                 )
                             }

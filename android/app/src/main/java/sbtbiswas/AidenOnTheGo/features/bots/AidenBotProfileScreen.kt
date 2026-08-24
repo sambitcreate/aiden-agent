@@ -301,6 +301,7 @@ fun AidenBotProfileScreen(
 
                     // 2. Edit button
                     OutlinedButton(
+                        border = null,
                         onClick = { onNavigateToEditBot(botId) },
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1f)
@@ -314,6 +315,7 @@ fun AidenBotProfileScreen(
 
                     // 3. Access button
                     OutlinedButton(
+                        border = null,
                         onClick = {
                             if (onNavigateToCustomAccess != null) {
                                 onNavigateToCustomAccess(botId)
@@ -333,6 +335,7 @@ fun AidenBotProfileScreen(
 
                     // 4. Pin / Favorite button
                     OutlinedButton(
+                        border = null,
                         onClick = {
                             val cl = client ?: return@OutlinedButton
                             val favs = favorites ?: return@OutlinedButton
@@ -393,6 +396,7 @@ fun AidenBotProfileScreen(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 OutlinedButton(
+                                    border = null,
                                     onClick = {
                                         val cl = client ?: return@OutlinedButton
                                         val favs = favorites ?: return@OutlinedButton
@@ -414,6 +418,7 @@ fun AidenBotProfileScreen(
                                 }
 
                                 OutlinedButton(
+                                    border = null,
                                     onClick = {
                                         val cl = client ?: return@OutlinedButton
                                         val favs = favorites ?: return@OutlinedButton

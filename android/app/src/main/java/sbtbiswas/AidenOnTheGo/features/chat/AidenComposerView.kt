@@ -1,7 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.compose.animation.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -33,7 +32,7 @@ import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
-import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 
 /**
  * 1:1 Parity iOS Glass Composer for Aiden On-The-Go.
@@ -49,10 +48,12 @@ fun AidenComposerView(
     canSend: Boolean,
     isStreaming: Boolean,
     isVoiceListening: Boolean,
+    isVoiceBusy: Boolean = false,
     onToggleVoice: () -> Unit,
     pendingAttachments: List<AidenMessageAttachmentUpload> = emptyList(),
     onRemoveAttachment: (AidenMessageAttachmentUpload) -> Unit = {},
-    onAddAttachment: () -> Unit = {},
+    onAddImage: () -> Unit = {},
+    onAddFile: () -> Unit = {},
     selectedProvider: AidenProvider? = null,
     selectedModel: AidenModel? = null,
     selectedThinkingLevel: String? = null,
@@ -66,28 +67,25 @@ fun AidenComposerView(
     val palette = AidenTheme.palette
     var isFieldFocused by remember { mutableStateOf(false) }
     var showModelMenu by remember { mutableStateOf(false) }
+    var showAttachmentMenu by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
             .shadow(
-                elevation = if (isFieldFocused) 14.dp else 8.dp,
-                shape = RoundedCornerShape(24.dp),
-                ambientColor = Color.Black.copy(alpha = 0.15f),
-                spotColor = palette.accent.copy(alpha = 0.2f)
-            ),
-        shape = RoundedCornerShape(24.dp),
-        color = palette.raised.copy(alpha = 0.96f),
-        border = BorderStroke(
-            width = 0.75.dp,
-            color = if (isFieldFocused) palette.accent.copy(alpha = 0.45f) else palette.secondary.copy(alpha = 0.18f)
-        )
+                elevation = if (isFieldFocused) 6.dp else 4.dp,
+                shape = RoundedCornerShape(AidenUi.ComposerRadius),
+                ambientColor = Color.Black.copy(alpha = 0.08f),
+                spotColor = Color.Black.copy(alpha = 0.08f)
+        ),
+        shape = RoundedCornerShape(AidenUi.ComposerRadius),
+        color = if (isFieldFocused) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
             // 1. Pending Attachments Carousel
             if (pendingAttachments.isNotEmpty()) {
@@ -101,7 +99,6 @@ fun AidenComposerView(
                         Surface(
                             color = palette.canvas.copy(alpha = 0.7f),
                             shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(0.5.dp, palette.secondary.copy(alpha = 0.15f)),
                             modifier = Modifier.animateItem()
                         ) {
                             Row(
@@ -151,18 +148,18 @@ fun AidenComposerView(
                 if (draft.isEmpty() && !isVoiceListening) {
                     Text(
                         text = placeholder,
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
-                        color = palette.secondary.copy(alpha = 0.65f)
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = palette.secondary
                     )
                 }
                 BasicTextField(
                     value = draft,
                     onValueChange = onDraftChange,
-                    readOnly = isReadOnly,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    readOnly = isReadOnly || isVoiceBusy,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
                         color = palette.foreground,
-                        fontSize = 15.sp,
-                        lineHeight = 22.sp
+                        fontSize = 16.sp,
+                        lineHeight = 24.sp
                     ),
                     cursorBrush = SolidColor(palette.accent),
                     keyboardOptions = KeyboardOptions(
@@ -186,22 +183,59 @@ fun AidenComposerView(
                     .fillMaxWidth()
                     .padding(top = 6.dp)
             ) {
-                // Attachment Plus Button
-                IconButton(
-                    onClick = onAddAttachment,
-                    enabled = !isReadOnly && !isStreaming,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(palette.canvas.copy(alpha = 0.5f))
-                        .tactilePress { onAddAttachment() }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Add attachment",
-                        tint = if (!isReadOnly && !isStreaming) palette.foreground else palette.secondary.copy(alpha = 0.4f),
-                        modifier = Modifier.size(18.dp)
-                    )
+                // iOS parity: expose images and files as distinct native choices.
+                Box {
+                    IconButton(
+                        onClick = { showAttachmentMenu = true },
+                        enabled = !isReadOnly && !isStreaming && pendingAttachments.size < 10,
+                        modifier = Modifier
+                            .size(AidenUi.MinimumTouchTarget)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add attachment",
+                            tint = if (!isReadOnly && !isStreaming) palette.foreground else palette.secondary.copy(alpha = 0.4f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showAttachmentMenu,
+                        onDismissRequest = { showAttachmentMenu = false },
+                        shape = RoundedCornerShape(18.dp),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Photo Library") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.PhotoLibrary,
+                                    contentDescription = null,
+                                    tint = palette.foreground
+                                )
+                            },
+                            onClick = {
+                                showAttachmentMenu = false
+                                onAddImage()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Choose File") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Description,
+                                    contentDescription = null,
+                                    tint = palette.foreground
+                                )
+                            },
+                            onClick = {
+                                showAttachmentMenu = false
+                                onAddFile()
+                            }
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(8.dp))
@@ -210,12 +244,11 @@ fun AidenComposerView(
                 if (availableProviders.isNotEmpty() && onSelectModel != null) {
                     Box {
                         Surface(
-                            color = palette.canvas.copy(alpha = 0.5f),
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(0.5.dp, palette.secondary.copy(alpha = 0.15f)),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            shape = RoundedCornerShape(24.dp),
                             modifier = Modifier
-                                .height(32.dp)
-                                .tactilePress { showModelMenu = true }
+                                .heightIn(min = AidenUi.MinimumTouchTarget)
+                                .clickable { showModelMenu = true }
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -308,14 +341,13 @@ fun AidenComposerView(
                 // Voice Mic / Waveform Button
                 IconButton(
                     onClick = onToggleVoice,
-                    enabled = !isReadOnly && !isStreaming,
+                    enabled = !isReadOnly && !isStreaming && (!isVoiceBusy || isVoiceListening),
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(AidenUi.MinimumTouchTarget)
                         .clip(CircleShape)
                         .background(
-                            if (isVoiceListening) palette.accent.copy(alpha = 0.15f) else palette.canvas.copy(alpha = 0.5f)
+                            if (isVoiceListening) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
                         )
-                        .tactilePress { onToggleVoice() }
                 ) {
                     if (isVoiceListening) {
                         AidenHarmonicWaveform(
@@ -327,9 +359,9 @@ fun AidenComposerView(
                     } else {
                         Icon(
                             imageVector = Icons.Default.Mic,
-                            contentDescription = "Voice Dictation",
+                            contentDescription = "Start voice input",
                             tint = if (isVoiceListening) palette.accent else palette.secondary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -353,10 +385,7 @@ fun AidenComposerView(
                         else -> palette.canvas.copy(alpha = 0.6f)
                     },
                     modifier = Modifier
-                        .size(36.dp)
-                        .tactilePress {
-                            if (isStreaming) onStop() else if (canSend) onSend()
-                        }
+                        .size(AidenUi.MinimumTouchTarget)
                 ) {
                     Box(
                         contentAlignment = Alignment.Center,
@@ -375,14 +404,14 @@ fun AidenComposerView(
                                     imageVector = Icons.Default.Stop,
                                     contentDescription = "Stop generation",
                                     tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.ArrowUpward,
                                     contentDescription = "Send message",
                                     tint = if (canSend) Color.White else palette.secondary.copy(alpha = 0.4f),
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }

@@ -1,7 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -32,8 +31,10 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
-import sbtbiswas.AidenOnTheGo.ui.theme.fadeInGradientBorder
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.time.Instant
 import java.time.ZoneId
@@ -91,6 +92,7 @@ fun aidenBotContactSectionIDs(
 
 enum class AidenBotsHomeContentState {
     LOADING,
+    ERROR,
     EMPTY,
     NO_RESULTS,
     CONTENT
@@ -104,9 +106,11 @@ fun aidenBotsHomeContentState(
     conversationCount: Int,
     hasQuery: Boolean,
     filteredBotCount: Int,
-    filteredConversationCount: Int
+    filteredConversationCount: Int,
+    hasError: Boolean = false
 ): AidenBotsHomeContentState {
-    if (!hasSnapshot && isLoading) return AidenBotsHomeContentState.LOADING
+    if (!hasSnapshot && hasError) return AidenBotsHomeContentState.ERROR
+    if (!hasSnapshot) return AidenBotsHomeContentState.LOADING
     if (totalBotCount == 0 && conversationCount == 0) return AidenBotsHomeContentState.EMPTY
     if (hasQuery && filteredBotCount == 0 && filteredConversationCount == 0) return AidenBotsHomeContentState.NO_RESULTS
     return AidenBotsHomeContentState.CONTENT
@@ -288,6 +292,7 @@ fun AidenBotHomeSkeletonView(
 @Composable
 fun AidenBotsHomeScreen(
     coordinator: AidenRemoteCoordinator,
+    viewModel: AidenBotsViewModel,
     onNavigateToChat: (String) -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
     onNavigateToCreateBot: () -> Unit,
@@ -298,32 +303,17 @@ fun AidenBotsHomeScreen(
     val client by coordinator.client.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
 
-    var botList by remember { mutableStateOf<AidenBotList?>(null) }
-    var conversations by remember { mutableStateOf<List<AidenBotConversationItem>>(emptyList()) }
-    var searchQuery by remember { mutableStateOf("") }
-    var remoteSearchResults by remember { mutableStateOf<List<AidenBotConversationItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
+    val botList by viewModel.botList.collectAsState()
+    val conversations by viewModel.conversations.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val remoteSearchResults by viewModel.remoteSearchResults.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
     var isChoosingBotDialog by remember { mutableStateOf(false) }
-    var selectedBotForMenu by remember { mutableStateOf<AidenBotSummary?>(null) }
-
-    fun refresh() {
-        val cl = client ?: return
-        scope.launch {
-            isLoading = true
-            try {
-                val list = cl.bots()
-                botList = list
-                val page = cl.botConversations()
-                conversations = aidenCanonicalBotConversations(page.conversations)
-            } catch (_: Exception) {} finally {
-                isLoading = false
-            }
-        }
-    }
 
     LaunchedEffect(client, connectionState) {
         if (client != null && connectionState == AidenConnectionState.CONNECTED) {
-            refresh()
+            viewModel.loadBots()
         }
     }
 
@@ -378,7 +368,8 @@ fun AidenBotsHomeScreen(
         conversationCount = conversations.size,
         hasQuery = searchQuery.trim().isNotEmpty(),
         filteredBotCount = matchingBots.size,
-        filteredConversationCount = 0
+        filteredConversationCount = 0,
+        hasError = errorMessage != null
     )
 
     fun startOrOpenChat(bot: AidenBotSummary) {
@@ -391,14 +382,15 @@ fun AidenBotsHomeScreen(
                 try {
                     val created = cl.createBotChat(bot.id)
                     onNavigateToChat(created.id)
-                    refresh()
+                    viewModel.loadBots(force = true)
                 } catch (_: Exception) {}
             }
         }
     }
 
     Scaffold(
-        containerColor = palette.canvas
+        containerColor = palette.canvas,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { padding ->
         Box(
             modifier = modifier
@@ -407,32 +399,8 @@ fun AidenBotsHomeScreen(
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 90.dp)
+                contentPadding = PaddingValues(bottom = 104.dp)
             ) {
-                // Header section
-                item {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 14.dp)
-                    ) {
-                        Text(
-                            text = "Bots",
-                            style = MaterialTheme.typography.headlineLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = palette.foreground,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(
-                            onClick = onNavigateToCreateBot,
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "New Bot", tint = palette.foreground)
-                        }
-                    }
-                }
-
                 // Offline banner if offline
                 if (connectionState != AidenConnectionState.CONNECTED && botList != null) {
                     item {
@@ -462,49 +430,45 @@ fun AidenBotsHomeScreen(
                             AidenBotHomeSkeletonView()
                         }
                     }
+                    AidenBotsHomeContentState.ERROR -> {
+                        item {
+                            AidenEmptyState(
+                                icon = Icons.Default.WifiOff,
+                                title = "Bots couldn’t load",
+                                body = errorMessage ?: "Reconnect to your Mac and try again.",
+                                modifier = Modifier.padding(top = 36.dp),
+                                action = {
+                                    Button(
+                                        onClick = { viewModel.loadBots(force = true) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                                        shape = RoundedCornerShape(24.dp),
+                                        modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
+                                    ) { Text("Retry") }
+                                }
+                            )
+                        }
+                    }
                     AidenBotsHomeContentState.EMPTY -> {
                         item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 54.dp, start = 24.dp, end = 24.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(
-                                        imageVector = Icons.Default.SmartToy,
-                                        contentDescription = null,
-                                        tint = palette.secondary,
-                                        modifier = Modifier.size(56.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Text(
-                                        text = if (connectionState == AidenConnectionState.CONNECTED) "Make your first Bot" else "No saved Bots",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.foreground
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = if (connectionState == AidenConnectionState.CONNECTED)
-                                            "Create a Bot to give a familiar helper one persistent conversation and its own capabilities."
-                                        else
-                                            "Reconnect to your Mac to load Bots.",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = palette.secondary
-                                    )
-                                    if (connectionState == AidenConnectionState.CONNECTED) {
-                                        Spacer(modifier = Modifier.height(16.dp))
+                            AidenEmptyState(
+                                icon = Icons.Default.SmartToy,
+                                title = if (connectionState == AidenConnectionState.CONNECTED) "Make your first Bot" else "No saved Bots",
+                                body = if (connectionState == AidenConnectionState.CONNECTED)
+                                    "Create a familiar helper with one persistent conversation and its own capabilities."
+                                else
+                                    "Reconnect to your Mac to load Bots.",
+                                modifier = Modifier.padding(top = 36.dp),
+                                action = if (connectionState == AidenConnectionState.CONNECTED) {
+                                    {
                                         Button(
                                             onClick = onNavigateToCreateBot,
                                             colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                            shape = RoundedCornerShape(12.dp)
-                                        ) {
-                                            Text("New Bot", color = Color.White, fontWeight = FontWeight.Bold)
-                                        }
+                                            shape = RoundedCornerShape(24.dp),
+                                            modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
+                                        ) { Text("New Bot") }
                                     }
-                                }
-                            }
+                                } else null
+                            )
                         }
                     }
                     AidenBotsHomeContentState.NO_RESULTS -> {
@@ -527,12 +491,9 @@ fun AidenBotsHomeScreen(
                         // Favorites Section
                         if (favoriteBots.isNotEmpty()) {
                             item {
-                                Text(
+                                AidenSectionLabel(
                                     text = "Favorites",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = palette.secondary,
-                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                                    modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 10.dp)
                                 )
                                 LazyRow(
                                     contentPadding = PaddingValues(horizontal = 20.dp),
@@ -545,14 +506,14 @@ fun AidenBotsHomeScreen(
                                             modifier = Modifier
                                                 .width(80.dp)
                                                 .clip(RoundedCornerShape(16.dp))
-                                                .tactilePress { startOrOpenChat(bot) }
+                                                .clickable { startOrOpenChat(bot) }
                                                 .padding(vertical = 4.dp)
                                         ) {
                                             Box(
                                                 contentAlignment = Alignment.Center,
                                                 modifier = Modifier
                                                     .size(76.dp)
-                                                    .shadow(elevation = 6.dp, shape = CircleShape)
+                                                    .shadow(elevation = 1.dp, shape = CircleShape)
                                             ) {
                                                 AidenBotCanonicalAvatarView(
                                                     coordinator = coordinator,
@@ -580,12 +541,9 @@ fun AidenBotsHomeScreen(
                         // Bots Section
                         if (otherBots.isNotEmpty()) {
                             item {
-                                Text(
+                                AidenSectionLabel(
                                     text = "Bots",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = palette.secondary,
-                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                                    modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 10.dp)
                                 )
                             }
 
@@ -597,24 +555,17 @@ fun AidenBotsHomeScreen(
                                 val isActive = conv?.activityState != null && conv.activityState != AidenBotConversationActivityState.IDLE
 
                                 Surface(
-                                    color = palette.raised,
-                                    shape = RoundedCornerShape(16.dp),
-                                    border = BorderStroke(0.5.dp, palette.secondary.copy(alpha = 0.12f)),
+                                    color = Color.Transparent,
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 5.dp)
-                                        .shadow(elevation = if (isActive) 4.dp else 2.dp, shape = RoundedCornerShape(16.dp))
-                                        .fadeInGradientBorder(
-                                            showBorder = isActive,
-                                            colors = listOf(palette.accent, palette.warning, palette.accent),
-                                            shape = RoundedCornerShape(16.dp),
-                                            borderWidth = 1.5.dp
-                                        )
-                                        .tactilePress { startOrOpenChat(bot) }
+                                        .padding(horizontal = 8.dp, vertical = 1.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { startOrOpenChat(bot) }
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(14.dp)
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = AidenUi.RowVerticalPadding)
                                     ) {
                                         AidenBotCanonicalAvatarView(
                                             coordinator = coordinator,
@@ -663,8 +614,8 @@ fun AidenBotsHomeScreen(
                                                 if (status != null) {
                                                     Spacer(modifier = Modifier.height(6.dp))
                                                     Surface(
-                                                        color = palette.accent.copy(alpha = 0.12f),
-                                                        shape = RoundedCornerShape(8.dp)
+                                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                                        shape = RoundedCornerShape(10.dp)
                                                     ) {
                                                         Row(
                                                             verticalAlignment = Alignment.CenterVertically,
@@ -694,8 +645,11 @@ fun AidenBotsHomeScreen(
                                                 }
                                             }
                                         }
-                                        IconButton(onClick = { onNavigateToBotProfile(bot.id) }) {
-                                            Icon(Icons.Default.ChevronRight, contentDescription = "Bot Details", tint = palette.secondary)
+                                        IconButton(
+                                            onClick = { onNavigateToBotProfile(bot.id) },
+                                            modifier = Modifier.size(AidenUi.MinimumTouchTarget)
+                                        ) {
+                                            Icon(Icons.Default.ChevronRight, contentDescription = "Open ${bot.name} details", tint = palette.secondary)
                                         }
                                     }
                                 }
@@ -712,14 +666,14 @@ fun AidenBotsHomeScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .navigationBarsPadding()
+                    .padding(horizontal = AidenUi.ScreenGutter, vertical = 10.dp)
             ) {
                 // Search Glass Capsule
                 Surface(
                     shape = RoundedCornerShape(27.dp),
                     color = palette.raised.copy(alpha = 0.94f),
-                    border = BorderStroke(0.5.dp, palette.secondary.copy(alpha = 0.18f)),
-                    shadowElevation = 8.dp,
+                    shadowElevation = 3.dp,
                     modifier = Modifier
                         .weight(1f)
                         .height(54.dp)
@@ -748,18 +702,7 @@ fun AidenBotsHomeScreen(
                             }
                             BasicTextField(
                                 value = searchQuery,
-                                onValueChange = { query ->
-                                    searchQuery = query
-                                    val cl = client
-                                    if (cl != null && query.trim().isNotEmpty()) {
-                                        scope.launch {
-                                            try {
-                                                val page = cl.botConversations(query = query.trim())
-                                                remoteSearchResults = page.conversations
-                                            } catch (_: Exception) {}
-                                        }
-                                    }
-                                },
+                                onValueChange = viewModel::updateSearchQuery,
                                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                                     color = palette.foreground,
                                     fontSize = 15.sp
@@ -771,7 +714,7 @@ fun AidenBotsHomeScreen(
                         }
                         if (searchQuery.isNotEmpty()) {
                             IconButton(
-                                onClick = { searchQuery = "" },
+                                onClick = { viewModel.updateSearchQuery("") },
                                 modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
@@ -789,13 +732,8 @@ fun AidenBotsHomeScreen(
                 Surface(
                     shape = CircleShape,
                     color = if (chatReadyBots.isNotEmpty()) palette.accent else palette.raised,
-                    border = BorderStroke(0.5.dp, palette.secondary.copy(alpha = 0.18f)),
-                    shadowElevation = 8.dp,
-                    modifier = Modifier
-                        .size(54.dp)
-                        .tactilePress {
-                            if (chatReadyBots.isNotEmpty()) isChoosingBotDialog = true
-                        }
+                    shadowElevation = 3.dp,
+                    modifier = Modifier.size(54.dp)
                 ) {
                     IconButton(
                         onClick = { isChoosingBotDialog = true },

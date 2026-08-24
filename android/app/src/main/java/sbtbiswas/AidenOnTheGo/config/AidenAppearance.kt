@@ -101,8 +101,8 @@ data class AidenPalette(
 object AidenThemeCatalog {
     val palettes: Map<AidenThemePresetID, List<AidenPalette>> = mapOf(
         AidenThemePresetID.AIDEN to listOf(
-            AidenPalette(canvasHex = "#F6F7F9", sidebarHex = "#EEF0F3", raisedHex = "#FFFFFF", foregroundHex = "#3D3F41", secondaryHex = "#6B7280", accentHex = "#006AD6", successHex = "#30D158", warningHex = "#FF9F0A", dangerHex = "#FF453A"),
-            AidenPalette(canvasHex = "#181B21", sidebarHex = "#20242C", raisedHex = "#292E37", foregroundHex = "#D1D4DA", secondaryHex = "#9AA3AE", accentHex = "#3E97F6", successHex = "#32D17A", warningHex = "#FFB020", dangerHex = "#FF5E57")
+            AidenPalette(canvasHex = "#FBFBFA", sidebarHex = "#F3F3F1", raisedHex = "#FFFFFF", foregroundHex = "#181817", secondaryHex = "#686866", accentHex = "#0B7DE5", successHex = "#087C58", warningHex = "#9A6700", dangerHex = "#C3322B"),
+            AidenPalette(canvasHex = "#111110", sidebarHex = "#171716", raisedHex = "#1B1B1A", foregroundHex = "#F5F5F3", secondaryHex = "#A7A7A2", accentHex = "#4B9CF2", successHex = "#55C99B", warningHex = "#E6B750", dangerHex = "#E25750")
         ),
         AidenThemePresetID.SLATE to listOf(
             AidenPalette(canvasHex = "#F2F5F9", sidebarHex = "#E6EBF2", raisedHex = "#FFFFFF", foregroundHex = "#3A434E", secondaryHex = "#637083", accentHex = "#087581", successHex = "#2DB67D", warningHex = "#E0A72E", dangerHex = "#E24D5B"),

@@ -1,16 +1,12 @@
 package sbtbiswas.AidenOnTheGo.ui.theme
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,10 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import kotlin.math.pow
 
 /**
@@ -87,31 +80,6 @@ fun Modifier.tactilePress(
 }
 
 /**
- * Hairline border with subtle opacity conforming to the Aiden design tokens.
- */
-fun Modifier.hairlineBorder(
-    color: Color,
-    shape: Shape = RoundedCornerShape(12.dp),
-    width: Dp = 0.5.dp
-): Modifier = this.border(
-    border = BorderStroke(width, color),
-    shape = shape
-)
-
-/**
- * Gradient border for hero cards, active bots, and focused inputs.
- */
-fun Modifier.gradientBorder(
-    colors: List<Color>,
-    shape: Shape = RoundedCornerShape(12.dp),
-    width: Dp = 1.dp
-): Modifier = this.border(
-    width = width,
-    brush = Brush.linearGradient(colors),
-    shape = shape
-)
-
-/**
  * Exponential vertical scrim with natural curve decay (prevents banding on glass headers/footers).
  */
 fun Modifier.exponentialVerticalScrim(
@@ -135,27 +103,4 @@ fun Modifier.exponentialVerticalScrim(
         val height = size.height * kotlin.math.abs(endYPercentage - startYPercentage)
         drawRect(brush = brush, topLeft = Offset(0f, top), size = Size(size.width, height))
     }
-}
-
-/**
- * Smoothly animates gradient border appearance on active or selected cards.
- */
-fun Modifier.fadeInGradientBorder(
-    showBorder: Boolean,
-    colors: List<Color>,
-    shape: Shape = RoundedCornerShape(16.dp),
-    borderWidth: Dp = 1.5.dp
-): Modifier = composed {
-    val animatedColors = List(colors.size) { i ->
-        animateColorAsState(
-            targetValue = if (showBorder) colors[i] else colors[i].copy(alpha = 0f),
-            animationSpec = spring(dampingRatio = 0.8f, stiffness = 400f),
-            label = "border_color_$i"
-        ).value
-    }
-    this.border(
-        width = borderWidth,
-        brush = Brush.linearGradient(animatedColors),
-        shape = shape
-    )
 }

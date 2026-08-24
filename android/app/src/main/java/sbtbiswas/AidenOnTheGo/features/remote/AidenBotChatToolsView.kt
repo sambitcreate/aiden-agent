@@ -479,6 +479,7 @@ fun AidenBotChatAccessSheet(
             // Scope Selector
             Row(modifier = Modifier.fillMaxWidth()) {
                 FilterChip(
+                    border = null,
                     selected = selectedScope == AidenBotChatAccessScope.CHAT,
                     onClick = { selectedScope = AidenBotChatAccessScope.CHAT },
                     label = { Text("This chat") },
@@ -486,6 +487,7 @@ fun AidenBotChatAccessSheet(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 FilterChip(
+                    border = null,
                     selected = selectedScope == AidenBotChatAccessScope.BOT,
                     onClick = { selectedScope = AidenBotChatAccessScope.BOT },
                     label = { Text("Bot defaults") },
@@ -520,12 +522,14 @@ fun AidenBotChatAccessSheet(
                         Text("Mode:", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
                         Spacer(modifier = Modifier.width(12.dp))
                         FilterChip(
+                            border = null,
                             selected = currentDraft.mode == AidenBotChatAccessMode.INHERIT,
                             onClick = { if (canEdit) model.draft = currentDraft.copy(mode = AidenBotChatAccessMode.INHERIT) },
                             label = { Text("Inherit Bot") }
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         FilterChip(
+                            border = null,
                             selected = currentDraft.mode == AidenBotChatAccessMode.CUSTOM,
                             onClick = { if (canEdit) model.draft = currentDraft.copy(mode = AidenBotChatAccessMode.CUSTOM) },
                             label = { Text("Customize") }

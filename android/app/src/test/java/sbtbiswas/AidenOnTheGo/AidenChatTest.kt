@@ -439,6 +439,35 @@ class AidenChatTest {
     }
 
     @Test
+    fun testAttachmentImageCacheIsScopedByInstallationDeviceAndChat() {
+        val tempDir = File(System.getProperty("java.io.tmpdir"), "aiden-image-cache-test-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val cache = AidenChatCache(root = tempDir)
+            val bytes = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )
+            val attachment = AidenMessageAttachment(
+                id = "image-1",
+                name = "photo.png",
+                mimeType = "image/png",
+                kind = AidenAttachmentKind.IMAGE,
+                size = bytes.size
+            )
+
+            cache.saveAttachmentImage(bytes, "instance-a", "device-a", "chat-a", attachment)
+            assertArrayEquals(bytes, cache.attachmentImage("instance-a", "device-a", "chat-a", attachment))
+            assertNull(cache.attachmentImage("instance-a", "device-b", "chat-a", attachment))
+            assertNull(cache.attachmentImage("instance-a", "device-a", "chat-b", attachment))
+            assertNull(cache.attachmentImage("instance-b", "device-a", "chat-a", attachment))
+
+            cache.removeAttachmentImage("instance-a", "device-a", "chat-a", attachment.id)
+            assertNull(cache.attachmentImage("instance-a", "device-a", "chat-a", attachment))
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun testDraftStoreOptimisticGenerationTracking() {
         val tempDir = File(System.getProperty("java.io.tmpdir"), "aiden-drafts-test-${UUID.randomUUID()}").apply { mkdirs() }
         try {

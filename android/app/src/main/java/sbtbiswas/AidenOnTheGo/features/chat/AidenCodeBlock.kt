@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -40,9 +39,8 @@ fun AidenCodeBlock(
     val scope = rememberCoroutineScope()
 
     Surface(
-        color = palette.canvas,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, palette.secondary.copy(alpha = 0.2f)),
         modifier = modifier.fillMaxWidth()
     ) {
         Column {
@@ -74,16 +72,7 @@ fun AidenCodeBlock(
                                 copied = false
                             }
                         },
-                        modifier = Modifier
-                            .size(28.dp)
-                            .tactilePress {
-                                onCopy(code)
-                                copied = true
-                                scope.launch {
-                                    delay(2000)
-                                    copied = false
-                                }
-                            }
+                        modifier = Modifier.size(48.dp)
                     ) {
                         AnimatedContent(
                             targetState = copied,

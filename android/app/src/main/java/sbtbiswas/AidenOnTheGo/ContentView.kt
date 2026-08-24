@@ -10,7 +10,9 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenPairingScreen
 import sbtbiswas.AidenOnTheGo.features.remote.AidenProductShellScreen
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
+import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
 @Composable
@@ -18,6 +20,8 @@ fun ContentView(
     coordinator: AidenRemoteCoordinator,
     installationStore: AidenInstallationStore,
     navigationStore: AidenProductNavigationStore,
+    chatCache: AidenChatCache,
+    voiceInputStore: AidenVoiceInputStore,
     onNavigateToChat: (String) -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
     onNavigateToBotEditor: (String?) -> Unit,
@@ -49,6 +53,8 @@ fun ContentView(
                         coordinator = coordinator,
                         navigationStore = navigationStore,
                         installationStore = installationStore,
+                        chatCache = chatCache,
+                        voiceInputStore = voiceInputStore,
                         onNavigateToChat = onNavigateToChat,
                         onNavigateToBotProfile = onNavigateToBotProfile,
                         onNavigateToBotEditor = onNavigateToBotEditor,

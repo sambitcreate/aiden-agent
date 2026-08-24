@@ -10,6 +10,10 @@ import sbtbiswas.AidenOnTheGo.models.AidenAttachmentImageValidation
 import sbtbiswas.AidenOnTheGo.models.AidenChat
 import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Date
 
@@ -171,6 +175,10 @@ class AidenChatCache(
         if (attachment.kind != sbtbiswas.AidenOnTheGo.models.AidenAttachmentKind.IMAGE) return null
         val file = attachmentImageFile(instanceId, deviceId, chatId, attachment.id)
         if (!file.exists()) return null
+        if (file.length() !in 1..AidenAttachmentImageValidation.MAXIMUM_BYTES.toLong()) {
+            file.delete()
+            return null
+        }
         val data = try { file.readBytes() } catch (_: Exception) { return null }
         val validated = AidenAttachmentImageValidation.validatedData(
             data,
@@ -204,7 +212,25 @@ class AidenChatCache(
 
         val file = attachmentImageFile(instanceId, deviceId, chatId, attachment.id)
         file.parentFile?.mkdirs()
-        file.writeBytes(validated)
+        val temporary = File(file.parentFile, ".${file.name}.${java.util.UUID.randomUUID()}.tmp")
+        try {
+            FileOutputStream(temporary).use { stream ->
+                stream.write(validated)
+                stream.fd.sync()
+            }
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    file.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (temporary.exists()) temporary.delete()
+        }
         pruneAttachmentImages(instanceId, preserving = file)
     }
 

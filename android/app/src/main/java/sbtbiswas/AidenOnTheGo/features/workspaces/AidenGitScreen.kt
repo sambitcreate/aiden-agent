@@ -246,6 +246,7 @@ fun AidenGitScreen(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 OutlinedButton(
+                                    border = null,
                                     onClick = { showBranchSheet = true },
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.weight(1f),
@@ -255,6 +256,7 @@ fun AidenGitScreen(
                                 }
 
                                 OutlinedButton(
+                                    border = null,
                                     onClick = {
                                         if (client != null && !isCheckingPush) {
                                             isCheckingPush = true
@@ -281,6 +283,7 @@ fun AidenGitScreen(
                                 }
 
                                 OutlinedButton(
+                                    border = null,
                                     onClick = { showCompareDialog = true },
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.weight(1f),
@@ -290,6 +293,7 @@ fun AidenGitScreen(
                                 }
 
                                 OutlinedButton(
+                                    border = null,
                                     onClick = { showWorktreesSheet = true },
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.weight(1f),
@@ -434,7 +438,9 @@ fun AidenGitScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                OutlinedTextField(
+                TextField(
+
+                    colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                     value = commitMessage,
                     onValueChange = { commitMessage = it },
                     label = { Text("Commit message") },
@@ -682,7 +688,8 @@ fun AidenGitScreen(
                     title = { Text("Create New Branch", fontWeight = FontWeight.Bold) },
                     text = {
                         Column {
-                            OutlinedTextField(
+                            TextField(
+                                colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                                 value = newBranchName,
                                 onValueChange = { newBranchName = it },
                                 label = { Text("Branch name") },
@@ -690,7 +697,8 @@ fun AidenGitScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedTextField(
+                            TextField(
+                                colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                                 value = startPoint,
                                 onValueChange = { startPoint = it },
                                 label = { Text("Start point (branch / commit)") },
@@ -808,7 +816,8 @@ fun AidenGitScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
+                    TextField(
+                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = baseRef,
                         onValueChange = { baseRef = it },
                         label = { Text("Base branch") },
@@ -986,7 +995,8 @@ fun AidenGitScreen(
                     title = { Text("Create Managed Worktree", fontWeight = FontWeight.Bold) },
                     text = {
                         Column {
-                            OutlinedTextField(
+                            TextField(
+                                colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                                 value = wtBranch,
                                 onValueChange = { wtBranch = it },
                                 label = { Text("Branch name") },
@@ -994,7 +1004,8 @@ fun AidenGitScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedTextField(
+                            TextField(
+                                colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                                 value = wtName,
                                 onValueChange = { wtName = it },
                                 label = { Text("Worktree name") },

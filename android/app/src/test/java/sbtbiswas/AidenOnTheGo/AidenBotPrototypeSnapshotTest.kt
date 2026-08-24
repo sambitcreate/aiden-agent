@@ -9,6 +9,8 @@ import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotFirstPrototypeConf
 import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotPrototypeFixtures
 import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotPrototypeScreen
 import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotPrototypeState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import androidx.compose.ui.unit.dp
 
 class AidenBotPrototypeSnapshotTest {
     @Test
@@ -96,6 +98,21 @@ class AidenBotPrototypeSnapshotTest {
 
         val pureBlack = AidenPalette.mixHex(white, black, 1.0f)
         assertEquals("#000000", pureBlack.uppercase())
+    }
+
+    @Test
+    fun testAndroidVisualFoundationContract() {
+        val light = AidenThemeCatalog.palette(AidenThemePresetID.AIDEN, false)
+        val dark = AidenThemeCatalog.palette(AidenThemePresetID.AIDEN, true)
+
+        assertEquals("#FBFBFA", light.canvasHex)
+        assertEquals("#181817", light.foregroundHex)
+        assertEquals("#111110", dark.canvasHex)
+        assertEquals("#F5F5F3", dark.foregroundHex)
+
+        assertTrue(AidenUi.MinimumTouchTarget >= 48.dp)
+        assertEquals(20.dp, AidenUi.ScreenGutter)
+        assertEquals(30.dp, AidenUi.ComposerRadius)
     }
 
     @Test

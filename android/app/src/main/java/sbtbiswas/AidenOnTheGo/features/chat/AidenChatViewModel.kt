@@ -1,14 +1,20 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
@@ -89,18 +95,20 @@ class AidenChatViewModel(
     private var titleRefreshJob: Job? = null
     private var terminalReconciliationJob: Job? = null
     private val turnAttempts = AidenTurnAttemptTracker()
+    private val attachmentImageLoadMutex = Mutex()
+    private val attachmentImageLoads = mutableMapOf<String, Deferred<ByteArray?>>()
+    private val boundClient = coordinator.client.value
+    private val instanceId: String = coordinator.installationStore.activeInstallation?.instanceId ?: ""
+    private val deviceId: String = coordinator.installationStore.activeInstallation?.deviceId ?: ""
 
-    private val instanceId: String
-        get() = coordinator.installationStore.activeInstallation?.instanceId ?: ""
-
-    private val deviceId: String
-        get() = coordinator.installationStore.activeInstallation?.deviceId ?: ""
+    private fun activeClient(): AidenRemoteClient? =
+        boundClient?.takeIf { coordinator.client.value === it }
 
     val isReadOnlyPresentation: Boolean
         get() = coordinator.installationStore.activeInstallation == null
 
     val isConnected: Boolean
-        get() = coordinator.client.value != null
+        get() = activeClient() != null
 
     val canSend: Boolean
         get() = !isReadOnlyPresentation && isConnected && !_isStarting.value &&
@@ -160,7 +168,7 @@ class AidenChatViewModel(
     }
 
     fun loadChat() {
-        val client = coordinator.client.value ?: return
+        val client = activeClient() ?: return
         viewModelScope.launch {
             _isLoading.value = true
             try {
@@ -177,7 +185,7 @@ class AidenChatViewModel(
     }
 
     fun loadCatalog() {
-        val client = coordinator.client.value ?: return
+        val client = activeClient() ?: return
         viewModelScope.launch {
             try {
                 val catalog = client.modelCatalog()
@@ -205,12 +213,16 @@ class AidenChatViewModel(
         val currentInstanceId = instanceId
         if (currentInstanceId.isEmpty()) return
         val activeStream = chatCache.loadActiveStream(currentInstanceId, chatId) ?: return
+        if (activeStream.deviceId != deviceId) {
+            chatCache.removeActiveStream(currentInstanceId, chatId, ifStreamId = activeStream.streamId)
+            return
+        }
         startStreaming(activeStream)
     }
 
     fun send() {
         if (!canSend) return
-        val client = coordinator.client.value ?: return
+        val client = activeClient() ?: return
         val currentChat = _chat.value ?: return
 
         val text = _draft.value.trim()
@@ -314,7 +326,7 @@ class AidenChatViewModel(
         ) {
             return uploads.size
         }
-        val client = coordinator.client.value ?: return uploads.size
+        val client = activeClient() ?: return uploads.size
         _isUploadingAttachment.value = true
         _presentedError.value = null
         var failedCount = 0
@@ -356,9 +368,14 @@ class AidenChatViewModel(
     }
 
     fun removePendingAttachment(attachmentId: String) {
-        val client = coordinator.client.value
+        val client = activeClient()
         val toRemove = _pendingAttachments.value.firstOrNull { it.id == attachmentId } ?: return
         _pendingAttachments.value = _pendingAttachments.value.filter { it.id != attachmentId }
+        if (instanceId.isNotEmpty() && deviceId.isNotEmpty()) {
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                chatCache.removeAttachmentImage(instanceId, deviceId, chatId, attachmentId)
+            }
+        }
         if (client != null) {
             viewModelScope.launch {
                 try { client.removeAttachment(chatId, toRemove.id) } catch (_: Exception) {}
@@ -366,8 +383,56 @@ class AidenChatViewModel(
         }
     }
 
+    suspend fun attachmentImageData(attachment: AidenMessageAttachment): ByteArray? {
+        if (instanceId.isEmpty() || deviceId.isEmpty() ||
+            attachment.kind != AidenAttachmentKind.IMAGE
+        ) return null
+
+        val loadKey = "$instanceId\u001f$deviceId\u001f$chatId\u001f${attachment.id}"
+        val request = attachmentImageLoadMutex.withLock {
+            attachmentImageLoads[loadKey] ?: viewModelScope.async {
+                loadAttachmentImageData(attachment)
+            }.also { attachmentImageLoads[loadKey] = it }
+        }
+        return try {
+            request.await()
+        } finally {
+            attachmentImageLoadMutex.withLock {
+                if (attachmentImageLoads[loadKey] === request && request.isCompleted) {
+                    attachmentImageLoads.remove(loadKey)
+                }
+            }
+        }
+    }
+
+    private suspend fun loadAttachmentImageData(attachment: AidenMessageAttachment): ByteArray? {
+
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            chatCache.attachmentImage(instanceId, deviceId, chatId, attachment)
+        }?.let { return it }
+        val client = activeClient() ?: return null
+        return try {
+            val content = client.attachmentContent(chatId, attachment.id)
+            if (activeClient() !== client || coordinator.activeInstanceId != instanceId ||
+                coordinator.installationStore.activeInstallation?.deviceId != deviceId
+            ) return null
+            if (!content.mimeType.equals(attachment.mimeType, ignoreCase = true)) return null
+            val validated = AidenAttachmentImageValidation.validatedData(
+                content.data,
+                attachment.mimeType,
+                attachment.size
+            ) ?: return null
+            withContext(kotlinx.coroutines.Dispatchers.IO) {
+                chatCache.saveAttachmentImage(validated, instanceId, deviceId, chatId, attachment)
+            }
+            validated
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun startStreaming(originalStream: AidenChatCache.ActiveStream) {
-        val client = coordinator.client.value ?: return
+        val client = activeClient() ?: return
         activeStreamId = originalStream.streamId
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
@@ -519,7 +584,7 @@ class AidenChatViewModel(
     }
 
     private suspend fun restorePendingApproval(streamId: String) {
-        val client = coordinator.client.value ?: return
+        val client = activeClient() ?: return
         try {
             val snapshot = client.streamApproval(streamId)
             if (activeStreamId != streamId) return
@@ -542,7 +607,7 @@ class AidenChatViewModel(
     }
 
     fun cancelTurn() {
-        val client = coordinator.client.value ?: return
+        val client = activeClient() ?: return
         val streamId = activeStreamId ?: return
         viewModelScope.launch {
             try {
@@ -562,7 +627,7 @@ class AidenChatViewModel(
             _pendingApproval.value = null
             return
         }
-        val client = coordinator.client.value ?: return
+        val client = activeClient() ?: return
         val streamId = activeStreamId ?: return
         val previousState = _streamState.value
 
@@ -583,7 +648,7 @@ class AidenChatViewModel(
     }
 
     private suspend fun reconcileChat(): Boolean {
-        val client = coordinator.client.value ?: return false
+        val client = activeClient() ?: return false
         return try {
             val remote = client.chat(chatId)
             acceptRemoteChat(remote)
@@ -610,7 +675,7 @@ class AidenChatViewModel(
     private fun schedulePendingTitleRefresh() {
         if (titleRefreshJob != null && titleRefreshJob!!.isActive) return
         titleRefreshJob = viewModelScope.launch {
-            val client = coordinator.client.value ?: return@launch
+            val client = activeClient() ?: return@launch
             for (delayMs in AidenChatTitleReconciliation.retryMilliseconds) {
                 try {
                     delay(delayMs)
@@ -682,5 +747,19 @@ class AidenChatViewModel(
     fun sendTurn(text: String, thinkingLevel: String? = null, attachmentIds: List<String>? = null) {
         updateDraft(text)
         send()
+    }
+
+    companion object {
+        fun factory(
+            chatId: String,
+            coordinator: AidenRemoteCoordinator,
+            chatCache: AidenChatCache,
+            draftStore: AidenChatDraftStore
+        ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return AidenChatViewModel(chatId, coordinator, chatCache, draftStore) as T
+            }
+        }
     }
 }

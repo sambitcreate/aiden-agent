@@ -241,7 +241,9 @@ fun AidenBotImagePlaygroundSheet(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
+        TextField(
+
+            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
             value = prompt,
             onValueChange = { prompt = it },
             label = { Text("Avatar Description") },

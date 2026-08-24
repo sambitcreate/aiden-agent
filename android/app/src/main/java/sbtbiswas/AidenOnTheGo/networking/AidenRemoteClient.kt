@@ -1,7 +1,11 @@
 package sbtbiswas.AidenOnTheGo.networking
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -14,8 +18,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.*
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -340,6 +346,7 @@ class AidenRemoteClient(
         acceptHeader: String = "application/json",
         acceptedStatus: Set<Int> = setOf(200),
         botScope: AidenBotPrivateResponseScope? = null,
+        requestTimeoutSeconds: Long? = null,
         deserializer: (ByteArray) -> T
     ): T = withContext(Dispatchers.IO) {
         val url = if (path.startsWith("http")) path else "$endpoint$path"
@@ -374,7 +381,13 @@ class AidenRemoteClient(
             "DELETE" -> if (requestBody != null) requestBuilder.delete(requestBody) else requestBuilder.delete()
         }
 
-        val response = httpClient.newCall(requestBuilder.build()).await()
+        val callClient = requestTimeoutSeconds?.let {
+            httpClient.newBuilder()
+                .readTimeout(it, TimeUnit.SECONDS)
+                .callTimeout(it, TimeUnit.SECONDS)
+                .build()
+        } ?: httpClient
+        val response = callClient.newCall(requestBuilder.build()).await()
         val bytes = response.body?.bytes() ?: ByteArray(0)
 
         if (!acceptedStatus.contains(response.code)) {
@@ -578,17 +591,22 @@ class AidenRemoteClient(
             .get()
             .build()
 
-        val response = httpClient.newCall(request).await()
-        val bytes = response.body?.bytes() ?: ByteArray(0)
-        if (!response.isSuccessful) {
-            val errorBody = parseError(response.code, bytes)
-            throw AidenRemoteClientException.Server(response.code, errorBody)
+        httpClient.newCall(request).await().use { response ->
+            if (!response.isSuccessful) {
+                val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+            }
+            val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
+            if (contentType != "image/jpeg" && contentType != "image/png") {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            val bytes = try {
+                response.body.readBounded(AidenAttachmentImageValidation.MAXIMUM_BYTES)
+            } catch (_: IOException) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            AidenAttachmentContent(data = bytes, mimeType = contentType)
         }
-        val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
-        if (contentType != "image/jpeg" && contentType != "image/png") {
-            throw AidenRemoteClientException.InvalidResponse()
-        }
-        AidenAttachmentContent(data = bytes, mimeType = contentType)
     }
 
     suspend fun startTurn(
@@ -657,7 +675,7 @@ class AidenRemoteClient(
     fun streamEvents(
         id: String,
         after: Int = 0
-    ): Flow<AidenRemoteStreamEvent> {
+    ): Flow<AidenRemoteStreamEvent> = callbackFlow {
         val query = if (after > 0) "?after=$after" else ""
         val url = "$endpoint/streams/$id/events$query"
         val requestBuilder = Request.Builder()
@@ -673,15 +691,28 @@ class AidenRemoteClient(
         }
 
         val call = httpClient.newCall(requestBuilder.build())
-        val response = call.execute()
-        if (!response.isSuccessful) {
-            val bytes = response.body?.bytes() ?: ByteArray(0)
-            val errorBody = parseError(response.code, bytes)
-            throw AidenRemoteClientException.Server(response.code, errorBody)
+        val readerJob = launch(Dispatchers.IO) {
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val bytes = response.body?.bytes() ?: ByteArray(0)
+                        val errorBody = parseError(response.code, bytes)
+                        throw AidenRemoteClientException.Server(response.code, errorBody)
+                    }
+                    val stream = response.body?.byteStream()
+                        ?: throw AidenRemoteClientException.InvalidResponse()
+                    AidenSSEParser.parseStream(stream, expectedStreamId = id, startSequence = after)
+                        .collect { event -> send(event) }
+                }
+                close()
+            } catch (error: Exception) {
+                if (isActive) close(error)
+            }
         }
-
-        val stream = response.body?.byteStream() ?: throw AidenRemoteClientException.InvalidResponse()
-        return AidenSSEParser.parseStream(stream, expectedStreamId = id, startSequence = after)
+        awaitClose {
+            call.cancel()
+            readerJob.cancel()
+        }
     }
 
     fun openStream(chatId: String, streamId: String, lastEventId: Int? = null): Flow<AidenRemoteStreamEvent> =
@@ -1117,6 +1148,44 @@ class AidenRemoteClient(
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
 
+    suspend fun speechStatus(): AidenSpeechStatus = executeRequest("/speech") { bytes ->
+        json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
+    suspend fun selectSpeechModel(modelId: String): AidenSpeechStatus = executeRequest(
+        "/speech",
+        method = "PATCH",
+        bodyJson = json.encodeToString(AidenSpeechSelectionRequest(modelId))
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun downloadSpeechModel(modelId: String): AidenSpeechStatus = executeRequest(
+        "/speech/models/$modelId/download",
+        method = "POST",
+        acceptedStatus = setOf(202)
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun cancelSpeechModelDownload(modelId: String): AidenSpeechStatus = executeRequest(
+        "/speech/models/$modelId/download",
+        method = "DELETE"
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun deleteSpeechModel(modelId: String): AidenSpeechStatus = executeRequest(
+        "/speech/models/$modelId",
+        method = "DELETE"
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun transcribeSpeech(pcmBase64: String, modelId: String): AidenSpeechTranscription {
+        val body = withContext(Dispatchers.Default) {
+            json.encodeToString(AidenSpeechTranscriptionRequest(pcmBase64 = pcmBase64, modelId = modelId))
+        }
+        return executeRequest(
+            "/speech/transcriptions",
+            method = "POST",
+            bodyJson = body,
+            requestTimeoutSeconds = 120
+        ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+    }
+
     // --- Files & Git ---
     suspend fun workspaceFiles(workspaceId: String): AidenWorkspaceFileIndex = executeRequest(
         "/workspaces/$workspaceId/files"
@@ -1491,4 +1560,22 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
             continuation.resumeWithException(e)
         }
     })
+}
+
+private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
+    val body = this ?: return ByteArray(0)
+    if (body.contentLength() > maximumBytes) throw IOException("response body exceeds limit")
+    val output = ByteArrayOutputStream(minOf(maximumBytes, 64 * 1024))
+    body.byteStream().use { input ->
+        val buffer = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            total += read
+            if (total > maximumBytes) throw IOException("response body exceeds limit")
+            output.write(buffer, 0, read)
+        }
+    }
+    return output.toByteArray()
 }

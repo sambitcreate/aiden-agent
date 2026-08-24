@@ -40,7 +40,8 @@ fun AidenBotCanonicalAvatarView(
     size: Dp = 48.dp,
     modifier: Modifier = Modifier
 ) {
-    val effectiveClient = client ?: coordinator?.client?.value
+    val coordinatorClient = coordinator?.client?.collectAsState()?.value
+    val effectiveClient = client ?: coordinatorClient
     val effectiveBotCache = botCache ?: coordinator?.botCache
     val asset = avatar.asset
     var customBitmap by remember(asset?.assetRevision) {

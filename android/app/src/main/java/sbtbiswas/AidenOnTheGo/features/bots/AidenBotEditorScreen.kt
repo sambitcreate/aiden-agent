@@ -477,7 +477,9 @@ fun AidenBotEditorScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Identity", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
 
-                        OutlinedTextField(
+                        TextField(
+
+                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = currentDraft.name,
                             onValueChange = { draft = currentDraft.copy(name = it.take(80)) },
                             label = { Text("Name") },
@@ -487,7 +489,9 @@ fun AidenBotEditorScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        OutlinedTextField(
+                        TextField(
+
+                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = currentDraft.purpose,
                             onValueChange = { draft = currentDraft.copy(purpose = it.take(280)) },
                             label = { Text("Purpose (Optional)") },
@@ -497,7 +501,9 @@ fun AidenBotEditorScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        OutlinedTextField(
+                        TextField(
+
+                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = currentDraft.openingGreeting,
                             onValueChange = { draft = currentDraft.copy(openingGreeting = it.take(2000)) },
                             label = { Text("Opening Greeting (Optional)") },
@@ -508,7 +514,9 @@ fun AidenBotEditorScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        OutlinedTextField(
+                        TextField(
+
+                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = currentDraft.instructions,
                             onValueChange = { draft = currentDraft.copy(instructions = it.take(32000)) },
                             label = { Text("Instructions") },
@@ -541,6 +549,7 @@ fun AidenBotEditorScreen(
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                                 items(AidenBotAvatarShape.values()) { shape ->
                                     FilterChip(
+                                        border = null,
                                         selected = currentDraft.avatar.shape == shape,
                                         onClick = { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(shape = shape)) },
                                         label = { Text(shape.name.lowercase().replaceFirstChar { it.uppercase() }) }
@@ -573,6 +582,7 @@ fun AidenBotEditorScreen(
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                                 items(AidenBotAvatarEyes.values()) { eyes ->
                                     FilterChip(
+                                        border = null,
                                         selected = currentDraft.avatar.eyes == eyes,
                                         onClick = { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(eyes = eyes)) },
                                         label = { Text(AidenBotAvatarColors.getEyeGlyph(eyes)) }
@@ -587,6 +597,7 @@ fun AidenBotEditorScreen(
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                                 items(AidenBotAvatarDetail.entries) { detail ->
                                     FilterChip(
+                                        border = null,
                                         selected = currentDraft.avatar.detail == detail,
                                         onClick = { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(detail = detail)) },
                                         label = { Text(detail.name.lowercase().replaceFirstChar { it.uppercase() }) }
@@ -606,6 +617,7 @@ fun AidenBotEditorScreen(
                         }
 
                         OutlinedButton(
+                            border = null,
                             onClick = { showImagePlaygroundSheet = true },
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
@@ -628,12 +640,14 @@ fun AidenBotEditorScreen(
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             FilterChip(
+                                border = null,
                                 selected = currentDraft.usesFullAccess,
                                 onClick = { draft = currentDraft.copy(usesFullAccess = true) },
                                 label = { Text("Full Access") },
                                 modifier = Modifier.weight(1f)
                             )
                             FilterChip(
+                                border = null,
                                 selected = !currentDraft.usesFullAccess,
                                 onClick = { draft = currentDraft.copy(usesFullAccess = false) },
                                 label = { Text("Custom Access") },

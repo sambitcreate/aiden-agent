@@ -5,7 +5,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -193,7 +192,6 @@ fun AidenPairingScreen(
             Surface(
                 color = palette.raised,
                 shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, palette.secondary.copy(alpha = 0.12f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -305,7 +303,8 @@ fun AidenPairingScreen(
                 }
                 1 -> {
                     // Manual 20-character Crockford code
-                    OutlinedTextField(
+                    TextField(
+                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = manualCode,
                         onValueChange = { manualCode = formatCrockfordCode(it) },
                         label = { Text("20-Character Setup Code") },
@@ -319,7 +318,9 @@ fun AidenPairingScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    OutlinedTextField(
+                    TextField(
+
+                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = endpointUrl,
                         onValueChange = { endpointUrl = it },
                         label = { Text("Mac Address (HTTPS Endpoint)") },
@@ -374,7 +375,8 @@ fun AidenPairingScreen(
                 }
                 2 -> {
                     // QR Payload JSON Input Fallback
-                    OutlinedTextField(
+                    TextField(
+                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = qrJsonInput,
                         onValueChange = { qrJsonInput = it },
                         label = { Text("QR Code Payload JSON") },

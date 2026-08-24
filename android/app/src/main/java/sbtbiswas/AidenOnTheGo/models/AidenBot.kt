@@ -8,7 +8,8 @@ import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import kotlinx.serialization.json.JsonContentPolymorphicSerializer
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -145,12 +146,24 @@ sealed class AidenBotSemanticAvatar {
     data class Recipe(val recipe: AidenBotAvatarRecipe) : AidenBotSemanticAvatar()
 }
 
-object AidenBotSemanticAvatarSerializer : JsonContentPolymorphicSerializer<AidenBotSemanticAvatar>(AidenBotSemanticAvatar::class) {
-    override fun selectDeserializer(element: JsonElement): KSerializer<out AidenBotSemanticAvatar> {
+object AidenBotSemanticAvatarSerializer : KSerializer<AidenBotSemanticAvatar> {
+    override val descriptor: SerialDescriptor = AidenBotAvatarRecipe.serializer().descriptor
+
+    override fun serialize(encoder: Encoder, value: AidenBotSemanticAvatar) {
+        require(encoder is JsonEncoder)
+        when (value) {
+            is AidenBotSemanticAvatar.Legacy -> encoder.encodeSerializableValue(AidenBotLegacyAvatar.serializer(), value.legacy)
+            is AidenBotSemanticAvatar.Recipe -> encoder.encodeSerializableValue(AidenBotAvatarRecipe.serializer(), value.recipe)
+        }
+    }
+
+    override fun deserialize(decoder: Decoder): AidenBotSemanticAvatar {
+        require(decoder is JsonDecoder)
+        val element = decoder.decodeJsonElement()
         return if (element is JsonPrimitive && element.isString) {
-            AidenBotLegacyAvatarWrapperSerializer
+            AidenBotSemanticAvatar.Legacy(decoder.json.decodeFromJsonElement(AidenBotLegacyAvatar.serializer(), element))
         } else {
-            AidenBotAvatarRecipeWrapperSerializer
+            AidenBotSemanticAvatar.Recipe(decoder.json.decodeFromJsonElement(AidenBotAvatarRecipe.serializer(), element))
         }
     }
 }

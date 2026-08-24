@@ -29,11 +29,11 @@ val LocalAidenAppearanceConfig = staticCompositionLocalOf {
 }
 
 val AidenShapes = Shapes(
-    extraSmall = RoundedCornerShape(6.dp),
-    small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(14.dp),
-    large = RoundedCornerShape(20.dp),
-    extraLarge = RoundedCornerShape(28.dp)
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(32.dp)
 )
 
 object AidenTheme {
@@ -99,8 +99,8 @@ fun AidenTheme(
             surfaceContainer = palette.raised.withElevationLuminosity(2.dp, isDark),
             surfaceContainerHigh = palette.raised.withElevationLuminosity(4.dp, isDark),
             surfaceContainerHighest = palette.raised.withElevationLuminosity(8.dp, isDark),
-            outline = palette.secondary.copy(alpha = 0.35f),
-            outlineVariant = palette.secondary.copy(alpha = 0.15f),
+            outline = Color.Transparent,
+            outlineVariant = Color.Transparent,
             error = palette.danger,
             onError = Color.White,
             errorContainer = palette.danger.copy(alpha = 0.2f),
@@ -127,8 +127,8 @@ fun AidenTheme(
             surfaceContainer = palette.raised,
             surfaceContainerHigh = palette.raised,
             surfaceContainerHighest = palette.raised,
-            outline = palette.secondary.copy(alpha = 0.3f),
-            outlineVariant = palette.secondary.copy(alpha = 0.12f),
+            outline = Color.Transparent,
+            outlineVariant = Color.Transparent,
             error = palette.danger,
             onError = Color.White,
             errorContainer = palette.danger.copy(alpha = 0.12f),
@@ -138,13 +138,13 @@ fun AidenTheme(
 
     val scale = config.fontSize.scaleFactor
     val typography = Typography(
-        headlineLarge = TextStyle(fontWeight = FontWeight.Bold, fontSize = (30 * scale).sp, lineHeight = (36 * scale).sp, letterSpacing = (-0.5).sp, color = palette.foreground),
+        headlineLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (28 * scale).sp, lineHeight = (34 * scale).sp, letterSpacing = (-0.45).sp, color = palette.foreground),
         headlineMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (24 * scale).sp, lineHeight = (30 * scale).sp, letterSpacing = (-0.25).sp, color = palette.foreground),
-        headlineSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (20 * scale).sp, lineHeight = (26 * scale).sp, letterSpacing = 0.sp, color = palette.foreground),
-        titleLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (18 * scale).sp, lineHeight = (24 * scale).sp, letterSpacing = 0.sp, color = palette.foreground),
+        headlineSmall = TextStyle(fontWeight = FontWeight.Medium, fontSize = (20 * scale).sp, lineHeight = (26 * scale).sp, letterSpacing = (-0.1).sp, color = palette.foreground),
+        titleLarge = TextStyle(fontWeight = FontWeight.Medium, fontSize = (20 * scale).sp, lineHeight = (26 * scale).sp, letterSpacing = (-0.1).sp, color = palette.foreground),
         titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (16 * scale).sp, lineHeight = (22 * scale).sp, letterSpacing = 0.1.sp, color = palette.foreground),
         titleSmall = TextStyle(fontWeight = FontWeight.Medium, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.1.sp, color = palette.secondary),
-        bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = (16 * scale).sp, lineHeight = (24 * scale).sp, letterSpacing = 0.2.sp, color = palette.foreground),
+        bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = (16 * scale).sp, lineHeight = (25 * scale).sp, letterSpacing = 0.1.sp, color = palette.foreground),
         bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.25.sp, color = palette.foreground),
         bodySmall = TextStyle(fontWeight = FontWeight.Normal, fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.3.sp, color = palette.secondary),
         labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.1.sp, color = palette.foreground),
