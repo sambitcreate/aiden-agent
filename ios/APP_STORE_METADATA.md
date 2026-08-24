@@ -2,7 +2,7 @@
 
 Status: Release draft. Public identity, category, age-rating answers, privacy-label answers, and screenshot specifications are resolved from the shipping app and current Apple definitions. App Store Connect publication and release-specific owner decisions remain open.
 
-The executable canonical ASC localization draft lives in `app-store/metadata/`. The first internal TestFlight train is `0.1.0`; build `1` was rejected during upload for an alpha-bearing App Store icon, builds `2`–`16` progressively corrected the icon and expanded the native companion, and build `17` is the current processed internal candidate. The version directory and Xcode targets match that decision. Offline validation is safe, but no metadata may be applied until the public mobile privacy/support copy and owner decisions below are complete.
+The executable canonical ASC localization draft lives in `app-store/metadata/`. The first internal TestFlight train is `0.1.0`; build `1` was rejected during upload for an alpha-bearing App Store icon, builds `2`–`19` progressively corrected the icon and expanded the native companion, and build `20` is the current processed internal candidate. The version directory and Xcode targets match that decision. Offline validation is safe, but no metadata may be applied until the public mobile privacy/support copy and owner decisions below are complete.
 
 ## Resolved public identity
 
@@ -104,7 +104,7 @@ Current Apple reference: `https://developer.apple.com/help/app-store-connect/ref
 
 ## Owner decisions still required
 
-- Internal TestFlight starts at marketing version `0.1.0`; build `1` was rejected before processing and build `17` is the current processed internal candidate. Advance the build number for later uploads in the same train and reserve `1.0.0` for the first public release decision.
+- Internal TestFlight starts at marketing version `0.1.0`; build `1` was rejected before processing and build `20` is the current processed internal candidate. Advance the build number for later uploads in the same train and reserve `1.0.0` for the first public release decision.
 - Enter Developer Tools / Productivity in App Store Connect, or deliberately override this documented recommendation.
 - Verify and publish the drafted 13+ age-rating answers in the exact current questionnaire.
 - Verify and publish the drafted “No data collected” App Privacy answer against the final distributed build and operational services.
