@@ -85,12 +85,14 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 8);
+  assert.equal(fixture.contractRevision, 9);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.capabilities, fixture.pairingExchange.capabilities);
   assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
+  assert.equal(record(fixture.speechStatus, "fixture speech status").selectedModelId, "parakeet-v3");
+  assert.equal(record(fixture.speechTranscription, "fixture speech transcription").modelId, "parakeet-v3");
   assert.equal(
     fixture.botCapabilityCatalog.fileScopes.some((scope) => scope.kind === "full_mac"),
     true,
@@ -188,6 +190,10 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/streams/{streamId}/cancel",
     "/approvals/{approvalId}/respond",
     "/models",
+    "/speech",
+    "/speech/models/{modelId}/download",
+    "/speech/models/{modelId}",
+    "/speech/transcriptions",
     "/usage",
     "/workspaces/{workspaceId}/files",
     "/workspaces/{workspaceId}/files/{fileId}",

@@ -31,9 +31,9 @@ Initial capability IDs:
 
 | Capability | Authority |
 | --- | --- |
-| `server:read` | Read instance/version/capability projection. |
+| `server:read` | Read instance/version/capability projection, aggregate usage, and paired-Mac speech status. |
 | `chat:read` | Read projected chats and stream status. |
-| `chat:write` | Create/rename/delete chats; start/cancel turns. |
+| `chat:write` | Create/rename/delete chats; start/cancel turns; use and set up paired-Mac speech transcription. |
 | `approval:respond` | Resolve approvals owned by this device/stream. |
 | `workspace:read` | Read workspace registry projection. |
 | `workspace:browse` | Navigate locally approved directory roots. |
@@ -132,6 +132,12 @@ Allowed: task ID/revision, safe name/description, workspace/provider/model IDs, 
 
 Forbidden: provider fingerprint, resolved MCP bindings, chat ID, credentials, process environment, raw script path, unredacted stdout/stderr, internal cancellation handles.
 
+### Speech
+
+Allowed: the fixed local transcription engine identifier and readiness, a bounded allowlisted model catalog with installed/downloading state and progress, one model setup or removal command, and a final bounded transcript. Audio input is exact base64 PCM16: mono, signed 16-bit little-endian, 16 kHz, and no longer than 60 seconds.
+
+Forbidden: server filesystem paths, arbitrary model URLs or archive names, provider credentials, partial recognition events, retained recordings, raw decoder diagnostics, or transcripts above the response bound.
+
 ## 5. Endpoint inventory
 
 The OpenAPI document owns exact request/response shapes. This section owns behavior.
@@ -187,6 +193,21 @@ The ordinary `GET /chats` Workspace projection is regular-chat only, and ordinar
 First-turn title generation remains off the interactive response path. While it is active, chat list/get projections include optional `titlePending: true`; the field disappears only after the title job settles. Clients may use this hint for a bounded authoritative refresh and must not treat it as a revision or mutation precondition.
 
 Bot chats are persistent identity records and are not independently deletable through the generic `DELETE /chats/{chatId}` route. Archive the Bot to make it read-only; this prevents retained legacy duplicates from being promoted into a second active conversation.
+
+### Paired-Mac speech transcription
+
+- `GET /speech`: current local engine, selected model, readiness, and allowlisted model setup state. Requires `server:read`.
+- `PATCH /speech`: select an installed allowlisted model. Requires `chat:write`.
+- `POST /speech/models/{modelId}/download`: download and install one fixed-catalog model archive on the Mac. Requires `chat:write`.
+- `DELETE /speech/models/{modelId}/download`: cancel that model's active setup. Requires `chat:write`.
+- `DELETE /speech/models/{modelId}`: remove an installed model when it is not active. Requires `chat:write`.
+- `POST /speech/transcriptions`: transcribe one exact PCM16 envelope locally and return one final transcript. Requires `chat:write`.
+
+Speech setup and use map to the frozen v1 `server:read` and `chat:write` grants so shipped strict clients can continue pairing. A future protocol revision may split speech use from model administration; v1 clients must not infer such authority from unknown capability names.
+
+The transcription request accepts only mono signed 16-bit little-endian PCM at 16 kHz, base64 encoded, with at most 60 seconds of samples. The Mac authenticates before buffering this larger body, repeats the credential mutation fence after buffering, validates the exact envelope, and admits at most one active decode plus one queued decode. A third concurrent request fails with retryable `429 rate_limited`. The local Parakeet engine emits final text only; recordings and transcripts are not persisted, included in diagnostics, or sent to Aiden's provider integrations.
+
+Mobile-triggered setup may download only the fixed release URL compiled into Aiden. The Mac enforces an 800 MiB compressed-archive download ceiling, extracts into a staging directory, requires the complete model manifest, then publishes the model. Callers cannot provide a URL or destination. Download, extraction, and recognition failures return only stable sanitized errors. A separate extracted-byte/file-count ceiling remains required before treating hostile-archive expansion as fully mitigated.
 
 ### Bots, Bot conversations, access, and avatars
 

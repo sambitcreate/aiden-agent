@@ -37,6 +37,8 @@ import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
+import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
+import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
 import {
   parseBotNoticeAcknowledgement,
   type BotNoticeAcknowledgement,
@@ -105,6 +107,10 @@ export interface AidenRemoteRouterDependencies {
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+  speech?: Pick<
+    AidenRemoteSpeechService,
+    "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe"
+  >;
   botNotice?: {
     status(deviceId: string): Promise<BotNoticeStatus>;
     acknowledge(
@@ -163,6 +169,7 @@ export interface AidenRemoteRouterDependencies {
       | "workspaceGit"
       | "scheduledTasks"
       | "usage"
+      | "speech"
       | "chats"
       | "chat"
       | "chatMove"
@@ -1717,6 +1724,68 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.usage) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.usage.summary(usageQuery(query)));
+        return;
+      }
+      if (path === "/speech" && request.method === "GET") {
+        requireNoQuery(query);
+        route = "speech";
+        const device = await authenticate(request, dependencies.devices, "server:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, await dependencies.speech.status());
+        return;
+      }
+      if (path === "/speech" && request.method === "PATCH") {
+        requireNoQuery(query);
+        route = "speech";
+        const body = await readJsonBody(request, 1_024);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, await dependencies.speech.select(body));
+        return;
+      }
+      const speechModelDownloadMatch = /^\/speech\/models\/([A-Za-z0-9._-]{1,64})\/download$/u.exec(path);
+      if (speechModelDownloadMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "speech";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 202, await dependencies.speech.startDownload(speechModelDownloadMatch[1]!));
+        return;
+      }
+      if (speechModelDownloadMatch && request.method === "DELETE") {
+        requireNoQuery(query);
+        route = "speech";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, await dependencies.speech.cancelDownload(speechModelDownloadMatch[1]!));
+        return;
+      }
+      const speechModelMatch = /^\/speech\/models\/([A-Za-z0-9._-]{1,64})$/u.exec(path);
+      if (speechModelMatch && request.method === "DELETE") {
+        requireNoQuery(query);
+        route = "speech";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, await dependencies.speech.deleteModel(speechModelMatch[1]!));
+        return;
+      }
+      if (path === "/speech/transcriptions" && request.method === "POST") {
+        requireNoQuery(query);
+        route = "speech";
+        // Reject unpaired peers before buffering the larger bounded speech body.
+        // Re-authenticate through the mutation fence after parsing so revocation
+        // that races the upload still prevents application-service admission.
+        await authenticateCredential(request, dependencies.devices, "chat:write");
+        const body = await readJsonBody(request, AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, await dependencies.speech.transcribe(body));
         return;
       }
       if (path === "/chats" && request.method === "GET") {

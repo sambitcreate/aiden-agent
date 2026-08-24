@@ -8,6 +8,7 @@ import {
   type AidenRemoteCapability,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
@@ -79,6 +80,16 @@ async function fixture(options: {
     revision: "bot_revision_1",
   };
   const favorites = { botIds: ["bot-1"], revision: "bot_favorites_revision_1" };
+  const speechStatus = {
+    engine: { ready: true, error: null },
+    selectedModelId: "parakeet-v3",
+    models: [{
+      id: "parakeet-v3", name: "Parakeet", description: "Local speech",
+      sizeLabel: "620 MB", quant: "int8", languagesLabel: "25 languages",
+      accuracy: 0.8, speed: 0.85, recommended: true, installed: true,
+    }],
+    input: { encoding: "pcm_s16le" as const, sampleRate: 16_000 as const, channels: 1 as const, maximumSeconds: 60 as const, partialResults: false as const },
+  };
   const authorizeRetainedBotChat = async (
     input: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
   ): Promise<boolean> => {
@@ -643,6 +654,32 @@ async function fixture(options: {
           endpoint: "https://aiden.example.test/api/aiden/v1",
           serverSpkiSha256: `sha256/${Buffer.alloc(32).toString("base64")}`,
         }),
+    },
+    speech: {
+      status: async () => {
+        calls.push("speech:status");
+        return speechStatus;
+      },
+      select: async (body) => {
+        calls.push(`speech:select:${JSON.stringify(body)}`);
+        return speechStatus;
+      },
+      startDownload: async (modelId) => {
+        calls.push(`speech:download:${modelId}`);
+        return speechStatus;
+      },
+      cancelDownload: async (modelId) => {
+        calls.push(`speech:cancel:${modelId}`);
+        return speechStatus;
+      },
+      deleteModel: async (modelId) => {
+        calls.push(`speech:delete:${modelId}`);
+        return speechStatus;
+      },
+      transcribe: async (body) => {
+        calls.push(`speech:transcribe:${typeof body}`);
+        return { text: "Hello from the Mac", modelId: "parakeet-v3" };
+      },
     },
     connectionMode: () => "lan",
     now: () => 1_000,
@@ -1683,6 +1720,110 @@ test("authenticated usage returns privacy-safe Mac aggregates with a bounded ran
 
     const invalid = await fetch(`${app.base}/usage?range=forever`, { headers });
     assert.equal(invalid.status, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test("paired clients can inspect and use bounded Mac transcription without exposing it to read-only devices", async () => {
+  const app = await fixture({ capabilities: ["server:read", "chat:write"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const status = await fetch(`${app.base}/speech`, { headers });
+    assert.equal(status.status, 200);
+    assert.equal((await status.json()).input.partialResults, false);
+
+    const transcription = await fetch(`${app.base}/speech/transcriptions`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        encoding: "pcm_s16le",
+        sampleRate: 16_000,
+        channels: 1,
+        pcmBase64: Buffer.from([0, 0]).toString("base64"),
+        modelId: "parakeet-v3",
+      }),
+    });
+    assert.equal(transcription.status, 200);
+    assert.deepEqual(await transcription.json(), { text: "Hello from the Mac", modelId: "parakeet-v3" });
+    assert.equal(app.calls.includes("speech:status"), true);
+    assert.equal(app.calls.includes("speech:transcribe:object"), true);
+
+    const maximumPcm = Buffer.alloc(16_000 * 2 * 60).toString("base64");
+    const maximumBody = JSON.stringify({
+      encoding: "pcm_s16le",
+      sampleRate: 16_000,
+      channels: 1,
+      pcmBase64: maximumPcm,
+      modelId: "parakeet-v3",
+    });
+    assert.ok(Buffer.byteLength(maximumBody) <= AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES);
+    const maximum = await fetch(`${app.base}/speech/transcriptions`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: maximumBody,
+    });
+    assert.equal(maximum.status, 200);
+
+    const oversized = await fetch(`${app.base}/speech/transcriptions`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: "x".repeat(AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES + 1),
+    });
+    assert.equal(oversized.status, 413);
+  } finally {
+    await app.close();
+  }
+
+  const readOnly = await fixture({ capabilities: ["server:read"] });
+  try {
+    const denied = await fetch(`${readOnly.base}/speech/transcriptions`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error.code, "capability_denied");
+  } finally {
+    await readOnly.close();
+  }
+});
+
+test("speech transcription authenticates before buffering its larger request body", async () => {
+  const app = await fixture({ capabilities: ["chat:write"] });
+  try {
+    const target = new URL(`${app.base}/speech/transcriptions`);
+    const response = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const request = httpRequest({
+        host: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: "POST",
+        headers: {
+          "aiden-protocol-version": "1",
+          "content-type": "application/json",
+          "content-length": String(AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES + 1),
+        },
+      }, (incoming) => {
+        const chunks: Buffer[] = [];
+        incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        incoming.on("end", () => resolve({
+          status: incoming.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString("utf8"),
+        }));
+      });
+      request.once("error", reject);
+      // Do not send the declared body. The unauthenticated request must settle
+      // without waiting for or allocating the large upload.
+      request.end();
+    });
+    const result = await response;
+    assert.equal(result.status, 401);
+    assert.equal(JSON.parse(result.body).error.code, "authentication_required");
+    assert.equal(app.calls.some((entry) => entry.startsWith("speech:transcribe")), false);
   } finally {
     await app.close();
   }

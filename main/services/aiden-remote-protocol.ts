@@ -508,6 +508,8 @@ export interface AidenRemoteContractFixture {
   scheduleSettings: unknown;
   scheduleRunAccepted: unknown;
   scheduleRun: unknown;
+  speechStatus: unknown;
+  speechTranscription: unknown;
   botSummary: AidenRemoteBotSummary;
   botList: AidenRemoteBotList;
   botDetail: AidenRemoteBotDetail;
@@ -3205,6 +3207,8 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     scheduleSettings: value.scheduleSettings,
     scheduleRunAccepted: value.scheduleRunAccepted,
     scheduleRun: value.scheduleRun,
+    speechStatus: value.speechStatus,
+    speechTranscription: value.speechTranscription,
     botSummary,
     botList,
     botDetail,

@@ -897,7 +897,7 @@ test("canonical revision-8 Bot fixtures parse into explicit bounded contract vie
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
-  assert.equal(fixture.contractRevision, 8);
+  assert.equal(fixture.contractRevision, 9);
   assert.equal(fixture.botList.maxBots, 256);
   assert.deepEqual(fixture.botList.favorites, fixture.botFavorites);
   assert.equal(fixture.botSummary.health, "ready");

@@ -1810,6 +1810,75 @@
         }
       }
     },
+    "/speech": {
+      "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }],
+      "get": {
+        "operationId": "getSpeechStatus",
+        "x-aiden-capability": "server:read",
+        "responses": {
+          "200": { "description": "Paired-Mac local speech engine and model status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "operationId": "selectSpeechModel",
+        "x-aiden-capability": "chat:write",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["modelId"], "properties": { "modelId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" } }, "additionalProperties": false } } } },
+        "responses": {
+          "200": { "description": "Updated local speech selection", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/speech/models/{modelId}/download": {
+      "parameters": [
+        { "$ref": "#/components/parameters/ProtocolVersion" },
+        { "name": "modelId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" } }
+      ],
+      "post": {
+        "operationId": "downloadSpeechModel",
+        "x-aiden-capability": "chat:write",
+        "responses": {
+          "202": { "description": "Model download accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "operationId": "cancelSpeechModelDownload",
+        "x-aiden-capability": "chat:write",
+        "responses": {
+          "200": { "description": "Current model download status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/speech/models/{modelId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/ProtocolVersion" },
+        { "name": "modelId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" } }
+      ],
+      "delete": {
+        "operationId": "deleteSpeechModel",
+        "x-aiden-capability": "chat:write",
+        "responses": {
+          "200": { "description": "Speech status after deleting the local model", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/speech/transcriptions": {
+      "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }],
+      "post": {
+        "operationId": "transcribeSpeech",
+        "x-aiden-capability": "chat:write",
+        "description": "Transcribes one explicit, bounded recording locally on the paired Mac. Audio is not retained and the current Parakeet model returns a final result only.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechTranscriptionRequest" } } } },
+        "responses": {
+          "200": { "description": "Final local transcript", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechTranscription" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/usage": {
       "parameters": [
         {
@@ -3571,6 +3640,86 @@
             "minLength": 1,
             "maxLength": 80
           }
+        },
+        "additionalProperties": false
+      },
+      "SpeechStatus": {
+        "type": "object",
+        "required": ["engine", "selectedModelId", "models", "input"],
+        "properties": {
+          "engine": {
+            "type": "object",
+            "required": ["ready", "error"],
+            "properties": { "ready": { "type": "boolean" }, "error": { "type": ["string", "null"] } },
+            "additionalProperties": false
+          },
+          "selectedModelId": { "type": ["string", "null"] },
+          "models": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "required": ["id", "name", "description", "sizeLabel", "quant", "languagesLabel", "accuracy", "speed", "recommended", "installed"],
+              "properties": {
+                "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+                "name": { "type": "string", "maxLength": 200 },
+                "description": { "type": "string", "maxLength": 1000 },
+                "sizeLabel": { "type": "string", "maxLength": 100 },
+                "quant": { "type": "string", "maxLength": 50 },
+                "languagesLabel": { "type": "string", "maxLength": 200 },
+                "accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+                "speed": { "type": "number", "minimum": 0, "maximum": 1 },
+                "recommended": { "type": "boolean" },
+                "installed": { "type": "boolean" },
+                "download": {
+                  "type": "object",
+                  "required": ["id", "percentage", "phase", "status"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "percentage": { "type": "integer", "minimum": 0, "maximum": 100 },
+                    "phase": { "enum": ["download", "extract"] },
+                    "status": { "enum": ["downloading", "failed"] },
+                    "error": { "type": "string", "maxLength": 1000 }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "input": {
+            "type": "object",
+            "required": ["encoding", "sampleRate", "channels", "maximumSeconds", "partialResults"],
+            "properties": {
+              "encoding": { "const": "pcm_s16le" },
+              "sampleRate": { "const": 16000 },
+              "channels": { "const": 1 },
+              "maximumSeconds": { "const": 60 },
+              "partialResults": { "const": false }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SpeechTranscriptionRequest": {
+        "type": "object",
+        "required": ["encoding", "sampleRate", "channels", "pcmBase64", "modelId"],
+        "properties": {
+          "encoding": { "const": "pcm_s16le" },
+          "sampleRate": { "const": 16000 },
+          "channels": { "const": 1 },
+          "pcmBase64": { "type": "string", "contentEncoding": "base64", "maxLength": 2560000 },
+          "modelId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" }
+        },
+        "additionalProperties": false
+      },
+      "SpeechTranscription": {
+        "type": "object",
+        "required": ["text", "modelId"],
+        "properties": {
+          "text": { "type": "string", "maxLength": 200000 },
+          "modelId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" }
         },
         "additionalProperties": false
       },

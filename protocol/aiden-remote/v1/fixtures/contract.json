@@ -1,5 +1,5 @@
 {
-  "contractRevision": 8,
+  "contractRevision": 9,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -194,6 +194,35 @@
     "defaultMcpEnabled": false,
     "defaultNotify": true,
     "defaultTimezone": "America/New_York"
+  },
+  "speechStatus": {
+    "engine": { "ready": true, "error": null },
+    "selectedModelId": "parakeet-v3",
+    "models": [
+      {
+        "id": "parakeet-v3",
+        "name": "Parakeet TDT 0.6B v3",
+        "description": "Fast and accurate. Supports 25 European languages.",
+        "sizeLabel": "620 MB",
+        "quant": "int8",
+        "languagesLabel": "25 languages",
+        "accuracy": 0.8,
+        "speed": 0.85,
+        "recommended": true,
+        "installed": true
+      }
+    ],
+    "input": {
+      "encoding": "pcm_s16le",
+      "sampleRate": 16000,
+      "channels": 1,
+      "maximumSeconds": 60,
+      "partialResults": false
+    }
+  },
+  "speechTranscription": {
+    "text": "Drafted securely on the paired Mac.",
+    "modelId": "parakeet-v3"
   },
   "scheduleRunAccepted": {
     "taskId": "task_fixture_01",

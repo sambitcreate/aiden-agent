@@ -73,6 +73,7 @@ import {
 } from "./git.js";
 import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import { usageStore } from "./usage-store.js";
+import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
@@ -281,6 +282,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
         usage: typeof usageStore;
+        speech: AidenRemoteSpeechService;
         bots: AidenRemoteBotService;
         botNotice: {
           status: typeof botApplicationService.noticeStatus;
@@ -555,6 +557,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
           });
+          const speech = new AidenRemoteSpeechService();
           return {
             instanceId,
             workspaceBrowser,
@@ -566,6 +569,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             git,
             schedules,
             usage: usageStore,
+            speech,
             bots,
             botNotice: {
               status: (deviceId) => botApplicationService.noticeStatus(deviceId),
