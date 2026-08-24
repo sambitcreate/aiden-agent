@@ -34,6 +34,28 @@ test("desktop and paired Telegram principals have explicit one-time notice IPC p
   assert.match(bots, /telegramBotNoticeAudienceId\(\s*profileName,/u);
 });
 
+test("desktop Bot editor owns access and model selection through revisioned IPC", () => {
+  const bots = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
+  const ipc = readFileSync(
+    new URL("../../renderer/lib/ipc.ts", import.meta.url),
+    "utf8",
+  );
+  for (const channel of [
+    "bots:getCapabilityCatalog",
+    "bots:getBotAccess",
+    "bots:updateBotAccess",
+  ]) {
+    assert.match(bots, new RegExp(channel, "u"));
+    assert.match(ipc, new RegExp(channel, "u"));
+  }
+  assert.match(bots, /parseBotAccessUpdateInput/u);
+  assert.match(bots, /capabilityCatalog\(\s*desktopAudienceId/u);
+  assert.match(bots, /updateBotAccess\(\{\s*audienceId: desktopAudienceId/u);
+  assert.match(bots, /modelSelection\(\s*desktopAudienceId/u);
+  assert.match(bots, /botAccessUpdateRendererError\(error\)/u);
+  assert.doesNotMatch(bots, /bots:updateBotAccess[\s\S]{0,200}chatStore\./u);
+});
+
 test("bot face generation is main-owned and uses only the bounded Pi recipe", () => {
   const bots = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
   const params = readFileSync(new URL("./bot-params.ts", import.meta.url), "utf8");

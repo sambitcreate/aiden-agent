@@ -72,9 +72,18 @@ import type {
 } from "../shared/bots";
 import { botAvatarSuggestionErrorMessage } from "../shared/bots";
 import type {
+  BotAccessUpdate,
+  BotAccessView,
+  BotCapabilityCatalog,
   BotNoticeAcknowledgement,
   BotNoticeStatus,
 } from "../shared/bot-capabilities";
+
+/** Bot access plus its current model selection, mirrored from the bot detail. */
+export interface BotAccessState {
+  access: BotAccessView;
+  modelSelection?: { providerId: string; modelId: string };
+}
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -775,6 +784,15 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
+  getCapabilityCatalog: () =>
+    invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog"),
+  getBotAccess: (id: string) =>
+    invoke<BotAccessState | null>("bots:getBotAccess", id),
+  updateBotAccess: (input: {
+    botId: string;
+    expectedRevision: string;
+    access: BotAccessUpdate;
+  }) => invoke<BotAccessView>("bots:updateBotAccess", input),
   archive: (input: { id: string; expectedRevision: string }) =>
     invoke<BotDefinition>("bots:archive", input),
   restore: (input: { id: string; expectedRevision: string }) =>

@@ -8,6 +8,8 @@ import {
 import {
   isBoundedBotText,
   isPathSafeBotCapabilityId,
+  parseBotAccessUpdate,
+  type BotAccessUpdate,
 } from "../../renderer/shared/bot-capabilities.js";
 
 const CREATE_KEYS = new Set([
@@ -19,6 +21,7 @@ const CREATE_KEYS = new Set([
 ]);
 const UPDATE_KEYS = new Set([...CREATE_KEYS, "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
+const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
 const AVATAR_SUGGESTION_KEYS = new Set([
   "currentAvatar",
   "model",
@@ -119,4 +122,17 @@ export function parseBotAvatarSuggestionInput(value: unknown): BotAvatarSuggesti
 
 export function parseBotAvatarRequestId(value: unknown): string {
   return text(value, "bot avatar request id", BOT_LIMITS.avatarRequestIdChars)!;
+}
+
+export function parseBotAccessUpdateInput(value: unknown): {
+  botId: string;
+  expectedRevision: string;
+  access: BotAccessUpdate;
+} {
+  const record = exact(value, ACCESS_UPDATE_KEYS, "bot access update fields");
+  return {
+    botId: parseBotId(record.botId),
+    expectedRevision: parseBotRevision(record.expectedRevision),
+    access: parseBotAccessUpdate(record.access),
+  };
 }

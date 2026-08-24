@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  parseBotAccessUpdateInput,
   parseBotAvatarRequestId,
   parseBotAvatarSuggestionInput,
   parseBotChatCreate,
@@ -88,5 +89,62 @@ test("bot avatar suggestions accept only a bounded provider, model, prompt, and 
         currentAvatar: { ...currentAvatar, eyes: "mouth" },
       }),
     /Invalid current bot avatar/u,
+  );
+});
+
+test("bot access update envelope is exact, bounded, and shares the wire parser", () => {
+  const full = {
+    botId: "bot:61c59133",
+    expectedRevision: "revision:policy:16",
+    access: {
+      accessMode: "full" as const,
+      catalogRevision: "bot_catalog_deadbeef",
+      confirmedForeground: true,
+      providerId: "bc_provider_9zzLPOGDo0Cdjuvu6xdhjutPM",
+      modelId: "bc_model_I_zCzuPPxmjgUmte8tPqPAs1",
+    },
+  };
+  assert.deepEqual(parseBotAccessUpdateInput(full), full);
+  assert.throws(
+    () => parseBotAccessUpdateInput({ ...full, extra: true }),
+    /Invalid bot access update fields/u,
+  );
+  assert.throws(
+    () => parseBotAccessUpdateInput({ ...full, botId: "" }),
+    /Invalid bot id/u,
+  );
+  assert.throws(
+    () => parseBotAccessUpdateInput({ ...full, expectedRevision: "has spaces" }),
+    /Invalid bot revision/u,
+  );
+  assert.throws(
+    () =>
+      parseBotAccessUpdateInput({
+        ...full,
+        access: { ...full.access, confirmedForeground: false },
+      }),
+    /Full Access requires foreground confirmation/u,
+  );
+  const custom = {
+    botId: full.botId,
+    expectedRevision: full.expectedRevision,
+    access: {
+      accessMode: "custom" as const,
+      catalogRevision: full.access.catalogRevision,
+      custom: {
+        providerId: full.access.providerId,
+        modelId: full.access.modelId,
+        fileScopeIds: ["scope:home"],
+        shellEnabled: false,
+        connectionIds: [],
+        skillIds: [],
+        otherCapabilityIds: [],
+      },
+    },
+  };
+  assert.deepEqual(parseBotAccessUpdateInput(custom), custom);
+  assert.throws(
+    () => parseBotAccessUpdateInput({ ...custom, access: { ...custom.access, custom: undefined } }),
+    /Invalid Bot (access update|Custom access selection)/u,
   );
 });

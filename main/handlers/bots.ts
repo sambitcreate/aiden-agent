@@ -9,7 +9,19 @@ import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
-import { parseBotNoticeAcknowledgement } from "../../renderer/shared/bot-capabilities.js";
+import {
+  BotCapabilityValidationError,
+  parseBotNoticeAcknowledgement,
+} from "../../renderer/shared/bot-capabilities.js";
+import {
+  BotApplicationUnavailableError,
+} from "../services/bot-application-service.js";
+import {
+  BotCapabilityCatalogConflictError,
+  BotCapabilityRevisionConflictError,
+  BotCapabilitySubsetError,
+  BotCapabilityUnavailableError,
+} from "../services/bot-capability-store-core.js";
 import { botMutationGate } from "../services/bot-mutation-gate.js";
 import { generateBotAvatarSuggestion } from "../services/bot-avatar-generator.js";
 import { botAvatarOperations } from "../services/bot-avatar-operation-registry.js";
@@ -27,6 +39,7 @@ import {
 } from "../services/telegram/telegram-profile-config.js";
 import { telegramProfileMutationFence } from "../services/telegram/telegram-profile-mutation-fence.js";
 import {
+  parseBotAccessUpdateInput,
   parseBotAvatarSuggestionInput,
   parseBotAvatarRequestId,
   parseBotChatCreate,
@@ -168,6 +181,30 @@ export function registerBotHandlers(): void {
   );
   ipcMain.handle("bots:update", async (_event, input: unknown) => {
     return botApplicationService.updateBot(parseBotUpdate(input));
+  });
+  ipcMain.handle("bots:getCapabilityCatalog", async () =>
+    botApplicationService.capabilityCatalog(desktopAudienceId),
+  );
+  ipcMain.handle("bots:getBotAccess", async (_event, id: unknown) => {
+    const botId = parseBotId(id);
+    const [access, modelSelection] = await Promise.all([
+      botApplicationService.getBotAccess(botId),
+      botApplicationService.modelSelection(desktopAudienceId, botId),
+    ]);
+    return { access, modelSelection };
+  });
+  ipcMain.handle("bots:updateBotAccess", async (_event, input: unknown) => {
+    const parsed = parseBotAccessUpdateInput(input);
+    try {
+      return await botApplicationService.updateBotAccess({
+        audienceId: desktopAudienceId,
+        botId: parsed.botId,
+        expectedRevision: parsed.expectedRevision,
+        access: parsed.access,
+      });
+    } catch (error) {
+      throw botAccessUpdateRendererError(error);
+    }
   });
   ipcMain.handle("bots:archive", async (_event, id: unknown) => {
     if (!id || typeof id !== "object" || Array.isArray(id)) {
@@ -425,4 +462,34 @@ export function registerBotHandlers(): void {
       throw error;
     }
   });
+}
+
+/**
+ * Surface the same recovery guidance the remote protocol gives iOS so the Mac
+ * editor can reconcile instead of showing a raw service error.
+ */
+function botAccessUpdateRendererError(error: unknown): unknown {
+  if (error instanceof BotApplicationUnavailableError) {
+    return new Error(
+      error.reason === "archived"
+        ? "Restore this Bot before making changes."
+        : "This Bot no longer exists.",
+    );
+  }
+  if (
+    error instanceof BotCapabilityRevisionConflictError ||
+    error instanceof BotCapabilityCatalogConflictError
+  ) {
+    return new Error("This Bot changed. Refresh it before trying again.");
+  }
+  if (error instanceof BotCapabilitySubsetError) {
+    return new Error("This Bot cannot use more access than its policy allows.");
+  }
+  if (error instanceof BotCapabilityUnavailableError) {
+    return new Error("Some selected Bot access is unavailable. Refresh and review it.");
+  }
+  if (error instanceof BotCapabilityValidationError) {
+    return new Error("Bot capabilities changed. Refresh and review the current access choices.");
+  }
+  return error;
 }

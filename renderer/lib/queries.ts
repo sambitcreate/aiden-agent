@@ -45,6 +45,8 @@ export const queryKeys = {
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
+  botCapabilityCatalog: ["bot-capability-catalog"] as const,
+  botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
   botTelegramTargets: ["bot-telegram-targets"] as const,
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
@@ -269,6 +271,24 @@ export function useBotChats(botId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.botChats(botId),
     queryFn: () => botsApi.listChats(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+/** Bot capability catalog for the desktop audience; refreshed after saves. */
+export function useBotCapabilityCatalog(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.botCapabilityCatalog,
+    queryFn: () => botsApi.getCapabilityCatalog(),
+    enabled,
+  });
+}
+
+/** Current Bot access policy and its model selection. */
+export function useBotAccess(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botAccess(botId),
+    queryFn: () => botsApi.getBotAccess(botId!),
     enabled: Boolean(botId),
   });
 }
