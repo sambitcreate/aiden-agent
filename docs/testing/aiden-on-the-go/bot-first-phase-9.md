@@ -51,6 +51,13 @@ Final model-authority XCTest result bundle:
 - Assigned only to `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`): `internalBuildState=IN_BETA_TESTING`, `externalBuildState=NOT_APPLICABLE`.
 - App Store Connect reports minimum iOS 18.0 and `usesNonExemptEncryption=false`. No external group, Beta App Review, App Review, metadata, pricing, screenshot, or availability mutation was performed.
 
+## Internal TestFlight evidence — build 19
+
+- Version `0.1.0 (19)` was archived from commit `190329463`, uploaded with the checked-in internal-only export policy, and processed as `VALID`.
+- Exact App Store Connect build: `e52c1988-56e6-4cea-8de3-ce27711ef970`.
+- `internalBuildState=READY_FOR_BETA_TESTING` for `Internal Testers` (`3f90ffa7-29bb-429e-80a4-88422eb85b6d`), `externalBuildState=NOT_APPLICABLE`; App Store Connect reports minimum iOS 18.0 and `usesNonExemptEncryption=false`.
+- The iOS binary carries the same Bot contract as build 18 at the bumped build number; the paired Mac gains resilient Bot access saves, desktop capability/access IPC, and the five-page Mac bot editor wizard. No external group, Beta App Review, App Review, metadata, pricing, screenshot, or availability mutation was performed.
+
 ## External/manual gates still open
 
 - Eligible Apple Intelligence hardware for successful Image Playground/PCC acceptance.
