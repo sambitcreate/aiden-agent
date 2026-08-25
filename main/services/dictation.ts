@@ -8,9 +8,8 @@ import { destroyPill, hidePill, showPill } from "../windows/pill-window.js";
 import { effectiveBindings } from "../../renderer/shared/keybindings.js";
 import { configStore } from "./config-store.js";
 import { cleanupDictationTranscript } from "./dictation-cleanup.js";
-import { startHoldKeyWatch } from "./dictation-hold-watch.js";
 import { shouldAcceptDictationPress } from "./dictation-hotkey.js";
-import { queryMacKeyDown } from "./dictation-key-state.js";
+import { watchMacKeyUntilUp } from "./dictation-key-state.js";
 import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
 import { pasteTranscript, runAtomicMacPaste, type PasteDeps } from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
@@ -48,13 +47,7 @@ const coordinator = new DictationCoordinator({
     const binding = effectiveBindings(settings.keybindings, settings)["dictation.toggle"];
     return acceleratorPrimaryMacKeyCode(binding);
   },
-  startHoldWatch: (keyCode, onRelease) =>
-    startHoldKeyWatch(keyCode, {
-      isKeyDown: queryMacKeyDown,
-      onRelease,
-      setIntervalFn: setInterval,
-      clearIntervalFn: clearInterval,
-    }),
+  startHoldWatch: (keyCode, onRelease) => watchMacKeyUntilUp(keyCode, onRelease),
 });
 
 /** Hotkey callback (fire-and-forget). Debounced against OS key chatter. */
