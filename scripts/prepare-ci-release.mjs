@@ -16,7 +16,25 @@ export function automaticReleaseVersion(baseVersion, runNumber) {
   return `${Number(match[1])}.${Number(match[2])}.${Number(runNumber)}`;
 }
 
+export function mainPushReleaseVersion(baseVersion, runNumber, baseTagExists) {
+  const incrementedVersion = automaticReleaseVersion(baseVersion, runNumber);
+  if (typeof baseTagExists !== "boolean") {
+    throw new Error("Base tag existence must be a boolean");
+  }
+  return baseTagExists ? incrementedVersion : baseVersion;
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === modulePath) {
   const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, "package.json"), "utf8"));
-  console.log(automaticReleaseVersion(packageJson.version, process.argv[2]));
+  const baseTagExistsArgument = process.argv[3];
+  if (baseTagExistsArgument !== "true" && baseTagExistsArgument !== "false") {
+    throw new Error("Base tag existence must be provided as true or false");
+  }
+  console.log(
+    mainPushReleaseVersion(
+      packageJson.version,
+      process.argv[2],
+      baseTagExistsArgument === "true",
+    ),
+  );
 }

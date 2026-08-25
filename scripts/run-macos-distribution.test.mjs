@@ -183,6 +183,8 @@ test("release publication checks deployed consumers before building", async () =
   const consumerCheck = workflow.indexOf("npm run release:check-consumers");
   const distributionBuild = workflow.indexOf("npm run dist");
 
+  assert.match(workflow, /git ls-remote --tags origin/u);
+  assert.match(workflow, /--allow-same-version/u);
   assert.ok(consumerCheck >= 0, "the release workflow must check Homebrew and the website");
   assert.ok(
     distributionBuild > consumerCheck,
