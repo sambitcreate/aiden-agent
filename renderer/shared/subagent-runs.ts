@@ -28,6 +28,32 @@ export const SUBAGENT_MILESTONE_KINDS = [
 ] as const;
 export type SubagentMilestoneKind = (typeof SUBAGENT_MILESTONE_KINDS)[number];
 
+export const SUBAGENT_PROJECTION_NOTICE_KINDS = [
+  "task_truncated",
+  "report_truncated",
+  "display_filtered",
+] as const;
+export type SubagentProjectionNoticeKind = (typeof SUBAGENT_PROJECTION_NOTICE_KINDS)[number];
+
+/**
+ * Projection facts describe immutable task handling plus terminal report
+ * handling. Task provenance cannot change after launch; report/display facts
+ * may only be added when a run becomes terminal, and no fact may disappear.
+ */
+export function subagentProjectionNoticesAreMonotonic(
+  current: readonly SubagentProjectionNoticeKind[] | undefined,
+  next: readonly SubagentProjectionNoticeKind[] | undefined,
+  allowTerminalAdditions: boolean,
+): boolean {
+  const currentSet = new Set(current);
+  const nextSet = new Set(next);
+  if (currentSet.has("task_truncated") !== nextSet.has("task_truncated")) return false;
+  if ([...currentSet].some((notice) => !nextSet.has(notice))) return false;
+  return (
+    allowTerminalAdditions || [...nextSet].every((notice) => currentSet.has(notice))
+  );
+}
+
 export type SubagentRunState =
   | "queued"
   | "starting"
@@ -76,6 +102,8 @@ export interface SubagentRunSnapshotV1 {
   tokens: number;
   /** Bounded, ordered, renderer-safe activity kinds. */
   milestones?: SubagentMilestoneKind[];
+  /** Closed producer facts about transformations applied to this saved view. */
+  projectionNotices?: SubagentProjectionNoticeKind[];
   latestText?: string;
   terminalMarkdown?: string;
   error?: string;
@@ -112,8 +140,9 @@ const RUN_STATES = new Set<SubagentRunState>([
   ...SUBAGENT_TERMINAL_STATES,
 ]);
 const ROLES = new Set<SubagentSnapshotRole>(["scout", "planner", "reviewer"]);
-const MILESTONE_KINDS = new Set<SubagentMilestoneKind>(
-  SUBAGENT_MILESTONE_KINDS,
+const MILESTONE_KINDS = new Set<SubagentMilestoneKind>(SUBAGENT_MILESTONE_KINDS);
+const PROJECTION_NOTICE_KINDS = new Set<SubagentProjectionNoticeKind>(
+  SUBAGENT_PROJECTION_NOTICE_KINDS,
 );
 const SAFE_ID = /^[A-Za-z0-9._:-]+$/u;
 const IDENTIFIER_ENCODING_SEPARATOR = /[._:-]/u;
@@ -144,6 +173,7 @@ const OPTIONAL_SNAPSHOT_KEYS = new Set([
   "activity",
   "finishedAt",
   "milestones",
+  "projectionNotices",
   "latestText",
   "terminalMarkdown",
   "error",
@@ -173,27 +203,17 @@ function identifierEncodingSlicesAreSafe(value: string): boolean {
   let checked = 0;
   for (const start of starts) {
     for (const end of ends) {
-      if (
-        end <= start ||
-        (start === 0 && end === value.length) ||
-        end - start < 8
-      )
-        continue;
+      if (end <= start || (start === 0 && end === value.length) || end - start < 8) continue;
       checked += 1;
       if (checked > MAX_IDENTIFIER_ENCODING_SLICES) return false;
       const slice = value.slice(start, end);
       if (sanitizeSubagentSnapshotText(slice) !== slice) return false;
       const compact = slice.replace(IDENTIFIER_ENCODING_SEPARATORS, "");
-      if (
-        compact.length >= 8 &&
-        sanitizeSubagentSnapshotText(compact) !== compact
-      )
-        return false;
+      if (compact.length >= 8 && sanitizeSubagentSnapshotText(compact) !== compact) return false;
     }
   }
   const compact = value.replace(IDENTIFIER_ENCODING_SEPARATORS, "");
-  if (compact.length >= 8 && sanitizeSubagentSnapshotText(compact) !== compact)
-    return false;
+  if (compact.length >= 8 && sanitizeSubagentSnapshotText(compact) !== compact) return false;
   return true;
 }
 
@@ -217,12 +237,7 @@ function hasControl(value: string, allowNewlines: boolean): boolean {
   return Array.from(value).some((character) => {
     const code = character.codePointAt(0) ?? 0;
     if (allowNewlines && (code === 10 || code === 13)) return false;
-    return (
-      code <= 31 ||
-      (code >= 127 && code <= 159) ||
-      code === 0x2028 ||
-      code === 0x2029
-    );
+    return code <= 31 || (code >= 127 && code <= 159) || code === 0x2028 || code === 0x2029;
   });
 }
 
@@ -246,17 +261,12 @@ function hasExactSnapshotKeys(value: Record<string, unknown>): boolean {
     REQUIRED_SNAPSHOT_KEYS.size <= keys.length &&
     keys.length <= REQUIRED_SNAPSHOT_KEYS.size + OPTIONAL_SNAPSHOT_KEYS.size &&
     [...REQUIRED_SNAPSHOT_KEYS].every((key) => key in value) &&
-    keys.every(
-      (key) =>
-        REQUIRED_SNAPSHOT_KEYS.has(key) || OPTIONAL_SNAPSHOT_KEYS.has(key),
-    )
+    keys.every((key) => REQUIRED_SNAPSHOT_KEYS.has(key) || OPTIONAL_SNAPSHOT_KEYS.has(key))
   );
 }
 
 /** Reject malformed or non-redacted values before they cross IPC or replay from disk. */
-export function parseSubagentRunSnapshotV1(
-  value: unknown,
-): SubagentRunSnapshotV1 | undefined {
+export function parseSubagentRunSnapshotV1(value: unknown): SubagentRunSnapshotV1 | undefined {
   if (!isRecord(value) || !hasExactSnapshotKeys(value)) return undefined;
   if (
     value.version !== SUBAGENT_RUN_SNAPSHOT_VERSION ||
@@ -289,11 +299,18 @@ export function parseSubagentRunSnapshotV1(
             typeof milestone !== "string" ||
             !MILESTONE_KINDS.has(milestone as SubagentMilestoneKind),
         ))) ||
+    (value.projectionNotices !== undefined &&
+      (!Array.isArray(value.projectionNotices) ||
+        value.projectionNotices.length > SUBAGENT_PROJECTION_NOTICE_KINDS.length ||
+        new Set(value.projectionNotices).size !== value.projectionNotices.length ||
+        value.projectionNotices.some(
+          (notice) =>
+            typeof notice !== "string" ||
+            !PROJECTION_NOTICE_KINDS.has(notice as SubagentProjectionNoticeKind),
+        ))) ||
     !Array.isArray(value.warnings) ||
     value.warnings.length > MAX_SUBAGENT_WARNINGS ||
-    value.warnings.some(
-      (warning) => !safeText(warning, MAX_SUBAGENT_WARNING_CHARS),
-    )
+    value.warnings.some((warning) => !safeText(warning, MAX_SUBAGENT_WARNING_CHARS))
   ) {
     return undefined;
   }
@@ -306,8 +323,7 @@ export function parseSubagentRunSnapshotV1(
       value.error !== undefined ||
       value.warnings.length > 0);
   if (
-    (value.activity !== undefined &&
-      !safeText(value.activity, MAX_SUBAGENT_ACTIVITY_CHARS)) ||
+    (value.activity !== undefined && !safeText(value.activity, MAX_SUBAGENT_ACTIVITY_CHARS)) ||
     (value.latestText !== undefined &&
       !safeText(value.latestText, MAX_SUBAGENT_LATEST_TEXT_CHARS, {
         allowNewlines: true,
@@ -316,12 +332,14 @@ export function parseSubagentRunSnapshotV1(
       !safeText(value.terminalMarkdown, MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS, {
         allowNewlines: true,
       })) ||
-    (value.error !== undefined &&
-      !safeText(value.error, MAX_SUBAGENT_ERROR_CHARS)) ||
+    (value.error !== undefined && !safeText(value.error, MAX_SUBAGENT_ERROR_CHARS)) ||
     (value.finishedAt !== undefined &&
-      (!finiteTimestamp(value.finishedAt) ||
-        value.finishedAt < value.updatedAt)) ||
+      (!finiteTimestamp(value.finishedAt) || value.finishedAt < value.updatedAt)) ||
     activeHasTerminalFields ||
+    (SUBAGENT_ACTIVE_STATES.has(state) &&
+      (value.projectionNotices as unknown[] | undefined)?.includes("report_truncated")) ||
+    ((value.projectionNotices as unknown[] | undefined)?.includes("report_truncated") &&
+      value.terminalMarkdown === undefined) ||
     (SUBAGENT_ACTIVE_STATES.has(state) && value.finishedAt !== undefined) ||
     (SUBAGENT_TERMINAL_STATES.has(state) && value.finishedAt === undefined)
   ) {
@@ -341,14 +359,10 @@ export function parseSubagentRunSnapshotV1(
     label: value.label,
     taskPreview: value.taskPreview,
     state,
-    ...(value.activity === undefined
-      ? {}
-      : { activity: value.activity as string }),
+    ...(value.activity === undefined ? {} : { activity: value.activity as string }),
     startedAt: value.startedAt,
     updatedAt: value.updatedAt,
-    ...(value.finishedAt === undefined
-      ? {}
-      : { finishedAt: value.finishedAt as number }),
+    ...(value.finishedAt === undefined ? {} : { finishedAt: value.finishedAt as number }),
     modelId: value.modelId,
     turns: value.turns,
     tools: value.tools,
@@ -356,9 +370,12 @@ export function parseSubagentRunSnapshotV1(
     ...(value.milestones === undefined
       ? {}
       : { milestones: [...(value.milestones as SubagentMilestoneKind[])] }),
-    ...(value.latestText === undefined
+    ...(value.projectionNotices === undefined
       ? {}
-      : { latestText: value.latestText as string }),
+      : {
+          projectionNotices: [...(value.projectionNotices as SubagentProjectionNoticeKind[])],
+        }),
+    ...(value.latestText === undefined ? {} : { latestText: value.latestText as string }),
     ...(value.terminalMarkdown === undefined
       ? {}
       : { terminalMarkdown: value.terminalMarkdown as string }),
@@ -367,25 +384,17 @@ export function parseSubagentRunSnapshotV1(
   };
 }
 
-export function parseSubagentRunSnapshotsV1(
-  value: unknown,
-): SubagentRunSnapshotV1[] {
-  if (!Array.isArray(value) || value.length > MAX_SUBAGENT_RUNS_PER_GENERATION)
-    return [];
+export function parseSubagentRunSnapshotsV1(value: unknown): SubagentRunSnapshotV1[] {
+  if (!Array.isArray(value) || value.length > MAX_SUBAGENT_RUNS_PER_GENERATION) return [];
   const parsed = value.map(parseSubagentRunSnapshotV1);
-  return parsed.every(
-    (entry): entry is SubagentRunSnapshotV1 => entry !== undefined,
-  )
-    ? parsed
-    : [];
+  return parsed.every((entry): entry is SubagentRunSnapshotV1 => entry !== undefined) ? parsed : [];
 }
 
 export function subagentMessageReference(
   generationId: string,
   snapshots: readonly SubagentRunSnapshotV1[],
 ): SubagentMessageReferenceV1 | undefined {
-  if (!isSafeSubagentIdentifier(generationId) || snapshots.length === 0)
-    return undefined;
+  if (!isSafeSubagentIdentifier(generationId) || snapshots.length === 0) return undefined;
   const runs: SubagentRunSnapshotV1[] = [];
   const seen = new Set<string>();
   for (const snapshot of snapshots) {
@@ -461,16 +470,11 @@ export function parseSubagentMessageReferenceV1(
     (value.failed as number) +
     (value.timedOut as number) +
     (value.interrupted as number);
-  if (value.total !== value.runIds.length || total !== value.total)
-    return undefined;
+  if (value.total !== value.runIds.length || total !== value.total) return undefined;
 
   let items: SubagentMessageReferenceItemV1[] | undefined;
   if (enriched) {
-    if (
-      !Array.isArray(value.items) ||
-      value.items.length !== value.runIds.length
-    )
-      return undefined;
+    if (!Array.isArray(value.items) || value.items.length !== value.runIds.length) return undefined;
     const parsedItems: SubagentMessageReferenceItemV1[] = [];
     for (let index = 0; index < value.items.length; index += 1) {
       const item = value.items[index];
@@ -496,12 +500,10 @@ export function parseSubagentMessageReferenceV1(
       });
     }
     const itemCounts = {
-      completed: parsedItems.filter(({ state }) => state === "completed")
-        .length,
+      completed: parsedItems.filter(({ state }) => state === "completed").length,
       failed: parsedItems.filter(({ state }) => state === "failed").length,
       timedOut: parsedItems.filter(({ state }) => state === "timed_out").length,
-      interrupted: parsedItems.filter(({ state }) => state === "interrupted")
-        .length,
+      interrupted: parsedItems.filter(({ state }) => state === "interrupted").length,
     };
     if (
       itemCounts.completed !== value.completed ||
@@ -528,15 +530,11 @@ export function parseSubagentMessageReferenceV1(
 }
 
 export const SUBAGENT_RUN_SNAPSHOT_VERSION_V2 = 2 as const;
-export type SubagentRunStateV2 =
-  SubagentRunState | "needs_attention" | "stopped" | "unknown";
+export type SubagentRunStateV2 = SubagentRunState | "needs_attention" | "stopped" | "unknown";
 export type SubagentExecutionModeV2 = "foreground" | "background";
 export type SubagentContextModeV2 = "fresh" | "fork";
 
-export interface SubagentRunSnapshotV2 extends Omit<
-  SubagentRunSnapshotV1,
-  "version" | "state"
-> {
+export interface SubagentRunSnapshotV2 extends Omit<SubagentRunSnapshotV1, "version" | "state"> {
   version: typeof SUBAGENT_RUN_SNAPSHOT_VERSION_V2;
   state: SubagentRunStateV2;
   parentRunId?: string;
@@ -567,24 +565,16 @@ const V2_STATES = new Set<SubagentRunStateV2>([
   "stopped",
   "unknown",
 ]);
-const V2_EXECUTION_MODES = new Set<SubagentExecutionModeV2>([
-  "foreground",
-  "background",
-]);
+const V2_EXECUTION_MODES = new Set<SubagentExecutionModeV2>(["foreground", "background"]);
 const V2_CONTEXT_MODES = new Set<SubagentContextModeV2>(["fresh", "fork"]);
 
 function hasExactV2SnapshotKeys(value: Record<string, unknown>): boolean {
   const keys = Object.keys(value);
   return (
     V2_REQUIRED_SNAPSHOT_KEYS.size <= keys.length &&
-    keys.length <=
-      V2_REQUIRED_SNAPSHOT_KEYS.size + V2_OPTIONAL_SNAPSHOT_KEYS.size &&
+    keys.length <= V2_REQUIRED_SNAPSHOT_KEYS.size + V2_OPTIONAL_SNAPSHOT_KEYS.size &&
     [...V2_REQUIRED_SNAPSHOT_KEYS].every((key) => key in value) &&
-    keys.every(
-      (key) =>
-        V2_REQUIRED_SNAPSHOT_KEYS.has(key) ||
-        V2_OPTIONAL_SNAPSHOT_KEYS.has(key),
-    )
+    keys.every((key) => V2_REQUIRED_SNAPSHOT_KEYS.has(key) || V2_OPTIONAL_SNAPSHOT_KEYS.has(key))
   );
 }
 
@@ -628,18 +618,17 @@ function v2BaseProjection(
     tools: value.tools,
     tokens: value.tokens,
     ...(value.milestones === undefined ? {} : { milestones: value.milestones }),
-    ...(value.latestText === undefined ? {} : { latestText: value.latestText }),
-    ...(value.terminalMarkdown === undefined
+    ...(value.projectionNotices === undefined
       ? {}
-      : { terminalMarkdown: value.terminalMarkdown }),
+      : { projectionNotices: value.projectionNotices }),
+    ...(value.latestText === undefined ? {} : { latestText: value.latestText }),
+    ...(value.terminalMarkdown === undefined ? {} : { terminalMarkdown: value.terminalMarkdown }),
     ...(value.error === undefined ? {} : { error: value.error }),
     warnings: value.warnings,
   };
 }
 
-export function parseSubagentRunSnapshotV2(
-  value: unknown,
-): SubagentRunSnapshotV2 | undefined {
+export function parseSubagentRunSnapshotV2(value: unknown): SubagentRunSnapshotV2 | undefined {
   if (
     !isRecord(value) ||
     !hasExactV2SnapshotKeys(value) ||
@@ -654,15 +643,12 @@ export function parseSubagentRunSnapshotV2(
     typeof value.context !== "string" ||
     !V2_CONTEXT_MODES.has(value.context as SubagentContextModeV2) ||
     !nonNegativeInteger(value.authorityRevision) ||
-    (value.parentRunId !== undefined &&
-      !isSafeSubagentIdentifier(value.parentRunId)) ||
-    (value.retryOfRunId !== undefined &&
-      !isSafeSubagentIdentifier(value.retryOfRunId)) ||
+    (value.parentRunId !== undefined && !isSafeSubagentIdentifier(value.parentRunId)) ||
+    (value.retryOfRunId !== undefined && !isSafeSubagentIdentifier(value.retryOfRunId)) ||
     (value.depth === 1 && value.parentRunId !== undefined) ||
     (value.depth > 1 && value.parentRunId === undefined) ||
     value.parentRunId === value.runId ||
-    (value.state === "needs_attention" &&
-      value.activity !== "Needs attention.") ||
+    (value.state === "needs_attention" && value.activity !== "Needs attention.") ||
     value.retryOfRunId === value.runId
   ) {
     return undefined;
@@ -672,8 +658,7 @@ export function parseSubagentRunSnapshotV2(
   if (!v1) return undefined;
   if (
     (state === "needs_attention" && value.finishedAt !== undefined) ||
-    ((state === "stopped" || state === "unknown") &&
-      value.finishedAt === undefined)
+    ((state === "stopped" || state === "unknown") && value.finishedAt === undefined)
   ) {
     return undefined;
   }
@@ -681,12 +666,8 @@ export function parseSubagentRunSnapshotV2(
     ...v1,
     version: SUBAGENT_RUN_SNAPSHOT_VERSION_V2,
     state,
-    ...(value.parentRunId === undefined
-      ? {}
-      : { parentRunId: value.parentRunId as string }),
-    ...(value.retryOfRunId === undefined
-      ? {}
-      : { retryOfRunId: value.retryOfRunId as string }),
+    ...(value.parentRunId === undefined ? {} : { parentRunId: value.parentRunId as string }),
+    ...(value.retryOfRunId === undefined ? {} : { retryOfRunId: value.retryOfRunId as string }),
     depth: value.depth,
     execution: value.execution as SubagentExecutionModeV2,
     context: value.context as SubagentContextModeV2,
@@ -694,9 +675,7 @@ export function parseSubagentRunSnapshotV2(
   };
 }
 
-export function parseSubagentRunSnapshot(
-  value: unknown,
-): SubagentRunSnapshot | undefined {
+export function parseSubagentRunSnapshot(value: unknown): SubagentRunSnapshot | undefined {
   if (!isRecord(value)) return undefined;
   return value.version === SUBAGENT_RUN_SNAPSHOT_VERSION
     ? parseSubagentRunSnapshotV1(value)
@@ -730,10 +709,7 @@ export interface SubagentHistoryDetailV1 {
   effects: SubagentEffectActivityV1[];
 }
 
-const EFFECT_KINDS = new Set<SubagentEffectActivityKindV1>([
-  "mcp_mutation",
-  "shell",
-]);
+const EFFECT_KINDS = new Set<SubagentEffectActivityKindV1>(["mcp_mutation", "shell"]);
 const EFFECT_STATES = new Set<SubagentEffectActivityStateV1>([
   "prepared",
   "authorized",
@@ -768,15 +744,7 @@ function hasExactPlainDataKeys(
 export function parseSubagentEffectActivityV1(
   value: unknown,
 ): SubagentEffectActivityV1 | undefined {
-  if (
-    !hasExactPlainDataKeys(value, [
-      "version",
-      "kind",
-      "state",
-      "label",
-      "updatedAt",
-    ])
-  ) {
+  if (!hasExactPlainDataKeys(value, ["version", "kind", "state", "label", "updatedAt"])) {
     return undefined;
   }
   if (
@@ -801,9 +769,7 @@ export function parseSubagentEffectActivityV1(
   };
 }
 
-export function parseSubagentHistoryDetailV1(
-  value: unknown,
-): SubagentHistoryDetailV1 | undefined {
+export function parseSubagentHistoryDetailV1(value: unknown): SubagentHistoryDetailV1 | undefined {
   if (
     !hasExactPlainDataKeys(value, ["version", "snapshot", "effects"]) ||
     value.version !== 1 ||
@@ -813,8 +779,7 @@ export function parseSubagentHistoryDetailV1(
     return undefined;
   const snapshot = parseSubagentRunSnapshot(value.snapshot);
   const effects = value.effects.map(parseSubagentEffectActivityV1);
-  if (!snapshot || effects.some((effect) => effect === undefined))
-    return undefined;
+  if (!snapshot || effects.some((effect) => effect === undefined)) return undefined;
   return {
     version: 1,
     snapshot,
@@ -844,7 +809,5 @@ export function adaptSubagentRunSnapshotV2ToV1(
   snapshot: SubagentRunSnapshotV2,
 ): SubagentRunSnapshotV1 | undefined {
   const parsed = parseSubagentRunSnapshotV2(snapshot);
-  return parsed
-    ? parseSubagentRunSnapshotV1(v2BaseProjection(parsed))
-    : undefined;
+  return parsed ? parseSubagentRunSnapshotV1(v2BaseProjection(parsed)) : undefined;
 }
