@@ -66,7 +66,7 @@ test("Bot provider signatures bind stored and custom authority while rejecting a
   assert.doesNotMatch(JSON.stringify(signatures), /stored-secret|oauth-a|custom-secret/u);
 });
 
-test("production-shaped catalogs keep restart identity and rotate exact opaque grants", async (t) => {
+test("production-shaped catalogs keep restart identity and public ids across exact-grant rotation", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-production-catalog-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   let credential = hash("credential-a");
@@ -117,7 +117,11 @@ test("production-shaped catalogs keep restart identity and rotate exact opaque g
 
   credential = hash("credential-b");
   const rotated = await (await createService()).snapshot({ audienceId: "device_a" });
-  assert.notEqual(rotated.catalog.providers[0]?.id, first.catalog.providers[0]?.id);
+  assert.equal(rotated.catalog.providers[0]?.id, first.catalog.providers[0]?.id);
+  assert.notEqual(
+    rotated.resources.providers[0]?.connectionFingerprint,
+    first.resources.providers[0]?.connectionFingerprint,
+  );
 
   skills = [];
   await (await createService()).snapshot({ audienceId: "device_a" });
@@ -129,7 +133,7 @@ test("production-shaped catalogs keep restart identity and rotate exact opaque g
     available: true,
   }];
   const readded = await (await createService()).snapshot({ audienceId: "device_a" });
-  assert.notEqual(readded.catalog.skills[0]?.id, first.catalog.skills[0]?.id);
+  assert.equal(readded.catalog.skills[0]?.id, first.catalog.skills[0]?.id);
 });
 
 test("Bot-targeted catalogs isolate managed-home skills and stay stable across restart", async (t) => {

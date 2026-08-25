@@ -2,7 +2,9 @@ import { createHmac } from "node:crypto";
 import { types as utilTypes } from "node:util";
 import {
   BOT_CAPABILITY_LIMITS,
+  BOT_FILE_SCOPE_SELECTION_GUIDANCE,
   BotCapabilityValidationError,
+  botFileScopeSelectionIsCoherent,
   cloneBotCustomSelection,
   isBoundedBotText,
   isPathSafeBotCapabilityId,
@@ -35,6 +37,9 @@ export const BOT_CAPABILITY_OPAQUE_KEY_BYTES = 32;
 export const BOT_CAPABILITY_BINDING_VERSION = 1 as const;
 
 const EXACT_SHA256 = /^[a-f0-9]{64}$/u;
+const OPAQUE_ID_DOMAIN_V1 = "aiden-bot-capability-v1";
+const OPAQUE_ID_DOMAIN_V2 = "aiden-bot-capability-v2";
+const mintKeys = new WeakMap<BotCapabilityOpaqueIdMint, Buffer>();
 
 export interface BoundBotProviderModel {
   providerOption: Omit<BotProviderOption, "models">;
@@ -136,36 +141,83 @@ function copyBytes(value: Uint8Array): Buffer {
   return Buffer.from(value);
 }
 
+function mintOpaqueIdWithDomain(
+  key: Buffer,
+  domain: typeof OPAQUE_ID_DOMAIN_V1 | typeof OPAQUE_ID_DOMAIN_V2,
+  namespace: BotCapabilityOpaqueNamespace,
+  sourceIdentity: string,
+  exactFingerprint: string,
+): string {
+  if (!EXACT_SHA256.test(exactFingerprint) || !sourceIdentity) {
+    throw new Error("Cannot mint a Bot capability id from invalid exact facts.");
+  }
+  const hmac = createHmac("sha256", key)
+    .update(domain)
+    .update("\0")
+    .update(namespace)
+    .update("\0")
+    .update(sourceIdentity);
+  // v1 mixed live fingerprints into the public id, so MCP/skill churn rotated
+  // checkboxes mid-wizard. v2 is identity-stable; exact facts stay in bindings.
+  if (domain === OPAQUE_ID_DOMAIN_V1) {
+    hmac.update("\0").update(exactFingerprint);
+  }
+  const id = `bc_${namespace}_${hmac.digest("base64url")}`;
+  if (!isPathSafeBotCapabilityId(id)) {
+    throw new Error("Minted Bot capability id exceeded the public identity contract.");
+  }
+  return id;
+}
+
 /**
  * Create stable, unlinkable selection ids. Callers must load the same private
  * key after every restart; this helper deliberately never generates one.
+ * Public ids follow source identity, not live fingerprints, so a wizard can
+ * keep the same checkboxes while Custom still fail-closes on stored facts.
  */
 export function createBotCapabilityOpaqueIdMint(
   persistedKey: Uint8Array,
 ): BotCapabilityOpaqueIdMint {
   const key = copyBytes(persistedKey);
-  return (
+  const mint: BotCapabilityOpaqueIdMint = (
     namespace: BotCapabilityOpaqueNamespace,
     sourceIdentity: string,
     exactFingerprint: string,
-  ): string => {
-    if (!EXACT_SHA256.test(exactFingerprint) || !sourceIdentity) {
-      throw new Error("Cannot mint a Bot capability id from invalid exact facts.");
-    }
-    const digest = createHmac("sha256", key)
-      .update("aiden-bot-capability-v1\0")
-      .update(namespace)
-      .update("\0")
-      .update(sourceIdentity)
-      .update("\0")
-      .update(exactFingerprint)
-      .digest("base64url");
-    const id = `bc_${namespace}_${digest}`;
-    if (!isPathSafeBotCapabilityId(id)) {
-      throw new Error("Minted Bot capability id exceeded the public identity contract.");
-    }
-    return id;
-  };
+  ): string =>
+    mintOpaqueIdWithDomain(key, OPAQUE_ID_DOMAIN_V2, namespace, sourceIdentity, exactFingerprint);
+  mintKeys.set(mint, key);
+  return mint;
+}
+
+export function mintLegacyBotCapabilityOpaqueId(
+  persistedKey: Uint8Array,
+  namespace: BotCapabilityOpaqueNamespace,
+  sourceIdentity: string,
+  exactFingerprint: string,
+): string {
+  return mintOpaqueIdWithDomain(
+    copyBytes(persistedKey),
+    OPAQUE_ID_DOMAIN_V1,
+    namespace,
+    sourceIdentity,
+    exactFingerprint,
+  );
+}
+
+function opaqueIdMatchesMint(
+  mintOpaqueId: BotCapabilityOpaqueIdMint,
+  namespace: BotCapabilityOpaqueNamespace,
+  sourceIdentity: string,
+  exactFingerprint: string,
+  actualId: string,
+): boolean {
+  if (actualId === mintOpaqueId(namespace, sourceIdentity, exactFingerprint)) return true;
+  const key = mintKeys.get(mintOpaqueId);
+  return (
+    key !== undefined &&
+    actualId ===
+      mintOpaqueIdWithDomain(key, OPAQUE_ID_DOMAIN_V1, namespace, sourceIdentity, exactFingerprint)
+  );
 }
 
 function compareText(left: string, right: string): number {
@@ -859,34 +911,50 @@ export function assertBoundBotCustomSelectionOpaqueIds(
   mintOpaqueId: BotCapabilityOpaqueIdMint,
 ): void {
   const binding = parseBoundBotCustomSelection(value);
-  const expectedProviderId = mintOpaqueId(
-    "provider",
-    binding.provider.sourceProviderId,
-    binding.provider.providerExactFingerprint,
-  );
-  const expectedModelId = mintOpaqueId(
-    "model",
-    `${binding.provider.sourceProviderId}\0${binding.provider.sourceModelId}`,
-    binding.provider.modelExactFingerprint,
-  );
   const idsMatch =
-    binding.provider.providerOption.id === expectedProviderId &&
-    binding.provider.modelOption.id === expectedModelId &&
-    binding.fileScopes.every(
-      (scope) => scope.option.id === mintOpaqueId("file", scope.sourceId, scope.exactFingerprint),
+    opaqueIdMatchesMint(
+      mintOpaqueId,
+      "provider",
+      binding.provider.sourceProviderId,
+      binding.provider.providerExactFingerprint,
+      binding.provider.providerOption.id,
     ) &&
-    binding.connections.every(
-      (connection) =>
-        connection.option.id ===
-        mintOpaqueId("connection", connection.sourceId, connection.exactFingerprint),
+    opaqueIdMatchesMint(
+      mintOpaqueId,
+      "model",
+      `${binding.provider.sourceProviderId}\0${binding.provider.sourceModelId}`,
+      binding.provider.modelExactFingerprint,
+      binding.provider.modelOption.id,
     ) &&
-    binding.skills.every(
-      (skill) => skill.option.id === mintOpaqueId("skill", skill.sourceId, skill.exactFingerprint),
+    binding.fileScopes.every((scope) =>
+      opaqueIdMatchesMint(mintOpaqueId, "file", scope.sourceId, scope.exactFingerprint, scope.option.id),
     ) &&
-    binding.otherCapabilities.every(
-      (capability) =>
-        capability.option.id ===
-        mintOpaqueId("other", capability.kind, capability.exactFingerprint),
+    binding.connections.every((connection) =>
+      opaqueIdMatchesMint(
+        mintOpaqueId,
+        "connection",
+        connection.sourceId,
+        connection.exactFingerprint,
+        connection.option.id,
+      ),
+    ) &&
+    binding.skills.every((skill) =>
+      opaqueIdMatchesMint(
+        mintOpaqueId,
+        "skill",
+        skill.sourceId,
+        skill.exactFingerprint,
+        skill.option.id,
+      ),
+    ) &&
+    binding.otherCapabilities.every((capability) =>
+      opaqueIdMatchesMint(
+        mintOpaqueId,
+        "other",
+        capability.kind,
+        capability.exactFingerprint,
+        capability.option.id,
+      ),
     );
   if (!idsMatch) {
     throw new Error("Bot Custom binding opaque ids do not match their persisted exact facts.");
@@ -935,17 +1003,10 @@ function fileSelectionIsCoherent(
   selection: BotCustomSelection,
   snapshot: BotCapabilityCatalogSnapshot,
 ): boolean {
-  const scopes = selection.fileScopeIds.map((id) =>
-    snapshot.resources.fileScopes.find(({ option }) => option.id === id),
+  return botFileScopeSelectionIsCoherent(
+    selection.fileScopeIds,
+    snapshot.resources.fileScopes.map(({ option }) => option),
   );
-  if (scopes.some((scope) => !scope)) return false;
-  const kinds = scopes.map((scope) => scope!.option.kind);
-  const fullMac = kinds.filter((kind) => kind === "full_mac").length;
-  const botHome = kinds.filter((kind) => kind === "bot_home").length;
-  const approved = kinds.filter((kind) => kind === "approved_location").length;
-  if (fullMac > 0) return fullMac === 1 && kinds.length === 1;
-  if (approved > 0) return botHome === 1;
-  return botHome <= 1;
 }
 
 function bindProvider(
@@ -1019,9 +1080,7 @@ export function bindBotCustomSelection(input: {
   const selection = parseBotCustomSelection(input.selection);
   validateSelectionAgainstCatalog(selection, input.snapshot.catalog);
   if (!fileSelectionIsCoherent(selection, input.snapshot)) {
-    throw new BotCapabilityValidationError(
-      "Choose Full Mac, Bot folder, approved locations with the Bot folder, or Files Off.",
-    );
+    throw new BotCapabilityValidationError(BOT_FILE_SCOPE_SELECTION_GUIDANCE);
   }
   const byOptionId = <T extends { option: { id: string; available: boolean } }>(
     choices: readonly T[],
@@ -1146,6 +1205,44 @@ function resourceIssue(
   return current.option.available ? undefined : issue(group, selectionId, "unavailable");
 }
 
+function findByIdOrSource<T extends { option: { id: string }; sourceId: string }>(
+  items: readonly T[],
+  selectionId: string,
+  sourceId: string,
+): T | undefined {
+  return (
+    items.find((item) => item.option.id === selectionId) ??
+    items.find((item) => item.sourceId === sourceId)
+  );
+}
+
+function adoptRetainedPublicId<T extends { option: { id: string } }>(
+  existing: T,
+  retainedId: string,
+): T {
+  if (existing.option.id !== retainedId) {
+    existing.option.id = retainedId;
+  }
+  return existing;
+}
+
+function findOrAdoptByIdentity<T extends { option: { id: string } }>(
+  collection: T[],
+  retainedId: string,
+  matchIdentity: (item: T) => boolean,
+  label: string,
+): T | undefined {
+  const byId = collection.find((item) => item.option.id === retainedId);
+  if (byId) {
+    if (!matchIdentity(byId)) {
+      throw new Error(`Bot ${label} opaque id collision detected.`);
+    }
+    return byId;
+  }
+  const byIdentity = collection.find(matchIdentity);
+  return byIdentity ? adoptRetainedPublicId(byIdentity, retainedId) : undefined;
+}
+
 /** Return only public opaque drift facts; private identities never enter error text. */
 export function botCustomSelectionDrift(
   binding: BoundBotCustomSelection,
@@ -1153,8 +1250,10 @@ export function botCustomSelectionDrift(
 ): BotCapabilityDriftIssue[] {
   binding = parseBoundBotCustomSelection(binding);
   const issues: BotCapabilityDriftIssue[] = [];
-  const provider = current.resources.providers.find(
-    ({ option }) => option.id === binding.provider.providerOption.id,
+  const provider = findByIdOrSource(
+    current.resources.providers,
+    binding.provider.providerOption.id,
+    binding.provider.sourceProviderId,
   );
   if (
     !provider ||
@@ -1165,9 +1264,13 @@ export function botCustomSelectionDrift(
   } else if (!provider.option.available) {
     issues.push(issue("provider", binding.provider.providerOption.id, "unavailable"));
   }
-  const model = provider?.models.find(
-    ({ option }) => option.id === binding.provider.modelOption.id,
-  );
+  const model = provider
+    ? findByIdOrSource(
+        provider.models,
+        binding.provider.modelOption.id,
+        binding.provider.sourceModelId,
+      )
+    : undefined;
   if (
     !model ||
     model.sourceId !== binding.provider.sourceModelId ||
@@ -1186,21 +1289,25 @@ export function botCustomSelectionDrift(
     }
   }
   for (const bound of binding.fileScopes) {
-    const found = current.resources.fileScopes.find(({ option }) => option.id === bound.option.id);
+    const found = findByIdOrSource(current.resources.fileScopes, bound.option.id, bound.sourceId);
     const foundIssue = found?.sourceId !== bound.sourceId
       ? issue("file_scope", bound.option.id, "changed_or_removed")
       : resourceIssue("file_scope", bound.option.id, bound.exactFingerprint, found);
     if (foundIssue) issues.push(foundIssue);
   }
   for (const bound of binding.connections) {
-    const found = current.resources.connections.find(({ option }) => option.id === bound.option.id);
+    const found = findByIdOrSource(
+      current.resources.connections,
+      bound.option.id,
+      bound.sourceId,
+    );
     const foundIssue = found?.sourceId !== bound.sourceId
       ? issue("connection", bound.option.id, "changed_or_removed")
       : resourceIssue("connection", bound.option.id, bound.exactFingerprint, found);
     if (foundIssue) issues.push(foundIssue);
   }
   for (const bound of binding.skills) {
-    const found = current.resources.skills.find(({ option }) => option.id === bound.option.id);
+    const found = findByIdOrSource(current.resources.skills, bound.option.id, bound.sourceId);
     const foundIssue = found?.sourceId !== bound.sourceId
       ? issue("skill", bound.option.id, "changed_or_removed")
       : resourceIssue("skill", bound.option.id, bound.exactFingerprint, found);
@@ -1208,7 +1315,8 @@ export function botCustomSelectionDrift(
   }
   for (const bound of binding.otherCapabilities) {
     const found = current.resources.otherCapabilities.find(
-      ({ option }) => option.id === bound.option.id,
+      (capability) =>
+        capability.option.id === bound.option.id || capability.kind === bound.kind,
     );
     const foundIssue = resourceIssue(
       "other_capability",
@@ -1237,19 +1345,11 @@ function unavailableOption<T extends BotCapabilityOption>(option: T): T {
   return { ...option, available: false };
 }
 
-function sameOrCollision(
-  current: { exactFingerprint: string },
-  retained: { exactFingerprint: string },
-  label: string,
-): void {
-  if (current.exactFingerprint !== retained.exactFingerprint) {
-    throw new Error(`Bot ${label} opaque id collision detected.`);
-  }
-}
-
 /**
- * Add unavailable public tombstones for exact grants that disappeared or
- * changed. New resources retain their new opaque ids, so Custom never widens.
+ * Keep stored public ids visible when a source is gone. Same-identity fingerprint
+ * drift keeps the live row available so the user can re-bind; Custom still
+ * fail-closes at admit until they save. Distinct sources that hash to one id
+ * remain a collision.
  */
 export function withBotCapabilityTombstones(
   current: BotCapabilityCatalogSnapshot,
@@ -1265,16 +1365,13 @@ export function withBotCapabilityTombstones(
   };
   for (const candidate of retainedBindings) {
     const binding = parseBoundBotCustomSelection(candidate);
-    let provider = resources.providers.find(
-      ({ option }) => option.id === binding.provider.providerOption.id,
+    let provider = findOrAdoptByIdentity(
+      resources.providers,
+      binding.provider.providerOption.id,
+      (candidate) => candidate.sourceId === binding.provider.sourceProviderId,
+      "provider",
     );
-    if (provider) {
-      sameOrCollision(
-        provider,
-        { exactFingerprint: binding.provider.providerExactFingerprint },
-        "provider",
-      );
-    } else {
+    if (!provider) {
       provider = {
         sourceId: binding.provider.sourceProviderId,
         connectionFingerprint: binding.provider.connectionFingerprint,
@@ -1288,12 +1385,13 @@ export function withBotCapabilityTombstones(
       };
       resources.providers.push(provider);
     }
-    const model = provider.models.find(
-      ({ option }) => option.id === binding.provider.modelOption.id,
+    const model = findOrAdoptByIdentity(
+      provider.models,
+      binding.provider.modelOption.id,
+      (candidate) => candidate.sourceId === binding.provider.sourceModelId,
+      "model",
     );
-    if (model) {
-      sameOrCollision(model, { exactFingerprint: binding.provider.modelExactFingerprint }, "model");
-    } else {
+    if (!model) {
       provider.models.push({
         sourceId: binding.provider.sourceModelId,
         modelFingerprint: binding.provider.modelFingerprint,
@@ -1304,16 +1402,14 @@ export function withBotCapabilityTombstones(
     provider.models.sort((left, right) => compareText(left.option.id, right.option.id));
     provider.option.models = provider.models.map(({ option }) => ({ ...option }));
 
-    const appendResource = <T extends { option: BotCapabilityOption; exactFingerprint: string }>(
+    const appendResource = <T extends { option: BotCapabilityOption }>(
       collection: T[],
       retained: T,
       label: string,
+      matchIdentity: (item: T) => boolean,
     ) => {
-      const existing = collection.find(({ option }) => option.id === retained.option.id);
-      if (existing) {
-        sameOrCollision(existing, retained, label);
-        return;
-      }
+      const existing = findOrAdoptByIdentity(collection, retained.option.id, matchIdentity, label);
+      if (existing) return;
       collection.push({ ...retained, option: unavailableOption(retained.option) });
     };
     for (const scope of binding.fileScopes) {
@@ -1326,6 +1422,7 @@ export function withBotCapabilityTombstones(
           exactFingerprint: scope.exactFingerprint,
         },
         "file-scope",
+        (item) => item.sourceId === scope.sourceId,
       );
     }
     for (const connection of binding.connections) {
@@ -1337,16 +1434,23 @@ export function withBotCapabilityTombstones(
           tools: connection.tools.map((tool) => ({ ...tool })),
         },
         "connection",
+        (item) => item.sourceId === connection.sourceId,
       );
     }
     for (const skill of binding.skills) {
-      appendResource(resources.skills, { ...skill, option: { ...skill.option } }, "skill");
+      appendResource(
+        resources.skills,
+        { ...skill, option: { ...skill.option } },
+        "skill",
+        (item) => item.sourceId === skill.sourceId,
+      );
     }
     for (const capability of binding.otherCapabilities) {
       appendResource(
         resources.otherCapabilities,
         { ...capability, option: { ...capability.option } },
         "ordinary-capability",
+        (item) => item.kind === capability.kind,
       );
     }
   }

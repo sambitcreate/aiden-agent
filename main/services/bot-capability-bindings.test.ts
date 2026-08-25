@@ -18,6 +18,7 @@ import {
   botCustomSelectionDrift,
   boundBotCustomSelectionFingerprint,
   createBotCapabilityOpaqueIdMint,
+  mintLegacyBotCapabilityOpaqueId,
   parseBoundBotCustomSelection,
   parseBoundBotProviderModel,
   reconcileBoundBotCustomSelection,
@@ -149,7 +150,7 @@ function binding(current = snapshot()): BoundBotCustomSelection {
   });
 }
 
-test("opaque ids are stable across restart keys and do not reveal source identity", () => {
+test("opaque ids stay stable across fingerprint churn and do not reveal source identity", () => {
   const first = createBotCapabilityOpaqueIdMint(key)("skill", "private-skill-id", digest("facts"));
   const restarted = createBotCapabilityOpaqueIdMint(Buffer.from(key))(
     "skill",
@@ -166,9 +167,22 @@ test("opaque ids are stable across restart keys and do not reveal source identit
     "private-skill-id",
     digest("changed-facts"),
   );
+  const otherSource = createBotCapabilityOpaqueIdMint(key)(
+    "skill",
+    "other-private-skill-id",
+    digest("facts"),
+  );
+  const legacy = mintLegacyBotCapabilityOpaqueId(
+    key,
+    "skill",
+    "private-skill-id",
+    digest("facts"),
+  );
   assert.equal(restarted, first);
   assert.notEqual(changedKey, first);
-  assert.notEqual(changedFacts, first);
+  assert.equal(changedFacts, first);
+  assert.notEqual(otherSource, first);
+  assert.notEqual(legacy, first);
   assert.equal(first.includes("private-skill-id"), false);
   assert.match(first, /^bc_skill_[A-Za-z0-9_-]+$/u);
   assert.throws(() => createBotCapabilityOpaqueIdMint(Buffer.alloc(31)), /32-byte key/u);
@@ -231,13 +245,14 @@ test("file choices enforce Full Mac exclusivity and approved-location Bot folder
   );
 });
 
-test("MCP schema/effect drift disables the old exact grant and creates an unavailable tombstone", () => {
+test("MCP schema/effect drift keeps the public id and fail-closes the stored grant", () => {
   const current = snapshot();
   const bound = binding(current);
   const changedInventory = inventory();
   changedInventory.connections[0]!.tools[0]!.inputSchemaFingerprint =
     digest("changed-input-schema");
   const changed = snapshot(changedInventory);
+  assert.equal(changed.catalog.connections[0]!.id, current.catalog.connections[0]!.id);
   const result = reconcileBoundBotCustomSelection(bound, changed);
   assert.equal(result.state, "drifted");
   assert.deepEqual(result.issues, [
@@ -247,35 +262,36 @@ test("MCP schema/effect drift disables the old exact grant and creates an unavai
       reason: "changed_or_removed",
     },
   ]);
-  const oldOption = result.catalogSnapshot.catalog.connections.find(
+  const option = result.catalogSnapshot.catalog.connections.find(
     ({ id }) => id === bound.selection.connectionIds[0],
   );
-  const newOption = result.catalogSnapshot.catalog.connections.find(
-    ({ id }) => id === changed.catalog.connections[0]!.id,
-  );
-  assert.equal(oldOption?.available, false);
-  assert.equal(newOption?.available, true);
+  assert.equal(option?.available, true);
   assert.doesNotThrow(() =>
-    validateSelectionAgainstCatalog(bound.selection, result.catalogSnapshot.catalog, {
-      requireAvailable: false,
+    bindBotCustomSelection({
+      selection: bound.selection,
+      catalogRevision: changed.catalog.revision,
+      snapshot: changed,
     }),
   );
-  assert.throws(() =>
+  assert.doesNotThrow(() =>
     validateSelectionAgainstCatalog(bound.selection, result.catalogSnapshot.catalog),
   );
+  assert.throws(() => assertBoundBotCustomSelectionCurrent(bound, changed), BotCapabilityBindingDriftError);
   const publicJson = JSON.stringify(result.catalogSnapshot.catalog);
   assert.equal(publicJson.includes("private-connection-id"), false);
   assert.equal(publicJson.includes("calendar_events"), false);
   assert.equal(publicJson.includes("Fingerprint"), false);
 });
 
-test("provider recipient and skill-content drift both mint new ids and retain safe old tombstones", () => {
+test("provider recipient and skill-content drift keep public ids and fail closed until re-bind", () => {
   const current = snapshot();
   const bound = binding(current);
   const changedInventory = inventory();
   changedInventory.providers[0]!.connectionFingerprint = digest("changed-recipient");
   changedInventory.skills[0]!.contentFingerprint = digest("changed-skill-content");
   const changed = snapshot(changedInventory);
+  assert.equal(changed.catalog.providers[0]!.id, current.catalog.providers[0]!.id);
+  assert.equal(changed.catalog.skills[0]!.id, current.catalog.skills[0]!.id);
   const reconciled = reconcileBoundBotCustomSelection(bound, changed);
   assert.equal(reconciled.state, "drifted");
   assert.deepEqual(
@@ -286,12 +302,19 @@ test("provider recipient and skill-content drift both mint new ids and retain sa
     reconciled.catalogSnapshot.catalog.providers.find(
       ({ id }) => id === bound.provider.providerOption.id,
     )?.available,
-    false,
+    true,
   );
   assert.equal(
     reconciled.catalogSnapshot.catalog.skills.find(({ id }) => id === bound.skills[0]!.option.id)
       ?.available,
-    false,
+    true,
+  );
+  assert.doesNotThrow(() =>
+    bindBotCustomSelection({
+      selection: bound.selection,
+      catalogRevision: changed.catalog.revision,
+      snapshot: changed,
+    }),
   );
   assert.throws(
     () => assertBoundBotCustomSelectionCurrent(bound, changed),
@@ -342,7 +365,7 @@ test("tampered bindings fail before tombstone projection or validation", () => {
   );
 });
 
-test("strict private binding reload preserves exact drift tombstones across restart", () => {
+test("strict private binding reload preserves identity-stable ids across fingerprint churn", () => {
   const beforeRestart = snapshot();
   const persistedJson = JSON.stringify(binding(beforeRestart));
   assert.equal(persistedJson.includes("/Users/"), false);
@@ -358,20 +381,65 @@ test("strict private binding reload preserves exact drift tombstones across rest
   const driftedInventory = inventory();
   driftedInventory.skills[0]!.contentFingerprint = digest("skill-content-after-restart");
   const afterDrift = snapshot(driftedInventory);
+  assert.equal(afterDrift.catalog.skills[0]!.id, afterRestart.selection.skillIds[0]);
   const reconciled = reconcileBoundBotCustomSelection(afterRestart, afterDrift);
   assert.equal(reconciled.state, "drifted");
   assert.equal(
     reconciled.catalogSnapshot.catalog.skills.find(
       ({ id }) => id === afterRestart.selection.skillIds[0],
     )?.available,
-    false,
-  );
-  assert.equal(
-    reconciled.catalogSnapshot.catalog.skills.find(
-      ({ id }) => id === afterDrift.catalog.skills[0]!.id,
-    )?.available,
     true,
   );
+  assert.throws(
+    () => assertBoundBotCustomSelectionCurrent(afterRestart, afterDrift),
+    BotCapabilityBindingDriftError,
+  );
+  assert.doesNotThrow(() =>
+    bindBotCustomSelection({
+      selection: afterRestart.selection,
+      catalogRevision: afterDrift.catalog.revision,
+      snapshot: afterDrift,
+    }),
+  );
+});
+
+test("legacy v1 opaque ids still verify after identity-stable minting", () => {
+  const current = snapshot();
+  const bound = binding(current);
+  const skill = bound.skills[0]!;
+  const legacySkillId = mintLegacyBotCapabilityOpaqueId(
+    key,
+    "skill",
+    skill.sourceId,
+    skill.exactFingerprint,
+  );
+  const stored = structuredClone(bound);
+  stored.skills[0] = { ...skill, option: { ...skill.option, id: legacySkillId } };
+  stored.selection = { ...bound.selection, skillIds: [legacySkillId] };
+  const parsed = parseBoundBotCustomSelection(stored);
+  assert.doesNotThrow(() =>
+    assertBoundBotCustomSelectionOpaqueIds(parsed, createBotCapabilityOpaqueIdMint(key)),
+  );
+});
+
+test("removed sources keep unavailable tombstones with the stored public id", () => {
+  const current = snapshot();
+  const bound = binding(current);
+  const removedInventory = inventory();
+  removedInventory.skills = [];
+  const withoutSkill = snapshot(removedInventory);
+  const withTombstones = withBotCapabilityTombstones(withoutSkill, [bound]);
+  const option = withTombstones.catalog.skills.find(
+    ({ id }) => id === bound.selection.skillIds[0],
+  );
+  assert.equal(option?.available, false);
+  assert.deepEqual(botCustomSelectionDrift(bound, withoutSkill), [
+    {
+      group: "skill",
+      selectionId: bound.selection.skillIds[0],
+      reason: "changed_or_removed",
+    },
+  ]);
 });
 
 test("legacy provider bindings without image metadata do not drift after capability discovery", () => {
@@ -537,6 +605,16 @@ test("main catalog service uses injected inventories, stable persisted key, and 
   });
   assert.equal(reconciled.state, "drifted");
   assert.equal(reconciled.issues[0]?.group, "connection");
+  assert.equal(reconciled.selection.connectionIds[0], bound.selection.connectionIds[0]);
+  const refreshed = await service.snapshot({ audienceId: "device_a" });
+  assert.equal(refreshed.catalog.connections[0]!.id, first.catalog.connections[0]!.id);
+  await assert.doesNotReject(
+    service.bindCustom({
+      audienceId: "device_a",
+      selection: bound.selection,
+      catalogRevision: refreshed.catalog.revision,
+    }),
+  );
 });
 
 test("main catalog service honors cancellation without app globals", async () => {
