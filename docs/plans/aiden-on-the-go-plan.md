@@ -862,3 +862,9 @@ The Remote contract adds authenticated status/model-management/transcription rou
 - iPhone and iPad expose the same scroll-aware downward-arrow action in a 34-point circular Liquid Glass surface inside a 44-point touch target. Tapping dismisses it immediately before scrolling to the latest message.
 - The product-switcher coachmark uses a continuous rounded glass card in a transparent presentation host, and prominent accent-filled mobile actions use the palette’s semantic on-accent foreground to retain contrast across every appearance preset.
 - UI contracts cover the Android arrow-only action/menu state and the iOS scroll threshold. Android unit tests, lint, assembly, Android-test compilation, live Pixel IME/scroll inspection, and the 288-test signed physical-iPhone suite pass; the final normal apps were installed in place on both devices.
+
+## Unified mobile pull request and Android artifact — 2026-08-24
+
+iOS, Android, the shared Remote contracts, and the completed Bot companion-vision implementation are consolidated on one review branch based directly on `main`. Create Images/Banana, Gemini Live, and the Pi inline proposal remain intentionally separate so this pull request has one mobile-companion release boundary.
+
+Pull-request CI now gives Android its own Java 21/SDK 36 job. It runs the complete debug JVM tests, lint, debug assembly, and Android-test Kotlin compilation, then publishes the installable debug APK plus its SHA-256 checksum as a 14-day workflow artifact. Hosted CI continues to compile the iOS app and test bundle for generic physical hardware without using a simulator; signed XCTest acceptance remains a recorded physical-device gate.
