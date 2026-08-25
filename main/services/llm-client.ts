@@ -45,7 +45,13 @@ import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
-import type { ApprovalDecision, Chat, ChatStartParams, WorkspacePermission } from "./types.js";
+import type {
+  ApprovalDecision,
+  Attachment,
+  Chat,
+  ChatStartParams,
+  WorkspacePermission,
+} from "./types.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
@@ -168,11 +174,21 @@ import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import {
+  type PiAgentRuntimeExtension,
   PiAgentRuntimeHarness,
   piAgentRuntimeExtensions,
   resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
 } from "./pi-agent-runtime-harness.js";
+import {
+  createDisplayImageExtensionRuntime,
+  displayedAssistantImageUsage,
+  DISPLAY_IMAGE_TOOL_NAME,
+  shouldEnableDisplayImageExtension,
+} from "./display-image-extension.js";
+import { CHAT_ARTIFACT_EVENT_VERSION } from "../../renderer/shared/chat-artifacts.js";
+import { generationHasVisibleOutput } from "./generation-visible-output.js";
+import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -676,6 +692,54 @@ async function prepareGeneration(
         : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
+  const displayedImages: Attachment[] = [];
+  const displayedImageIds = new Set<string>();
+  const generationExtensions: PiAgentRuntimeExtension[] = [];
+  if (
+    shouldEnableDisplayImageExtension({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      workspaceRoot: folderPath,
+      permission,
+      excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
+    })
+  ) {
+    const existingUsage = displayedAssistantImageUsage(chat.messages);
+    const pendingUsage = await displayImageArtifactStore.usageByChat(params.chatId);
+    if (pendingUsage.count > 0) {
+      throw new Error("Restart Aiden to recover the previous image response before continuing.");
+    }
+    const displayImageRuntime = createDisplayImageExtensionRuntime({
+      workspaceRoot: folderPath!,
+      artifactNamespace: streamId,
+      existingChatImageBytes: existingUsage.bytes + pendingUsage.bytes,
+      existingChatImageCount: existingUsage.count + pendingUsage.count,
+      existingChatImagePixels: existingUsage.pixels + pendingUsage.pixels,
+      onArtifact: async (artifact, dimensions) => {
+        await displayImageArtifactStore.stage({
+          chatId: params.chatId,
+          generationId: streamId,
+          model: params.model,
+          artifact,
+          pixels: dimensions.width * dimensions.height,
+        });
+        if (displayedImageIds.has(artifact.attachment.id)) return false;
+        displayedImageIds.add(artifact.attachment.id);
+        displayedImages.push(artifact.attachment);
+        sendGeneration(streamId, "chat:artifact", {
+          streamId,
+          event: {
+            version: CHAT_ARTIFACT_EVENT_VERSION,
+            operation: "present",
+            artifact,
+          },
+        });
+        return true;
+      },
+    });
+    generationExtensions.push(displayImageRuntime.extension);
+  }
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
@@ -703,6 +767,8 @@ async function prepareGeneration(
     folderPath,
     git,
     tools,
+    generationExtensions,
+    displayedImages,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -860,7 +926,12 @@ export const llmClient = {
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
-        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(
+          streamId,
+          params.chatId,
+          initialization.workspaceId,
+          params.workspaceId,
+        );
         return false;
       }
       releaseGenerationSkillReservation(initialization);
@@ -876,6 +947,8 @@ export const llmClient = {
       folderPath,
       git,
       tools,
+      generationExtensions,
+      displayedImages,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -948,6 +1021,7 @@ export const llmClient = {
         finalTimeline.steps.length === 0 &&
         finalTimeline.status !== "cancelled" &&
         !subagents &&
+        displayedImages.length === 0 &&
         !providerFailure
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
@@ -965,6 +1039,7 @@ export const llmClient = {
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
             providerFailure,
+            attachments: displayedImages.length ? displayedImages : undefined,
             timeline:
               finalTimeline.steps.length || finalTimeline.status === "cancelled"
                 ? finalTimeline
@@ -980,6 +1055,22 @@ export const llmClient = {
         const messageId = [...chat.messages]
           .reverse()
           .find((message) => message.role === "assistant")?.id;
+        if (displayedImages.length > 0) {
+          try {
+            await displayImageArtifactStore.remove(
+              params.chatId,
+              displayedImages.map((attachment) => attachment.id),
+            );
+          } catch (error) {
+            // ChatStore is already durable. Startup recovery deduplicates this
+            // staging residue by attachment id before removing it.
+            logger.warn(
+              "pi",
+              `Could not clear committed image artifacts for stream ${streamId}.`,
+              error,
+            );
+          }
+        }
         return { chat, error: undefined, messageId };
       } catch (error) {
         logger.error("pi", `Could not persist response for stream ${streamId}`, error);
@@ -1005,7 +1096,7 @@ export const llmClient = {
     let piJournalHealthy = true;
     try {
       const runtimeExtensionSnapshot = piAgentRuntimeExtensions.snapshotWithRevision();
-      const runtimeExtensions = runtimeExtensionSnapshot.extensions;
+      const runtimeExtensions = [...runtimeExtensionSnapshot.extensions, ...generationExtensions];
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -1580,7 +1671,12 @@ export const llmClient = {
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
-        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(
+          streamId,
+          params.chatId,
+          initialization.workspaceId,
+          params.workspaceId,
+        );
         return false;
       }
       releaseGenerationSkillReservation(initialization);
@@ -1782,7 +1878,12 @@ export const llmClient = {
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
+      broadcastChatSettled(
+        streamId,
+        params.chatId,
+        activeGeneration.workspaceId,
+        params.workspaceId,
+      );
       return false;
     }
 
@@ -1880,9 +1981,7 @@ export const llmClient = {
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed"
-              ? runtimeOutcome.providerFailure
-              : undefined,
+            runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", {
@@ -1895,7 +1994,7 @@ export const llmClient = {
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           });
-        } else if (!full.trim() && !wasCancelled) {
+        } else if (!generationHasVisibleOutput(full, displayedImages.length) && !wasCancelled) {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
@@ -1963,7 +2062,12 @@ export const llmClient = {
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
-          broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
+          broadcastChatSettled(
+            streamId,
+            params.chatId,
+            activeGeneration.workspaceId,
+            params.workspaceId,
+          );
         }
       }
     })();

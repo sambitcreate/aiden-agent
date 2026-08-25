@@ -92,7 +92,10 @@ test("terminal cache sync ignores attached, malformed, and replayed payloads", (
   const emitError = (payload: unknown) => {
     for (const handler of listeners.get("chat:error") ?? []) handler(payload);
   };
-  emitError({ streamId: "still-visible", chat: chat("chat-visible", "visible") });
+  emitError({
+    streamId: "still-visible",
+    chat: chat("chat-visible", "visible"),
+  });
   rememberDetachedLifecycleStream(detached("detached"));
   emitError({ streamId: "detached", chat: { id: "incomplete" } });
   emitError({ streamId: "detached", chat: chat("chat-a", "late") });
@@ -284,7 +287,10 @@ test("a rejected fallback listener keeps the chat draining until retry succeeds"
 
 test("settlement notifications expose only validated bounded ownership", () => {
   assert.deepEqual(
-    parseChatSettlementNotification({ chatId: "chat-a", workspaceId: "workspace-1" }),
+    parseChatSettlementNotification({
+      chatId: "chat-a",
+      workspaceId: "workspace-1",
+    }),
     { chatId: "chat-a", workspaceId: "workspace-1" },
   );
   for (const payload of [
@@ -344,6 +350,7 @@ test("a provisional stale read survives a missed settlement event until authorit
   const durable = chat("chat-missed-settlement", "durable with subagent references");
   const response = parseChatReadResponse({
     chat: stale,
+    imageArtifactRecoveryPending: false,
     reconciliation: {
       chatId: stale.id,
       workspaceId: stale.workspaceId,
@@ -394,22 +401,33 @@ test("a provisional stale read survives a missed settlement event until authorit
 
 test("chat read reconciliation metadata is bounded, content-free, and owner-bound", () => {
   const stale = chat("chat-a", "stale transcript remains only inside chat");
-  assert.deepEqual(parseChatReadResponse({ chat: stale, reconciliation: null }), {
-    chat: stale,
-    reconciliation: null,
-  });
+  assert.deepEqual(
+    parseChatReadResponse({
+      chat: stale,
+      imageArtifactRecoveryPending: true,
+      reconciliation: null,
+    }),
+    {
+      chat: stale,
+      imageArtifactRecoveryPending: true,
+      reconciliation: null,
+    },
+  );
   for (const response of [
     { chat: stale },
     {
       chat: stale,
+      imageArtifactRecoveryPending: false,
       reconciliation: { chatId: "chat-b", workspaceId: "workspace-1" },
     },
     {
       chat: stale,
+      imageArtifactRecoveryPending: false,
       reconciliation: { chatId: "chat-a", workspaceId: "/private/path" },
     },
     {
       chat: stale,
+      imageArtifactRecoveryPending: false,
       reconciliation: {
         chatId: "chat-a",
         workspaceId: "x".repeat(500),

@@ -62,7 +62,7 @@ import {
   migrateLegacyKeybindings,
 } from "../renderer/shared/keybindings.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
-import type { AppSettings } from "./services/types.js";
+import type { AppSettings, Chat } from "./services/types.js";
 import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
 import { createRendererReadinessGate } from "./services/renderer-readiness-core.js";
 import { createSupersedingTaskGate } from "./services/superseding-task-core.js";
@@ -80,6 +80,7 @@ import {
 } from "./services/subagents/subagent-packaged-soak-core.js";
 import { subagentsEnabled } from "./services/subagents/feature-flag.js";
 import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
+import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { chatStore } from "./services/chat-store.js";
 import {
@@ -960,14 +961,17 @@ async function createMainWindow(): Promise<void> {
       });
     },
   );
-  createdWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
-    logger.error(
-      "renderer-lifecycle",
-      "Renderer preload failed",
-      { webContentsId: createdWebContentsId, preloadPath },
-      error,
-    );
-  });
+  createdWindow.webContents.on(
+    "preload-error",
+    (_event, preloadPath, error) => {
+      logger.error(
+        "renderer-lifecycle",
+        "Renderer preload failed",
+        { webContentsId: createdWebContentsId, preloadPath },
+        error,
+      );
+    },
+  );
   createdWindow.once("ready-to-show", () => createdWindow.show());
   createdWindow.on("close", (event) => {
     if (
@@ -1332,7 +1336,11 @@ if (!ownsSingleInstanceLock) {
   registerHandlers();
 
   app.on("child-process-gone", (_event, details) => {
-    logger.error("electron-lifecycle", "Electron child process exited unexpectedly", details);
+    logger.error(
+      "electron-lifecycle",
+      "Electron child process exited unexpectedly",
+      details,
+    );
   });
 
   app.on("second-instance", () => showMainWindow());
@@ -1436,7 +1444,10 @@ if (!ownsSingleInstanceLock) {
         );
       }
       if (!isPackagedRuntime()) {
-        logger.info("dev-log", `Writing dev log to ${devLogPath() ?? "unknown"}`);
+        logger.info(
+          "dev-log",
+          `Writing dev log to ${devLogPath() ?? "unknown"}`,
+        );
         logger.info("electron-lifecycle", "Electron application ready", {
           appName: app.getName(),
           appVersion: app.getVersion(),
@@ -1461,12 +1472,39 @@ if (!ownsSingleInstanceLock) {
       // Reconcile every persisted active child at the actual restart boundary,
       // before a renderer can read or append run history.
       await piRuntimeEffectStore.initialize();
+      await displayImageArtifactStore.initialize();
       await subagentRunStore.initialize();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
+        await displayImageArtifactStore.deleteChat(chatId);
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
+      const startupChats = (
+        await Promise.all(
+          (await displayImageArtifactStore.pendingChatIds()).map((chatId) =>
+            chatStore.get(chatId),
+          ),
+        )
+      ).filter((chat): chat is Chat => chat !== null);
+      await displayImageArtifactStore.recover(
+        startupChats,
+        async ({ chatId, attachments, createdAt, model }) => {
+          await chatStore.appendMessage(chatId, {
+            role: "assistant",
+            content: "",
+            attachments,
+            createdAt,
+            model,
+            providerFailure: {
+              version: 1,
+              category: "interrupted",
+              attempts: 1,
+              retryExhausted: false,
+            },
+          });
+        },
+      );
       const visibleChatIds = new Set(
         (await chatStore.list()).map((chat) => chat.id),
       );

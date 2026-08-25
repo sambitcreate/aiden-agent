@@ -96,6 +96,7 @@ import {
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
+import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -271,6 +272,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
+  const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
@@ -302,6 +304,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const pendingReasoningDeltaRef = React.useRef("");
   const streamedTextRef = React.useRef("");
   const streamedReasoningRef = React.useRef("");
+  const streamingArtifactsRef = React.useRef<ChatArtifactV1[]>([]);
   const deltaFrameRef = React.useRef<number | null>(null);
   const streamHandoffRef = React.useRef<(() => void) | null>(null);
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
@@ -327,6 +330,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       pendingReasoningDeltaRef.current = "";
       streamedTextRef.current = "";
       streamedReasoningRef.current = "";
+      streamingArtifactsRef.current = [];
       streamHandoffRef.current?.();
       streamHandoffRef.current = null;
     };
@@ -338,6 +342,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useLayoutEffect(() => {
     setStreamingText(null);
     setStreamingReasoning(null);
+    setStreamingArtifacts([]);
+    streamingArtifactsRef.current = [];
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -366,6 +372,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [environmentPanel.subagentsEnabled, messages],
   );
   const hasMessages = messages.length > 0;
+  const imageArtifactRecoveryPending =
+    hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
 
@@ -384,6 +392,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (throughAssistantMessageId?: string) => {
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before copying this chat.");
+      }
+      if (imageArtifactRecoveryPending) {
+        throw new Error("Restart Aiden to recover this image response before copying the chat.");
       }
       if (isGenerating || isStartingGeneration || approvals.length > 0) {
         throw new Error("Finish the current response or approval before copying this chat.");
@@ -420,6 +431,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       approvals.length,
       chatId,
       documentAppendReconciliationRequired,
+      imageArtifactRecoveryPending,
       isGenerating,
       isStartingGeneration,
       navigate,
@@ -509,6 +521,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setHasUnpersistedResponse(false);
       setStreamingText("");
       setStreamingReasoning(null);
+      setStreamingArtifacts([]);
+      streamingArtifactsRef.current = [];
       setStreamComplete(false);
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
@@ -574,6 +588,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
             setStreamingText("");
             setStreamingReasoning(null);
             setStreamComplete(false);
+          },
+          onArtifactEvent: (event) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            if (event.operation === "reset") {
+              setStreamingArtifacts([]);
+              streamingArtifactsRef.current = [];
+              return;
+            }
+            const { artifact } = event;
+            setIsModelLoading(false);
+            if (
+              streamingArtifactsRef.current.some(
+                (candidate) => candidate.attachment.id === artifact.attachment.id,
+              )
+            ) {
+              return;
+            }
+            streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+            setStreamingArtifacts(streamingArtifactsRef.current);
           },
           onReasoningDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
@@ -647,6 +680,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setLiveSubagents([]);
               setStreamingText(null);
               setStreamingReasoning(null);
+              setStreamingArtifacts([]);
+              streamingArtifactsRef.current = [];
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
               setStreamComplete(false);
@@ -705,7 +740,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   streamedReasoningRef.current = "";
                   setStreamComplete(false);
                 }
-                setHasUnpersistedResponse(Boolean(partial && !updatedChat));
+                const hasUnpersistedArtifact = streamingArtifactsRef.current.length > 0;
+                setHasUnpersistedResponse(
+                  Boolean((partial || hasUnpersistedArtifact) && !updatedChat),
+                );
+                if (updatedChat) {
+                  setStreamingArtifacts([]);
+                  streamingArtifactsRef.current = [];
+                }
                 setIsStoppingGeneration(false);
                 setIsModelLoading(false);
                 if (!partial || updatedChat) {
@@ -714,10 +756,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 setApprovals([]);
                 const persistedFailure =
-                  updatedChat?.messages[updatedChat.messages.length - 1]?.role ===
-                    "assistant" &&
-                  updatedChat.messages[updatedChat.messages.length - 1]
-                    ?.providerFailure;
+                  updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
+                  updatedChat.messages[updatedChat.messages.length - 1]?.providerFailure;
                 setError(
                   persistedFailure
                     ? null
@@ -752,6 +792,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const handleSend = React.useCallback(
     async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (imageArtifactRecoveryPending) {
+        throw new Error(
+          "Restart Aiden to recover the previous image response before sending another message.",
+        );
+      }
       if (computerUseSaving) {
         throw new Error("Wait for the Computer Use setting to finish saving before sending.");
       }
@@ -814,7 +859,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       }
     },
-    [chatId, computerUseSaving, detachedGenerationDraining, providerId, model, qc, runGeneration],
+    [
+      chatId,
+      computerUseSaving,
+      detachedGenerationDraining,
+      imageArtifactRecoveryPending,
+      providerId,
+      model,
+      qc,
+      runGeneration,
+    ],
   );
 
   const handleStop = React.useCallback(() => {
@@ -835,10 +889,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     pendingReasoningDeltaRef.current = "";
     streamedTextRef.current = "";
     streamedReasoningRef.current = "";
+    streamingArtifactsRef.current = [];
     streamHandoffRef.current?.();
     streamHandoffRef.current = null;
     setStreamingText(null);
     setStreamingReasoning(null);
+    setStreamingArtifacts([]);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -1039,7 +1095,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       setThinkingSaving(true);
       try {
-        const updated = await settingsApi.set({ showLocalModelReasoning: visible });
+        const updated = await settingsApi.set({
+          showLocalModelReasoning: visible,
+        });
         qc.setQueryData(queryKeys.settings, updated);
       } catch (changeError) {
         toast.error(
@@ -1051,13 +1109,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [
-      isGenerating,
-      isStartingGeneration,
-      localReasoningVisibilitySupported,
-      qc,
-      thinkingSaving,
-    ],
+    [isGenerating, isStartingGeneration, localReasoningVisibilitySupported, qc, thinkingSaving],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
@@ -1326,6 +1378,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         generationTimeline,
         agentActivity?.phase,
         approvals.length,
+        streamingArtifacts.length,
       ]}
       showScrollToBottomButton
       footer={
@@ -1451,8 +1504,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
             // route no longer remounts the pane, and Composer owns that text
             // without a chatId reset of its own.
             key={chatId}
-            ready={ready}
-            readinessMessage={readinessMessage}
+            ready={ready && !imageArtifactRecoveryPending}
+            readinessMessage={
+              imageArtifactRecoveryPending
+                ? "Response save failed. Restart Aiden to recover it before sending another message."
+                : readinessMessage
+            }
             hasMessages={hasMessages}
             chatId={chatId}
             onSend={handleSend}
@@ -1504,7 +1561,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             slashSessionBlockedReason={
               documentAppendReconciliationRequired
                 ? "Reload Aiden before copying this chat."
-                : undefined
+                : imageArtifactRecoveryPending
+                  ? "Restart Aiden to recover this image response before copying the chat."
+                  : undefined
             }
             slashPaletteBlocked={Boolean(pending)}
             slashActionBusy={isGenerating || isStartingGeneration}
@@ -1592,9 +1651,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
         </div>
       ) : (
         <MessageList
+          key={chatId}
           messages={messages}
           streamingText={streamingText}
           streamingReasoning={streamingReasoning}
+          streamingArtifacts={streamingArtifacts}
           streamComplete={streamComplete}
           onStreamHandoffComplete={() => streamHandoffRef.current?.()}
           timeline={generationTimeline}
@@ -1602,7 +1663,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
           subagentsEnabled={environmentPanel.subagentsEnabled}
           onOpenSubagent={environmentPanel.openSubagent}
           agentActivity={visibleAgentActivity}
-          error={error}
+          error={
+            error ??
+            (imageArtifactRecoveryPending
+              ? "Response save failed. Restart Aiden to recover the displayed image before continuing."
+              : null)
+          }
         />
       )}
     </ScrollArea>
