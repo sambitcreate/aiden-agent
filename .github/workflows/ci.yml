@@ -116,10 +116,12 @@ jobs:
       - name: Start Android test device
         shell: bash
         run: |
-          printf 'no\n' | avdmanager create avd \
+          avdmanager create avd \
             --force \
             --name aiden-ci \
-            --package 'system-images;android-36;google_apis;x86_64'
+            --package 'system-images;android-36;google_apis;x86_64' \
+            --device pixel_2
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx aiden-ci
           nohup "$ANDROID_HOME/emulator/emulator" \
             -avd aiden-ci \
             -no-window \
