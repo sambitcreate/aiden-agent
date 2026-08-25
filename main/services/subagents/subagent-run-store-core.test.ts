@@ -1351,6 +1351,45 @@ test("requires lifecycle states and aggregate counters to move forward", async (
   );
 });
 
+test("projection provenance cannot disappear or change before terminal evidence", async (t) => {
+  const directory = await testDirectory(t);
+  const store = createSubagentRunStore(async () => directory);
+  const running = snapshot({
+    state: "running",
+    finishedAt: undefined,
+    projectionNotices: ["task_truncated"],
+  });
+  await store.upsert(running);
+
+  await assert.rejects(
+    store.upsert(snapshot({ ...running, revision: 2, updatedAt: 21, projectionNotices: undefined })),
+    /lifecycle cannot move backward/u,
+  );
+  await assert.rejects(
+    store.upsert(
+      snapshot({
+        ...running,
+        revision: 2,
+        updatedAt: 21,
+        projectionNotices: ["task_truncated", "display_filtered"],
+      }),
+    ),
+    /lifecycle cannot move backward/u,
+  );
+
+  const terminal = snapshot({
+    ...running,
+    revision: 2,
+    state: "completed",
+    updatedAt: 22,
+    finishedAt: 22,
+    terminalMarkdown: "Done.\n\n... [report truncated]",
+    projectionNotices: ["task_truncated", "report_truncated", "display_filtered"],
+  });
+  await store.upsert(terminal);
+  assert.deepEqual((await store.get(running.runId))?.projectionNotices, terminal.projectionNotices);
+});
+
 test("history capacity never evicts runs still owned by retained chats", async (t) => {
   const directory = await testDirectory(t);
   const store = createSubagentRunStore(async () => directory, { maxRuns: 2 });
