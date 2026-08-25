@@ -107,6 +107,7 @@ function fixture(options: {
   const events: string[] = [];
   const catalogTargets: Array<string | undefined> = [];
   const policyCatalogRevisions: string[] = [];
+  const bindCatalogRevisions: string[] = [];
   const catalogRetainedProviders: Array<readonly {
     sourceProviderId: string;
     sourceModelId: string;
@@ -444,6 +445,7 @@ function fixture(options: {
         binding?: { provider?: { sourceProviderId: string; sourceModelId: string } };
         modelBinding?: { sourceProviderId: string; sourceModelId: string };
       }) {
+        policyCatalogRevisions.push(input.access.catalogRevision);
         events.push(input.binding ? "policy:create:bound" : "policy:create");
         const value = botPolicy(input.botId);
         policies.set(input.botId, value);
@@ -581,8 +583,13 @@ function fixture(options: {
         catalogRetainedProviders.push(input?.retainedProviders);
         return catalog();
       },
-      async bindCustom(input?: { botId?: string; snapshot?: BotCapabilityCatalogSnapshot }) {
+      async bindCustom(input?: {
+        botId?: string;
+        snapshot?: BotCapabilityCatalogSnapshot;
+        catalogRevision?: string;
+      }) {
         if (!input?.snapshot) catalogTargets.push(input?.botId);
+        if (input?.catalogRevision !== undefined) bindCatalogRevisions.push(input.catalogRevision);
         events.push("catalog:bind-custom");
         return {
           version: 1,
@@ -675,6 +682,7 @@ function fixture(options: {
     catalogTargets,
     catalogRetainedProviders,
     policyCatalogRevisions,
+    bindCatalogRevisions,
     inventoryLeaseAcquisitions: () => inventoryLeaseAcquisitions,
   };
 }
@@ -1742,6 +1750,32 @@ test("Custom access is privately bound before it is committed", async () => {
   assert.ok(
     app.events.indexOf("catalog:bind-custom") < app.events.indexOf("policy:create:bound"),
   );
+});
+
+test("Bot creation re-bases a stale client catalog revision onto the current snapshot", async () => {
+  const app = fixture({
+    catalogRevisionPlan: ["catalog:churned"],
+  });
+  await app.service.initialize();
+  await app.service.createBot({
+    audienceId: "device:a",
+    bot: { name: "Planner", instructions: "Plan.", avatar: "spark" },
+    access: {
+      accessMode: "custom",
+      catalogRevision: CATALOG_REVISION,
+      custom: {
+        providerId: "provider:opaque",
+        modelId: "model:opaque",
+        fileScopeIds: ["scope:home"],
+        shellEnabled: false,
+        connectionIds: [],
+        skillIds: [],
+        otherCapabilityIds: [],
+      },
+    },
+  });
+  assert.equal(app.bindCatalogRevisions.at(-1), "catalog:churned");
+  assert.equal(app.policyCatalogRevisions.at(-1), "catalog:churned");
 });
 
 test("capability catalog retains a private binding but returns only the safe public projection", async () => {

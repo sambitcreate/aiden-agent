@@ -193,6 +193,15 @@ export class BotPersistentChatDeletionError extends Error {
   }
 }
 
+function withCurrentCatalogRevision<T extends { catalogRevision: string }>(
+  access: T,
+  catalogRevision: string,
+): T {
+  return access.catalogRevision === catalogRevision
+    ? access
+    : { ...access, catalogRevision };
+}
+
 function createReservation(operation: BotLifecycleOperation): BotManagedWorkspaceReservation {
   if (
     operation.kind !== "create_bot" ||
@@ -345,11 +354,16 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     requested: BotAccessUpdate | undefined,
   ) => {
     const snapshot = await snapshotForAudience(audienceId);
-    let access: BotAccessUpdate = requested ?? {
-      accessMode: "full",
-      catalogRevision: snapshot.catalog.revision,
-      confirmedForeground: true,
-    };
+    // Audience-safe IDs are revalidated against this exact fresh snapshot.
+    // A stale wizard revision can therefore be rebased without accepting a
+    // removed or changed provider, model, connection, skill, or file scope.
+    let access: BotAccessUpdate = requested
+      ? withCurrentCatalogRevision(requested, snapshot.catalog.revision)
+      : {
+          accessMode: "full",
+          catalogRevision: snapshot.catalog.revision,
+          confirmedForeground: true,
+        };
     if (
       access.accessMode === "full" &&
       access.providerId === undefined &&
@@ -1191,10 +1205,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           // Audience-safe IDs are revalidated against this exact fresh snapshot.
           // A stale client revision can therefore be rebased without accepting a
           // removed or changed provider, model, connection, skill, or file scope.
-          const access: BotAccessUpdate =
-            snapshot.catalog.revision === input.access.catalogRevision
-              ? input.access
-              : { ...input.access, catalogRevision: snapshot.catalog.revision };
+          const access: BotAccessUpdate = withCurrentCatalogRevision(
+            input.access,
+            snapshot.catalog.revision,
+          );
           const binding = access.accessMode === "custom"
             ? await deps.catalog.bindCustom({
                 audienceId: input.audienceId,
@@ -1531,10 +1545,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
             input.botId,
             retainedBotProviderForChat(chat),
           );
-          const access: BotChatAccessUpdate =
-            snapshot.catalog.revision === input.access.catalogRevision
-              ? input.access
-              : { ...input.access, catalogRevision: snapshot.catalog.revision };
+          const access: BotChatAccessUpdate = withCurrentCatalogRevision(
+            input.access,
+            snapshot.catalog.revision,
+          );
           assertCurrent();
           return deps.capabilityStore.updateChatPolicy({
             chatId: input.chatId,
