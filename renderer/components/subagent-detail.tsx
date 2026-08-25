@@ -341,8 +341,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   </Text>
                 )}
                 <Text as="p" variant="small" color="secondary">
-                  {run.tokens} tokens recorded. Tool arguments, results, commands, and paths stay
-                  private.
+                  {run.tokens} tokens recorded. Saved details omit raw tool payloads, commands,
+                  and absolute paths. Children can read ordinary source and docs as written;
+                  protected credential and private-key paths are unavailable.
                 </Text>
               </div>
             </details>
