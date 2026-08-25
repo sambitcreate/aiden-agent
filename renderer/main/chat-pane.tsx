@@ -394,7 +394,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Reload Aiden before copying this chat.");
       }
       if (imageArtifactRecoveryPending) {
-        throw new Error("Restart Aiden to recover this image response before copying the chat.");
+        throw new Error(
+          "A previous image response could not be recovered. Delete this chat to discard it before copying.",
+        );
       }
       if (isGenerating || isStartingGeneration || approvals.length > 0) {
         throw new Error("Finish the current response or approval before copying this chat.");
@@ -794,7 +796,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
       if (imageArtifactRecoveryPending) {
         throw new Error(
-          "Restart Aiden to recover the previous image response before sending another message.",
+          "A previous image response could not be recovered. Delete this chat to discard it before sending another message.",
         );
       }
       if (computerUseSaving) {
@@ -1507,7 +1509,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             ready={ready && !imageArtifactRecoveryPending}
             readinessMessage={
               imageArtifactRecoveryPending
-                ? "Response save failed. Restart Aiden to recover it before sending another message."
+                ? "An image response could not be recovered. Delete this chat to discard it before sending another message."
                 : readinessMessage
             }
             hasMessages={hasMessages}
@@ -1562,7 +1564,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               documentAppendReconciliationRequired
                 ? "Reload Aiden before copying this chat."
                 : imageArtifactRecoveryPending
-                  ? "Restart Aiden to recover this image response before copying the chat."
+                  ? "Delete this chat to discard the unrecovered image response before copying."
                   : undefined
             }
             slashPaletteBlocked={Boolean(pending)}
@@ -1666,7 +1668,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           error={
             error ??
             (imageArtifactRecoveryPending
-              ? "Response save failed. Restart Aiden to recover the displayed image before continuing."
+              ? "An image response could not be recovered. Delete this chat to discard it before continuing."
               : null)
           }
         />

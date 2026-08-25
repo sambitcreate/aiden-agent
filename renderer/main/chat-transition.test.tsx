@@ -141,7 +141,7 @@ test("a committed append is not presented as unsent when generation start later 
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
 });
 
-test("an unpersisted image response blocks sends, copies, and the composer until restart", () => {
+test("an unpersisted image response blocks sends, copies, and the composer until deletion", () => {
   const pane = source("./chat-pane.tsx");
   const handleSend = between(
     pane,
@@ -157,7 +157,7 @@ test("an unpersisted image response blocks sends, copies, and the composer until
     /hasUnpersistedResponse \|\| chat\.data\?\.imageArtifactRecoveryPending === true/u,
   );
   assert.match(pane, /ready=\{ready && !imageArtifactRecoveryPending\}/u);
-  assert.match(pane, /Response save failed\. Restart Aiden to recover it/iu);
+  assert.match(pane, /Delete this chat to discard it/iu);
 });
 
 test("terminal chat snapshots reach cache before visual stream handoff awaits", () => {

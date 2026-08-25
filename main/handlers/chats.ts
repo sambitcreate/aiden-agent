@@ -246,7 +246,7 @@ export function registerChatHistoryHandlers(): void {
       if (!source) throw new Error("The chat is no longer available.");
       if (await displayImageArtifactStore.hasPending(parsed.chatId)) {
         throw new Error(
-          "Restart Aiden to recover the previous image response before copying this chat.",
+          "A previous image response could not be recovered. Delete this chat to discard it before copying.",
         );
       }
       const workspaceId = persistedChatWorkspaceId(source.workspaceId);
@@ -331,7 +331,7 @@ export function registerChatHistoryHandlers(): void {
       if (!chat) throw new Error("The chat is no longer available.");
       if (await displayImageArtifactStore.hasPending(chatId)) {
         throw new Error(
-          "Restart Aiden to recover the previous image response before exporting this chat.",
+          "A previous image response could not be recovered. Delete this chat to discard it before exporting.",
         );
       }
       if (owner.isDestroyed()) {
@@ -356,7 +356,7 @@ export function registerChatHistoryHandlers(): void {
       if (!latestChat) throw new Error("The chat is no longer available.");
       if (await displayImageArtifactStore.hasPending(chatId)) {
         throw new Error(
-          "Restart Aiden to recover the previous image response before exporting this chat.",
+          "A previous image response could not be recovered. Delete this chat to discard it before exporting.",
         );
       }
       if (owner.isDestroyed()) {
@@ -571,7 +571,7 @@ export function registerChatHistoryHandlers(): void {
         try {
           if (await displayImageArtifactStore.hasPending(chatId)) {
             throw new Error(
-              "Restart Aiden to recover the previous image response before sending another message.",
+              "A previous image response could not be recovered. Delete this chat to discard it before sending another message.",
             );
           }
           const authoritativeChat = skillReference

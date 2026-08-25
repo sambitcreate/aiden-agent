@@ -151,7 +151,7 @@ test("pending usage projections do not clone staged image payloads", async () =>
   }
 });
 
-test("unreadable staging degrades without aborting initialization", async () => {
+test("unreadable staging is quarantined without blocking unrelated chats", async () => {
   const root = await storageRoot();
   const file = path.join(root, "display-image-artifacts.json");
   await fs.writeFile(file, "{", "utf8");
@@ -159,21 +159,36 @@ test("unreadable staging degrades without aborting initialization", async () => 
 
   await store.initialize();
 
-  assert.deepEqual(store.availability(), {
-    available: false,
-    reason: "Display-image artifact staging is unreadable and was preserved.",
+  assert.deepEqual(store.availability(), { available: true });
+  assert.equal(await store.hasPending("chat-1"), false);
+  const preserved = store.quarantinedPath();
+  assert.ok(preserved);
+  assert.ok(preserved.startsWith(`${file}.invalid-`));
+  assert.equal(await fs.readFile(preserved, "utf8"), "{");
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "generation-1",
+    artifact: artifact("image-1"),
+    pixels: 1,
   });
   assert.equal(await store.hasPending("chat-1"), true);
-  await assert.rejects(
-    store.stage({
-      chatId: "chat-1",
-      generationId: "generation-1",
-      artifact: artifact("image-1"),
-      pixels: 1,
-    }),
-    /unreadable and was preserved/iu,
-  );
-  assert.equal(await fs.readFile(file, "utf8"), "{");
+  assert.doesNotMatch(await fs.readFile(file, "utf8"), /^\{$/u);
+});
+
+test("unsupported staging is quarantined before a clean store is opened", async () => {
+  const root = await storageRoot();
+  const file = path.join(root, "display-image-artifacts.json");
+  const unsupported = JSON.stringify({ version: 99, records: [] });
+  await fs.writeFile(file, unsupported, "utf8");
+  const store = new DisplayImageArtifactStore({ root: () => root });
+
+  await store.initialize();
+
+  assert.deepEqual(store.availability(), { available: true });
+  assert.equal(await store.hasPending("chat-1"), false);
+  const preserved = store.quarantinedPath();
+  assert.ok(preserved);
+  assert.equal(await fs.readFile(preserved, "utf8"), unsupported);
 });
 
 test("startup recovery retains the only durable copy when chat storage is unresolved", async () => {
@@ -335,7 +350,7 @@ test("main blocks new sends and copies until staged artifacts are recovered", as
   );
   assert.match(handlers, /displayImageArtifactStore\.hasPending\(chatId\)/u);
   assert.match(handlers, /displayImageArtifactStore\.hasPending\(parsed\.chatId\)/u);
-  assert.match(handlers, /Restart Aiden to recover the previous image response/iu);
+  assert.match(handlers, /Delete this chat to discard it/iu);
   const exportHandler = handlers.slice(handlers.indexOf('ipcMain.handle("chats:export"'));
   assert.match(exportHandler, /displayImageArtifactStore\.hasPending\(chatId\)/u);
   const readHandler = handlers.slice(

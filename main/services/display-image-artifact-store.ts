@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { DataStore } from "./data-store.js";
 import type { Attachment } from "./types.js";
 import { parseChatArtifactV1, type ChatArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
@@ -199,23 +201,56 @@ function stagedUsage(records: readonly StagedDisplayImageArtifact[]): DisplayIma
 
 /** Durable payload staging for non-replayable display effects. */
 export class DisplayImageArtifactStore {
-  private readonly data: DataStore<DisplayImageArtifactDatabase>;
+  private data: DataStore<DisplayImageArtifactDatabase>;
+  private readonly options: DisplayImageArtifactStoreOptions;
+  private readonly ownsDataStore: boolean;
   private readonly now: () => number;
   private initialized = false;
   private unavailableReason: string | null = null;
+  private quarantinedStorePath: string | null = null;
 
   constructor(options: DisplayImageArtifactStoreOptions = {}) {
+    this.options = options;
+    this.ownsDataStore = options.dataStore === undefined;
     this.data = options.dataStore ?? createDataStore(options);
     this.now = options.now ?? Date.now;
+  }
+
+  private async quarantineInvalidStore(reason: string): Promise<boolean> {
+    if (!this.ownsDataStore) return false;
+    const source = await this.data.path();
+    const stamp = new Date(this.now()).toISOString().replace(/[:.]/gu, "-");
+    const preserved = `${source}.invalid-${stamp}-${randomUUID()}`;
+    try {
+      await fs.rename(source, preserved);
+      const replacement = createDataStore(this.options);
+      await replacement.load();
+      if (
+        (await replacement.loadedFromCorruptFile()) ||
+        (await replacement.loadedFromUnsafeFile())
+      ) {
+        throw new Error("The replacement display-image artifact store is unavailable.");
+      }
+      this.data = replacement;
+      this.quarantinedStorePath = preserved;
+      return true;
+    } catch (error) {
+      this.unavailableReason = `${reason} Aiden could not preserve it at ${preserved}: ${error instanceof Error ? error.message : String(error)}`;
+      return false;
+    }
   }
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
     await this.data.load();
+    let unavailableReason: string | null = null;
     if (await this.data.loadedFromCorruptFile()) {
-      this.unavailableReason = "Display-image artifact staging is unreadable and was preserved.";
+      unavailableReason = "Display-image artifact staging is unreadable.";
     } else if (await this.data.loadedFromUnsafeFile()) {
-      this.unavailableReason = "Display-image artifact staging has an unsupported shape.";
+      unavailableReason = "Display-image artifact staging has an unsupported shape.";
+    }
+    if (unavailableReason && !(await this.quarantineInvalidStore(unavailableReason))) {
+      this.unavailableReason ??= unavailableReason;
     }
     this.initialized = true;
   }
@@ -229,6 +264,11 @@ export class DisplayImageArtifactStore {
     return this.unavailableReason
       ? { available: false, reason: this.unavailableReason }
       : { available: true };
+  }
+
+  quarantinedPath(): string | null {
+    this.requireInitialized();
+    return this.quarantinedStorePath;
   }
 
   private requireAvailable(): void {

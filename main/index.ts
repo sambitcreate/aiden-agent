@@ -1475,6 +1475,13 @@ if (!ownsSingleInstanceLock) {
       // before a renderer can read or append run history.
       await piRuntimeEffectStore.initialize();
       await displayImageArtifactStore.initialize();
+      const quarantinedImageArtifactPath = displayImageArtifactStore.quarantinedPath();
+      if (quarantinedImageArtifactPath) {
+        logger.warn(
+          "pi",
+          `Invalid image artifact staging was preserved at ${quarantinedImageArtifactPath}; Aiden opened a clean staging store.`,
+        );
+      }
       const displayImageArtifactAvailability = displayImageArtifactStore.availability();
       if (!displayImageArtifactAvailability.available) {
         logger.warn(
