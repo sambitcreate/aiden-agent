@@ -8,6 +8,7 @@ import {
   MAX_SUBAGENT_TASK_PREVIEW_CHARS,
   MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS,
   MAX_SUBAGENT_WARNING_CHARS,
+  SUBAGENT_PROJECTION_NOTICE_KINDS,
   SUBAGENT_RUN_SNAPSHOT_VERSION,
   parseSubagentRunSnapshotV1,
   parseSubagentRunSnapshotV2,
@@ -15,10 +16,11 @@ import {
   type SubagentRunSnapshotV2,
   type SubagentRunState,
   type SubagentMilestoneKind,
+  type SubagentProjectionNoticeKind,
 } from "../../../renderer/shared/subagent-runs.js";
 import { reportedTokens } from "../usage-accounting.js";
 import type { SubagentTaskRequest, SubagentTaskResult } from "./contracts.js";
-import { sanitizeSubagentSnapshotText } from "../../../renderer/shared/subagent-safe-text.js";
+import { sanitizeSubagentSnapshotTextWithFacts } from "../../../renderer/shared/subagent-safe-text.js";
 
 const MAX_DURABLE_LIVE_MILESTONES = 4;
 
@@ -40,8 +42,23 @@ export interface SubagentRunProjectorInput {
   now?: () => number;
 }
 
-function normalizeProjectedText(value: string): string {
-  const normalized = Array.from(sanitizeSubagentSnapshotText(value).replace(/\r\n?/gu, "\n"))
+interface ProjectedText {
+  text: string;
+  truncated: boolean;
+  displayFiltered: boolean;
+}
+
+function sanitizeProjectedText(value: string): { text: string; displayFiltered: boolean } {
+  const sanitized = sanitizeSubagentSnapshotTextWithFacts(value);
+  return {
+    text: sanitized.text,
+    displayFiltered: sanitized.privacyReplacement,
+  };
+}
+
+function normalizeProjectedTextWithFacts(value: string): Omit<ProjectedText, "truncated"> {
+  const first = sanitizeProjectedText(value);
+  const normalized = Array.from(first.text.replace(/\r\n?/gu, "\n"))
     .map((character) => {
       const code = character.codePointAt(0) ?? 0;
       if (code === 0x2028 || code === 0x2029) return "\n";
@@ -50,12 +67,23 @@ function normalizeProjectedText(value: string): string {
       return character;
     })
     .join("");
-  return sanitizeSubagentSnapshotText(normalized);
+  const second = sanitizeProjectedText(normalized);
+  return {
+    text: second.text,
+    displayFiltered: first.displayFiltered || second.displayFiltered,
+  };
 }
 
-function bounded(value: string, maximum: number, marker = "…"): string {
-  let safe = normalizeProjectedText(value).trim();
+function normalizeProjectedText(value: string): string {
+  return normalizeProjectedTextWithFacts(value).text;
+}
+
+function boundedProjection(value: string, maximum: number, marker = "…"): ProjectedText {
+  const initial = normalizeProjectedTextWithFacts(value);
+  let safe = initial.text.trim();
+  let displayFiltered = initial.displayFiltered;
   const safeMarker = normalizeProjectedText(marker);
+  const truncated = safe.length > maximum;
   for (let attempt = 0; attempt < 8 && safe.length > maximum; attempt += 1) {
     let end = Math.max(0, maximum - safeMarker.length);
     // Do not leave an unpaired high surrogate at the truncation boundary.
@@ -63,18 +91,56 @@ function bounded(value: string, maximum: number, marker = "…"): string {
     // Truncation can create a new credential-like suffix even when the full
     // value was safe. Re-run the privacy projection after every cut rather
     // than sending that unstable prefix to the strict snapshot parser.
-    safe = normalizeProjectedText(`${safe.slice(0, end)}${safeMarker}`).trim();
+    const next = normalizeProjectedTextWithFacts(`${safe.slice(0, end)}${safeMarker}`);
+    safe = next.text.trim();
+    displayFiltered ||= next.displayFiltered;
   }
-  if (safe.length <= maximum) return safe;
-  return safeMarker.slice(0, maximum);
+  return {
+    text: safe.length <= maximum ? safe : safeMarker.slice(0, maximum),
+    truncated,
+    displayFiltered,
+  };
 }
 
-function boundedSingleLine(value: string, maximum: number): string {
-  return bounded(normalizeProjectedText(value).replace(/\s+/gu, " "), maximum);
+function bounded(value: string, maximum: number, marker = "…"): string {
+  return boundedProjection(value, maximum, marker).text;
 }
 
-function boundedRequiredSingleLine(value: string, maximum: number, fallback: string): string {
-  return boundedSingleLine(value, maximum) || fallback;
+function boundedSingleLineProjection(
+  value: string,
+  maximum: number,
+  marker?: string,
+): ProjectedText {
+  const normalized = normalizeProjectedTextWithFacts(value);
+  const projected = boundedProjection(normalized.text.replace(/\s+/gu, " "), maximum, marker);
+  return {
+    ...projected,
+    displayFiltered: normalized.displayFiltered || projected.displayFiltered,
+  };
+}
+
+function boundedRequiredSingleLineProjection(
+  value: string,
+  maximum: number,
+  fallback: string,
+  marker?: string,
+): ProjectedText {
+  const projected = boundedSingleLineProjection(value, maximum, marker);
+  return {
+    text: projected.text || fallback,
+    truncated: projected.truncated,
+    displayFiltered: projected.displayFiltered,
+  };
+}
+
+function mergeProjectionNotices(
+  current: readonly SubagentProjectionNoticeKind[] | undefined,
+  ...notices: Array<SubagentProjectionNoticeKind | false>
+): SubagentProjectionNoticeKind[] | undefined {
+  const included = new Set(current);
+  for (const notice of notices) if (notice) included.add(notice);
+  const ordered = SUBAGENT_PROJECTION_NOTICE_KINDS.filter((notice) => included.has(notice));
+  return ordered.length > 0 ? ordered : undefined;
 }
 
 function safeToolMilestone(toolName: string): {
@@ -163,6 +229,24 @@ export class SubagentEventProjector {
       throw new Error("Subagent run identity was reused.");
     }
     const now = this.now();
+    const taskPreview = boundedRequiredSingleLineProjection(
+      request.task,
+      MAX_SUBAGENT_TASK_PREVIEW_CHARS,
+      "Private task details redacted.",
+      "... [task preview truncated]",
+    );
+    const label = boundedRequiredSingleLineProjection(request.label, 120, "Subagent task");
+    const modelId = boundedRequiredSingleLineProjection(
+      this.input.modelId,
+      160,
+      "Unknown model",
+    );
+    const projectionNotices = mergeProjectionNotices(
+      undefined,
+      taskPreview.truncated && "task_truncated",
+      (taskPreview.displayFiltered || label.displayFiltered || modelId.displayFiltered) &&
+        "display_filtered",
+    );
     this.publish({
       version: SUBAGENT_RUN_SNAPSHOT_VERSION,
       ...identity,
@@ -171,21 +255,18 @@ export class SubagentEventProjector {
       workspaceId: this.input.workspaceId,
       revision: 1,
       role: request.role,
-      label: boundedRequiredSingleLine(request.label, 120, "Subagent task"),
-      taskPreview: boundedRequiredSingleLine(
-        request.task,
-        MAX_SUBAGENT_TASK_PREVIEW_CHARS,
-        "Private task details redacted.",
-      ),
+      label: label.text,
+      taskPreview: taskPreview.text,
       state: "queued",
       activity: "Waiting for an execution slot",
       startedAt: now,
       updatedAt: now,
-      modelId: boundedRequiredSingleLine(this.input.modelId, 160, "Unknown model"),
+      modelId: modelId.text,
       turns: 0,
       tools: 0,
       tokens: 0,
       milestones: [],
+      ...(projectionNotices ? { projectionNotices } : {}),
       warnings: [],
     });
     this.durableLiveMilestones.set(identity.runId, 0);
@@ -260,24 +341,40 @@ export class SubagentEventProjector {
   }
 
   finish(runId: string, result: SubagentTaskResult): void {
+    const current = this.require(runId);
     const now = this.now();
-    const projectedWarning = result.warning
-      ? boundedSingleLine(result.warning, MAX_SUBAGENT_WARNING_CHARS)
-      : "";
+    const warningProjection = result.warning
+      ? boundedSingleLineProjection(result.warning, MAX_SUBAGENT_WARNING_CHARS)
+      : undefined;
+    const projectedWarning = warningProjection?.text ?? "";
     const warning = projectedWarning || undefined;
-    const terminalMarkdown =
-      bounded(
-        result.summary || result.warning || "[No textual result.]",
-        MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS,
-        "\n\n… [report truncated]",
-      ) || "[No textual result.]";
-    const latestText =
-      bounded(result.summary || result.warning || "", MAX_SUBAGENT_LATEST_TEXT_CHARS) || undefined;
-    const error =
-      boundedSingleLine(
-        result.warning || "The child could not complete this task.",
-        MAX_SUBAGENT_ERROR_CHARS,
-      ) || "The child could not complete this task.";
+    const sourceText = result.summary || result.warning || "[No textual result.]";
+    const terminalProjection = boundedProjection(
+      sourceText,
+      MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS,
+      "\n\n… [report truncated]",
+    );
+    const terminalMarkdown = terminalProjection.text || "[No textual result.]";
+    const latestProjection = boundedProjection(
+      result.summary || result.warning || "",
+      MAX_SUBAGENT_LATEST_TEXT_CHARS,
+    );
+    const latestText = latestProjection.text || undefined;
+    const errorProjection = boundedSingleLineProjection(
+      result.warning || "The child could not complete this task.",
+      MAX_SUBAGENT_ERROR_CHARS,
+    );
+    const error = errorProjection.text || "The child could not complete this task.";
+    const projectionNotices = mergeProjectionNotices(
+      current.projectionNotices,
+      ((result.status === "completed" && result.summaryTruncated === true) ||
+        terminalProjection.truncated) &&
+        "report_truncated",
+      (terminalProjection.displayFiltered ||
+        warningProjection?.displayFiltered === true ||
+        (result.status === "failed" && errorProjection.displayFiltered)) &&
+        "display_filtered",
+    );
     const state = stateForResult(result);
     this.update(
       runId,
@@ -287,6 +384,7 @@ export class SubagentEventProjector {
         finishedAt: now,
         ...(latestText ? { latestText } : {}),
         terminalMarkdown,
+        ...(projectionNotices ? { projectionNotices } : {}),
         ...(result.status === "failed"
           ? {
               error,
@@ -321,6 +419,8 @@ export class SubagentEventProjector {
       control.role !== current.role ||
       control.label !== current.label ||
       control.taskPreview !== current.taskPreview ||
+      JSON.stringify(control.projectionNotices ?? []) !==
+        JSON.stringify(current.projectionNotices ?? []) ||
       control.startedAt !== current.startedAt ||
       control.modelId !== current.modelId ||
       control.updatedAt < current.updatedAt ||
@@ -374,6 +474,7 @@ export class SubagentEventProjector {
         | "tools"
         | "tokens"
         | "milestones"
+        | "projectionNotices"
         | "latestText"
         | "terminalMarkdown"
         | "error"
