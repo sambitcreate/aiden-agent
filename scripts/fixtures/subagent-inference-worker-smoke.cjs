@@ -1,4 +1,4 @@
-/* global clearTimeout, process, setTimeout */
+/* global AbortController, clearTimeout, process, setTimeout */
 
 const { createServer } = require("node:http");
 const { app, utilityProcess } = require("electron");
@@ -74,7 +74,35 @@ app.whenReady().then(async () => {
     stderr = `${stderr}${String(chunk)}`.slice(-16_384);
   });
   child.on("spawn", () => {
-    child.postMessage({
+    const richContext = {
+      systemPrompt: "smoke",
+      messages: [],
+      tools: [
+        {
+          name: "smoke_tool",
+          description: "A clone-boundary smoke tool",
+          parameters: { type: "object", properties: {} },
+          label: "Smoke tool",
+          execute: async () => ({ content: [], details: null }),
+        },
+      ],
+    };
+    const richOptions = {
+      apiKey: "smoke",
+      signal: new AbortController().signal,
+      getApiKey: () => "must-stay-in-main",
+    };
+    const context = {
+      systemPrompt: richContext.systemPrompt,
+      messages: richContext.messages,
+      tools: richContext.tools.map(({ name, description, parameters }) => ({
+        name,
+        description,
+        parameters,
+      })),
+    };
+    const options = { apiKey: richOptions.apiKey };
+    const wireRequest = JSON.parse(JSON.stringify({
       kind: "start",
       version: 1,
       requestId,
@@ -90,13 +118,19 @@ app.whenReady().then(async () => {
         maxTokens: 1,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
-      context: { systemPrompt: "smoke", messages: [] },
-      options: { apiKey: "smoke" },
-    });
+      context,
+      options,
+    }));
+    child.postMessage(wireRequest);
   });
   child.on("message", (message) => {
     if (message?.requestId !== requestId) return;
     if (message.kind === "ready") {
+      if (message.launchToken !== "smoke") {
+        process.stderr.write("Worker readiness identity did not match its UtilityProcess argv.\n");
+        child.kill();
+        return;
+      }
       ready = true;
       process.stdout.write("AIDEN_SUBAGENT_WORKER_READY\n");
       child.postMessage({ kind: "ready-ack", version: 1, requestId });
