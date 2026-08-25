@@ -140,6 +140,37 @@ test("a natural terminal transition wins a later stop without being rewritten", 
   );
 });
 
+test("control updates preserve task provenance and only add report facts at terminal", () => {
+  const registry = new SubagentControlRegistryV2();
+  const running = snapshot({ projectionNotices: ["task_truncated"] });
+  registry.register(registration(running));
+
+  assert.throws(
+    () => registry.update(owner, snapshot({ revision: 2, updatedAt: 150 })),
+    /lifecycle cannot move backward/u,
+  );
+  assert.throws(
+    () =>
+      registry.update(
+        owner,
+        snapshot({
+          revision: 2,
+          updatedAt: 150,
+          projectionNotices: ["task_truncated", "display_filtered"],
+        }),
+      ),
+    /lifecycle cannot move backward/u,
+  );
+
+  const completed: SubagentRunSnapshotV2 = {
+    ...terminal(),
+    projectionNotices: ["task_truncated", "report_truncated", "display_filtered"],
+    terminalMarkdown: "Done.\n\n... [report truncated]",
+  };
+  registry.update(owner, completed);
+  assert.deepEqual(registry.status(owner, "run-one").projectionNotices, completed.projectionNotices);
+});
+
 test("mandatory hook failures prevent false terminal acknowledgement", () => {
   const approvalFailure = new SubagentControlRegistryV2({ now: () => 250 });
   approvalFailure.register(
