@@ -32,7 +32,7 @@ export function registerLocalVoiceHandlers(): void {
   });
   ipcMain.handle("localModels:delete", async (_event, id: unknown) => {
     const modelId = asString(id, "id");
-    releaseRecognizer(modelId);
+    await releaseRecognizer(modelId);
     await deleteModel(modelId);
     const settings = await configStore.getSettings();
     if (settings.localVoiceModel === modelId)
@@ -44,7 +44,7 @@ export function registerLocalVoiceHandlers(): void {
     const parsedModelId = asString(modelId, "modelId");
     const pcm = pcmToFloat32(asString(pcmBase64, "pcmBase64"));
     try {
-      const transcript = transcribePcm(pcm, parsedModelId);
+      const transcript = await transcribePcm(pcm, parsedModelId);
       await usageStore.record(
         unreportedUsageRecord({
           source: "voice-transcription",
