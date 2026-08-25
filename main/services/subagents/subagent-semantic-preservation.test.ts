@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   sanitizeSubagentSnapshotText,
+  sanitizeSubagentSnapshotTextWithFacts,
   sanitizeSubagentText,
 } from "../../../renderer/shared/subagent-safe-text.js";
 import { parseSubagentRunSnapshotV1 } from "../../../renderer/shared/subagent-runs.js";
@@ -69,6 +70,26 @@ test("projected task previews and model identifiers preserve safe input exactly"
   assert.equal(snapshot.taskPreview, task);
   assert.equal(snapshot.modelId, modelId);
   assert.deepEqual(parseSubagentRunSnapshotV1(snapshot), snapshot);
+});
+
+test("snapshot sanitizer reports replacements without inferring from literal markers", () => {
+  const literal = "Document [REDACTED] and [REDACTED ENCODED TEXT] literally.";
+  assert.deepEqual(sanitizeSubagentSnapshotTextWithFacts(literal), {
+    text: literal,
+    privacyReplacement: false,
+  });
+
+  const credential = sanitizeSubagentSnapshotTextWithFacts(
+    "Document [REDACTED] then token=actual-secret-value",
+  );
+  assert.equal(credential.text, "Document [REDACTED] then token=[REDACTED]");
+  assert.equal(credential.privacyReplacement, true);
+
+  const encoded = Buffer.from("OPENAI_API_KEY=actual-secret-value").toString("base64");
+  assert.deepEqual(
+    sanitizeSubagentSnapshotTextWithFacts(`Literal [REDACTED ENCODED TEXT] ${encoded}`),
+    { text: "[REDACTED ENCODED TEXT]", privacyReplacement: true },
+  );
 });
 
 test("actual credentials and private keys stay redacted at model and snapshot exposure boundaries", () => {
