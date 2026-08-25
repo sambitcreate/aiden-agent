@@ -242,6 +242,15 @@ import {
   resolvePiAgentRuntimeStaticContributions,
   type PiAgentRuntimeExtension,
 } from "./pi-agent-runtime-harness.js";
+import {
+  createDisplayImageExtensionRuntime,
+  displayedAssistantImageUsage,
+  DISPLAY_IMAGE_TOOL_NAME,
+  shouldEnableDisplayImageExtension,
+} from "./display-image-extension.js";
+import { CHAT_ARTIFACT_EVENT_VERSION } from "../../renderer/shared/chat-artifacts.js";
+import { displayImageArtifactStore } from "./display-image-artifact-store.js";
+import { generationHasVisibleOutput } from "./generation-visible-output.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -249,6 +258,24 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+function uniqueResponseImages(
+  sharedImages: readonly Attachment[],
+  displayedImages: readonly Attachment[],
+): Attachment[] {
+  const images = [...sharedImages];
+  for (const attachment of displayedImages) {
+    if (
+      images.some(
+        (item) => item.id === attachment.id || item.data === attachment.data,
+      )
+    ) {
+      continue;
+    }
+    images.push(attachment);
+  }
+  return images;
+}
 
 function piResourcesForSkillSnapshot(
   snapshot: SkillRegistrySnapshot | undefined,
@@ -545,6 +572,28 @@ async function prepareGeneration(
   options: GenerationExecutionOptions,
 ) {
   const sharedImages: Attachment[] = [];
+  const displayedImages: Attachment[] = [];
+  const displayedImageIds = new Set<string>();
+  const generationExtensions: PiAgentRuntimeExtension[] = [];
+  const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
+  const shareImage = (attachment: Attachment) => {
+    const existing = responseImages();
+    if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      throw new Error("This response already contains the maximum number of images.");
+    }
+    if (
+      existing.some(
+        (item) => item.id === attachment.id || item.data === attachment.data,
+      )
+    ) {
+      return;
+    }
+    const nextBytes = existing.reduce((sum, item) => sum + item.size, 0) + attachment.size;
+    if (nextBytes > MAX_ATTACHMENT_INLINE_BYTES) {
+      throw new Error("The images shared in this response exceed the 16 MB limit.");
+    }
+    sharedImages.push(attachment);
+  };
   const runtime = botContext?.prepared.runtime ??
     await resolveModelRuntime(params.providerId, params.model, signal);
   const botBound = botContext !== undefined;
@@ -879,17 +928,7 @@ async function prepareGeneration(
             )
         : undefined,
       shareImage: folderPath
-        ? (attachment) => {
-            if (sharedImages.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-              throw new Error("This response already contains the maximum number of images.");
-            }
-            if (sharedImages.some((item) => item.data === attachment.data)) return;
-            const nextBytes = sharedImages.reduce((sum, item) => sum + item.size, 0) + attachment.size;
-            if (nextBytes > MAX_ATTACHMENT_INLINE_BYTES) {
-              throw new Error("The images shared in this response exceed the 16 MB limit.");
-            }
-            sharedImages.push(attachment);
-          }
+        ? shareImage
         : undefined,
       includeCodingTools: !botContext,
       imageInspectionTool:
@@ -940,17 +979,7 @@ async function prepareGeneration(
         workspaceRoot: authority.workingDirectory,
         expectedWorkspaceIdentity: authority.managedHome.incarnation,
         scopeToWorkspace: true,
-        share: (attachment) => {
-          if (sharedImages.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-            throw new Error("This response already contains the maximum number of images.");
-          }
-          if (sharedImages.some((item) => item.data === attachment.data)) return;
-          const nextBytes = sharedImages.reduce((sum, item) => sum + item.size, 0) + attachment.size;
-          if (nextBytes > MAX_ATTACHMENT_INLINE_BYTES) {
-            throw new Error("The images shared in this response exceed the 16 MB limit.");
-          }
-          sharedImages.push(attachment);
-        },
+        share: shareImage,
       }));
     }
     if (authority.shell.enabled) {
@@ -1000,6 +1029,77 @@ async function prepareGeneration(
       return allowed ? [protectAdmittedBotTool(tool, botContext.admission)] : [];
     });
   }
+  if (
+    !botContext &&
+    shouldEnableDisplayImageExtension({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      workspaceRoot: folderPath,
+      permission,
+      excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
+    })
+  ) {
+    const artifactStoreAvailability = displayImageArtifactStore.availability();
+    if (!artifactStoreAvailability.available) {
+      throw new Error(
+        `${artifactStoreAvailability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+      );
+    }
+    const existingUsage = displayedAssistantImageUsage(chat.messages);
+    const pendingUsage = await displayImageArtifactStore.usageByChat(params.chatId);
+    if (pendingUsage.count > 0) {
+      throw new Error(
+        "A previous image response could not be recovered. Delete this chat to discard it before continuing.",
+      );
+    }
+    const displayImageRuntime = createDisplayImageExtensionRuntime({
+      workspaceRoot: folderPath!,
+      artifactNamespace: streamId,
+      existingChatImageBytes: existingUsage.bytes + pendingUsage.bytes,
+      existingChatImageCount: existingUsage.count + pendingUsage.count,
+      existingChatImagePixels: existingUsage.pixels + pendingUsage.pixels,
+      onArtifact: async (artifact, dimensions) => {
+        const existing = responseImages();
+        if (
+          existing.some(
+            (item) =>
+              item.id === artifact.attachment.id || item.data === artifact.attachment.data,
+          )
+        ) {
+          return false;
+        }
+        if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+          throw new Error("This response already contains the maximum number of images.");
+        }
+        const nextBytes =
+          existing.reduce((sum, item) => sum + item.size, 0) + artifact.attachment.size;
+        if (nextBytes > MAX_ATTACHMENT_INLINE_BYTES) {
+          throw new Error("The images shared in this response exceed the 16 MB limit.");
+        }
+        await displayImageArtifactStore.stage({
+          chatId: params.chatId,
+          generationId: streamId,
+          model: params.model,
+          artifact,
+          pixels: dimensions.width * dimensions.height,
+        });
+        if (displayedImageIds.has(artifact.attachment.id)) return false;
+        displayedImageIds.add(artifact.attachment.id);
+        displayedImages.push(artifact.attachment);
+        sendGeneration(streamId, "chat:artifact", {
+          streamId,
+          event: {
+            version: CHAT_ARTIFACT_EVENT_VERSION,
+            operation: "present",
+            artifact,
+          },
+        });
+        return true;
+      },
+    });
+    generationExtensions.push(displayImageRuntime.extension);
+  }
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
@@ -1028,6 +1128,8 @@ async function prepareGeneration(
     folderPath,
     git,
     tools,
+    generationExtensions,
+    displayedImages,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -1316,6 +1418,8 @@ export const llmClient = {
       folderPath,
       git,
       tools,
+      generationExtensions,
+      displayedImages,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -1386,6 +1490,7 @@ export const llmClient = {
       providerFailure?: ProviderFailureV1,
     ) => {
       const subagents = subagentMessageReference(streamId, subagentSupervisor?.snapshots() ?? []);
+      const assistantAttachments = uniqueResponseImages(sharedImages, displayedImages);
       if (
         !content.trim() &&
         !reasoning.trim() &&
@@ -1393,7 +1498,7 @@ export const llmClient = {
         finalTimeline.status !== "cancelled" &&
         !subagents &&
         !providerFailure &&
-        sharedImages.length === 0
+        assistantAttachments.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -1415,7 +1520,7 @@ export const llmClient = {
                 ? finalTimeline
                 : undefined,
             subagents,
-            attachments: sharedImages.length > 0 ? sharedImages : undefined,
+            attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
           },
           {
             providerId: params.providerId,
@@ -1426,6 +1531,22 @@ export const llmClient = {
         const messageId = [...chat.messages]
           .reverse()
           .find((message) => message.role === "assistant")?.id;
+        if (displayedImages.length > 0) {
+          try {
+            await displayImageArtifactStore.remove(
+              params.chatId,
+              displayedImages.map((attachment) => attachment.id),
+            );
+          } catch (error) {
+            // ChatStore is already durable. Startup recovery deduplicates this
+            // staging residue by attachment id before removing it.
+            logger.warn(
+              "pi",
+              `Could not clear committed image artifacts for stream ${streamId}.`,
+              error,
+            );
+          }
+        }
         return { chat, error: undefined, messageId };
       } catch (error) {
         logger.error("pi", `Could not persist response for stream ${streamId}`, error);
@@ -1469,7 +1590,7 @@ export const llmClient = {
               return undefined;
             },
           }]
-        : runtimeExtensionSnapshot.extensions;
+        : [...runtimeExtensionSnapshot.extensions, ...generationExtensions];
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -2427,7 +2548,13 @@ export const llmClient = {
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           });
-        } else if (!full.trim() && !wasCancelled) {
+        } else if (
+          !generationHasVisibleOutput(
+            full,
+            uniqueResponseImages(sharedImages, displayedImages).length,
+          ) &&
+          !wasCancelled
+        ) {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);

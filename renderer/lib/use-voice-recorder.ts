@@ -11,6 +11,7 @@ import {
   type TranscribeOptions,
 } from "./voice-recorder-core";
 import { DictationOperationGate } from "./dictation-operation-gate";
+import { scheduleRecorderStopWithTail, startChunkedMediaRecorder } from "./media-recorder-stop";
 
 type RecorderOptions = TranscribeOptions;
 
@@ -102,7 +103,7 @@ export function useVoiceRecorder(
         }
       };
       recorderRef.current = recorder;
-      recorder.start();
+      startChunkedMediaRecorder(recorder);
       operationGate.finishStart(token);
       setRecording(true);
     } catch (error) {
@@ -115,8 +116,9 @@ export function useVoiceRecorder(
   }, [onTranscript, operationGate, stopTracks]);
 
   const stop = React.useCallback(() => {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      scheduleRecorderStopWithTail(recorder, setTimeout);
     }
   }, []);
 

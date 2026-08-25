@@ -135,6 +135,10 @@ import type {
   AidenRemotePairingBootstrapView,
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
+import {
+  parseChatArtifactEventV1,
+  type ChatArtifactEventV1,
+} from "../shared/chat-artifacts";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -416,17 +420,26 @@ export interface TelegramStatus {
     settings: { enabled?: boolean; allowedUserId?: number };
     status: { status: string; queuedCount: number; lastError?: string };
   }>;
-  recentDiagnostics: Array<{ at: number; level: "info" | "warning" | "error" | "recovery"; message: string }>;
+  recentDiagnostics: Array<{
+    at: number;
+    level: "info" | "warning" | "error" | "recovery";
+    message: string;
+  }>;
 }
 export const telegramApi = {
   get: () => invoke<TelegramStatus>("telegram:get"),
   setKey: (key: string) => invoke<{ hasKey: boolean }>("telegram:setKey", key),
-  setEnabled: (enabled: boolean) => invoke<boolean>("telegram:setEnabled", enabled),
+  setEnabled: (enabled: boolean) =>
+    invoke<boolean>("telegram:setEnabled", enabled),
   connect: () => invoke<{ connected: boolean }>("telegram:connect"),
   disconnect: () => invoke<{ connected: boolean }>("telegram:disconnect"),
   resetPairing: () => invoke<{ reset: boolean }>("telegram:resetPairing"),
   setProvider: (providerId: string, model: string) =>
-    invoke<{ providerId: string; model: string }>("telegram:setProvider", providerId, model),
+    invoke<{ providerId: string; model: string }>(
+      "telegram:setProvider",
+      providerId,
+      model,
+    ),
   setWorkspace: (workspaceId?: string) =>
     invoke<{ workspaceId?: string }>("telegram:setWorkspace", workspaceId),
   setExperience: (input: {
@@ -437,11 +450,15 @@ export const telegramApi = {
     voiceMode: "hidden" | "mirror" | "always";
     threadedMode: boolean;
   }) => invoke("telegram:setExperience", input),
-  selectProfile: (profile: string) => invoke<{ profile: string }>("telegram:selectProfile", profile),
-  createProfile: (profile: string) => invoke<{ profile: string }>("telegram:createProfile", profile),
-  deleteProfile: (profile: string) => invoke<{ deleted: boolean }>("telegram:deleteProfile", profile),
-  onModelSelectionChanged: (handler: (selection: { providerId: string; model: string }) => void) =>
-    onNotification("telegram:model-selection-changed", handler),
+  selectProfile: (profile: string) =>
+    invoke<{ profile: string }>("telegram:selectProfile", profile),
+  createProfile: (profile: string) =>
+    invoke<{ profile: string }>("telegram:createProfile", profile),
+  deleteProfile: (profile: string) =>
+    invoke<{ deleted: boolean }>("telegram:deleteProfile", profile),
+  onModelSelectionChanged: (
+    handler: (selection: { providerId: string; model: string }) => void,
+  ) => onNotification("telegram:model-selection-changed", handler),
 };
 
 export const aidenRemoteApi = {
@@ -528,6 +545,8 @@ export const dictationApi = {
   cancel: () => invoke<void>("dictation:cancel"),
   /** Pill renderer is mounted and subscribed to dictation state broadcasts. */
   ready: () => invoke<void>("dictation:ready"),
+  /** Silence detector or UI asked to end capture without cancelling. */
+  stopRecording: () => invoke<void>("dictation:stop"),
 };
 
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
@@ -706,7 +725,13 @@ export const chatsApi = {
     if (response.reconciliation) {
       rememberChatReadReconciliation(response.reconciliation);
     }
-    return response.chat;
+    return response.chat
+      ? {
+          ...response.chat,
+          imageArtifactRecoveryPending: response.imageArtifactRecoveryPending,
+          imageArtifactRecoveryUnavailable: response.imageArtifactRecoveryUnavailable,
+        }
+      : null;
   },
   waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
   create: (input: {
@@ -869,6 +894,10 @@ interface ChatReasoningDelta {
   streamId: string;
   delta: string;
 }
+interface ChatArtifactNotification {
+  streamId: string;
+  event: unknown;
+}
 export type ChatStatusPhase = "model_loading" | "model_ready";
 interface ChatStatus {
   streamId: string;
@@ -952,6 +981,7 @@ export interface StreamCallbacks {
     reasoning?: string,
   ) => void;
   onTimeline?: (timeline: GenerationTimeline) => void;
+  onArtifactEvent?: (event: ChatArtifactEventV1) => void;
   onSubagents?: (snapshot: SubagentRunSnapshot) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
@@ -1022,6 +1052,15 @@ export function startGeneration(
       if (p.streamId === streamId) callbacks.onTimeline?.(p.timeline);
     }),
   );
+  if (callbacks.onArtifactEvent) {
+    unsubs.push(
+      onNotification<ChatArtifactNotification>("chat:artifact", (p) => {
+        if (p.streamId !== streamId) return;
+        const event = parseChatArtifactEventV1(p.event);
+        if (event) callbacks.onArtifactEvent?.(event);
+      }),
+    );
+  }
   if (callbacks.onSubagents) {
     unsubs.push(
       onNotification<ChatSubagents>("chat:subagents", (p) => {

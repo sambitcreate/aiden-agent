@@ -23,6 +23,8 @@ async function projectionReadServer(initial: Chat | Chat[]) {
       listRegular: async () => structuredClone(current.filter((chat) => chat.botId === undefined)),
       get: async (chatId) => ({
         chat: structuredClone(current.find((chat) => chat.id === chatId) ?? null),
+        imageArtifactRecoveryPending: false,
+        imageArtifactRecoveryUnavailable: false,
         reconciliation: null,
       }),
       create: async () => structuredClone(current[0]!),
@@ -287,7 +289,12 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     application: {
       list: async () => [structuredClone(chat)],
       listRegular: async () => chat.botId === undefined ? [structuredClone(chat)] : [],
-      get: async () => ({ chat: structuredClone(chat), reconciliation: null }),
+      get: async () => ({
+        chat: structuredClone(chat),
+        imageArtifactRecoveryPending: false,
+        imageArtifactRecoveryUnavailable: false,
+        reconciliation: null,
+      }),
       create: async () => structuredClone(chat),
       rename: async (_id, title, options) => {
         await options?.assertCurrent?.(chat);

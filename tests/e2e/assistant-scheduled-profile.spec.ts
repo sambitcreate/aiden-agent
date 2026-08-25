@@ -35,7 +35,8 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await taskSearch.fill("definitely-not-a-schedule");
   await expect(taskSearch).toHaveValue("definitely-not-a-schedule");
   await expect(page.getByText("No matching tasks", { exact: true })).toBeVisible();
-  await taskSearch.fill("");
+  await taskSearch.selectText();
+  await taskSearch.press("Backspace");
   await expect(taskSearch).toHaveValue("");
   await expect(page.getByText("No matching tasks", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "Active", exact: true }).click();

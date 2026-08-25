@@ -557,6 +557,22 @@ export class AidenRemoteChatService {
     if (result.reconciliation) {
       throw new AidenRemoteServiceError("operation_in_progress", "This chat is still reconciling.", 409, true);
     }
+    if (result.imageArtifactRecoveryUnavailable) {
+      throw new AidenRemoteServiceError(
+        "operation_in_progress",
+        "This chat is waiting for image-artifact storage repair on the Mac.",
+        409,
+        true,
+      );
+    }
+    if (result.imageArtifactRecoveryPending) {
+      throw new AidenRemoteServiceError(
+        "operation_in_progress",
+        "This chat is still recovering an interrupted image response.",
+        409,
+        true,
+      );
+    }
     return result.chat;
   }
 

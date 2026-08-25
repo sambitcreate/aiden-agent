@@ -90,7 +90,7 @@ test("a successful Mac transcript survives local usage-store failure", async () 
     new Float32Array([0]),
     "parakeet-v3",
     {
-      transcribePcm: () => "Keep this transcript",
+      transcribe: async () => "Keep this transcript",
       recordUsage: async () => {
         usageWrites += 1;
         throw new Error("usage store unavailable");
@@ -99,5 +99,23 @@ test("a successful Mac transcript survives local usage-store failure", async () 
   );
 
   assert.deepEqual(transcript, { text: "Keep this transcript", modelId: "parakeet-v3" });
+  assert.equal(usageWrites, 1);
+});
+
+test("a failed asynchronous Mac transcript preserves its original error when usage fails", async () => {
+  const inferenceError = new Error("recognizer failed");
+  let usageWrites = 0;
+  await assert.rejects(
+    completeAidenRemoteSpeechTranscription("bounded-pcm", "parakeet-v3", {
+      transcribe: async () => {
+        throw inferenceError;
+      },
+      recordUsage: async () => {
+        usageWrites += 1;
+        throw new Error("usage store unavailable");
+      },
+    }),
+    (error: unknown) => error === inferenceError,
+  );
   assert.equal(usageWrites, 1);
 });

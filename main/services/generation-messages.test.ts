@@ -118,6 +118,38 @@ test("journal rehydration preserves the authoritative chat timestamp", () => {
   assert.equal(message.timestamp, 123_456);
 });
 
+test("journal rehydration preserves bounded continuity for an image-only assistant reply", () => {
+  const message = chatMessageToPiMessage(
+    {
+      id: "message-image-only",
+      role: "assistant",
+      content: "",
+      createdAt: 123_457,
+      attachments: [
+        {
+          id: "displayed-image",
+          name: "private-name.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: 4,
+          data: "PRIVATE_IMAGE_BYTES",
+        },
+      ],
+    },
+    model,
+    false,
+  );
+
+  assert.equal(message.role, "assistant");
+  assert.deepEqual(message.content, [
+    { type: "text", text: "[Assistant displayed 1 inline image.]" },
+  ]);
+  assert.doesNotMatch(
+    JSON.stringify(message),
+    /private-name|PRIVATE_IMAGE_BYTES/iu,
+  );
+});
+
 test("journal rehydration preserves canonical mixed-provider Pi provenance", () => {
   const canonical = {
     role: "assistant" as const,
@@ -166,23 +198,38 @@ test("journal rehydration preserves canonical mixed-provider Pi provenance", () 
 
 test("stored Pi provenance rejects malformed nested provider protocol", () => {
   const valid = {
-    role: "assistant", content: [{ type: "text", text: "answer" }],
-    api: "anthropic-messages", provider: "anthropic", model: "claude",
+    role: "assistant",
+    content: [{ type: "text", text: "answer" }],
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude",
     usage: {
-      input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: "stop", timestamp: 10,
+    stopReason: "stop",
+    timestamp: 10,
   };
   assert.deepEqual(parseStoredPiAssistantMessage(valid), valid);
   for (const malformed of [
     { ...valid, provider: "" },
     { ...valid, content: [{ type: "image", data: "private" }] },
-    { ...valid, content: [{ type: "toolCall", id: "", name: "read", arguments: {} }] },
+    {
+      ...valid,
+      content: [{ type: "toolCall", id: "", name: "read", arguments: {} }],
+    },
     { ...valid, usage: {} },
     { ...valid, usage: { ...valid.usage, input: Number.NaN } },
-    { ...valid, usage: { ...valid.usage, cost: { ...valid.usage.cost, total: -1 } } },
-  ]) assert.equal(parseStoredPiAssistantMessage(malformed), undefined);
+    {
+      ...valid,
+      usage: { ...valid.usage, cost: { ...valid.usage.cost, total: -1 } },
+    },
+  ])
+    assert.equal(parseStoredPiAssistantMessage(malformed), undefined);
 });
 
 test("stored Pi provenance strips raw provider errors and diagnostics", () => {

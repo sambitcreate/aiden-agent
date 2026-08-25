@@ -22,7 +22,10 @@ test("keeps tool order stable when parallel calls finish out of order", () => {
   );
 
   projector.toolStarted("call-a", "read_file", { path: "src/a.ts" });
-  projector.toolStarted("call-b", "grep", { path: "src", query: "secret-search-value" });
+  projector.toolStarted("call-b", "grep", {
+    path: "src",
+    query: "secret-search-value",
+  });
   projector.toolRunning("call-a");
   projector.toolRunning("call-b");
   projector.toolFinished("call-b", "completed");
@@ -129,6 +132,17 @@ test("does not expose raw command, search, content, or absolute path arguments",
   assert.equal(serialized.includes("../outside"), false);
 });
 
+test("projects display_image as a safe relative GUI artifact action", () => {
+  assert.deepEqual(safeToolDescriptor("display_image", { path: "previews/page.png" }), {
+    label: "Display image",
+    target: "previews/page.png",
+  });
+  assert.deepEqual(safeToolDescriptor("display_image", { path: "/private/page.png" }), {
+    label: "Display image",
+    target: undefined,
+  });
+});
+
 test("terminal cancellation settles active steps", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   projector.toolStarted("call-a", "read_file", { path: "README.md" });
@@ -139,13 +153,13 @@ test("terminal cancellation settles active steps", () => {
   assert.equal(final.cancellationOrigin, "user_stop");
   assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(final))), final);
   assert.equal(
-    parseGenerationTimeline({ ...final, cancellationOrigin: "renderer_lifecycle" }),
+    parseGenerationTimeline({
+      ...final,
+      cancellationOrigin: "renderer_lifecycle",
+    }),
     undefined,
   );
-  assert.equal(
-    parseGenerationTimeline({ ...final, status: "completed" }),
-    undefined,
-  );
+  assert.equal(parseGenerationTimeline({ ...final, status: "completed" }), undefined);
   assert.equal(toolSteps(final)[0]?.status, "cancelled");
   assert.equal(typeof final.finishedAt, "number");
   assert.equal(typeof final.steps[0]?.finishedAt, "number");
@@ -153,7 +167,9 @@ test("terminal cancellation settles active steps", () => {
 
 test("explicit tool cancellation remains cancelled at generation settlement", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.toolStarted("provider-call-id", "run_command", { command: "long private command" });
+  projector.toolStarted("provider-call-id", "run_command", {
+    command: "long private command",
+  });
   projector.toolRunning("provider-call-id");
   projector.toolFinished("provider-call-id", "cancelled");
 
@@ -217,7 +233,10 @@ test("a command's detail is the model's description, never the command", () => {
 
 test("displayable details survive while unsafe ones are collapsed or dropped", () => {
   assert.equal(
-    safeToolDescriptor("grep", { path: "services", pattern: "export (const|class)" }).detail,
+    safeToolDescriptor("grep", {
+      path: "services",
+      pattern: "export (const|class)",
+    }).detail,
     "export (const|class)",
   );
   assert.equal(safeToolDescriptor("glob", { pattern: "  src/**/*.ts\n\n" }).detail, "src/**/*.ts");

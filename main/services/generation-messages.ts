@@ -156,6 +156,16 @@ export function chatMessageToPiMessage(
   if (message.role === "assistant" && message.pi) {
     return structuredClone(message.pi);
   }
+  const displayedImageCount =
+    message.role === "assistant" && !message.content.trim()
+      ? (message.attachments?.filter(
+          (attachment) => attachment.kind === "image",
+        ).length ?? 0)
+      : 0;
+  const content =
+    displayedImageCount > 0
+      ? `[Assistant displayed ${displayedImageCount} inline image${displayedImageCount === 1 ? "" : "s"}.]`
+      : message.content;
   const params: ChatStartParams = {
     chatId: "journal-rehydration",
     providerId: model.provider,
@@ -163,7 +173,7 @@ export function chatMessageToPiMessage(
     messages: [
       {
         role: message.role,
-        content: message.content,
+        content,
         attachments: message.attachments,
       },
     ],

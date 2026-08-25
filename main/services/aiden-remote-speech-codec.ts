@@ -14,7 +14,7 @@ const AIDEN_REMOTE_SPEECH_JSON_ENVELOPE_ALLOWANCE = 1_024;
 export const AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES =
   AIDEN_REMOTE_MAX_PCM16_BASE64_LENGTH + AIDEN_REMOTE_SPEECH_JSON_ENVELOPE_ALLOWANCE;
 
-export function decodeAidenRemotePcm16(value: unknown): Float32Array {
+export function validateAidenRemotePcm16Base64(value: unknown): string {
   if (
     typeof value !== "string"
     || value.length === 0
@@ -25,14 +25,20 @@ export function decodeAidenRemotePcm16(value: unknown): Float32Array {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
     throw new AidenRemoteServiceError("invalid_request", "The speech recording must be valid base64 PCM.", 400);
   }
-  const bytes = Buffer.from(value, "base64");
+  const bytesLength = Buffer.byteLength(value, "base64");
   if (
-    bytes.length === 0
-    || bytes.length > AIDEN_REMOTE_MAX_PCM16_BYTES
-    || bytes.length % 2 !== 0
+    bytesLength === 0
+    || bytesLength > AIDEN_REMOTE_MAX_PCM16_BYTES
+    || bytesLength % 2 !== 0
   ) {
     throw new AidenRemoteServiceError("invalid_request", "The speech recording must be 16-bit mono PCM no longer than 60 seconds.", 400);
   }
+  return value;
+}
+
+export function decodeAidenRemotePcm16(value: unknown): Float32Array {
+  const encoded = validateAidenRemotePcm16Base64(value);
+  const bytes = Buffer.from(encoded, "base64");
   const samples = new Float32Array(bytes.length / 2);
   for (let index = 0; index < samples.length; index += 1) {
     samples[index] = bytes.readInt16LE(index * 2) / 32_768;

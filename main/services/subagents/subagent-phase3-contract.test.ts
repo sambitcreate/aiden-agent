@@ -148,6 +148,10 @@ test("chat removal deletes private child history before the chat can disappear",
     "await deps.chatStore.remove(chatId,",
     deleteRuns,
   );
+  const deleteArtifacts = applicationService.indexOf(
+    "await deps.displayImageArtifactStore.deleteChat(chatId)",
+    deleteRuns,
+  );
   const completeDeletion = applicationService.indexOf(
     "await deps.subagentRunStore.completeChatDeletion(chatId)",
     deleteChat,
@@ -163,7 +167,8 @@ test("chat removal deletes private child history before the chat can disappear",
   assert.ok(beginDeletion >= 0);
   assert.ok(cancel > beginDeletion);
   assert.ok(deleteRuns > cancel);
-  assert.ok(deleteChat > deleteRuns);
+  assert.ok(deleteArtifacts > deleteRuns);
+  assert.ok(deleteChat > deleteArtifacts);
   assert.ok(completeDeletion > deleteChat);
   assert.ok(pendingDeletionCheck > completeDeletion);
   assert.ok(releaseAdmission > pendingDeletionCheck);
@@ -405,7 +410,7 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
     inactiveCheck,
   );
   const read = applicationService.indexOf(
-    "const chat = await deps.chatStore.get(chatId)",
+    "deps.chatStore.get(chatId)",
     idleWait,
   );
   const response = applicationService.indexOf(

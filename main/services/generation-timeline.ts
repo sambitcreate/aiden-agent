@@ -123,11 +123,17 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
     case "glob":
       return { label: "Find files", detail: safeDetail(values.pattern) };
     case "grep":
-      return { label: "Search files", target: path, detail: safeDetail(values.pattern) };
+      return {
+        label: "Search files",
+        target: path,
+        detail: safeDetail(values.pattern),
+      };
     case "write_file":
       return { label: "Write file", target: path };
     case "edit_file":
       return { label: "Edit file", target: path };
+    case "display_image":
+      return { label: "Display image", target: path };
     case "run_command":
       return { label: "Run command", detail: safeDetail(values.description) };
     case "share_image":
@@ -202,7 +208,10 @@ export class GenerationTimelineProjector {
     const timestamp = this.now();
     const last = this.timeline.steps[this.timeline.steps.length - 1];
     if (last && !isToolStep(last) && last.contentOffset === this.contentOffset) {
-      this.openThinking = { index: this.timeline.steps.length - 1, startedAt: timestamp };
+      this.openThinking = {
+        index: this.timeline.steps.length - 1,
+        startedAt: timestamp,
+      };
       return;
     }
     this.thinkingSequence += 1;
@@ -215,7 +224,10 @@ export class GenerationTimelineProjector {
       durationMs: 0,
       contentOffset: this.contentOffset,
     };
-    this.openThinking = { index: this.timeline.steps.length, startedAt: timestamp };
+    this.openThinking = {
+      index: this.timeline.steps.length,
+      startedAt: timestamp,
+    };
     this.timeline.steps.push(step);
     this.emit();
   }

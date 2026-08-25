@@ -1,6 +1,7 @@
 import { logger } from "../platform.js";
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
+import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import { llmClient } from "./llm-client.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
@@ -13,6 +14,7 @@ export const chatApplicationService = createChatApplicationService({
   chatStore,
   configStore,
   llmClient,
+  displayImageArtifactStore,
   workspaceMutationGate,
   workspaceOperationRegistry,
   subagentRunStore,

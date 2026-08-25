@@ -2,13 +2,13 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { unreportedUsageRecord } from "./usage-accounting.js";
 import type { UsageRequestRecord } from "./usage-store-core.js";
 
-interface AidenRemoteSpeechTranscriptionDependencies {
-  transcribePcm(samples: Float32Array, modelId: string): string;
+interface AidenRemoteSpeechTranscriptionDependencies<TInput> {
+  transcribe(input: TInput, modelId: string): string | Promise<string>;
   recordUsage(record: UsageRequestRecord): Promise<void>;
 }
 
-async function recordUsageBestEffort(
-  dependencies: AidenRemoteSpeechTranscriptionDependencies,
+async function recordUsageBestEffort<TInput>(
+  dependencies: AidenRemoteSpeechTranscriptionDependencies<TInput>,
   record: UsageRequestRecord,
 ): Promise<void> {
   try {
@@ -30,13 +30,13 @@ function speechUsage(modelId: string, status: "completed" | "failed"): UsageRequ
   });
 }
 
-export async function completeAidenRemoteSpeechTranscription(
-  samples: Float32Array,
+export async function completeAidenRemoteSpeechTranscription<TInput>(
+  input: TInput,
   modelId: string,
-  dependencies: AidenRemoteSpeechTranscriptionDependencies,
+  dependencies: AidenRemoteSpeechTranscriptionDependencies<TInput>,
 ): Promise<{ text: string; modelId: string }> {
   try {
-    const text = dependencies.transcribePcm(samples, modelId);
+    const text = await dependencies.transcribe(input, modelId);
     if ([...text].length > 200_000) {
       throw new AidenRemoteServiceError(
         "internal_error",

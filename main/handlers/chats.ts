@@ -10,6 +10,7 @@ import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
+import { displayImageArtifactStore } from "../services/display-image-artifact-store.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import {
   commitSkillInvocationForAppend,
@@ -156,6 +157,14 @@ export function registerChatHistoryHandlers(): void {
       }
       const source = await chatStore.get(parsed.chatId);
       if (!source) throw new Error("The chat is no longer available.");
+      if (await displayImageArtifactStore.hasPending(parsed.chatId)) {
+        const availability = displayImageArtifactStore.availability();
+        throw new Error(
+          availability.available
+            ? "A previous image response could not be recovered. Delete this chat to discard it before copying."
+            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+        );
+      }
       const runCopy = async () => {
         if (source.botId) {
           const assertCurrent = () => {
@@ -263,6 +272,14 @@ export function registerChatHistoryHandlers(): void {
       }
       const chat = await chatStore.get(chatId);
       if (!chat) throw new Error("The chat is no longer available.");
+      if (await displayImageArtifactStore.hasPending(chatId)) {
+        const availability = displayImageArtifactStore.availability();
+        throw new Error(
+          availability.available
+            ? "A previous image response could not be recovered. Delete this chat to discard it before exporting."
+            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+        );
+      }
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -283,6 +300,14 @@ export function registerChatHistoryHandlers(): void {
       }
       const latestChat = await chatStore.get(chatId);
       if (!latestChat) throw new Error("The chat is no longer available.");
+      if (await displayImageArtifactStore.hasPending(chatId)) {
+        const availability = displayImageArtifactStore.availability();
+        throw new Error(
+          availability.available
+            ? "A previous image response could not be recovered. Delete this chat to discard it before exporting."
+            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+        );
+      }
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -409,6 +434,14 @@ export function registerChatHistoryHandlers(): void {
       return (async () => {
         let appended = false;
         try {
+          if (await displayImageArtifactStore.hasPending(chatId)) {
+            const availability = displayImageArtifactStore.availability();
+            throw new Error(
+              availability.available
+                ? "A previous image response could not be recovered. Delete this chat to discard it before sending another message."
+                : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+            );
+          }
           const authoritativeChat = skillReference
             ? await chatStore.get(chatId)
             : undefined;

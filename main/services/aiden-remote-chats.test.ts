@@ -46,6 +46,8 @@ function fixture(
     retainedBotChatAuthorizer?: AidenRemoteRetainedBotChatAuthorizer;
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     modelSupportsImages?: () => boolean;
+    imageArtifactRecoveryPending?: boolean;
+    imageArtifactRecoveryUnavailable?: boolean;
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -76,7 +78,12 @@ function fixture(
       },
       get: async () => {
         fixtureOptions.onPayloadGet?.();
-        return { chat: current ? structuredClone(current) : null, reconciliation: null };
+        return {
+          chat: current ? structuredClone(current) : null,
+          imageArtifactRecoveryPending: fixtureOptions.imageArtifactRecoveryPending === true,
+          imageArtifactRecoveryUnavailable: fixtureOptions.imageArtifactRecoveryUnavailable === true,
+          reconciliation: null,
+        };
       },
       create: async (input) => {
         creates += 1;
@@ -753,6 +760,21 @@ test("chat reads expose an in-flight background title without changing the revis
   const settled = await app.service.get("chat-1");
   assert.equal("titlePending" in settled, false);
   assert.equal(settled.revision, revision);
+});
+
+test("remote chat reads fail closed while image artifacts need recovery or repair", async () => {
+  await assert.rejects(
+    fixture(chat(), { imageArtifactRecoveryPending: true }).service.get("chat-1"),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "operation_in_progress",
+  );
+  await assert.rejects(
+    fixture(chat(), { imageArtifactRecoveryUnavailable: true }).service.get("chat-1"),
+    /storage repair/u,
+  );
 });
 
 test("chat create is device-scoped idempotent and CRUD checks exact revisions", async () => {

@@ -6,10 +6,10 @@ import {
   listModels,
   localModelDownloadStates,
 } from "./local-models.js";
-import { engineStatus, releaseRecognizer, transcribePcm } from "./parakeet.js";
+import { engineStatus, releaseRecognizer, transcribePcm16Base64 } from "./parakeet.js";
 import { usageStore } from "./usage-store.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import { decodeAidenRemotePcm16 } from "./aiden-remote-speech-codec.js";
+import { validateAidenRemotePcm16Base64 } from "./aiden-remote-speech-codec.js";
 import { AidenRemoteSpeechLane } from "./aiden-remote-speech-lane.js";
 import { completeAidenRemoteSpeechTranscription } from "./aiden-remote-speech-transcription.js";
 
@@ -59,7 +59,7 @@ export class AidenRemoteSpeechService {
   async status(): Promise<AidenRemoteSpeechStatus> {
     const settings = await configStore.getSettings();
     const downloads = new Map(localModelDownloadStates().map((value) => [value.id, value]));
-    const engine = engineStatus();
+    const engine = await engineStatus();
     return {
       engine: {
         ready: engine.ready,
@@ -121,11 +121,13 @@ export class AidenRemoteSpeechService {
 
   async deleteModel(idValue: unknown): Promise<AidenRemoteSpeechStatus> {
     const id = modelId(idValue);
-    releaseRecognizer(id);
-    await deleteModel(id);
-    const settings = await configStore.getSettings();
-    if (settings.localVoiceModel === id) await configStore.setSettings({ localVoiceModel: "" });
-    return this.status();
+    return this.transcriptionLane.run(async () => {
+      await releaseRecognizer(id);
+      await deleteModel(id);
+      const settings = await configStore.getSettings();
+      if (settings.localVoiceModel === id) await configStore.setSettings({ localVoiceModel: "" });
+      return this.status();
+    });
   }
 
   async transcribe(input: unknown): Promise<{ text: string; modelId: string }> {
@@ -151,12 +153,12 @@ export class AidenRemoteSpeechService {
           true,
         );
       }
-      // Keep the bounded base64-to-Float32 conversion inside the same lane as
-      // native recognition so concurrent requests cannot allocate duplicate
-      // sample buffers or add parallel main-process work.
-      const samples = decodeAidenRemotePcm16(value.pcmBase64);
-      return completeAidenRemoteSpeechTranscription(samples, id, {
-        transcribePcm,
+      // Validate the bounded wire payload without allocating its decoded sample
+      // buffer in Electron main. PCM16 conversion and inference stay isolated
+      // inside the utility process.
+      const pcmBase64 = validateAidenRemotePcm16Base64(value.pcmBase64);
+      return completeAidenRemoteSpeechTranscription(pcmBase64, id, {
+        transcribe: transcribePcm16Base64,
         recordUsage: (usage) => usageStore.record(usage),
       });
     });

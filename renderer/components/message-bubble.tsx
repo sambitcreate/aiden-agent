@@ -1,15 +1,14 @@
 // A single chat message. User messages are right-aligned bubbles; assistant
 // messages render markdown full-width, native-transcript style.
 
-import * as React from "react";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import { Callout, ErrorBoundary, Text } from "./ui";
-import { ChevronLeft, ChevronRight, FileText, Sparkles, X } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { Markdown } from "./markdown";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
 import { CopyButton } from "./copy-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
+import { MessageAttachments } from "./message-attachments";
 
 export interface MessageBubbleProps {
   role: ChatMessage["role"];
@@ -23,102 +22,6 @@ export interface MessageBubbleProps {
   /** Split assistant prose renders one whole-response copy action on its tail. */
   showCopy?: boolean;
   copyText?: string;
-}
-
-function MessageAttachments({ attachments }: { attachments: Attachment[] }) {
-  const images = attachments.filter((attachment) => attachment.kind === "image" && attachment.data);
-  const files = attachments.filter((attachment) => attachment.kind !== "image" || !attachment.data);
-  const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
-  const selected = selectedIndex === null ? undefined : images[selectedIndex];
-
-  return (
-    <>
-      {images.length > 0 ? (
-        <div className="flex max-w-full gap-2 overflow-x-auto py-1" data-message-image-gallery>
-          {images.map((attachment, index) => (
-            <button
-              key={attachment.id}
-              type="button"
-              onClick={() => setSelectedIndex(index)}
-              className="group/image shrink-0 overflow-hidden rounded-xl outline-none ring-accent/70 focus-visible:ring-2"
-              aria-label={`Open ${attachment.name} full screen`}
-            >
-              <img
-                src={`data:${attachment.mimeType};base64,${attachment.data}`}
-                alt={attachment.name}
-                className="max-h-56 max-w-[min(70vw,360px)] rounded-xl border border-separator object-contain transition-transform duration-[180ms] group-hover/image:scale-[1.01]"
-              />
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {files.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {files.map((attachment) => (
-            <div
-              key={attachment.id}
-              className="flex items-center gap-1.5 rounded-lg border border-separator bg-control px-2.5 py-1.5"
-            >
-              <FileText className="size-4 shrink-0 text-tertiary" />
-              <span className="max-w-[12rem] truncate text-small">{attachment.name}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      <DialogPrimitive.Root
-        open={selected !== undefined}
-        onOpenChange={(open) => !open && setSelectedIndex(null)}
-      >
-        <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-60 bg-black/80 backdrop-blur-sm" />
-          <DialogPrimitive.Content className="fixed inset-0 z-60 flex items-center justify-center p-8 outline-none">
-            <DialogPrimitive.Title className="sr-only">
-              {selected?.name ?? "Image preview"}
-            </DialogPrimitive.Title>
-            <DialogPrimitive.Description className="sr-only">
-              Full-screen image attachment preview
-            </DialogPrimitive.Description>
-            {selected ? (
-              <img
-                src={`data:${selected.mimeType};base64,${selected.data}`}
-                alt={selected.name}
-                className="max-h-full max-w-full rounded-xl object-contain shadow-modal"
-              />
-            ) : null}
-            <DialogPrimitive.Close asChild>
-              <button
-                type="button"
-                aria-label="Close image preview"
-                className="absolute right-6 top-6 grid size-10 place-items-center rounded-full bg-black/50 text-white outline-none ring-white/80 hover:bg-black/70 focus-visible:ring-2"
-              >
-                <X className="size-5" />
-              </button>
-            </DialogPrimitive.Close>
-            {images.length > 1 && selectedIndex !== null ? (
-              <>
-                <button
-                  type="button"
-                  aria-label="Previous image"
-                  onClick={() => setSelectedIndex((selectedIndex - 1 + images.length) % images.length)}
-                  className="absolute left-6 grid size-10 place-items-center rounded-full bg-black/50 text-white outline-none ring-white/80 hover:bg-black/70 focus-visible:ring-2"
-                >
-                  <ChevronLeft className="size-5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Next image"
-                  onClick={() => setSelectedIndex((selectedIndex + 1) % images.length)}
-                  className="absolute right-6 grid size-10 place-items-center rounded-full bg-black/50 text-white outline-none ring-white/80 hover:bg-black/70 focus-visible:ring-2"
-                >
-                  <ChevronRight className="size-5" />
-                </button>
-              </>
-            ) : null}
-          </DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>
-    </>
-  );
 }
 
 /** Isolate untrusted model-formatting failures to the individual message. */
@@ -158,7 +61,9 @@ export function MessageBubble({
               <span className="text-mini capitalize text-tertiary">{skill.source}</span>
             </div>
           ) : null}
-          {attachments && attachments.length > 0 ? <MessageAttachments attachments={attachments} /> : null}
+          {attachments && attachments.length > 0 ? (
+            <MessageAttachments attachments={attachments} role="user" />
+          ) : null}
           {content ? (
             <div className="rounded-2xl bg-control px-4 py-2.5">
               <Text className="whitespace-pre-wrap break-words">{content}</Text>
@@ -178,7 +83,10 @@ export function MessageBubble({
 
   return (
     <div className="group flex w-full">
-      <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        {attachments && attachments.length > 0 ? (
+          <MessageAttachments attachments={attachments} role="assistant" />
+        ) : null}
         {streaming ? (
           <StreamingMarkdownReveal
             content={content}
@@ -188,11 +96,6 @@ export function MessageBubble({
         ) : (
           <Markdown content={content} />
         )}
-        {attachments && attachments.length > 0 ? (
-          <div className={content ? "mt-3" : undefined}>
-            <MessageAttachments attachments={attachments} />
-          </div>
-        ) : null}
         {content && showCopy ? (
           <div
             className={`mt-1 ${streaming && !streamComplete ? "invisible" : ""}`}

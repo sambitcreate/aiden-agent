@@ -64,6 +64,7 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
     configStore: { getWorkspace: async (id: string) => id === workspace.id ? workspace : null },
     llmClient: {
       isChatOwnedByInactiveRenderer: () => false,
+      isChatBusy: () => false,
       waitForChatIdle: async () => true,
       requiresAppendReconciliation: () => false,
       markAppendReconciliationRequired: () => undefined,
@@ -71,6 +72,11 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
       beginChatWorkspaceChange: () => () => undefined,
       beginChatDeletion: () => () => { finishDeletionCalls += 1; },
       cancelChat: async () => undefined,
+    },
+    displayImageArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => false,
+      deleteChat: async () => undefined,
     },
     workspaceMutationGate: {
       admit: () => ({ signal: new AbortController().signal, release: () => undefined }),
@@ -118,6 +124,7 @@ test("shared chat reads retain inactive-renderer reconciliation semantics", asyn
   const application = fixture({
     llmClient: {
       isChatOwnedByInactiveRenderer: () => ++checks <= 2,
+      isChatBusy: () => false,
       waitForChatIdle: async () => false,
       requiresAppendReconciliation: () => false,
       markAppendReconciliationRequired: () => undefined,
@@ -131,6 +138,66 @@ test("shared chat reads retain inactive-renderer reconciliation semantics", asyn
     chatId: "chat-1",
     workspaceId: "workspace-1",
   });
+});
+
+test("shared chat reads expose stable staged-image recovery gates", async () => {
+  let pendingChecks = 0;
+  const pending = fixture({
+    displayImageArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => {
+        pendingChecks += 1;
+        return true;
+      },
+      deleteChat: async () => undefined,
+    },
+  });
+  const pendingRead = await pending.service.get("chat-1");
+  assert.equal(pendingRead.imageArtifactRecoveryPending, true);
+  assert.equal(pendingRead.imageArtifactRecoveryUnavailable, false);
+  assert.equal(pendingChecks, 2);
+
+  const unavailable = fixture({
+    displayImageArtifactStore: {
+      availability: () => ({ available: false, reason: "store unavailable" }),
+      hasPending: async () => {
+        throw new Error("must not inspect an unavailable store");
+      },
+      deleteChat: async () => undefined,
+    },
+  });
+  const unavailableRead = await unavailable.service.get("chat-1");
+  assert.equal(unavailableRead.imageArtifactRecoveryPending, false);
+  assert.equal(unavailableRead.imageArtifactRecoveryUnavailable, true);
+});
+
+test("shared chat deletion removes staged artifacts after the durable tombstone", async () => {
+  const events: string[] = [];
+  const application = fixture({
+    subagentRunStore: {
+      deleteChat: async () => { events.push("tombstone"); },
+      completeChatDeletion: async () => { events.push("complete"); },
+      pendingChatDeletions: async () => [],
+    },
+    displayImageArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => false,
+      deleteChat: async () => { events.push("artifacts"); },
+    },
+    piRuntimeEffectStore: { deleteChat: async () => { events.push("effects"); } },
+    piCompactionSessionStore: { deleteChat: async () => { events.push("compaction"); } },
+    chatStore: {
+      listRegular: async () => [],
+      list: async () => [],
+      get: async () => chat(),
+      create: async () => chat(),
+      rename: async () => chat(),
+      moveEmptyChatToWorkspace: async () => chat(),
+      remove: async () => { events.push("chat"); },
+    },
+  });
+  await application.service.remove("chat-1");
+  assert.deepEqual(events, ["tombstone", "artifacts", "effects", "compaction", "chat", "complete"]);
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {
@@ -213,6 +280,7 @@ test("chat deletion checks a remote revision before cancellation or private-hist
   const application = fixture({
     llmClient: {
       isChatOwnedByInactiveRenderer: () => false,
+      isChatBusy: () => false,
       waitForChatIdle: async () => true,
       requiresAppendReconciliation: () => false,
       markAppendReconciliationRequired: () => undefined,

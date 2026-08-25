@@ -45,17 +45,30 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 				set the clipboard to transcriptText
 				return "copied"
 			end if
-			set the clipboard to transcriptText
+	set the clipboard to transcriptText
 			keystroke "v" using command down
 		on error
 			set the clipboard to transcriptText
 			return "copied"
 		end try
 	end tell
-	delay 0.12
-	try
-		if (the clipboard as text) is transcriptText then set the clipboard to previousClipboard
-	end try
+	set quietWindow to 0.2
+	set elapsed to 0
+	repeat while elapsed is less than 8
+		delay 0.05
+		set elapsed to elapsed + 0.05
+		try
+			if (the clipboard as text) is not transcriptText then return "pasted"
+		on error
+			return "pasted"
+		end try
+		if elapsed is greater than or equal to quietWindow then
+			try
+				if (the clipboard as text) is transcriptText then set the clipboard to previousClipboard
+			end try
+			return "pasted"
+		end if
+	end repeat
 	return "pasted"
 end run`;
 
