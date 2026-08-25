@@ -705,6 +705,12 @@ async function prepareGeneration(
       excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
     })
   ) {
+    const artifactStoreAvailability = displayImageArtifactStore.availability();
+    if (!artifactStoreAvailability.available) {
+      throw new Error(
+        `${artifactStoreAvailability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+      );
+    }
     const existingUsage = displayedAssistantImageUsage(chat.messages);
     const pendingUsage = await displayImageArtifactStore.usageByChat(params.chatId);
     if (pendingUsage.count > 0) {

@@ -374,6 +374,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const hasMessages = messages.length > 0;
   const imageArtifactRecoveryPending =
     hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
+  const imageArtifactRecoveryUnavailable =
+    chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
 
@@ -392,6 +394,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (throughAssistantMessageId?: string) => {
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before copying this chat.");
+      }
+      if (imageArtifactRecoveryUnavailable) {
+        throw new Error(
+          "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
+        );
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
@@ -434,6 +441,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       chatId,
       documentAppendReconciliationRequired,
       imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable,
       isGenerating,
       isStartingGeneration,
       navigate,
@@ -794,6 +802,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const handleSend = React.useCallback(
     async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (imageArtifactRecoveryUnavailable) {
+        throw new Error(
+          "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
+        );
+      }
       if (imageArtifactRecoveryPending) {
         throw new Error(
           "A previous image response could not be recovered. Delete this chat to discard it before sending another message.",
@@ -866,6 +879,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       computerUseSaving,
       detachedGenerationDraining,
       imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable,
       providerId,
       model,
       qc,
@@ -1506,9 +1520,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             // route no longer remounts the pane, and Composer owns that text
             // without a chatId reset of its own.
             key={chatId}
-            ready={ready && !imageArtifactRecoveryPending}
+            ready={
+              ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable
+            }
             readinessMessage={
-              imageArtifactRecoveryPending
+              imageArtifactRecoveryUnavailable
+                ? "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
+                : imageArtifactRecoveryPending
                 ? "An image response could not be recovered. Delete this chat to discard it before sending another message."
                 : readinessMessage
             }
@@ -1563,6 +1581,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             slashSessionBlockedReason={
               documentAppendReconciliationRequired
                 ? "Reload Aiden before copying this chat."
+                : imageArtifactRecoveryUnavailable
+                  ? "Open Aiden's developer log to locate the image staging file that needs repair."
                 : imageArtifactRecoveryPending
                   ? "Delete this chat to discard the unrecovered image response before copying."
                   : undefined
@@ -1667,9 +1687,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
           agentActivity={visibleAgentActivity}
           error={
             error ??
-            (imageArtifactRecoveryPending
-              ? "An image response could not be recovered. Delete this chat to discard it before continuing."
-              : null)
+            (imageArtifactRecoveryUnavailable
+              ? "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
+              : imageArtifactRecoveryPending
+                ? "An image response could not be recovered. Delete this chat to discard it before continuing."
+                : null)
           }
         />
       )}

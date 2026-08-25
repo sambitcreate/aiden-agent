@@ -235,7 +235,7 @@ export class DisplayImageArtifactStore {
       this.quarantinedStorePath = preserved;
       return true;
     } catch (error) {
-      this.unavailableReason = `${reason} Aiden could not preserve it at ${preserved}: ${error instanceof Error ? error.message : String(error)}`;
+      this.unavailableReason = `${reason} Aiden could not move ${source} to ${preserved}: ${error instanceof Error ? error.message : String(error)}`;
       return false;
     }
   }

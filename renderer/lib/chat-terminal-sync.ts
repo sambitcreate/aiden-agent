@@ -129,7 +129,8 @@ export function parseChatReadResponse(payload: unknown): ChatReadResponse | null
   const candidate = payload as Record<string, unknown>;
   if (
     (candidate.chat !== null && !isChatSnapshot(candidate.chat)) ||
-    typeof candidate.imageArtifactRecoveryPending !== "boolean"
+    typeof candidate.imageArtifactRecoveryPending !== "boolean" ||
+    typeof candidate.imageArtifactRecoveryUnavailable !== "boolean"
   ) {
     return null;
   }
@@ -137,6 +138,7 @@ export function parseChatReadResponse(payload: unknown): ChatReadResponse | null
     return {
       chat: candidate.chat as Chat | null,
       imageArtifactRecoveryPending: candidate.imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable: candidate.imageArtifactRecoveryUnavailable,
       reconciliation: null,
     };
   }
@@ -158,6 +160,7 @@ export function parseChatReadResponse(payload: unknown): ChatReadResponse | null
   return {
     chat: candidate.chat as Chat | null,
     imageArtifactRecoveryPending: candidate.imageArtifactRecoveryPending,
+    imageArtifactRecoveryUnavailable: candidate.imageArtifactRecoveryUnavailable,
     reconciliation: {
       chatId: reconciliation.chatId,
       workspaceId: persistedChatWorkspaceId(reconciliation.workspaceId),

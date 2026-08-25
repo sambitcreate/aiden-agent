@@ -351,6 +351,7 @@ test("main blocks new sends and copies until staged artifacts are recovered", as
   assert.match(handlers, /displayImageArtifactStore\.hasPending\(chatId\)/u);
   assert.match(handlers, /displayImageArtifactStore\.hasPending\(parsed\.chatId\)/u);
   assert.match(handlers, /Delete this chat to discard it/iu);
+  assert.match(handlers, /developer log to locate the staging file that needs repair/iu);
   const exportHandler = handlers.slice(handlers.indexOf('ipcMain.handle("chats:export"'));
   assert.match(exportHandler, /displayImageArtifactStore\.hasPending\(chatId\)/u);
   const readHandler = handlers.slice(

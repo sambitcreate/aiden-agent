@@ -72,9 +72,13 @@ export function registerChatHistoryHandlers(): void {
     if (llmClient.isChatOwnedByInactiveRenderer(chatId)) {
       reconciliationRequired = !(await llmClient.waitForChatIdle(chatId));
     }
+    const imageArtifactAvailability = displayImageArtifactStore.availability();
+    const imageArtifactRecoveryUnavailable = !imageArtifactAvailability.available;
     const [chat, hasStagedImageArtifact] = await Promise.all([
       chatStore.get(chatId),
-      displayImageArtifactStore.hasPending(chatId),
+      imageArtifactRecoveryUnavailable
+        ? Promise.resolve(false)
+        : displayImageArtifactStore.hasPending(chatId),
     ]);
     const imageArtifactRecoveryPending =
       hasStagedImageArtifact && !llmClient.isChatBusy(chatId)
@@ -88,6 +92,7 @@ export function registerChatHistoryHandlers(): void {
     return {
       chat: chatForRenderer(chat),
       imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable,
       reconciliation: reconciliationRequired
         ? {
             chatId,
@@ -245,8 +250,11 @@ export function registerChatHistoryHandlers(): void {
       const source = await chatStore.get(parsed.chatId);
       if (!source) throw new Error("The chat is no longer available.");
       if (await displayImageArtifactStore.hasPending(parsed.chatId)) {
+        const availability = displayImageArtifactStore.availability();
         throw new Error(
-          "A previous image response could not be recovered. Delete this chat to discard it before copying.",
+          availability.available
+            ? "A previous image response could not be recovered. Delete this chat to discard it before copying."
+            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
         );
       }
       const workspaceId = persistedChatWorkspaceId(source.workspaceId);
@@ -330,8 +338,11 @@ export function registerChatHistoryHandlers(): void {
       const chat = await chatStore.get(chatId);
       if (!chat) throw new Error("The chat is no longer available.");
       if (await displayImageArtifactStore.hasPending(chatId)) {
+        const availability = displayImageArtifactStore.availability();
         throw new Error(
-          "A previous image response could not be recovered. Delete this chat to discard it before exporting.",
+          availability.available
+            ? "A previous image response could not be recovered. Delete this chat to discard it before exporting."
+            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
         );
       }
       if (owner.isDestroyed()) {
@@ -355,8 +366,11 @@ export function registerChatHistoryHandlers(): void {
       const latestChat = await chatStore.get(chatId);
       if (!latestChat) throw new Error("The chat is no longer available.");
       if (await displayImageArtifactStore.hasPending(chatId)) {
+        const availability = displayImageArtifactStore.availability();
         throw new Error(
-          "A previous image response could not be recovered. Delete this chat to discard it before exporting.",
+          availability.available
+            ? "A previous image response could not be recovered. Delete this chat to discard it before exporting."
+            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
         );
       }
       if (owner.isDestroyed()) {
@@ -570,8 +584,11 @@ export function registerChatHistoryHandlers(): void {
         let appended = false;
         try {
           if (await displayImageArtifactStore.hasPending(chatId)) {
+            const availability = displayImageArtifactStore.availability();
             throw new Error(
-              "A previous image response could not be recovered. Delete this chat to discard it before sending another message.",
+              availability.available
+                ? "A previous image response could not be recovered. Delete this chat to discard it before sending another message."
+                : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
             );
           }
           const authoritativeChat = skillReference
