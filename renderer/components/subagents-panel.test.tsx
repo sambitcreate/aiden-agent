@@ -55,7 +55,8 @@ import {
   type SubagentDetailAnnouncementRequest,
 } from "./subagent-live-announcer.js";
 import { groupSubagentRuns, SubagentRoster } from "./subagent-roster.js";
-import { SubagentDetail } from "./subagent-detail.js";
+import { SubagentDetail, subagentProjectionNotices } from "./subagent-detail.js";
+import { CopyButton } from "./copy-button.js";
 import { SubagentsPanel } from "./subagents-panel.js";
 import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval.js";
 import {
@@ -319,6 +320,51 @@ function mountedElementsWithAttribute(document: Document, attribute: string): HT
   );
 }
 
+function mountedButtonClick(button: HTMLElement): () => Promise<void> {
+  const propsKey = Object.keys(button).find((key) => key.startsWith("__reactProps"));
+  assert.ok(propsKey, "mounted React button should expose its click props");
+  const props = (button as unknown as Record<string, { onClick?: () => Promise<void> }>)[propsKey];
+  assert.equal(typeof props?.onClick, "function");
+  return props.onClick!;
+}
+
+function mountedCopyAnnouncement(document: Document, status: string): string | undefined {
+  return mountedElementsWithAttribute(document, "data-copy-announcement").find(
+    (element) => element.getAttribute("data-copy-announcement") === status,
+  )?.textContent;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function SuspendForCopyTest({ promise }: { promise: Promise<unknown> }): React.ReactElement {
+  throw promise;
+}
+
+function InterruptedCopyRenderHarness({
+  gate,
+  suspend,
+  text,
+}: {
+  gate: Promise<unknown>;
+  suspend: boolean;
+  text: string;
+}) {
+  return (
+    <>
+      <CopyButton text={text} label="Copy result" />
+      {suspend ? <SuspendForCopyTest promise={gate} /> : null}
+    </>
+  );
+}
+
 function MountedSelectionRepairHarness({
   compact,
   compactView,
@@ -474,7 +520,7 @@ test("streaming chips render ordered live snapshots before a message reference e
 test("V2 detail exposes context but gates controls on production callbacks", () => {
   const fresh = v2Run();
   const unavailable = renderToStaticMarkup(<SubagentDetail run={fresh} />);
-  assert.match(unavailable, /Fresh context/u);
+  assert.match(unavailable, /Context: task only \(fresh session\)/u);
   assert.doesNotMatch(unavailable, /data-subagent-controls/u);
 
   const stoppable = renderToStaticMarkup(<SubagentDetail run={fresh} onStop={() => undefined} />);
@@ -490,7 +536,7 @@ test("V2 detail exposes context but gates controls on production callbacks", () 
     terminalMarkdown: "Done.",
   });
   const retryable = renderToStaticMarkup(<SubagentDetail run={forked} />);
-  assert.match(retryable, /Forked conversation/u);
+  assert.match(retryable, /Context: bounded visible conversation text copied at launch/u);
   assert.doesNotMatch(retryable, /aria-label="Retry Code scout"/u);
 
   const legacy = renderToStaticMarkup(
@@ -521,6 +567,378 @@ test("detail renders bounded effect kind, state, and explicit unknown guidance",
   assert.match(html, /Check the remote system before retrying/u);
   assert.match(html, /State: unknown/u);
   assert.doesNotMatch(html, /terminalDigest|authorityDigest|argumentDigest/u);
+});
+
+test("detail names bounded previews, exposes exact copy controls, and explains projection markers", () => {
+  const projected = v2Run({
+    taskPreview: "Inspect encoded-looking text ... [task preview truncated]",
+    state: "completed",
+    activity: undefined,
+    finishedAt: 3_000,
+    terminalMarkdown: "Result with [REDACTED ENCODED TEXT]\n\n… [report truncated]",
+    projectionNotices: ["task_truncated", "report_truncated", "display_filtered"],
+  });
+  assert.deepEqual(subagentProjectionNotices(projected), [
+    "This saved task preview was shortened.",
+    "This saved result was shortened.",
+    "Some text was replaced by a privacy marker in this saved inspector. This display filter does not rewrite the child's task or its report to the main thread.",
+  ]);
+  const html = renderToStaticMarkup(<SubagentDetail run={projected} />);
+  assert.match(html, />Task preview</u);
+  assert.match(html, /aria-label="Copy task preview for Code scout"/u);
+  assert.match(html, /aria-label="Copy result from Code scout"/u);
+  assert.match(html, /data-subagent-projection-notice="true"/u);
+  assert.match(html, /Saved view notice/u);
+  assert.match(html, /overflow-wrap:anywhere/u);
+
+  const literalMarkers = v2Run({
+    taskPreview: "Document ... [task preview truncated] literally.",
+    state: "completed",
+    activity: undefined,
+    finishedAt: 3_000,
+    terminalMarkdown: "Explain [REDACTED ENCODED TEXT] and ... [report truncated] literally.",
+  });
+  assert.deepEqual(subagentProjectionNotices(literalMarkers), []);
+  const literalHtml = renderToStaticMarkup(<SubagentDetail run={literalMarkers} />);
+  assert.doesNotMatch(literalHtml, /data-subagent-projection-notice/u);
+});
+
+test("detail renders and copies one terminal result when live and terminal text coexist", () => {
+  const html = renderToStaticMarkup(
+    <SubagentDetail
+      run={v2Run({
+        state: "completed",
+        activity: undefined,
+        finishedAt: 3_000,
+        latestText: "Older live summary that must not render",
+        terminalMarkdown: "Authoritative **terminal** report",
+      })}
+    />,
+  );
+
+  assert.equal((html.match(/>Result</gu) ?? []).length, 1);
+  assert.equal((html.match(/aria-label="Copy result from Code scout"/gu) ?? []).length, 1);
+  assert.match(html, /Authoritative/u);
+  assert.match(html, /<strong>terminal<\/strong>/u);
+  assert.doesNotMatch(html, /Older live summary/u);
+});
+
+test("CopyButton writes exact Markdown, encoded-looking, Unicode, and newline payloads", async () => {
+  const release = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const payloads = [
+    "**Markdown** result",
+    "encoded-looking: SGVsbG8gd29ybGQ= and 0xdeadbeef01234567",
+    "combining: e\u0301",
+    "first line\nsecond line",
+  ];
+  const writes: string[] = [];
+  const previousActEnvironment = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "IS_REACT_ACT_ENVIRONMENT",
+  );
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+  });
+  const root = createRoot(mounted.container);
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (value: string) => writes.push(value) },
+  });
+
+  try {
+    for (const [index, payload] of payloads.entries()) {
+      await React.act(async () => {
+        root.render(<CopyButton key={index} text={payload} label="Copy result" />);
+      });
+      const button = mounted.container.getElementsByTagName("button")[0] as HTMLElement;
+      await React.act(async () => {
+        await mountedButtonClick(button)();
+      });
+      assert.equal(button.getAttribute("data-copy-status"), "copied");
+      assert.equal(button.getAttribute("aria-label"), "Copy result");
+      assert.equal(button.getAttribute("title"), "Copied");
+      assert.equal(mountedCopyAnnouncement(mounted.document, "copied"), "Copied to clipboard.");
+    }
+  } finally {
+    await React.act(async () => {
+      root.unmount();
+    });
+    if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+    if (previousActEnvironment) {
+      Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", previousActEnvironment);
+    } else {
+      Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    }
+    mounted.restore();
+    release();
+  }
+
+  assert.deepEqual(writes, payloads);
+});
+
+test("CopyButton exposes a polite failure state without claiming success", async () => {
+  const release = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const previousActEnvironment = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "IS_REACT_ACT_ENVIRONMENT",
+  );
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+  });
+  const root = createRoot(mounted.container);
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: async () => {
+        throw new Error("Clipboard unavailable");
+      },
+    },
+  });
+
+  try {
+    await React.act(async () => {
+      root.render(<CopyButton text="Result" label="Copy result" />);
+    });
+    const button = mounted.container.getElementsByTagName("button")[0] as HTMLElement;
+    await React.act(async () => {
+      await mountedButtonClick(button)();
+    });
+    assert.equal(button.getAttribute("data-copy-status"), "error");
+    assert.equal(button.getAttribute("aria-label"), "Copy result");
+    assert.notEqual(button.getAttribute("aria-label"), "Copied");
+    assert.equal(button.getAttribute("title"), "Copy failed — try again");
+    assert.equal(mountedCopyAnnouncement(mounted.document, "error"), "Copy failed. Try again.");
+  } finally {
+    await React.act(async () => {
+      root.unmount();
+    });
+    if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+    if (previousActEnvironment) {
+      Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", previousActEnvironment);
+    } else {
+      Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    }
+    mounted.restore();
+    release();
+  }
+});
+
+test("CopyButton ignores stale out-of-order clipboard completions", async () => {
+  const release = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const previousActEnvironment = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "IS_REACT_ACT_ENVIRONMENT",
+  );
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+  });
+  const root = createRoot(mounted.container);
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const pending: Array<{ value: string; request: ReturnType<typeof deferred<void>> }> = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (value: string) => {
+        const request = deferred<void>();
+        pending.push({ value, request });
+        return request.promise;
+      },
+    },
+  });
+
+  try {
+    await React.act(async () => {
+      root.render(<CopyButton text="first" label="Copy result" />);
+    });
+    const button = mounted.container.getElementsByTagName("button")[0] as HTMLElement;
+    const firstCopy = mountedButtonClick(button)();
+    const secondCopy = mountedButtonClick(button)();
+    assert.deepEqual(
+      pending.map(({ value }) => value),
+      ["first", "first"],
+    );
+
+    await React.act(async () => {
+      pending[1].request.resolve();
+      await secondCopy;
+    });
+    assert.equal(button.getAttribute("data-copy-status"), "copied");
+    assert.equal(button.getAttribute("title"), "Copied");
+    assert.equal(button.getAttribute("aria-label"), "Copy result");
+
+    await React.act(async () => {
+      pending[0].request.resolve();
+      await firstCopy;
+    });
+    assert.equal(button.getAttribute("data-copy-status"), "copied");
+    assert.equal(button.getAttribute("title"), "Copied");
+    assert.equal(mountedCopyAnnouncement(mounted.document, "copied"), "Copied to clipboard.");
+  } finally {
+    await React.act(async () => {
+      root.unmount();
+    });
+    if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+    if (previousActEnvironment) {
+      Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", previousActEnvironment);
+    } else {
+      Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    }
+    mounted.restore();
+    release();
+  }
+});
+
+test("CopyButton ignores a pending result after text changes or unmount", async () => {
+  const release = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const previousActEnvironment = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "IS_REACT_ACT_ENVIRONMENT",
+  );
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+  });
+  const root = createRoot(mounted.container);
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const pending: Array<{ value: string; request: ReturnType<typeof deferred<void>> }> = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (value: string) => {
+        const request = deferred<void>();
+        pending.push({ value, request });
+        return request.promise;
+      },
+    },
+  });
+
+  try {
+    await React.act(async () => {
+      root.render(<CopyButton text="old" label="Copy result" />);
+    });
+    const oldButton = mounted.container.getElementsByTagName("button")[0] as HTMLElement;
+    const oldCopy = mountedButtonClick(oldButton)();
+    await React.act(async () => {
+      root.render(<CopyButton text="new" label="Copy result" />);
+    });
+    pending[0].request.resolve();
+    await React.act(async () => {
+      await oldCopy;
+    });
+    const newButton = mounted.container.getElementsByTagName("button")[0] as HTMLElement;
+    assert.equal(newButton.getAttribute("data-copy-status"), "idle");
+    assert.equal(newButton.getAttribute("title"), "Copy result");
+    assert.equal(newButton.getAttribute("aria-label"), "Copy result");
+    assert.equal(mountedCopyAnnouncement(mounted.document, "idle"), "");
+    assert.deepEqual(
+      pending.map(({ value }) => value),
+      ["old"],
+    );
+
+    const newCopy = mountedButtonClick(newButton)();
+    assert.equal(pending.length, 2);
+    await React.act(async () => {
+      root.unmount();
+    });
+    pending[1].request.resolve();
+    await React.act(async () => {
+      await newCopy;
+    });
+  } finally {
+    if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+    if (previousActEnvironment) {
+      Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", previousActEnvironment);
+    } else {
+      Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    }
+    mounted.restore();
+    release();
+  }
+});
+
+test("CopyButton does not invalidate a completion from an interrupted speculative render", async () => {
+  const release = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const previousActEnvironment = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "IS_REACT_ACT_ENVIRONMENT",
+  );
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+  });
+  const root = createRoot(mounted.container);
+  const gate = deferred<void>();
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const copyRequest = deferred<void>();
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async () => copyRequest.promise },
+  });
+
+  const renderHarness = (text: string, suspend: boolean) => (
+    <React.Suspense fallback={<span data-copy-fallback="true">Loading</span>}>
+      <InterruptedCopyRenderHarness gate={gate.promise} suspend={suspend} text={text} />
+    </React.Suspense>
+  );
+
+  try {
+    await React.act(async () => {
+      root.render(renderHarness("stable", false));
+    });
+    const button = mounted.container.getElementsByTagName("button")[0] as HTMLElement;
+    const copy = mountedButtonClick(button)();
+
+    await React.act(async () => {
+      React.startTransition(() => {
+        root.render(renderHarness("speculative", true));
+      });
+    });
+    assert.equal(button.isConnected, true);
+
+    await React.act(async () => {
+      root.render(renderHarness("stable", false));
+    });
+    copyRequest.resolve();
+    await React.act(async () => {
+      await copy;
+    });
+    const restoredButton = mounted.container.getElementsByTagName("button")[0] as HTMLElement;
+    assert.equal(restoredButton.getAttribute("data-copy-status"), "copied");
+    assert.equal(restoredButton.getAttribute("title"), "Copied");
+  } finally {
+    gate.resolve();
+    await React.act(async () => {
+      root.unmount();
+    });
+    if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+    if (previousActEnvironment) {
+      Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", previousActEnvironment);
+    } else {
+      Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    }
+    mounted.restore();
+    release();
+  }
 });
 
 test("workspace-write approvals render exact bounded safety facts and stay wired to deny-first controls", () => {
@@ -566,7 +984,10 @@ test("workspace-write approvals render exact bounded safety facts and stay wired
   assert.match(chatPaneSource, /isSubagentWorkspaceWriteApprovalDetails\(pending\.details\)/u);
   assert.match(chatPaneSource, /pendingWorkspaceWriteClaim/u);
   assert.match(chatPaneSource, /Invalid privileged approval blocked/u);
-  assert.match(chatPaneSource, /pending\?\.canAllow !== false && !invalidPendingPrivilegedApproval/u);
+  assert.match(
+    chatPaneSource,
+    /pending\?\.canAllow !== false && !invalidPendingPrivilegedApproval/u,
+  );
   assert.match(chatPaneSource, /Aiden cannot safely authorize this action from this view/u);
   assert.match(approvalCard, /\{pendingCanAllow \? \(/u);
   assert.match(approvalCard, /\) : null\}/u);
@@ -809,8 +1230,12 @@ test("depth-2 stop is node-only while depth-1 stop is explicitly cascading", () 
     parentRunId: "parent",
     depth: 2,
   });
-  const rootMarkup = renderToStaticMarkup(<SubagentDetail run={v2Run()} onStop={() => undefined} />);
-  const nestedMarkup = renderToStaticMarkup(<SubagentDetail run={nested} onStop={() => undefined} />);
+  const rootMarkup = renderToStaticMarkup(
+    <SubagentDetail run={v2Run()} onStop={() => undefined} />,
+  );
+  const nestedMarkup = renderToStaticMarkup(
+    <SubagentDetail run={nested} onStop={() => undefined} />,
+  );
   assert.match(rootMarkup, /aria-label="Stop subtree Code scout"/u);
   assert.match(nestedMarkup, /aria-label="Stop subagent Code scout"/u);
   assert.doesNotMatch(rootMarkup + nestedMarkup, /aria-label="Retry Code scout"/u);
@@ -871,7 +1296,10 @@ test("mounted narrow tree keeps the selected semantic treeitem focused across li
       (element) => element.getAttribute("role") === "treeitem",
     ) as HTMLElement[];
     assert.equal(treeitems.length, 2);
-    assert.deepEqual(treeitems.map((element) => element.getAttribute("aria-level")), ["1", "2"]);
+    assert.deepEqual(
+      treeitems.map((element) => element.getAttribute("aria-level")),
+      ["1", "2"],
+    );
     const child = treeitems.find(
       (element) => element.getAttribute("data-subagent-run-id") === "mounted-child",
     )!;
@@ -1169,12 +1597,14 @@ test("overview and terminal summaries preserve attention and exact outcomes", ()
     "0 active subagents; 1 completed successfully; 1 failed; 1 timed out; 1 interrupted; 1 stopped; 1 outcome unknown.",
   );
   assert.equal(subagentLiveSummary([view(failed)]), "0 active subagents; 1 failed.");
-  const needsAttention = view(v2Run({
-    runId: "attention",
-    state: "needs_attention",
-    activity: "Approval required",
-    finishedAt: undefined,
-  }));
+  const needsAttention = view(
+    v2Run({
+      runId: "attention",
+      state: "needs_attention",
+      activity: "Approval required",
+      finishedAt: undefined,
+    }),
+  );
   assert.deepEqual(subagentOverviewSummary([needsAttention, view(failed), view(completed)]), {
     primary: "1 needs attention",
     secondary: "1 failed · 1 completed",
@@ -1822,7 +2252,7 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(detailSource, /<details className=/u);
   assert.doesNotMatch(detailSource, /<details[^>]*\bopen=/u);
   assert.match(detailSource, /<ErrorBoundary/u);
-  assert.match(detailSource, /<Markdown content=\{run\.terminalMarkdown\}/u);
+  assert.match(detailSource, /<Markdown content=\{resultText\}/u);
   assert.match(detailSource, /\{awayFromLatest \? \(/u);
   assert.match(detailSource, /data-subagent-jump-latest="true"/u);
   assert.match(detailSource, /onPointerDownCapture=\{markUserNavigation\}/u);
@@ -1833,6 +2263,9 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(detailSource, /run\.milestones\.map/u);
   assert.match(detailSource, /Model:/u);
   assert.match(detailSource, /run\.modelId/u);
+  assert.match(detailSource, /Copy task preview for/u);
+  assert.match(detailSource, /Copy result from/u);
+  assert.match(detailSource, /data-subagent-projection-notice="true"/u);
   assert.match(detailSource, /Saved details omit raw tool payloads, commands,/u);
   assert.match(detailSource, /Children can read ordinary source and docs as written/u);
   assert.match(detailSource, /<Callout color="red" role="note">/u);
