@@ -2,8 +2,9 @@
 
 Status: In progress. Phases 0–6, the production-inert Phase 7A durable
 background lifecycle core, and the Phase 7B1 storage seam are complete. The
-2026-08-18 worker-startup diagnostic hardening is complete; Phase 7B
-coordinator activation is next.
+2026-08-18 worker-startup diagnostic hardening and the 2026-08-25 Pi semantic,
+foreground presentation/recovery, and parent-only mobile projection repairs are
+complete; Phase 7B coordinator activation is next.
 
 Spec date: 2026-08-05.
 
@@ -202,6 +203,19 @@ checks, bounds, and renderer snapshot projection remain separate controls.
 Regression coverage locks the exact `and report back` failure, routes, public
 keys, encoded-looking content, safe hidden metadata, and the retained protected
 path/private-key matrix.
+
+Foreground presentation and mobile-boundary repair (2026-08-25): foreground
+snapshots now reconcile monotonically across live, handoff, persisted V1, and
+native V2 sources; terminal outcomes and immutable identity cannot roll back.
+Owner-scoped Stop progress/errors, exact-reference saved-detail refresh, stale
+and delayed-save presentation, focus recovery, narrow layouts, and one polite
+announcement authority passed independent runtime and UX review loops. Remote
+iOS/Android projections remain parent-only: ordinary parent transcript,
+timeline/outcome, and stream state cross the boundary while child references,
+snapshots, histories, controls, and endpoints remain Mac-local. Structural
+privacy validation is recursive and normalized, but visible parent text stays
+opaque and exact. Aggregate desktop gates, Android 104/104 unit tests, and a
+physical-iPhone Phase 0 run (26 pass, 2 expected skips) are green.
 
 ## Phases
 
