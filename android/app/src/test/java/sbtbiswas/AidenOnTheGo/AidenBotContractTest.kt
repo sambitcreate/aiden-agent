@@ -1,5 +1,5 @@
 package sbtbiswas.AidenOnTheGo
- 
+
 import kotlinx.serialization.json.Json
 import org.junit.Assert.*
 import org.junit.Test

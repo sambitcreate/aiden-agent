@@ -1,7 +1,7 @@
 # Companion Vision Models
 
-**Status:** Complete  
-**Owner:** Aiden Agent  
+**Status:** Complete
+**Owner:** Aiden Agent
 **Scope:** macOS runtime and Bot editor, Aiden Remote API, iOS Bot editor and chat
 
 ## Outcome

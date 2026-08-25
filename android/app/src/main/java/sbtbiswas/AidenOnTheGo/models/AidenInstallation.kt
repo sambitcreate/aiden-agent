@@ -28,7 +28,7 @@ enum class AidenDeviceType {
      * strictly validates `deviceType: "iphone" | "ipad"`.
      * To maintain 100% wire compatibility with the existing Mac server without requiring immediate Mac-side changes,
      * ANDROID_PHONE maps to "iphone" and ANDROID_TABLET maps to "ipad" on the wire.
-     * 
+     *
      * TODO(future): When the Mac backend expands `AidenRemoteDeviceType` to include "android_phone" / "android_tablet",
      * update this mapping to return `name.lowercase()`.
      */

@@ -1,6 +1,6 @@
 # Companion vision model verification
 
-Date: 2026-08-24  
+Date: 2026-08-24
 Target: Aiden Agent macOS runtime and Bot editor, Aiden Remote revision 9, Aiden On The Go on a physical iPhone 13 Pro
 
 ## Verified behavior
