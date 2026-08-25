@@ -113,48 +113,17 @@ jobs:
           :app:compileDebugAndroidTestKotlin
           --stacktrace
 
-      - name: Start Android test device
-        shell: bash
-        run: |
-          avdmanager create avd \
-            --force \
-            --name aiden-ci \
-            --package 'system-images;android-36;google_apis;x86_64' \
-            --device pixel_2
-          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx aiden-ci
-          nohup "$ANDROID_HOME/emulator/emulator" \
-            -avd aiden-ci \
-            -no-window \
-            -noaudio \
-            -no-boot-anim \
-            -no-metrics \
-            -no-snapshot \
-            -gpu swiftshader_indirect \
-            >"$RUNNER_TEMP/aiden-emulator.log" 2>&1 &
-          emulator_pid=$!
-          adb start-server
-          for attempt in {1..180}; do
-            if ! kill -0 "$emulator_pid" 2>/dev/null; then
-              sed -n '1,240p' "$RUNNER_TEMP/aiden-emulator.log"
-              exit 1
-            fi
-            if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == '1' ]]; then
-              adb shell settings put global window_animation_scale 0
-              adb shell settings put global transition_animation_scale 0
-              adb shell settings put global animator_duration_scale 0
-              exit 0
-            fi
-            sleep 2
-          done
-          sed -n '1,240p' "$RUNNER_TEMP/aiden-emulator.log"
-          exit 1
-
       - name: Run Android Compose UI tests
-        run: ./gradlew :app:connectedDebugAndroidTest --stacktrace
-
-      - name: Stop Android test device
-        if: always()
-        run: adb emu kill || true
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7_pro
+          working-directory: ./android
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          disable-animations: true
+          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
 
       - name: Record APK checksum
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.apk.sha256
