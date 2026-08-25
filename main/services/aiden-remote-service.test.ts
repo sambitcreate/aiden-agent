@@ -116,6 +116,16 @@ interface FixtureOptions {
     state: "available" | "owned" | "other_aiden_live" | "other_aiden_stale" | "unrelated_conflict" | "funnel_conflict" | "unavailable";
     errorCode?: "not_installed" | "not_connected" | "https_unavailable" | "status_unavailable";
   };
+  tailscaleInspection?: {
+    connectionStatus: {
+      installed: boolean;
+      dnsName?: string;
+      httpsAvailable?: boolean;
+      serveStatus?: AidenTailscaleStatus;
+      errorCode?: "not_installed" | "not_connected" | "https_unavailable" | "status_unavailable";
+    };
+    assessment: NonNullable<FixtureOptions["tailscaleAssessment"]>;
+  };
   afterListenerBound?: (input: {
     transport: "lan" | "tailscale";
     port: number;
@@ -170,15 +180,21 @@ async function fixture(
     connects: 0,
     disconnects: 0,
     reconciles: 0,
+    statusCalls: 0,
+    assessmentCalls: 0,
+    inspectionCalls: 0,
     targets: [] as string[],
     disconnectTargets: [] as string[],
-    status: async () => ({
-      installed: true,
-      dnsName: "aiden.tailnet.ts.net",
-      ...(options.tailscaleServeStatus
-        ? { serveStatus: options.tailscaleServeStatus }
-        : {}),
-    }),
+    status: async () => {
+      tailscale.statusCalls += 1;
+      return {
+        installed: true,
+        dnsName: "aiden.tailnet.ts.net",
+        ...(options.tailscaleServeStatus
+          ? { serveStatus: options.tailscaleServeStatus }
+          : {}),
+      };
+    },
     connect: async (
       target: string,
       _ownership?: { path: "/api/aiden/v1"; target: string },
@@ -212,7 +228,10 @@ async function fixture(
     },
     ...(options.enableTailscaleTakeover
       ? {
-          assessRoute: async () => ({ state: "other_aiden_stale" as const }),
+          assessRoute: async () => {
+            tailscale.assessmentCalls += 1;
+            return { state: "other_aiden_stale" as const };
+          },
           reviewTakeover: async () => ({ token: "A".repeat(32), expiresAt: Date.now() + 30_000 }),
           takeOver: async (
             target: string,
@@ -227,7 +246,16 @@ async function fixture(
         }
       : {}),
     ...(options.tailscaleAssessment
-      ? { assessRoute: async () => options.tailscaleAssessment! }
+      ? { assessRoute: async () => {
+          tailscale.assessmentCalls += 1;
+          return options.tailscaleAssessment!;
+        } }
+      : {}),
+    ...(options.tailscaleInspection
+      ? { inspectRoute: async () => {
+          tailscale.inspectionCalls += 1;
+          return options.tailscaleInspection!;
+        } }
       : {}),
   };
   let identityLoads = 0;
@@ -1051,6 +1079,48 @@ test("Tailscale takeover review stays main-owned and persists only after confirm
       app.persisted().tailscaleOwnership?.target,
       `http://127.0.0.1:${app.persisted().lanPort + 1}/api/aiden/v1`,
     );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("service status consumes one atomic Tailscale route inspection", async () => {
+  const serveStatus: AidenTailscaleStatus = {
+    TCP: { "443": { HTTPS: true } },
+    Web: {
+      "aiden.tailnet.ts.net:443": {
+        Handlers: {
+          "/api/aiden/v1": {
+            Proxy: "http://127.0.0.1:49221/api/aiden/v1",
+          },
+        },
+      },
+    },
+  };
+  const app = await fixture({
+    mode: "both",
+    tailscaleInspection: {
+      connectionStatus: {
+        installed: true,
+        dnsName: "aiden.tailnet.ts.net",
+        httpsAvailable: true,
+        serveStatus,
+      },
+      assessment: { state: "other_aiden_live" },
+    },
+  });
+  try {
+    await app.service.setEnabled(true);
+    app.tailscale.statusCalls = 0;
+    app.tailscale.assessmentCalls = 0;
+    app.tailscale.inspectionCalls = 0;
+    const status = await app.service.status();
+    assert.equal(status.tailscaleRouteState, "other_aiden_live");
+    assert.equal(status.tailscaleInstalled, true);
+    assert.equal(status.tailscaleEndpoint, "https://aiden.tailnet.ts.net/api/aiden/v1");
+    assert.equal(app.tailscale.inspectionCalls, 1);
+    assert.equal(app.tailscale.statusCalls, 0);
+    assert.equal(app.tailscale.assessmentCalls, 0);
   } finally {
     await app.cleanup();
   }
