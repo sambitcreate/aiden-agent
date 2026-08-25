@@ -1185,6 +1185,239 @@ test("the roster separates active and terminal runs without color-only status", 
   assert.doesNotMatch(rosterSource, /document\.querySelector/u);
 });
 
+test("presentation-only saving and stale states stay visible without rewriting protocol state", () => {
+  const active = view(run("active", { updatedAt: 1_000 }));
+  const done = view(
+    run("done", {
+      state: "completed",
+      activity: undefined,
+      finishedAt: 2_000,
+      terminalMarkdown: "Done.",
+    }),
+  );
+  const presentations = new Map([
+    [active.runId, { state: "stale_active", label: "Still working; last update 45s ago" } as const],
+    [
+      done.runId,
+      { state: "saving", label: "Saving subagent result · child outcome: Done" } as const,
+    ],
+  ]);
+  const roster = renderToStaticMarkup(
+    <SubagentRoster
+      runs={[active, done]}
+      selectedRunId={active.runId}
+      onSelect={() => undefined}
+      presentationByRunId={presentations}
+    />,
+  );
+  assert.match(roster, /data-subagent-presentation="stale_active"/u);
+  assert.match(roster, /data-subagent-presentation="saving"/u);
+  assert.match(roster, /Still working; last update 45s ago/u);
+  assert.match(roster, /Saving subagent result/u);
+  assert.equal(active.state, "running");
+  assert.equal(done.state, "completed");
+
+  const staleDetail = renderToStaticMarkup(
+    <SubagentDetail run={active.snapshot!} presentation={presentations.get(active.runId)} />,
+  );
+  assert.match(staleDetail, /data-subagent-presentation="stale_active"/u);
+  assert.match(staleDetail, /No recent update/u);
+
+  const savingDetail = renderToStaticMarkup(
+    <SubagentDetail run={done.snapshot!} presentation={presentations.get(done.runId)} />,
+  );
+  assert.match(savingDetail, /data-subagent-presentation="saving"/u);
+  assert.match(savingDetail, /Recording subagent outcome/u);
+  assert.match(savingDetail, /Finished\. Aiden is waiting for this outcome/u);
+
+  const delayedDetail = renderToStaticMarkup(
+    <SubagentDetail
+      run={done.snapshot!}
+      presentation={{
+        state: "save_delayed",
+        label: "Save delayed · child outcome: Done",
+      }}
+    />,
+  );
+  assert.match(delayedDetail, /data-subagent-presentation="save_delayed"/u);
+  assert.match(delayedDetail, /Outcome not yet saved/u);
+  assert.match(delayedDetail, /Finished\. This outcome has not appeared/u);
+});
+
+test("terminal-only handoff presentation ages from saving to delayed on the panel clock", () => {
+  const snapshot = v2Run({
+    state: "failed",
+    activity: undefined,
+    updatedAt: 10_000,
+    finishedAt: 10_000,
+    terminalMarkdown: "Failed report",
+  });
+  const originalNow = Date.now;
+  try {
+    Date.now = () => 20_000;
+    const saving = renderToStaticMarkup(
+      <SubagentsPanel
+        chatId="chat-1"
+        workspaceId="workspace-1"
+        runs={[view(snapshot)]}
+        handoffSnapshots={[snapshot]}
+        selectedRunId={snapshot.runId}
+      />,
+    );
+    assert.match(saving, /Saving subagent result · child outcome: Failed/u);
+    assert.match(saving, /data-subagent-presentation="saving"/u);
+
+    Date.now = () => 140_000;
+    const delayed = renderToStaticMarkup(
+      <SubagentsPanel
+        chatId="chat-1"
+        workspaceId="workspace-1"
+        runs={[view(snapshot)]}
+        handoffSnapshots={[snapshot]}
+        selectedRunId={snapshot.runId}
+      />,
+    );
+    assert.match(delayed, /Save delayed · child outcome: Failed/u);
+    assert.match(delayed, /data-subagent-presentation="save_delayed"/u);
+  } finally {
+    Date.now = originalNow;
+  }
+
+  const panelSource = readFileSync(new URL("./subagents-panel.tsx", import.meta.url), "utf8");
+  assert.match(panelSource, /state === "saving"/u);
+  assert.match(panelSource, /!hasActiveRuns && !hasUndelayedHandoff/u);
+  assert.doesNotMatch(panelSource, /!hasActiveRuns && handoffSnapshots\.length === 0/u);
+});
+
+test("loaded detail shows refresh progress and preserves last activity after failure", () => {
+  const snapshot = v2Run({
+    state: "completed",
+    activity: undefined,
+    finishedAt: 3_000,
+    terminalMarkdown: "Last available report",
+  });
+  const refreshing = renderToStaticMarkup(
+    <SubagentDetail run={snapshot} refreshing refreshError="stale failure" />,
+  );
+  assert.match(refreshing, /data-subagent-detail-refreshing="true"/u);
+  assert.match(refreshing, /Refreshing saved activity…/u);
+  assert.match(refreshing, /Last available report/u);
+  assert.doesNotMatch(refreshing, /Showing the last available activity/u);
+
+  const failed = renderToStaticMarkup(
+    <SubagentDetail
+      run={snapshot}
+      refreshError="transport failed"
+      onRetryRefresh={() => undefined}
+    />,
+  );
+  assert.match(failed, /data-subagent-detail-refresh-error="true"/u);
+  assert.match(failed, /Showing the last available activity/u);
+  assert.match(failed, /Retry refresh/u);
+  assert.match(failed, /Last available report/u);
+  assert.doesNotMatch(failed, /transport failed/u);
+});
+
+test("saved refresh presentation is suppressed for a reference-less live run", () => {
+  const snapshot = v2Run({
+    state: "running",
+    finishedAt: undefined,
+    terminalMarkdown: undefined,
+    latestText: "Live activity remains visible",
+  });
+  const liveView = view(snapshot);
+  const live = renderToStaticMarkup(
+    <SubagentsPanel
+      chatId="chat-1"
+      workspaceId="workspace-1"
+      runs={[liveView]}
+      selectedRunId={snapshot.runId}
+      detailLoading
+      detailError="history unavailable"
+    />,
+  );
+  assert.match(live, /Live activity remains visible/u);
+  assert.doesNotMatch(live, /data-subagent-detail-refresh/u);
+  assert.doesNotMatch(live, /Refreshing saved activity/u);
+  assert.doesNotMatch(live, /Showing the last available activity/u);
+
+  const savedView = { ...liveView, referenceMessageId: "message-1" };
+  const saved = renderToStaticMarkup(
+    <SubagentsPanel
+      chatId="chat-1"
+      workspaceId="workspace-1"
+      runs={[savedView]}
+      selectedRunId={snapshot.runId}
+      detailLoading
+    />,
+  );
+  assert.match(saved, /data-subagent-detail-refreshing="true"/u);
+});
+
+test("owner-provided stop pending survives detail selection and remount", () => {
+  const stopping = v2Run({ runId: "stopping", childId: "child-stopping", label: "Stopping scout" });
+  const sibling = v2Run({ runId: "sibling", childId: "child-sibling", label: "Sibling scout" });
+  const render = (selectedRunId: string) =>
+    renderToStaticMarkup(
+      <SubagentsPanel
+        chatId="chat-1"
+        workspaceId="workspace-1"
+        runs={[view(stopping), view(sibling)]}
+        selectedRunId={selectedRunId}
+        stopPendingRunIds={["stopping"]}
+        onStopRun={() => undefined}
+      />,
+    );
+
+  const first = render("stopping");
+  assert.match(first, />Stopping…</u);
+  assert.match(first, /data-subagent-presentation="stopping"/u);
+  assert.match(first, /aria-label="Stopping Stopping scout"/u);
+  assert.match(first, /aria-busy="true"/u);
+  assert.match(first, /disabled=""/u);
+  assert.match(render("sibling"), /aria-label="Stop subtree Sibling scout"/u);
+  assert.doesNotMatch(render("sibling"), /aria-label="Stopping Sibling scout"/u);
+  const remounted = render("stopping");
+  assert.match(remounted, />Stopping…</u);
+  assert.match(remounted, /disabled=""/u);
+
+  const compactRoster = renderToStaticMarkup(
+    <SubagentsPanel
+      chatId="chat-1"
+      workspaceId="workspace-1"
+      runs={[view(stopping), view(sibling)]}
+      selectedRunId="stopping"
+      stopPendingRunIds={["stopping"]}
+      compact
+    />,
+  );
+  assert.match(compactRoster, /data-subagents-layout="compact"/u);
+  assert.match(compactRoster, /data-subagent-presentation="stopping"/u);
+  assert.match(compactRoster, />Stopping…</u);
+});
+
+test("owner-provided Stop failures survive selection and detail remount", () => {
+  const failed = v2Run({ runId: "failed-stop", childId: "child-failed", label: "Code scout" });
+  const sibling = v2Run({ runId: "sibling", childId: "child-sibling", label: "Sibling scout" });
+  const render = (selectedRunId: string) =>
+    renderToStaticMarkup(
+      <SubagentsPanel
+        chatId="chat-1"
+        workspaceId="workspace-1"
+        runs={[view(failed), view(sibling)]}
+        selectedRunId={selectedRunId}
+        stopErrorsByRunId={{ "failed-stop": "Stop service unavailable." }}
+        onStopRun={() => undefined}
+      />,
+    );
+
+  const first = render("failed-stop");
+  assert.match(first, /Stop service unavailable\./u);
+  assert.doesNotMatch(first, /role="alert"/u);
+  assert.doesNotMatch(render("sibling"), /Stop service unavailable\./u);
+  assert.match(render("failed-stop"), /data-subagent-control-error="true"/u);
+});
+
 test("the roster renders strict V2 nesting as an expanded semantic tree with roving focus", () => {
   const parent = v2Run({
     runId: "parent",
@@ -1429,6 +1662,63 @@ test("saved detail announcements cover loading, success, failure, and Retry with
     subagentDetailAnnouncement(unavailable, loading),
     "Retrying saved activity for Saved review.",
   );
+  const refreshing = { ...loaded, presentation: "refreshing" as const };
+  const refreshFailed = { ...loaded, presentation: "refresh_failed" as const };
+  assert.equal(
+    subagentDetailAnnouncement(loaded, refreshing),
+    "Refreshing saved activity for Saved review.",
+  );
+  assert.equal(
+    subagentDetailAnnouncement(refreshing, refreshFailed),
+    "Could not refresh saved activity for Saved review. Showing the last available activity. Retry is available.",
+  );
+  assert.equal(
+    subagentDetailAnnouncement(null, refreshFailed),
+    "Could not refresh saved activity for Saved review. Showing the last available activity. Retry is available.",
+  );
+  assert.equal(subagentDetailAnnouncement(refreshFailed, refreshFailed), null);
+  assert.equal(
+    subagentDetailAnnouncement(refreshFailed, refreshing),
+    "Retrying saved activity for Saved review.",
+  );
+  assert.equal(
+    subagentDetailAnnouncement(refreshing, loaded),
+    "Saved activity refreshed for Saved review. Reading a workspace file.",
+  );
+  const stopping = {
+    ...loaded,
+    saved: false,
+    presentation: "stopping" as const,
+  };
+  const stopFailed = { ...stopping, presentation: "stop_failed" as const };
+  assert.equal(subagentDetailAnnouncement(loaded, stopping), "Stopping Saved review.");
+  assert.equal(subagentDetailAnnouncement(stopping, stopping), null);
+  assert.equal(
+    subagentDetailAnnouncement(stopping, stopFailed),
+    "Could not stop Saved review. Try again if the run is still available.",
+  );
+
+  const saving = {
+    ...loaded,
+    saved: false,
+    presentation: "saving" as const,
+    statusLabel: "Saving subagent result · child outcome: Failed",
+  };
+  const delayed = {
+    ...saving,
+    presentation: "save_delayed" as const,
+    statusLabel: "Save delayed · child outcome: Failed",
+  };
+  assert.equal(
+    subagentDetailAnnouncement(loaded, saving),
+    "Saved review: Saving subagent result · child outcome: Failed.",
+  );
+  assert.equal(subagentDetailAnnouncement(saving, saving), null);
+  assert.equal(
+    subagentDetailAnnouncement(saving, delayed),
+    "Saved review: Save delayed · child outcome: Failed.",
+  );
+  assert.equal(subagentDetailAnnouncement(delayed, delayed), null);
   assert.equal(
     subagentDetailAnnouncement(loaded, {
       ...loaded,
@@ -1459,6 +1749,60 @@ test("saved detail announcements cover loading, success, failure, and Retry with
     null,
     "an owner change must not announce the previous chat's transition",
   );
+});
+
+test("an inactive detail does not consume a saved refresh failure announcement", async () => {
+  const releaseMountedDomTest = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const root = createRoot(mounted.container);
+  const snapshot = v2Run({
+    runId: "saved-inactive",
+    childId: "child-saved-inactive",
+    state: "completed",
+    finishedAt: 4_000,
+    terminalMarkdown: "Last saved result",
+  });
+  const savedView = { ...view(snapshot), referenceMessageId: "message-saved-inactive" };
+  const announcements: string[] = [];
+  const render = (active: boolean, detailLoading: boolean, detailError: string | null) => {
+    flushSync(() => {
+      root.render(
+        <SubagentsPanel
+          chatId="chat-inactive"
+          workspaceId="workspace-1"
+          runs={[savedView]}
+          selectedRunId={snapshot.runId}
+          selectedRunSnapshot={snapshot}
+          active={active}
+          detailLoading={detailLoading}
+          detailError={detailError}
+          onDetailAnnouncement={(_ownerKey, message) => announcements.push(message)}
+        />,
+      );
+    });
+  };
+
+  try {
+    render(true, false, null);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    render(false, true, null);
+    render(false, false, "history unavailable");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(announcements, []);
+
+    render(true, false, "history unavailable");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(announcements, [
+      "Could not refresh saved activity for Code scout. Showing the last available activity. Retry is available.",
+    ]);
+  } finally {
+    flushSync(() => root.unmount());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    mounted.restore();
+    releaseMountedDomTest();
+  }
 });
 
 test("a promoted selected detail remains loaded during persistence handoff", () => {
@@ -1871,6 +2215,181 @@ test("breakpoint changes restore detail and Back focus to deterministic semantic
   assert.equal(subagentPanelBreakpointFocusTarget(false, true, "roster"), "roster");
   assert.equal(subagentPanelBreakpointFocusTarget(false, false, "detail"), null);
   assert.equal(subagentPanelBreakpointFocusTarget(false, true, null), null);
+});
+
+test("mounted SubagentsPanel preserves narrow content and controls across exact width contracts", async () => {
+  const releaseMountedDomTest = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const root = createRoot(mounted.container);
+  const widths = [276, 356, 456, 520, 620] as const;
+  const longLabel = `Long Unicode reviewer 😀 ${"界".repeat(96)}`;
+  const longModel = `provider/model-${"m".repeat(180)}`;
+  const longTask = `Inspect ${"task_segment_".repeat(90)} and preserve Unicode 🧭`;
+  const longResult = `Result ${"result_segment_".repeat(100)} завершено`;
+  let detailRequestVersion = 0;
+
+  const parent = v2Run({
+    runId: "narrow-parent",
+    childId: "child-narrow-parent",
+    label: `Parent ${longLabel}`,
+    modelId: longModel,
+    taskPreview: longTask,
+    state: "running",
+    finishedAt: undefined,
+  });
+  const child = v2Run({
+    runId: "narrow-child",
+    childId: "child-narrow-child",
+    parentRunId: parent.runId,
+    depth: 2,
+    label: longLabel,
+    modelId: longModel,
+    taskPreview: longTask,
+    state: "completed",
+    activity: undefined,
+    finishedAt: 4_000,
+    updatedAt: 4_000,
+    terminalMarkdown: longResult,
+  });
+  const parentView = view(parent);
+  const childView = { ...view(child), referenceMessageId: "message-narrow-child" };
+  const pendingView: SubagentRunView = {
+    runId: "narrow-pending",
+    generationId: child.generationId,
+    label: `Pending ${longLabel}`,
+    role: "reviewer",
+    state: "completed",
+    terminal: true,
+    source: "message",
+    sortKey: "9999:narrow-pending",
+    referenceMessageId: "message-narrow-pending",
+  };
+
+  const renderPanel = (
+    width: (typeof widths)[number],
+    selectedRunId: string,
+    options: { detailLoading?: boolean; detailError?: string | null } = {},
+  ) => {
+    const compact = width < 620;
+    mounted.container.setAttribute("style", `width: ${width}px`);
+    flushSync(() => {
+      root.render(
+        <SubagentsPanel
+          chatId={`chat-width-${width}`}
+          workspaceId="workspace-1"
+          runs={[parentView, childView, pendingView]}
+          selectedRunId={selectedRunId}
+          compact={compact}
+          detailRequestVersion={detailRequestVersion}
+          detailLoading={options.detailLoading}
+          detailError={options.detailError}
+          onRetryDetail={() => undefined}
+          onStopRun={() => undefined}
+        />,
+      );
+    });
+    const panel = mountedElementsWithAttribute(mounted.document, "data-subagents-layout")[0]!;
+    assert.equal(mounted.container.getAttribute("style"), `width: ${width}px`);
+    assert.equal(panel.getAttribute("data-subagents-layout"), compact ? "compact" : "wide");
+    return { compact, panel };
+  };
+
+  const buttonWithText = (value: string) =>
+    Array.from(mounted.container.getElementsByTagName("button")).find((button) =>
+      button.textContent?.includes(value),
+    ) as HTMLElement | undefined;
+  const elementWithExactText = (tag: string, value: string) =>
+    Array.from(mounted.container.getElementsByTagName(tag)).find(
+      (element) => element.textContent === value,
+    ) as HTMLElement | undefined;
+
+  try {
+    for (const width of widths) {
+      const roster = renderPanel(width, child.runId);
+      const treeItems = mountedElementsWithAttribute(mounted.document, "data-subagent-treeitem");
+      assert.equal(treeItems.length, 3, `${width}px keeps the semantic tree intact`);
+      const selectedTreeItem = treeItems.find(
+        (item) => item.getAttribute("aria-selected") === "true",
+      )!;
+      assert.equal(selectedTreeItem.getAttribute("data-subagent-run-id"), child.runId);
+      assert.equal(selectedTreeItem.getAttribute("tabindex"), "0");
+      assert.match(selectedTreeItem.getAttribute("class") ?? "", /min-w-0/u);
+      assert.match(selectedTreeItem.textContent ?? "", /Long Unicode reviewer/u);
+      selectedTreeItem.focus();
+      assert.equal(mounted.document.activeElement, selectedTreeItem);
+
+      detailRequestVersion += 1;
+      renderPanel(width, child.runId, { detailError: "persisted refresh failed" });
+      const heading = mountedElementsWithAttribute(
+        mounted.document,
+        "data-subagent-detail-heading",
+      )[0]!;
+      assert.match(heading.textContent ?? "", /Long Unicode reviewer/u);
+      assert.match(heading.getAttribute("class") ?? "", /break-words/u);
+      const detailRegion = mountedElementsWithAttribute(
+        mounted.document,
+        "data-subagent-detail-region",
+      )[0]!;
+      assert.match(detailRegion.getAttribute("class") ?? "", /min-w-0/u);
+      const modelText = Array.from(mounted.container.getElementsByTagName("p")).find((element) =>
+        element.textContent?.startsWith("Model: provider/model-"),
+      ) as HTMLElement;
+      assert.match(modelText.getAttribute("class") ?? "", /overflow-wrap:anywhere/u);
+      const taskText = elementWithExactText("p", longTask)!;
+      assert.match(taskText.getAttribute("class") ?? "", /break-words/u);
+      assert.match(taskText.getAttribute("class") ?? "", /overflow-wrap:anywhere/u);
+      const resultWrapper = Array.from(mounted.container.getElementsByTagName("div")).find(
+        (element) =>
+          element.textContent === longResult &&
+          element.getAttribute("class")?.includes("overflow-wrap:anywhere"),
+      ) as HTMLElement;
+      assert.ok(resultWrapper, `${width}px retains the long result overflow contract`);
+      assert.ok(buttonWithText("Retry refresh"), `${width}px retains refresh retry`);
+      assert.ok(
+        Array.from(mounted.container.getElementsByTagName("button")).some((button) =>
+          button.getAttribute("aria-label")?.startsWith("Copy task preview for"),
+        ),
+      );
+      assert.ok(
+        Array.from(mounted.container.getElementsByTagName("button")).some((button) =>
+          button.getAttribute("aria-label")?.startsWith("Copy result from"),
+        ),
+      );
+      assert.equal(Boolean(buttonWithText("Back to subagents")), roster.compact);
+
+      renderPanel(width, parent.runId);
+      const stop = Array.from(mounted.container.getElementsByTagName("button")).find((button) =>
+        button.getAttribute("aria-label")?.startsWith("Stop subtree"),
+      );
+      assert.ok(stop, `${width}px retains the labeled Stop action`);
+
+      renderPanel(width, pendingView.runId, { detailLoading: true });
+      assert.ok(
+        Array.from(mounted.container.getElementsByTagName("p")).some(
+          (element) => element.textContent === "Loading subagent activity…",
+        ),
+        `${width}px retains pending detail copy`,
+      );
+      renderPanel(width, pendingView.runId, { detailError: "missing persisted detail" });
+      assert.ok(
+        mountedElementsWithAttribute(mounted.document, "data-subagent-detail-unavailable")[0],
+        `${width}px retains the unavailable callout`,
+      );
+      assert.ok(
+        Array.from(mounted.container.getElementsByTagName("button")).some((button) =>
+          button.getAttribute("aria-label")?.startsWith("Retry loading details for"),
+        ),
+        `${width}px retains labeled unavailable retry`,
+      );
+    }
+  } finally {
+    flushSync(() => root.unmount());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    mounted.restore();
+    releaseMountedDomTest();
+  }
 });
 
 test("mounted compact selection repair restores Back and breakpoint focus to the surviving row", async () => {
@@ -2294,14 +2813,17 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(panelSource, /onFocusCapture=/u);
   assert.match(panelSource, /onBlurCapture=/u);
   assert.match(panelSource, /shouldRestoreSubagentDetailFocus/u);
-  assert.doesNotMatch(panelSource, /\{detailError\}/u);
+  assert.match(panelSource, /refreshError=\{savedDetailRefreshError\}/u);
   assert.doesNotMatch(panelSource, /aria-live=/u);
   assert.doesNotMatch(panelSource, /role="status"/u);
   assert.doesNotMatch(panelSource, /data-subagent-detail-announcer/u);
   assert.match(panelSource, /onDetailAnnouncement\?\.\(ownerKey, message\)/u);
   assert.match(panelSource, /subagentPanelBreakpointFocusTarget/u);
   assert.match(panelSource, /data-subagent-back="true"/u);
-  assert.match(panelSource, /if \(!active \|\| !hasActiveRuns\) return/u);
+  assert.match(
+    panelSource,
+    /if \(!active \|\| \(!hasActiveRuns && !hasUndelayedHandoff\)\) return/u,
+  );
   assert.doesNotMatch(panelSource, /loadingObservedRunIdRef/u);
   assert.match(
     panelSource,
