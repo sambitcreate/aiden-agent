@@ -70,7 +70,7 @@ jobs:
   android:
     name: Android build and APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: android
@@ -85,8 +85,13 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: Install Android SDK 36
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Android SDK and test image
+        run: >-
+          sdkmanager
+          "platforms;android-36"
+          "build-tools;36.0.0"
+          "emulator"
+          "system-images;android-36;google_apis;x86_64"
 
       - name: Verify Android and assemble debug APK
         run: >-
@@ -96,6 +101,41 @@ jobs:
           :app:assembleDebug
           :app:compileDebugAndroidTestKotlin
           --stacktrace
+
+      - name: Start Android test device
+        shell: bash
+        run: |
+          printf 'no\n' | avdmanager create avd \
+            --force \
+            --name aiden-ci \
+            --package 'system-images;android-36;google_apis;x86_64'
+          nohup "$ANDROID_HOME/emulator/emulator" \
+            -avd aiden-ci \
+            -no-window \
+            -noaudio \
+            -no-boot-anim \
+            -no-snapshot \
+            -gpu swiftshader_indirect \
+            >"$RUNNER_TEMP/aiden-emulator.log" 2>&1 &
+          adb wait-for-device
+          for attempt in {1..180}; do
+            if [[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == '1' ]]; then
+              adb shell settings put global window_animation_scale 0
+              adb shell settings put global transition_animation_scale 0
+              adb shell settings put global animator_duration_scale 0
+              exit 0
+            fi
+            sleep 2
+          done
+          sed -n '1,240p' "$RUNNER_TEMP/aiden-emulator.log"
+          exit 1
+
+      - name: Run Android Compose UI tests
+        run: ./gradlew :app:connectedDebugAndroidTest --stacktrace
+
+      - name: Stop Android test device
+        if: always()
+        run: adb emu kill || true
 
       - name: Record APK checksum
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.apk.sha256
