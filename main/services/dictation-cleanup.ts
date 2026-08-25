@@ -8,6 +8,7 @@ import {
   buildDictationCleanupUserPrompt,
   DICTATION_CLEANUP_SYSTEM_PROMPT,
   DICTATION_CLEANUP_TIMEOUT_MS,
+  dictationCleanupUsageIsLocal,
   sanitizeDictationCleanupOutput,
 } from "./dictation-cleanup-core.js";
 import { resolveModelRuntime } from "./model-runtime.js";
@@ -85,7 +86,10 @@ export async function cleanupDictationTranscript(transcript: string): Promise<st
             providerId: settingsAfter.lastProviderId,
             providerLabel: settingsAfter.lastProviderId,
             modelId: settingsAfter.lastModel,
-            local: false,
+            local: dictationCleanupUsageIsLocal(
+              await configStore.getProvider(settingsAfter.lastProviderId),
+              settingsAfter.lastProviderId,
+            ),
             status: controller.signal.aborted ? "cancelled" : "failed",
           }),
         );
