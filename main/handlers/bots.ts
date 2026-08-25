@@ -500,7 +500,7 @@ function botAccessUpdateRendererError(error: unknown): unknown {
     return new Error("Some selected Bot access is unavailable. Refresh and review it.");
   }
   if (error instanceof BotCapabilityValidationError) {
-    return new Error("Bot capabilities changed. Refresh and review the current access choices.");
+    return new Error(error.message);
   }
   return error;
 }
