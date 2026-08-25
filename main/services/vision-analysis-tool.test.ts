@@ -121,3 +121,49 @@ test("image inspection propagates cancellation instead of turning revocation int
     (error: unknown) => error === reason,
   );
 });
+
+test("a successful image inspection survives local usage-store failure", async () => {
+  const response: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: "The receipt total is $12.00." }],
+    api: "openai-responses",
+    provider: "vision-provider",
+    model: "vision-model",
+    usage: {
+      input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  };
+  const tool = createVisionAnalysisTool({
+    attachments: [image],
+    authority: {
+      providerId: "vision-provider",
+      modelId: "vision-model",
+      revalidateBeforeEffect: async () => undefined,
+    },
+  }, {
+    resolveRuntime: async () => ({
+      provider: { id: "vision-provider", label: "Vision Provider", type: "openai" },
+      model: {
+        id: "vision-model", name: "Vision Model", api: "openai-responses",
+        provider: "vision-provider", baseUrl: "https://example.invalid", reasoning: false,
+        input: ["text", "image"], contextWindow: 8_192, maxTokens: 2_048,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      apiKey: "private-key",
+      streams: { streamSimple: () => ({ result: async () => response }) },
+    }) as never,
+    recordUsage: async () => {
+      throw new Error("usage store unavailable");
+    },
+  });
+
+  const inspected = await tool.execute("usage-failure", {
+    imageRef: visionAttachmentAlias(image),
+    question: "What is the total?",
+  });
+
+  assert.equal(text(inspected), "The receipt total is $12.00.");
+});

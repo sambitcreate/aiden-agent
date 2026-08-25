@@ -7,11 +7,11 @@ import {
   localModelDownloadStates,
 } from "./local-models.js";
 import { engineStatus, releaseRecognizer, transcribePcm } from "./parakeet.js";
-import { unreportedUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { decodeAidenRemotePcm16 } from "./aiden-remote-speech-codec.js";
 import { AidenRemoteSpeechLane } from "./aiden-remote-speech-lane.js";
+import { completeAidenRemoteSpeechTranscription } from "./aiden-remote-speech-transcription.js";
 
 const MAX_SPEECH_SECONDS = 60;
 const SAMPLE_RATE = 16_000;
@@ -155,31 +155,10 @@ export class AidenRemoteSpeechService {
       // native recognition so concurrent requests cannot allocate duplicate
       // sample buffers or add parallel main-process work.
       const samples = decodeAidenRemotePcm16(value.pcmBase64);
-      try {
-        const text = transcribePcm(samples, id);
-        if ([...text].length > 200_000) {
-          throw new AidenRemoteServiceError("internal_error", "The speech transcript exceeded the supported limit.", 500);
-        }
-        await usageStore.record(unreportedUsageRecord({
-          source: "voice-transcription",
-          providerId: "local-voice",
-          providerLabel: "Paired Mac voice",
-          modelId: id,
-          local: true,
-          status: "completed",
-        }));
-        return { text, modelId: id };
-      } catch (error) {
-        await usageStore.record(unreportedUsageRecord({
-          source: "voice-transcription",
-          providerId: "local-voice",
-          providerLabel: "Paired Mac voice",
-          modelId: id,
-          local: true,
-          status: "failed",
-        }));
-        throw error;
-      }
+      return completeAidenRemoteSpeechTranscription(samples, id, {
+        transcribePcm,
+        recordUsage: (usage) => usageStore.record(usage),
+      });
     });
   }
 }

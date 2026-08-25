@@ -9,6 +9,7 @@ import {
   decodeAidenRemotePcm16,
 } from "./aiden-remote-speech-codec.js";
 import { AidenRemoteSpeechLane } from "./aiden-remote-speech-lane.js";
+import { completeAidenRemoteSpeechTranscription } from "./aiden-remote-speech-transcription.js";
 
 test("remote speech PCM codec validates base64 and converts signed little-endian samples", () => {
   const bytes = Buffer.alloc(6);
@@ -81,4 +82,22 @@ test("remote speech lane serializes work, bounds admission, and recovers after f
   assert.equal(await second, "second result");
   assert.deepEqual(order, ["first:start", "first:fail", "second:start"]);
   assert.equal(await lane.run(() => "recovered"), "recovered");
+});
+
+test("a successful Mac transcript survives local usage-store failure", async () => {
+  let usageWrites = 0;
+  const transcript = await completeAidenRemoteSpeechTranscription(
+    new Float32Array([0]),
+    "parakeet-v3",
+    {
+      transcribePcm: () => "Keep this transcript",
+      recordUsage: async () => {
+        usageWrites += 1;
+        throw new Error("usage store unavailable");
+      },
+    },
+  );
+
+  assert.deepEqual(transcript, { text: "Keep this transcript", modelId: "parakeet-v3" });
+  assert.equal(usageWrites, 1);
 });

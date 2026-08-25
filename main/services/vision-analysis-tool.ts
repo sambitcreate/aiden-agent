@@ -58,6 +58,14 @@ export function createVisionAnalysisTool(input: {
     const { usageStore } = await import("./usage-store.js");
     await usageStore.record(record);
   });
+  const recordUsageBestEffort = async (record: UsageRequestRecord): Promise<void> => {
+    try {
+      await recordUsage(record);
+    } catch {
+      // Accounting is observational. A local store failure must not replace a
+      // valid model result or mask the provider/cancellation error it records.
+    }
+  };
   const byAlias = new Map(
     input.attachments
       .filter((attachment) => attachment.kind === "image" && typeof attachment.data === "string")
@@ -132,7 +140,7 @@ export function createVisionAnalysisTool(input: {
             },
           ).result();
         } catch (error) {
-          await recordUsage(unreportedUsageRecord({
+          await recordUsageBestEffort(unreportedUsageRecord({
             source: "vision",
             providerId: runtime.provider.id,
             providerLabel: runtime.provider.label,
@@ -143,7 +151,7 @@ export function createVisionAnalysisTool(input: {
           }));
           throw error;
         }
-        await recordUsage(assistantUsageRecord({
+        await recordUsageBestEffort(assistantUsageRecord({
           message: { ...response, responseModel: undefined },
           provider: runtime.provider,
           model: runtime.model,
