@@ -11,6 +11,7 @@ test("pill preload exposes only capture, transcription, settings read, and dicta
     "dictation:error",
     "dictation:ready",
     "dictation:result",
+    "dictation:stop",
     "settings:get",
     "settings:getAppearance",
     "voice:transcribe",
