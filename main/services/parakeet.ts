@@ -116,22 +116,6 @@ export async function transcribePcmBase64(pcmBase64: string, modelId: string): P
   }
 }
 
-export async function transcribePcm(samples: Float32Array, modelId: string): Promise<string> {
-  const directory = modelDir(modelId);
-  if (!directory || !isModelInstalled(modelId)) {
-    throw new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.");
-  }
-  try {
-    return await transcribePcmBase64(
-      Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength).toString("base64"),
-      modelId,
-    );
-  } catch (error) {
-    if (isolationUnavailable(error)) return transcribePcmInProcess(samples, modelId, directory);
-    throw error;
-  }
-}
-
 export function disposeParakeet(): void {
   const current = client;
   client = null;
