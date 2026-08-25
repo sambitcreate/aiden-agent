@@ -3329,9 +3329,15 @@ final class AidenRemoteClientTests: XCTestCase {
             await Task.yield()
         }
         XCTAssertTrue(store.installations.isEmpty)
+        XCTAssertTrue(coordinator.isMutating)
+        let overlappingSwitch = await coordinator.switchInstallationOutcome(to: "another-instance")
+        guard case .busy = overlappingSwitch else {
+            return XCTFail("An installation switch must not overlap removal and cache purging.")
+        }
         await probe.release()
         _ = await acceptedCommit.value
         await removal.value
+        XCTAssertFalse(coordinator.isMutating)
 
         let restored = await cache.loadActiveStream(
             instanceId: "instance-race",

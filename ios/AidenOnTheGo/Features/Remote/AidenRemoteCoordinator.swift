@@ -341,6 +341,8 @@ final class AidenRemoteCoordinator {
 
     func switchInstallationOutcome(to installationId: String) async -> AidenRemoteMutationOutcome<Void> {
         guard !isMutating else { return .busy }
+        isMutating = true
+        defer { isMutating = false }
         do {
             let previousInstallationId = activeInstanceId
             try installationStore.setActive(installationId)
@@ -368,6 +370,8 @@ final class AidenRemoteCoordinator {
 
     func removeInstallationOutcome(_ installationId: String) async -> AidenRemoteMutationOutcome<Void> {
         guard !isMutating else { return .busy }
+        isMutating = true
+        defer { isMutating = false }
         do {
             let previousInstallationId = activeInstanceId
             let knownWorkspaceIds = previousInstallationId == installationId

@@ -17,6 +17,17 @@ struct AidenBotsHomeScope: Equatable {
     let deviceID: String
 }
 
+struct AidenBotsHomeLoadPlan: Equatable {
+    let loadsList: Bool
+    let loadsConversations: Bool
+
+    init(installation: AidenInstallation?) {
+        loadsList = installation?.hasNegotiatedAccess(to: .botRead) == true
+        loadsConversations = loadsList
+            && installation?.hasNegotiatedAccess(to: .chatRead) == true
+    }
+}
+
 struct AidenBotsFavoriteMutation: Equatable {
     let id: UUID
     let scope: AidenBotsHomeScope
@@ -1059,14 +1070,43 @@ struct AidenBotsHomeView: View {
             let context = try coordinator.requestContext()
             capturedContext = context
             let client = try coordinator.remoteClient(for: context)
+            let plan = AidenBotsHomeLoadPlan(installation: installation)
             // Archived Bots remain the identity owner of their readable chat history.
             // Keep them in the projection/cache, then filter them only from creation
-            // and favorites controls.
-            async let listRequest = client.bots(includeArchived: true)
-            async let conversationRequest = client.botConversations()
-            let (list, conversations) = try await (listRequest, conversationRequest)
+            // and favorites controls. Bot identity and chat history are separately
+            // granted, so one denied segment must not erase the other.
+            async let listRequest = aidenLoadBotsHomeSegment(enabled: plan.loadsList) {
+                try await client.bots(includeArchived: true)
+            }
+            async let conversationRequest = aidenLoadBotsHomeSegment(
+                enabled: plan.loadsConversations
+            ) {
+                try await client.botConversations()
+            }
+            let (listResult, conversationResult) = await (listRequest, conversationRequest)
             guard coordinator.isCurrent(context), loadGeneration == generation,
                   loadID == expectedLoadID, !Task.isCancelled else { return }
+            var failures: [Error] = []
+            let list: AidenBotList?
+            switch listResult {
+            case .success(let value): list = value
+            case .failure(let error):
+                list = nil
+                failures.append(error)
+            }
+            let conversations: AidenBotConversationPage?
+            switch conversationResult {
+            case .success(let value): conversations = value
+            case .failure(let error):
+                conversations = nil
+                failures.append(error)
+            }
+            for error in failures {
+                if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            }
+            guard list != nil || conversations != nil else {
+                throw failures.first ?? AidenRemoteClientError.invalidResponse
+            }
             let segments = AidenBotCacheSegments(
                 list: list,
                 conversations: conversations
@@ -1094,10 +1134,12 @@ struct AidenBotsHomeView: View {
                   await AidenBotCache.shared.isCurrent(activation),
                   !Task.isCancelled else { return }
             snapshot = persistedSnapshot ?? refreshed
-            validateSelectedBot(in: list.bots)
+            validateSelectedBot(in: list?.bots ?? snapshot?.list?.bots ?? [])
             isLoading = false
             if cacheWriteFailed {
                 loadError = "Bots loaded, but this iPhone couldn’t save them for offline use."
+            } else if !failures.isEmpty {
+                loadError = "Some Bot details couldn’t be refreshed. Showing the latest available data."
             }
         } catch is CancellationError {
             return
@@ -1149,7 +1191,10 @@ struct AidenBotsHomeView: View {
               ),
               expected.loadID.isBotSurfaceActive,
               !expected.query.isEmpty,
-              coordinator.connectionState == .connected else { return }
+              coordinator.connectionState == .connected,
+              AidenBotsHomeLoadPlan(
+                  installation: coordinator.installationStore.activeInstallation
+              ).loadsConversations else { return }
         var capturedContext: AidenRemoteRequestContext?
         do {
             try await Task.sleep(for: .milliseconds(250))
@@ -1179,5 +1224,17 @@ struct AidenBotsHomeView: View {
             guard searchID == expected else { return }
             remoteSearchResults = nil
         }
+    }
+}
+
+private func aidenLoadBotsHomeSegment<Value: Sendable>(
+    enabled: Bool,
+    operation: @escaping @Sendable () async throws -> Value
+) async -> Result<Value?, Error> {
+    guard enabled else { return .success(nil) }
+    do {
+        return .success(try await operation())
+    } catch {
+        return .failure(error)
     }
 }

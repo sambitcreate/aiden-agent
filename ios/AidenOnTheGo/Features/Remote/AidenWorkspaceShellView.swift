@@ -159,30 +159,99 @@ private final class AidenHomeModel {
         guard coordinator.connectionState == .connected,
               let context = try? coordinator.requestContext(),
               !isLoading else { return }
+        let plan = AidenHomeLoadPlan(
+            installation: coordinator.installationStore.activeInstallation
+        )
+        if !plan.loadsChats {
+            chats = []
+            modelCatalog = nil
+        }
+        if !plan.loadsScheduledTasks { scheduledTasks = [] }
+        if !plan.loadsUsage { usage = nil }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         do {
             let client = try coordinator.remoteClient(for: context)
-            async let chatsRequest = client.chats()
-            async let tasksRequest = client.scheduledTasks()
-            async let catalogRequest: AidenModelCatalog? = try? await client.modelCatalog()
-            let (chats, tasks, catalog) = try await (chatsRequest, tasksRequest, catalogRequest)
-            guard coordinator.isCurrent(context) else { return }
-            self.chats = AidenChat.regularWorkspaceChats(from: chats)
-                .sorted { $0.updatedAt > $1.updatedAt }
-            scheduledTasks = tasks.sorted {
-                ($0.nextRunAt ?? .distantFuture) < ($1.nextRunAt ?? .distantFuture)
+            async let chatsRequest = aidenLoadHomeSegment(enabled: plan.loadsChats) {
+                try await client.chats()
             }
-            if let catalog { modelCatalog = catalog }
-            let loadedUsage = try? await client.usage()
+            async let tasksRequest = aidenLoadHomeSegment(enabled: plan.loadsScheduledTasks) {
+                try await client.scheduledTasks()
+            }
+            async let catalogRequest = aidenLoadHomeSegment(enabled: plan.loadsModelCatalog) {
+                try await client.modelCatalog()
+            }
+            async let usageRequest = aidenLoadHomeSegment(enabled: plan.loadsUsage) {
+                try await client.usage()
+            }
+            let (chatsResult, tasksResult, catalogResult, usageResult) = await (
+                chatsRequest,
+                tasksRequest,
+                catalogRequest,
+                usageRequest
+            )
             guard coordinator.isCurrent(context) else { return }
-            usage = loadedUsage
+            var failures: [Error] = []
+            switch chatsResult {
+            case .success(let loadedChats):
+                if let loadedChats {
+                    chats = AidenChat.regularWorkspaceChats(from: loadedChats)
+                        .sorted { $0.updatedAt > $1.updatedAt }
+                }
+            case .failure(let error): failures.append(error)
+            }
+            switch tasksResult {
+            case .success(let loadedTasks):
+                if let loadedTasks {
+                    scheduledTasks = loadedTasks.sorted {
+                        ($0.nextRunAt ?? .distantFuture) < ($1.nextRunAt ?? .distantFuture)
+                    }
+                }
+            case .failure(let error): failures.append(error)
+            }
+            switch catalogResult {
+            case .success(let catalog):
+                if let catalog { modelCatalog = catalog }
+            case .failure(let error): failures.append(error)
+            }
+            switch usageResult {
+            case .success(let loadedUsage):
+                if let loadedUsage { usage = loadedUsage }
+            case .failure(let error): failures.append(error)
+            }
+            errorMessage = failures.first?.localizedDescription
         } catch {
             if coordinator.isCurrent(context) {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+struct AidenHomeLoadPlan: Equatable {
+    let loadsChats: Bool
+    let loadsScheduledTasks: Bool
+    let loadsModelCatalog: Bool
+    let loadsUsage: Bool
+
+    init(installation: AidenInstallation?) {
+        loadsChats = installation?.hasNegotiatedAccess(to: .chatRead) == true
+        loadsScheduledTasks = installation?.hasNegotiatedAccess(to: .scheduleRead) == true
+        loadsModelCatalog = loadsChats
+        loadsUsage = installation?.hasNegotiatedAccess(to: .serverRead) == true
+    }
+}
+
+private func aidenLoadHomeSegment<Value: Sendable>(
+    enabled: Bool,
+    operation: @escaping @Sendable () async throws -> Value
+) async -> Result<Value?, Error> {
+    guard enabled else { return .success(nil) }
+    do {
+        return .success(try await operation())
+    } catch {
+        return .failure(error)
     }
 }
 

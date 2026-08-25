@@ -51,6 +51,34 @@ final class AidenProductShellTests: XCTestCase {
         )
     }
 
+    func testHomeLoadsOnlyIndependentlyNegotiatedCapabilitySegments() throws {
+        let botOnly = try installation(
+            device: [.serverRead, .botRead],
+            server: [.serverRead, .botRead]
+        )
+        let botOnlyPlan = AidenBotsHomeLoadPlan(installation: botOnly)
+        XCTAssertTrue(botOnlyPlan.loadsList)
+        XCTAssertFalse(botOnlyPlan.loadsConversations)
+
+        let botWithHistory = try installation(
+            device: [.serverRead, .chatRead, .botRead],
+            server: [.serverRead, .chatRead, .botRead]
+        )
+        let botHistoryPlan = AidenBotsHomeLoadPlan(installation: botWithHistory)
+        XCTAssertTrue(botHistoryPlan.loadsList)
+        XCTAssertTrue(botHistoryPlan.loadsConversations)
+
+        let workspaceWithoutSchedules = try installation(
+            device: [.serverRead, .chatRead],
+            server: [.serverRead, .chatRead]
+        )
+        let workspacePlan = AidenHomeLoadPlan(installation: workspaceWithoutSchedules)
+        XCTAssertTrue(workspacePlan.loadsChats)
+        XCTAssertFalse(workspacePlan.loadsScheduledTasks)
+        XCTAssertTrue(workspacePlan.loadsModelCatalog)
+        XCTAssertTrue(workspacePlan.loadsUsage)
+    }
+
     func testBotEditorsKeepWarmCachedContentVisibleDuringRefresh() {
         XCTAssertTrue(
             aidenBotUsesColdLoadingPlaceholder(isLoading: true, hasUsableContent: false)
