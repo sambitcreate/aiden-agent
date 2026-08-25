@@ -156,7 +156,9 @@ test("every Settings destination renders and a one-model local inventory stays u
   const options = page.locator("[cmdk-item]");
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText(E2E_MODEL_DISPLAY_NAME);
-  await options.first().click();
+  await expect(filter).toBeFocused();
+  await expect(options.first()).toHaveAttribute("data-selected", "true");
+  await filter.press("Enter");
   await expect(modelTrigger).toHaveAttribute(
     "aria-label",
     new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}\\. Choose a model\\.$`, "u"),

@@ -55,6 +55,25 @@ test("visible main-process branding derives from the configured app name", () =>
   assert.match(main, /app\.dock\?\.setBadge\("DEV"\)/u);
 });
 
+test("optional background services cannot close an already visible desktop window", () => {
+  const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const mainWindow = main.indexOf("await createMainWindow()");
+  const scheduleStart = main.indexOf("await scheduleService.start()", mainWindow);
+  const telegramStart = main.indexOf("await telegramService.start()", scheduleStart);
+  const updaterStart = main.indexOf("appUpdateService.start()", telegramStart);
+
+  assert.ok(mainWindow >= 0 && scheduleStart > mainWindow);
+  assert.ok(telegramStart > scheduleStart && updaterStart > telegramStart);
+  assert.match(
+    main.slice(mainWindow, updaterStart),
+    /try \{[\s\S]*?await scheduleService\.start\(\)[\s\S]*?catch \(error\)[\s\S]*?desktop app will remain available for repair/u,
+  );
+  assert.match(
+    main.slice(scheduleStart, updaterStart),
+    /try \{[\s\S]*?await telegramService\.start\(\)[\s\S]*?catch \(error\)[\s\S]*?desktop app will remain available for repair/u,
+  );
+});
+
 test("packaged test launches retain their explicit private user-data directory", () => {
   const profile = readFileSync(new URL("./runtime-profile.ts", import.meta.url), "utf8");
   const soak = readFileSync(

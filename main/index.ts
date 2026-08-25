@@ -1723,11 +1723,27 @@ if (!ownsSingleInstanceLock) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;
       }
-      await scheduleService.start();
-      // Ordinary Telegram conversations remain available when Bot storage
-      // needs repair. Bot-bound routes independently revalidate their exact
-      // managed home and access policy before queue admission.
-      await telegramService.start();
+      try {
+        await scheduleService.start();
+      } catch (error) {
+        logger.error(
+          "scheduled-tasks",
+          "Scheduled tasks could not restore their saved state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
+      // Telegram restoration is optional to desktop availability. Bot-bound
+      // routes independently revalidate their exact managed home and access
+      // policy before queue admission whenever the binding store is healthy.
+      try {
+        await telegramService.start();
+      } catch (error) {
+        logger.error(
+          "telegram",
+          "Telegram could not restore its saved state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
       appUpdateService.start();
     })
     .catch((error: unknown) => {

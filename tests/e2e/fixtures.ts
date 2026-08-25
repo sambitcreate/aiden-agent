@@ -700,6 +700,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       };
       state = aidenState;
       await use(aidenState);
+      failed = testInfo.status !== testInfo.expectedStatus;
     } catch (error) {
       primaryFailure = error;
       failed = true;
@@ -771,7 +772,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       process.stderr.write(`E2E teardown failures:\n${details}\n`);
       if (!failed) throw new Error(`E2E teardown failed:\n${details}`);
     }
-    if (failed) throw primaryFailure;
+    if (primaryFailure !== undefined) throw primaryFailure;
   },
 });
 
