@@ -123,7 +123,39 @@ test("hold-to-talk release stops recording after the grace window", async () => 
   assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
 });
 
-test("hold-to-talk falls back to press-to-stop when the key watch fails", async () => {
+test("hold-to-talk falls back to press-to-stop when the key watch cannot start", async () => {
+  const subject = harness({
+    isHoldToTalk: () => true,
+    getHoldKeyCode: () => 2,
+    startHoldWatch: () => null,
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
+});
+
+test("hold-to-talk falls back to press-to-stop when the key watch dies after start", async () => {
+  let failWatch: (() => void) | undefined;
+  const subject = harness({
+    isHoldToTalk: () => true,
+    getHoldKeyCode: () => 2,
+    startHoldWatch: (_keyCode, _onRelease, onFailed) => {
+      failWatch = onFailed;
+      return () => {};
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  failWatch?.();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
+});
+
+test("hold-to-talk falls back to press-to-stop when the key watch throws", async () => {
   const subject = harness({
     isHoldToTalk: () => true,
     getHoldKeyCode: () => 2,
