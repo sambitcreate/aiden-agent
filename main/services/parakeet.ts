@@ -1,94 +1,127 @@
-// On-device speech-to-text via sherpa-onnx (NVIDIA Parakeet TDT). The native
-// engine ships bundled with the app — no external install needed. Models are
-// downloaded/managed by local-models.ts; transcription runs fully offline.
+// Isolated on-device transcription host. The recognizer runs in a utility
+// process so decode work cannot stall Electron main.
 
-import { createRequire } from "node:module";
-import { logger } from "../platform.js";
-import { modelDir, isModelInstalled } from "./local-models.js";
+import { fileURLToPath } from "node:url";
+import type { UtilityProcess } from "electron";
+import { isModelInstalled, modelDir } from "./local-models.js";
+import {
+  engineStatus as engineStatusInProcess,
+  releaseRecognizer as releaseRecognizerInProcess,
+  transcribePcm as transcribePcmInProcess,
+} from "./parakeet-engine.js";
+import { ParakeetProcessClient } from "./parakeet-process-core.js";
 
-// sherpa-onnx-node is a CommonJS native addon, externalized from the bundle.
-const require = createRequire(import.meta.url);
+let client: ParakeetProcessClient | null = null;
+let child: UtilityProcess | null = null;
+let launching: Promise<ParakeetProcessClient> | null = null;
 
-interface OfflineStream {
-  acceptWaveform(input: { sampleRate: number; samples: Float32Array }): void;
+function float32ToBase64(samples: Float32Array): string {
+  const bytes = Buffer.alloc(samples.byteLength);
+  for (let i = 0; i < samples.length; i += 1) bytes.writeFloatLE(samples[i] ?? 0, i * 4);
+  return bytes.toString("base64");
 }
-interface OfflineRecognizer {
-  createStream(): OfflineStream;
-  decode(stream: OfflineStream): void;
-  getResult(stream: OfflineStream): { text: string };
-}
-interface SherpaModule {
-  OfflineRecognizer: new (config: unknown) => OfflineRecognizer;
+
+function attachUtilityProcess(processHandle: UtilityProcess): ParakeetProcessClient {
+  return new ParakeetProcessClient({
+    postMessage: (message) => processHandle.postMessage(message),
+    onMessage: (handler) => {
+      const listener = (message: unknown) => handler(message);
+      processHandle.on("message", listener);
+      return () => {
+        processHandle.removeListener("message", listener);
+      };
+    },
+    onExit: (handler) => {
+      const listener = (code: number) => handler(code);
+      processHandle.on("exit", listener);
+      return () => {
+        processHandle.removeListener("exit", listener);
+      };
+    },
+    kill: () => {
+      processHandle.kill();
+    },
+  });
 }
 
-let sherpa: SherpaModule | null = null;
-let sherpaError: string | null = null;
-
-function loadSherpa(): SherpaModule {
-  if (sherpa) return sherpa;
-  if (sherpaError) throw new Error(sherpaError);
-  try {
-    sherpa = require("sherpa-onnx-node") as SherpaModule;
-    return sherpa;
-  } catch (error) {
-    sherpaError = `On-device engine failed to load: ${error instanceof Error ? error.message : String(error)}`;
-    logger.error("parakeet", sherpaError);
-    throw new Error(sherpaError);
+async function launchClient(): Promise<ParakeetProcessClient> {
+  const { utilityProcess } = await import("electron");
+  if (typeof utilityProcess?.fork !== "function") {
+    throw new Error("Cannot find package 'electron'");
   }
+  const entry = fileURLToPath(new URL("./parakeet-worker.js", import.meta.url));
+  const launched = utilityProcess.fork(entry, [], {
+    serviceName: "Aiden Voice Transcription",
+    stdio: "ignore",
+  });
+  const created = attachUtilityProcess(launched);
+  launched.on("exit", () => {
+    if (child === launched) child = null;
+    if (client === created) client = null;
+  });
+  child = launched;
+  client = created;
+  return created;
 }
 
-export function engineStatus(): { ready: boolean; error: string | null } {
+async function getClient(): Promise<ParakeetProcessClient> {
+  if (client) return client;
+  if (!launching) {
+    launching = launchClient().finally(() => {
+      launching = null;
+    });
+  }
+  return launching;
+}
+
+function isolationUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Cannot find package 'electron'|Cannot find module ['"]electron['"]/i.test(message);
+}
+
+export async function engineStatus(): Promise<{ ready: boolean; error: string | null }> {
   try {
-    loadSherpa();
-    return { ready: true, error: null };
+    return await (await getClient()).status();
   } catch (error) {
+    if (isolationUnavailable(error)) return engineStatusInProcess();
     return { ready: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-// Recognizer construction is expensive (loads ~600 MB of ONNX), so cache one per model.
-const recognizers = new Map<string, OfflineRecognizer>();
+export async function releaseRecognizer(modelId: string): Promise<void> {
+  try {
+    await (await getClient()).release(modelId);
+  } catch (error) {
+    if (isolationUnavailable(error)) {
+      releaseRecognizerInProcess(modelId);
+      return;
+    }
+    throw error;
+  }
+}
 
-function getRecognizer(modelId: string): OfflineRecognizer {
-  const cached = recognizers.get(modelId);
-  if (cached) return cached;
-
-  const s = loadSherpa();
-  const dir = modelDir(modelId);
-  if (!dir || !isModelInstalled(modelId)) {
+export async function transcribePcm(samples: Float32Array, modelId: string): Promise<string> {
+  const directory = modelDir(modelId);
+  if (!directory || !isModelInstalled(modelId)) {
     throw new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.");
   }
-  const recognizer = new s.OfflineRecognizer({
-    featConfig: { sampleRate: 16000, featureDim: 80 },
-    modelConfig: {
-      transducer: {
-        encoder: `${dir}/encoder.int8.onnx`,
-        decoder: `${dir}/decoder.int8.onnx`,
-        joiner: `${dir}/joiner.int8.onnx`,
-      },
-      tokens: `${dir}/tokens.txt`,
-      modelType: "nemo_transducer",
-      numThreads: 2,
-      provider: "cpu",
-      debug: false,
-    },
-  });
-  recognizers.set(modelId, recognizer);
-  logger.info("parakeet", `Loaded recognizer for "${modelId}"`);
-  return recognizer;
+  try {
+    return await (
+      await getClient()
+    ).transcribe({
+      modelId,
+      modelDirectory: directory,
+      pcmBase64: float32ToBase64(samples),
+    });
+  } catch (error) {
+    if (isolationUnavailable(error)) return transcribePcmInProcess(samples, modelId, directory);
+    throw error;
+  }
 }
 
-/** Forget a cached recognizer (e.g. after deleting/replacing a model). */
-export function releaseRecognizer(modelId: string): void {
-  recognizers.delete(modelId);
-}
-
-/** Transcribe 16 kHz mono Float32 PCM using the given Parakeet model. */
-export function transcribePcm(samples: Float32Array, modelId: string): string {
-  if (samples.length === 0) return "";
-  const recognizer = getRecognizer(modelId);
-  const stream = recognizer.createStream();
-  stream.acceptWaveform({ sampleRate: 16000, samples });
-  recognizer.decode(stream);
-  return recognizer.getResult(stream).text.trim();
+export function disposeParakeet(): void {
+  const current = client;
+  client = null;
+  current?.dispose();
+  child = null;
 }
