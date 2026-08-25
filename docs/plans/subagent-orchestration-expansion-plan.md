@@ -168,6 +168,41 @@ in the focused gate. Parent and child prompts now state truthful failed-child
 and blocked-result behavior. No prompt, provider payload, header, URL,
 credential, or raw runtime exception enters renderer snapshots or Pi journals.
 
+Production launch repair (2026-08-25): six zero-activity production failures
+were traced to an invalid macOS assumption in the ownership hardening above.
+Electron delivers UtilityProcess script arguments to its Node service without
+reliably exposing them in the packaged Helper's `ps` command, so requiring the
+launch nonce there rejected every healthy child before provider dispatch. The
+OS PID/start identity is again used only as the compare-before-SIGKILL reuse
+fence; a strict nonce-bearing `ready` IPC frame now authenticates the loaded
+worker before its provider is constructed or contacted. Focused protocol and
+real Electron worker smoke coverage lock matching and mismatched readiness.
+
+Dev clone-boundary repair (2026-08-25): the first retest passed launch identity
+but failed before readiness with Electron's `An object could not be cloned.`
+Pi deliberately passes full `AgentTool` instances through the structurally
+compatible provider context and spreads its loop configuration into provider
+options; those values include `execute`, credential, transform, and lifecycle
+callbacks that belong in main. Aiden now positively projects only provider tool
+definitions and documented stream options, then JSON-normalizes every parent
+frame against the strict inference protocol before UtilityProcess IPC. This
+matches pi-subagents' explicit JSON/process boundary while preserving Aiden's
+embedded Pi sessions and main-owned tools. Focused protocol, aggregate
+Subagents, and callback-bearing real Electron worker smoke gates cover it.
+
+Pi semantic-normalization repair (2026-08-25): a follow-up dev retest exposed
+privacy false positives after children were launching successfully. Aiden had
+applied its renderer-safe recursive credential/encoding sanitizer to actual
+child prompts, reports, shell output, source-file admission, filenames, and grep
+lines. Model-facing text now uses a dedicated control-only normalizer so authored
+prose, paths, source syntax, encodings, Markdown, and Unicode remain exact like
+Pi. Child reads/search preserve ordinary repository semantics while explicit
+credential paths, private-key formats, workspace confinement, symlink/race
+checks, bounds, and renderer snapshot projection remain separate controls.
+Regression coverage locks the exact `and report back` failure, routes, public
+keys, encoded-looking content, safe hidden metadata, and the retained protected
+path/private-key matrix.
+
 ## Phases
 
 | Phase                                | State          | Scope                                                                                                                                                                                                    | Required gate                                                                                                                                                                                      |
