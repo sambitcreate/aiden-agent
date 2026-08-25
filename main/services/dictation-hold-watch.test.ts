@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { startHoldKeyWatch } from "./dictation-hold-watch.js";
 
+async function flush(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 test("fires onRelease once when the hold key goes up", async () => {
   const releases: number[] = [];
   let down = true;
@@ -18,13 +24,13 @@ test("fires onRelease once when the hold key goes up", async () => {
     clearIntervalFn: () => {},
   });
   ticks[0]?.();
-  await Promise.resolve();
+  await flush();
   assert.deepEqual(releases, []);
   down = false;
   ticks[0]?.();
-  await Promise.resolve();
+  await flush();
   ticks[0]?.();
-  await Promise.resolve();
+  await flush();
   assert.deepEqual(releases, [1]);
   stop();
 });
