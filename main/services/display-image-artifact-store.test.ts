@@ -116,6 +116,66 @@ test("staging is idempotent and pending usage remains chat-scoped", async () => 
   });
 });
 
+test("pending usage projections do not clone staged image payloads", async () => {
+  const root = await storageRoot();
+  const store = new DisplayImageArtifactStore({ root: () => root });
+  await store.initialize();
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "generation-1",
+    artifact: artifact("image-1"),
+    pixels: 1,
+  });
+  const structuredCloneDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "structuredClone",
+  );
+  Object.defineProperty(globalThis, "structuredClone", {
+    configurable: true,
+    writable: true,
+    value: () => {
+      throw new Error("usage queries must not clone payloads");
+    },
+  });
+  try {
+    assert.deepEqual(await store.usageByChat("chat-1"), {
+      bytes: ONE_PIXEL_PNG.length,
+      count: 1,
+      pixels: 1,
+    });
+    assert.equal(await store.hasPending("chat-1"), true);
+  } finally {
+    if (structuredCloneDescriptor) {
+      Object.defineProperty(globalThis, "structuredClone", structuredCloneDescriptor);
+    }
+  }
+});
+
+test("unreadable staging degrades without aborting initialization", async () => {
+  const root = await storageRoot();
+  const file = path.join(root, "display-image-artifacts.json");
+  await fs.writeFile(file, "{", "utf8");
+  const store = new DisplayImageArtifactStore({ root: () => root });
+
+  await store.initialize();
+
+  assert.deepEqual(store.availability(), {
+    available: false,
+    reason: "Display-image artifact staging is unreadable and was preserved.",
+  });
+  assert.equal(await store.hasPending("chat-1"), true);
+  await assert.rejects(
+    store.stage({
+      chatId: "chat-1",
+      generationId: "generation-1",
+      artifact: artifact("image-1"),
+      pixels: 1,
+    }),
+    /unreadable and was preserved/iu,
+  );
+  assert.equal(await fs.readFile(file, "utf8"), "{");
+});
+
 test("startup recovery retains the only durable copy when chat storage is unresolved", async () => {
   const root = await storageRoot();
   const store = new DisplayImageArtifactStore({ root: () => root });
@@ -296,4 +356,6 @@ test("startup marks crash-recovered image generations as interrupted", async () 
   const recovery = index.slice(index.indexOf("displayImageArtifactStore.recover("));
   assert.match(recovery, /category: "interrupted"/u);
   assert.match(recovery, /attachments,/u);
+  assert.match(recovery, /Could not recover staged image artifacts/iu);
+  assert.match(recovery, /affected chats remain blocked/iu);
 });

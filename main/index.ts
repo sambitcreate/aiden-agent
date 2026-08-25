@@ -1475,38 +1475,58 @@ if (!ownsSingleInstanceLock) {
       // before a renderer can read or append run history.
       await piRuntimeEffectStore.initialize();
       await displayImageArtifactStore.initialize();
+      const displayImageArtifactAvailability = displayImageArtifactStore.availability();
+      if (!displayImageArtifactAvailability.available) {
+        logger.warn(
+          "pi",
+          "Image artifact recovery is unavailable; chat mutations will remain blocked.",
+          new Error(displayImageArtifactAvailability.reason),
+        );
+      }
       await subagentRunStore.initialize();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
-        await displayImageArtifactStore.deleteChat(chatId);
+        if (displayImageArtifactAvailability.available) {
+          await displayImageArtifactStore.deleteChat(chatId);
+        }
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
-      const startupChats = (
-        await Promise.all(
-          (await displayImageArtifactStore.pendingChatIds()).map((chatId) =>
-            chatStore.get(chatId),
-          ),
-        )
-      ).filter((chat): chat is Chat => chat !== null);
-      await displayImageArtifactStore.recover(
-        startupChats,
-        async ({ chatId, attachments, createdAt, model }) => {
-          await chatStore.appendMessage(chatId, {
-            role: "assistant",
-            content: "",
-            attachments,
-            createdAt,
-            model,
-            providerFailure: {
-              version: 1,
-              category: "interrupted",
-              attempts: 1,
-              retryExhausted: false,
+      if (displayImageArtifactAvailability.available) {
+        try {
+          const startupChats = (
+            await Promise.all(
+              (await displayImageArtifactStore.pendingChatIds()).map((chatId) =>
+                chatStore.get(chatId),
+              ),
+            )
+          ).filter((chat): chat is Chat => chat !== null);
+          await displayImageArtifactStore.recover(
+            startupChats,
+            async ({ chatId, attachments, createdAt, model }) => {
+              await chatStore.appendMessage(chatId, {
+                role: "assistant",
+                content: "",
+                attachments,
+                createdAt,
+                model,
+                providerFailure: {
+                  version: 1,
+                  category: "interrupted",
+                  attempts: 1,
+                  retryExhausted: false,
+                },
+              });
             },
-          });
-        },
-      );
+          );
+        } catch (error) {
+          logger.warn(
+            "pi",
+            "Could not recover staged image artifacts; affected chats remain blocked.",
+            error,
+          );
+        }
+      }
       const visibleChatIds = new Set(
         (await chatStore.list()).map((chat) => chat.id),
       );
