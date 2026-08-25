@@ -142,7 +142,7 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(modelTrigger).toBeVisible();
 
   await modelTrigger.click();
-  await page.getByRole("tab", { name: "List", exact: true }).click();
+  await page.getByRole("tab", { name: "List", exact: true }).press("Enter");
   const filter = page.getByRole("combobox", { name: "Chat model" });
   await expect(filter).toBeFocused();
   await filter.fill("this-model-does-not-exist");
@@ -152,7 +152,7 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(modelTrigger).toBeFocused();
 
   await modelTrigger.click();
-  await page.getByRole("tab", { name: "List", exact: true }).click();
+  await page.getByRole("tab", { name: "List", exact: true }).press("Enter");
   const options = page.locator("[cmdk-item]");
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText(E2E_MODEL_DISPLAY_NAME);

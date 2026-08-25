@@ -30,6 +30,9 @@ test("the hermetic Electron E2E launch can disable the development crash helper"
   );
   assert.match(bootstrap, /if \(!crashReporterDisabledForE2e\) \{[\s\S]*?crashReporter\.start/u);
   assert.match(fixture, /AIDEN_E2E_DISABLE_CRASH_REPORTER:\s*"1"/u);
+  assert.match(fixture, /"--disable-gpu"/u);
+  assert.match(fixture, /"--force-prefers-reduced-motion=reduce"/u);
+  assert.match(fixture, /testInfo\.attach\("aiden-dev-log"/u);
 });
 
 test("development shortcut registration is gated without removing in-app menu accelerators", () => {

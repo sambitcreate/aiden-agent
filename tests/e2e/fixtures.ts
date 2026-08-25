@@ -648,7 +648,13 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         const launchArgs = [
           "-r",
           ELECTRON_TEST_BOOTSTRAP,
+          // Hosted macOS runners have no stable foreground/GPU presentation.
+          // Keep interaction timing deterministic without changing production.
+          "--disable-backgrounding-occluded-windows",
+          "--disable-gpu",
+          "--disable-renderer-backgrounding",
           "--force-renderer-accessibility",
+          "--force-prefers-reduced-motion=reduce",
           `--user-data-dir=${testUserDataDir}`,
           REPOSITORY_ROOT,
         ];
@@ -696,6 +702,36 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
     } catch (error) {
       primaryFailure = error;
       failed = true;
+    }
+
+    if (failed && rootDir) {
+      const child = app?.process();
+      try {
+        await testInfo.attach("electron-process-state", {
+          body: Buffer.from(
+            `${JSON.stringify({
+              pid: child?.pid,
+              exitCode: child?.exitCode,
+              signalCode: child?.signalCode,
+              killed: child?.killed,
+            })}\n`,
+            "utf8",
+          ),
+          contentType: "application/json",
+        });
+      } catch (error) {
+        process.stderr.write(`Could not attach Electron process state: ${formatFailure(error)}\n`);
+      }
+      try {
+        await testInfo.attach("aiden-dev-log", {
+          body: await readFile(path.join(rootDir, "user-data", "logs", "aiden-dev.log")),
+          contentType: "text/plain",
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          process.stderr.write(`Could not attach Aiden dev log: ${formatFailure(error)}\n`);
+        }
+      }
     }
 
     const teardownFailures: unknown[] = [];

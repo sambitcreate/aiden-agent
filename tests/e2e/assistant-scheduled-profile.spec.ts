@@ -8,7 +8,7 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
 
   // Assistant is a local dock. Exercise its state without submitting a prompt
   // (and therefore without creating a provider request or an assistant thread).
-  await page.getByRole("button", { name: "Open Aiden" }).click();
+  await page.getByRole("button", { name: "Open Aiden" }).press("Enter");
   const assistantComposer = page.getByRole("textbox", { name: "Message Aiden" });
   const assistantPanel = assistantComposer.locator(
     "xpath=ancestor::div[.//button[@aria-label='New conversation']][1]",
@@ -22,7 +22,7 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await assistantComposer.fill("Unsaved assistant draft");
   await page.getByRole("button", { name: "Minimize Aiden" }).click();
   await expect(page.getByRole("button", { name: "Open Aiden" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Aiden" }).click();
+  await page.getByRole("button", { name: "Open Aiden" }).press("Enter");
   await expect(assistantComposer).toHaveValue("Unsaved assistant draft");
   await assistantComposer.fill("");
   await page.getByRole("button", { name: "Minimize Aiden" }).click();
