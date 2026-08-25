@@ -21,6 +21,17 @@ test("the Electron build enters through the profile bootstrap", () => {
   assert.match(buildScript, /entryPoints: \["main\/bootstrap\.ts"\]/u);
 });
 
+test("the hermetic Electron E2E launch can disable the development crash helper", () => {
+  const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
+  const fixture = readFileSync(new URL("../tests/e2e/fixtures.ts", import.meta.url), "utf8");
+  assert.match(
+    bootstrap,
+    /process\.env\.AIDEN_E2E_DISABLE_CRASH_REPORTER\s*===\s*"1"/u,
+  );
+  assert.match(bootstrap, /if \(!crashReporterDisabledForE2e\) \{[\s\S]*?crashReporter\.start/u);
+  assert.match(fixture, /AIDEN_E2E_DISABLE_CRASH_REPORTER:\s*"1"/u);
+});
+
 test("development shortcut registration is gated without removing in-app menu accelerators", () => {
   const shortcut = readFileSync(
     new URL("./services/shortcut.ts", import.meta.url),

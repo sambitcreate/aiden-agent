@@ -506,13 +506,27 @@ export async function closeAiden(app: ElectronApplication | undefined): Promise<
   const pid = child.pid;
   let closeError: unknown;
   try {
-    await withTimeout(app.close(), "Electron shutdown", ELECTRON_EXIT_TIMEOUT_MS);
+    if (pid) {
+      const closed = await Promise.race([
+        app.close().then(() => true),
+        waitForProcessExit(pid, ELECTRON_EXIT_TIMEOUT_MS),
+      ]);
+      if (!closed) {
+        throw new Error(`Electron shutdown timed out after ${ELECTRON_EXIT_TIMEOUT_MS} ms.`);
+      }
+    } else {
+      await withTimeout(app.close(), "Electron shutdown", ELECTRON_EXIT_TIMEOUT_MS);
+    }
   } catch (error) {
     closeError = error;
   }
   const leaked = Boolean(pid && processIsAlive(pid));
   if (leaked) await terminateOwnedProcess(child);
-  if (closeError || leaked) {
+  // Playwright can miss Electron's child-process exit event on macOS even
+  // after the owned main PID has already terminated. The PID is the
+  // authoritative leak check; do not turn that bookkeeping timeout into a
+  // false test failure when the process is verifiably gone.
+  if (leaked) {
     const detail = closeError instanceof Error ? ` ${closeError.message}` : "";
     throw new Error(
       `Electron teardown did not finish cleanly${pid ? ` for PID ${pid}` : ""}.${detail}`,
@@ -620,6 +634,10 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         const launchEnvironment: Record<string, string> = {
           ...isolatedAppEnvironment(),
           AIDEN_CONFIG_DIR: testConfigDir,
+          // crashReporter.start() launches Crashpad, whose macOS helper can
+          // retain Playwright's worker transport after Electron main exits.
+          // E2E still verifies the owned main PID directly during teardown.
+          AIDEN_E2E_DISABLE_CRASH_REPORTER: "1",
           AIDEN_RUNTIME_PROFILE: "development",
           HOME: testRootDir,
           XDG_CACHE_HOME: testXdgCacheDir,
