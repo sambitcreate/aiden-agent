@@ -1,8 +1,26 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import type { ChildProcess } from "node:child_process";
 import { queryMacKeyDown, watchMacKeyUntilUp } from "./dictation-key-state.js";
+
+interface FakeHoldChild extends EventEmitter {
+  killed: boolean;
+  exitCode: number | null;
+  kill: () => boolean;
+}
+
+function fakeChild(): FakeHoldChild {
+  const child = new EventEmitter() as FakeHoldChild;
+  child.killed = false;
+  child.exitCode = null;
+  child.kill = () => {
+    child.killed = true;
+    child.exitCode = 1;
+    child.emit("exit", 1);
+    return true;
+  };
+  return child;
+}
 
 test("queryMacKeyDown coalesces overlapping queries for the same key", async () => {
   let calls = 0;
@@ -25,15 +43,7 @@ test("queryMacKeyDown coalesces overlapping queries for the same key", async () 
 
 test("watchMacKeyUntilUp fires onRelease when the watcher exits cleanly", async () => {
   const releases: number[] = [];
-  const child = new EventEmitter() as EventEmitter & ChildProcess;
-  child.killed = false;
-  child.exitCode = null;
-  child.kill = (() => {
-    child.killed = true;
-    child.exitCode = 1;
-    child.emit("exit", 1);
-    return true;
-  }) as ChildProcess["kill"];
+  const child = fakeChild();
   const stop = watchMacKeyUntilUp(2, () => {
     releases.push(1);
   }, (() => child) as never);
@@ -44,15 +54,13 @@ test("watchMacKeyUntilUp fires onRelease when the watcher exits cleanly", async 
 
 test("watchMacKeyUntilUp stop kills the child without firing onRelease", async () => {
   const releases: number[] = [];
-  const child = new EventEmitter() as EventEmitter & ChildProcess;
-  child.killed = false;
-  child.exitCode = null;
-  child.kill = (() => {
+  const child = fakeChild();
+  child.kill = () => {
     child.killed = true;
     child.exitCode = null;
     child.emit("exit", null);
     return true;
-  }) as ChildProcess["kill"];
+  };
   const stop = watchMacKeyUntilUp(49, () => {
     releases.push(1);
   }, (() => child) as never);
