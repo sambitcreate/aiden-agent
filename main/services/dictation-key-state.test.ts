@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { queryMacKeyDown, watchMacKeyUntilUp } from "./dictation-key-state.js";
+import { watchMacKeyUntilUp } from "./dictation-key-state.js";
 
 interface FakeHoldChild extends EventEmitter {
   killed: boolean;
@@ -22,38 +22,61 @@ function fakeChild(): FakeHoldChild {
   return child;
 }
 
-test("queryMacKeyDown coalesces overlapping queries for the same key", async () => {
-  let calls = 0;
-  const execFileFn = (
-    _command: string,
-    _args: readonly string[],
-    _options: unknown,
-    callback: (error: Error | null, stdout: string) => void,
-  ) => {
-    calls += 1;
-    queueMicrotask(() => callback(null, "1\n"));
-    return {} as never;
-  };
-  const first = queryMacKeyDown(2, execFileFn as never);
-  const second = queryMacKeyDown(2, execFileFn as never);
-  assert.equal(await first, true);
-  assert.equal(await second, true);
-  assert.equal(calls, 1);
+test("watchMacKeyUntilUp returns null when spawn fails", () => {
+  const stop = watchMacKeyUntilUp(2, () => {}, {
+    spawnFn: () => {
+      throw new Error("spawn failed");
+    },
+  });
+  assert.equal(stop, null);
 });
 
-test("watchMacKeyUntilUp fires onRelease when the watcher exits cleanly", async () => {
+test("watchMacKeyUntilUp fires onRelease when the watcher exits cleanly", () => {
   const releases: number[] = [];
+  const failures: number[] = [];
   const child = fakeChild();
-  const stop = watchMacKeyUntilUp(2, () => {
-    releases.push(1);
-  }, (() => child) as never);
+  const stop = watchMacKeyUntilUp(
+    2,
+    () => {
+      releases.push(1);
+    },
+    {
+      spawnFn: () => child as never,
+      onFailed: () => {
+        failures.push(1);
+      },
+    },
+  );
   child.emit("exit", 0);
   assert.deepEqual(releases, [1]);
-  stop();
+  assert.deepEqual(failures, []);
+  stop?.();
 });
 
-test("watchMacKeyUntilUp stop kills the child without firing onRelease", async () => {
+test("watchMacKeyUntilUp reports failure on a non-zero exit without releasing", () => {
   const releases: number[] = [];
+  const failures: number[] = [];
+  const child = fakeChild();
+  watchMacKeyUntilUp(
+    2,
+    () => {
+      releases.push(1);
+    },
+    {
+      spawnFn: () => child as never,
+      onFailed: () => {
+        failures.push(1);
+      },
+    },
+  );
+  child.emit("exit", 1);
+  assert.deepEqual(releases, []);
+  assert.deepEqual(failures, [1]);
+});
+
+test("watchMacKeyUntilUp stop kills the child without firing onRelease or onFailed", () => {
+  const releases: number[] = [];
+  const failures: number[] = [];
   const child = fakeChild();
   child.kill = () => {
     child.killed = true;
@@ -61,10 +84,20 @@ test("watchMacKeyUntilUp stop kills the child without firing onRelease", async (
     child.emit("exit", null);
     return true;
   };
-  const stop = watchMacKeyUntilUp(49, () => {
-    releases.push(1);
-  }, (() => child) as never);
-  stop();
+  const stop = watchMacKeyUntilUp(
+    49,
+    () => {
+      releases.push(1);
+    },
+    {
+      spawnFn: () => child as never,
+      onFailed: () => {
+        failures.push(1);
+      },
+    },
+  );
+  stop?.();
   assert.equal(child.killed, true);
   assert.deepEqual(releases, []);
+  assert.deepEqual(failures, []);
 });
