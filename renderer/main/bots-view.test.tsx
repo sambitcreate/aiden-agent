@@ -50,6 +50,7 @@ test("bot detail owns one-to-one Telegram bind and unbind controls", () => {
 
 test("bots UI edits definitions and creates conversations through dedicated IPC", () => {
   const view = source("./bots-view.tsx");
+  assert.match(view, /botsApi\.getCapabilityCatalog\(\)[\s\S]*botsApi\.create\(/u);
   assert.match(view, /botsApi\.create\(\{\s*bot: createInputFromDraft\(draft\),\s*access:/u);
   assert.match(
     view,
@@ -94,6 +95,9 @@ test("bot editor owns access mode, model selection, and capability toggles", () 
   assert.match(view, /The attached image and a focused question go to this provider/u);
   assert.match(view, /No image-capable model is connected/u);
   assert.match(view, /Settings → Providers/u);
+  assert.match(view, /nextBotFileScopeIds\(/u);
+  assert.match(view, /botFileScopeSelectionIsCoherent\(/u);
+  assert.match(view, /BOT_FILE_SCOPE_SELECTION_GUIDANCE/u);
   // Capability toggles with Full-mode disabling, matching the iOS sections.
   assert.match(view, /aria-label=\{`Allow \$\{option\.label\} for this bot`\}/u);
   assert.match(view, /aria-label="Allow run commands for this bot"/u);
