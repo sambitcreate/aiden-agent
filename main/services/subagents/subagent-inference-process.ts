@@ -30,8 +30,9 @@ import {
   SubagentInferenceProcessOwner,
 } from "./subagent-inference-process-core.js";
 import {
+  prepareSubagentInferenceContext,
+  prepareSubagentInferenceOptions,
   SUBAGENT_INFERENCE_PROTOCOL_VERSION,
-  type SerializableStreamOptions,
 } from "./subagent-inference-protocol.js";
 import {
   isRetryableSubagentStartupFailure,
@@ -178,7 +179,7 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
   constructor(
     private readonly child: UtilityProcess,
     launchIdentity: string | undefined,
-    private readonly expectedIdentityToken: string,
+    private readonly expectedReadyToken: string,
     launchError?: Error,
     initiallyExited = false,
   ) {
@@ -187,9 +188,7 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
     this.launchError = launchError;
     child.once("spawn", () => {
       const identity = readOwnedProcessIdentity(child.pid);
-      if (identity.kind === "found" && identity.identity.includes(this.expectedIdentityToken)) {
-        this.launchIdentity = identity.identity;
-      }
+      if (identity.kind === "found") this.launchIdentity = identity.identity;
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
       this.startupStderr.append(chunk);
@@ -212,15 +211,17 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
   captureLaunchIdentity(): boolean {
     if (this.launchIdentity) return true;
     const identity = readOwnedProcessIdentity(this.child.pid);
-    if (identity.kind !== "found" || !identity.identity.includes(this.expectedIdentityToken)) {
-      return false;
-    }
+    if (identity.kind !== "found") return false;
     this.launchIdentity = identity.identity;
     return true;
   }
 
   isLaunchVerified(): boolean {
     return this.launchError === undefined && this.captureLaunchIdentity();
+  }
+
+  verifyReadyIdentity(launchToken: string): boolean {
+    return launchToken === this.expectedReadyToken;
   }
 
   postMessage(message: unknown): void {
@@ -326,8 +327,10 @@ async function launchElectronInferenceProcess(
 ): Promise<KillableInferenceProcess> {
   const { utilityProcess } = await import("electron");
   const entry = fileURLToPath(new URL("./subagent-inference-worker.js", import.meta.url));
-  // The nonce is non-secret and makes the OS command identity unique even if
-  // PID reuse occurs within ps(1)'s one-second start-time resolution.
+  // Electron delivers UtilityProcess script argv to the Node service without
+  // reliably exposing it in the packaged macOS Helper command line. The nonce
+  // therefore authenticates the worker's IPC readiness frame, while the OS
+  // identity below remains a separate compare-before-SIGKILL PID-reuse fence.
   const launchNonce = randomUUID();
   const child = utilityProcess.fork(entry, [`--aiden-inference-owner=${launchNonce}`], {
     serviceName: "Aiden Subagent Inference",
@@ -342,9 +345,7 @@ async function launchElectronInferenceProcess(
   const initialIdentity = readOwnedProcessIdentity(child.pid);
   const owned = new ElectronInferenceProcess(
     child,
-    initialIdentity.kind === "found" && initialIdentity.identity.includes(launchNonce)
-      ? initialIdentity.identity
-      : undefined,
+    initialIdentity.kind === "found" ? initialIdentity.identity : undefined,
     launchNonce,
   );
   return new Promise<KillableInferenceProcess>((resolve) => {
@@ -549,16 +550,8 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
           const env = Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined;
           requestOptions = { ...options, apiKey, headers, env };
         }
-        const {
-          signal,
-          onPayload: _onPayload,
-          onResponse: _onResponse,
-          transformHeaders: _transformHeaders,
-          ...serializable
-        } = requestOptions;
-        const prepared: SerializableStreamOptions = {
-          ...serializable,
-        };
+        const { signal } = requestOptions;
+        const prepared = prepareSubagentInferenceOptions(requestOptions);
         const requestSignals = [leaseSignal, signal, this.shutdownController.signal].filter(
           (candidate): candidate is AbortSignal => candidate !== undefined,
         );
@@ -573,7 +566,7 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
                 version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
                 requestId: randomUUID(),
                 model: requestModel,
-                context,
+                context: prepareSubagentInferenceContext(context),
                 options: prepared,
               },
               {
