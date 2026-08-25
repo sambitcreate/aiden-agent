@@ -61,6 +61,7 @@ class AidenRemoteClient(
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+        explicitNulls = false
     }
 
     private val httpClient: OkHttpClient = customOkHttpClient ?: createOkHttpClient(
@@ -495,7 +496,10 @@ class AidenRemoteClient(
     // --- Chats ---
     suspend fun chats(workspaceId: String? = null): List<AidenChat> {
         val query = if (workspaceId != null) "?workspaceId=$workspaceId" else ""
-        return executeRequest("/chats$query") { bytes ->
+        return executeRequest(
+            "/chats$query",
+            botScope = AidenBotPrivateResponseScope.ChatProjection
+        ) { bytes ->
             val resp = json.decodeFromString<ChatListResponse>(String(bytes, Charsets.UTF_8))
             resp.chats
         }
@@ -503,7 +507,7 @@ class AidenRemoteClient(
 
     suspend fun chat(id: String): AidenChat = executeRequest(
         "/chats/$id",
-        botScope = AidenBotPrivateResponseScope.BotClassifiedChat
+        botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         val c = json.decodeFromString<AidenChat>(String(bytes, Charsets.UTF_8))
         if (c.id != id) throw AidenRemoteClientException.InvalidResponse()
@@ -520,7 +524,8 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(ChatCreateRequest(workspaceId, providerId, modelId)),
         idempotencyKey = idempotencyKey,
-        acceptedStatus = setOf(201)
+        acceptedStatus = setOf(201),
+        botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
@@ -533,7 +538,8 @@ class AidenRemoteClient(
         "/chats/$id",
         method = "PATCH",
         ifMatchRevision = revision,
-        bodyJson = json.encodeToString(ChatUpdateRequest(title = title))
+        bodyJson = json.encodeToString(ChatUpdateRequest(title = title)),
+        botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
@@ -556,7 +562,8 @@ class AidenRemoteClient(
         method = "POST",
         ifMatchRevision = revision,
         idempotencyKey = idempotencyKey,
-        bodyJson = json.encodeToString(ChatMoveRequest(workspaceId = workspaceId))
+        bodyJson = json.encodeToString(ChatMoveRequest(workspaceId = workspaceId)),
+        botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
@@ -618,7 +625,8 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(request),
         idempotencyKey = idempotencyKey,
-        acceptedStatus = setOf(202)
+        acceptedStatus = setOf(202),
+        botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
