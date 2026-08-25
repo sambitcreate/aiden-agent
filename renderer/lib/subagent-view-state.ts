@@ -50,6 +50,8 @@ export interface SubagentRunViewCounts {
   failed: number;
   timedOut: number;
   interrupted: number;
+  stopped: number;
+  unknown: number;
 }
 
 export interface SubagentRunViewSplit {
@@ -430,6 +432,8 @@ export function summarizeSubagentRunViews(
     failed: all.filter(({ state }) => state === "failed").length,
     timedOut: all.filter(({ state }) => state === "timed_out").length,
     interrupted: all.filter(({ state }) => state === "interrupted").length,
+    stopped: all.filter(({ state }) => state === "stopped").length,
+    unknown: all.filter(({ state }) => state === "unknown").length,
   };
 }
 
@@ -463,7 +467,7 @@ const STATUS_LABELS: Record<SubagentRunViewState, string> = {
   interrupted: "Interrupted",
   needs_attention: "Needs attention",
   stopped: "Stopped",
-  unknown: "Finished",
+  unknown: "Outcome unknown",
 };
 
 export function subagentStatusLabel(state: SubagentRunViewState): string {
