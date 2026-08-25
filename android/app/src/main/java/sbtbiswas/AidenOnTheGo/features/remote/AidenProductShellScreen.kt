@@ -119,11 +119,22 @@ fun AidenProductShellScreen(
                 },
                 actions = {
                     if (activeArea == AidenProductArea.BOTS) {
-                        AidenToolbarAction(
-                            icon = Icons.Outlined.Add,
-                            contentDescription = "New Bot",
-                            onClick = { onNavigateToBotEditor(null) }
-                        )
+                        Surface(
+                            onClick = { onNavigateToBotEditor(null) },
+                            modifier = Modifier.size(40.dp),
+                            shape = CircleShape,
+                            color = palette.accent,
+                            shadowElevation = 2.dp
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Add,
+                                    contentDescription = "New Bot",
+                                    tint = androidx.compose.ui.graphics.Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
                         Spacer(Modifier.width(2.dp))
                     }
                     AidenToolbarAction(
