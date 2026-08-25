@@ -21,6 +21,7 @@ import {
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
   assertPackagedSubagentInferenceWorkerEntries,
+  assertPackagedParakeetWorkerEntries,
   assertPackagedNodePtyHelperEntries,
   assertNodePtySpawnHelperMode,
   assertSamePackagedArtifactIdentity,
@@ -30,6 +31,7 @@ import {
   verifyExactComputerUseHelperTree,
   verifyPackagedModelCatalogResources,
   verifyPackagedSubagentInferenceWorker,
+  verifyPackagedParakeetWorker,
   verifyPackagedNodePtyResources,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
@@ -201,6 +203,26 @@ test("package verifier requires a bounded packed subagent inference worker", asy
       verifyPackagedSubagentInferenceWorker(unpackedAsar),
       /bounded packed regular file/u,
     );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires a packed on-device transcription worker", async () => {
+  assert.doesNotThrow(() =>
+    assertPackagedParakeetWorkerEntries(["/build/main/parakeet-worker.js"]),
+  );
+  assert.throws(() => assertPackagedParakeetWorkerEntries([]), /transcription worker/u);
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-parakeet-worker-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const workerDirectory = path.join(source, "build", "main");
+  try {
+    await mkdir(workerDirectory, { recursive: true });
+    await writeFile(path.join(workerDirectory, "parakeet-worker.js"), "export {};\n");
+    const packedAsar = path.join(root, "packed.asar");
+    await createPackage(source, packedAsar);
+    await assert.doesNotReject(verifyPackagedParakeetWorker(packedAsar));
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
