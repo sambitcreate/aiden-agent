@@ -705,10 +705,18 @@ async function prepareGeneration(
       excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
     })
   ) {
+    const artifactStoreAvailability = displayImageArtifactStore.availability();
+    if (!artifactStoreAvailability.available) {
+      throw new Error(
+        `${artifactStoreAvailability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+      );
+    }
     const existingUsage = displayedAssistantImageUsage(chat.messages);
     const pendingUsage = await displayImageArtifactStore.usageByChat(params.chatId);
     if (pendingUsage.count > 0) {
-      throw new Error("Restart Aiden to recover the previous image response before continuing.");
+      throw new Error(
+        "A previous image response could not be recovered. Delete this chat to discard it before continuing.",
+      );
     }
     const displayImageRuntime = createDisplayImageExtensionRuntime({
       workspaceRoot: folderPath!,

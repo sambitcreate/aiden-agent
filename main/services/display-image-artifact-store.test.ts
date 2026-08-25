@@ -116,6 +116,81 @@ test("staging is idempotent and pending usage remains chat-scoped", async () => 
   });
 });
 
+test("pending usage projections do not clone staged image payloads", async () => {
+  const root = await storageRoot();
+  const store = new DisplayImageArtifactStore({ root: () => root });
+  await store.initialize();
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "generation-1",
+    artifact: artifact("image-1"),
+    pixels: 1,
+  });
+  const structuredCloneDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "structuredClone",
+  );
+  Object.defineProperty(globalThis, "structuredClone", {
+    configurable: true,
+    writable: true,
+    value: () => {
+      throw new Error("usage queries must not clone payloads");
+    },
+  });
+  try {
+    assert.deepEqual(await store.usageByChat("chat-1"), {
+      bytes: ONE_PIXEL_PNG.length,
+      count: 1,
+      pixels: 1,
+    });
+    assert.equal(await store.hasPending("chat-1"), true);
+  } finally {
+    if (structuredCloneDescriptor) {
+      Object.defineProperty(globalThis, "structuredClone", structuredCloneDescriptor);
+    }
+  }
+});
+
+test("unreadable staging is quarantined without blocking unrelated chats", async () => {
+  const root = await storageRoot();
+  const file = path.join(root, "display-image-artifacts.json");
+  await fs.writeFile(file, "{", "utf8");
+  const store = new DisplayImageArtifactStore({ root: () => root });
+
+  await store.initialize();
+
+  assert.deepEqual(store.availability(), { available: true });
+  assert.equal(await store.hasPending("chat-1"), false);
+  const preserved = store.quarantinedPath();
+  assert.ok(preserved);
+  assert.ok(preserved.startsWith(`${file}.invalid-`));
+  assert.equal(await fs.readFile(preserved, "utf8"), "{");
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "generation-1",
+    artifact: artifact("image-1"),
+    pixels: 1,
+  });
+  assert.equal(await store.hasPending("chat-1"), true);
+  assert.doesNotMatch(await fs.readFile(file, "utf8"), /^\{$/u);
+});
+
+test("unsupported staging is quarantined before a clean store is opened", async () => {
+  const root = await storageRoot();
+  const file = path.join(root, "display-image-artifacts.json");
+  const unsupported = JSON.stringify({ version: 99, records: [] });
+  await fs.writeFile(file, unsupported, "utf8");
+  const store = new DisplayImageArtifactStore({ root: () => root });
+
+  await store.initialize();
+
+  assert.deepEqual(store.availability(), { available: true });
+  assert.equal(await store.hasPending("chat-1"), false);
+  const preserved = store.quarantinedPath();
+  assert.ok(preserved);
+  assert.equal(await fs.readFile(preserved, "utf8"), unsupported);
+});
+
 test("startup recovery retains the only durable copy when chat storage is unresolved", async () => {
   const root = await storageRoot();
   const store = new DisplayImageArtifactStore({ root: () => root });
@@ -275,7 +350,8 @@ test("main blocks new sends and copies until staged artifacts are recovered", as
   );
   assert.match(handlers, /displayImageArtifactStore\.hasPending\(chatId\)/u);
   assert.match(handlers, /displayImageArtifactStore\.hasPending\(parsed\.chatId\)/u);
-  assert.match(handlers, /Restart Aiden to recover the previous image response/iu);
+  assert.match(handlers, /Delete this chat to discard it/iu);
+  assert.match(handlers, /developer log to locate the staging file that needs repair/iu);
   const exportHandler = handlers.slice(handlers.indexOf('ipcMain.handle("chats:export"'));
   assert.match(exportHandler, /displayImageArtifactStore\.hasPending\(chatId\)/u);
   const readHandler = handlers.slice(
@@ -296,4 +372,6 @@ test("startup marks crash-recovered image generations as interrupted", async () 
   const recovery = index.slice(index.indexOf("displayImageArtifactStore.recover("));
   assert.match(recovery, /category: "interrupted"/u);
   assert.match(recovery, /attachments,/u);
+  assert.match(recovery, /Could not recover staged image artifacts/iu);
+  assert.match(recovery, /affected chats remain blocked/iu);
 });

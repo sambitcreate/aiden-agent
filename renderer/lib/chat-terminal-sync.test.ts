@@ -351,6 +351,7 @@ test("a provisional stale read survives a missed settlement event until authorit
   const response = parseChatReadResponse({
     chat: stale,
     imageArtifactRecoveryPending: false,
+    imageArtifactRecoveryUnavailable: false,
     reconciliation: {
       chatId: stale.id,
       workspaceId: stale.workspaceId,
@@ -405,11 +406,27 @@ test("chat read reconciliation metadata is bounded, content-free, and owner-boun
     parseChatReadResponse({
       chat: stale,
       imageArtifactRecoveryPending: true,
+      imageArtifactRecoveryUnavailable: false,
       reconciliation: null,
     }),
     {
       chat: stale,
       imageArtifactRecoveryPending: true,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: null,
+    },
+  );
+  assert.deepEqual(
+    parseChatReadResponse({
+      chat: stale,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: true,
+      reconciliation: null,
+    }),
+    {
+      chat: stale,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: true,
       reconciliation: null,
     },
   );
@@ -418,16 +435,19 @@ test("chat read reconciliation metadata is bounded, content-free, and owner-boun
     {
       chat: stale,
       imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
       reconciliation: { chatId: "chat-b", workspaceId: "workspace-1" },
     },
     {
       chat: stale,
       imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
       reconciliation: { chatId: "chat-a", workspaceId: "/private/path" },
     },
     {
       chat: stale,
       imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
       reconciliation: {
         chatId: "chat-a",
         workspaceId: "x".repeat(500),

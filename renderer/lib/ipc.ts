@@ -632,6 +632,7 @@ export const chatsApi = {
       ? {
           ...response.chat,
           imageArtifactRecoveryPending: response.imageArtifactRecoveryPending,
+          imageArtifactRecoveryUnavailable: response.imageArtifactRecoveryUnavailable,
         }
       : null;
   },

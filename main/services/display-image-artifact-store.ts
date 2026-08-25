@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { DataStore } from "./data-store.js";
 import type { Attachment } from "./types.js";
 import { parseChatArtifactV1, type ChatArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
@@ -199,29 +201,79 @@ function stagedUsage(records: readonly StagedDisplayImageArtifact[]): DisplayIma
 
 /** Durable payload staging for non-replayable display effects. */
 export class DisplayImageArtifactStore {
-  private readonly data: DataStore<DisplayImageArtifactDatabase>;
+  private data: DataStore<DisplayImageArtifactDatabase>;
+  private readonly options: DisplayImageArtifactStoreOptions;
+  private readonly ownsDataStore: boolean;
   private readonly now: () => number;
   private initialized = false;
+  private unavailableReason: string | null = null;
+  private quarantinedStorePath: string | null = null;
 
   constructor(options: DisplayImageArtifactStoreOptions = {}) {
+    this.options = options;
+    this.ownsDataStore = options.dataStore === undefined;
     this.data = options.dataStore ?? createDataStore(options);
     this.now = options.now ?? Date.now;
+  }
+
+  private async quarantineInvalidStore(reason: string): Promise<boolean> {
+    if (!this.ownsDataStore) return false;
+    const source = await this.data.path();
+    const stamp = new Date(this.now()).toISOString().replace(/[:.]/gu, "-");
+    const preserved = `${source}.invalid-${stamp}-${randomUUID()}`;
+    try {
+      await fs.rename(source, preserved);
+      const replacement = createDataStore(this.options);
+      await replacement.load();
+      if (
+        (await replacement.loadedFromCorruptFile()) ||
+        (await replacement.loadedFromUnsafeFile())
+      ) {
+        throw new Error("The replacement display-image artifact store is unavailable.");
+      }
+      this.data = replacement;
+      this.quarantinedStorePath = preserved;
+      return true;
+    } catch (error) {
+      this.unavailableReason = `${reason} Aiden could not move ${source} to ${preserved}: ${error instanceof Error ? error.message : String(error)}`;
+      return false;
+    }
   }
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
     await this.data.load();
+    let unavailableReason: string | null = null;
     if (await this.data.loadedFromCorruptFile()) {
-      throw new Error("Display-image artifact staging is unreadable and was preserved.");
+      unavailableReason = "Display-image artifact staging is unreadable.";
+    } else if (await this.data.loadedFromUnsafeFile()) {
+      unavailableReason = "Display-image artifact staging has an unsupported shape.";
     }
-    if (await this.data.loadedFromUnsafeFile()) {
-      throw new Error("Display-image artifact staging has an unsupported shape.");
+    if (unavailableReason && !(await this.quarantineInvalidStore(unavailableReason))) {
+      this.unavailableReason ??= unavailableReason;
     }
     this.initialized = true;
   }
 
   private requireInitialized(): void {
     if (!this.initialized) throw new Error("Display-image artifact staging is not initialized.");
+  }
+
+  availability(): { available: true } | { available: false; reason: string } {
+    this.requireInitialized();
+    return this.unavailableReason
+      ? { available: false, reason: this.unavailableReason }
+      : { available: true };
+  }
+
+  quarantinedPath(): string | null {
+    this.requireInitialized();
+    return this.quarantinedStorePath;
+  }
+
+  private requireAvailable(): void {
+    this.requireInitialized();
+    if (this.unavailableReason) throw new Error(this.unavailableReason);
   }
 
   async stage(input: {
@@ -231,7 +283,7 @@ export class DisplayImageArtifactStore {
     artifact: ChatArtifactV1;
     pixels: number;
   }): Promise<"inserted" | "existing"> {
-    this.requireInitialized();
+    this.requireAvailable();
     const parsed = parseRecord({
       version: STORE_VERSION,
       ...input,
@@ -274,7 +326,7 @@ export class DisplayImageArtifactStore {
   }
 
   async remove(chatId: string, artifactIds: readonly string[]): Promise<void> {
-    this.requireInitialized();
+    this.requireAvailable();
     if (!boundedIdentity(chatId) || artifactIds.some((id) => !boundedIdentity(id))) {
       throw new Error("Invalid display-image artifact cleanup identity.");
     }
@@ -290,7 +342,7 @@ export class DisplayImageArtifactStore {
   }
 
   async deleteChat(chatId: string): Promise<void> {
-    this.requireInitialized();
+    this.requireAvailable();
     if (!boundedIdentity(chatId)) return;
     await this.data.update((database) => {
       const before = database.records.length;
@@ -300,7 +352,7 @@ export class DisplayImageArtifactStore {
   }
 
   async pending(): Promise<readonly StagedDisplayImageArtifact[]> {
-    this.requireInitialized();
+    this.requireAvailable();
     return structuredClone((await this.data.load()).records);
   }
 
@@ -309,12 +361,15 @@ export class DisplayImageArtifactStore {
   }
 
   async usageByChat(chatId: string): Promise<DisplayImageArtifactUsage> {
-    this.requireInitialized();
+    this.requireAvailable();
     if (!boundedIdentity(chatId)) throw new Error("Invalid display-image artifact chat identity.");
-    return stagedUsage((await this.pending()).filter((record) => record.chatId === chatId));
+    return stagedUsage((await this.data.load()).records.filter((record) => record.chatId === chatId));
   }
 
   async hasPending(chatId: string): Promise<boolean> {
+    this.requireInitialized();
+    if (!boundedIdentity(chatId)) throw new Error("Invalid display-image artifact chat identity.");
+    if (this.unavailableReason) return true;
     const usage = await this.usageByChat(chatId);
     return usage.count > 0;
   }
@@ -324,7 +379,7 @@ export class DisplayImageArtifactStore {
     chats: readonly DisplayImageArtifactRecoveryChat[],
     append: (message: RecoveredDisplayImageMessage) => Promise<void>,
   ): Promise<void> {
-    this.requireInitialized();
+    this.requireAvailable();
     const chatById = new Map(chats.map((chat) => [chat.id, chat]));
     const records = await this.pending();
     const recordsByChat = new Map<string, StagedDisplayImageArtifact[]>();

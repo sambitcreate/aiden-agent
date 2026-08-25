@@ -485,6 +485,8 @@ export interface Chat extends ChatMeta {
   computerUseEnabled?: boolean;
   /** Main-owned crash stage exists and must be recovered before another chat mutation. */
   imageArtifactRecoveryPending?: boolean;
+  /** Main-owned image staging could not be opened or quarantined automatically. */
+  imageArtifactRecoveryUnavailable?: boolean;
   messages: ChatMessage[];
 }
 
@@ -495,6 +497,7 @@ export interface Chat extends ChatMeta {
 export interface ChatReadResponse {
   chat: Chat | null;
   imageArtifactRecoveryPending: boolean;
+  imageArtifactRecoveryUnavailable: boolean;
   reconciliation: {
     chatId: string;
     workspaceId: string;
