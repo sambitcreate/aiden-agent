@@ -55,6 +55,8 @@ export interface SubagentTaskResult {
   label: string;
   status: SubagentTaskStatus;
   summary: string;
+  /** Present only when the completed-summary producer shortened the authored report. */
+  summaryTruncated?: true;
   warning?: string;
 }
 
