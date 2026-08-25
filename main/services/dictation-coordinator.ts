@@ -121,7 +121,7 @@ export class DictationCoordinator {
     this.deps.broadcast({ state: "stopping" });
   }
 
-  /** Hotkey press. Toggle mode starts/stops; hold mode starts and ignores repeats. */
+  /** Hotkey press. Toggle mode starts/stops; hold mode starts, ignores down-repeats, and stops once release is in flight. */
   press(): Promise<void> {
     return this.enqueue(async () => {
       this.clearHideTimer();
@@ -188,6 +188,10 @@ export class DictationCoordinator {
       }
       if (this.stage !== "recording") return;
       this.clearReleaseTimer();
+      // End the key watch before the grace window so a re-press can still
+      // stop recording. Leaving the watch "active" would ignore that press
+      // after this timer is cancelled.
+      this.endHoldWatch();
       this.releaseTimer = this.deps.setTimer(() => {
         this.releaseTimer = null;
         void this.enqueue(() => {
