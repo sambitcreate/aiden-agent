@@ -369,6 +369,11 @@ export function registerProviderHandlers(): void {
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
+    if (typeof p.dictationHoldToTalk === "boolean") next.dictationHoldToTalk = p.dictationHoldToTalk;
+    if (typeof p.dictationSilenceStop === "boolean")
+      next.dictationSilenceStop = p.dictationSilenceStop;
+    if (typeof p.dictationCleanup === "boolean") next.dictationCleanup = p.dictationCleanup;
+    if (typeof p.dictationSounds === "boolean") next.dictationSounds = p.dictationSounds;
     if (typeof p.showLocalModelReasoning === "boolean")
       next.showLocalModelReasoning = p.showLocalModelReasoning;
     if (typeof p.dictationAccelerator === "string")

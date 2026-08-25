@@ -461,13 +461,21 @@ export interface AppSettings {
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
-  /** Selected on-device Whisper model id (see local-models catalog). */
+  /** Selected on-device speech model id (see local-models catalog). */
   localVoiceModel?: string;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  /** Hold the dictation shortcut to record; release to transcribe. */
+  dictationHoldToTalk?: boolean;
+  /** End dictation shortly after silence. */
+  dictationSilenceStop?: boolean;
+  /** Polish the transcript with the current chat model before paste. */
+  dictationCleanup?: boolean;
+  /** Play start/stop/done cues from the dictation pill. */
+  dictationSounds?: boolean;
   /** Versioned command overrides. Legacy global fields remain migration fallbacks. */
   keybindings?: KeybindingOverridesV1;
   /** Background chat-title generation policy. Defaults to automatic. */

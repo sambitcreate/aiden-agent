@@ -8,6 +8,7 @@ import {
   handleDictationError,
   handleDictationResult,
   handlePillReady,
+  stopDictationRecording,
 } from "../services/dictation.js";
 
 export function registerDictationHandlers(): void {
@@ -26,5 +27,9 @@ export function registerDictationHandlers(): void {
   ipcMain.handle("dictation:ready", (event) => {
     if (!isCurrentPillEvent(event)) throw new Error("Untrusted dictation ready sender.");
     return handlePillReady();
+  });
+  ipcMain.handle("dictation:stop", (event) => {
+    if (!isCurrentPillEvent(event)) throw new Error("Untrusted dictation stop sender.");
+    return stopDictationRecording();
   });
 }

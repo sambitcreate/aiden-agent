@@ -3,6 +3,7 @@ import test from "node:test";
 import type { DictationStatePayload } from "../../renderer/shared/dictation.js";
 import {
   DictationCoordinator,
+  HOLD_RELEASE_GRACE_MS,
   type DictationCoordinatorDeps,
 } from "./dictation-coordinator.js";
 
@@ -97,4 +98,148 @@ test("a hotkey cancels a stuck transcription and ignores its late result", async
     "cancelled",
   ]);
   assert.equal(subject.coordinator.currentStage, "idle");
+});
+
+test("hold-to-talk release stops recording after the grace window", async () => {
+  let grace: (() => void) | undefined;
+  const subject = harness({
+    isHoldToTalk: () => true,
+    getHoldKeyCode: () => 2,
+    startHoldWatch: () => () => {},
+    setTimer: (callback, delayMs) => {
+      if (delayMs === HOLD_RELEASE_GRACE_MS) grace = callback;
+      return setTimeout(() => {}, 60_000);
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  await subject.coordinator.release();
+  assert.ok(grace);
+  grace();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
+});
+
+test("hold-to-talk falls back to press-to-stop when the key watch cannot start", async () => {
+  const subject = harness({
+    isHoldToTalk: () => true,
+    getHoldKeyCode: () => 2,
+    startHoldWatch: () => null,
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
+});
+
+test("hold-to-talk falls back to press-to-stop when the key watch dies after start", async () => {
+  let failWatch: (() => void) | undefined;
+  const subject = harness({
+    isHoldToTalk: () => true,
+    getHoldKeyCode: () => 2,
+    startHoldWatch: (_keyCode, _onRelease, onFailed) => {
+      failWatch = onFailed;
+      return () => {};
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  failWatch?.();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
+});
+
+test("hold-to-talk falls back to press-to-stop when the key watch throws", async () => {
+  const subject = harness({
+    isHoldToTalk: () => true,
+    getHoldKeyCode: () => 2,
+    startHoldWatch: () => {
+      throw new Error("watch failed");
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
+});
+
+test("hold-to-talk re-press during the release grace window still stops recording", async () => {
+  let grace: (() => void) | undefined;
+  let watchStops = 0;
+  const subject = harness({
+    isHoldToTalk: () => true,
+    getHoldKeyCode: () => 2,
+    startHoldWatch: () => () => {
+      watchStops += 1;
+    },
+    setTimer: (callback, delayMs) => {
+      if (delayMs === HOLD_RELEASE_GRACE_MS) grace = callback;
+      return setTimeout(() => {}, 60_000);
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.release();
+  assert.ok(watchStops >= 1);
+  assert.equal(subject.coordinator.currentStage, "recording");
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
+  grace?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+});
+
+test("hold-to-talk repeats do not stop while the key watch is active", async () => {
+  const subject = harness({
+    isHoldToTalk: () => true,
+    getHoldKeyCode: () => 2,
+    startHoldWatch: () => () => {},
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording"]);
+});
+
+test("silence stop ends an in-progress recording", async () => {
+  const subject = harness();
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.stopRecording();
+  assert.equal(subject.coordinator.currentStage, "transcribing");
+  assert.deepEqual(subject.events.map((event) => event.state), ["recording", "stopping"]);
+});
+
+test("cleanup failures still paste the original transcript", async () => {
+  const pasted: string[] = [];
+  const subject = harness({
+    shouldCleanup: () => true,
+    cleanupTranscript: async () => {
+      throw new Error("model unavailable");
+    },
+    paste: async (text) => {
+      pasted.push(text);
+      return "pasted";
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  await subject.coordinator.result("hello there");
+  assert.deepEqual(pasted, ["hello there"]);
+  assert.deepEqual(subject.events.map((event) => event.state), [
+    "recording",
+    "stopping",
+    "pasted",
+  ]);
 });

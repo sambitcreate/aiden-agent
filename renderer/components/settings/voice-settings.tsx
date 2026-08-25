@@ -15,6 +15,7 @@ import {
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useSettings } from "../../lib/queries";
 import type { VoiceProvider } from "../../lib/types";
+import { DictationShortcutSettings } from "./dictation-shortcut-settings";
 import { LocalVoiceSettings } from "./local-voice-settings";
 
 const CLOUD_MODELS: Record<"openai" | "gemini", string[]> = {
@@ -77,6 +78,7 @@ export function VoiceSettings() {
       </FieldSet>
 
       {provider === "local" ? <LocalVoiceSettings /> : null}
+      <DictationShortcutSettings />
     </div>
   );
 }

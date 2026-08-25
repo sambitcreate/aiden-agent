@@ -18,6 +18,9 @@ import {
   DictationOperationGate,
   withDictationTimeout,
 } from "../lib/dictation-operation-gate";
+import { analyserRms, SilenceStopDetector } from "../lib/dictation-vad";
+import { playDictationCue } from "../lib/dictation-sounds";
+import { scheduleRecorderStopWithTail, startChunkedMediaRecorder } from "../lib/media-recorder-stop";
 import { startPillAppearanceSync } from "../lib/pill-appearance";
 
 type Phase = "idle" | "recording" | "transcribing" | "pasted" | "copied" | "error";
@@ -48,8 +51,12 @@ export function PillApp() {
   const barRefs = React.useRef<Array<HTMLDivElement | null>>([]);
   const rafRef = React.useRef(0);
   const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const operationGateRef = React.useRef(new DictationOperationGate());
   const appearanceReadyRef = React.useRef<Promise<void>>(Promise.resolve());
+  const silenceStopRef = React.useRef(false);
+  const soundsEnabledRef = React.useRef(false);
+  const silenceDetectorRef = React.useRef<SilenceStopDetector | null>(null);
 
   React.useEffect(() => {
     const sync = startPillAppearanceSync();
@@ -65,6 +72,12 @@ export function PillApp() {
     }
   }, []);
 
+  const clearStopTimer = React.useCallback(() => {
+    if (!stopTimerRef.current) return;
+    clearTimeout(stopTimerRef.current);
+    stopTimerRef.current = null;
+  }, []);
+
   const releaseRecording = React.useCallback(
     (active: ActiveRecording) => {
       stopWaveform();
@@ -77,8 +90,13 @@ export function PillApp() {
 
   const startWaveform = React.useCallback((analyser: AnalyserNode) => {
     const bins = new Uint8Array(analyser.frequencyBinCount);
+    const timeDomain = new Uint8Array(analyser.fftSize);
     const paint = () => {
       analyser.getByteFrequencyData(bins);
+      if (silenceStopRef.current) {
+        analyser.getByteTimeDomainData(timeDomain);
+        silenceDetectorRef.current?.sample(analyserRms(timeDomain));
+      }
       // Skip the DC/lowest bins and bucket the useful range into the bar count.
       const usable = Math.floor(bins.length * 0.7);
       for (let i = 0; i < WAVEFORM_BARS; i += 1) {
@@ -121,6 +139,7 @@ export function PillApp() {
       const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       const audioContext = new AudioContext();
       pendingAudioContext = audioContext;
+      void audioContext.resume().catch(() => {});
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       audioContext.createMediaStreamSource(stream).connect(analyser);
@@ -162,9 +181,27 @@ export function PillApp() {
       pendingStream = null;
       pendingAudioContext = null;
       operationGateRef.current.finishStart(token);
-      recorder.start();
+      const settings = await settingsApi.get();
+      if (!operationGateRef.current.isCurrent(token)) {
+        active.cancelled = true;
+        if (active.recorder.state !== "inactive") active.recorder.stop();
+        else releaseRecording(active);
+        return;
+      }
+      silenceStopRef.current = settings.dictationSilenceStop === true;
+      soundsEnabledRef.current = settings.dictationSounds === true;
+      if (silenceStopRef.current) {
+        silenceDetectorRef.current = new SilenceStopDetector(() => {
+          void dictationApi.stopRecording();
+        });
+        silenceDetectorRef.current.reset();
+      } else {
+        silenceDetectorRef.current = null;
+      }
+      startChunkedMediaRecorder(recorder);
       setElapsed(0);
       setPhase("recording");
+      if (soundsEnabledRef.current) void playDictationCue("start");
       startWaveform(analyser);
       timerRef.current = setInterval(() => setElapsed((value) => value + 1), 1_000);
     } catch (error) {
@@ -180,11 +217,14 @@ export function PillApp() {
 
   const stopRecording = React.useCallback(() => {
     const active = recordingRef.current;
-    if (active && active.recorder.state !== "inactive") active.recorder.stop();
-  }, []);
+    if (!active || active.recorder.state === "inactive") return;
+    clearStopTimer();
+    stopTimerRef.current = scheduleRecorderStopWithTail(active.recorder, setTimeout);
+  }, [clearStopTimer]);
 
   const discardRecording = React.useCallback(() => {
     operationGateRef.current.cancel();
+    clearStopTimer();
     const active = recordingRef.current;
     if (active) {
       active.cancelled = true;
@@ -193,7 +233,7 @@ export function PillApp() {
     }
     stopWaveform();
     setPhase("idle");
-  }, [releaseRecording, stopWaveform]);
+  }, [clearStopTimer, releaseRecording, stopWaveform]);
 
   React.useEffect(() => {
     let active = true;
@@ -203,16 +243,20 @@ export function PillApp() {
           void startRecording();
           break;
         case "stopping":
+          if (soundsEnabledRef.current) void playDictationCue("stop");
           stopRecording();
           break;
         case "pasted":
+          if (soundsEnabledRef.current) void playDictationCue("success");
           setPhase("pasted");
           break;
         case "copied":
+          if (soundsEnabledRef.current) void playDictationCue("success");
           setPhase("copied");
           break;
         case "error":
           stopWaveform();
+          if (soundsEnabledRef.current) void playDictationCue("error");
           setErrorMessage(payload.message ?? "Dictation failed.");
           setPhase("error");
           break;
@@ -238,6 +282,7 @@ export function PillApp() {
   React.useEffect(
     () => () => {
       operationGateRef.current.cancel();
+      if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
       const active = recordingRef.current;
       if (!active) return;
       active.cancelled = true;

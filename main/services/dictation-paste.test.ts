@@ -35,6 +35,8 @@ test("native paste transaction preserves all pasteboard representations and rech
   assert.match(ATOMIC_PASTE_SCRIPT, /unix id of currentProcess/);
   assert.match(ATOMIC_PASTE_SCRIPT, /currentElement is not targetElement/);
   assert.match(ATOMIC_PASTE_SCRIPT, /clipboard as text.*transcriptText/s);
+  assert.match(ATOMIC_PASTE_SCRIPT, /quietWindow/);
+  assert.match(ATOMIC_PASTE_SCRIPT, /is not transcriptText then return "pasted"/);
   assert.match(ATOMIC_PASTE_SCRIPT, /set the clipboard to previousClipboard/);
 });
 

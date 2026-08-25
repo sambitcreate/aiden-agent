@@ -448,6 +448,8 @@ export const dictationApi = {
   cancel: () => invoke<void>("dictation:cancel"),
   /** Pill renderer is mounted and subscribed to dictation state broadcasts. */
   ready: () => invoke<void>("dictation:ready"),
+  /** Silence detector or UI asked to end capture without cancelling. */
+  stopRecording: () => invoke<void>("dictation:stop"),
 };
 
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */

@@ -3,6 +3,7 @@ export const PILL_INVOKE_CHANNELS = new Set([
   "dictation:error",
   "dictation:ready",
   "dictation:result",
+  "dictation:stop",
   "settings:get",
   "settings:getAppearance",
   "voice:transcribe",

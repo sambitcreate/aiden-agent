@@ -709,6 +709,10 @@ export interface AppSettings {
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  dictationHoldToTalk?: boolean;
+  dictationSilenceStop?: boolean;
+  dictationCleanup?: boolean;
+  dictationSounds?: boolean;
   keybindings?: KeybindingOverridesV1;
   chatTitleProviderId?: ChatTitleProviderId;
   appearance?: AppearanceConfig;
