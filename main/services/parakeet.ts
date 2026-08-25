@@ -3,6 +3,7 @@
 
 import { fileURLToPath } from "node:url";
 import type { UtilityProcess } from "electron";
+import { pcmToFloat32 } from "../handlers/voice-codec.js";
 import { isModelInstalled, modelDir } from "./local-models.js";
 import {
   engineStatus as engineStatusInProcess,
@@ -14,12 +15,6 @@ import { ParakeetProcessClient } from "./parakeet-process-core.js";
 let client: ParakeetProcessClient | null = null;
 let child: UtilityProcess | null = null;
 let launching: Promise<ParakeetProcessClient> | null = null;
-
-function float32ToBase64(samples: Float32Array): string {
-  const bytes = Buffer.alloc(samples.byteLength);
-  for (let i = 0; i < samples.length; i += 1) bytes.writeFloatLE(samples[i] ?? 0, i * 4);
-  return bytes.toString("base64");
-}
 
 function attachUtilityProcess(processHandle: UtilityProcess): ParakeetProcessClient {
   return new ParakeetProcessClient({
@@ -100,7 +95,7 @@ export async function releaseRecognizer(modelId: string): Promise<void> {
   }
 }
 
-export async function transcribePcm(samples: Float32Array, modelId: string): Promise<string> {
+export async function transcribePcmBase64(pcmBase64: string, modelId: string): Promise<string> {
   const directory = modelDir(modelId);
   if (!directory || !isModelInstalled(modelId)) {
     throw new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.");
@@ -111,8 +106,26 @@ export async function transcribePcm(samples: Float32Array, modelId: string): Pro
     ).transcribe({
       modelId,
       modelDirectory: directory,
-      pcmBase64: float32ToBase64(samples),
+      pcmBase64,
     });
+  } catch (error) {
+    if (isolationUnavailable(error)) {
+      return transcribePcmInProcess(pcmToFloat32(pcmBase64), modelId, directory);
+    }
+    throw error;
+  }
+}
+
+export async function transcribePcm(samples: Float32Array, modelId: string): Promise<string> {
+  const directory = modelDir(modelId);
+  if (!directory || !isModelInstalled(modelId)) {
+    throw new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.");
+  }
+  try {
+    return await transcribePcmBase64(
+      Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength).toString("base64"),
+      modelId,
+    );
   } catch (error) {
     if (isolationUnavailable(error)) return transcribePcmInProcess(samples, modelId, directory);
     throw error;
