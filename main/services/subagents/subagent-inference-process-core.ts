@@ -21,6 +21,7 @@ import {
   MAX_SUBAGENT_INFERENCE_MESSAGE_BYTES,
   SubagentInferenceOutboundBudget,
   SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+  toSubagentInferenceWireMessage,
 } from "./subagent-inference-protocol.js";
 
 const TERM_GRACE_MS = 250;
@@ -29,6 +30,8 @@ const KILL_GRACE_MS = 750;
 export interface KillableInferenceProcess {
   /** Prove that this handle is bound to the exact launched OS process. */
   isLaunchVerified(): boolean;
+  /** Authenticate the loaded worker before provider construction or network work. */
+  verifyReadyIdentity(launchToken: string): boolean;
   postMessage(message: unknown): void;
   terminate(): boolean;
   /** Hard-kill only the launch identity captured by this owned handle. */
@@ -114,6 +117,12 @@ export class SubagentInferenceProcessOwner {
     let workerMessageObserved = false;
     let exitCode: number | null | undefined;
     const outboundBudget = new SubagentInferenceOutboundBudget();
+    const postToWorker = (message: import("./subagent-inference-protocol.js").SubagentInferenceParentMessage) => {
+      if (!process) throw new Error("The isolated inference process is unavailable.");
+      const wire = toSubagentInferenceWireMessage(message);
+      outboundBudget.consume(wire);
+      process.postMessage(wire);
+    };
     let exited = false;
     let resolveExit!: () => void;
     const exit = new Promise<void>((resolve) => (resolveExit = resolve));
@@ -126,7 +135,7 @@ export class SubagentInferenceProcessOwner {
     const terminate = async () => {
       if (!process || exited) return;
       try {
-        process.postMessage({
+        postToWorker({
           kind: "cancel",
           version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
           requestId: request.requestId,
@@ -268,14 +277,22 @@ export class SubagentInferenceProcessOwner {
           }
           const message = raw as SubagentInferenceWorkerMessage;
           if (message.kind === "ready") {
+            if (!process?.verifyReadyIdentity(message.launchToken)) {
+              fail("The isolated subagent inference process sent an invalid readiness identity.", "inference", {
+                stage: "protocol",
+                code: "invalid_message",
+                durationMs: performance.now() - startedAt,
+              });
+              void stopOwnedProcess();
+              return;
+            }
             try {
               const acknowledgement = {
                 kind: "ready-ack",
                 version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
                 requestId: request.requestId,
               } as const;
-              outboundBudget.consume(acknowledgement);
-              process?.postMessage(acknowledgement);
+              postToWorker(acknowledgement);
             } catch {
               fail("The isolated inference readiness acknowledgement failed.", "inference", {
                 stage: "protocol",
@@ -299,7 +316,7 @@ export class SubagentInferenceProcessOwner {
                 version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
                 requestId: request.requestId,
               } as const;
-              process?.postMessage(acknowledgement);
+              postToWorker(acknowledgement);
             } catch {
               setFailure(
                 "The isolated inference terminal acknowledgement failed.",
@@ -336,8 +353,7 @@ export class SubagentInferenceProcessOwner {
                 callId: message.callId,
                 ...(payload === undefined ? {} : { payload }),
               } as const;
-              outboundBudget.consume(reply);
-              process?.postMessage(reply);
+              postToWorker(reply);
             })().catch(() => {
               fail("A main-owned provider hook failed.", "policy", {
                 stage: "provider_hook",
@@ -382,7 +398,7 @@ export class SubagentInferenceProcessOwner {
               requestId: request.requestId,
             } as const;
             try {
-              process?.postMessage(acknowledgement);
+              postToWorker(acknowledgement);
             } catch {
               terminalAuthenticationFailure = false;
               terminalProviderFailureCategory = undefined;
@@ -409,8 +425,7 @@ export class SubagentInferenceProcessOwner {
         await stopOwnedProcess();
         throw signal.reason ?? new Error("Subagent inference cancelled.");
       }
-      outboundBudget.consume(request);
-      process.postMessage(request);
+      postToWorker(request);
       await exit;
       if (!terminal) {
         const durationMs = performance.now() - startedAt;
