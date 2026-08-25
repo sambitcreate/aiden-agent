@@ -68,7 +68,11 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
     exact: true,
   });
   await expect(profileName).toHaveText("E2E Local User");
-  await page.getByRole("button", { name: "Edit profile name" }).click();
+  // Exercise the keyboard path so a short-lived success toast from the
+  // scheduled-task editor cannot intercept an otherwise valid pointer click.
+  const editProfileName = page.getByRole("button", { name: "Edit profile name" });
+  await editProfileName.focus();
+  await page.keyboard.press("Enter");
   const profileInput = page.getByRole("textbox", { name: "Profile name" });
   await profileInput.fill("   ");
   await expect(page.getByRole("button", { name: "Save profile name" })).toBeDisabled();

@@ -1,10 +1,29 @@
 import https from "node:https";
+import type { Page } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-async function remoteHealth(): Promise<{ status: number; body: unknown }> {
+type RemoteRuntimeStatus = {
+  enabled: boolean;
+  running: boolean;
+  lanPort: number;
+};
+
+async function remoteStatus(page: Page): Promise<RemoteRuntimeStatus> {
+  return page.evaluate(async () => {
+    const bridge = (window as unknown as {
+      aidenAPI: { ipc: { invoke(channel: string): Promise<unknown> } };
+    }).aidenAPI;
+    const snapshot = await bridge.ipc.invoke("remote:get") as {
+      status: RemoteRuntimeStatus;
+    };
+    return snapshot.status;
+  });
+}
+
+async function remoteHealth(port: number): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const request = https.get(
-      "https://127.0.0.1:49220/api/aiden/v1/health",
+      `https://127.0.0.1:${port}/api/aiden/v1/health`,
       { rejectUnauthorized: false, timeout: 3_000 },
       (response) => {
         const chunks: Buffer[] = [];
@@ -35,17 +54,19 @@ test("Remote Access is opt-in and remains available after the main window closes
 
   const enabled = page.getByRole("switch", { name: "Enable Aiden Remote Access" });
   await expect(enabled).toHaveAttribute("data-state", "unchecked");
-  await expect(remoteHealth()).rejects.toThrow();
+  expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
   await enabled.click();
   await expect(enabled).toHaveAttribute("data-state", "checked");
   await expect(
     page.getByRole("group").filter({ has: enabled })
       .getByText("Ready for a device", { exact: true }),
   ).toBeVisible();
-  assertHealth(await remoteHealth());
+  const running = await remoteStatus(page);
+  expect(running).toMatchObject({ enabled: true, running: true });
+  assertHealth(await remoteHealth(running.lanPort));
 
   await page.close();
-  assertHealth(await remoteHealth());
+  assertHealth(await remoteHealth(running.lanPort));
 });
 
 function assertHealth(result: { status: number; body: unknown }): void {
