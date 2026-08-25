@@ -24,7 +24,11 @@ export interface DictationCoordinatorDeps {
   cleanupTranscript?: (text: string) => Promise<string>;
   shouldCleanup?: () => boolean | Promise<boolean>;
   getHoldKeyCode?: () => number | null | Promise<number | null>;
-  startHoldWatch?: (keyCode: number, onRelease: () => void) => () => void;
+  startHoldWatch?: (
+    keyCode: number,
+    onRelease: () => void,
+    onFailed?: () => void,
+  ) => (() => void) | null | undefined;
 }
 
 const RESULT_HIDE_DELAY_MS = 1_200;
@@ -88,9 +92,16 @@ export class DictationCoordinator {
     this.endHoldWatch();
     if (!this.holdToTalk || this.holdKeyCode === null || !this.deps.startHoldWatch) return;
     try {
-      const stop = this.deps.startHoldWatch(this.holdKeyCode, () => {
-        void this.release();
-      });
+      const stop = this.deps.startHoldWatch(
+        this.holdKeyCode,
+        () => {
+          void this.release();
+        },
+        () => {
+          this.holdWatchActive = false;
+          this.stopHoldWatch = null;
+        },
+      );
       if (typeof stop !== "function") return;
       this.stopHoldWatch = stop;
       this.holdWatchActive = true;
