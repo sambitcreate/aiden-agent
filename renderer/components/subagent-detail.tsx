@@ -5,6 +5,7 @@ import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
 } from "../lib/subagent-panel-state";
+import type { SubagentRunPresentation } from "../lib/subagent-view-state";
 import type {
   SubagentEffectActivityV1,
   SubagentMilestoneKind,
@@ -78,13 +79,31 @@ export interface SubagentDetailProps {
   run: SubagentRunSnapshot;
   effectActivity?: readonly SubagentEffectActivityV1[];
   onStop?: (run: SubagentRunSnapshot) => Promise<void> | void;
+  stopPending?: boolean;
+  stopError?: string | null;
+  presentation?: SubagentRunPresentation;
+  refreshing?: boolean;
+  refreshError?: string | null;
+  onRetryRefresh?: () => void;
   now?: number;
   className?: string;
 }
 
 export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetailProps>(
   function SubagentDetail(
-    { run, effectActivity = [], onStop, now = Date.now(), className },
+    {
+      run,
+      effectActivity = [],
+      onStop,
+      stopPending = false,
+      stopError = null,
+      presentation,
+      refreshing = false,
+      refreshError = null,
+      onRetryRefresh,
+      now = Date.now(),
+      className,
+    },
     headingRef,
   ) {
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -92,8 +111,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const followGrowthRef = React.useRef(false);
     const previousRunRef = React.useRef<{ runId: string; revision: number } | null>(null);
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
-    const [controlPending, setControlPending] = React.useState<"stop" | null>(null);
-    const [controlError, setControlError] = React.useState<string | null>(null);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
     const resultText = run.terminalMarkdown ?? run.latestText;
@@ -106,18 +123,13 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const canStop = run.version === 2 && run.execution === "foreground" && active && onStop;
     const stopLabel = run.version === 2 && run.depth === 1 ? "Stop subtree" : "Stop subagent";
     const invokeControl = async () => {
-      if (controlPending) return;
+      if (stopPending) return;
       if (!onStop) return;
-      setControlPending("stop");
-      setControlError(null);
       try {
         await onStop(run);
-      } catch (error) {
-        setControlError(
-          error instanceof Error ? error.message : "Aiden could not stop this subagent.",
-        );
-      } finally {
-        setControlPending(null);
+      } catch {
+        // The owner boundary retains and presents control failures. A detail
+        // instance must not create a second, selection-scoped error source.
       }
     };
     const updateScrollPosition = React.useCallback(() => {
@@ -221,7 +233,8 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   {run.label}
                 </h2>
                 <Text as="p" variant="small" color="secondary" className="mt-0.5">
-                  {run.role} · {state} · {formatSubagentElapsed(run.startedAt, endedAt)}
+                  {run.role} · {presentation?.label ?? state} ·{" "}
+                  {formatSubagentElapsed(run.startedAt, endedAt)}
                 </Text>
                 <Text
                   as="p"
@@ -247,6 +260,53 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </span>
             </header>
 
+            {presentation?.state === "saving" || presentation?.state === "save_delayed" ? (
+              <Callout role="note" data-subagent-presentation={presentation.state}>
+                <Text variant="small-strong">
+                  {presentation.state === "saving"
+                    ? "Recording subagent outcome"
+                    : "Outcome not yet saved"}
+                </Text>
+                <Text as="p" variant="small" color="secondary">
+                  {state}.{" "}
+                  {presentation.state === "saving"
+                    ? "Aiden is waiting for this outcome to appear in conversation history."
+                    : "This outcome has not appeared in conversation history yet."}
+                </Text>
+              </Callout>
+            ) : presentation?.state === "stale_active" ? (
+              <Callout role="note" data-subagent-presentation="stale_active">
+                <Text variant="small-strong">No recent update</Text>
+                <Text as="p" variant="small" color="secondary">
+                  {presentation.label}. The child is still active; no newer activity has arrived.
+                </Text>
+              </Callout>
+            ) : null}
+
+            {refreshing ? (
+              <Text as="p" variant="small" color="secondary" data-subagent-detail-refreshing="true">
+                Refreshing saved activity…
+              </Text>
+            ) : refreshError ? (
+              <Callout role="note" data-subagent-detail-refresh-error="true">
+                <Text variant="small-strong">Showing the last available activity</Text>
+                <Text as="p" variant="small" color="secondary">
+                  Aiden could not refresh this saved detail. The activity below may be out of date.
+                </Text>
+                {onRetryRefresh ? (
+                  <Button
+                    variant="muted"
+                    size="small"
+                    radius="rounded"
+                    onClick={onRetryRefresh}
+                    className="mt-3 motion-reduce:transition-none"
+                  >
+                    Retry refresh
+                  </Button>
+                ) : null}
+              </Callout>
+            ) : null}
+
             {canStop ? (
               <div
                 className="flex min-w-0 flex-wrap items-center gap-2"
@@ -256,24 +316,25 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   variant="muted"
                   size="small"
                   radius="rounded"
-                  disabled={controlPending !== null}
-                  aria-label={`${stopLabel} ${run.label}`}
+                  disabled={stopPending}
+                  aria-label={stopPending ? `Stopping ${run.label}` : `${stopLabel} ${run.label}`}
+                  aria-busy={stopPending ? true : undefined}
                   onClick={() => void invokeControl()}
                   className="motion-reduce:transition-none"
                 >
                   <Square aria-hidden="true" className="size-3" />
-                  {controlPending === "stop" ? "Stopping…" : stopLabel}
+                  {stopPending ? "Stopping…" : stopLabel}
                 </Button>
               </div>
             ) : null}
 
-            {controlError ? (
-              <Callout color="red" role="alert" data-subagent-control-error="true">
+            {stopError ? (
+              <Callout color="red" role="note" data-subagent-control-error="true">
                 <Text variant="small-strong" color="red">
                   Subagent action failed
                 </Text>
                 <Text as="p" variant="small" color="secondary">
-                  {controlError} Try again if the run is still available.
+                  {stopError} Try again if the run is still available.
                 </Text>
               </Callout>
             ) : null}
