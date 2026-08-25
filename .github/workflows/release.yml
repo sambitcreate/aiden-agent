@@ -43,8 +43,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release_version="$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER")"
-          npm version "$release_version" --no-git-tag-version
+          base_version="$(node -p "require('./package.json').version")"
+          base_tag_match="$(git ls-remote --tags origin "refs/tags/v${base_version}")"
+          base_tag_exists=false
+          if [[ -n "$base_tag_match" ]]; then
+            base_tag_exists=true
+          fi
+          release_version="$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER" "$base_tag_exists")"
+          npm version "$release_version" --no-git-tag-version --allow-same-version
           echo "version=$release_version" >> "$GITHUB_OUTPUT"
           echo "tag=v$release_version" >> "$GITHUB_OUTPUT"
 
