@@ -13,6 +13,18 @@ import type {
 import { Markdown } from "./markdown";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
+import { CopyButton } from "./copy-button";
+
+export function subagentProjectionNotices(run: SubagentRunSnapshot): string[] {
+  const notices = new Set(run.projectionNotices);
+  return [
+    notices.has("task_truncated") ? "This saved task preview was shortened." : null,
+    notices.has("report_truncated") ? "This saved result was shortened." : null,
+    notices.has("display_filtered")
+      ? "Some text was replaced by a privacy marker in this saved inspector. This display filter does not rewrite the child's task or its report to the main thread."
+      : null,
+  ].filter((notice): notice is string => notice !== null);
+}
 
 export function formatSubagentElapsed(startedAt: number, endedAt: number): string {
   const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1_000));
@@ -84,6 +96,8 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const [controlError, setControlError] = React.useState<string | null>(null);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
+    const resultText = run.terminalMarkdown ?? run.latestText;
+    const projectionNotices = subagentProjectionNotices(run);
     const active =
       run.state === "queued" ||
       run.state === "starting" ||
@@ -209,7 +223,12 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 <Text as="p" variant="small" color="secondary" className="mt-0.5">
                   {run.role} · {state} · {formatSubagentElapsed(run.startedAt, endedAt)}
                 </Text>
-                <Text as="p" variant="small" color="tertiary" className="mt-0.5 break-words">
+                <Text
+                  as="p"
+                  variant="small"
+                  color="tertiary"
+                  className="mt-0.5 break-words [overflow-wrap:anywhere]"
+                >
                   Model: {run.modelId}
                 </Text>
                 {run.version === 2 ? (
@@ -220,7 +239,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                     className="mt-0.5 break-words"
                     data-subagent-context={run.context}
                   >
-                    {run.context === "fresh" ? "Fresh context" : "Forked conversation"}
+                    {run.context === "fresh"
+                      ? "Context: task only (fresh session)"
+                      : "Context: bounded visible conversation text copied at launch"}
                   </Text>
                 ) : null}
               </span>
@@ -258,18 +279,37 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
             ) : null}
 
             <section aria-labelledby={`subagent-task-${run.runId}`}>
-              <Text
-                as="h3"
-                id={`subagent-task-${run.runId}`}
-                variant="small-strong"
-                color="tertiary"
-              >
-                Task
-              </Text>
-              <Text as="p" variant="regular" className="mt-1 break-words">
+              <div className="flex min-w-0 items-center gap-2">
+                <Text
+                  as="h3"
+                  id={`subagent-task-${run.runId}`}
+                  variant="small-strong"
+                  color="tertiary"
+                  className="min-w-0 flex-1"
+                >
+                  Task preview
+                </Text>
+                <CopyButton
+                  text={run.taskPreview}
+                  label={`Copy task preview for ${run.label}`}
+                  className="shrink-0"
+                />
+              </div>
+              <Text as="p" variant="regular" className="mt-1 break-words [overflow-wrap:anywhere]">
                 {run.taskPreview}
               </Text>
             </section>
+
+            {projectionNotices.length > 0 ? (
+              <Callout role="note" data-subagent-projection-notice="true">
+                <Text variant="small-strong">Saved view notice</Text>
+                <ul className="list-disc space-y-1 pl-4 text-small text-secondary">
+                  {projectionNotices.map((notice) => (
+                    <li key={notice}>{notice}</li>
+                  ))}
+                </ul>
+              </Callout>
+            ) : null}
 
             <section aria-labelledby={`subagent-activity-${run.runId}`}>
               <Text
@@ -310,7 +350,8 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                         {effect.label}
                       </Text>
                       <Text as="p" variant="small" color="secondary">
-                        {effect.kind === "shell" ? "Command" : "Remote change"} · State: {effect.state.replace(/_/gu, " ")}
+                        {effect.kind === "shell" ? "Command" : "Remote change"} · State:{" "}
+                        {effect.state.replace(/_/gu, " ")}
                       </Text>
                     </li>
                   ))}
@@ -341,9 +382,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   </Text>
                 )}
                 <Text as="p" variant="small" color="secondary">
-                  {run.tokens} tokens recorded. Saved details omit raw tool payloads, commands,
-                  and absolute paths. Children can read ordinary source and docs as written;
-                  protected credential and private-key paths are unavailable.
+                  {run.tokens} tokens recorded. Saved details omit raw tool payloads, commands, and
+                  absolute paths. Children can read ordinary source and docs as written; protected
+                  credential and private-key paths are unavailable.
                 </Text>
               </div>
             </details>
@@ -372,39 +413,31 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </Callout>
             ) : null}
 
-            {run.terminalMarkdown ? (
+            {resultText ? (
               <section aria-labelledby={`subagent-result-${run.runId}`}>
-                <Text
-                  as="h3"
-                  id={`subagent-result-${run.runId}`}
-                  variant="small-strong"
-                  color="tertiary"
-                  className="mb-2"
-                >
-                  Result
-                </Text>
+                <div className="mb-2 flex min-w-0 items-center gap-2">
+                  <Text
+                    as="h3"
+                    id={`subagent-result-${run.runId}`}
+                    variant="small-strong"
+                    color="tertiary"
+                    className="min-w-0 flex-1"
+                  >
+                    Result
+                  </Text>
+                  <CopyButton
+                    text={resultText}
+                    label={`Copy result from ${run.label}`}
+                    className="shrink-0"
+                  />
+                </div>
                 <ErrorBoundary
                   resetKey={`${run.runId}:${run.revision}`}
-                  fallback={<UnrenderableSubagentUpdate content={run.terminalMarkdown} />}
+                  fallback={<UnrenderableSubagentUpdate content={resultText} />}
                 >
-                  <Markdown content={run.terminalMarkdown} />
-                </ErrorBoundary>
-              </section>
-            ) : run.latestText ? (
-              <section aria-labelledby={`subagent-result-${run.runId}`}>
-                <Text
-                  as="h3"
-                  id={`subagent-result-${run.runId}`}
-                  variant="small-strong"
-                  color="tertiary"
-                >
-                  Result
-                </Text>
-                <ErrorBoundary
-                  resetKey={`${run.runId}:${run.revision}:latest`}
-                  fallback={<UnrenderableSubagentUpdate content={run.latestText} />}
-                >
-                  <Markdown content={run.latestText} />
+                  <div className="min-w-0 [overflow-wrap:anywhere]">
+                    <Markdown content={resultText} />
+                  </div>
                 </ErrorBoundary>
               </section>
             ) : null}
