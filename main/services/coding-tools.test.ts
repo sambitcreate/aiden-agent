@@ -502,6 +502,13 @@ test("workspace search and read tools exclude credential paths from model-visibl
       "legacy-putty.txt",
       "generic-ssh2.txt",
       "generic-pgp.txt",
+    ]) {
+      await assert.rejects(
+        readFile.execute("test", { path: protectedPath }),
+        /Reading credential files is disabled/,
+      );
+    }
+    for (const readablePath of [
       "opaque-settings.json",
       "app.ts",
       "notes.txt",
@@ -512,10 +519,8 @@ test("workspace search and read tools exclude credential paths from model-visibl
       "encoded-hex.txt",
       "encoded-base32.txt",
     ]) {
-      await assert.rejects(
-        readFile.execute("test", { path: protectedPath }),
-        /Reading credential files is disabled/,
-      );
+      const readable = await readFile.execute("test", { path: readablePath });
+      assert.equal(readable.content[0]?.type, "text", readablePath);
     }
     for (const protectedPath of [
       ".git/config",
@@ -582,13 +587,13 @@ test("workspace search and read tools exclude credential paths from model-visibl
       /\/api_key$|\/token$|auth\.json|client\.ppk|client_secret(?:_123\.json)?|credentials(?:[._]backup)?\.(?:json|toml|yaml)|credentials\.json\.bak\.1|deceptive\/\.github|id_rsa(?:\.(?:2024\.)?bak)?$|private-key\.der|prettierrc\.secret|secrets(?:\.old\.yaml|\.json)?$|service-account$|stylelintrc-token|token-backup\.txt/m,
     );
     const recursiveGlobLines = new Set(recursiveGlobText.split("\n"));
-    for (const unsafePath of [
-      unsafeAssignmentName,
-      unsafeTokenName,
-      `${unsafeEncodedDirectory}/ordinary.txt`,
-    ]) {
-      assert.equal(recursiveGlobLines.has(unsafePath), false, unsafePath);
-    }
+    assert.equal(recursiveGlobLines.has(unsafeAssignmentName), true, unsafeAssignmentName);
+    assert.equal(recursiveGlobLines.has(unsafeTokenName), false, unsafeTokenName);
+    assert.equal(
+      recursiveGlobLines.has(`${unsafeEncodedDirectory}/ordinary.txt`),
+      true,
+      unsafeEncodedDirectory,
+    );
     for (const [relativePath] of visibleCredentialFixtures) {
       assert.equal(recursiveGlobLines.has(relativePath), false, relativePath);
     }
@@ -614,7 +619,7 @@ test("workspace search and read tools exclude credential paths from model-visibl
       const encodedGrep = await grep.execute("test", { pattern: encodedPattern });
       const encodedBlock = encodedGrep.content[0];
       const encodedText = encodedBlock?.type === "text" ? encodedBlock.text : "";
-      assert.doesNotMatch(encodedText, new RegExp(encodedPattern, "u"));
+      assert.match(encodedText, new RegExp(encodedPattern, "u"));
       assert.match(encodedText, /search incomplete:/);
     }
     for (const protectedPath of [".git", ".config/gcloud", ".azure"]) {
@@ -662,7 +667,7 @@ test("workspace search and read tools exclude credential paths from model-visibl
     const credentialFamilyGrepBlock = credentialFamilyGrep.content[0];
     const credentialFamilyGrepText =
       credentialFamilyGrepBlock?.type === "text" ? credentialFamilyGrepBlock.text : "";
-    assert.doesNotMatch(
+    assert.match(
       credentialFamilyGrepText,
       /ADC_REFRESH|APP_PWD|AUTH_ARCHIVE|AWS_CREDS|AWS_DOT|AZURE_SP|BACKUP_DOT|BARE_SECRET|CLIENT_SECRET|CREDENTIALS_|CREDS_JSON|DB_PASSWD|DER_PRIVATE|GITHUB_DOT|GITHUB_PAT|GOOGLE_ADC|HTPASSWD|KEYSTORE_SECRET|OAUTH_ACCESS|OPENAI_API_KEY|PGP_NAMED|PROD_DOT|PW_TEXT|SAFE_DIRECTORY_SECRET|SAFE_HIDDEN_API_KEY|SAFE_HIDDEN_TOKEN|SECRETS_|SERVICE_ACCOUNT_|SHADOW_EXPORT|TOKEN_BACKUP/,
     );
@@ -694,7 +699,7 @@ test("workspace search and read tools exclude credential paths from model-visibl
         "STRUCTURED_CLIENT_SECRET|SYMBOL_API_KEY_SECRET|SYMBOL_ONLY_SECRET|SYMBOL_PASSWORD_SECRET|sk-live-1234567890|abcd1234secret|hunter2secret|dXNlcjpodW50ZXIy|github_pat_|supersecretvalue123",
     });
     const structuredSecretGrepBlock = structuredSecretGrep.content[0];
-    assert.doesNotMatch(
+    assert.match(
       structuredSecretGrepBlock?.type === "text" ? structuredSecretGrepBlock.text : "",
       /STRUCTURED_CLIENT_SECRET|SYMBOL_API_KEY_SECRET|SYMBOL_ONLY_SECRET|SYMBOL_PASSWORD_SECRET|sk-live-1234567890|abcd1234secret|hunter2secret|dXNlcjpodW50ZXIy|github_pat_|supersecretvalue123/,
     );
@@ -716,18 +721,25 @@ test("workspace search and read tools exclude credential paths from model-visibl
       safeSessionGrepBlock?.type === "text" ? safeSessionGrepBlock.text : "",
       /session-source\.ts:1: const session = await createSession\(\);/,
     );
-    for (const secretFilenameContent of [
+    for (const visibleFilenameContent of [
       "ordinary filename content",
-      "ordinary token filename content",
       "ordinary nested content",
     ]) {
-      const secretNameGrep = await grep.execute("test", { pattern: secretFilenameContent });
-      const secretNameGrepBlock = secretNameGrep.content[0];
-      const secretNameGrepText =
-        secretNameGrepBlock?.type === "text" ? secretNameGrepBlock.text : "";
-      assert.doesNotMatch(secretNameGrepText, new RegExp(secretFilenameContent, "u"));
-      assert.match(secretNameGrepText, /search incomplete:/);
+      const visibleNameGrep = await grep.execute("test", { pattern: visibleFilenameContent });
+      const visibleNameGrepBlock = visibleNameGrep.content[0];
+      const visibleNameGrepText =
+        visibleNameGrepBlock?.type === "text" ? visibleNameGrepBlock.text : "";
+      assert.match(visibleNameGrepText, new RegExp(visibleFilenameContent, "u"));
+      assert.match(visibleNameGrepText, /search incomplete:/);
     }
+    const protectedNameGrep = await grep.execute("test", {
+      pattern: "ordinary token filename content",
+    });
+    const protectedNameGrepBlock = protectedNameGrep.content[0];
+    const protectedNameGrepText =
+      protectedNameGrepBlock?.type === "text" ? protectedNameGrepBlock.text : "";
+    assert.doesNotMatch(protectedNameGrepText, /ordinary token filename content/u);
+    assert.match(protectedNameGrepText, /search incomplete:/);
     const listDir = childTools.find((tool) => tool.name === "list_dir");
     assert.ok(listDir);
     const listResult = await listDir.execute("test", { path: "." });
@@ -746,9 +758,9 @@ test("workspace search and read tools exclude credential paths from model-visibl
     for (const [relativePath] of visibleCredentialFixtures) {
       assert.equal(listedNames.has(relativePath), false, relativePath);
     }
-    for (const unsafeName of [unsafeAssignmentName, unsafeTokenName, unsafeEncodedDirectory]) {
-      assert.equal(listedNames.has(unsafeName), false, unsafeName);
-    }
+    assert.equal(listedNames.has(unsafeAssignmentName), true, unsafeAssignmentName);
+    assert.equal(listedNames.has(unsafeTokenName), false, unsafeTokenName);
+    assert.ok(listText.includes(unsafeEncodedDirectory), unsafeEncodedDirectory);
     assert.match(listText, /id_rsa\.pub/);
     assert.match(listText, /auth\.ts/);
     assert.match(listText, /listing incomplete:/);
@@ -819,7 +831,7 @@ test("subagent filesystem failures never expose the canonical workspace path", a
   }
 });
 
-test("all subagent filesystem tools hide JavaScript-escaped credentials and absolute paths", async () => {
+test("all subagent filesystem tools preserve JavaScript-escaped source and paths", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-js-escape-privacy-"));
   const escapedSecret = javascriptUnicodeEscapes("OPENAI_API_KEY=correct-horse-battery-staple");
   const escapedPath = javascriptHexEscapes("/Users/alice/private.txt");
@@ -838,15 +850,15 @@ test("all subagent filesystem tools hide JavaScript-escaped credentials and abso
     const tools = buildSubagentCodingTools(root, ["read_file", "list_dir", "glob", "grep"]);
     const byName = (name: string) => tools.find((tool) => tool.name === name)!;
 
-    await assert.rejects(
-      byName("read_file").execute("escaped-read", { path: "encoded-content.txt" }),
-      /Reading credential files is disabled/,
-    );
+    const encodedRead = await byName("read_file").execute("escaped-read", {
+      path: "encoded-content.txt",
+    });
+    assert.equal(encodedRead.content[0]?.type, "text");
     for (const hiddenName of [escapedSecretName, escapedPathName]) {
-      await assert.rejects(
-        byName("read_file").execute("escaped-name-read", { path: hiddenName }),
-        /Reading credential files is disabled/,
-      );
+      const namedRead = await byName("read_file").execute("escaped-name-read", {
+        path: hiddenName,
+      });
+      assert.equal(namedRead.content[0]?.type, "text");
     }
 
     const listResult = await byName("list_dir").execute("escaped-list", { path: "." });
@@ -860,16 +872,18 @@ test("all subagent filesystem tools hide JavaScript-escaped credentials and abso
     const listText = listBlock?.type === "text" ? listBlock.text : "";
     const globText = globBlock?.type === "text" ? globBlock.text : "";
     const grepText = grepBlock?.type === "text" ? grepBlock.text : "";
-    for (const modelVisible of [listText, globText, grepText]) {
-      assert.doesNotMatch(modelVisible, /\\u004f|\\x2f|correct-horse|Users|alice|private/u);
-      assert.match(modelVisible, /incomplete:/u);
-    }
+    assert.ok(listText.includes(escapedSecretName));
+    assert.ok(listText.includes(escapedPathName));
+    assert.ok(globText.includes(escapedSecretName));
+    assert.ok(globText.includes(escapedPathName));
+    assert.match(grepText, /credential \\u004f/u);
+    assert.match(grepText, /path \\x2f/u);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
-test("all subagent filesystem tools hide JSON named-control credentials", async () => {
+test("all subagent filesystem tools preserve named-control source and filenames", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-json-control-privacy-"));
   const controls = ["t", "n", "r", "b", "f"] as const;
   const namedSecrets = controls.map(
@@ -912,15 +926,15 @@ test("all subagent filesystem tools hide JSON named-control credentials", async 
     const tools = buildSubagentCodingTools(root, ["read_file", "list_dir", "glob", "grep"]);
     const byName = (name: string) => tools.find((tool) => tool.name === name)!;
 
-    await assert.rejects(
-      byName("read_file").execute("named-control-read", { path: "encoded-content.txt" }),
-      /Reading credential files is disabled/u,
-    );
+    const encodedRead = await byName("read_file").execute("named-control-read", {
+      path: "encoded-content.txt",
+    });
+    assert.equal(encodedRead.content[0]?.type, "text");
     for (const unsafeName of unsafeNames) {
-      await assert.rejects(
-        byName("read_file").execute("named-control-name-read", { path: unsafeName }),
-        /Reading credential files is disabled/u,
-      );
+      const namedRead = await byName("read_file").execute("named-control-name-read", {
+        path: unsafeName,
+      });
+      assert.equal(namedRead.content[0]?.type, "text", unsafeName);
     }
     const benignRead = await byName("read_file").execute("named-control-benign-read", {
       path: "benign-source.ts",
@@ -940,21 +954,19 @@ test("all subagent filesystem tools hide JSON named-control credentials", async 
     const globText = globBlock?.type === "text" ? globBlock.text : "";
     const grepText = grepBlock?.type === "text" ? grepBlock.text : "";
 
-    for (const modelVisible of [listText, globText, grepText]) {
+    for (const modelVisible of [listText, globText]) {
       for (const unsafeName of unsafeNames) {
-        assert.equal(modelVisible.includes(unsafeName), false, unsafeName);
+        assert.equal(modelVisible.includes(unsafeName), true, unsafeName);
       }
-      assert.doesNotMatch(modelVisible, /correct-horse-battery|api\\[tnrbf]|api\\\\nkey/u);
-      assert.match(modelVisible, /incomplete:/u);
     }
+    assert.match(grepText, /credential/u);
     assert.match(grepText, /ordinary named-control source/u);
-    assert.doesNotMatch(grepText, /credential api/u);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
-test("all subagent filesystem tools hide irregularly wrapped reversible encodings", async () => {
+test("all subagent filesystem tools preserve irregularly wrapped reversible encodings", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-wrapped-encoding-privacy-"));
   const standardBase64 = Buffer.from(
     "OPENAI_API_KEY=correct-horse-standard-base64",
@@ -1028,15 +1040,15 @@ test("all subagent filesystem tools hide irregularly wrapped reversible encoding
     const tools = buildSubagentCodingTools(root, ["read_file", "list_dir", "glob", "grep"]);
     const byName = (name: string) => tools.find((tool) => tool.name === name)!;
 
-    await assert.rejects(
-      byName("read_file").execute("wrapped-read", { path: "wrapped-content.txt" }),
-      /Reading credential files is disabled/u,
-    );
+    const wrappedRead = await byName("read_file").execute("wrapped-read", {
+      path: "wrapped-content.txt",
+    });
+    assert.equal(wrappedRead.content[0]?.type, "text");
     for (const unsafeName of unsafeNames) {
-      await assert.rejects(
-        byName("read_file").execute("wrapped-name-read", { path: unsafeName }),
-        /Reading credential files is disabled/u,
-      );
+      const namedRead = await byName("read_file").execute("wrapped-name-read", {
+        path: unsafeName,
+      });
+      assert.equal(namedRead.content[0]?.type, "text", unsafeName);
     }
     const benignRead = await byName("read_file").execute("wrapped-benign-read", {
       path: "benign-wrapped.txt",
@@ -1056,16 +1068,170 @@ test("all subagent filesystem tools hide irregularly wrapped reversible encoding
     const globText = globBlock?.type === "text" ? globBlock.text : "";
     const grepText = grepBlock?.type === "text" ? grepBlock.text : "";
 
-    for (const modelVisible of [listText, globText, grepText]) {
+    for (const modelVisible of [listText, globText]) {
       for (const unsafeName of unsafeNames) {
-        assert.equal(modelVisible.includes(unsafeName), false, unsafeName);
+        assert.equal(modelVisible.includes(unsafeName), true, unsafeName);
       }
-      assert.doesNotMatch(modelVisible, /correct-horse|T1BFTkFJ|credential-[0-4]/u);
-      assert.match(modelVisible, /incomplete:/u);
     }
+    assert.match(grepText, /credential-[0-4]/u);
     assert.match(listText, /benign-wrapped\.txt/u);
     assert.match(globText, /benign-wrapped\.txt/u);
     assert.match(grepText, /ordinary wrapped-encoding source remains visible/u);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("child workspace reads preserve normal semantics and deny explicit credential paths", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-child-tools-"));
+  try {
+    await fs.mkdir(path.join(root, ".claude"));
+    await fs.mkdir(path.join(root, ".vscode"));
+    await fs.mkdir(path.join(root, ".ssh"));
+    await fs.mkdir(path.join(root, ".aws"));
+    await fs.mkdir(path.join(root, ".config", "gcloud"), { recursive: true });
+    await fs.writeFile(path.join(root, ".claude", "settings.json"), '{"safe":true}\n', "utf8");
+    await fs.writeFile(path.join(root, ".vscode", "settings.json"), '{"editor":"safe"}\n', "utf8");
+    await fs.writeFile(path.join(root, ".env.example"), "OPENAI_API_KEY=replace-me\n", "utf8");
+    await fs.writeFile(path.join(root, ".env"), "OPENAI_API_KEY=do-not-expose\n", "utf8");
+    await fs.writeFile(path.join(root, ".ssh", "id_rsa"), "SSH_PRIVATE_KEY\n", "utf8");
+    await fs.writeFile(path.join(root, ".aws", "credentials"), "[default]\naws_secret=hidden\n", "utf8");
+    await fs.writeFile(path.join(root, ".config", "gcloud", "credentials.db"), "hidden\n", "utf8");
+    await fs.writeFile(path.join(root, ".npmrc"), "//registry/:_authToken=hidden\n", "utf8");
+    await fs.writeFile(path.join(root, "auth.json"), '{"password":"hidden"}\n', "utf8");
+    await fs.writeFile(path.join(root, "id_rsa"), "SSH_PRIVATE_KEY\n", "utf8");
+    await fs.writeFile(path.join(root, "id_rsa.pub"), "ssh-rsa PUBLIC_KEY_SAFE\n", "utf8");
+    await fs.writeFile(path.join(root, "server.key"), "TLS_PRIVATE_KEY\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "misnamed-key.txt"),
+      "-----BEGIN OPENSSH PRIVATE KEY-----\nprivate material\n",
+      "utf8",
+    );
+
+    const tools = buildSubagentCodingTools(root, ["read_file", "list_dir", "glob", "grep"]);
+    const byName = (name: string) => tools.find((tool) => tool.name === name)!;
+    const readFile = byName("read_file");
+    const listDir = byName("list_dir");
+    const glob = byName("glob");
+    assert.ok(readFile);
+    assert.ok(listDir);
+    assert.ok(glob);
+
+    const readText = async (relativePath: string) => {
+      const result = await readFile.execute("read", { path: relativePath });
+      const block = result.content[0];
+      return block?.type === "text" ? block.text : "";
+    };
+
+    assert.equal(await readText(".claude/settings.json"), '{"safe":true}\n');
+    assert.equal(await readText(".vscode/settings.json"), '{"editor":"safe"}\n');
+    assert.equal(await readText(".env.example"), "OPENAI_API_KEY=replace-me\n");
+
+    for (const protectedPath of [
+      ".env",
+      ".ssh",
+      ".ssh/id_rsa",
+      ".aws",
+      ".aws/credentials",
+      ".config/gcloud",
+      ".config/gcloud/credentials.db",
+      ".npmrc",
+      "auth.json",
+      "id_rsa",
+      "server.key",
+      "misnamed-key.txt",
+    ]) {
+      await assert.rejects(
+        readFile.execute("read", { path: protectedPath }),
+        /Reading credential files is disabled/u,
+      );
+    }
+    assert.equal(await readText("id_rsa.pub"), "ssh-rsa PUBLIC_KEY_SAFE\n");
+
+    const listResult = await listDir.execute("list", { path: "." });
+    const listBlock = listResult.content[0];
+    const listText = listBlock?.type === "text" ? listBlock.text : "";
+    assert.match(listText, /^dir\s+\.claude$/mu);
+    assert.match(listText, /^dir\s+\.vscode$/mu);
+    assert.match(listText, /^file\s{2}\.env\.example$/mu);
+    assert.doesNotMatch(listText, /^file\s{2}\.env$/mu);
+    assert.doesNotMatch(listText, /^dir\s{2}\.ssh$/mu);
+    assert.doesNotMatch(listText, /^dir\s{2}\.aws$/mu);
+
+    const globResult = await glob.execute("glob", { pattern: "**/*" });
+    const globBlock = globResult.content[0];
+    const globText = globBlock?.type === "text" ? globBlock.text : "";
+    assert.match(globText, /\.claude\/settings\.json/u);
+    assert.match(globText, /\.vscode\/settings\.json/u);
+    assert.match(globText, /\.env\.example/u);
+    assert.doesNotMatch(globText, /(?:^|\n)\.env(?:\n|$)/u);
+    assert.doesNotMatch(globText, /(?:^|\n)\.ssh(?:\/|\n)/u);
+    assert.doesNotMatch(globText, /(?:^|\n)\.aws(?:\/|\n)/u);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("child grep preserves matching lines from ordinary source and docs", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-child-grep-"));
+  try {
+    const encodedSecret = Buffer.from("OPENAI_API_KEY=encoded-but-visible", "utf8").toString(
+      "base64",
+    );
+    const encodedFilename =
+      Buffer.from("OPENAI_API_KEY=encoded-name", "utf8").toString("base64") + ".txt";
+    await fs.mkdir(path.join(root, "docs"));
+    await fs.writeFile(
+      path.join(root, "docs", "notes.md"),
+      [
+        "OPENAI_API_KEY=example documentation value",
+        "Authorization: Basic documentation example",
+        "encoded " + encodedSecret,
+        "file:///Users/alice/private.txt",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(path.join(root, encodedFilename), "ordinary encoded filename\n", "utf8");
+    await fs.writeFile(path.join(root, ".env"), "OPENAI_API_KEY=hidden environment value\n", "utf8");
+
+    const tools = buildSubagentCodingTools(root, ["read_file", "glob", "grep"]);
+    const byName = (name: string) => tools.find((tool) => tool.name === name)!;
+    const readFile = byName("read_file");
+    const glob = byName("glob");
+    const grep = byName("grep");
+    assert.ok(readFile);
+    assert.ok(glob);
+    assert.ok(grep);
+
+    const notes = await readFile.execute("notes", { path: "docs/notes.md" });
+    const notesBlock = notes.content[0];
+    const notesText = notesBlock?.type === "text" ? notesBlock.text : "";
+    assert.match(notesText, /OPENAI_API_KEY=example documentation value/u);
+    assert.ok(notesText.includes(encodedSecret));
+    assert.match(notesText, /Users\/alice\/private\.txt/u);
+
+    const encodedNameRead = await readFile.execute("encoded-name", { path: encodedFilename });
+    const encodedNameBlock = encodedNameRead.content[0];
+    assert.equal(
+      encodedNameBlock?.type === "text" ? encodedNameBlock.text : "",
+      "ordinary encoded filename\n",
+    );
+
+    const globResult = await glob.execute("encoded-glob", { pattern: "**/*" });
+    const globBlock = globResult.content[0];
+    const globText = globBlock?.type === "text" ? globBlock.text : "";
+    assert.ok(globText.includes(encodedFilename));
+
+    const grepResult = await grep.execute("semantic-grep", {
+      pattern: "OPENAI_API_KEY|Authorization|encoded|private\\.txt",
+    });
+    const grepBlock = grepResult.content[0];
+    const grepText = grepBlock?.type === "text" ? grepBlock.text : "";
+    assert.match(grepText, /docs\/notes\.md:1: OPENAI_API_KEY=example documentation value/u);
+    assert.match(grepText, /docs\/notes\.md:2: Authorization: Basic documentation example/u);
+    assert.match(grepText, /docs\/notes\.md:3: encoded/u);
+    assert.match(grepText, /docs\/notes\.md:4: file:\/\/\/Users\/alice\/private\.txt/u);
+    assert.doesNotMatch(grepText, /\.env:1:|hidden environment value/u);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
