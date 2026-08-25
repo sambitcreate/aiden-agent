@@ -330,8 +330,12 @@ test("the Environment summary exposes conditional current-chat counts and the sh
     environment,
     /state=\{(?:panel\.)?subagentCounts\.active > 0 \? "running" : "finished"\}/u,
   );
-  assert.match(environment, /\{subagentCounts\.active\} working/u);
-  assert.match(environment, /\{subagentCounts\.done\} done/u);
+  assert.match(environment, /subagentOverviewSummary\(panel\.subagentViews\)/u);
+  assert.match(environment, /\{subagentSummary\.primary\}/u);
+  assert.match(environment, /\{subagentSummary\.secondary\}/u);
+  assert.match(environment, /subagentSummary\.ariaLabel/u);
+  assert.match(environment, /min-w-0 truncate text-regular text-primary/u);
+  assert.match(environment, /max-w-44 min-w-0 truncate text-small/u);
 });
 
 test("live snapshots are owner-checked, revisioned, and released across route transitions", () => {
