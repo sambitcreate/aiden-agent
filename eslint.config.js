@@ -5,7 +5,14 @@ import globals from "globals";
 
 export default [
   {
-    ignores: ["build/**", "release/**", "node_modules/**", ".memory/**", ".papercuts/**"],
+    ignores: [
+      "build/**",
+      "release/**",
+      "android/**/build/**",
+      "node_modules/**",
+      ".memory/**",
+      ".papercuts/**",
+    ],
   },
   js.configs.recommended,
   {
