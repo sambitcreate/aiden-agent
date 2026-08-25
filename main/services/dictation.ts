@@ -47,7 +47,8 @@ const coordinator = new DictationCoordinator({
     const binding = effectiveBindings(settings.keybindings, settings)["dictation.toggle"];
     return acceleratorPrimaryMacKeyCode(binding);
   },
-  startHoldWatch: (keyCode, onRelease) => watchMacKeyUntilUp(keyCode, onRelease),
+  startHoldWatch: (keyCode, onRelease, onFailed) =>
+    watchMacKeyUntilUp(keyCode, onRelease, { onFailed }),
 });
 
 /** Hotkey callback (fire-and-forget). Debounced against OS key chatter. */
