@@ -12,9 +12,7 @@ export interface SubagentOverviewSummary {
   ariaLabel: string;
 }
 
-export function subagentOverviewSummary(
-  runs: readonly SubagentRunView[],
-): SubagentOverviewSummary {
+export function subagentOverviewSummary(runs: readonly SubagentRunView[]): SubagentOverviewSummary {
   const counts = runs.reduce(
     (current, run) => {
       current[run.state] += 1;
@@ -105,9 +103,7 @@ function formatSubagentLiveSummary(
     { queued: 0, starting: 0, working: 0, needsAttention: 0 },
   );
   const activeSummary = [
-    activeOutcomes.needsAttention > 0
-      ? `${activeOutcomes.needsAttention} needs attention`
-      : null,
+    activeOutcomes.needsAttention > 0 ? `${activeOutcomes.needsAttention} needs attention` : null,
     activeOutcomes.queued > 0 ? `${activeOutcomes.queued} queued` : null,
     activeOutcomes.starting > 0 ? `${activeOutcomes.starting} starting` : null,
     activeOutcomes.working > 0 ? `${activeOutcomes.working} working` : null,
@@ -147,25 +143,13 @@ function formatSubagentLiveSummary(
     },
   );
   const outcomeSummary = [
-    terminalOutcomes.completed > 0
-      ? `${terminalOutcomes.completed} completed successfully`
-      : null,
+    terminalOutcomes.completed > 0 ? `${terminalOutcomes.completed} completed successfully` : null,
     terminalOutcomes.failed > 0 ? `${terminalOutcomes.failed} failed` : null,
-    terminalOutcomes.timedOut > 0
-      ? `${terminalOutcomes.timedOut} timed out`
-      : null,
-    terminalOutcomes.interrupted > 0
-      ? `${terminalOutcomes.interrupted} interrupted`
-      : null,
-    terminalOutcomes.stopped > 0
-      ? `${terminalOutcomes.stopped} stopped`
-      : null,
-    terminalOutcomes.unknown > 0
-      ? `${terminalOutcomes.unknown} outcome unknown`
-      : null,
-    terminalOutcomes.finished > 0
-      ? `${terminalOutcomes.finished} finished`
-      : null,
+    terminalOutcomes.timedOut > 0 ? `${terminalOutcomes.timedOut} timed out` : null,
+    terminalOutcomes.interrupted > 0 ? `${terminalOutcomes.interrupted} interrupted` : null,
+    terminalOutcomes.stopped > 0 ? `${terminalOutcomes.stopped} stopped` : null,
+    terminalOutcomes.unknown > 0 ? `${terminalOutcomes.unknown} outcome unknown` : null,
+    terminalOutcomes.finished > 0 ? `${terminalOutcomes.finished} finished` : null,
   ]
     .filter((outcome): outcome is string => outcome !== null)
     .join("; ");
@@ -178,25 +162,18 @@ function formatSubagentLiveSummary(
   return `${activeLead}; ${outcomeSummary || "0 finished"}.${latestSummary}`;
 }
 
-export function subagentSnapshotLiveSummary(
-  runs: readonly SubagentRunSnapshot[],
-): string {
+export function subagentSnapshotLiveSummary(runs: readonly SubagentRunSnapshot[]): string {
   const active = runs.filter((run) => isSubagentRunViewStateActive(run.state));
   return formatSubagentLiveSummary(
     active,
-    runs
-      .filter((run) => !isSubagentRunViewStateActive(run.state))
-      .map((run) => run.state),
+    runs.filter((run) => !isSubagentRunViewStateActive(run.state)).map((run) => run.state),
   );
 }
 
 export function subagentSnapshotLiveSummaryIsTerminal(
   runs: readonly SubagentRunSnapshot[],
 ): boolean {
-  return (
-    runs.length > 0 &&
-    runs.every((run) => !isSubagentRunViewStateActive(run.state))
-  );
+  return runs.length > 0 && runs.every((run) => !isSubagentRunViewStateActive(run.state));
 }
 
 interface PendingSubagentLiveAnnouncement {
@@ -227,10 +204,7 @@ export class SubagentLiveAnnouncementCoordinator {
 
   constructor(
     private readonly publish: (announcement: string) => void,
-    private readonly schedule: (
-      callback: () => void,
-      delayMs: number,
-    ) => unknown,
+    private readonly schedule: (callback: () => void, delayMs: number) => unknown,
     private readonly cancel: (timer: unknown) => void,
   ) {}
 
@@ -343,12 +317,7 @@ export function subagentPanelSelectionState(
     runId,
     loading:
       detailLoading ||
-      Boolean(
-        selectionCommitPending &&
-        selectedRun &&
-        !selectedRun.snapshot &&
-        !detailError,
-      ),
+      Boolean(selectionCommitPending && selectedRun && !selectedRun.snapshot && !detailError),
   };
 }
 
@@ -467,12 +436,20 @@ export function subagentDetailPendingLoading(
   detailLoading: boolean,
   detailError: string | null,
 ): boolean {
-  if (!hasSelectedRun || hasDetailSnapshot || detailError !== null)
-    return false;
+  if (!hasSelectedRun || hasDetailSnapshot || detailError !== null) return false;
   return detailLoading;
 }
 
-export type SubagentDetailPresentation = "loading" | "unavailable" | "loaded";
+export type SubagentDetailPresentation =
+  | "loading"
+  | "unavailable"
+  | "loaded"
+  | "refreshing"
+  | "refresh_failed"
+  | "stopping"
+  | "stop_failed"
+  | "saving"
+  | "save_delayed";
 
 export function subagentDetailPresentation(
   hasSelectedRun: boolean,
@@ -491,6 +468,7 @@ export interface SubagentDetailAnnouncementState {
   saved: boolean;
   presentation: SubagentDetailPresentation;
   activity?: string;
+  statusLabel?: string;
 }
 
 /**
@@ -503,9 +481,33 @@ export function subagentDetailAnnouncement(
   next: SubagentDetailAnnouncementState | null,
 ): string | null {
   if (!next) return null;
-  const sameRun =
-    previous?.ownerKey === next.ownerKey && previous.runId === next.runId;
+  const sameRun = previous?.ownerKey === next.ownerKey && previous.runId === next.runId;
 
+  if (next.presentation === "stopping") {
+    return !sameRun || previous?.presentation !== "stopping" ? `Stopping ${next.label}.` : null;
+  }
+  if (next.presentation === "stop_failed" && (!sameRun || previous?.presentation === "stopping")) {
+    return `Could not stop ${next.label}. Try again if the run is still available.`;
+  }
+  if (
+    (next.presentation === "saving" || next.presentation === "save_delayed") &&
+    (!sameRun || previous?.presentation !== next.presentation)
+  ) {
+    return `${next.label}: ${next.statusLabel ?? "Subagent outcome is waiting for conversation history"}.`;
+  }
+
+  if (next.saved && next.presentation === "refreshing") {
+    return sameRun && previous?.presentation === "refresh_failed"
+      ? `Retrying saved activity for ${next.label}.`
+      : `Refreshing saved activity for ${next.label}.`;
+  }
+  if (
+    next.saved &&
+    next.presentation === "refresh_failed" &&
+    (!sameRun || previous?.presentation !== "refresh_failed")
+  ) {
+    return `Could not refresh saved activity for ${next.label}. Showing the last available activity. Retry is available.`;
+  }
   if (next.saved && next.presentation === "loading") {
     return sameRun && previous?.presentation === "unavailable"
       ? `Retrying saved activity for ${next.label}.`
@@ -515,11 +517,12 @@ export function subagentDetailAnnouncement(
     next.saved &&
     next.presentation === "loaded" &&
     sameRun &&
-    previous?.presentation === "loading"
+    (previous?.presentation === "loading" || previous?.presentation === "refreshing")
   ) {
+    const action = previous.presentation === "refreshing" ? "refreshed" : "loaded";
     return next.activity
-      ? `Saved activity loaded for ${next.label}. ${next.activity}.`
-      : `Saved activity loaded for ${next.label}.`;
+      ? `Saved activity ${action} for ${next.label}. ${next.activity}.`
+      : `Saved activity ${action} for ${next.label}.`;
   }
   if (
     next.saved &&
@@ -552,10 +555,7 @@ export function shouldRestoreSubagentDetailFocus(
   nextFrame: string | null,
 ): boolean {
   return (
-    detailOwnedFocus &&
-    previousFrame !== null &&
-    nextFrame !== null &&
-    previousFrame !== nextFrame
+    detailOwnedFocus && previousFrame !== null && nextFrame !== null && previousFrame !== nextFrame
   );
 }
 
