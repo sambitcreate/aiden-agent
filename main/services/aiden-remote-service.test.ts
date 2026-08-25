@@ -22,11 +22,14 @@ import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.
 import type { AidenTailscaleStatus } from "./aiden-remote-tailscale-route.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 
-async function canBind(port: number): Promise<boolean> {
+async function canBind(
+  port: number,
+  host: "::" | "127.0.0.1" = "127.0.0.1",
+): Promise<boolean> {
   const server = createServer();
   return new Promise((resolve) => {
     server.once("error", () => resolve(false));
-    server.listen(port, "127.0.0.1", () => {
+    server.listen(port, host, () => {
       server.close(() => resolve(true));
     });
   });
@@ -678,7 +681,10 @@ test("a committed endpoint remains stable across restart even when alternatives 
 });
 
 test("committed legacy port 65535 remains restart-compatible in every connection mode", async (context) => {
-  if (!await canBind(65_535) || !await canBind(49_221)) {
+  // LAN binds the IPv6 wildcard (dual stack on supported hosts), while the
+  // companion Tailscale listener is IPv4 loopback. Probe the same addresses
+  // as production so a host-owned IPv6 endpoint skips instead of racing us.
+  if (!await canBind(65_535, "::") || !await canBind(49_221)) {
     context.skip("legacy endpoint ports are occupied on this host");
     return;
   }
