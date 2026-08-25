@@ -1774,8 +1774,14 @@ test("Bot creation re-bases a stale client catalog revision onto the current sna
       },
     },
   });
-  assert.equal(app.bindCatalogRevisions.at(-1), "catalog:churned");
-  assert.equal(app.policyCatalogRevisions.at(-1), "catalog:churned");
+  assert.equal(
+    app.bindCatalogRevisions[app.bindCatalogRevisions.length - 1],
+    "catalog:churned",
+  );
+  assert.equal(
+    app.policyCatalogRevisions[app.policyCatalogRevisions.length - 1],
+    "catalog:churned",
+  );
 });
 
 test("capability catalog retains a private binding but returns only the safe public projection", async () => {
