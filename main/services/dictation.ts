@@ -1,15 +1,22 @@
-// Global dictation coordinator. Serialized state machine (mirrors handy's
-// TranscriptionCoordinator) driven by the dictation hotkey: idle → recording →
-// transcribing → idle. The pill window records and transcribes; this module
-// owns the lifecycle, the paste/clipboard handoff, and pill visibility.
+// Global dictation coordinator. Serialized state machine driven by the
+// dictation hotkey: idle → recording → transcribing → idle. The pill window
+// records and transcribes; this module owns the lifecycle, the paste/clipboard
+// handoff, and pill visibility.
 
 import { clipboard, ipcMain, logger, systemPreferences } from "../platform.js";
 import { destroyPill, hidePill, showPill } from "../windows/pill-window.js";
+import { effectiveBindings } from "../../renderer/shared/keybindings.js";
+import { configStore } from "./config-store.js";
+import { cleanupDictationTranscript } from "./dictation-cleanup.js";
+import { startHoldKeyWatch } from "./dictation-hold-watch.js";
+import { shouldAcceptDictationPress } from "./dictation-hotkey.js";
+import { queryMacKeyDown } from "./dictation-key-state.js";
+import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
 import { pasteTranscript, runAtomicMacPaste, type PasteDeps } from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
-// Only nag with the Accessibility prompt once per session; after that the
-// clipboard fallback applies silently until the user grants access.
+
 let accessibilityPrompted = false;
+let lastPressAt = 0;
 
 function livePasteDeps(): PasteDeps {
   return {
@@ -33,11 +40,29 @@ const coordinator = new DictationCoordinator({
   setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimer: (timer) => clearTimeout(timer),
   logError: (message, error) => logger.error("dictation", message, error),
+  isHoldToTalk: async () => (await configStore.getSettings()).dictationHoldToTalk === true,
+  shouldCleanup: async () => (await configStore.getSettings()).dictationCleanup === true,
+  cleanupTranscript: cleanupDictationTranscript,
+  getHoldKeyCode: async () => {
+    const settings = await configStore.getSettings();
+    const binding = effectiveBindings(settings.keybindings, settings)["dictation.toggle"];
+    return acceleratorPrimaryMacKeyCode(binding);
+  },
+  startHoldWatch: (keyCode, onRelease) =>
+    startHoldKeyWatch(keyCode, {
+      isKeyDown: queryMacKeyDown,
+      onRelease,
+      setIntervalFn: setInterval,
+      clearIntervalFn: clearInterval,
+    }),
 });
 
-/** Hotkey callback (fire-and-forget). */
+/** Hotkey callback (fire-and-forget). Debounced against OS key chatter. */
 export function toggleDictation(): void {
-  void coordinator.toggle();
+  const now = Date.now();
+  if (!shouldAcceptDictationPress(lastPressAt, now)) return;
+  lastPressAt = now;
+  void coordinator.press();
 }
 
 /** Pill finished transcribing. */
@@ -53,6 +78,11 @@ export async function handleDictationError(message: unknown): Promise<void> {
 /** Pill cancel button. */
 export async function cancelDictation(): Promise<void> {
   await coordinator.cancel();
+}
+
+/** Silence detector asked to end capture. */
+export async function stopDictationRecording(): Promise<void> {
+  await coordinator.stopRecording();
 }
 
 /**
