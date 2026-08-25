@@ -40,6 +40,8 @@ let re2Constructor: typeof import("re2-wasm").RE2 | undefined;
 
 /** Tools whose effects mutate the folder or system — gated behind approval in "ask" mode. */
 export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_command"]);
+/** Sharing a local file is an outbound disclosure and always needs attended approval. */
+export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set(["share_image"]);
 
 function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
@@ -260,6 +262,12 @@ interface WorkspaceRootGuard {
   };
 }
 
+export interface PinnedWorkspaceRootIdentity {
+  /** Decimal strings preserve the platform's full stat width. */
+  readonly device: string;
+  readonly inode: string;
+}
+
 function createParentWorkspaceRoot(
   root: string,
   testObserver?: WorkspaceRootGuard["testObserver"],
@@ -275,11 +283,21 @@ function createParentWorkspaceRoot(
 function pinWorkspaceRoot(
   root: string,
   testObserver?: WorkspaceRootGuard["testObserver"],
+  expectedIdentity?: PinnedWorkspaceRootIdentity,
 ): WorkspaceRootGuard {
   const lexical = path.resolve(root);
   const canonical = realpathSync(lexical);
   const identity = statSync(canonical);
   if (!identity.isDirectory()) throw new Error("The workspace root is not a directory.");
+  if (expectedIdentity) {
+    const exactIdentity = statSync(canonical, { bigint: true });
+    if (
+      exactIdentity.dev.toString() !== expectedIdentity.device ||
+      exactIdentity.ino.toString() !== expectedIdentity.inode
+    ) {
+      throw new Error("The authorized workspace root changed before this generation started.");
+    }
+  }
   return { lexical, canonical, identity, testObserver };
 }
 
@@ -836,6 +854,8 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
       return `Edit file: ${String(a.path ?? "?")}`;
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
+    case "share_image":
+      return `Share image in chat: ${String(a.path ?? "?")}`;
     default:
       return toolName;
   }
@@ -1677,13 +1697,7 @@ function makeRunCommand(workspace: WorkspaceRootGuard): AgentTool {
   };
 }
 
-/** All folder-scoped tools for a workspace root, in a sensible ordering. */
-export function buildCodingTools(
-  root: string,
-  /** Test-only scheduling seam for deterministic cancellation regressions. */
-  testObserver?: WorkspaceRootGuard["testObserver"],
-): AgentTool[] {
-  const workspace = createParentWorkspaceRoot(root, testObserver);
+function buildParentCodingToolSet(workspace: WorkspaceRootGuard): AgentTool[] {
   return [
     declarePiRuntimeReplay(makeParentReadFile(workspace), "safe"),
     declarePiRuntimeReplay(makeParentListDir(workspace), "safe"),
@@ -1693,6 +1707,29 @@ export function buildCodingTools(
     declarePiRuntimeReplay(makeWriteFile(workspace), "never"),
     declarePiRuntimeReplay(makeRunCommand(workspace), "never"),
   ];
+}
+
+/** All folder-scoped tools for a workspace root, in a sensible ordering. */
+export function buildCodingTools(
+  root: string,
+  /** Test-only scheduling seam for deterministic cancellation regressions. */
+  testObserver?: WorkspaceRootGuard["testObserver"],
+): AgentTool[] {
+  return buildParentCodingToolSet(createParentWorkspaceRoot(root, testObserver));
+}
+
+/**
+ * The same parent tool surface with the root's path and inode fixed at build
+ * time. Use when an authority lease grants one exact, already-existing root.
+ */
+export function buildPinnedCodingTools(
+  root: string,
+  /** Test-only scheduling seam for deterministic path-replacement regressions. */
+  testObserver?: WorkspaceRootGuard["testObserver"],
+  /** Optional authority-proven identity captured before the tool set is built. */
+  expectedIdentity?: PinnedWorkspaceRootIdentity,
+): AgentTool[] {
+  return buildParentCodingToolSet(pinWorkspaceRoot(root, testObserver, expectedIdentity));
 }
 
 /**

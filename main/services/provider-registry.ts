@@ -1,4 +1,4 @@
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type {
   Api,
   AuthInteraction,
@@ -8,23 +8,28 @@ import type {
   Model,
   Models,
   Provider as PiProvider,
+  ProviderModelsStore,
   ProviderStreams,
 } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import { CodexProviderService, OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { piCredentialStore } from "./pi-credential-store.js";
-import { piModelsStore } from "./pi-models-store.js";
+import { piModelsStore, piProviderModelsStore } from "./pi-models-store.js";
 import { isCustomProviderId } from "./custom-provider-id.js";
 import { secrets } from "./secrets.js";
-import type { Provider, ProviderModelMetadata, StoredProvider } from "./types.js";
-import {
-  anthropicThinkingCanDisable,
-  anthropicThinkingLevelsForModel,
-} from "../../renderer/shared/anthropic-thinking.js";
-import {
-  googleThinkingCanDisable,
-  googleThinkingLevelsForModel,
-} from "../../renderer/shared/google-thinking.js";
+import type { Provider, StoredProvider } from "./types.js";
 import type { ProviderAuthBackend, ProviderLogoutBackend } from "./provider-auth-flow-core.js";
+import { registerAidenBuiltinProviders } from "./concentrate-provider.js";
+import { validateOnboardingProviderCredential } from "./onboarding-provider-validation.js";
+import { withPiRemoteCatalog } from "./pi-remote-catalog.js";
+import { refreshPiCatalogs, staleCatalogProviderIds } from "./pi-catalog-refresh.js";
+import {
+  additionalAidenPiApis,
+  withAidenPiCompatibility,
+} from "./pi-provider-compatibility.js";
+import { piModelMetadataFor } from "./pi-model-metadata.js";
+import { withBotProviderInventoryMutation } from "./bot-runtime-inventory-publication.js";
+import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 
 /** IDs used by Aiden before Pi became the provider authority. */
 const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
@@ -35,28 +40,18 @@ const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
   moonshot: "moonshotai",
 };
 
-function metadataFor(providerId: string, model: Model<Api>): ProviderModelMetadata {
-  const thinking =
-    providerId === "anthropic"
-      ? {
-          thinkingLevels: anthropicThinkingLevelsForModel(model),
-          thinkingCanDisable: anthropicThinkingCanDisable(model),
-        }
-      : providerId === "google"
-        ? {
-            thinkingLevels: googleThinkingLevelsForModel(model),
-            thinkingCanDisable: googleThinkingCanDisable(model),
-          }
-        : {};
-  return {
-    source: "provider",
-    name: model.name,
-    type: "llm",
-    vision: model.input.includes("image"),
-    reasoning: model.reasoning,
-    ...thinking,
-    contextLength: model.contextWindow,
-  };
+function catalogRefreshWarning(errors: ReadonlyMap<string, Error>): string | undefined {
+  if (errors.size === 0) return undefined;
+  // Provider refresh errors can contain upstream response text. Keep that in
+  // main-process diagnostics; the renderer only needs the affected catalog
+  // names and a recovery action.
+  const affectedProviders = [...errors.keys()]
+    .slice(0, 3)
+    .map((providerId) => providerId.replace(/[^a-zA-Z0-9._-]/gu, "").slice(0, 64))
+    .filter(Boolean)
+    .join(", ");
+  const affectedCopy = affectedProviders ? ` Affected: ${affectedProviders}.` : "";
+  return `Credentials were saved, but the model catalog could not refresh. Cached models are still available. Retry in Provider Settings.${affectedCopy}`;
 }
 
 function builtinProviderRecord(
@@ -73,7 +68,7 @@ function builtinProviderRecord(
     baseUrl: provider.baseUrl ?? "",
     models: modelIds,
     modelMetadata: Object.fromEntries(
-      models.map((model) => [model.id, metadataFor(provider.id, model)]),
+      models.map((model) => [model.id, piModelMetadataFor(provider.id, model)]),
     ),
     defaultModel: modelIds[0],
     // Pi owns the exact auth semantics (including ambient credentials and
@@ -93,6 +88,8 @@ export class ProviderRegistry {
   constructor(
     readonly models: Models,
     private readonly credentials: CredentialStore,
+    private readonly providerModelsStore: (providerId: string) => ProviderModelsStore =
+      piProviderModelsStore,
   ) {
     this.codex = new CodexProviderService(models, credentials);
   }
@@ -196,6 +193,12 @@ export class ProviderRegistry {
       authenticate: (interaction: AuthInteraction) => auth.login!(interaction),
       commitCredential: async (credential: unknown) => {
         await this.credentials.modify(providerId, async () => credential as Credential);
+        // Credential setup is an explicit network action. Publish this
+        // provider's current Pi catalog before reporting setup complete so
+        // newly released models appear immediately on Mac and paired clients.
+        const errors = await this.refreshBuiltinCatalogs([providerId]);
+        const warning = catalogRefreshWarning(errors);
+        return warning ? { warning } : undefined;
       },
       logout: () => this.credentials.delete(providerId),
     };
@@ -224,6 +227,57 @@ export class ProviderRegistry {
     };
   }
 
+  /**
+   * Validate first-run OpenAI/Anthropic API keys with their authenticated,
+   * non-generation model catalogs before replacing any stored credential.
+   * Other Pi providers keep their provider-owned setup flows until they have an
+   * explicitly documented non-billable validation strategy.
+   */
+  async validateAndStoreOnboardingApiKey(
+    providerId: "openai" | "anthropic",
+    key: string,
+    isCurrent: () => boolean,
+  ): Promise<{ provider: Provider; catalogWarning?: string }> {
+    const provider = this.models.getProvider(providerId);
+    if (!provider) throw new Error("This provider is unavailable in the installed catalog.");
+    const draft = {
+      ...builtinProviderRecord(provider),
+      kind: providerId === "anthropic" ? ("anthropic" as const) : ("openai" as const),
+    };
+    if (!draft.baseUrl) throw new Error("This provider does not expose a validation endpoint.");
+    const installedModels = provider.getModels();
+    const usableModelIds = await validateOnboardingProviderCredential({
+      provider: draft,
+      apiKey: key,
+      installedModelIds: installedModels.map((model) => model.id),
+      isCurrent,
+      commit: async (apiKey) => {
+        await this.credentials.modify(providerId, async () => {
+          if (!isCurrent()) throw new Error("The onboarding window is no longer active.");
+          return { type: "api_key", key: apiKey };
+        });
+      },
+    });
+    const refreshErrors = await this.refreshBuiltinCatalogs([providerId]);
+    const refreshedModels = await this.models.getAvailable(providerId);
+    const accessible = new Set(usableModelIds);
+    const usableModels = refreshedModels.filter((model) => accessible.has(model.id));
+    const configuredProvider: Provider = {
+      ...builtinProviderRecord(provider, usableModels),
+      hasKey: true,
+      canLogout: true,
+      authMethods: [
+        {
+          type: "api_key",
+          label: provider.auth.apiKey?.name ?? "API key",
+          canLogin: Boolean(provider.auth.apiKey?.login),
+        },
+      ],
+    };
+    const catalogWarning = catalogRefreshWarning(refreshErrors);
+    return { provider: configuredProvider, ...(catalogWarning ? { catalogWarning } : {}) };
+  }
+
   /** Restore durable dynamic catalogs before exposing any Pi snapshot. */
   async ensureBuiltinCatalogs(): Promise<void> {
     if (!this.catalogHydration) {
@@ -236,17 +290,37 @@ export class ProviderRegistry {
   }
 
   /** Refresh Pi-owned dynamic catalogs after valid setup or an explicit user action. */
-  async refreshBuiltinCatalogs(): Promise<ReadonlyMap<string, Error>> {
+  async refreshBuiltinCatalogs(
+    providerIds?: readonly string[],
+    force = true,
+  ): Promise<ReadonlyMap<string, Error>> {
     await this.ensureBuiltinCatalogs();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     timeout.unref?.();
-    try {
-      const result = await this.models.refresh({ force: true, signal: controller.signal });
-      return result.errors;
-    } finally {
-      clearTimeout(timeout);
-    }
+    return withBotProviderInventoryMutation(async () => {
+      try {
+        const result = await refreshPiCatalogs({
+          models: this.models,
+          credentials: this.credentials,
+          providerModelsStore: this.providerModelsStore,
+          // Launch revalidation is a stale-only pass over Aiden's cached Pi
+          // overlays. Do not invoke Radius' separate gateway discovery on every
+          // renderer launch. An explicit force refresh retains Pi's full behavior.
+          providerIds: providerIds ?? (force
+            ? undefined
+            : await staleCatalogProviderIds(this.models.getProviders(), this.providerModelsStore)),
+          force,
+          signal: controller.signal,
+        });
+        if (!result.aborted) return result.errors;
+        const errors = new Map(result.errors);
+        errors.set(providerIds?.[0] ?? "provider catalogs", new Error("Model refresh timed out."));
+        return errors;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }, invalidateBotRuntimeInventoryAuthority);
   }
 
   /** Reject stale/hidden Pi selections before an agent run accepts user input. */
@@ -346,6 +420,21 @@ export class ProviderRegistry {
 }
 
 export const providerRegistry = new ProviderRegistry(
-  builtinModels({ credentials: piCredentialStore, modelsStore: piModelsStore }),
+  registerAidenBuiltinProviders(
+    (() => {
+      const models = createModels({ credentials: piCredentialStore, modelsStore: piModelsStore });
+      for (const provider of builtinProviders()) {
+        const compatible = withAidenPiCompatibility(provider);
+        models.setProvider(
+          provider.id === "radius"
+            ? provider
+            : withPiRemoteCatalog(compatible, {
+                supportedApis: additionalAidenPiApis(provider.id),
+              }),
+        );
+      }
+      return models;
+    })(),
+  ),
   piCredentialStore,
 );

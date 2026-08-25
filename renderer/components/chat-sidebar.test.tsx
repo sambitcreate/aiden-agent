@@ -61,6 +61,19 @@ test("downloaded updates appear immediately above Profile in the sidebar footer"
   assert.ok(profileIndex < settingsIndex, "Profile and Settings should keep their stable order");
 });
 
+test("sidebar keeps a compact mobile connection surface beside Settings", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const connectionPopover = source("./remote-connection-popover.tsx");
+
+  assert.match(sidebar, /<RemoteConnectionPopover/u);
+  assert.match(sidebar, /search: \{ section: "remoteAccess" \}/u);
+  assert.match(connectionPopover, /aria-label=\{`Mobile connections · \$\{summary\}`\}/u);
+  assert.match(connectionPopover, /label="Active"/u);
+  assert.match(connectionPopover, /label="Inactive"/u);
+  assert.match(connectionPopover, />Previous</u);
+  assert.match(connectionPopover, /Add or manage connections/u);
+});
+
 test("update banner reports progress, failure recovery, and a guarded restart action", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const banner = between(
@@ -181,6 +194,24 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
+test("Aiden settings uses the canonical sidebar logo", () => {
+  const settings = source("../main/settings-view.tsx");
+  const rendererLogo = readFileSync(
+    new URL("../../resources/aiden-sidebar-logo.png", import.meta.url),
+  );
+  const canonicalLogo = readFileSync(
+    new URL(
+      "../../ios/AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png",
+      import.meta.url,
+    ),
+  );
+
+  assert.match(settings, /assistant: <AidenSidebarLogo\s*\/>/u);
+  assert.match(settings, /resources\/aiden-sidebar-logo\.png/u);
+  assert.doesNotMatch(settings, /assistant: <Sparkles/u);
+  assert.deepEqual(rendererLogo, canonicalLogo);
+});
+
 test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {
   const ui = source("./ui.tsx");
   assert.match(
@@ -280,8 +311,9 @@ test("toasts use elevation without a colored border or outline", () => {
   assert.doesNotMatch(styles, /--elevation-toast: 0 0 0/u);
 });
 
-test("working chats receive an accessible zero-animation sidebar indicator", () => {
+test("working chats receive an accessible animated sidebar indicator", () => {
   const sidebar = source("./chat-sidebar.tsx");
+  const styles = source("../styles.css");
   const indicator = between(sidebar, "function ChatActivityIndicator", "\n}\n\nconst MONTHS");
 
   assert.match(sidebar, /useActiveChatIds\(\)/u);
@@ -291,6 +323,12 @@ test("working chats receive an accessible zero-animation sidebar indicator", () 
   );
   assert.match(sidebar, /aria-busy=\{renamingWithAppleId === chat\.id \|\| working\}/u);
   assert.match(indicator, /aria-label="Working"/u);
-  assert.match(indicator, /<Loader2 className="size-4" aria-hidden="true" \/>/u);
-  assert.doesNotMatch(indicator, /animate-|animation:/u);
+  assert.match(
+    indicator,
+    /<Loader2 className="size-4 animate-\[spin_1\.5s_linear_infinite\]" aria-hidden="true" \/>/u,
+  );
+  assert.match(
+    styles,
+    /:root\[data-reduce-motion="true"\] \*[\s\S]*animation-duration: 0\.001ms !important;[\s\S]*animation-iteration-count: 1 !important;/u,
+  );
 });

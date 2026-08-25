@@ -18,7 +18,7 @@ import {
   toast,
 } from "../ui";
 import { providersApi } from "../../lib/ipc";
-import { useModelInfo } from "../../lib/queries";
+import { useModelInfo, useSettings } from "../../lib/queries";
 import { resolveModelDisplay } from "../../lib/model-display";
 import type {
   Provider,
@@ -27,6 +27,9 @@ import type {
   ProviderModelMetadata,
 } from "../../lib/types";
 import { resolveProviderDeployment } from "../../shared/provider-deployment";
+import { ProviderModelVisibility } from "./provider-model-visibility";
+import { ProviderIcon } from "../provider-icon";
+import { isModelHidden } from "../../shared/model-visibility";
 
 /** Compact k-token label, e.g. 128000 → "128K". */
 function formatContext(n: number | undefined): string | null {
@@ -59,6 +62,8 @@ export function ProviderEditor({
   onSaved,
   returnFocus,
 }: ProviderEditorProps) {
+  const artworkInputRef = React.useRef<HTMLInputElement>(null);
+  const artworkBusyRef = React.useRef(false);
   const [label, setLabel] = React.useState(provider.label);
   const [baseUrl, setBaseUrl] = React.useState(provider.baseUrl);
   const [kind, setKind] = React.useState<ProviderKind>(provider.kind);
@@ -74,6 +79,8 @@ export function ProviderEditor({
   const [defaultModel, setDefaultModel] = React.useState(
     provider.defaultModel ?? provider.models[0] ?? "",
   );
+  const [artwork, setArtwork] = React.useState(provider.artwork);
+  const [artworkBusy, setArtworkBusy] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [modelsStale, setModelsStale] = React.useState(false);
@@ -82,6 +89,18 @@ export function ProviderEditor({
     error: boolean;
   } | null>(null);
   const modelInfo = useModelInfo(provider.id, models, provider);
+  const settings = useSettings();
+  const visibleDefaultModels = settings.data
+    ? models.filter(
+        (modelId) =>
+          !isModelHidden(settings.data?.hiddenModelsByProvider, provider.id, modelId),
+      )
+    : [];
+  const defaultModelIsHidden = Boolean(
+    settings.data &&
+    defaultModel &&
+    isModelHidden(settings.data.hiddenModelsByProvider, provider.id, defaultModel),
+  );
   const usesArtificialAnalysis = models.some(
     (modelId) => modelInfo.data?.[modelId]?.metadataSource === "artificial-analysis",
   );
@@ -98,6 +117,7 @@ export function ProviderEditor({
       setModels(provider.models);
       setModelMetadata(provider.modelMetadata ?? {});
       setDefaultModel(provider.defaultModel ?? provider.models[0] ?? "");
+      setArtwork(provider.artwork);
       setModelsStale(false);
       setConnectionNotice(null);
     }
@@ -107,6 +127,7 @@ export function ProviderEditor({
     id: provider.id,
     kind,
     label: label.trim() || provider.label,
+    artwork,
     baseUrl: baseUrl.trim() || provider.baseUrl,
     models,
     modelMetadata,
@@ -116,6 +137,35 @@ export function ProviderEditor({
     isPreset: false,
     isBuiltin: false,
   });
+
+  const chooseArtwork = async (file: File | undefined) => {
+    if (!file || artworkBusyRef.current) return;
+    if (file.size > 512 * 1024) {
+      toast.error("Provider artwork must be 512 KB or smaller.");
+      return;
+    }
+    artworkBusyRef.current = true;
+    setArtworkBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () =>
+          typeof reader.result === "string"
+            ? resolve(reader.result)
+            : reject(new Error("Aiden could not read that image."));
+        reader.onerror = () => reject(reader.error ?? new Error("Aiden could not read that image."));
+        reader.readAsDataURL(file);
+      });
+      const dataBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+      setArtwork(await providersApi.normalizeArtwork({ name: file.name, dataBase64 }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden could not use that provider icon.");
+    } finally {
+      artworkBusyRef.current = false;
+      setArtworkBusy(false);
+      if (artworkInputRef.current) artworkInputRef.current.value = "";
+    }
+  };
 
   const applyDiscoveredModels = (
     list: string[],
@@ -209,6 +259,51 @@ export function ProviderEditor({
       <FieldSet>
         <Field label="Name">
           <Input value={label} onChange={(e) => setLabel(e.target.value)} />
+        </Field>
+
+        <Field
+          label="Provider icon"
+          description="Choose a PNG or SVG up to 512 KB. Aiden normalizes it locally and shares only the bounded PNG with paired iOS devices."
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+              <ProviderIcon
+                providerId={provider.id}
+                providerLabel={label.trim() || provider.label}
+                artwork={artwork}
+                className="size-6"
+              />
+            </span>
+            <input
+              ref={artworkInputRef}
+              type="file"
+              accept="image/png,image/svg+xml,.png,.svg"
+              className="sr-only"
+              aria-label="Choose provider icon"
+              disabled={artworkBusy}
+              onChange={(event) => void chooseArtwork(event.target.files?.[0])}
+            />
+            <Button
+              type="button"
+              variant="muted"
+              size="small"
+              disabled={artworkBusy}
+              onClick={() => artworkInputRef.current?.click()}
+            >
+              {artworkBusy ? "Normalizing…" : artwork ? "Replace" : "Choose image"}
+            </Button>
+            {artwork ? (
+              <Button
+                type="button"
+                variant="transparent"
+                size="small"
+                disabled={artworkBusy}
+                onClick={() => setArtwork(undefined)}
+              >
+                Use default
+              </Button>
+            ) : null}
+          </div>
         </Field>
 
         <Field
@@ -349,12 +444,26 @@ export function ProviderEditor({
         {models.length > 0 ? (
           <Field label="Default model">
             <div className="grid gap-1.5">
-              <Select value={defaultModel} onValueChange={setDefaultModel}>
+              <Select
+                value={defaultModel}
+                onValueChange={setDefaultModel}
+                disabled={settings.data === undefined}
+              >
                 <SelectTrigger size="small">
                   <SelectValue placeholder="Select a model" />
                 </SelectTrigger>
                 <SelectContent>
-                  {models.map((m) => (
+                  {defaultModelIsHidden ? (
+                    <SelectItem value={defaultModel} disabled>
+                      {resolveModelDisplay(
+                        defaultModel,
+                        modelMetadata[defaultModel]?.name
+                          ? { name: modelMetadata[defaultModel].name }
+                          : modelInfo.data?.[defaultModel],
+                      ).label} · Hidden
+                    </SelectItem>
+                  ) : null}
+                  {visibleDefaultModels.map((m) => (
                     <SelectItem key={m} value={m}>
                       {
                         resolveModelDisplay(
@@ -428,6 +537,7 @@ export function ProviderEditor({
           </div>
         </div>
       ) : null}
+      <ProviderModelVisibility provider={{ ...provider, models, modelMetadata }} />
     </Dialog>
   );
 }

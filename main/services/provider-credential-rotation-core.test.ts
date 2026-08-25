@@ -123,6 +123,10 @@ test("direct provider key writes share the durable rotation-journal bound", () =
   assert.equal(normalizeProviderCredentialInput("  key  "), "key");
   assert.equal(normalizeProviderCredentialInput("   "), null);
   assert.throws(
+    () => normalizeProviderCredentialInput("CANARY_SECRET\nSECOND"),
+    /control characters/u,
+  );
+  assert.throws(
     () => normalizeProviderCredentialInput("x".repeat(1_048_577)),
     /cannot exceed 1048576 characters/u,
   );

@@ -49,6 +49,21 @@ jobs:
           DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
         run: npm run test:native
 
+      # The owner requires physical-device-only XCTest acceptance. Hosted CI has
+      # no physical iOS device, so compile the app and test bundle for generic
+      # hardware here; the complete XCTest suite is recorded from signed devices.
+      - name: Compile Aiden On The Go tests for generic iOS hardware
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+        run: >-
+          xcodebuild build-for-testing -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'generic/platform=iOS'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          CODE_SIGNING_ALLOWED=NO
+
       - name: Build production bundles
         run: npm run build
 

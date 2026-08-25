@@ -48,6 +48,7 @@ import {
 import type {
   SubagentMcpClientPort,
   SubagentMcpReadHost,
+  SubagentMcpRemoteTool,
 } from "./subagents/subagent-mcp-read.js";
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
 
@@ -206,6 +207,61 @@ export const productionSubagentMcpReadHost: SubagentMcpReadHost = Object.freeze(
     withClient: withIsolatedSubagentMcpClient,
   },
 );
+
+function botMcpRequestOptions(signal: AbortSignal) {
+  return { signal, timeout: 10_000, maxTotalTimeout: 10_000 };
+}
+
+/**
+ * Fresh metadata inspection through the same transports and authentication as
+ * ordinary Aiden MCP. Unlike subagent discovery this intentionally supports
+ * stdio and does not apply subagent authority limits or cache entries.
+ */
+export async function inspectConfiguredMcpToolsForBotCatalog(
+  server: McpServer,
+  signal: AbortSignal,
+): Promise<readonly SubagentMcpRemoteTool[]> {
+  const lease = mcpConfigurationLeases.acquire(server.id);
+  const operationSignal = AbortSignal.any([signal, lease.signal]);
+  const isCurrent = () => {
+    lease.assertCurrent();
+    if (operationSignal.aborted) throw subagentMcpAbortReason(operationSignal);
+    return true;
+  };
+  return withConfiguredMcp(
+    server.id,
+    mcpRuntimeConnectionSnapshot(server),
+    async () => {
+      const client = new Client(
+        { name: "aiden-bot-mcp-catalog", version: "1.0.0" },
+        { capabilities: {} },
+      );
+      try {
+        await client.connect(
+          makeTransport(await resolveAuth(server, isCurrent), isCurrent) as never,
+          botMcpRequestOptions(operationSignal),
+        );
+        isCurrent();
+        const { tools } = await client.listTools(
+          undefined,
+          botMcpRequestOptions(operationSignal),
+        );
+        isCurrent();
+        return tools.map(({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
+          name,
+          ...(description === undefined ? {} : { description }),
+          ...(inputSchema === undefined ? {} : { inputSchema }),
+          ...(outputSchema === undefined ? {} : { outputSchema }),
+          ...(annotations === undefined ? {} : { annotations }),
+          ...(execution === undefined ? {} : { execution }),
+        }));
+      } finally {
+        await client.close().catch(() => undefined);
+      }
+    },
+    isCurrent,
+  );
+}
 
 class McpManager {
   private readonly clients = new GenerationBoundConnectionCache<Client>();

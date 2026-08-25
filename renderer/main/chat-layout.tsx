@@ -82,7 +82,7 @@ export function ChatLayout() {
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />
           </div>
-          {pathname === "/profile" || pathname === "/scheduled" ? null : <TerminalDrawer />}
+          {pathname === "/profile" || pathname === "/scheduled" || (pathname.startsWith("/bots") && !params.chatId) ? null : <TerminalDrawer />}
         </div>
       </EnvironmentWorkbench>
     </SplitView>

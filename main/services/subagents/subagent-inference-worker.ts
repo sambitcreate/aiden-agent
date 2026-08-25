@@ -1,6 +1,7 @@
 import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { isCodexAuthenticationFailure } from "../codex-auth-failure.js";
+import { providerFailureFromTerminalOutcome } from "../provider-failure.js";
 import {
   isSubagentInferenceParentMessage,
   compactAssistantMessageEvent,
@@ -25,8 +26,9 @@ function post(message: unknown): void {
 }
 
 function postFailure(requestId: string, error: unknown): void {
-  // The fixed failure frame remains available even when a provider frame was
-  // rejected for exceeding the data budget.
+  // A catch at this boundary is ambiguous: it can be provider construction,
+  // worker protocol, IPC budget, or an internal runtime failure. Only a real
+  // terminal provider event may carry a provider-failure category.
   parentPort.postMessage({
     kind: "failure",
     version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
@@ -127,6 +129,15 @@ parentPort.on("message", (messageEvent) => {
           message.model.provider === "openai-codex" &&
           event.type === "error" &&
           isCodexAuthenticationFailure(event.error.errorMessage);
+        const providerFailureCategory =
+          event.type === "error" && event.reason === "error"
+            ? providerFailureFromTerminalOutcome({
+                kind: "provider_failed",
+                reason: "request-failed",
+                attempts: 1,
+                finalMessage: event.error,
+              }).category
+            : undefined;
         post({
           kind: "event",
           version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
@@ -134,6 +145,7 @@ parentPort.on("message", (messageEvent) => {
           sequence: sequence++,
           event: compactAssistantMessageEvent(safeEvent),
           ...(authenticationFailure ? { authenticationFailure: true } : {}),
+          ...(providerFailureCategory ? { providerFailureCategory } : {}),
         });
         if (event.type === "done" || event.type === "error") terminalSent = true;
       }

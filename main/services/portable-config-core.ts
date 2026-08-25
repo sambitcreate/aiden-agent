@@ -19,7 +19,10 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { DataStore, DataStoreExternalChangeError } from "./data-store.js";
-import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
 import { assistantConfigFrom } from "../handlers/assistant-parse.js";
 import { parseGoogleThinkingPreferences } from "../../renderer/shared/google-thinking.js";
 import { parseCodexThinkingPreferences } from "../../renderer/shared/codex-thinking.js";
@@ -35,6 +38,9 @@ import type {
 import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "./types.js";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 import { isConfiguredSkill, isConfiguredSkillList } from "./skill-config-limits.js";
+import { normalizeHiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
+import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
+import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -357,6 +363,7 @@ export function isPortableProvider(value: unknown): value is PortableProvider {
     (provider.kind === "openai" || provider.kind === "anthropic") &&
     typeof provider.label === "string" &&
     provider.label.trim().length > 0 &&
+    (provider.artwork === undefined || normalizeProviderArtwork(provider.artwork) !== undefined) &&
     isProviderBaseUrl(provider.baseUrl) &&
     typeof provider.needsKey === "boolean" &&
     (provider.defaultModel === undefined || typeof provider.defaultModel === "string") &&
@@ -379,7 +386,13 @@ function isProviderModelMetadata(value: unknown): value is ProviderModelMetadata
   return (
     (value.source === "lmstudio" || value.source === "ollama" || value.source === "provider") &&
     (value.name === undefined || typeof value.name === "string") &&
-    (value.type === undefined || value.type === "llm" || value.type === "embedding") &&
+    (value.type === undefined ||
+      value.type === "llm" ||
+      value.type === "embedding" ||
+      value.type === "reranker" ||
+      value.type === "image" ||
+      value.type === "audio" ||
+      value.type === "video") &&
     (value.vision === undefined || typeof value.vision === "boolean") &&
     (value.toolCall === undefined || typeof value.toolCall === "boolean") &&
     (value.reasoning === undefined || typeof value.reasoning === "boolean") &&
@@ -430,9 +443,11 @@ function normalizeStoredProvider(value: unknown): StoredProvider | undefined {
   const raw = value as Record<string, unknown>;
   const models = normalizeModelIds(raw.models) ?? [];
   const modelMetadata = normalizeProviderModelMetadataMap(raw.modelMetadata);
-  const { modelMetadata: _metadata, models: _models, ...intent } = raw;
+  const { artwork: rawArtwork, modelMetadata: _metadata, models: _models, ...intent } = raw;
+  const artwork = normalizeProviderArtwork(rawArtwork);
   return {
     ...(intent as PortableProvider),
+    ...(artwork ? { artwork } : {}),
     models,
     ...(modelMetadata !== undefined ? { modelMetadata } : {}),
   };
@@ -544,13 +559,20 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     if (isRecord(settings.assistant)) normalized.assistant = structuredClone(settings.assistant);
     else delete normalized.assistant;
   }
+  const onboarding = parseOnboardingState(settings.onboarding);
+  if (onboarding) normalized.onboarding = onboarding;
+  else delete normalized.onboarding;
   for (const key of [
     "googleThinkingByModel",
     "codexThinkingByModel",
     "anthropicThinkingByModel",
+    "providerThinkingByModel",
   ] as const) {
     if (settings[key] !== undefined && !isRecord(settings[key])) delete normalized[key];
   }
+  const hiddenModelsByProvider = normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider);
+  if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
+  else delete normalized.hiddenModelsByProvider;
   return {
     ...rest,
     settings: normalized as AppSettings,
@@ -560,6 +582,12 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 /** Safe projection for consumers; persistence retains unknown nested future data. */
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
+  const onboarding = parseOnboardingState(settings.onboarding);
+  if (onboarding) runtime.onboarding = onboarding;
+  else delete runtime.onboarding;
+  const hiddenModelsByProvider = normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider);
+  if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
+  else delete runtime.hiddenModelsByProvider;
   const retainKnownValue = (key: keyof AppSettings, allowed: readonly string[]): void => {
     const value = settings[key];
     if (value !== undefined && (typeof value !== "string" || !allowed.includes(value))) {
@@ -608,6 +636,27 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   projectThinkingMap("googleThinkingByModel", parseGoogleThinkingPreferences);
   projectThinkingMap("codexThinkingByModel", parseCodexThinkingPreferences);
   projectThinkingMap("anthropicThinkingByModel", parseAnthropicThinkingPreferences);
+  if (settings.providerThinkingByModel !== undefined) {
+    if (!isRecord(settings.providerThinkingByModel)) {
+      delete runtime.providerThinkingByModel;
+    } else {
+      const providers: Array<[string, Record<string, GenerationThinkingLevel>]> = [];
+      let retainedModels = 0;
+      for (const [providerId, rawModels] of Object.entries(settings.providerThinkingByModel).slice(0, 128)) {
+        if (!providerId || providerId.length > 256 || !isRecord(rawModels)) continue;
+        const models: Record<string, GenerationThinkingLevel> = {};
+        for (const [modelId, level] of Object.entries(rawModels).slice(0, 256)) {
+          if (retainedModels >= 512) break;
+          if (!modelId || modelId.length > 256 || !isGenerationThinkingLevel(level)) continue;
+          models[modelId] = level;
+          retainedModels += 1;
+        }
+        if (Object.keys(models).length > 0) providers.push([providerId, models]);
+      }
+      if (providers.length > 0) runtime.providerThinkingByModel = Object.fromEntries(providers);
+      else delete runtime.providerThinkingByModel;
+    }
+  }
   return runtime;
 }
 
@@ -934,6 +983,34 @@ export function createPortableConfigStores(
       previous: PortableConfigShape | null,
       next: PortableConfigShape,
     ) => void;
+    afterPortableWritePublish?: (
+      previous: PortableConfigShape | null,
+      next: PortableConfigShape,
+    ) => void;
+    beforeSettingsExternalCacheCommit?: (
+      previous: SettingsShape | null,
+      next: SettingsShape,
+    ) => void;
+    beforeSettingsWritePublish?: (
+      previous: SettingsShape | null,
+      next: SettingsShape,
+    ) => void;
+    afterSettingsWritePublish?: (
+      previous: SettingsShape | null,
+      next: SettingsShape,
+    ) => void;
+    beforeProviderModelExternalCacheCommit?: (
+      previous: ProviderModelCacheShape | null,
+      next: ProviderModelCacheShape,
+    ) => void;
+    beforeProviderModelWritePublish?: (
+      previous: ProviderModelCacheShape | null,
+      next: ProviderModelCacheShape,
+    ) => void;
+    afterProviderModelWritePublish?: (
+      previous: ProviderModelCacheShape | null,
+      next: ProviderModelCacheShape,
+    ) => void;
   } = {},
 ) {
   const portable = new DataStore<PortableConfigShape>(
@@ -954,6 +1031,7 @@ export function createPortableConfigStores(
       beforeExternalCacheCommit:
         testHooks.beforePortableExternalCacheCommit,
       beforeWritePublish: testHooks.beforePortableWritePublish,
+      afterWritePublish: testHooks.afterPortableWritePublish,
     },
   );
   const settings = new DataStore<SettingsShape>(SETTINGS_FILENAME, { settings: {} }, localRoot, {
@@ -962,6 +1040,9 @@ export function createPortableConfigStores(
     reloadBeforeWrite: true,
     rejectCorruptWrite: true,
     rejectExternalChanges: true,
+    beforeExternalCacheCommit: testHooks.beforeSettingsExternalCacheCommit,
+    beforeWritePublish: testHooks.beforeSettingsWritePublish,
+    afterWritePublish: testHooks.afterSettingsWritePublish,
   });
   const local = new DataStore<LocalConfigShape>(
     LOCAL_CONFIG_FILENAME,
@@ -982,7 +1063,12 @@ export function createPortableConfigStores(
     PROVIDER_MODEL_CACHE_FILENAME,
     { byProvider: {} },
     localRoot,
-    { normalize: normalizeProviderModelCacheShape },
+    {
+      normalize: normalizeProviderModelCacheShape,
+      beforeExternalCacheCommit: testHooks.beforeProviderModelExternalCacheCommit,
+      beforeWritePublish: testHooks.beforeProviderModelWritePublish,
+      afterWritePublish: testHooks.afterProviderModelWritePublish,
+    },
   );
 
   let migrationPromise: Promise<boolean> | null = null;

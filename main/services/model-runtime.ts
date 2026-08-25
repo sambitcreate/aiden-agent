@@ -2,7 +2,12 @@
 
 import type { AnthropicMessagesCompat, Models } from "@earendil-works/pi-ai";
 import { configStore } from "./config-store.js";
-import { resolveModelRuntimeWith, type ResolvedModelRuntime } from "./model-runtime-core.js";
+import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
+import {
+  resolveModelRuntimeWith,
+  withPinnedBotProviderAuth,
+  type ResolvedModelRuntime,
+} from "./model-runtime-core.js";
 import { catalogProviderSlug } from "./models-catalog-core.js";
 import { modelsCatalog } from "./models-catalog.js";
 import { providerRegistry } from "./provider-registry.js";
@@ -77,4 +82,56 @@ export async function resolveModelRuntime(
     modelId,
     signal,
   );
+}
+
+/** Resolve a Bot runtime with request auth pinned before the final authority revalidation. */
+export async function resolveBotModelRuntime(
+  providerId: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<ResolvedModelRuntime> {
+  const runtime = await resolveModelRuntime(providerId, modelId, signal);
+  if (
+    runtime.provider.id === OPENAI_CODEX_PROVIDER_ID ||
+    !providerRegistry.isBuiltinProvider(runtime.provider.id)
+  ) {
+    return runtime;
+  }
+  if (signal?.aborted) throw signal.reason;
+  const [provider, auth] = await Promise.all([
+    Promise.resolve(providerRegistry.models.getProvider(runtime.provider.id)),
+    providerRegistry.models.getAuth(runtime.model),
+  ]);
+  if (!provider || !auth) {
+    throw new Error("This Bot's AI connection is no longer configured.");
+  }
+  if (signal?.aborted) throw signal.reason;
+  return withPinnedBotProviderAuth(
+    runtime,
+    auth,
+    provider.streamSimple.bind(provider),
+  );
+}
+
+/**
+ * Resolve stored built-in auth before Bot authority admission. Pi may refresh
+ * and persist an expired OAuth credential here; the post-admission runtime
+ * resolution then pins the fresh credential without invalidating its own lease.
+ */
+export async function preflightBotModelAuth(
+  providerId: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const runtime = await resolveModelRuntime(providerId, modelId, signal);
+  if (
+    runtime.provider.id === OPENAI_CODEX_PROVIDER_ID ||
+    !providerRegistry.isBuiltinProvider(runtime.provider.id)
+  ) {
+    return;
+  }
+  if (signal?.aborted) throw signal.reason;
+  const auth = await providerRegistry.models.getAuth(runtime.model);
+  if (!auth) throw new Error("This Bot's AI connection is no longer configured.");
+  if (signal?.aborted) throw signal.reason;
 }

@@ -7,7 +7,7 @@ import type {
 } from "./types.js";
 
 interface ScheduleExecutionLike {
-  run(task: ScheduledTask): Promise<ScheduledRun>;
+  run(task: ScheduledTask, runId?: string): Promise<ScheduledRun>;
   cancel(taskId: string): boolean;
   cancelAll(): void;
 }
@@ -107,7 +107,7 @@ export function createScheduleServiceCore(
 
   function dispatch(
     taskId: string,
-    options: { automatic: boolean },
+    options: { automatic: boolean; runId?: string },
   ): Promise<ScheduledRun> {
     if (runningTasks.has(taskId)) {
       throw new Error("This scheduled task is already running.");
@@ -142,7 +142,7 @@ export function createScheduleServiceCore(
         const claimed = options.automatic ? await advanceBeforeRun(task) : task;
         if (state.cancelRequested)
           throw new Error("This scheduled task was cancelled.");
-        return execution.run(claimed);
+        return execution.run(claimed, options.runId);
       } finally {
         if (!workspaceResolved) {
           workspaceResolved = true;
@@ -374,10 +374,13 @@ export function createScheduleServiceCore(
 
     async remove(
       id: string,
-      options: { signal?: AbortSignal } = {},
+      options: { signal?: AbortSignal; expectedUpdatedAt?: number } = {},
     ): Promise<void> {
       await withTaskLifecycle(id, async () => {
         const current = await store.get(id);
+        if (options.expectedUpdatedAt !== undefined && current?.updatedAt !== options.expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         throwIfAborted(options.signal, "removal");
         stopJob(id);
         await cancelAndSettle(id);
@@ -392,10 +395,13 @@ export function createScheduleServiceCore(
 
     async pause(
       id: string,
-      options: { signal?: AbortSignal } = {},
+      options: { signal?: AbortSignal; expectedUpdatedAt?: number } = {},
     ): Promise<ScheduledTask> {
       return withTaskLifecycle(id, async () => {
         const current = await store.get(id);
+        if (options.expectedUpdatedAt !== undefined && current?.updatedAt !== options.expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         throwIfAborted(options.signal, "pause");
         stopJob(id);
         await cancelAndSettle(id);
@@ -419,10 +425,13 @@ export function createScheduleServiceCore(
 
     async resume(
       id: string,
-      options: { signal?: AbortSignal } = {},
+      options: { signal?: AbortSignal; expectedUpdatedAt?: number } = {},
     ): Promise<ScheduledTask> {
       return withTaskLifecycle(id, async () => {
         const current = await store.get(id);
+        if (options.expectedUpdatedAt !== undefined && current?.updatedAt !== options.expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         throwIfAborted(options.signal, "resume");
         const task = await store.setEnabled(id, true);
         const restore = async () => {
@@ -448,10 +457,10 @@ export function createScheduleServiceCore(
 
     runNow(
       id: string,
-      options: { signal?: AbortSignal } = {},
+      options: { signal?: AbortSignal; runId?: string } = {},
     ): Promise<ScheduledRun> {
       throwIfAborted(options.signal, "run");
-      const operation = dispatch(id, { automatic: false });
+      const operation = dispatch(id, { automatic: false, runId: options.runId });
       if (!options.signal) return operation;
       const cancel = () => {
         const state = runningTasks.get(id);

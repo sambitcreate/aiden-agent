@@ -115,16 +115,28 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
     quitReceiptFinalization,
   );
   const failureExit = shutdown.indexOf("app.exit(1);", quitReceiptFinalization);
+  const failureDiagnosticFlush = shutdown.lastIndexOf(
+    "await flushSubagentRuntimeDiagnostics();",
+    failureExit,
+  );
   const forcedQuit = shutdown.indexOf("forceAppQuit = true;", cleanup);
+  const normalDiagnosticFlush = shutdown.lastIndexOf(
+    "await flushSubagentRuntimeDiagnostics();",
+    forcedQuit,
+  );
   const quitAction = soak.indexOf('case "normal_quit"');
   assert.ok(parentShutdown >= 0);
   assert.ok(parentShutdown < registryShutdown);
   assert.ok(registryShutdown >= 0);
   assert.ok(quitReceiptFinalization > registryShutdown);
   assert.ok(failureExit > quitReceiptFinalization);
+  assert.ok(failureDiagnosticFlush > quitReceiptFinalization);
+  assert.ok(failureDiagnosticFlush < failureExit);
   assert.ok(failureExit < cleanup);
   assert.ok(cleanup > quitReceiptFinalization);
   assert.ok(forcedQuit > cleanup);
+  assert.ok(normalDiagnosticFlush > cleanup);
+  assert.ok(normalDiagnosticFlush < forcedQuit);
   assert.match(shutdown, /parentSettled\s*=\s*await llmClient\.shutdown\(\)/u);
   assert.match(shutdown, /quitReceiptFinalization\.status === "failed"/u);
   assert.match(shutdown, /continuing shutdown without a receipt/u);

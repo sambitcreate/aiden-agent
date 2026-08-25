@@ -46,6 +46,7 @@ interface MessageListProps {
 
 interface AssistantResponseProps {
   content: string;
+  attachments?: import("../lib/types").Attachment[];
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
   subagentChips?: React.ReactNode;
@@ -56,6 +57,7 @@ interface AssistantResponseProps {
 
 function AssistantResponse({
   content,
+  attachments,
   timeline,
   reasoning,
   subagentChips,
@@ -76,10 +78,11 @@ function AssistantResponse({
             active={streaming && !streamComplete && !content}
           />
         ) : null}
-        {content ? (
+        {content || (attachments?.length ?? 0) > 0 ? (
           <SafeMessageBubble
             role="assistant"
             content={content}
+            attachments={attachments}
             streaming={streaming}
             streamComplete={streamComplete}
             onStreamHandoffComplete={onStreamHandoffComplete}
@@ -132,9 +135,13 @@ function AssistantResponse({
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
             showCopy={isLastText}
             copyText={content}
+            attachments={isLastText ? attachments : undefined}
           />
         );
       })}
+      {lastTextIndex < 0 && (attachments?.length ?? 0) > 0 ? (
+        <SafeMessageBubble role="assistant" content="" attachments={attachments} />
+      ) : null}
     </>
   );
 }
@@ -243,6 +250,7 @@ export function MessageList({
             <>
               <AssistantResponse
                 content={m.content}
+                attachments={m.attachments}
                 timeline={m.timeline}
                 reasoning={m.reasoning}
                 subagentChips={

@@ -1064,6 +1064,7 @@ export function AlertDialog({
   keepOpenOnConfirm = false,
   returnFocus,
   onConfirm,
+  layer = "default",
 }: Omit<
   DialogProps,
   | "children"
@@ -1100,7 +1101,10 @@ export function AlertDialog({
       <AlertDialogPrimitive.Portal>
         <AlertDialogPrimitive.Overlay
           data-slot="dialog-overlay"
-          className="fixed inset-0 z-50 bg-transparent"
+          className={cn(
+            "fixed inset-0 bg-transparent",
+            layer === "onboarding" ? "z-[70]" : "z-50",
+          )}
         />
         <AlertDialogPrimitive.Content
           data-slot="dialog-content"
@@ -1114,7 +1118,10 @@ export function AlertDialog({
             }
           }}
           onEscapeKeyDown={(event) => busy && event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none"
+          className={cn(
+            "fixed left-1/2 top-1/2 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
+            layer === "onboarding" ? "z-[70]" : "z-50",
+          )}
         >
           <AlertDialogPrimitive.Title className="text-heading2 font-semibold">
             {title}

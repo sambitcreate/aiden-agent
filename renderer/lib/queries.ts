@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-query";
 import {
   assistantApi,
+  aidenRemoteApi,
+  botsApi,
   chatsApi,
   artificialAnalysisApi,
   computerUseApi,
@@ -40,6 +42,13 @@ import type {
 export const queryKeys = {
   providers: ["providers"] as const,
   chats: ["chats"] as const,
+  bots: ["bots"] as const,
+  bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
+  botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
+  botCapabilityCatalog: ["bot-capability-catalog"] as const,
+  botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
+  botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
+  botTelegramTargets: ["bot-telegram-targets"] as const,
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
@@ -60,6 +69,7 @@ export const queryKeys = {
   mcpPresets: ["mcpPresets"] as const,
   exa: ["exa"] as const,
   telegram: ["telegram"] as const,
+  aidenRemote: ["aidenRemote"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,
@@ -239,6 +249,63 @@ export function useChats(workspaceId?: string) {
     // sidebar renders whatever this resolves to, and `workspaceId` is briefly
     // undefined while workspaces load, so wait for a concrete id instead.
     enabled: Boolean(workspaceId),
+  });
+}
+
+export function useBots(includeArchived = false) {
+  return useQuery({
+    queryKey: [...queryKeys.bots, includeArchived ? "all" : "active"],
+    queryFn: () => botsApi.list(includeArchived),
+  });
+}
+
+export function useBot(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.bot(botId),
+    queryFn: () => botsApi.get(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotChats(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botChats(botId),
+    queryFn: () => botsApi.listChats(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+/** Bot capability catalog for the desktop audience; refreshed after saves. */
+export function useBotCapabilityCatalog(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.botCapabilityCatalog,
+    queryFn: () => botsApi.getCapabilityCatalog(),
+    enabled,
+  });
+}
+
+/** Current Bot access policy and its model selection. */
+export function useBotAccess(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botAccess(botId),
+    queryFn: () => botsApi.getBotAccess(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotTelegramBinding(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botTelegramBinding(botId),
+    queryFn: () => botsApi.getTelegramBinding(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotTelegramTargets(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.botTelegramTargets,
+    queryFn: botsApi.listTelegramTargets,
+    enabled,
   });
 }
 
@@ -462,6 +529,16 @@ export function useExaConfig() {
 
 export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
+}
+
+export function useAidenRemoteSettings() {
+  return useQuery({
+    queryKey: queryKeys.aidenRemote,
+    queryFn: aidenRemoteApi.get,
+    retry: false,
+    refetchOnWindowFocus: true,
+    refetchInterval: 10_000,
+  });
 }
 
 export function useEngineStatus(enabled = true) {

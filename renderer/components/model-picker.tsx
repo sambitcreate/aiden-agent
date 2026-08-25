@@ -25,6 +25,7 @@ import {
   PINNED_MODELS_KEY,
   positionSavedModels,
   positionModels,
+  visibleModelEntries,
   type ModelEntry,
   type PositionedModel,
 } from "../lib/model-picker-data";
@@ -33,6 +34,7 @@ import { useModelPadLayout } from "../lib/model-pad-layout";
 import type { ModelInfo, Provider } from "../lib/types";
 import { Check, ChevronsUpDown, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -41,6 +43,7 @@ interface ModelPickerProps {
   onChange: (providerId: string, model: string) => void;
   disabled?: boolean;
   settingsBlockedReason?: string;
+  hiddenModelsByProvider?: HiddenModelsByProvider;
 }
 
 function formatTokens(value: number | undefined): string | null {
@@ -244,6 +247,7 @@ function ModelHoverDetails({
             providerId={model.providerId}
             providerLabel={model.providerLabel}
             modelId={model.model}
+            artwork={model.providerArtwork}
             className="size-4"
           />
         </span>
@@ -317,6 +321,7 @@ export function ModelPicker({
   onChange,
   disabled,
   settingsBlockedReason,
+  hiddenModelsByProvider,
 }: ModelPickerProps) {
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
@@ -343,7 +348,8 @@ export function ModelPicker({
     }
   });
 
-  const entries = createModelEntries(providers, infoByValue);
+  const allEntries = createModelEntries(providers, infoByValue);
+  const entries = visibleModelEntries(allEntries, hiddenModelsByProvider);
   const orderedEntries = orderModelEntries(entries, pinned);
   const detailPositions = positionModels(entries);
   const positioned = positionSavedModels(entries, modelPadLayout.placements);
@@ -352,7 +358,7 @@ export function ModelPicker({
     entries.some((entry) => entry.info?.metadataSource === "artificial-analysis") ||
     positioned.some((entry) => entry.confidence === "suggested");
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
-  const selected = entries.find((entry) => entry.value === selectedValue);
+  const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
   const detailPosition = detailPositions.find((entry) => entry.value === previewValue);
   const activePosition =
@@ -474,6 +480,7 @@ export function ModelPicker({
               providerId={selected.providerId}
               providerLabel={selected.providerLabel}
               modelId={selected.model}
+              artwork={selected.providerArtwork}
               className="size-4 text-tertiary"
             />
           ) : null}
@@ -624,6 +631,7 @@ export function ModelPicker({
                         providerId={entry.providerId}
                         providerLabel={entry.providerLabel}
                         modelId={entry.model}
+                        artwork={entry.providerArtwork}
                         className="size-4 text-tertiary"
                       />
                       <span className="min-w-0 flex-1">

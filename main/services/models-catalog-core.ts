@@ -10,6 +10,8 @@ import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.j
 interface RawModel {
   id?: string;
   name?: string;
+  description?: string;
+  family?: string;
   attachment?: boolean;
   reasoning?: boolean;
   tool_call?: boolean;
@@ -125,7 +127,14 @@ function validateRawModel(value: unknown, providerId: string, modelId: string): 
   if (typeof model.name !== "string" || model.name.length === 0) {
     throw new Error(`Bundled model catalog model ${providerId}/${modelId} must have a name.`);
   }
-  for (const field of ["id", "knowledge", "release_date", "last_updated"]) {
+  for (const field of [
+    "id",
+    "description",
+    "family",
+    "knowledge",
+    "release_date",
+    "last_updated",
+  ]) {
     assertOptionalString(model[field], `${providerId}/${modelId}.${field}`);
   }
   for (const field of ["attachment", "reasoning", "tool_call", "open_weights"]) {
@@ -252,6 +261,25 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
     return { id: modelId, metadataSource: "fallback", matched: false };
   }
   const inputs = raw.modalities?.input ?? [];
+  const outputs = raw.modalities?.output ?? [];
+  const family = raw.family?.trim().toLocaleLowerCase();
+  const description = raw.description?.trim() ?? "";
+  const mediaOutputType: ModelInfo["modelType"] =
+    outputs.length > 0 && !outputs.includes("text")
+      ? outputs.includes("image")
+        ? "image"
+        : outputs.includes("video")
+          ? "video"
+          : outputs.includes("audio")
+            ? "audio"
+            : undefined
+      : undefined;
+  const modelType: ModelInfo["modelType"] =
+    family === "text-embedding" || /^embedding model\b/iu.test(description)
+      ? "embedding"
+      : /^reranking model\b/iu.test(description)
+        ? "reranker"
+        : mediaOutputType;
   return {
     id: modelId,
     name: raw.name,
@@ -264,6 +292,7 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
     toolCall: typeof raw.tool_call === "boolean" ? raw.tool_call : undefined,
     reasoning: typeof raw.reasoning === "boolean" ? raw.reasoning : undefined,
     openWeights: typeof raw.open_weights === "boolean" ? raw.open_weights : undefined,
+    ...(modelType ? { modelType } : {}),
     contextLength: raw.limit?.context,
     outputLimit: raw.limit?.output,
     inputModalities: inputs.length ? inputs : undefined,
@@ -419,7 +448,14 @@ function localInfo(
     vision: metadata.vision ?? fallback.vision,
     toolCall: metadata.toolCall ?? fallback.toolCall,
     reasoning: metadata.reasoning ?? fallback.reasoning,
-    modelType: metadata.type,
+    // A provider's generic `llm` label cannot make a catalog-identified
+    // embedding/reranker chat-capable. Either trusted non-chat source wins.
+    modelType:
+      metadata.type && metadata.type !== "llm"
+        ? metadata.type
+        : fallback.modelType && fallback.modelType !== "llm"
+          ? fallback.modelType
+          : metadata.type ?? fallback.modelType,
     parameterCount: metadata.parameterCount,
     format: metadata.format,
     contextLength: metadata.contextLength ?? fallback.contextLength,

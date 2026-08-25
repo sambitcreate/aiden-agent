@@ -8,6 +8,7 @@ import type {
 export type UsageRequestSource =
   | "chat"
   | "chat-title"
+  | "bot-avatar"
   | "voice-transcription"
   | "scheduled"
   | "subagent"
@@ -74,6 +75,7 @@ const RANGE_DAYS: Record<Exclude<UsageDateRange, "all">, number> = {
 const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "chat",
   "chat-title",
+  "bot-avatar",
   "voice-transcription",
   "scheduled",
   "subagent",
@@ -486,4 +488,3 @@ export function createUsageStore(
     },
   };
 }
-

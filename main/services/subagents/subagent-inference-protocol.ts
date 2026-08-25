@@ -7,6 +7,10 @@ import type {
   ProviderHeaders,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import {
+  PROVIDER_FAILURE_CATEGORIES,
+  type ProviderFailureCategoryV1,
+} from "../../../renderer/shared/provider-failure.js";
 
 export const SUBAGENT_INFERENCE_PROTOCOL_VERSION = 1;
 export const MAX_SUBAGENT_INFERENCE_MESSAGE_BYTES = 32 * 1024 * 1024;
@@ -81,6 +85,8 @@ export interface SubagentInferenceEventMessage {
   event: Record<string, unknown>;
   /** Closed worker-side classification; raw provider text never crosses IPC. */
   authenticationFailure?: true;
+  /** Closed worker-side classification; provider-authored text never crosses IPC. */
+  providerFailureCategory?: ProviderFailureCategoryV1;
 }
 
 export interface SubagentInferenceFailureMessage {
@@ -184,7 +190,10 @@ export function isSubagentInferenceWorkerMessage(
   if (typeof value.requestId !== "string" || value.requestId.length === 0) return false;
   if (value.kind === "ready") return Object.keys(value).length === 3;
   if (value.kind === "failure") {
-    return Object.keys(value).length === 4 && typeof value.message === "string";
+    return (
+      typeof value.message === "string" &&
+      hasExactKeys(value, ["kind", "version", "requestId", "message"])
+    );
   }
   if (value.kind === "hook") {
     return (
@@ -195,16 +204,20 @@ export function isSubagentInferenceWorkerMessage(
       Object.prototype.hasOwnProperty.call(value, "payload")
     );
   }
-  const eventKeys = value.authenticationFailure === true ? 6 : 5;
+  const authenticationFailure = value.authenticationFailure === true;
+  const providerFailureCategory =
+    typeof value.providerFailureCategory === "string" &&
+    (PROVIDER_FAILURE_CATEGORIES as readonly string[]).includes(value.providerFailureCategory);
+  const eventKeys = 5 + (authenticationFailure ? 1 : 0) + (providerFailureCategory ? 1 : 0);
   return (
     value.kind === "event" &&
     Object.keys(value).length === eventKeys &&
     Number.isSafeInteger(value.sequence) &&
     (value.sequence as number) >= 0 &&
     (value.authenticationFailure === undefined ||
-      (value.authenticationFailure === true &&
-        isRecord(value.event) &&
-        value.event.type === "error")) &&
+      (authenticationFailure && isRecord(value.event) && value.event.type === "error")) &&
+    (value.providerFailureCategory === undefined ||
+      (providerFailureCategory && isRecord(value.event) && value.event.type === "error")) &&
     isWireAssistantEvent(value.event)
   );
 }

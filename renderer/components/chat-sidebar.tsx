@@ -42,6 +42,7 @@ import {
   SquarePen,
   UserRound,
 } from "lucide-react";
+import { BotSidebarIcon } from "./bot-avatar";
 import { appUpdatesApi, chatsApi, gitApi, workspacesApi } from "../lib/ipc";
 import { truncatePathMiddle } from "../lib/truncate-path";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
@@ -67,6 +68,7 @@ import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
 import { useActiveChatIds } from "../lib/use-chat-activity";
+import { RemoteConnectionPopover } from "./remote-connection-popover";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 /** Must match aiden-app-update-banner-out in styles.css. */
@@ -312,8 +314,8 @@ function ChatActivityIndicator() {
       title="Working"
       className="inline-flex size-5 items-center justify-center text-accent"
     >
-      {/* A static open ring communicates in-progress work without an animation clock. */}
-      <Loader2 className="size-4" aria-hidden="true" />
+      {/* Reduced-motion mode collapses this continuous rotation via the global motion contract. */}
+      <Loader2 className="size-4 animate-[spin_1.5s_linear_infinite]" aria-hidden="true" />
     </span>
   );
 }
@@ -456,6 +458,13 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     },
     [navigate, settingsBlockedReason],
   );
+  const openRemoteSettings = React.useCallback(() => {
+    if (settingsBlockedReason) {
+      toast.info(settingsBlockedReason);
+      return;
+    }
+    void navigate({ to: "/settings", search: { section: "remoteAccess" } });
+  }, [navigate, settingsBlockedReason]);
 
   React.useEffect(() => {
     const clearRevealTimer = () => {
@@ -769,13 +778,20 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 disabled={Boolean(settingsBlockedReason)}
                 onClick={() => navigate({ to: "/profile" })}
               />
-              <SidebarListItem
-                icon={<Settings />}
-                title="Settings"
-                selected={pathname === "/settings"}
-                disabled={Boolean(settingsBlockedReason)}
-                onClick={() => navigate({ to: "/settings" })}
-              />
+              <div className="flex min-w-0 items-center gap-0.5">
+                <SidebarListItem
+                  icon={<Settings />}
+                  title="Settings"
+                  selected={pathname === "/settings"}
+                  disabled={Boolean(settingsBlockedReason)}
+                  className="min-w-0 flex-1"
+                  onClick={() => navigate({ to: "/settings" })}
+                />
+                <RemoteConnectionPopover
+                  settingsBlockedReason={settingsBlockedReason}
+                  onManage={openRemoteSettings}
+                />
+              </div>
             </div>
           </SidebarFooter>
         }
@@ -792,6 +808,12 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             title="Scheduled"
             selected={pathname === "/scheduled"}
             onClick={() => navigate({ to: "/scheduled" })}
+          />
+          <SidebarListItem
+            icon={<BotSidebarIcon />}
+            title="Bots"
+            selected={pathname.startsWith("/bots")}
+            onClick={() => navigate({ to: "/bots" })}
           />
         </div>
 

@@ -1,6 +1,6 @@
 // Discover provider models and retain provider-reported metadata for local runtimes.
 
-import type { ProviderModelMetadata, StoredProvider } from "./types.js";
+import type { ProviderModelMetadata, ProviderModelType, StoredProvider } from "./types.js";
 import {
   GOOGLE_PROVIDER_ID,
   googleProviderModelMetadata,
@@ -68,6 +68,9 @@ export interface ConnectionTestResult extends DiscoveredModels {
 /** Keep a settings request responsive when a local or private server is offline. */
 export const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_GOOGLE_MODEL_PAGES = 10;
+export const MAX_MODEL_DISCOVERY_RESPONSE_BYTES = 1_048_576;
+export const MAX_DISCOVERED_MODELS = 2_000;
+export const MAX_DISCOVERED_MODEL_ID_LENGTH = 256;
 
 class ModelDiscoveryHttpError extends Error {
   constructor(
@@ -76,6 +79,47 @@ class ModelDiscoveryHttpError extends Error {
   ) {
     super(message);
   }
+}
+
+function httpFailureMessage(status: number): string {
+  if (status === 401) return "The provider rejected those credentials.";
+  if (status === 403) return "The provider denied access to its model catalog.";
+  if (status === 429) return "The provider is rate limiting connection checks. Try again later.";
+  if (status === 404 || status === 405) return "The model catalog endpoint is not supported.";
+  if (status >= 500) return "The provider is temporarily unavailable.";
+  return `The provider could not list models (HTTP ${status}).`;
+}
+
+async function boundedResponseText(response: Response): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_MODEL_DISCOVERY_RESPONSE_BYTES) {
+    throw new Error("The provider's model catalog is too large.");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_MODEL_DISCOVERY_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("The provider's model catalog is too large.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
 }
 
 /**
@@ -96,6 +140,21 @@ export function normalizeProviderBaseUrl(value: string): string {
   if (!url.hostname) {
     throw new Error("Provider URL must include a host.");
   }
+  const hostname = url.hostname.toLowerCase().replace(/\.$/u, "");
+  const literalMetadataTarget =
+    /^169\.254\./u.test(hostname) ||
+    /^\[::ffff:(?:169\.254\.|a9fe:)/u.test(hostname) ||
+    hostname === "100.100.100.200" ||
+    hostname === "0.0.0.0" ||
+    hostname === "[::]" ||
+    /^\[fe[89ab][0-9a-f]:/u.test(hostname);
+  if (
+    literalMetadataTarget ||
+    hostname === "metadata.google.internal" ||
+    hostname === "metadata"
+  ) {
+    throw new Error("Provider URL cannot target a host-local metadata service.");
+  }
   if (url.username || url.password) {
     throw new Error("Put credentials in the API key field, not the URL.");
   }
@@ -104,6 +163,22 @@ export function normalizeProviderBaseUrl(value: string): string {
   }
   url.pathname = url.pathname.replace(/\/+$/u, "");
   return url.toString().replace(/\/$/u, "");
+}
+
+/** First-run Tailnet setup is intentionally narrower than arbitrary custom endpoints. */
+export function assertOnboardingTailnetBaseUrl(value: string): void {
+  const url = new URL(value);
+  const hostname = url.hostname.toLowerCase().replace(/\.$/u, "");
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(hostname);
+  const cgnat =
+    ipv4 !== null &&
+    Number(ipv4[1]) === 100 &&
+    Number(ipv4[2]) >= 64 &&
+    Number(ipv4[2]) <= 127;
+  const tailscaleIpv6 = /^\[fd7a:115c:a1e0:/u.test(hostname);
+  if (!hostname.endsWith(".ts.net") && !cgnat && !tailscaleIpv6) {
+    throw new Error("Use a Tailscale .ts.net name or Tailnet IP address for this connection.");
+  }
 }
 
 function headersFor(provider: StoredProvider, apiKey: string | null): Record<string, string> {
@@ -144,22 +219,35 @@ async function fetchJson(
       method: init.method ?? "GET",
       body: init.body,
       headers: init.body ? { ...headers, "content-type": "application/json" } : headers,
-      redirect: init.redirect,
+      redirect: init.redirect ?? "error",
       signal,
     });
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new ModelDiscoveryHttpError(
-        `Failed to list models: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
-        response.status,
-      );
+      await response.body?.cancel().catch(() => undefined);
+      throw new ModelDiscoveryHttpError(httpFailureMessage(response.status), response.status);
     }
-    return response.json() as Promise<unknown>;
+    const text = await boundedResponseText(response);
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new Error("The provider returned an invalid model catalog.");
+    }
   } catch (error) {
-    if (signal.aborted) {
+    if (controller?.signal.aborted) {
       throw new Error(`Connection timed out after ${timeoutMs / 1000} seconds.`);
     }
-    throw error;
+    if (init.signal?.aborted) throw new Error("Connection check cancelled.");
+    if (error instanceof ModelDiscoveryHttpError) throw error;
+    if (
+      error instanceof Error &&
+      (error.message === "The provider's model catalog is too large." ||
+        error.message === "The provider returned an invalid model catalog.")
+    ) {
+      throw error;
+    }
+    // Header/fetch errors can echo credential material. Renderer-facing
+    // callers receive only app-owned transport copy.
+    throw new Error("Couldn't reach the provider model endpoint.");
   } finally {
     if (timeout) clearTimeout(timeout);
   }
@@ -232,6 +320,10 @@ function capabilityFlags(value: unknown): {
   toolCall?: boolean;
   reasoning?: boolean;
   embedding?: boolean;
+  reranking?: boolean;
+  imageOutput?: boolean;
+  audioOutput?: boolean;
+  videoOutput?: boolean;
   completion?: boolean;
 } {
   if (Array.isArray(value)) {
@@ -245,6 +337,15 @@ function capabilityFlags(value: unknown): {
       toolCall: capabilities.has("tools") || capabilities.has("tool_use"),
       reasoning: capabilities.has("reasoning") || capabilities.has("thinking"),
       embedding: capabilities.has("embedding") || capabilities.has("embeddings"),
+      reranking: capabilities.has("rerank") || capabilities.has("reranking"),
+      imageOutput:
+        capabilities.has("image_generation") || capabilities.has("text_to_image"),
+      audioOutput:
+        capabilities.has("audio_generation") ||
+        capabilities.has("speech") ||
+        capabilities.has("tts"),
+      videoOutput:
+        capabilities.has("video_generation") || capabilities.has("text_to_video"),
       completion: capabilities.has("completion"),
     };
   }
@@ -264,12 +365,68 @@ function capabilityFlags(value: unknown): {
         : typeof capabilities.thinking === "boolean"
           ? capabilities.thinking
           : undefined,
+    embedding:
+      typeof capabilities.embedding === "boolean" ? capabilities.embedding : undefined,
+    reranking:
+      typeof capabilities.reranking === "boolean" ? capabilities.reranking : undefined,
+    imageOutput:
+      typeof capabilities.image_generation === "boolean"
+        ? capabilities.image_generation
+        : undefined,
+    audioOutput:
+      typeof capabilities.audio_generation === "boolean"
+        ? capabilities.audio_generation
+        : undefined,
+    videoOutput:
+      typeof capabilities.video_generation === "boolean"
+        ? capabilities.video_generation
+        : undefined,
   };
+}
+
+function providerModelType(
+  rawType: string | undefined,
+  flags: ReturnType<typeof capabilityFlags>,
+): ProviderModelType | undefined {
+  const type = rawType?.trim().toLocaleLowerCase().replace(/[\s_]+/gu, "-");
+  if (flags.embedding || type?.includes("embed")) return "embedding";
+  if (flags.reranking || type?.includes("rerank")) return "reranker";
+  // Explicit output capabilities are stronger than a server's generic `llm`
+  // label; otherwise media-only endpoints leak into chat model lists.
+  if (flags.videoOutput) return "video";
+  if (flags.audioOutput) return "audio";
+  if (flags.imageOutput) return "image";
+  if (
+    type === "llm" ||
+    type === "vlm" ||
+    type === "chat" ||
+    type === "chat-completion" ||
+    type === "text-generation" ||
+    type === "text-to-text" ||
+    type === "image-text-to-text"
+  ) {
+    return "llm";
+  }
+  if (type?.includes("video")) return "video";
+  if (
+    type?.includes("audio") ||
+    type?.includes("speech") ||
+    type === "tts" ||
+    type?.includes("transcription")
+  ) {
+    return "audio";
+  }
+  if (type?.includes("image") || type?.includes("diffusion")) return "image";
+  if (flags.completion) return "llm";
+  return undefined;
+}
+
+function isProviderNonChatType(type: ProviderModelType | undefined): boolean {
+  return type !== undefined && type !== "llm";
 }
 
 function genericMetadata(entry: GenericModelEntry): ProviderModelMetadata {
   const flags = capabilityFlags(entry.capabilities);
-  const type = entry.type?.toLowerCase();
   const quantization =
     typeof entry.quantization === "string"
       ? entry.quantization
@@ -277,12 +434,7 @@ function genericMetadata(entry: GenericModelEntry): ProviderModelMetadata {
   return {
     source: "provider",
     name: entry.display_name ?? entry.name,
-    type:
-      type?.includes("embed") || flags.embedding
-        ? "embedding"
-        : type === "llm" || type === "vlm"
-          ? "llm"
-          : undefined,
+    type: providerModelType(entry.type, flags),
     vision: flags.vision,
     toolCall: flags.toolCall,
     reasoning: flags.reasoning,
@@ -294,14 +446,16 @@ function genericMetadata(entry: GenericModelEntry): ProviderModelMetadata {
 
 function normalizeDiscovery(entries: GenericModelEntry[]): DiscoveredModels {
   const metadataEntries: Array<[string, ProviderModelMetadata]> = [];
-  for (const entry of entries) {
-    const id = entry.id ?? entry.key ?? entry.name;
-    if (!id) continue;
+  for (const entry of entries.slice(0, MAX_DISCOVERED_MODELS)) {
+    const candidate = entry.id ?? entry.key ?? entry.name;
+    if (typeof candidate !== "string") continue;
+    const id = candidate.trim();
+    if (!id || id.length > MAX_DISCOVERED_MODEL_ID_LENGTH) continue;
     metadataEntries.push([id, genericMetadata(entry)]);
   }
   const metadata = Object.fromEntries(metadataEntries);
   const models = Object.keys(metadata)
-    .filter((id) => metadata[id]?.type !== "embedding")
+    .filter((id) => !isProviderNonChatType(metadata[id]?.type))
     .sort();
   return { models: Array.from(new Set(models)), modelMetadata: metadata };
 }
@@ -320,17 +474,19 @@ function parseLmStudioResponse(value: unknown): DiscoveredModels | null {
     .filter((value): value is Record<string, unknown> => Boolean(value));
   const metadataEntries: Array<[string, ProviderModelMetadata]> = [];
   let recommendedModel: string | undefined;
-  for (const entry of entries) {
+  for (const entry of entries.slice(0, MAX_DISCOVERED_MODELS)) {
     const key = typeof entry.key === "string" ? entry.key : undefined;
-    if (!key) continue;
+    if (!key || key.length > MAX_DISCOVERED_MODEL_ID_LENGTH) continue;
     const capabilities = capabilityFlags(entry.capabilities);
-    const type =
-      entry.type === "embedding" ? "embedding" : entry.type === "llm" ? "llm" : undefined;
+    const type = providerModelType(
+      typeof entry.type === "string" ? entry.type : undefined,
+      capabilities,
+    );
     const quantization = object(entry.quantization);
     const loadedInstances = entry.loaded_instances;
     if (
       !recommendedModel &&
-      type !== "embedding" &&
+      !isProviderNonChatType(type) &&
       ((Array.isArray(loadedInstances) && loadedInstances.length > 0) || entry.state === "loaded")
     ) {
       recommendedModel = key;
@@ -357,7 +513,7 @@ function parseLmStudioResponse(value: unknown): DiscoveredModels | null {
   }
   const modelMetadata = Object.fromEntries(metadataEntries);
   const models = Object.keys(modelMetadata)
-    .filter((id) => modelMetadata[id]?.type !== "embedding")
+    .filter((id) => !isProviderNonChatType(modelMetadata[id]?.type))
     .sort();
   return {
     models,
@@ -413,8 +569,12 @@ export async function discoverOllamaModels(
     const tagsResponse = object(tagsValue);
     if (!tagsResponse || !Array.isArray(tagsResponse.models)) return null;
     const tags = tagsResponse.models
+      .slice(0, MAX_DISCOVERED_MODELS)
       .map((value) => object(value) as OllamaTag | null)
-      .filter((value): value is OllamaTag => Boolean(value?.model ?? value?.name));
+      .filter((value): value is OllamaTag => {
+        const id = value?.model ?? value?.name;
+        return Boolean(id && id.length <= MAX_DISCOVERED_MODEL_ID_LENGTH);
+      });
 
     const rows = await mapWithConcurrency(tags, 4, async (tag) => {
       const id = tag.model ?? tag.name!;
@@ -434,11 +594,7 @@ export async function discoverOllamaModels(
         }
       }
       const capabilities = capabilityFlags(detail.capabilities);
-      const type = capabilities.embedding
-        ? "embedding"
-        : capabilities.completion
-          ? "llm"
-          : undefined;
+      const type = providerModelType(undefined, capabilities);
       const details = detail.details ?? tag.details;
       return {
         id,

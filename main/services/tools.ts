@@ -33,6 +33,8 @@ import { selectedMcpServers } from "./mcp-selection.js";
 import { assertScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { buildTelegramAgentTools } from "./telegram/telegram-agent-tools.js";
+import { createShareImageTool } from "./share-image-tool.js";
+import type { Attachment } from "./types.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -131,6 +133,12 @@ export interface ToolContext {
   interactionSurface?: "telegram";
   /** Explicitly expose cross-target Telegram delivery to attended local agents. */
   allowTelegramDirect?: boolean;
+  /** Generation-scoped sink for assistant images that become durable with the final response. */
+  shareImage?: (attachment: Attachment) => void;
+  /** Main-owned Bot assembly supplies its own exact multi-root file tools. */
+  includeCodingTools?: boolean;
+  /** Main-owned Bot assembly may withhold skills until exact grants are joined. */
+  includeSkillTools?: boolean;
 }
 
 export function buildSchedulingTools(
@@ -232,8 +240,11 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
 
   // Folder-scoped coding tools (read/write/edit/list/glob/grep/run_command).
   // Withheld entirely when permission is "none" or no folder is bound.
-  if (ctx.workspaceRoot && ctx.permission !== "none") {
+  if (ctx.includeCodingTools !== false && ctx.workspaceRoot && ctx.permission !== "none") {
     tools.push(...buildCodingTools(ctx.workspaceRoot));
+    if (ctx.shareImage) {
+      tools.push(createShareImageTool({ workspaceRoot: ctx.workspaceRoot, share: ctx.shareImage }));
+    }
   }
 
   const settings = await configStore.getSettings();
@@ -250,7 +261,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
     (ctx.workspaceId
       ? await skillRegistry.snapshot(ctx.workspaceId)
       : undefined);
-  if (skillSnapshot) {
+  if (ctx.includeSkillTools !== false && skillSnapshot) {
     tools.push(...buildSkillTools(skillSnapshot, ctx.permission !== "none"));
   }
 
@@ -261,4 +272,3 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
 
   return tools;
 }
-

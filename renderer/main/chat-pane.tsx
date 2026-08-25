@@ -7,6 +7,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
@@ -27,6 +28,7 @@ import {
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
 import {
   chatsApi,
+  aidenRemoteApi,
   createChatTurnId,
   settingsApi,
   startGeneration,
@@ -40,13 +42,14 @@ import {
   logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
+  useBot,
   useComputerUseStatus,
   useGitInfo,
   useModelInfo,
   useProviders,
   useSettings,
 } from "../lib/queries";
-import { useModelSelection } from "../lib/use-model-selection";
+import { resolveVisibleModelSelection, useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
@@ -62,6 +65,7 @@ import {
 import { computerUseReadinessReady } from "../lib/computer-use-control";
 import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
+import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
 import {
@@ -79,6 +83,13 @@ import {
   normalizeAnthropicThinkingLevel,
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
+import {
+  normalizeProviderThinkingLevel,
+} from "../shared/provider-thinking";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../shared/generation-thinking";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
@@ -116,6 +127,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
   const chat = useChat(chatId);
+  const bot = useBot(chat.data?.botId);
   const settings = useSettings();
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
@@ -141,7 +153,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
-  const { providerId, model, select } = useModelSelection(providers.data);
+  const { providerId, model, select } = useModelSelection(
+    providers.data,
+    settings.data?.hiddenModelsByProvider,
+    settings.data !== undefined,
+  );
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&
@@ -192,9 +208,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
         : detachedGenerationDraining
           ? "Finishing the previous response…"
           : undefined;
-  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
+  const botReadinessMessage = chat.data?.botId
+    ? bot.isLoading
+      ? "Loading bot…"
+      : !bot.data
+        ? "This bot is no longer available."
+        : bot.data.archivedAt
+          ? "Restore this bot before continuing the conversation."
+          : undefined
+    : undefined;
+  const ready =
+    modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
   const readinessMessage =
-    chatReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
+    chatReadinessMessage ?? botReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -252,6 +278,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
     anthropicThinkingLevels,
     storedAnthropicThinkingLevel,
   );
+  const providerThinkingLevels = React.useMemo<GenerationThinkingLevel[]>(() => {
+    const declared = thinkingMetadata?.thinkingLevels;
+    return declared?.filter(isGenerationThinkingLevel) ?? [];
+  }, [thinkingMetadata?.thinkingLevels]);
+  const providerThinkingSupported =
+    selectedProvider?.isBuiltin === true &&
+    providerId !== GOOGLE_PROVIDER_ID &&
+    providerId !== OPENAI_CODEX_PROVIDER_ID &&
+    providerId !== ANTHROPIC_PROVIDER_ID &&
+    Boolean(model) &&
+    modelInfo.data?.[model]?.reasoning === true &&
+    providerThinkingLevels.length > 0;
+  const storedProviderThinkingLevel = model
+    ? settings.data?.providerThinkingByModel?.[providerId]?.[model]
+    : undefined;
+  const providerThinkingLevel = normalizeProviderThinkingLevel(
+    providerThinkingLevels,
+    storedProviderThinkingLevel,
+  );
   const localReasoningVisibilitySupported = Boolean(
     selectedProvider && isLocalProviderDeployment(selectedProvider),
   );
@@ -298,6 +343,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
   const approvalCardRef = React.useRef<HTMLElement | null>(null);
+  const remoteApprovalRefreshRef = React.useRef(0);
   const pendingDeltaRef = React.useRef("");
   const pendingReasoningDeltaRef = React.useRef("");
   const streamedTextRef = React.useRef("");
@@ -307,6 +353,33 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
 
   chatIdRef.current = chatId;
+
+  React.useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      const requestId = ++remoteApprovalRefreshRef.current;
+      try {
+        const remote = await aidenRemoteApi.pendingApproval(chatId);
+        if (
+          !active
+          || chatIdRef.current !== chatId
+          || !isLatestRemoteApprovalRefresh(requestId, remoteApprovalRefreshRef.current)
+        ) return;
+        setApprovals((current) => mergeRemoteApproval(current, remote));
+      } catch {
+        // Remote chat infrastructure is lazy; absence before first pairing is expected.
+      }
+    };
+    void refresh();
+    const unsubscribe = aidenRemoteApi.onApprovalChanged(({ chatId: changedChatId }) => {
+      if (changedChatId === chatId) void refresh();
+    });
+    return () => {
+      active = false;
+      remoteApprovalRefreshRef.current += 1;
+      unsubscribe();
+    };
+  }, [chatId]);
 
   // Detach only the generation owned by the departing chat. The main process
   // keeps that operation alive and reconciles its durable terminal state.
@@ -368,6 +441,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const hasMessages = messages.length > 0;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
+
+  React.useEffect(() => {
+    if (!isNewChat || settings.data === undefined) return;
+    const next = resolveVisibleModelSelection(
+      { providerId, model },
+      providers.data,
+      settings.data?.hiddenModelsByProvider,
+    );
+    if (next && (next.providerId !== providerId || next.model !== model)) {
+      select(next.providerId, next.model);
+    }
+  }, [isNewChat, model, providerId, providers.data, select, settings.data]);
 
   const renameChat = React.useCallback(
     async (title: string) => {
@@ -551,7 +636,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               ? codexThinkingLevel
               : anthropicThinkingSupported
                 ? anthropicThinkingLevel
-                : undefined,
+                : providerThinkingSupported
+                  ? providerThinkingLevel
+                  : undefined,
         },
         {
           onDelta: (delta) => {
@@ -714,10 +801,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 setApprovals([]);
                 const persistedFailure =
-                  updatedChat?.messages[updatedChat.messages.length - 1]?.role ===
-                    "assistant" &&
-                  updatedChat.messages[updatedChat.messages.length - 1]
-                    ?.providerFailure;
+                  updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
+                  updatedChat.messages[updatedChat.messages.length - 1]?.providerFailure;
                 setError(
                   persistedFailure
                     ? null
@@ -737,6 +822,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       chatId,
+      anthropicThinkingLevel,
+      anthropicThinkingSupported,
       codexThinkingLevel,
       codexThinkingSupported,
       effectiveWorkspaceId,
@@ -744,6 +831,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       googleThinkingLevel,
       googleThinkingSupported,
       providerId,
+      providerThinkingLevel,
+      providerThinkingSupported,
       model,
       qc,
       waitForStreamHandoff,
@@ -864,13 +953,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
       decidingApprovalRef.current = prompt.approvalId;
       setDecidingApprovalId(prompt.approvalId);
       try {
-        await chatsApi.approve(prompt.approvalId, decision);
+        if (prompt.source === "remote") {
+          await aidenRemoteApi.respondApproval(chatId, prompt.approvalId, decision);
+        } else {
+          await chatsApi.approve(prompt.approvalId, decision);
+        }
         if (chatIdRef.current !== decisionChatId) return;
         setApprovals((prev) =>
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
+        if (prompt.source === "remote") {
+          setApprovals((prev) =>
+            prev.filter((approval) => approval.approvalId !== prompt.approvalId),
+          );
+        }
         toast.error(
           approvalError instanceof Error
             ? approvalError.message
@@ -1027,6 +1125,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [anthropicThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
+  const changeProviderThinking = React.useCallback(
+    async (level: GenerationThinkingLevel) => {
+      if (!model || !providerThinkingSupported || thinkingSaving ||
+        isStartingGeneration || isGenerating) return;
+      setThinkingSaving(true);
+      try {
+        const updated = await settingsApi.setProviderThinking(providerId, model, level);
+        qc.setQueryData(queryKeys.settings, updated);
+      } catch (changeError) {
+        toast.error(
+          changeError instanceof Error
+            ? changeError.message
+            : "Couldn't save this model's thinking level.",
+        );
+      } finally {
+        setThinkingSaving(false);
+      }
+    },
+    [
+      isGenerating,
+      isStartingGeneration,
+      model,
+      providerId,
+      providerThinkingSupported,
+      qc,
+      thinkingSaving,
+    ],
+  );
+
   const changeLocalReasoningVisibility = React.useCallback(
     async (visible: boolean) => {
       if (
@@ -1051,13 +1178,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [
-      isGenerating,
-      isStartingGeneration,
-      localReasoningVisibilitySupported,
-      qc,
-      thinkingSaving,
-    ],
+    [isGenerating, isStartingGeneration, localReasoningVisibilitySupported, qc, thinkingSaving],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
@@ -1250,6 +1371,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
+  const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
   const activeStep = latestActiveAgentStep(generationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -1294,7 +1416,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <ScrollArea
       className="h-full min-h-0"
-      title={chat.data?.title ?? "New agent"}
+      title={
+        bot.data ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <BotAvatar botId={bot.data.id} avatar={bot.data.avatar} name={bot.data.name} photoLoading="immediate" size="small" />
+            <span className="min-w-0">
+              <span className="flex items-center gap-2">
+                <span className="truncate">{bot.data.name}</span>
+                <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">Bot</span>
+              </span>
+              <span className="block truncate text-small font-normal text-secondary">{chat.data?.title ?? "New conversation"}</span>
+            </span>
+          </span>
+        ) : (chat.data?.title ?? "New agent")
+      }
       actions={
         <>
           <OpenInEditorPicker
@@ -1382,15 +1517,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       </Text>
                     </div>
                   </div>
-                  {invalidPendingPrivilegedApproval ? (
+                  {!pendingCanAllow ? (
                     <Text
                       variant="small"
                       as="p"
                       id={`approval-summary-${pending.approvalId}`}
                       className="mt-2.5 rounded-control bg-well px-3 py-2"
                     >
-                      Aiden could not verify the exact target, arguments, or safety profile for this
-                      request.
+                      Aiden cannot safely authorize this action from this view. Deny it here or
+                      review the exact action on the Mac that owns this chat.
                     </Text>
                   ) : pendingWorkspaceWrite ? (
                     <SubagentWorkspaceWriteApproval
@@ -1427,7 +1562,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     >
                       Deny
                     </Button>
-                    {invalidPendingPrivilegedApproval ? null : (
+                    {pendingCanAllow ? (
                       <Button
                         variant="accent"
                         size="small"
@@ -1440,7 +1575,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                             ? subagentMcpMutationAllowLabel(pendingMcpMutation)
                             : "Allow once"}
                       </Button>
-                    )}
+                    ) : null}
                   </div>
                 </section>
               </div>
@@ -1548,6 +1683,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   disabled={thinkingSaving || isStartingGeneration || isGenerating}
                   onChange={(level) => void changeAnthropicThinking(level)}
                 />
+              ) : providerThinkingSupported ? (
+                <ThinkingControl
+                  providerLabel={selectedProvider?.label ?? "Model"}
+                  level={providerThinkingLevel}
+                  levels={providerThinkingLevels}
+                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                  onChange={(level) => void changeProviderThinking(level)}
+                />
               ) : localReasoningVisibilitySupported ? (
                 <ReasoningVisibilityControl
                   visible={showLocalModelReasoning}
@@ -1558,12 +1702,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             modelPicker={
               <ModelPicker
-                providers={providers.data ?? []}
+                providers={settings.data ? providers.data ?? [] : []}
                 providerId={providerId}
                 model={model}
                 onChange={select}
                 disabled={isGenerating || thinkingSaving}
                 settingsBlockedReason={settingsBlockedReason}
+                hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
               />
             }
           />

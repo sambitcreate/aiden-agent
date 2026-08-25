@@ -2,7 +2,12 @@ import * as React from "react";
 import { Check, Loader2, Plus, Save, Search, Sparkles, Undo2, X } from "lucide-react";
 import { Badge, Button, Field, FieldSet, Input, Text, toast } from "../ui";
 import { ProviderIcon } from "../provider-icon";
-import { createModelEntries, encodeSelection, type ModelEntry } from "../../lib/model-picker-data";
+import {
+  createModelEntries,
+  encodeSelection,
+  visibleModelEntries,
+  type ModelEntry,
+} from "../../lib/model-picker-data";
 import {
   emptyModelPadLayout,
   modelPadLayoutsEqual,
@@ -14,6 +19,7 @@ import {
   useArtificialAnalysisStatus,
   useProviders,
   useProvidersModelInfo,
+  useSettings,
 } from "../../lib/queries";
 import type { ModelInfo } from "../../lib/types";
 import { cn } from "../../lib/ui-utils";
@@ -49,6 +55,7 @@ export function ModelPadSettings() {
   const providers = providersQuery.data ?? [];
   const catalog = useProvidersModelInfo(providers);
   const artificialAnalysis = useArtificialAnalysisStatus();
+  const settings = useSettings();
   const [saved, setSaved] = React.useState(readModelPadLayout);
   const [draft, setDraft] = React.useState(readModelPadLayout);
   const [filter, setFilter] = React.useState("");
@@ -63,7 +70,10 @@ export function ModelPadSettings() {
       infoByValue[encodeSelection(provider.id, modelId)] = data?.[modelId];
     }
   });
-  const entries = createModelEntries(providers, infoByValue);
+  const entries = visibleModelEntries(
+    createModelEntries(providers, infoByValue),
+    settings.data?.hiddenModelsByProvider,
+  );
   const entriesByValue = new Map(entries.map((entry) => [entry.value, entry]));
   const placed = entries.filter((entry) => draft.placements[entry.value]);
   const draftPlacementCount = Object.keys(draft.placements).length;
@@ -321,6 +331,7 @@ export function ModelPadSettings() {
                         providerId={entry.providerId}
                         providerLabel={entry.providerLabel}
                         modelId={entry.model}
+                        artwork={entry.providerArtwork}
                         className="size-3.5 text-tertiary"
                       />
                       <span className="min-w-0 flex-1">

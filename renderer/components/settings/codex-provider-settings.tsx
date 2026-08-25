@@ -2,7 +2,16 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, LoaderCircle, LogIn, MessageSquareCode, RefreshCw } from "lucide-react";
 
-import { AlertDialog, Badge, Button, Input, Separator, Text, toast } from "../ui";
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Input,
+  Separator,
+  Text,
+  toast,
+  type DialogLayer,
+} from "../ui";
 import { CopyButton } from "../copy-button";
 import { ProviderIcon } from "../provider-icon";
 import { providersApi } from "../../lib/ipc";
@@ -39,7 +48,7 @@ function statusBadge(
   return <Badge color="secondary">Sign in needed</Badge>;
 }
 
-export function CodexProviderSettings() {
+export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLayer }) {
   const queryClient = useQueryClient();
   const status = useCodexProviderStatus();
   const sessionRef = React.useRef<CodexAuthSession | null>(null);
@@ -106,13 +115,7 @@ export function CodexProviderSettings() {
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [
-    authView?.action?.type,
-    authView?.action?.type === "auth_url" ? authView.action.url : undefined,
-    authView?.action?.type === "device_code" ? authView.action.userCode : undefined,
-    authView?.phase,
-    authView?.prompt?.promptId,
-  ]);
+  }, [authView]);
 
   const restoreCardFocus = React.useCallback(() => {
     requestAnimationFrame(() => cardRef.current?.focus());
@@ -450,7 +453,7 @@ export function CodexProviderSettings() {
               </div>
             ) : null}
 
-            {actionable?.type === "auth_url" ? (
+            {actionable?.type === "auth_url" || actionable?.type === "browser_open_failed" ? (
               <div className="flex flex-wrap items-center gap-2">
                 <Button asChild variant="filled" size="small">
                   <a
@@ -464,7 +467,9 @@ export function CodexProviderSettings() {
                   </a>
                 </Button>
                 <Text variant="small" color="tertiary">
-                  A browser window should already be open.
+                  {actionable.type === "browser_open_failed"
+                    ? actionable.message
+                    : "A browser window should already be open."}
                 </Text>
               </div>
             ) : null}
@@ -626,6 +631,7 @@ export function CodexProviderSettings() {
       ) : null}
 
       <AlertDialog
+        layer={layer}
         open={confirmSignOut}
         onOpenChange={setConfirmSignOut}
         title={status.isError ? "Clear ChatGPT sign-in?" : "Sign out of ChatGPT?"}

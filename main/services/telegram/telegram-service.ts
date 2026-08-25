@@ -29,11 +29,22 @@ import { compactTelegramSession } from "./telegram-session.js";
 import { transcribe } from "../transcription.js";
 import { skillRegistry } from "../skill-registry-main.js";
 import { formatSkillInvocation } from "@earendil-works/pi-agent-core";
-import { mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { TelegramModelChoice } from "./telegram-controls.js";
-import { TELEGRAM_COMMANDS } from "./telegram-controls.js";
+import {
+  TELEGRAM_COMMANDS,
+  visibleTelegramModelChoices,
+} from "./telegram-controls.js";
 import { getTelegramExtensions } from "./telegram-extension-registry.js";
 import {
   DEFAULT_TELEGRAM_PROFILE,
@@ -44,11 +55,29 @@ import {
   telegramProfilePatch,
   telegramProfileRuntimeFile,
   telegramProfileTokenKey,
+  telegramBotNoticeAudienceId,
 } from "./telegram-profile-config.js";
 import { createTelegramThreadStore } from "./telegram-thread-store.js";
 import { createTelegramOwnershipLease } from "./telegram-ownership.js";
-import { chunkForTelegram, chunkRichMarkdown, markdownToTelegramHtml } from "./telegram-markdown.js";
+import {
+  chunkForTelegram,
+  chunkRichMarkdown,
+  markdownToTelegramHtml,
+} from "./telegram-markdown.js";
 import { registerTelegramDirectRuntime } from "./telegram-direct-runtime.js";
+import { firstVisibleModelForProvider } from "../../../renderer/shared/model-visibility.js";
+import { botStore } from "../bot-store.js";
+import { botApplicationService } from "../bot-application-service-main.js";
+import { botManagedWorkspace } from "../bot-capability-services-main.js";
+import { resolveBotInboundAttachmentHome } from "../bot-inbound-attachment-home.js";
+import { preflightBotTurnAuthority } from "../bot-runtime-authority-main.js";
+import { writeBotInboundAttachment } from "../bot-inbound-attachment-inbox.js";
+import {
+  telegramBotBindingAuthority,
+  telegramBotBindings,
+} from "./telegram-bot-bindings.js";
+import { createTelegramBotBindingValidator } from "./telegram-bot-binding-validation.js";
+import { telegramProfileMutationFence } from "./telegram-profile-mutation-fence.js";
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
 let profileSettingsMutation = Promise.resolve();
@@ -57,40 +86,86 @@ async function getProfileSettings(profile: string) {
   return projectTelegramProfile(await configStore.getSettings(), profile);
 }
 
-async function setProfileSettings(profile: string, patch: Partial<import("../types.js").AppSettings>) {
+async function revokeTelegramBotNoticeForCurrentOwner(
+  profile: string,
+): Promise<void> {
+  const ownerUserId = (await getProfileSettings(profile)).telegramAllowedUserId;
+  if (ownerUserId === undefined) return;
+  await botApplicationService.revokeNoticeAudience(
+    telegramBotNoticeAudienceId(profile, ownerUserId),
+  );
+}
+
+const validateTelegramBotBinding = createTelegramBotBindingValidator({
+  getBot: (botId) => botStore.get(botId),
+  getProfileOwnerUserId: async (profile) =>
+    (await getProfileSettings(profile)).telegramAllowedUserId,
+  getActiveBinding: (botId) => telegramBotBindings.get(botId),
+  resolveManagedWorkspace: (botId) =>
+    botApplicationService.resolveManagedWorkspace(botId),
+  getChatAccess: (chatId) => botApplicationService.getChatAccess(chatId),
+});
+
+async function setProfileSettings(
+  profile: string,
+  patch: Partial<import("../types.js").AppSettings>,
+) {
   let result: import("../types.js").AppSettings | undefined;
   const operation = profileSettingsMutation.then(async () => {
     const current = await configStore.getSettings();
     result = projectTelegramProfile(
-      await configStore.setSettings(telegramProfilePatch(current, profile, patch)),
+      await configStore.setSettings(
+        telegramProfilePatch(current, profile, patch),
+      ),
       profile,
     );
   });
-  profileSettingsMutation = operation.then(() => undefined, () => undefined);
+  profileSettingsMutation = operation.then(
+    () => undefined,
+    () => undefined,
+  );
   await operation;
   return result!;
 }
 
-async function resolveProvider(profile = DEFAULT_TELEGRAM_PROFILE): Promise<{
+async function resolveProvider(
+  profile = DEFAULT_TELEGRAM_PROFILE,
+  requestedProviderId?: string,
+  requestedModel?: string,
+): Promise<{
   providerId: string;
   model: string;
   provider: StoredProvider;
 } | null> {
   const settings = await getProfileSettings(profile);
   // Prefer Telegram-specific provider/model, fall back to the global default.
-  const providerId = settings.telegramProviderId ?? settings.lastProviderId;
+  if ((requestedProviderId === undefined) !== (requestedModel === undefined)) {
+    return null;
+  }
+  const providerId = requestedProviderId ?? settings.telegramProviderId ?? settings.lastProviderId;
   if (!providerId) return null;
   const provider =
     (await providerRegistry.selectionProvider(providerId)) ??
     (await configStore.getProvider(providerId));
   if (!provider) return null;
   const model =
-    settings.telegramModel ?? settings.lastModel ?? provider.defaultModel ?? provider.models[0];
+    requestedModel ?? settings.telegramModel ??
+    firstVisibleModelForProvider(
+      settings.hiddenModelsByProvider,
+      providerId,
+      provider.models,
+      [
+        settings.lastProviderId === providerId ? settings.lastModel : undefined,
+        provider.defaultModel,
+      ],
+    );
   if (!model) return null;
   return { providerId, model, provider };
 }
 
-async function resolveWorkspace(workspaceId?: string): Promise<TelegramWorkspaceResolution> {
+async function resolveWorkspace(
+  workspaceId?: string,
+): Promise<TelegramWorkspaceResolution> {
   if (!workspaceId) return { kind: "assistant" };
   const workspace = await configStore.getWorkspace(workspaceId);
 
@@ -101,10 +176,11 @@ async function resolveWorkspace(workspaceId?: string): Promise<TelegramWorkspace
 }
 
 async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
-  const [builtin, custom, codex] = await Promise.all([
+  const [builtin, custom, codex, settings] = await Promise.all([
     providerRegistry.listBuiltinProviders(),
     listProvidersWithLegacyPiCredentialMigration(),
     providerRegistry.codex.snapshot().catch(() => null),
+    configStore.getSettings(),
   ]);
   const byId = new Map<string, Provider>();
   for (const provider of [...builtin, ...custom]) {
@@ -118,15 +194,18 @@ async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
       baseUrl: "",
       models: codex.models.map((model) => model.id),
       modelMetadata: Object.fromEntries(
-        codex.models.map((model) => [model.id, {
-          source: "provider" as const,
-          name: model.name,
-          type: "llm" as const,
-          vision: model.vision,
-          reasoning: model.reasoning,
-          thinkingLevels: model.thinkingLevels,
-          contextLength: model.contextWindow,
-        }]),
+        codex.models.map((model) => [
+          model.id,
+          {
+            source: "provider" as const,
+            name: model.name,
+            type: "llm" as const,
+            vision: model.vision,
+            reasoning: model.reasoning,
+            thinkingLevels: model.thinkingLevels,
+            contextLength: model.contextWindow,
+          },
+        ]),
       ),
       defaultModel: codex.models[0]?.id,
       needsKey: true,
@@ -134,7 +213,7 @@ async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
       isBuiltin: true,
     });
   }
-  return [...byId.values()].flatMap((provider) =>
+  const models = [...byId.values()].flatMap((provider) =>
     provider.models.map((model) => {
       const metadata = provider.modelMetadata?.[model];
       return {
@@ -147,43 +226,78 @@ async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
       };
     }),
   );
+  return visibleTelegramModelChoices(models, settings.hiddenModelsByProvider);
 }
 
-async function readWorkspaceAttachment(workspaceId: string | undefined, requestedPath: string) {
-  if (!workspaceId) throw new Error("Choose a folder workspace before attaching local files.");
+async function readWorkspaceAttachment(
+  workspaceId: string | undefined,
+  requestedPath: string,
+) {
+  if (!workspaceId)
+    throw new Error("Choose a folder workspace before attaching local files.");
   const workspace = await configStore.getWorkspace(workspaceId);
-  if (!isTelegramFolderWorkspace(workspace) || !workspace.folderPath) throw new Error("The selected workspace is unavailable.");
+  if (!isTelegramFolderWorkspace(workspace) || !workspace.folderPath)
+    throw new Error("The selected workspace is unavailable.");
   const folderPath = workspace.folderPath;
   const root = await realpath(folderPath);
-  const candidate = path.isAbsolute(requestedPath) ? requestedPath : path.resolve(root, requestedPath);
+  const candidate = path.isAbsolute(requestedPath)
+    ? requestedPath
+    : path.resolve(root, requestedPath);
   const resolved = await realpath(candidate);
   const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Attachments must stay inside the selected workspace.");
+  if (relative.startsWith("..") || path.isAbsolute(relative))
+    throw new Error("Attachments must stay inside the selected workspace.");
   const metadata = await stat(resolved);
-  if (!metadata.isFile()) throw new Error("The attachment is not a regular file.");
-  if (metadata.size > 50 * 1024 * 1024) throw new Error("Telegram documents are limited to 50 MB.");
+  if (!metadata.isFile())
+    throw new Error("The attachment is not a regular file.");
+  if (metadata.size > 50 * 1024 * 1024)
+    throw new Error("Telegram documents are limited to 50 MB.");
   const extension = path.extname(resolved).toLowerCase();
-  const mimeType = ({
-    ".pdf": "application/pdf", ".json": "application/json", ".txt": "text/plain",
-    ".md": "text/markdown", ".png": "image/png", ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg", ".webp": "image/webp", ".zip": "application/zip",
-    ".csv": "text/csv", ".mp4": "video/mp4", ".mp3": "audio/mpeg",
-  } as Record<string, string>)[extension] ?? "application/octet-stream";
-  return { bytes: await readFile(resolved), name: path.basename(resolved), mimeType };
+  const mimeType =
+    (
+      {
+        ".pdf": "application/pdf",
+        ".json": "application/json",
+        ".txt": "text/plain",
+        ".md": "text/markdown",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".zip": "application/zip",
+        ".csv": "text/csv",
+        ".mp4": "video/mp4",
+        ".mp3": "audio/mpeg",
+      } as Record<string, string>
+    )[extension] ?? "application/octet-stream";
+  return {
+    bytes: await readFile(resolved),
+    name: path.basename(resolved),
+    mimeType,
+  };
 }
 
 function validateVoiceResult(
   voice: import("./telegram-extension-registry.js").TelegramVoiceSynthesisResult,
 ) {
   if (!(voice.bytes instanceof Uint8Array) || voice.bytes.byteLength === 0) {
-    throw new Error("Telegram voice providers must return non-empty audio bytes.");
+    throw new Error(
+      "Telegram voice providers must return non-empty audio bytes.",
+    );
   }
   if (voice.bytes.byteLength > 20 * 1024 * 1024) {
     throw new Error("Telegram voice messages are limited to 20 MB.");
   }
   const name = voice.name ?? "aiden-voice.ogg";
-  if (!/\.(?:ogg|opus)$/iu.test(name) || (voice.mimeType !== undefined && voice.mimeType !== "audio/ogg" && voice.mimeType !== "audio/opus")) {
-    throw new Error("Telegram-native voice providers must return OGG/Opus audio.");
+  if (
+    !/\.(?:ogg|opus)$/iu.test(name) ||
+    (voice.mimeType !== undefined &&
+      voice.mimeType !== "audio/ogg" &&
+      voice.mimeType !== "audio/opus")
+  ) {
+    throw new Error(
+      "Telegram-native voice providers must return OGG/Opus audio.",
+    );
   }
   return { ...voice, name };
 }
@@ -238,6 +352,26 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
   });
   let threadProvisioning = Promise.resolve();
   const core = createTelegramServiceCore({
+    profile,
+    assertBotBindingStoreHealthy: () => telegramBotBindings.assertHealthy(),
+    resolveBotBinding: async ({
+      profile: bindingProfile,
+      chatId,
+      threadId,
+    }) => {
+      if (bindingProfile !== profile) return undefined;
+      const binding = await telegramBotBindings.resolve(
+        profile,
+        chatId,
+        threadId,
+      );
+      if (!binding) return undefined;
+      // Return the exact stored record and let service-core reject owner
+      // mismatches. Treating a mismatched record as "unbound" would silently
+      // fall back to the profile's ordinary Aiden conversation.
+      return binding;
+    },
+    validateBotBinding: validateTelegramBotBinding,
     api,
     acquireOwnership: ownership.acquire,
     releaseOwnership: ownership.release,
@@ -251,22 +385,40 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     listWorkspaces: async () =>
       (await configStore.listWorkspaces())
         .filter(isTelegramFolderWorkspace)
-        .map(({ id, name, folderPath }) => ({ id, name, folderPath: folderPath as string })),
-    resolveThreadWorkspace: async (threadId) => (await threadStore.find(threadId))?.workspaceId,
+        .map(({ id, name, folderPath }) => ({
+          id,
+          name,
+          folderPath: folderPath as string,
+        })),
+    resolveThreadWorkspace: async (threadId) =>
+      (await threadStore.find(threadId))?.workspaceId,
     ensureThreadTargets: (chatId) => {
       const operation = threadProvisioning.then(async () => {
         const settings = await getProfileSettings(profile);
         if (!settings.telegramThreadedMode) return;
-        const workspaces = (await configStore.listWorkspaces()).filter(isTelegramFolderWorkspace);
-        const removed = await threadStore.retainWorkspaces(new Set(workspaces.map(({ id }) => id)), chatId);
+        const workspaces = (await configStore.listWorkspaces()).filter(
+          isTelegramFolderWorkspace,
+        );
+        const removed = await threadStore.retainWorkspaces(
+          new Set(workspaces.map(({ id }) => id)),
+          chatId,
+        );
         for (const target of removed) {
-          await api.deleteForumTopic(target.chatId, target.threadId).catch((cause) => {
-            logger.warn("telegram", `[${profile}] Could not remove stale Telegram thread ${target.threadId}: ${cause instanceof Error ? cause.message : String(cause)}`);
-          });
+          await api
+            .deleteForumTopic(target.chatId, target.threadId)
+            .catch((cause) => {
+              logger.warn(
+                "telegram",
+                `[${profile}] Could not remove stale Telegram thread ${target.threadId}: ${cause instanceof Error ? cause.message : String(cause)}`,
+              );
+            });
         }
         for (const workspace of workspaces) {
           if (await threadStore.findWorkspace(workspace.id)) continue;
-          const topic = await api.createForumTopic(chatId, `Aiden · ${workspace.name}`.slice(0, 128));
+          const topic = await api.createForumTopic(
+            chatId,
+            `Aiden · ${workspace.name}`.slice(0, 128),
+          );
           await threadStore.upsert({
             threadId: topic.message_thread_id,
             chatId,
@@ -281,15 +433,23 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
           });
         }
       });
-      threadProvisioning = operation.then(() => undefined, () => undefined);
+      threadProvisioning = operation.then(
+        () => undefined,
+        () => undefined,
+      );
       return operation;
     },
     clearThreadTargets: async () => {
       const targets = await threadStore.list();
       for (const target of targets) {
-        await api.deleteForumTopic(target.chatId, target.threadId).catch((cause) => {
-          logger.warn("telegram", `[${profile}] Could not remove Telegram thread ${target.threadId}: ${cause instanceof Error ? cause.message : String(cause)}`);
-        });
+        await api
+          .deleteForumTopic(target.chatId, target.threadId)
+          .catch((cause) => {
+            logger.warn(
+              "telegram",
+              `[${profile}] Could not remove Telegram thread ${target.threadId}: ${cause instanceof Error ? cause.message : String(cause)}`,
+            );
+          });
       }
       await threadStore.clear();
     },
@@ -302,28 +462,65 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
           openSession: (id) => piCompactionSessionStore.openChat(id),
           resolveProvider: () => resolveProvider(profile),
           resolveRuntime: resolveModelRuntime,
-          resolveThinkingLevel: async () => (await getProfileSettings(profile)).telegramThinkingLevel,
+          resolveThinkingLevel: async () =>
+            (await getProfileSettings(profile)).telegramThinkingLevel,
         },
         chatId,
       ),
     transcribeAudio: transcribe,
-    storeInboundFile: async ({ bytes, name, workspaceId }) => {
-      const workspace = workspaceId ? await configStore.getWorkspace(workspaceId) : undefined;
-      const workspaceRoot = isTelegramFolderWorkspace(workspace) && workspace.folderPath
-        ? await realpath(workspace.folderPath)
+    storeInboundFile: async ({ bytes, name, workspaceId, botId }) => {
+      const botHome = await resolveBotInboundAttachmentHome({
+        botId,
+        workspaceId,
+        resolveManagedWorkspace: (id) =>
+          botApplicationService.resolveManagedWorkspace(id),
+        revalidateManagedWorkspace: (expected) =>
+          botManagedWorkspace.revalidate(expected),
+        canonicalize: realpath,
+      });
+      // Bot routes must never fall through to either a regular Workspace or
+      // the global inbox. The resolver above throws for every Bot mismatch.
+      const workspace = !botId && workspaceId
+        ? await configStore.getWorkspace(workspaceId)
         : undefined;
+      const workspaceRoot = botHome?.homePath ?? (
+        isTelegramFolderWorkspace(workspace) && workspace.folderPath
+          ? await realpath(workspace.folderPath)
+          : undefined
+      );
       const root = workspaceRoot
         ? path.join(workspaceRoot, ".aiden", "telegram-inbox", profile)
         : path.join(app.getPath("userData"), "telegram-inbox", profile);
+      if (botHome) {
+        const safeName =
+          path
+            .basename(name)
+            .replace(/[^A-Za-z0-9._-]+/gu, "_")
+            .slice(-120) || "telegram-file";
+        const leaf = `${randomUUID()}-${safeName}`;
+        return writeBotInboundAttachment({
+          home: botHome,
+          profile,
+          leaf,
+          bytes,
+        });
+      }
       await mkdir(root, { recursive: true, mode: 0o700 });
       const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1_000;
-      for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+      for (const entry of await readdir(root, { withFileTypes: true }).catch(
+        () => [],
+      )) {
         if (!entry.isFile()) continue;
         const candidate = path.join(root, entry.name);
         const metadata = await stat(candidate).catch(() => undefined);
-        if (metadata && metadata.mtimeMs < cutoff) await unlink(candidate).catch(() => undefined);
+        if (metadata && metadata.mtimeMs < cutoff)
+          await unlink(candidate).catch(() => undefined);
       }
-      const safeName = path.basename(name).replace(/[^A-Za-z0-9._-]+/gu, "_").slice(-120) || "telegram-file";
+      const safeName =
+        path
+          .basename(name)
+          .replace(/[^A-Za-z0-9._-]+/gu, "_")
+          .slice(-120) || "telegram-file";
       const destination = path.join(root, `${randomUUID()}-${safeName}`);
       await writeFile(destination, bytes, { flag: "wx", mode: 0o600 });
       return destination;
@@ -345,7 +542,10 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
           });
           if (result) return validateVoiceResult(result);
         } catch (cause) {
-          logger.warn("telegram", `[${profile}] Voice provider ${extension.id} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+          logger.warn(
+            "telegram",
+            `[${profile}] Voice provider ${extension.id} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
         }
       }
       return undefined;
@@ -354,22 +554,31 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       const rows: string[] = [];
       const sections: Array<{ label: string; callbackData: string }> = [];
       for (const extension of getTelegramExtensions()) {
-        if (extension.statusRows) rows.push(...await extension.statusRows());
+        if (extension.statusRows) rows.push(...(await extension.statusRows()));
         for (const section of extension.sections ?? []) {
-          sections.push({ label: section.label, callbackData: section.callbackData });
+          sections.push({
+            label: section.label,
+            callbackData: section.callbackData,
+          });
         }
       }
       return { rows, sections };
     },
     handleExtensionCallback: async (data, context) => {
       const match = /^ext:([a-z][a-z0-9_-]{0,31}):/u.exec(data);
-      const extension = match ? getTelegramExtensions().find(({ id }) => id === match[1]) : undefined;
-      if (!extension?.handleCallback) throw new Error("This extension control is no longer available.");
+      const extension = match
+        ? getTelegramExtensions().find(({ id }) => id === match[1])
+        : undefined;
+      if (!extension?.handleCallback)
+        throw new Error("This extension control is no longer available.");
       return extension.handleCallback(data, { profile, ...context });
     },
     handleExtensionUpdate: async (update, context) => {
       for (const extension of getTelegramExtensions()) {
-        if (extension.handleUpdate && await extension.handleUpdate(update, { profile, ...context })) {
+        if (
+          extension.handleUpdate &&
+          (await extension.handleUpdate(update, { profile, ...context }))
+        ) {
           return true;
         }
       }
@@ -379,7 +588,10 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       let transformed = content;
       for (const extension of getTelegramExtensions()) {
         if (extension.transformInbound) {
-          transformed = await extension.transformInbound(transformed, message, { profile, ...context });
+          transformed = await extension.transformInbound(transformed, message, {
+            profile,
+            ...context,
+          });
         }
       }
       return transformed;
@@ -388,23 +600,43 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       let transformed = markdown;
       for (const extension of getTelegramExtensions()) {
         if (extension.transformOutbound) {
-          transformed = await extension.transformOutbound(transformed, { profile, ...context });
+          transformed = await extension.transformOutbound(transformed, {
+            profile,
+            ...context,
+          });
         }
       }
       return transformed;
     },
     listPromptCommands: async (workspaceId) => {
-      const used = new Set<string>(TELEGRAM_COMMANDS.map(({ command }) => command));
+      const used = new Set<string>(
+        TELEGRAM_COMMANDS.map(({ command }) => command),
+      );
       const extensionCommands = getTelegramExtensions().flatMap((extension) =>
         (extension.commands ?? []).flatMap((command) => {
           if (used.has(command.name)) return [];
           used.add(command.name);
-          return [{
-            command: command.name,
-            description: command.description.replace(/\s+/gu, " ").slice(0, 256),
-            handle: (argument: string, message: Parameters<typeof command.handler>[0]["message"], context: Omit<Parameters<typeof command.handler>[0]["context"], "profile">) =>
-              command.handler({ argument, message, context: { profile, ...context } }),
-          }];
+          return [
+            {
+              command: command.name,
+              description: command.description
+                .replace(/\s+/gu, " ")
+                .slice(0, 256),
+              handle: (
+                argument: string,
+                message: Parameters<typeof command.handler>[0]["message"],
+                context: Omit<
+                  Parameters<typeof command.handler>[0]["context"],
+                  "profile"
+                >,
+              ) =>
+                command.handler({
+                  argument,
+                  message,
+                  context: { profile, ...context },
+                }),
+            },
+          ];
         }),
       );
       if (!workspaceId) return extensionCommands;
@@ -415,18 +647,27 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
           .replace(/[^a-z0-9_]+/gu, "_")
           .replace(/^_+|_+$/gu, "")
           .slice(0, 32);
-        if (!command || !/^[a-z]/u.test(command) || used.has(command)) return [];
+        if (!command || !/^[a-z]/u.test(command) || used.has(command))
+          return [];
         used.add(command);
-        return [{
-          command,
-          description: (skill.description || `Run ${skill.name}`).replace(/\s+/gu, " ").slice(0, 256),
-          expand: (argument: string) => formatSkillInvocation({
-            name: skill.name,
-            description: skill.description,
-            content: skill.instructions,
-            filePath: skill.path ?? "/Aiden/Configured Skills/SKILL.md",
-          }, argument),
-        }];
+        return [
+          {
+            command,
+            description: (skill.description || `Run ${skill.name}`)
+              .replace(/\s+/gu, " ")
+              .slice(0, 256),
+            expand: (argument: string) =>
+              formatSkillInvocation(
+                {
+                  name: skill.name,
+                  description: skill.description,
+                  content: skill.instructions,
+                  filePath: skill.path ?? "/Aiden/Configured Skills/SKILL.md",
+                },
+                argument,
+              ),
+          },
+        ];
       });
       return [...extensionCommands, ...skillCommands];
     },
@@ -439,7 +680,10 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
         lastModel: choice.model,
         telegramThinkingLevel: choice.reasoning ? undefined : "off",
       });
-      await configStore.setSettings({ lastProviderId: choice.providerId, lastModel: choice.model });
+      await configStore.setSettings({
+        lastProviderId: choice.providerId,
+        lastModel: choice.model,
+      });
       ipcMain.broadcast("telegram:model-selection-changed", {
         providerId: choice.providerId,
         model: choice.model,
@@ -448,30 +692,45 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     turn: {
       llmClient,
       chatStore,
-      resolveProvider: () => resolveProvider(profile),
-      resolveThinkingLevel: async () => (await getProfileSettings(profile)).telegramThinkingLevel,
+      resolveProvider: (providerId, model) => resolveProvider(profile, providerId, model),
+      resolveThinkingLevel: async () =>
+        (await getProfileSettings(profile)).telegramThinkingLevel,
       resolveWorkspace,
+      preflightBotTurnAuthority,
       broadcastMetadata,
     },
     getToken: () => secrets.getKey(tokenKey),
     now: () => Date.now(),
     sleep,
     warn: (message) => logger.warn("telegram", `[${profile}] ${message}`),
-    error: (message, cause) => logger.error("telegram", `[${profile}] ${message}`, cause),
+    error: (message, cause) =>
+      logger.error("telegram", `[${profile}] ${message}`, cause),
     info: (message) => logger.info("telegram", `[${profile}] ${message}`),
   });
 
   async function resolveDirectTarget(thread?: string | number) {
     const settings = await getProfileSettings(profile);
     const chatId = settings.telegramAllowedUserId;
-    if (chatId === undefined) throw new Error(`Telegram profile ${profile} is not paired.`);
-    if (thread === undefined) return { chatId, workspaceId: settings.telegramWorkspaceId };
+    if (chatId === undefined)
+      throw new Error(`Telegram profile ${profile} is not paired.`);
+    if (thread === undefined)
+      return { chatId, workspaceId: settings.telegramWorkspaceId };
     const targets = await threadStore.list();
-    const target = typeof thread === "number"
-      ? targets.find((candidate) => candidate.threadId === thread)
-      : targets.find((candidate) => candidate.name.toLowerCase() === thread.trim().toLowerCase());
-    if (!target || target.chatId !== chatId) throw new Error(`Unknown live Telegram thread target: ${String(thread)}`);
-    return { chatId, threadId: target.threadId, workspaceId: target.workspaceId, name: target.name };
+    const target =
+      typeof thread === "number"
+        ? targets.find((candidate) => candidate.threadId === thread)
+        : targets.find(
+            (candidate) =>
+              candidate.name.toLowerCase() === thread.trim().toLowerCase(),
+          );
+    if (!target || target.chatId !== chatId)
+      throw new Error(`Unknown live Telegram thread target: ${String(thread)}`);
+    return {
+      chatId,
+      threadId: target.threadId,
+      workspaceId: target.workspaceId,
+      name: target.name,
+    };
   }
 
   return Object.assign(core, {
@@ -485,21 +744,28 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
         const richChunks = chunkRichMarkdown(input.text);
         for (let index = 0; index < richChunks.length; index += 1) {
           try {
-            sent.push(await api.sendRichMessage({
-              chatId: target.chatId,
-              threadId: target.threadId,
-              markdown: richChunks[index]!,
-            }));
-          } catch (cause) {
-            if (!(cause instanceof TelegramApiError) || cause.code !== 400) throw cause;
-            for (const text of chunkForTelegram(markdownToTelegramHtml(richChunks.slice(index).join("\n\n")))) {
-              sent.push(await api.sendMessage({
+            sent.push(
+              await api.sendRichMessage({
                 chatId: target.chatId,
                 threadId: target.threadId,
-                text,
-                parseMode: "HTML",
-                disablePreview: true,
-              }));
+                markdown: richChunks[index]!,
+              }),
+            );
+          } catch (cause) {
+            if (!(cause instanceof TelegramApiError) || cause.code !== 400)
+              throw cause;
+            for (const text of chunkForTelegram(
+              markdownToTelegramHtml(richChunks.slice(index).join("\n\n")),
+            )) {
+              sent.push(
+                await api.sendMessage({
+                  chatId: target.chatId,
+                  threadId: target.threadId,
+                  text,
+                  parseMode: "HTML",
+                  disablePreview: true,
+                }),
+              );
             }
             break;
           }
@@ -508,22 +774,41 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       }
       const sent = [];
       for (const text of chunkForTelegram(markdownToTelegramHtml(input.text))) {
-        sent.push(await api.sendMessage({
-          chatId: target.chatId,
-          threadId: target.threadId,
-          text,
-          parseMode: "HTML",
-          disablePreview: true,
-        }));
+        sent.push(
+          await api.sendMessage({
+            chatId: target.chatId,
+            threadId: target.threadId,
+            text,
+            parseMode: "HTML",
+            disablePreview: true,
+          }),
+        );
       }
       return sent;
     },
-    async sendDirectAttachment(input: { path: string; caption?: string; thread?: string | number }) {
+    async sendDirectAttachment(input: {
+      path: string;
+      caption?: string;
+      thread?: string | number;
+    }) {
       const target = await resolveDirectTarget(input.thread);
-      const file = await readWorkspaceAttachment(target.workspaceId, input.path);
-      return api.sendDocument({ chatId: target.chatId, threadId: target.threadId, ...file, caption: input.caption });
+      const file = await readWorkspaceAttachment(
+        target.workspaceId,
+        input.path,
+      );
+      return api.sendDocument({
+        chatId: target.chatId,
+        threadId: target.threadId,
+        ...file,
+        caption: input.caption,
+      });
     },
-    async sendDirectVoice(input: { text: string; lang?: string; rate?: string; thread?: string | number }) {
+    async sendDirectVoice(input: {
+      text: string;
+      lang?: string;
+      rate?: string;
+      thread?: string | number;
+    }) {
       const target = await resolveDirectTarget(input.thread);
       for (const extension of getTelegramExtensions()) {
         try {
@@ -538,9 +823,17 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
               workspaceId: target.workspaceId,
             },
           });
-          if (voice) return api.sendVoice({ chatId: target.chatId, threadId: target.threadId, ...validateVoiceResult(voice) });
+          if (voice)
+            return api.sendVoice({
+              chatId: target.chatId,
+              threadId: target.threadId,
+              ...validateVoiceResult(voice),
+            });
         } catch (cause) {
-          logger.warn("telegram", `[${profile}] Voice provider ${extension.id} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+          logger.warn(
+            "telegram",
+            `[${profile}] Voice provider ${extension.id} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
         }
       }
       throw new Error("No Telegram voice synthesis provider is registered.");
@@ -567,12 +860,16 @@ export function createTelegramProfileManager() {
     const settings = await configStore.getSettings();
     const profiles = listTelegramProfileNames(settings);
     const requested = settings.telegramActiveProfile;
-    activeProfile = requested && profiles.includes(requested) ? requested : DEFAULT_TELEGRAM_PROFILE;
+    activeProfile =
+      requested && profiles.includes(requested)
+        ? requested
+        : DEFAULT_TELEGRAM_PROFILE;
     return profiles;
   }
 
   return {
     async start(): Promise<void> {
+      await telegramBotBindings.assertHealthy();
       const profiles = await refreshProfiles();
       await Promise.all(profiles.map((profile) => serviceFor(profile).start()));
     },
@@ -580,7 +877,9 @@ export function createTelegramProfileManager() {
       for (const service of services.values()) service.stop();
     },
     async stopAndSettle(): Promise<void> {
-      await Promise.all([...services.values()].map((service) => service.stopAndSettle()));
+      await Promise.all(
+        [...services.values()].map((service) => service.stopAndSettle()),
+      );
     },
     getStatus() {
       return serviceFor(activeProfile).getStatus();
@@ -597,17 +896,20 @@ export function createTelegramProfileManager() {
     async listProfiles() {
       const settings = await configStore.getSettings();
       const profiles = listTelegramProfileNames(settings);
-      return Promise.all(profiles.map(async (profile) => ({
-        name: profile,
-        settings: telegramProfileFromSettings(settings, profile),
-        hasToken: await secrets.hasKey(telegramProfileTokenKey(profile)),
-        status: serviceFor(profile).getStatus(),
-      })));
+      return Promise.all(
+        profiles.map(async (profile) => ({
+          name: profile,
+          settings: telegramProfileFromSettings(settings, profile),
+          hasToken: await secrets.hasKey(telegramProfileTokenKey(profile)),
+          status: serviceFor(profile).getStatus(),
+        })),
+      );
     },
     async selectProfile(value: string): Promise<string> {
       const profile = normalizeTelegramProfileName(value);
       const profiles = await refreshProfiles();
-      if (!profiles.includes(profile)) throw new Error(`Unknown Telegram profile: ${profile}`);
+      if (!profiles.includes(profile))
+        throw new Error(`Unknown Telegram profile: ${profile}`);
       activeProfile = profile;
       await configStore.setSettings({ telegramActiveProfile: profile });
       return profile;
@@ -615,12 +917,16 @@ export function createTelegramProfileManager() {
     async createProfile(value: string): Promise<string> {
       const profile = normalizeTelegramProfileName(value);
       const settings = await configStore.getSettings();
-      if (listTelegramProfileNames(settings).includes(profile)) throw new Error(`Telegram profile already exists: ${profile}`);
+      if (listTelegramProfileNames(settings).includes(profile))
+        throw new Error(`Telegram profile already exists: ${profile}`);
       if (Object.keys(settings.telegramProfiles ?? {}).length >= 16) {
         throw new Error("Aiden supports up to 16 named Telegram profiles.");
       }
       await configStore.setSettings({
-        telegramProfiles: { ...(settings.telegramProfiles ?? {}), [profile]: {} },
+        telegramProfiles: {
+          ...(settings.telegramProfiles ?? {}),
+          [profile]: {},
+        },
         telegramActiveProfile: profile,
       });
       activeProfile = profile;
@@ -629,17 +935,25 @@ export function createTelegramProfileManager() {
     },
     async deleteProfile(value: string): Promise<void> {
       const profile = normalizeTelegramProfileName(value);
-      if (profile === DEFAULT_TELEGRAM_PROFILE) throw new Error("The default Telegram profile cannot be deleted.");
-      const service = services.get(profile);
-      await service?.stopAndSettle();
-      await service?.resetPairing();
-      services.delete(profile);
-      await secrets.deleteKey(telegramProfileTokenKey(profile));
-      const settings = await configStore.getSettings();
-      const profiles = { ...(settings.telegramProfiles ?? {}) };
-      delete profiles[profile];
-      activeProfile = DEFAULT_TELEGRAM_PROFILE;
-      await configStore.setSettings({ telegramProfiles: profiles, telegramActiveProfile: activeProfile });
+      if (profile === DEFAULT_TELEGRAM_PROFILE)
+        throw new Error("The default Telegram profile cannot be deleted.");
+      await telegramProfileMutationFence.runDestructive(profile, async () => {
+        const service = services.get(profile);
+        await service?.stopAndSettle();
+        await telegramBotBindingAuthority.disableProfile(profile);
+        await revokeTelegramBotNoticeForCurrentOwner(profile);
+        await service?.resetPairing();
+        services.delete(profile);
+        await secrets.deleteKey(telegramProfileTokenKey(profile));
+        const settings = await configStore.getSettings();
+        const profiles = { ...(settings.telegramProfiles ?? {}) };
+        delete profiles[profile];
+        activeProfile = DEFAULT_TELEGRAM_PROFILE;
+        await configStore.setSettings({
+          telegramProfiles: profiles,
+          telegramActiveProfile: activeProfile,
+        });
+      });
     },
     async getActiveSettings() {
       await refreshProfiles();
@@ -658,28 +972,62 @@ export function createTelegramProfileManager() {
     },
     async setEnabled(enabled: boolean): Promise<void> {
       await setProfileSettings(activeProfile, { telegramEnabled: enabled });
-      if (enabled) await serviceFor(activeProfile).start();
-      else serviceFor(activeProfile).stop();
+      if (enabled) {
+        await telegramBotBindings.assertHealthy();
+        await serviceFor(activeProfile).start();
+      } else {
+        serviceFor(activeProfile).stop();
+      }
     },
     connect: () => serviceFor(activeProfile).connect(),
     disconnect: () => serviceFor(activeProfile).disconnect(),
-    resetPairing: () => serviceFor(activeProfile).resetPairing(),
+    resetPairing: async () => {
+      const profile = activeProfile;
+      await telegramProfileMutationFence.runDestructive(profile, async () => {
+        await telegramBotBindingAuthority.disableProfile(profile);
+        await revokeTelegramBotNoticeForCurrentOwner(profile);
+        await serviceFor(profile).resetPairing();
+      });
+    },
     ensureActiveThreads: () => serviceFor(activeProfile).ensureThreads(),
     clearActiveThreads: () => serviceFor(activeProfile).clearThreads(),
     async listTargets(profileName?: string) {
-      const targetProfile = profileName ? normalizeTelegramProfileName(profileName) : activeProfile;
+      const targetProfile = profileName
+        ? normalizeTelegramProfileName(profileName)
+        : activeProfile;
       return serviceFor(targetProfile).listTargets();
     },
-    async sendDirectMessage(input: { profile?: string; thread?: string | number; text: string }) {
-      const targetProfile = input.profile ? normalizeTelegramProfileName(input.profile) : activeProfile;
+    async sendDirectMessage(input: {
+      profile?: string;
+      thread?: string | number;
+      text: string;
+    }) {
+      const targetProfile = input.profile
+        ? normalizeTelegramProfileName(input.profile)
+        : activeProfile;
       return serviceFor(targetProfile).sendDirectMessage(input);
     },
-    async sendDirectAttachment(input: { profile?: string; thread?: string | number; path: string; caption?: string }) {
-      const targetProfile = input.profile ? normalizeTelegramProfileName(input.profile) : activeProfile;
+    async sendDirectAttachment(input: {
+      profile?: string;
+      thread?: string | number;
+      path: string;
+      caption?: string;
+    }) {
+      const targetProfile = input.profile
+        ? normalizeTelegramProfileName(input.profile)
+        : activeProfile;
       return serviceFor(targetProfile).sendDirectAttachment(input);
     },
-    async sendDirectVoice(input: { profile?: string; thread?: string | number; text: string; lang?: string; rate?: string }) {
-      const targetProfile = input.profile ? normalizeTelegramProfileName(input.profile) : activeProfile;
+    async sendDirectVoice(input: {
+      profile?: string;
+      thread?: string | number;
+      text: string;
+      lang?: string;
+      rate?: string;
+    }) {
+      const targetProfile = input.profile
+        ? normalizeTelegramProfileName(input.profile)
+        : activeProfile;
       return serviceFor(targetProfile).sendDirectVoice(input);
     },
   };

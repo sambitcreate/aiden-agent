@@ -8,7 +8,7 @@ import {
 } from "../attachments.js";
 import type { TelegramBotApi, TelegramMessage } from "./telegram-bot-api.js";
 
-const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
+export const MAX_TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const TEXT_MIME_PREFIXES = ["text/", "application/json", "application/xml", "application/javascript"];
 
 export interface TelegramInboundContent {
@@ -100,13 +100,13 @@ export async function normalizeTelegramInbound(
   const localFiles: TelegramInboundContent["localFiles"] = [];
   let hasVoiceInput = false;
   for (const candidate of candidates(message)) {
-    if (candidate.declaredSize && candidate.declaredSize > MAX_DOWNLOAD_BYTES) {
+    if (candidate.declaredSize && candidate.declaredSize > MAX_TELEGRAM_DOWNLOAD_BYTES) {
       notices.push(`${candidate.name} was skipped because it exceeds Telegram's 20 MB bot download limit.`);
       continue;
     }
     try {
       const { bytes } = await deps.api.downloadFile(candidate.fileId);
-      if (bytes.byteLength > MAX_DOWNLOAD_BYTES) {
+      if (bytes.byteLength > MAX_TELEGRAM_DOWNLOAD_BYTES) {
         notices.push(`${candidate.name} was skipped because it is too large.`);
         continue;
       }

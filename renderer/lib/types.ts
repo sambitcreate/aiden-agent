@@ -11,12 +11,14 @@ import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
+import type { ProviderArtwork } from "../shared/provider-artwork";
+export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
 
 export type ProviderDeployment = "local" | "hosted";
 
-export type ProviderModelType = "llm" | "embedding";
+export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
 
 export interface ProviderModelMetadata {
   source: "lmstudio" | "ollama" | "provider";
@@ -36,6 +38,7 @@ export interface Provider {
   id: string;
   kind: ProviderKind;
   label: string;
+  artwork?: ProviderArtwork;
   baseUrl: string;
   models: string[];
   modelMetadata?: Record<string, ProviderModelMetadata>;
@@ -57,6 +60,11 @@ export interface Provider {
     label: string;
     canLogin: boolean;
   }>;
+}
+
+export interface ProviderCatalogRefreshResult {
+  providers: Provider[];
+  errors: Array<{ providerId: string; message: string }>;
 }
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex" as const;
@@ -129,6 +137,13 @@ export type ProviderAuthEvent =
   | {
       flowId: string;
       providerId: string;
+      type: "browser_open_failed";
+      url: string;
+      message: string;
+    }
+  | {
+      flowId: string;
+      providerId: string;
       type: "progress";
       message: string;
     };
@@ -137,6 +152,12 @@ export interface ProviderAuthDone {
   flowId: string;
   providerId: string;
   cancelled: boolean;
+  warning?: string;
+}
+
+export interface OnboardingProviderValidationResult {
+  provider: Provider;
+  catalogWarning?: string;
 }
 
 export interface ProviderAuthError {
@@ -415,6 +436,7 @@ export interface ModelInfo {
   toolCall?: boolean;
   reasoning?: boolean;
   openWeights?: boolean;
+  /** Normalized capability classification; every value except `llm` is non-chat. */
   modelType?: ProviderModelType;
   parameterCount?: string;
   format?: string;
@@ -475,6 +497,7 @@ export interface ChatMeta {
   id: string;
   title: string;
   workspaceId?: string;
+  botId?: string;
   providerId?: string;
   model?: string;
   createdAt: number;
@@ -698,6 +721,7 @@ export interface AssistantConfigSnapshot {
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
+  hiddenModelsByProvider?: Record<string, string[]>;
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
@@ -712,6 +736,7 @@ export interface AppSettings {
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
   codexThinkingByModel?: Record<string, CodexThinkingLevel>;
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
+  providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
@@ -722,6 +747,7 @@ export interface AppSettings {
   scheduledDefaultTimezone?: string;
   assistant?: AssistantConfig;
   profileName?: string;
+  onboarding?: import("../shared/onboarding.js").OnboardingState;
   telegramEnabled?: boolean;
   telegramAllowedUserId?: number;
   telegramProviderId?: string;

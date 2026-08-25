@@ -286,6 +286,10 @@ async function generateFoundationModelsRename(chatId: string): Promise<ChatTitle
 }
 
 export const chatTitleService = {
+  isFirstTurnPending(chatId: string): boolean {
+    return inFlight.has(chatId);
+  },
+
   startForFirstTurn(input: { chatId: string; providerId: string; model: string }): void {
     if (!input.chatId || inFlight.has(input.chatId)) return;
     const task = generateFirstTurnTitle({

@@ -1,8 +1,8 @@
 # Dynamic Model Catalog Plan
 
-Status: Partial — Pi's device-local models store, cache-only hydration, and explicit
-provider refresh are implemented; the remote overlay for otherwise-static hosted
-providers is not.
+Status: Implemented — trusted pi.dev overlays, durable offline hydration, scoped
+setup refresh, nonblocking four-hour launch refresh, explicit Settings/command
+refresh, Pi-native metadata, and Mac/iOS projection ship on the pinned Pi runtime.
 Date: 2026-07-24  
 Source audited: local `/Users/sambitbiswas/projects/pi` (`packages/coding-agent` remote catalog + `packages/ai` Models/ModelsStore)  
 Related: `docs/plans/pi-provider-integration-plan.md` (Phases 1–2 already call for `ModelsStore` + refresh; this plan owns the **remote overlay** that plan deferred)
@@ -10,6 +10,40 @@ Related: `docs/plans/pi-provider-integration-plan.md` (Phases 1–2 already call
 ## Outcome
 
 Aiden users should get newly published hosted models (for example Opus 5) **without waiting for an Aiden app release**, by refreshing a device-local catalog overlay — the same product idea as Pi’s `pi update --models` / `/model` refresh.
+
+## Implementation record (2026-08-22)
+
+- Option A is accepted: Aiden reads full executable model records only from the fixed
+  `https://pi.dev` provider endpoint. Requests carry a static versioned Aiden/Pi
+  User-Agent and never provider credentials, chat content, install IDs, or models.dev data.
+- `@earendil-works/pi-ai` and agent-core remain deliberately pinned to `0.80.10`.
+  A full Pi package bump also changes Session/runtime contracts, so Aiden backports
+  only the reviewed remote-catalog behavior and OpenCode Go Responses transport.
+- The main process restores normalized `0600` device-local catalogs offline before
+  first paint. A soft refresh runs after first paint when the four-hour TTL is stale;
+  Settings and the command palette provide force refresh. The stale launch pass includes
+  only stale Aiden pi.dev overlays, excluding Radius, Concentrate, and every other
+  provider-owned discovery path. Partial provider failures still publish
+  successes, retain each failed provider's last-known-good catalog, and surface a
+  nonfatal retry warning after credentials have already been saved.
+- Remote routing fields are validated against each shipped provider's HTTPS origins
+  and executable API set. Responses are streamed through a 5 MiB limit, catalog/store
+  cardinality is bounded, validators are safe, downgrade and far-future timestamps are
+  rejected, and an already-poisoned future timestamp can be replaced by a current valid
+  generation, while a system-clock rollback retains the accepted catalog and downgrade
+  high-water mark. Scoped refresh uses Pi's non-refreshing auth check, so cancellation cannot
+  leave an OAuth rotation running after timeout. Empty 200 and negative 404/501 results
+  honor the same four-hour TTL; timeout/malformed responses never replace a good cache.
+  Renderer refresh results contain only bounded provider IDs and app-owned recovery copy;
+  raw upstream/auth error bodies remain main-process-private.
+- Provider-owned metadata is the fallback when a new model is absent from the bundled
+  models.dev snapshot. OpenCode Go's `ox-alpha-free` therefore appears as
+  “Ox Alpha Free (Unlimited)” with low/high/max thinking on Mac and paired iOS.
+  The remote-v1 projection also carries the effective saved/default level and whether
+  “off” hides required thinking so both clients make the same initial selection.
+- `npm run models:refresh` and `npm run dist` remain the only models.dev network paths.
+  The refreshed bundled capability snapshot is still offline display/ranking data,
+  not live selectable inventory.
 
 When this ships:
 
@@ -31,10 +65,10 @@ When this ships:
 
 | Layer | Today | Gap |
 | --- | --- | --- |
-| Selectable hosted models | Pi `builtinModels()` is authoritative for built-ins and provider-owned dynamic catalogs | Providers without their own dynamic fetch still require a Pi pin bump **and** an Aiden release |
+| Selectable hosted models | Pi `Models` plus Aiden's trusted pi.dev overlay are authoritative for built-ins | Shipped baseline remains the offline fallback; no release is required for compatible new remote records |
 | Capability metadata | Bundled `resources/model-capabilities.json` via `npm run models:refresh`; AA device cache on Connect & fetch | Offline by design; not the Opus-5 availability problem |
-| Pi registry | `ProviderRegistry` + `builtinModels({ credentials, modelsStore })`; cache-only hydration and explicit force refresh are wired | No Aiden-owned remote overlay for otherwise-static providers |
-| Device-local store | `pi-models-store.ts` persists Pi `ModelsStoreEntry` snapshots under Electron `userData` | The store can retain provider-owned dynamic results, but it cannot create a remote path for a static provider |
+| Pi registry | `ProviderRegistry` wraps static providers with a validated overlay, compatible transports, offline hydration, scoped setup refresh, TTL launch refresh, and explicit force refresh | A future full Pi package upgrade remains a separate Session/runtime migration |
+| Device-local store | `pi-models-store.ts` persists bounded normalized `ModelsStoreEntry` snapshots under Electron `userData` with mode `0600` | None for the implemented overlay scope |
 
 Pi coding-agent reference (do not import the package; mirror the pattern):
 

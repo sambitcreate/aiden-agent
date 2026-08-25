@@ -18,8 +18,8 @@ import {
   ChartScatter,
   Info,
   Clock3,
-  Sparkles,
   Send,
+  Smartphone,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -34,9 +34,34 @@ import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
+import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
+
+const AIDEN_SIDEBAR_LOGO_URL = new URL(
+  "../../resources/aiden-sidebar-logo.png",
+  import.meta.url,
+).href;
+
+function AidenSidebarLogo() {
+  return (
+    <span
+      aria-hidden="true"
+      className="block size-5 shrink-0 bg-current"
+      style={{
+        WebkitMaskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
+        maskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+      }}
+    />
+  );
+}
 
 type NavItem = {
   id: SettingsSection;
@@ -52,9 +77,10 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
   telegram: <Send className="size-5" />,
+  remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
-  assistant: <Sparkles className="size-5" />,
+  assistant: <AidenSidebarLogo />,
   computerUse: <MousePointer2 className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
@@ -75,6 +101,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   modelData: ModelDataSettings,
   skills: SkillsSettings,
   telegram: TelegramSettings,
+  remoteAccess: RemoteAccessSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,

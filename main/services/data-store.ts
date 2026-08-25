@@ -50,6 +50,8 @@ export interface DataStoreOptions<T> {
   beforeExternalCacheCommit?: (previous: T | null, next: T) => void;
   /** Synchronous authority fence immediately before an app write is published. */
   beforeWritePublish?: (previous: T | null, next: T) => void;
+  /** Synchronous authority fence immediately after a successful app publication. */
+  afterWritePublish?: (previous: T | null, next: T) => void;
 }
 
 export class DataStoreExternalChangeError extends Error {
@@ -468,10 +470,8 @@ export class DataStore<T> {
         await stagedHandle.close();
       }
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-      this.options.beforeWritePublish?.(
-        this.cache === null ? null : structuredClone(this.cache),
-        data,
-      );
+      const previous = this.cache === null ? null : structuredClone(this.cache);
+      this.options.beforeWritePublish?.(previous, data);
       if (this.options.rejectExternalChanges) {
         await this.publishProtected(staged, destination, isCurrent);
       } else {
@@ -479,13 +479,18 @@ export class DataStore<T> {
         await fs.rename(staged, destination);
         await this.syncDirectory(path.dirname(destination));
       }
+      // Publish the in-memory view in the same synchronous turn as the durable
+      // replacement, before the post-publication authority fence. Work admitted
+      // immediately after that fence must never acquire a current lease while
+      // still observing the predecessor from a warm cache.
+      this.cache = data;
+      this.diskSnapshot = Buffer.from(serialized, "utf-8");
+      this.corrupt = false;
+      this.unsafe = false;
+      this.options.afterWritePublish?.(previous, data);
     } finally {
       await fs.rm(staged, { force: true }).catch(() => undefined);
     }
-    this.cache = data;
-    this.diskSnapshot = Buffer.from(serialized, "utf-8");
-    this.corrupt = false;
-    this.unsafe = false;
   }
 
   async save(data: T, isCurrent: () => boolean = () => true): Promise<void> {

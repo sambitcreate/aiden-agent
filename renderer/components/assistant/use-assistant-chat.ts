@@ -14,10 +14,11 @@ import {
   type StreamCallbacks,
 } from "../../lib/ipc";
 import type { Chat, ChatMeta } from "../../lib/types";
-import { useProviders } from "../../lib/queries";
+import { useProviders, useSettings } from "../../lib/queries";
 import {
   isModelSelectionAvailable,
   readModelSelection,
+  resolveVisibleModelSelection,
   subscribeModelSelection,
 } from "../../lib/use-model-selection";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../../lib/streaming-reveal";
@@ -240,7 +241,9 @@ export function useAssistantChat(): AssistantChat {
   // seeded once at mount, so the dock would never see the composer switch
   // models. Read storage at the point of use instead.
   const providers = useProviders();
+  const settings = useSettings();
   const [selection, setSelection] = React.useState(readModelSelection);
+  const [activeChatId, setActiveChatId] = React.useState<string | null>(null);
   const [conversationLoading, setConversationLoading] = React.useState(false);
   const conversationLoadingRef = React.useRef(false);
   const [turnSaving, setTurnSaving] = React.useState(false);
@@ -250,7 +253,16 @@ export function useAssistantChat(): AssistantChat {
     useAppendReconciliationRequired();
   const reloadRequired =
     appendReconciliationRequired || documentAppendReconciliationRequired;
-  const modelReady = isModelSelectionAvailable(selection, providers.data);
+  const newWorkSelection = resolveVisibleModelSelection(
+    selection,
+    providers.data,
+    settings.data?.hiddenModelsByProvider,
+  );
+  const effectiveSelection = activeChatId ? selection : newWorkSelection;
+  const modelReady = Boolean(
+    effectiveSelection &&
+      isModelSelectionAvailable(effectiveSelection, providers.data),
+  );
   const ready =
     modelReady &&
     !conversationLoading &&
@@ -283,7 +295,6 @@ export function useAssistantChat(): AssistantChat {
       turnSaving,
     }) && !reloadRequired;
   const [threads, setThreads] = React.useState<ChatMeta[]>([]);
-  const [activeChatId, setActiveChatId] = React.useState<string | null>(null);
   const handleRef = React.useRef<GenerationHandle | null>(null);
   // Every async continuation below checks this before touching state. Without
   // it, a cancelled turn's late chat:done clears `streaming` for the turn that
@@ -440,8 +451,16 @@ export function useAssistantChat(): AssistantChat {
     (text: string, restoreDraft?: (text: string) => void) => {
       // Read the selection fresh: the composer may have switched models since
       // the last focus sync.
-      const current = readModelSelection();
+      const stored = readModelSelection();
+      const current = activeChatId
+        ? stored
+        : resolveVisibleModelSelection(
+            stored,
+            providers.data,
+            settings.data?.hiddenModelsByProvider,
+          );
       if (
+        !current ||
         conversationLoadingRef.current ||
         stoppedPersistingTurnRef.current === turnRef.current ||
         !canSendAssistantMessage(text, {
@@ -727,6 +746,7 @@ export function useAssistantChat(): AssistantChat {
       reloadRequired,
       fail,
       providers.data,
+      settings.data?.hiddenModelsByProvider,
       refreshThreads,
       streamComplete,
       streaming,
