@@ -3,7 +3,7 @@
 // services/parakeet.ts and services/local-models.ts.
 
 import { ipcMain } from "../platform.js";
-import { engineStatus, transcribePcm, releaseRecognizer } from "../services/parakeet.js";
+import { engineStatus, transcribePcmBase64, releaseRecognizer } from "../services/parakeet.js";
 import {
   listModels,
   downloadModel,
@@ -42,9 +42,9 @@ export function registerLocalVoiceHandlers(): void {
   // ── Local transcription ──────────────────────────────────────────────
   ipcMain.handle("voice:transcribeLocal", async (_event, pcmBase64: unknown, modelId: unknown) => {
     const parsedModelId = asString(modelId, "modelId");
-    const pcm = pcmToFloat32(asString(pcmBase64, "pcmBase64"));
+    const encoded = asString(pcmBase64, "pcmBase64");
     try {
-      const transcript = await transcribePcm(pcm, parsedModelId);
+      const transcript = await transcribePcmBase64(encoded, parsedModelId);
       await usageStore.record(
         unreportedUsageRecord({
           source: "voice-transcription",
