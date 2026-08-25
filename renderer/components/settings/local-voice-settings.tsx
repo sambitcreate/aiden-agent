@@ -1,17 +1,12 @@
-// On-device voice settings: engine status, the active Parakeet model (with a
-// button into the full model-management subview), and the dictation hotkey.
-// Everything runs locally — recordings are transcribed on the user's Mac.
+// On-device voice settings: engine status and the active Parakeet model.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
-import { Badge, Button, Callout, Field, FieldSet, Text, toast } from "../ui";
+import { Badge, Button, Callout, Field, FieldSet, Text } from "../ui";
 import { Settings2 } from "lucide-react";
 import { settingsApi } from "../../lib/ipc";
-import { queryKeys, useEngineStatus, useLocalModels, useSettings, useShortcuts } from "../../lib/queries";
-import { prettyAccelerator } from "../../shared/keybindings";
+import { queryKeys, useEngineStatus, useLocalModels, useSettings } from "../../lib/queries";
 import { ModelManagerView } from "./model-manager-view";
-import { installAccessibilityRefresh } from "../../lib/accessibility-refresh";
 
 function EngineStatus() {
   const status = useEngineStatus();
@@ -49,7 +44,6 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
   const active = (models.data ?? []).find((m) => m.id === activeId && m.installed);
   const installedCount = (models.data ?? []).filter((m) => m.installed).length;
 
-  // If the active model was deleted, clear it so the mic prompts to pick another.
   React.useEffect(() => {
     if (activeId && models.data && !models.data.some((m) => m.id === activeId && m.installed)) {
       void settingsApi.set({ localVoiceModel: "" }).then(() => qc.invalidateQueries({ queryKey: queryKeys.settings }));
@@ -77,109 +71,6 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
   );
 }
 
-function AccessibilityAccess() {
-  const [trusted, setTrusted] = React.useState<boolean | null>(null);
-
-  React.useEffect(() => {
-    const refresh = () => void window.aidenAPI.accessibility.isTrusted().then(setTrusted);
-    refresh();
-    return installAccessibilityRefresh(refresh);
-  }, []);
-
-  const grant = async () => {
-    const granted = await window.aidenAPI.accessibility.request();
-    setTrusted(granted);
-    if (!granted) {
-      toast.info("Enable Aiden Agent in System Settings → Privacy & Security → Accessibility, then come back.");
-    }
-  };
-
-  if (trusted === null) return null;
-  return (
-    <Field
-      label="Accessibility access"
-      description="Lets Aiden paste dictated text into the focused text field. Without it, transcripts are copied to the clipboard instead."
-    >
-      {trusted ? (
-        <Badge color="green">Granted</Badge>
-      ) : (
-        <Button variant="filled" onClick={() => void grant()}>
-          Grant Access
-        </Button>
-      )}
-    </Field>
-  );
-}
-
-function DictationHotkey() {
-  const navigate = useNavigate();
-  const shortcuts = useShortcuts();
-
-  if (shortcuts.isError) {
-    return (
-      <Field
-        label="Dictation hotkey"
-        description="The saved shortcut could not be read."
-      >
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Badge color="red">Unavailable</Badge>
-          <Button size="small" onClick={() => void shortcuts.refetch()}>
-            Retry
-          </Button>
-          <Button
-            size="small"
-            variant="filled"
-            onClick={() =>
-              void navigate({ to: "/settings", search: { section: "shortcut" } })
-            }
-          >
-            Manage shortcuts
-          </Button>
-        </div>
-      </Field>
-    );
-  }
-
-  if (shortcuts.isLoading || !shortcuts.data) {
-    return (
-      <Field
-        label="Dictation hotkey"
-        description="Checking the saved global shortcut."
-      >
-        <Badge>Checking…</Badge>
-      </Field>
-    );
-  }
-
-  const binding = shortcuts.data?.effective["dictation.toggle"] ?? null;
-  const runtime = shortcuts.data?.global.find((item) => item.commandId === "dictation.toggle");
-
-  return (
-    <Field
-      label="Dictation hotkey"
-      description="Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
-    >
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <Badge color={runtime?.state === "active" ? "green" : runtime?.state === "unavailable" ? "red" : undefined}>
-          {runtime?.state === "active"
-            ? "Active"
-            : runtime?.state === "unavailable"
-              ? "Unavailable"
-              : "Off"}
-        </Badge>
-        <Text variant="small-strong">{prettyAccelerator(binding)}</Text>
-        <Button
-          size="small"
-          variant="filled"
-          onClick={() => void navigate({ to: "/settings", search: { section: "shortcut" } })}
-        >
-          Manage shortcuts
-        </Button>
-        </div>
-    </Field>
-  );
-}
-
 export function LocalVoiceSettings() {
   const [managing, setManaging] = React.useState(false);
 
@@ -190,11 +81,6 @@ export function LocalVoiceSettings() {
       <FieldSet title="On-Device Engine">
         <EngineStatus />
         <ActiveModel onManage={() => setManaging(true)} />
-      </FieldSet>
-
-      <FieldSet title="Dictation Shortcut">
-        <DictationHotkey />
-        <AccessibilityAccess />
       </FieldSet>
     </div>
   );
