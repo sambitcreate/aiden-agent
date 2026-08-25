@@ -64,9 +64,11 @@ function RosterNode({
   const run = node.run;
   const expanded = subagentTreeIsExpanded(node, expansion);
   const selected = run.runId === selectedRunId;
-  const displayState = node.level === 1 && node.branchActive ? "Active" : subagentStateLabel(run.state);
+  const displayState = subagentStateLabel(run.state);
   const hiddenCount = expanded ? 0 : node.descendantCount;
-  const orbState = node.level === 1 && node.branchActive ? "running" : run.state;
+  const activeDescendantLabel = node.activeDescendantCount
+    ? `${node.activeDescendantCount} active descendant${node.activeDescendantCount === 1 ? "" : "s"}`
+    : null;
   return (
     <div data-subagent-tree-node={run.runId}>
       <div
@@ -101,8 +103,8 @@ function RosterNode({
           data-subagent-treeitem={run.runId}
           data-subagent-run-id={run.runId}
           tabIndex={focusedRunId === run.runId ? 0 : -1}
-          aria-current={selected ? "true" : undefined}
-          aria-label={`${run.label}, ${run.role}, ${displayState}${hiddenCount ? `, ${hiddenCount} hidden descendant${hiddenCount === 1 ? "" : "s"}` : ""}`}
+          aria-selected={selected}
+          aria-label={`${run.label}, ${run.role}, ${displayState}${activeDescendantLabel ? `, ${activeDescendantLabel}` : ""}${hiddenCount ? `, ${hiddenCount} hidden descendant${hiddenCount === 1 ? "" : "s"}` : ""}`}
           onFocus={() => onFocusRun(run.runId)}
           onKeyDown={(event) => onKeyDown(event, run.runId)}
           onClick={(event) => onSelect(run.runId, event.currentTarget)}
@@ -111,7 +113,7 @@ function RosterNode({
             selected && "bg-list-selection",
           )}
         >
-          <SubagentOrb role={run.role} state={orbState} activity={run.snapshot?.activity} />
+          <SubagentOrb role={run.role} state={run.state} activity={run.snapshot?.activity} />
           <span className="min-w-0 flex-1">
             <Text as="span" variant="small-strong" truncate className="block">
               {run.label}
@@ -130,9 +132,10 @@ function RosterNode({
             as="span"
             variant="small"
             color="tertiary"
-            className={cn("shrink-0", stateTone(run.state))}
+            className={cn("max-w-28 shrink truncate", stateTone(run.state))}
+            title={activeDescendantLabel ? `${activeDescendantLabel} · ${displayState}` : displayState}
           >
-            {displayState}
+            {activeDescendantLabel ? `${node.activeDescendantCount} active · ${displayState}` : displayState}
           </Text>
         </button>
       </div>
