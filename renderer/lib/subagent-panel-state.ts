@@ -6,6 +6,52 @@ import {
 } from "./subagent-view-state";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 
+export interface SubagentOverviewSummary {
+  primary: string;
+  secondary: string;
+  ariaLabel: string;
+}
+
+export function subagentOverviewSummary(
+  runs: readonly SubagentRunView[],
+): SubagentOverviewSummary {
+  const counts = runs.reduce(
+    (current, run) => {
+      current[run.state] += 1;
+      return current;
+    },
+    {
+      queued: 0,
+      starting: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      timed_out: 0,
+      interrupted: 0,
+      needs_attention: 0,
+      stopped: 0,
+      unknown: 0,
+    } satisfies Record<SubagentRunView["state"], number>,
+  );
+  const parts = [
+    counts.needs_attention ? `${counts.needs_attention} needs attention` : null,
+    counts.queued ? `${counts.queued} queued` : null,
+    counts.starting ? `${counts.starting} starting` : null,
+    counts.running ? `${counts.running} working` : null,
+    counts.failed ? `${counts.failed} failed` : null,
+    counts.timed_out ? `${counts.timed_out} timed out` : null,
+    counts.interrupted ? `${counts.interrupted} interrupted` : null,
+    counts.stopped ? `${counts.stopped} stopped` : null,
+    counts.unknown ? `${counts.unknown} outcome unknown` : null,
+    counts.completed ? `${counts.completed} completed` : null,
+  ].filter((part): part is string => part !== null);
+  return {
+    primary: parts[0] ?? "No subagents",
+    secondary: parts.slice(1).join(" · ") || `${runs.length} total`,
+    ariaLabel: parts.join(", ") || "No subagents",
+  };
+}
+
 export function subagentRunProgressLabel(
   state: SubagentRunView["state"] | "finished",
   activity?: string,
@@ -28,9 +74,11 @@ export function subagentLiveSummary(runs: readonly SubagentRunView[]): string {
   const { active, done } = splitSubagentRunViews(runs);
   return formatSubagentLiveSummary(
     active.map((run) => ({
+      runId: run.runId,
       label: run.label,
       state: run.state,
       activity: run.snapshot?.activity,
+      updatedAt: run.snapshot?.updatedAt,
     })),
     done.map((run) => run.state),
   );
@@ -38,28 +86,65 @@ export function subagentLiveSummary(runs: readonly SubagentRunView[]): string {
 
 function formatSubagentLiveSummary(
   active: ReadonlyArray<{
+    runId: string;
     label: string;
     state: SubagentRunView["state"];
     activity?: string;
+    updatedAt?: number;
   }>,
   terminalStates: readonly SubagentRunView["state"][],
 ): string {
-  const progress = active
-    .map(
-      (run) =>
-        `${run.label}: ${subagentRunProgressLabel(run.state, run.activity)}`,
-    )
-    .join("; ");
+  const activeOutcomes = active.reduce(
+    (counts, run) => {
+      if (run.state === "queued") counts.queued += 1;
+      else if (run.state === "starting") counts.starting += 1;
+      else if (run.state === "needs_attention") counts.needsAttention += 1;
+      else counts.working += 1;
+      return counts;
+    },
+    { queued: 0, starting: 0, working: 0, needsAttention: 0 },
+  );
+  const activeSummary = [
+    activeOutcomes.needsAttention > 0
+      ? `${activeOutcomes.needsAttention} needs attention`
+      : null,
+    activeOutcomes.queued > 0 ? `${activeOutcomes.queued} queued` : null,
+    activeOutcomes.starting > 0 ? `${activeOutcomes.starting} starting` : null,
+    activeOutcomes.working > 0 ? `${activeOutcomes.working} working` : null,
+  ]
+    .filter((outcome): outcome is string => outcome !== null)
+    .join(", ");
+  const latest = active.reduce<(typeof active)[number] | undefined>(
+    (current, run) =>
+      !current ||
+      (run.updatedAt ?? 0) > (current.updatedAt ?? 0) ||
+      ((run.updatedAt ?? 0) === (current.updatedAt ?? 0) &&
+        (run.label > current.label ||
+          (run.label === current.label && run.runId.localeCompare(current.runId) > 0)))
+        ? run
+        : current,
+    undefined,
+  );
   const terminalOutcomes = terminalStates.reduce(
     (counts, state) => {
       if (state === "completed") counts.completed += 1;
       else if (state === "failed") counts.failed += 1;
       else if (state === "timed_out") counts.timedOut += 1;
       else if (state === "interrupted") counts.interrupted += 1;
+      else if (state === "stopped") counts.stopped += 1;
+      else if (state === "unknown") counts.unknown += 1;
       else counts.finished += 1;
       return counts;
     },
-    { completed: 0, failed: 0, timedOut: 0, interrupted: 0, finished: 0 },
+    {
+      completed: 0,
+      failed: 0,
+      timedOut: 0,
+      interrupted: 0,
+      stopped: 0,
+      unknown: 0,
+      finished: 0,
+    },
   );
   const outcomeSummary = [
     terminalOutcomes.completed > 0
@@ -72,15 +157,25 @@ function formatSubagentLiveSummary(
     terminalOutcomes.interrupted > 0
       ? `${terminalOutcomes.interrupted} interrupted`
       : null,
+    terminalOutcomes.stopped > 0
+      ? `${terminalOutcomes.stopped} stopped`
+      : null,
+    terminalOutcomes.unknown > 0
+      ? `${terminalOutcomes.unknown} outcome unknown`
+      : null,
     terminalOutcomes.finished > 0
       ? `${terminalOutcomes.finished} finished`
       : null,
   ]
     .filter((outcome): outcome is string => outcome !== null)
     .join("; ");
-  return `${active.length} active subagent${active.length === 1 ? "" : "s"}; ${
-    outcomeSummary || "0 done"
-  }.${progress ? ` ${progress}.` : ""}`;
+  const activeLead = `${active.length} active subagent${active.length === 1 ? "" : "s"}${
+    activeSummary ? `: ${activeSummary}` : ""
+  }`;
+  const latestSummary = latest
+    ? ` Latest active update: ${latest.label}, ${subagentRunProgressLabel(latest.state, latest.activity)}.`
+    : "";
+  return `${activeLead}; ${outcomeSummary || "0 finished"}.${latestSummary}`;
 }
 
 export function subagentSnapshotLiveSummary(
