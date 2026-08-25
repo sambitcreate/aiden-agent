@@ -35,7 +35,7 @@ import {
   type SubagentContextCapture,
   type SubagentContextMode,
 } from "./forked-context.js";
-import { sanitizeSubagentText } from "./safe-text.js";
+import { normalizeSubagentModelText } from "./model-text.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
 import { createSubagentTool } from "./subagent-tool.js";
 import type { SubagentSupervisor } from "./subagent-supervisor.js";
@@ -176,7 +176,7 @@ export interface RunSubagentChildInput {
 }
 
 function truncateSummary(text: string): string {
-  text = sanitizeSubagentText(text);
+  text = normalizeSubagentModelText(text);
   if (text.length <= MAX_SUBAGENT_SUMMARY_CHARS) return text;
   const marker = "\n\n… [middle of child summary truncated] …\n\n";
   const available = MAX_SUBAGENT_SUMMARY_CHARS - marker.length;
