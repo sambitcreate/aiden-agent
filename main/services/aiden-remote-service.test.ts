@@ -406,6 +406,29 @@ test("a fresh profile moves to the next complete port pair and advertises only t
   }
 });
 
+test("a fresh profile skips a LAN candidate occupied only on IPv4 loopback", async () => {
+  const [blockedPort, fallbackPort] = await availablePortPairs(2);
+  const blocker = await reservePort(blockedPort, "127.0.0.1");
+  const app = await fixture({
+    mode: "both",
+    lanPort: blockedPort,
+    portCandidates: [blockedPort, fallbackPort],
+  });
+  try {
+    await app.service.setEnabled(true);
+    assert.equal(app.persisted().lanPort, fallbackPort);
+    assert.equal(app.persisted().lanPortCommitted, true);
+    assert.deepEqual(app.bonjour.inputs.map((input) => input.port), [fallbackPort]);
+    assert.deepEqual(await insecureHealth(fallbackPort), {
+      status: 200,
+      body: { ok: true, protocolVersion: 1 },
+    });
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
 test("a failed loopback companion bind rolls back the partial LAN listener before retrying", async () => {
   const [partialPort, fallbackPort] = await availablePortPairs(2);
   const blocker = await reservePort(partialPort + 1);

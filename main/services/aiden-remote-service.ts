@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
-import type { Server as NetServer } from "node:net";
+import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import os from "node:os";
 import type { Duplex } from "node:stream";
 import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
@@ -301,6 +301,19 @@ async function closeServer(server: NetServer | null): Promise<void> {
   });
 }
 
+async function ipv4LoopbackPortIsAvailable(port: number): Promise<boolean> {
+  const probe = createNetServer();
+  try {
+    await listen(probe, port, "127.0.0.1");
+    return true;
+  } catch (error) {
+    if (isAddressInUse(error)) return false;
+    throw error;
+  } finally {
+    await closeServer(probe);
+  }
+}
+
 export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublisher {
   private child: ChildProcess | null = null;
 
@@ -475,6 +488,15 @@ export class AidenRemoteService {
           externallyReservedPorts.has(candidate)
           || externallyReservedPorts.has(tailscaleLoopbackPort(candidate))
         ) continue;
+        // On macOS an IPv4 loopback listener can coexist with an IPv6
+        // wildcard listener on the same numeric port. Without this probe,
+        // Aiden can report its HTTPS listener as ready while 127.0.0.1 still
+        // reaches the unrelated plaintext service. Reserve both address
+        // families as one endpoint pair before committing the port.
+        if (!(await ipv4LoopbackPortIsAvailable(candidate))) {
+          if (mayMoveFreshProfile) continue;
+          throw new AidenRemotePortInUseError(state.lanPort);
+        }
         let lanServer: HttpsServer | null = null;
         let tailscaleServer: HttpServer | null = null;
         try {
