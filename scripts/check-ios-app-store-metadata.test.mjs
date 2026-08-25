@@ -137,7 +137,11 @@ test("age and privacy drafts stay conservative and match the bundle manifest", a
   assert.match(mobilePrivacySupport, /iPhone or iPad Keychain/u);
   assert.match(mobilePrivacySupport, /local network or a Tailscale connection/u);
   assert.match(mobilePrivacySupport, /does not enable Tailscale Funnel/u);
-  assert.match(mobilePrivacySupport, /requires on-device recognition/u);
+  assert.match(
+    mobilePrivacySupport,
+    /In \*\*On this device\*\* mode, the app uses the platform speech API/u,
+  );
+  assert.match(mobilePrivacySupport, /neither endpoint stores the recording/u);
   assert.match(mobilePrivacySupport, /App Intents use a limited App Group cache/u);
   assert.match(mobilePrivacySupport, /hide assistant response excerpts by default/u);
   assert.match(mobilePrivacySupport, /hey@sambitbiswas\.com/u);

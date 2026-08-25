@@ -51,6 +51,7 @@ const appSourcePaths = [
   "AidenOnTheGo/AppIntents/AidenAppIntents.swift",
   "AidenOnTheGo/Auth/KeychainStore.swift",
   "AidenOnTheGo/Config/AidenAppearance.swift",
+  "AidenOnTheGo/Config/AidenVoiceInput.swift",
   "AidenOnTheGo/Config/AppConfig.swift",
   "AidenOnTheGo/ContentView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCustomAccessFlowView.swift",
@@ -338,7 +339,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   );
   assert.match(
     app,
-    /let configuration = AidenBotFirstPrototypeConfiguration\.current[\s\S]*?initialValue: configuration == nil \? AidenRemoteCoordinator\(\) : nil/u,
+    /let haptics = AidenHapticCenter\(\)[\s\S]*?let configuration = AidenBotFirstPrototypeConfiguration\.current[\s\S]*?initialValue: configuration == nil \? AidenRemoteCoordinator\(haptics: haptics\) : nil/u,
   );
   assert.match(
     app,
