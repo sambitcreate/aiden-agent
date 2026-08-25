@@ -113,6 +113,7 @@ class AidenBotPrototypeSnapshotTest {
         assertTrue(AidenUi.MinimumTouchTarget >= 48.dp)
         assertEquals(20.dp, AidenUi.ScreenGutter)
         assertEquals(30.dp, AidenUi.ComposerRadius)
+        assertFalse(AidenUi.ScrollableSheetGesturesEnabled)
     }
 
     @Test

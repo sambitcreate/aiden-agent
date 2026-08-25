@@ -37,6 +37,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenToolbarAction
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -202,7 +203,9 @@ fun AidenProductShellScreen(
         ModalBottomSheet(
             onDismissRequest = { showSettingsSheet = false },
             containerColor = palette.raised,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            dragHandle = null,
+            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             AidenAppearanceSettingsScreen(
                 appearanceStore = appearanceStore,
@@ -221,7 +224,9 @@ fun AidenProductShellScreen(
         ModalBottomSheet(
             onDismissRequest = { showPairingDialog = false },
             containerColor = palette.raised,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            dragHandle = null,
+            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             AidenPairingScreen(
                 coordinator = coordinator,

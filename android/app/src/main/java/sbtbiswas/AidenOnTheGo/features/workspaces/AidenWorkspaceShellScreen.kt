@@ -917,7 +917,9 @@ fun AidenWorkspaceDirectoryScreen(
     if (showFolderBrowserSheet) {
         ModalBottomSheet(
             onDismissRequest = { showFolderBrowserSheet = false },
-            containerColor = palette.canvas
+            containerColor = palette.canvas,
+            dragHandle = null,
+            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             AidenFolderBrowserSheet(
                 coordinator = coordinator,

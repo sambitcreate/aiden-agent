@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -563,7 +564,9 @@ fun AidenGitScreen(
 
         ModalBottomSheet(
             onDismissRequest = { showBranchSheet = false },
-            containerColor = palette.canvas
+            containerColor = palette.canvas,
+            dragHandle = null,
+            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             Column(
                 modifier = Modifier
@@ -805,7 +808,9 @@ fun AidenGitScreen(
 
         ModalBottomSheet(
             onDismissRequest = { showCompareDialog = false },
-            containerColor = palette.canvas
+            containerColor = palette.canvas,
+            dragHandle = null,
+            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             Column(
                 modifier = Modifier
@@ -912,7 +917,9 @@ fun AidenGitScreen(
 
         ModalBottomSheet(
             onDismissRequest = { showWorktreesSheet = false },
-            containerColor = palette.canvas
+            containerColor = palette.canvas,
+            dragHandle = null,
+            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             Column(
                 modifier = Modifier

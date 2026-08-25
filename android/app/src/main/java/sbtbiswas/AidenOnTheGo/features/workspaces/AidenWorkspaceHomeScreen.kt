@@ -356,7 +356,9 @@ private fun AidenWorkspaceHome(
         ModalBottomSheet(
             onDismissRequest = { showScheduledTasks = false },
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            dragHandle = null,
+            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             Box(Modifier.fillMaxWidth().heightIn(min = 520.dp)) {
                 AidenScheduledTasksScreen(coordinator) { showScheduledTasks = false }
@@ -368,7 +370,9 @@ private fun AidenWorkspaceHome(
             onDismissRequest = { showUsage = false },
             containerColor = palette.canvas,
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            sheetState = usageSheetState
+            sheetState = usageSheetState,
+            dragHandle = null,
+            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             AidenUsageSheet(
                 summary = usage!!,

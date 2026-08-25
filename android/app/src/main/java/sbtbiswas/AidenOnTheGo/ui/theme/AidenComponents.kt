@@ -36,6 +36,10 @@ object AidenUi {
     val RowVerticalPadding = 14.dp
     val MinimumTouchTarget = 48.dp
     val ComposerRadius = 30.dp
+
+    // Long-form sheets contain their own scrollable surface. Let that surface own
+    // vertical gestures so it cannot fight the sheet at the expanded boundary.
+    const val ScrollableSheetGesturesEnabled = false
 }
 
 /** Tonal, borderless text-field colors used across forms and dialogs. */

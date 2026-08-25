@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import java.util.UUID
 
 enum class AidenBotChatAccessScope(val label: String) {
@@ -436,7 +437,9 @@ fun AidenBotChatAccessSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = palette.canvas
+        containerColor = palette.canvas,
+        dragHandle = null,
+        sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
     ) {
         Column(
             modifier = Modifier
