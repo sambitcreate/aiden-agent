@@ -192,7 +192,11 @@ Workspace mutation must reuse Aiden's existing cancellation, schedule-restoratio
 - `DELETE /api/aiden/v1/chats/:chatId`
 - `POST /api/aiden/v1/chats/:chatId/move` only for an empty chat, matching Aiden's existing rule
 
-The mobile projection includes Aiden's renderer-safe chat fields only: IDs, workspace ID, provider/model IDs, timestamps, visible messages, safe reasoning, safe timeline/tool milestones, attachments, and closed provider-failure metadata. Private Pi journals, raw diagnostics, provider credentials, subagent private history, and filesystem internals never cross the API.
+The mobile projection includes Aiden's renderer-safe chat fields only: IDs, workspace ID, provider/model IDs, timestamps, visible messages, safe parent reasoning, parent timeline/tool milestones, attachments, and the parent turn's closed provider-failure metadata. Private Pi journals, raw diagnostics, provider credentials, subagent private history, and filesystem internals never cross the API.
+
+Subagent execution follows Pi's parent-only mobile boundary. Even when the parent turn uses subagents, iOS and Android receive only the ordinary parent messages, parent timeline and outcome, and parent stream state. Child/subagent IDs and counts, private histories, lifecycle snapshots, controls, and endpoints remain Mac-local. The parent runtime may incorporate child findings into its own visible reply, but mobile never receives a separately addressable child object.
+
+Visible parent `message.text` is opaque transcript data and remains exact within the 200,000-Unicode-scalar response bound. Filtering is structural: it excludes private fields and metadata, not strings because they resemble a path, URL, UUID, base64, hexadecimal data, or a credential. The clients must not display an encoded/redacted placeholder for such parent text. Separate credential fields, authorization headers, and provider/MCP secrets remain forbidden.
 
 Ordinary remote Workspace chat creation cannot mint Aiden's reserved Assistant workspace identity or unattended modes. Remote Workspace turns follow the same main-owned capability composition and permission checks as an attended desktop Workspace chat; the transport cannot request hidden modes or widen tool authority. Bot chats use the separate explicit, revisioned Full/Custom policy defined by the bot-first plan. Full becomes usable only after the current versioned notice; Custom and per-chat settings may narrow authority but never exceed the bot, OS permissions, global configuration, or existing safety gates.
 
@@ -212,6 +216,7 @@ Return only connected/configured provider identities, selectable models, capabil
 - `GET /api/aiden/v1/streams/:streamId/events`
   - SSE stream; supports `Last-Event-ID` and explicit `after` sequence.
 - `POST /api/aiden/v1/streams/:streamId/cancel`
+  - Cancels the authenticated parent turn stream only. It is not a child/subtree control API; any child shutdown is an internal consequence owned by the Mac runtime.
 - `POST /api/aiden/v1/approvals/:approvalId/respond`
   - First release accepts only `allow` or `deny`, matching Aiden's enforceable scope.
 
