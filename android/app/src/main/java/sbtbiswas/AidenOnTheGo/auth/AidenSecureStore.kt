@@ -13,7 +13,16 @@ interface AidenSecureStore {
 }
 
 class AndroidAidenSecureStore(context: Context) : AidenSecureStore {
-    private val prefs: SharedPreferences by lazy {
+    init {
+        // Older development builds could write credentials here when Android Keystore
+        // initialization failed. Remove that plaintext migration artifact eagerly.
+        context.getSharedPreferences(
+            "sbtbiswas.AidenOnTheGo.pairing.fallback",
+            Context.MODE_PRIVATE
+        ).edit().clear().apply()
+    }
+
+    private val prefs: SharedPreferences? by lazy {
         try {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -26,23 +35,27 @@ class AndroidAidenSecureStore(context: Context) : AidenSecureStore {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (_: Exception) {
-            // Fallback for tests or sandbox
-            context.getSharedPreferences("sbtbiswas.AidenOnTheGo.pairing.fallback", Context.MODE_PRIVATE)
+            // Pairing credentials must never fall back to ordinary SharedPreferences.
+            // Returning no credential keeps an existing installation disconnected, while
+            // writes fail explicitly so pairing can surface the secure-storage problem.
+            null
         }
     }
 
-    override fun getCredential(scope: String): String? = prefs.getString(scope, null)
+    override fun getCredential(scope: String): String? = prefs?.getString(scope, null)
 
     override fun setCredential(scope: String, credential: String) {
-        prefs.edit().putString(scope, credential).apply()
+        val encryptedPreferences = prefs
+            ?: throw IllegalStateException("Android secure credential storage is unavailable")
+        encryptedPreferences.edit().putString(scope, credential).apply()
     }
 
     override fun removeCredential(scope: String) {
-        prefs.edit().remove(scope).apply()
+        prefs?.edit()?.remove(scope)?.apply()
     }
 
     override fun clearAll() {
-        prefs.edit().clear().apply()
+        prefs?.edit()?.clear()?.apply()
     }
 }
 

@@ -5,12 +5,15 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -23,17 +26,21 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
+import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
+import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 
+@OptIn(FlowPreview::class)
 class AidenChatViewModel(
     val chatId: String,
     private val coordinator: AidenRemoteCoordinator,
     private val chatCache: AidenChatCache,
     private val draftStore: AidenChatDraftStore,
-    val initialChat: AidenChat? = null
+    val initialChat: AidenChat? = null,
+    private val liveNotificationManager: AidenRemoteLiveNotificationManager? = null
 ) : ViewModel() {
     private val _chat = MutableStateFlow<AidenChat?>(initialChat ?: chatCache.getChat(chatId))
     val chat: StateFlow<AidenChat?> = _chat.asStateFlow()
@@ -133,6 +140,47 @@ class AidenChatViewModel(
         loadChat()
         loadCatalog()
         resumeActiveStreamIfNeeded()
+        viewModelScope.launch {
+            combine(_streamState, _liveText, _activityTimeline) { state, text, timeline ->
+                Triple(state, text, timeline)
+            }.debounce(400).collect { (state, text, timeline) ->
+                publishLiveNotification(state, text, timeline)
+            }
+        }
+    }
+
+    private fun publishLiveNotification(
+        state: AidenStreamState?,
+        responseText: String,
+        timeline: AidenGenerationTimeline?
+    ) {
+        if (state == null || instanceId.isEmpty()) return
+        val activeStep = timeline?.steps?.lastOrNull { it.isActive }
+        val status = when {
+            state == AidenStreamState.WAITING_FOR_APPROVAL -> AgentRunActivityStatus.WAITING_FOR_APPROVAL
+            state == AidenStreamState.DONE -> AgentRunActivityStatus.COMPLETE
+            state == AidenStreamState.ERROR || state == AidenStreamState.INTERRUPTED -> AgentRunActivityStatus.FAILED
+            state == AidenStreamState.CANCELLED -> AgentRunActivityStatus.CANCELLED
+            responseText.isNotBlank() -> AgentRunActivityStatus.RESPONDING
+            activeStep?.kind == AidenAgentStep.Kind.TOOL -> AgentRunActivityStatus.USING_TOOL
+            state == AidenStreamState.QUEUED -> AgentRunActivityStatus.STARTING
+            else -> AgentRunActivityStatus.THINKING
+        }
+        val activity = when {
+            state == AidenStreamState.WAITING_FOR_APPROVAL -> "Waiting for your approval"
+            activeStep?.label?.isNotBlank() == true -> activeStep.label
+            activeStep?.toolName?.isNotBlank() == true -> activeStep.toolName
+            responseText.isNotBlank() -> "Writing a response"
+            else -> status.title
+        } ?: status.title
+        liveNotificationManager?.showAgentProgressNotification(
+            instanceId = instanceId,
+            sessionId = chatId,
+            sessionTitle = _chat.value?.title.orEmpty(),
+            status = status,
+            currentActivity = activity,
+            responseExcerpt = responseText
+        )
     }
 
     fun updateDraft(text: String) {
@@ -754,11 +802,18 @@ class AidenChatViewModel(
             chatId: String,
             coordinator: AidenRemoteCoordinator,
             chatCache: AidenChatCache,
-            draftStore: AidenChatDraftStore
+            draftStore: AidenChatDraftStore,
+            liveNotificationManager: AidenRemoteLiveNotificationManager? = null
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return AidenChatViewModel(chatId, coordinator, chatCache, draftStore) as T
+                return AidenChatViewModel(
+                    chatId,
+                    coordinator,
+                    chatCache,
+                    draftStore,
+                    liveNotificationManager = liveNotificationManager
+                ) as T
             }
         }
     }

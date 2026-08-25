@@ -70,7 +70,9 @@ class AidenBotCache(private val storageDir: File) {
     private fun loadDetails() {
         val dir = cacheDir ?: return
         val map = mutableMapOf<String, AidenBotDetail>()
-        val files = dir.listFiles { _, name -> name.startsWith("bot_") && name.endsWith(".json") } ?: return
+        val files = dir.listFiles { _, name ->
+            name.endsWith(".json") && name != "list.json" && name != "conversations.json"
+        } ?: return
         for (file in files) {
             try {
                 val detail = json.decodeFromString<AidenBotDetail>(file.readText(Charsets.UTF_8))
@@ -133,6 +135,19 @@ class AidenBotCache(private val storageDir: File) {
 
     fun putAvatar(botId: String, revision: String, data: ByteArray) = putAvatarData(botId, revision, data)
     fun getAvatar(botId: String, revision: String): ByteArray? = getAvatarData(botId, revision)
+
+    @Synchronized
+    fun purge(instanceId: String, deviceId: String) {
+        val scope = digest("$instanceId\u001f$deviceId")
+        File(cacheRoot, scope).deleteRecursively()
+        File(avatarRoot, scope).deleteRecursively()
+        if (activeScope == scope) {
+            activeScope = null
+            _botList.value = null
+            _botDetails.value = emptyMap()
+            _botConversations.value = null
+        }
+    }
 
     private fun digest(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray(Charsets.UTF_8))

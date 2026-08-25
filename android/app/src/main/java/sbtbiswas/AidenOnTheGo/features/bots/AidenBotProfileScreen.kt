@@ -100,7 +100,8 @@ fun AidenBotProfileScreen(
     onNavigateBack: () -> Unit,
     onNavigateToChat: (String) -> Unit,
     onNavigateToEditBot: (String) -> Unit,
-    onNavigateToCustomAccess: ((String) -> Unit)? = null
+    onNavigateToCustomAccess: ((String) -> Unit)? = null,
+    onBotMutated: () -> Unit = {}
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
@@ -190,6 +191,8 @@ fun AidenBotProfileScreen(
                                             )
                                             botDetail = res.detail
                                             favorites = res.favorites
+                                            coordinator.botCache.putBotDetail(res.detail)
+                                            onBotMutated()
                                         } catch (e: Exception) {
                                             actionError = e.message
                                         }
@@ -348,6 +351,7 @@ fun AidenBotProfileScreen(
                                 try {
                                     val updated = cl.updateFavorites(next, favs.revision)
                                     favorites = updated
+                                    onBotMutated()
                                 } catch (e: Exception) {
                                     actionError = e.message
                                 }
@@ -405,6 +409,7 @@ fun AidenBotProfileScreen(
                                             try {
                                                 val updated = cl.updateFavorites(next, favs.revision)
                                                 favorites = updated
+                                                onBotMutated()
                                             } catch (_: Exception) {}
                                         }
                                     },
@@ -427,6 +432,7 @@ fun AidenBotProfileScreen(
                                             try {
                                                 val updated = cl.updateFavorites(next, favs.revision)
                                                 favorites = updated
+                                                onBotMutated()
                                             } catch (_: Exception) {}
                                         }
                                     },
@@ -559,6 +565,8 @@ fun AidenBotProfileScreen(
                                 )
                                 botDetail = res.detail
                                 favorites = res.favorites
+                                coordinator.botCache.putBotDetail(res.detail)
+                                onBotMutated()
                             } catch (e: Exception) {
                                 actionError = e.message
                             }

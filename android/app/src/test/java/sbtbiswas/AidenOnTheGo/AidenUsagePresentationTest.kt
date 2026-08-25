@@ -48,6 +48,21 @@ class AidenUsagePresentationTest {
         assertNull(cache.load("instance-one", "7d"))
     }
 
+    @Test
+    fun cachePurgeRemovesEveryRangeOnlyForRequestedInstallation() {
+        val root = Files.createTempDirectory("aiden-usage-purge").toFile()
+        val cache = AidenUsageCache(root)
+        val first = summary(days = listOf(day("2026-08-24", 7)))
+        val second = summary(days = listOf(day("2026-08-24", 11)))
+        cache.store("instance-one", first)
+        cache.store("instance-two", second)
+
+        cache.purge("instance-one")
+
+        assertNull(cache.load("instance-one"))
+        assertEquals(second, cache.load("instance-two"))
+    }
+
     private fun summary(
         start: String = "2026-07-26",
         end: String = "2026-08-24",

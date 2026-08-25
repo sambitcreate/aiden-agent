@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import sbtbiswas.AidenOnTheGo.AidenOnTheGoApp
 import sbtbiswas.AidenOnTheGo.MainActivity
 import sbtbiswas.AidenOnTheGo.R
@@ -22,6 +23,10 @@ class AidenRemoteLiveNotificationManager(private val context: Context) {
         currentActivity: String,
         responseExcerpt: String
     ) {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        val safeTitle = AgentRunActivitySanitizer.sessionTitle(sessionTitle)
+        val safeActivity = AgentRunActivitySanitizer.activityLine(currentActivity)
+        val safeExcerpt = AgentRunActivitySanitizer.responseExcerpt(responseExcerpt)
         val deepLinkUri = Uri.parse(AidenDeepLink.chatUrl(instanceId, sessionId))
         val intent = Intent(Intent.ACTION_VIEW, deepLinkUri, context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -36,15 +41,15 @@ class AidenRemoteLiveNotificationManager(private val context: Context) {
 
         val notification = NotificationCompat.Builder(context, AidenOnTheGoApp.AGENT_RUN_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(AgentRunActivitySanitizer.sessionTitle(sessionTitle))
-            .setContentText("${status.title}: ${AgentRunActivitySanitizer.activityLine(currentActivity)}")
+            .setContentTitle(safeTitle)
+            .setContentText("${status.title}: $safeActivity")
             .setStyle(
                 NotificationCompat.BigTextStyle()
                     .bigText(
-                        if (responseExcerpt.isNotEmpty()) {
-                            "${status.title}: $currentActivity\n\n$responseExcerpt"
+                        if (safeExcerpt.isNotEmpty()) {
+                            "${status.title}: $safeActivity\n\n$safeExcerpt"
                         } else {
-                            "${status.title}: $currentActivity"
+                            "${status.title}: $safeActivity"
                         }
                     )
             )
@@ -53,7 +58,11 @@ class AidenRemoteLiveNotificationManager(private val context: Context) {
             .setAutoCancel(true)
             .build()
 
-        notificationManager.notify(sessionId.hashCode(), notification)
+        try {
+            notificationManager.notify(sessionId.hashCode(), notification)
+        } catch (_: SecurityException) {
+            // Android 13+ can revoke notification permission while a stream is active.
+        }
     }
 
     fun dismissNotification(sessionId: String) {

@@ -95,6 +95,57 @@ class AidenBotCacheTest {
     }
 
     @Test
+    fun testBotDetailWithNonPrefixedIdSurvivesFreshCacheLoad() {
+        val detail = AidenBotDetail(
+            id = "assistant-1",
+            name = "Helper",
+            purpose = "Assists with coding",
+            instructions = "Be concise.",
+            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT)),
+            health = AidenBotHealth.READY,
+            createdAt = Instant.now(),
+            updatedAt = Instant.now(),
+            revision = "rev_1",
+            access = AidenBotAccessView(
+                botId = "assistant-1",
+                accessMode = AidenBotAccessMode.FULL,
+                revision = "pol_rev_1",
+                policyEpoch = "epoch_1",
+                summary = "Full access"
+            )
+        )
+
+        AidenBotCache(tempFolder.root).apply {
+            activate("mac_1", "device_1")
+            putBotDetail(detail)
+        }
+        val reloaded = AidenBotCache(tempFolder.root).apply { activate("mac_1", "device_1") }
+
+        assertEquals(detail, reloaded.getBotDetail("assistant-1"))
+    }
+
+    @Test
+    fun testBotPurgeRemovesOnlyRequestedInstallationAndClearsActiveState() {
+        val cache = AidenBotCache(tempFolder.root)
+        val list = AidenBotList(
+            bots = emptyList(),
+            favorites = AidenBotFavorites(botIds = emptyList(), revision = "favorites-1")
+        )
+        cache.activate("mac-a", "device-a")
+        cache.putBotList(list)
+        cache.activate("mac-b", "device-b")
+        cache.putBotList(list.copy(favorites = list.favorites.copy(revision = "favorites-2")))
+
+        cache.purge("mac-b", "device-b")
+        assertNull(cache.botList.value)
+
+        cache.activate("mac-a", "device-a")
+        assertEquals("favorites-1", cache.botList.value?.favorites?.revision)
+        cache.activate("mac-b", "device-b")
+        assertNull(cache.botList.value)
+    }
+
+    @Test
     fun testDraftStoreIsInstallationAndChatScoped() {
         val draftStore = AidenChatDraftStore(tempFolder.root)
 

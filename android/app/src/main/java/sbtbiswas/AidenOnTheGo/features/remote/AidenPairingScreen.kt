@@ -51,6 +51,7 @@ fun AidenPairingScreen(
     var selectedTab by remember { mutableStateOf(0) } // 0: Scan QR, 1: Setup Code, 2: Paste JSON
     var isPairing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var installationPendingRemoval by remember { mutableStateOf<AidenInstallation?>(null) }
 
     fun formatCrockfordCode(input: String): String {
         val clean = input.uppercase().replace("-", "").filter { it in "0123456789ABCDEFGHJKMNPQRSTVWXYZIL" }.take(20)
@@ -166,12 +167,13 @@ fun AidenPairingScreen(
                                 )
                             }
                             IconButton(
-                                onClick = {
-                                    installationStore.removeInstallation(install.id)
-                                    coordinator.refreshClient()
-                                }
+                                onClick = { installationPendingRemoval = install }
                             ) {
-                                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = palette.danger)
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    contentDescription = "Remove ${install.name}",
+                                    tint = palette.danger
+                                )
                             }
                         }
                     }
@@ -408,5 +410,33 @@ fun AidenPairingScreen(
                 }
             }
         }
+    }
+
+    installationPendingRemoval?.let { installation ->
+        AlertDialog(
+            onDismissRequest = { installationPendingRemoval = null },
+            title = { Text("Remove ${installation.name}?") },
+            text = {
+                Text("This removes the pairing credential and all cached chats, Bots, usage, drafts, and workspace data for this Mac from this device.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        coordinator.removeInstallation(installation.id)
+                        installationPendingRemoval = null
+                    }
+                ) {
+                    Text("Remove", color = palette.danger, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { installationPendingRemoval = null }) {
+                    Text("Cancel", color = palette.foreground)
+                }
+            },
+            containerColor = palette.raised,
+            titleContentColor = palette.foreground,
+            textContentColor = palette.secondary
+        )
     }
 }

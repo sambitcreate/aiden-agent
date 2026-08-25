@@ -60,4 +60,17 @@ class AidenUsageCache(private val root: File) {
             // Cache failures never block live usage.
         }
     }
+
+    @Synchronized
+    fun purge(instanceId: String) {
+        root.listFiles { file -> file.isFile && file.extension == "json" }
+            ?.forEach { target ->
+                val belongsToInstallation = try {
+                    json.decodeFromString<Snapshot>(target.readText(Charsets.UTF_8)).instanceId == instanceId
+                } catch (_: Exception) {
+                    false
+                }
+                if (belongsToInstallation) target.delete()
+            }
+    }
 }

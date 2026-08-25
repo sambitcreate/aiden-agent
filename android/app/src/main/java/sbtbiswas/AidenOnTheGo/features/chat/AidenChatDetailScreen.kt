@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -70,6 +71,7 @@ import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.ThinkingOrb
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
+import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
@@ -88,6 +90,8 @@ fun AidenChatDetailScreen(
     chatCache: AidenChatCache,
     draftStore: AidenChatDraftStore,
     voiceInputStore: AidenVoiceInputStore,
+    liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
+    startVoiceOnOpen: Boolean = false,
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
@@ -100,7 +104,13 @@ fun AidenChatDetailScreen(
 
     val viewModel: AidenChatViewModel = viewModel(
         key = "chat:${coordinator.activeInstanceId}:${coordinator.installationStore.activeInstallation?.deviceId}:$chatId",
-        factory = AidenChatViewModel.factory(chatId, coordinator, chatCache, draftStore)
+        factory = AidenChatViewModel.factory(
+            chatId,
+            coordinator,
+            chatCache,
+            draftStore,
+            liveNotificationManager
+        )
     )
 
     val chat by viewModel.chat.collectAsState()
@@ -121,6 +131,7 @@ fun AidenChatDetailScreen(
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     var pendingVoiceStart by remember { mutableStateOf(false) }
+    var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
 
@@ -187,6 +198,33 @@ fun AidenChatDetailScreen(
         if (pendingVoiceStart) {
             pendingVoiceStart = false
             if (granted) startVoiceInput() else voiceInput.reportPermissionDenied()
+        }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { }
+    )
+
+    LaunchedEffect(isStreaming) {
+        if (
+            isStreaming &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !requestedNotificationPermission &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestedNotificationPermission = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    LaunchedEffect(startVoiceOnOpen) {
+        if (!startVoiceOnOpen || voiceInput.isListening || voiceInput.isBusy) return@LaunchedEffect
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startVoiceInput()
+        } else {
+            pendingVoiceStart = true
+            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 

@@ -48,6 +48,7 @@ fun AidenProductShellScreen(
     chatCache: AidenChatCache,
     appearanceStore: AidenAppearanceStore? = null,
     voiceInputStore: AidenVoiceInputStore,
+    botsViewModel: AidenBotsViewModel,
     onNavigateToChat: (String) -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
     onNavigateToBotEditor: (String?) -> Unit,
@@ -59,9 +60,6 @@ fun AidenProductShellScreen(
     val installations by installationStore.installations.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
     val palette = AidenTheme.palette
-    val botsViewModel: AidenBotsViewModel = viewModel(
-        factory = AidenBotsViewModel.factory(coordinator)
-    )
     val workspaceHomeViewModel: AidenWorkspaceHomeViewModel = viewModel(
         factory = AidenWorkspaceHomeViewModel.factory(coordinator, chatCache)
     )

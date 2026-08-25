@@ -123,13 +123,13 @@ fun AidenComposerView(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 IconButton(
                                     onClick = { onRemoveAttachment(attachment) },
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(48.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Close,
                                         contentDescription = "Remove attachment",
                                         tint = palette.secondary,
-                                        modifier = Modifier.size(12.dp)
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }

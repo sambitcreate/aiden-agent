@@ -7,10 +7,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.intents.AidenIntentCatalogStore
+import sbtbiswas.AidenOnTheGo.intents.AidenIntentInstallationRecord
+import sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
+import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
+import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenScheduledTaskCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
@@ -28,16 +34,26 @@ enum class AidenConnectionState {
 
 class AidenRemoteCoordinator(
     val installationStore: AidenInstallationStore,
-    private val storageDir: File? = null,
+    storageDir: File,
+    private val chatCache: AidenChatCache = AidenChatCache(storageDir),
+    private val draftStore: AidenChatDraftStore = AidenChatDraftStore(storageDir),
+    private val navigationStore: AidenProductNavigationStore = AidenProductNavigationStore(storageDir),
+    private val intentCatalogStore: AidenIntentCatalogStore? = null,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + Job())
 ) {
-    val archiveStore = AidenWorkspaceArchiveStore(storageDir ?: File("/data/data/sbtbiswas.AidenOnTheGo/files"))
-    val workspaceCache = AidenWorkspaceEnvironmentCache(File(storageDir ?: File("/data/data/sbtbiswas.AidenOnTheGo/files"), "workspace_cache"))
-    val scheduledCache = AidenScheduledTaskCache(File(storageDir ?: File("/data/data/sbtbiswas.AidenOnTheGo/files"), "scheduled_tasks_cache"))
-    val usageCache = AidenUsageCache(File(storageDir ?: File("/data/data/sbtbiswas.AidenOnTheGo/files"), "usage_cache"))
-    val botCache = AidenBotCache(storageDir ?: File("/data/data/sbtbiswas.AidenOnTheGo/files"))
+    val archiveStore = AidenWorkspaceArchiveStore(storageDir)
+    val workspaceCache = AidenWorkspaceEnvironmentCache(File(storageDir, "workspace_cache"))
+    val scheduledCache = AidenScheduledTaskCache(File(storageDir, "scheduled_tasks_cache"))
+    val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
+    val botCache = AidenBotCache(storageDir)
 
-    private val _connectionState = MutableStateFlow(AidenConnectionState.CONNECTING)
+    private val _connectionState = MutableStateFlow(
+        if (installationStore.activeInstallation == null) {
+            AidenConnectionState.NEEDS_PAIRING
+        } else {
+            AidenConnectionState.CONNECTING
+        }
+    )
     val connectionState: StateFlow<AidenConnectionState> = _connectionState.asStateFlow()
 
     private val _serverInfo = MutableStateFlow<AidenServer?>(null)
@@ -49,6 +65,9 @@ class AidenRemoteCoordinator(
     private val _workspaces = MutableStateFlow<List<AidenWorkspace>>(emptyList())
     val workspaces: StateFlow<List<AidenWorkspace>> = _workspaces.asStateFlow()
 
+    private val _hasCompletedWorkspaceRefresh = MutableStateFlow(false)
+    val hasCompletedWorkspaceRefresh: StateFlow<Boolean> = _hasCompletedWorkspaceRefresh.asStateFlow()
+
     private val _isMutating = MutableStateFlow(false)
     val isMutating: StateFlow<Boolean> = _isMutating.asStateFlow()
 
@@ -59,10 +78,19 @@ class AidenRemoteCoordinator(
     val activeInstanceId: String?
         get() = installationStore.activeInstallation?.instanceId
 
+    fun presentError(message: String) {
+        _errorMessage.value = message
+    }
+
+    fun clearError() {
+        _errorMessage.value = null
+    }
+
     init {
         scope.launch {
             installationStore.activeInstallationId.collect {
                 refreshClient()
+                refreshIntentCatalog()
             }
         }
     }
@@ -75,6 +103,7 @@ class AidenRemoteCoordinator(
             _client.value = null
             _serverInfo.value = null
             _workspaces.value = emptyList()
+            _hasCompletedWorkspaceRefresh.value = false
             _connectionState.value = AidenConnectionState.NEEDS_PAIRING
             return
         }
@@ -84,6 +113,7 @@ class AidenRemoteCoordinator(
             _client.value = null
             _serverInfo.value = null
             _workspaces.value = emptyList()
+            _hasCompletedWorkspaceRefresh.value = false
             _connectionState.value = AidenConnectionState.NEEDS_PAIRING
             return
         }
@@ -93,6 +123,7 @@ class AidenRemoteCoordinator(
         _client.value = newClient
         _serverInfo.value = null
         _workspaces.value = emptyList()
+        _hasCompletedWorkspaceRefresh.value = false
         _connectionState.value = AidenConnectionState.CONNECTING
 
         scope.launch {
@@ -110,7 +141,7 @@ class AidenRemoteCoordinator(
             } catch (e: AidenRemoteClientException.Server) {
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 if (e.isCredentialRevoked) {
-                    installationStore.removeInstallation(installation.id)
+                    removeInstallation(installation.id)
                     _connectionState.value = AidenConnectionState.NEEDS_PAIRING
                 } else {
                     _connectionState.value = AidenConnectionState.OFFLINE
@@ -134,8 +165,66 @@ class AidenRemoteCoordinator(
                 if (instanceId != null) {
                     archiveStore.prune(instanceId, list.map { it.id }.toSet())
                 }
-            } catch (_: Exception) {}
+                refreshIntentCatalog()
+            } catch (_: Exception) {
+            } finally {
+                if (isCurrent(expectedGeneration, installationId, currentClient)) {
+                    _hasCompletedWorkspaceRefresh.value = true
+                }
+            }
         }
+    }
+
+    /**
+     * Removes one pairing and every installation-scoped local artifact in one place.
+     * Both user-initiated removal and server credential revocation must use this path.
+     */
+    fun removeInstallation(id: String) {
+        val installation = installationStore.installations.value.firstOrNull { it.id == id } ?: return
+        val wasActive = installation.id == installationStore.activeInstallationId.value
+        val knownWorkspaceIds = buildSet {
+            if (wasActive) addAll(_workspaces.value.map { it.id })
+            addAll(
+                intentCatalogStore
+                    ?.load()
+                    ?.workspaces
+                    ?.filter { it.instanceId == installation.instanceId }
+                    ?.map { it.id }
+                    .orEmpty()
+            )
+        }
+        archiveStore.purge(installation.instanceId)
+        workspaceCache.purge(installation.instanceId, knownWorkspaceIds)
+        scheduledCache.purge(installation.instanceId)
+        usageCache.purge(installation.instanceId)
+        botCache.purge(installation.instanceId, installation.deviceId)
+        chatCache.purge(installation.instanceId)
+        draftStore.purge(installation.instanceId)
+        navigationStore.purge(installation.instanceId)
+        installationStore.removeInstallation(id)
+        if (!wasActive) refreshIntentCatalog()
+    }
+
+    private fun refreshIntentCatalog() {
+        val installations = installationStore.installations.value
+        val activeInstanceId = installationStore.activeInstallationId.value
+        val workspaceRecords = if (activeInstanceId == null) {
+            emptyList()
+        } else {
+            _workspaces.value.map { workspace ->
+                AidenIntentWorkspaceRecord(
+                    id = workspace.id,
+                    instanceId = activeInstanceId,
+                    name = workspace.name
+                )
+            }
+        }
+        intentCatalogStore?.update(
+            installations = installations.map { AidenIntentInstallationRecord(it.id, it.name) },
+            activeInstallationId = activeInstanceId,
+            workspaces = workspaceRecords,
+            forInstanceId = activeInstanceId
+        )
     }
 
     private fun isCurrent(generation: Long, installationId: String, client: AidenRemoteClient): Boolean =

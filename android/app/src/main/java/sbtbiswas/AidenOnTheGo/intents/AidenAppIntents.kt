@@ -35,7 +35,19 @@ class AidenIntentCatalogStore(context: Context) {
     fun load(): AidenIntentCatalogSnapshot {
         val raw = prefs.getString(KEY_CATALOG, null) ?: return AidenIntentCatalogSnapshot()
         return try {
-            json.decodeFromString<AidenIntentCatalogSnapshot>(raw)
+            val decoded = json.decodeFromString<AidenIntentCatalogSnapshot>(raw)
+            val installations = decoded.installations
+                .filter { safeId(it.id) && safeName(it.name) }
+                .distinctBy { it.id }
+            val installationIds = installations.map { it.id }.toSet()
+            val workspaces = decoded.workspaces
+                .filter { safeId(it.id) && safeId(it.instanceId) && safeName(it.name) && it.instanceId in installationIds }
+                .distinctBy { "${it.instanceId}\u001f${it.id}" }
+            AidenIntentCatalogSnapshot(
+                installations = installations,
+                workspaces = workspaces,
+                activeInstallationId = decoded.activeInstallationId?.takeIf { it in installationIds }
+            )
         } catch (_: Exception) {
             AidenIntentCatalogSnapshot()
         }
@@ -44,12 +56,24 @@ class AidenIntentCatalogStore(context: Context) {
     fun update(
         installations: List<AidenIntentInstallationRecord>,
         activeInstallationId: String?,
-        workspaces: List<AidenIntentWorkspaceRecord>
+        workspaces: List<AidenIntentWorkspaceRecord>,
+        forInstanceId: String? = activeInstallationId
     ) {
+        val sanitizedInstallations = installations
+            .filter { safeId(it.id) && safeName(it.name) }
+            .distinctBy { it.id }
+        val installationIds = sanitizedInstallations.map { it.id }.toSet()
+        val retainedWorkspaces = load().workspaces.filter {
+            it.instanceId != forInstanceId && it.instanceId in installationIds
+        }
+        val sanitizedWorkspaces = workspaces.filter {
+            safeId(it.id) && safeId(it.instanceId) && safeName(it.name) && it.instanceId in installationIds
+        }
         val snapshot = AidenIntentCatalogSnapshot(
-            installations = installations.distinctBy { it.id },
-            workspaces = workspaces.distinctBy { "${it.instanceId}_${it.id}" },
-            activeInstallationId = activeInstallationId
+            installations = sanitizedInstallations,
+            workspaces = (retainedWorkspaces + sanitizedWorkspaces)
+                .distinctBy { "${it.instanceId}\u001f${it.id}" },
+            activeInstallationId = activeInstallationId?.takeIf { it in installationIds }
         )
         val serialized = json.encodeToString(snapshot)
         prefs.edit().putString(KEY_CATALOG, serialized).apply()
@@ -57,5 +81,13 @@ class AidenIntentCatalogStore(context: Context) {
 
     companion object {
         private const val KEY_CATALOG = "aiden.intent_catalog.v1"
+
+        private fun safeId(value: String): Boolean =
+            value.isNotEmpty() && value.length <= 160 && value.all {
+                it.isLetterOrDigit() || it == '.' || it == '_' || it == ':' || it == '-'
+            }
+
+        private fun safeName(value: String): Boolean =
+            value.isNotBlank() && value.length <= 256 && value.none { Character.isISOControl(it) }
     }
 }

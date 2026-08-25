@@ -715,7 +715,7 @@ fun AidenBotsHomeScreen(
                         if (searchQuery.isNotEmpty()) {
                             IconButton(
                                 onClick = { viewModel.updateSearchQuery("") },
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(48.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
