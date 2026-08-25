@@ -90,7 +90,18 @@ test("a watched edit invalidates a warm runtime skill snapshot immediately", asy
   assert.equal((await registry.snapshot(workspace.id)).available[0]?.instructions, "Before");
 
   let resolveChanged!: () => void;
-  const changed = new Promise<void>((resolve) => { resolveChanged = resolve; });
+  let changeTimeout: NodeJS.Timeout | undefined;
+  const changed = new Promise<void>((resolve, reject) => {
+    changeTimeout = setTimeout(
+      () => reject(new Error("Skill watcher did not invalidate the warm Bot snapshot.")),
+      1_000,
+    );
+    resolveChanged = () => {
+      clearTimeout(changeTimeout);
+      resolve();
+    };
+  });
+  t.after(() => clearTimeout(changeTimeout));
   const watcher = new BotSkillContentWatcher(() => {
     registry.invalidate();
     resolveChanged();
