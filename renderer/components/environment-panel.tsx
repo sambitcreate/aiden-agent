@@ -54,7 +54,11 @@ import {
   type SubagentRunView,
   type SubagentRunViewCounts,
 } from "../lib/subagent-view-state";
-import { subagentPanelOwnerKey, subagentPanelSelectionState } from "../lib/subagent-panel-state";
+import {
+  subagentOverviewSummary,
+  subagentPanelOwnerKey,
+  subagentPanelSelectionState,
+} from "../lib/subagent-panel-state";
 import {
   SubagentLiveAnnouncer,
   type SubagentDetailAnnouncementRequest,
@@ -1105,6 +1109,7 @@ function EnvironmentSummaryCard() {
   const hasSubagents = panel.subagentsEnabled && subagentCounts.active + subagentCounts.done > 0;
   const representativeSubagent =
     panel.subagentViews.find((view) => !view.terminal) ?? panel.subagentViews[0];
+  const subagentSummary = subagentOverviewSummary(panel.subagentViews);
 
   React.useLayoutEffect(() => {
     if (open) {
@@ -1192,7 +1197,7 @@ function EnvironmentSummaryCard() {
                 <button
                   type="button"
                   onClick={() => panel.show("subagents")}
-                  aria-label={`Open Subagents, ${subagentCounts.active} working, ${subagentCounts.done} done`}
+                  aria-label={`Open Subagents, ${subagentSummary.ariaLabel}`}
                   className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                 >
                   <SubagentOrb
@@ -1201,11 +1206,11 @@ function EnvironmentSummaryCard() {
                     activity={representativeSubagent?.snapshot?.activity}
                     size={20}
                   />
-                  <span className="min-w-0 text-regular text-primary">
-                    {subagentCounts.active} working
+                  <span className="min-w-0 truncate text-regular text-primary">
+                    {subagentSummary.primary}
                   </span>
-                  <span className="text-small tabular-nums text-tertiary">
-                    {subagentCounts.done} done
+                  <span className="max-w-44 min-w-0 truncate text-small tabular-nums text-tertiary">
+                    {subagentSummary.secondary}
                   </span>
                 </button>
               </div>
