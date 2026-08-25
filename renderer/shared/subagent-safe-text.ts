@@ -1245,23 +1245,39 @@ export function containsHighConfidenceSecretIncludingEncodings(value: string): b
   );
 }
 
-function sanitizeWithPolicy(value: string, includeEnvironment: boolean): string {
+export interface SubagentTextSanitization {
+  text: string;
+  /** True only when the privacy policy generated a replacement. */
+  privacyReplacement: boolean;
+}
+
+function sanitizeWithPolicyFacts(
+  value: string,
+  includeEnvironment: boolean,
+): SubagentTextSanitization {
   const { compact, hadControls, spaced } = controlVariants(value);
   const safe = sanitizeVariant(spaced, includeEnvironment);
-  if (nonMarkdownPolicyIsUnsafe(safe, includeEnvironment)) return ENCODED_TEXT_REDACTION;
+  const directReplacement = safe !== spaced;
+  if (nonMarkdownPolicyIsUnsafe(safe, includeEnvironment)) {
+    return { text: ENCODED_TEXT_REDACTION, privacyReplacement: true };
+  }
   if (hadControls) {
     const compactSafe = sanitizeVariant(compact, includeEnvironment);
     if (compactSafe !== compact || nonMarkdownPolicyIsUnsafe(compactSafe, includeEnvironment)) {
-      return CONTROL_SPLIT_REDACTION;
+      return { text: CONTROL_SPLIT_REDACTION, privacyReplacement: true };
     }
     if (includeEnvironment && rendererMarkdownIsUnsafe(compactSafe)) {
-      return MARKDOWN_CONTENT_REDACTION;
+      return { text: MARKDOWN_CONTENT_REDACTION, privacyReplacement: true };
     }
   }
   if (includeEnvironment && rendererMarkdownIsUnsafe(safe)) {
-    return MARKDOWN_CONTENT_REDACTION;
+    return { text: MARKDOWN_CONTENT_REDACTION, privacyReplacement: true };
   }
-  return safe;
+  return { text: safe, privacyReplacement: directReplacement };
+}
+
+function sanitizeWithPolicy(value: string, includeEnvironment: boolean): string {
+  return sanitizeWithPolicyFacts(value, includeEnvironment).text;
 }
 
 /** Strip high-confidence credentials and absolute filesystem paths at trust boundaries. */
@@ -1276,4 +1292,12 @@ export function sanitizeSubagentText(value: string): string {
  */
 export function sanitizeSubagentSnapshotText(value: string): string {
   return sanitizeWithPolicy(value, true);
+}
+
+/**
+ * Project renderer-safe snapshot text while reporting producer-owned privacy
+ * provenance. Literal redaction-marker prose does not set the replacement fact.
+ */
+export function sanitizeSubagentSnapshotTextWithFacts(value: string): SubagentTextSanitization {
+  return sanitizeWithPolicyFacts(value, true);
 }
