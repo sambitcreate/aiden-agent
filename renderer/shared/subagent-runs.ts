@@ -49,9 +49,7 @@ export function subagentProjectionNoticesAreMonotonic(
   const nextSet = new Set(next);
   if (currentSet.has("task_truncated") !== nextSet.has("task_truncated")) return false;
   if ([...currentSet].some((notice) => !nextSet.has(notice))) return false;
-  return (
-    allowTerminalAdditions || [...nextSet].every((notice) => currentSet.has(notice))
-  );
+  return allowTerminalAdditions || [...nextSet].every((notice) => currentSet.has(notice));
 }
 
 export type SubagentRunState =
@@ -682,6 +680,95 @@ export function parseSubagentRunSnapshot(value: unknown): SubagentRunSnapshot | 
     : value.version === SUBAGENT_RUN_SNAPSHOT_VERSION_V2
       ? parseSubagentRunSnapshotV2(value)
       : undefined;
+}
+
+function subagentRunSnapshotIsTerminal(snapshot: SubagentRunSnapshot): boolean {
+  return snapshot.version === 2
+    ? snapshot.state === "completed" ||
+        snapshot.state === "failed" ||
+        snapshot.state === "timed_out" ||
+        snapshot.state === "interrupted" ||
+        snapshot.state === "stopped" ||
+        snapshot.state === "unknown"
+    : SUBAGENT_TERMINAL_STATES.has(snapshot.state);
+}
+
+function sameOptionalIdentifier(left: string | undefined, right: string | undefined): boolean {
+  return left === right;
+}
+
+function sameSubagentRunSnapshotIdentity(
+  current: SubagentRunSnapshot,
+  next: SubagentRunSnapshot,
+): boolean {
+  return (
+    current.version === next.version &&
+    current.runId === next.runId &&
+    current.groupId === next.groupId &&
+    current.generationId === next.generationId &&
+    current.childId === next.childId &&
+    current.chatId === next.chatId &&
+    current.workspaceId === next.workspaceId &&
+    current.role === next.role &&
+    current.label === next.label &&
+    current.taskPreview === next.taskPreview &&
+    current.startedAt === next.startedAt &&
+    current.modelId === next.modelId &&
+    (current.version !== 2 ||
+      (next.version === 2 &&
+        current.authorityRevision === next.authorityRevision &&
+        current.depth === next.depth &&
+        current.execution === next.execution &&
+        current.context === next.context &&
+        sameOptionalIdentifier(current.parentRunId, next.parentRunId) &&
+        sameOptionalIdentifier(current.retryOfRunId, next.retryOfRunId)))
+  );
+}
+
+function subagentRunStateProgresses(
+  current: SubagentRunSnapshot,
+  next: SubagentRunSnapshot,
+): boolean {
+  if (subagentRunSnapshotIsTerminal(current)) return false;
+  if (current.state === "queued") return true;
+  if (current.state === "starting") return next.state !== "queued";
+  return next.state !== "queued" && next.state !== "starting";
+}
+
+/**
+ * The shared renderer-facing lifecycle fence. A newer revision may enrich an
+ * active run, but it cannot rewrite authority/display identity, revive a
+ * terminal run, or move timestamps, counters, milestones, or projection facts
+ * backward. Exact same-revision replays are opt-in for idempotent history reads.
+ */
+export function subagentRunSnapshotUpdateIsMonotonic(
+  currentValue: unknown,
+  nextValue: unknown,
+  options: { allowExactReplay?: boolean } = {},
+): boolean {
+  const current = parseSubagentRunSnapshot(currentValue);
+  const next = parseSubagentRunSnapshot(nextValue);
+  if (!current || !next || !sameSubagentRunSnapshotIdentity(current, next)) return false;
+  if (next.revision === current.revision) {
+    return options.allowExactReplay === true && JSON.stringify(next) === JSON.stringify(current);
+  }
+  const currentMilestones = current.milestones ?? [];
+  const nextMilestones = next.milestones ?? [];
+  return (
+    next.revision > current.revision &&
+    next.updatedAt >= current.updatedAt &&
+    next.turns >= current.turns &&
+    next.tools >= current.tools &&
+    next.tokens >= current.tokens &&
+    nextMilestones.length >= currentMilestones.length &&
+    currentMilestones.every((milestone, index) => nextMilestones[index] === milestone) &&
+    subagentProjectionNoticesAreMonotonic(
+      current.projectionNotices,
+      next.projectionNotices,
+      subagentRunSnapshotIsTerminal(next),
+    ) &&
+    subagentRunStateProgresses(current, next)
+  );
 }
 
 export const MAX_SUBAGENT_EFFECT_ACTIVITY = 512;
