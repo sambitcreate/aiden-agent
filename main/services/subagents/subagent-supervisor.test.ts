@@ -11,6 +11,7 @@ import { buildSubagentCapabilityTools } from "./capability-tools.js";
 import { SUBAGENT_READ_TOOL_NAMES } from "./capability-profile.js";
 import {
   MAX_SUBAGENT_LABEL_CHARS,
+  MAX_SUBAGENT_SUMMARY_CHARS,
   MAX_SUBAGENT_TASK_CHARS,
   MAX_SUBAGENT_TOOL_RESULT_CHARS,
   parseSubagentToolRequest,
@@ -20,7 +21,10 @@ import {
   subagentsAllowedForGeneration,
   subagentWorkspaceWriteAllowedForGeneration,
 } from "./eligibility.js";
-import { runSubagentChild } from "./subagent-child-runner.js";
+import {
+  projectSubagentCompletedSummary,
+  runSubagentChild,
+} from "./subagent-child-runner.js";
 import { SubagentRuntimeRegistry, type SubagentRuntimeChild } from "./child-agent-runtime.js";
 import { SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
 import { createSubagentTool } from "./subagent-tool.js";
@@ -33,6 +37,47 @@ import {
   isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV1,
 } from "../../../renderer/shared/subagent-runs.js";
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+test("completed-summary projection reports only actual producer truncation", () => {
+  const literal = "Literal … [middle of child summary truncated] … marker.";
+  assert.deepEqual(projectSubagentCompletedSummary(literal), { summary: literal });
+
+  const projected = projectSubagentCompletedSummary("x".repeat(MAX_SUBAGENT_SUMMARY_CHARS + 1));
+  assert.equal(projected.summary.length, MAX_SUBAGENT_SUMMARY_CHARS);
+  assert.match(projected.summary, /… \[middle of child summary truncated\] …/u);
+  assert.equal(projected.summaryTruncated, true);
+});
+
+test("completed-summary projection preserves supplementary characters at both cuts", () => {
+  const marker = "\n\n… [middle of child summary truncated] …\n\n";
+  const tailLength = MAX_SUBAGENT_SUMMARY_CHARS - marker.length - 2_000;
+  const cases = [
+    "a".repeat(1_999) + "😀" + "b".repeat(7_000),
+    "a".repeat(3_000) + "😀" + "b".repeat(tailLength - 1),
+  ];
+
+  for (const value of cases) {
+    const projected = projectSubagentCompletedSummary(value);
+    assert.equal(projected.summaryTruncated, true);
+    assert.ok(projected.summary.length <= MAX_SUBAGENT_SUMMARY_CHARS);
+    assert.match(projected.summary, /… \[middle of child summary truncated\] …/u);
+    assert.equal(hasUnpairedSurrogate(projected.summary), false);
+  }
+});
 import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import type { SubagentContextCapture } from "./forked-context.js";
 
