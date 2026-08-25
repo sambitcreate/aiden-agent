@@ -1,4 +1,4 @@
-import { decodeHTML } from "entities";
+import { decodeHTMLStrict } from "entities";
 import { toString as markdownToString } from "mdast-util-to-string";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -37,12 +37,10 @@ const TOKEN_SECRET =
 const ASSIGNMENT_SECRET_HINT =
   /auth|access|api|authorization|aws|client|connection|cookie|credential|database|db|encryption|github|passwd|password|private|pwd|refresh|secret|session|signing|token/iu;
 const STANDALONE_CREDENTIAL_HINT =
-  /-----BEGIN|PuTTY-User-Key-File|ssh-(?:rsa|ed25519)|ecdsa-sha2-|Bearer\s|Basic\s|:\/\/|(?:AKIA|AIza|SG\.|eyJ|gh[pousr]_|github_pat_|glpat-|hf_|npm_|pypi-|sk-|(?:sk|rk)_(?:live|test)_|xox[baprs]-|ya29\.)/iu;
+  /-----BEGIN|PuTTY-User-Key-File|Bearer\s|Basic\s|:\/\/|(?:AKIA|AIza|SG\.|eyJ|gh[pousr]_|github_pat_|glpat-|hf_|npm_|pypi-|sk-|(?:sk|rk)_(?:live|test)_|xox[baprs]-|ya29\.)/iu;
 const PRIVATE_KEY_BLOCK =
   /-----BEGIN (?:[A-Z0-9 ]*PRIVATE KEY|OPENSSH PRIVATE KEY|SSH2 ENCRYPTED PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?(?:-----END (?:[A-Z0-9 ]*PRIVATE KEY|OPENSSH PRIVATE KEY|SSH2 ENCRYPTED PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----|$)/giu;
 const PUTTY_PRIVATE_KEY = /PuTTY-User-Key-File-[123]:[\s\S]*$/gimu;
-const SSH_KEY_MATERIAL =
-  /(^|[\s("'`])(?:ssh-(?:rsa|ed25519)|ecdsa-sha2-[^\s]+)\s+[A-Za-z0-9+/=]{16,}(?:[ \t]+[^\r\n]*)?/gimu;
 const FILE_URL = /\bfile:\/\/[^\r\n)\]}"'`<>;,]+/giu;
 const HTTP_URL = /(?<![A-Za-z0-9])https?:\/\/[^\s<>"'`]+/giu;
 const HTTP_URL_LOCAL_POSIX_PATHNAME =
@@ -53,11 +51,15 @@ const CONTEXTUAL_REGEX_LITERAL =
 const NUMERIC_DIVISION = /\b\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\b/gu;
 const SAFE_WEB_ROUTE_PREFIX = "(?:_next|api|app|assets|docs|login|logout|settings|users)";
 const CONTEXTUAL_WEB_ROUTE = new RegExp(
-  `\\b(?:endpoint|route)\\s+\\/${SAFE_WEB_ROUTE_PREFIX}(?:\\/[A-Za-z0-9._~!$&'()*+,:=@%-]+)*`,
+  `\\b(?:[Ee]ndpoint|[Rr]oute)\\s+\\/${SAFE_WEB_ROUTE_PREFIX}(?:\\/[A-Za-z0-9._~!$&'()*+,:=@%-]+)*`,
   "gu",
 );
 const HTML_WEB_ROUTE_ATTRIBUTE = new RegExp(
   `\\b(?:action|href|src)=(["'])\\/${SAFE_WEB_ROUTE_PREFIX}(?:\\/[A-Za-z0-9._~!$&'()*+,:=@%-]+)*\\1`,
+  "gu",
+);
+const HTTP_REQUEST_WEB_ROUTE = new RegExp(
+  `\\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE)\\s+\\/${SAFE_WEB_ROUTE_PREFIX}(?:\\/[A-Za-z0-9._~!$&'()*+,:=@%-]+)*(?=\\s|$)`,
   "gu",
 );
 const HTML_CLOSING_TAG = /<\/[A-Za-z][A-Za-z0-9-]*\s*>/gu;
@@ -96,7 +98,6 @@ const ASSIGNMENT_KEY_STOP = /[\s:=,;{}[\]]/u;
 const ASSIGNMENT_KEY_LEFT_BOUNDARY = /[\p{L}\p{M}\p{N}_-]/u;
 const COMBINING_MARK = /\p{M}/u;
 const INTERNAL_SECURITY_MARKUP = /(?<=[A-Za-z0-9_])(?:\*{1,2}|__|~~|`{1,3})(?=[A-Za-z0-9_=:])/gu;
-const HTML_ENTITY_CANDIDATE = /&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/iu;
 const ENCODED_TEXT_REDACTION = "[REDACTED ENCODED TEXT]";
 const CONTROL_SPLIT_REDACTION = "[REDACTED CONTROL-SPLIT TEXT]";
 const MARKDOWN_CONTENT_REDACTION = "[REDACTED MARKDOWN CONTENT]";
@@ -264,14 +265,11 @@ function normalizeSensitiveSyntax(value: string): {
   let hadEncodedControl = false;
   for (let pass = 0; pass < 64; pass += 1) {
     for (const [entity] of decoded.matchAll(/&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/giu)) {
-      if (Array.from(decodeHTML(entity)).some(isControl)) hadEncodedControl = true;
+      if (Array.from(decodeHTMLStrict(entity)).some(isControl)) hadEncodedControl = true;
     }
-    const next = decodeHTML(decoded);
+    const next = decodeHTMLStrict(decoded);
     if (next === decoded) break;
     decoded = next;
-  }
-  if (HTML_ENTITY_CANDIDATE.test(decoded)) {
-    return { hadEncodedControl, value: ENCODED_TEXT_REDACTION };
   }
   const hadWhitespaceSeparatedPercent = new RegExp(WHITESPACE_SEPARATED_PERCENT.source, "iu").test(
     decoded,
@@ -333,7 +331,6 @@ function sanitizeCredentialText(value: string): string {
     sanitized = sanitized
       .replace(PRIVATE_KEY_BLOCK, "[REDACTED PRIVATE KEY]")
       .replace(PUTTY_PRIVATE_KEY, "[REDACTED PRIVATE KEY]")
-      .replace(SSH_KEY_MATERIAL, "$1[REDACTED SSH KEY]")
       .replace(BEARER_SECRET, "Bearer [REDACTED]")
       .replace(BASIC_SECRET, "Basic [REDACTED]")
       .replace(CREDENTIAL_URI, "$1[REDACTED]@")
@@ -706,6 +703,7 @@ function sanitizePaths(value: string): string {
   preserve(NUMERIC_DIVISION);
   preserve(CONTEXTUAL_WEB_ROUTE);
   preserve(HTML_WEB_ROUTE_ATTRIBUTE);
+  preserve(HTTP_REQUEST_WEB_ROUTE);
   preserve(HTML_CLOSING_TAG);
   const withoutPaths = redactAbsolutePaths(protectedSyntax);
   const restoredSyntax = preservedSyntax.reduce(
@@ -1111,7 +1109,12 @@ function wrappedEncodingCompacts(candidate: string): {
           exhausted = true;
           break;
         }
-        if (compact.length < 8) continue;
+        // Whitespace-separated prose routinely looks like a Base32 payload
+        // after its spaces are removed (for example, "and report back").
+        // Require the minimum payload size plus an encoding marker before
+        // exploring a candidate. Newline-wrapped and framed encodings still
+        // pass this gate, while ordinary word sequences remain prose.
+        if (compact.length < 16 || !/[0-9+=]/u.test(compact)) continue;
         candidateCharacters += compact.length;
         if (
           compacts.length >= MAX_WRAPPED_ENCODING_CANDIDATES ||
