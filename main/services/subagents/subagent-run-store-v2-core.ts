@@ -2,6 +2,7 @@ import { isDeepStrictEqual, TextDecoder } from "node:util";
 import {
   isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV2,
+  subagentProjectionNoticesAreMonotonic,
   type SubagentRunSnapshotV2,
   type SubagentRunStateV2,
 } from "../../../renderer/shared/subagent-runs.js";
@@ -503,7 +504,12 @@ function validProgression(existing: SubagentRunSnapshotV2, next: SubagentRunSnap
     next.tools < existing.tools ||
     next.tokens < existing.tokens ||
     nextMilestones.length < existingMilestones.length ||
-    existingMilestones.some((milestone, index) => nextMilestones[index] !== milestone)
+    existingMilestones.some((milestone, index) => nextMilestones[index] !== milestone) ||
+    !subagentProjectionNoticesAreMonotonic(
+      existing.projectionNotices,
+      next.projectionNotices,
+      !ACTIVE_STATES.has(next.state),
+    )
   ) {
     return false;
   }
