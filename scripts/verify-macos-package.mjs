@@ -50,7 +50,9 @@ const reviewedHelperInfoPlistPath = path.join(
 const PACKAGED_MODELS_DEV_ENTRY = "resources/model-capabilities.json";
 const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY = "build/main/subagent-inference-worker.js";
 const PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY = "build/main/subagent-inference-worker-runtime.js";
+const PACKAGED_PARAKEET_WORKER_ENTRY = "build/main/parakeet-worker.js";
 const MAX_SUBAGENT_INFERENCE_WORKER_BYTES = 16 * 1024 * 1024;
+const MAX_PARAKEET_WORKER_BYTES = 4 * 1024 * 1024;
 const REQUIRED_NODE_PTY_HELPER_ENTRIES = Object.freeze([
   "node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
   "node_modules/node-pty/prebuilds/darwin-x64/spawn-helper",
@@ -215,6 +217,32 @@ export async function verifyPackagedSubagentInferenceWorker(appAsar) {
     throw new Error(
       "Packaged subagent inference bootstrap must disable subprocesses before loading providers.",
     );
+  }
+}
+
+export function assertPackagedParakeetWorkerEntries(entries) {
+  const normalized = new Set(entries.map((entry) => entry.replaceAll("\\", "/")));
+  if (!normalized.has(`/${PACKAGED_PARAKEET_WORKER_ENTRY}`)) {
+    throw new Error("Packaged app.asar is missing the on-device transcription worker.");
+  }
+}
+
+export async function verifyPackagedParakeetWorker(appAsar) {
+  await assertRegularFile(appAsar);
+  assertPackagedParakeetWorkerEntries(listPackage(appAsar, { isPack: false }));
+  const entry = statFile(appAsar, PACKAGED_PARAKEET_WORKER_ENTRY, false);
+  if (
+    !entry ||
+    entry.unpacked === true ||
+    typeof entry.size !== "number" ||
+    !Number.isSafeInteger(entry.size) ||
+    entry.size <= 0 ||
+    entry.size > MAX_PARAKEET_WORKER_BYTES ||
+    typeof entry.offset !== "string" ||
+    "files" in entry ||
+    "link" in entry
+  ) {
+    throw new Error("Packaged on-device transcription worker must be a bounded packed regular file.");
   }
 }
 
@@ -607,6 +635,7 @@ export async function verifyMacPackage(appPath) {
   }
   await verifyPackagedModelCatalogResources(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);
+  await verifyPackagedParakeetWorker(appAsar);
   await verifyPackagedNodePtyResources(appAsar);
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
