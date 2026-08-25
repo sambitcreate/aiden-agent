@@ -34,6 +34,7 @@ import {
   subagentDetailPresentation,
   subagentDetailRestoreRunId,
   subagentLiveSummary,
+  subagentOverviewSummary,
   subagentPanelBreakpointFocusTarget,
   subagentPanelOwnerKey,
   subagentPanelSelectionState,
@@ -187,10 +188,10 @@ function installMountedDom(): MountedDom {
         return element.hasAttribute("data-subagent-empty-heading");
       if (selector === "[data-subagent-detail-heading]")
         return element.hasAttribute("data-subagent-detail-heading");
-      if (selector === '[data-subagent-run-id][aria-current="true"]')
+      if (selector === '[data-subagent-run-id][aria-selected="true"]')
         return (
           element.hasAttribute("data-subagent-run-id") &&
-          element.getAttribute("aria-current") === "true"
+          element.getAttribute("aria-selected") === "true"
         );
       return selector === "[data-subagent-run-id]" && element.hasAttribute("data-subagent-run-id");
     };
@@ -747,9 +748,11 @@ test("the roster separates active and terminal runs without color-only status", 
   );
   assert.match(markup, />Active · 1</u);
   assert.match(markup, />Done · 1</u);
-  assert.match(markup, /aria-label="Code scout, scout, Active"/u);
+  assert.match(markup, /aria-label="Code scout, scout, Working"/u);
   assert.match(markup, /aria-label="Final reviewer, reviewer, Finished"/u);
-  assert.match(markup, /aria-current="true"/u);
+  assert.match(markup, /aria-selected="true"/u);
+  assert.equal((markup.match(/aria-selected="true"/gu) ?? []).length, 1);
+  assert.equal((markup.match(/aria-selected="false"/gu) ?? []).length, 1);
 
   const rosterSource = readFileSync(new URL("./subagent-roster.tsx", import.meta.url), "utf8");
   assert.match(rosterSource, /role="tree"/u);
@@ -793,7 +796,8 @@ test("the roster renders strict V2 nesting as an expanded semantic tree with rov
   assert.match(markup, /role="treeitem" aria-level="2"[^>]*data-subagent-treeitem="nested"/u);
   assert.match(markup, /aria-expanded="true"/u);
   assert.match(markup, /role="group" aria-label="Children of Parent planner"/u);
-  assert.match(markup, /Parent planner, planner, Active/u);
+  assert.match(markup, /Parent planner, planner, Finished, 1 active descendant/u);
+  assert.match(markup, />1 active · Finished</u);
   assert.match(markup, /data-subagent-run-id="nested" tabindex="0"/u);
   assert.match(markup, /data-subagent-run-id="parent" tabindex="-1"/u);
 });
@@ -1067,11 +1071,43 @@ test("activity labels and the single live summary announce meaningful progress",
   assert.equal(subagentStatusLabel("queued", queued.snapshot?.activity), "Queued");
   assert.equal(
     subagentLiveSummary([reading, queued]),
-    "2 active subagents; 0 done. Queued review: Queued; Code scout: Reading a workspace file.",
+    "2 active subagents: 1 queued, 1 working; 0 finished. Latest active update: Queued review, Queued.",
   );
   assert.equal(
     subagentSnapshotLiveSummary([reading.snapshot!, queued.snapshot!]),
-    "2 active subagents; 0 done. Code scout: Reading a workspace file; Queued review: Queued.",
+    "2 active subagents: 1 queued, 1 working; 0 finished. Latest active update: Queued review, Queued.",
+  );
+  assert.equal(
+    subagentSnapshotLiveSummary([queued.snapshot!, reading.snapshot!]),
+    subagentSnapshotLiveSummary([reading.snapshot!, queued.snapshot!]),
+  );
+  const sameLabelA = run("same-label-a", {
+    label: "Same label",
+    activity: "Reading a workspace file",
+  });
+  const sameLabelB = run("same-label-b", {
+    label: "Same label",
+    activity: "Searching workspace text",
+  });
+  assert.equal(
+    subagentSnapshotLiveSummary([sameLabelA, sameLabelB]),
+    subagentSnapshotLiveSummary([sameLabelB, sameLabelA]),
+  );
+  assert.match(
+    subagentSnapshotLiveSummary([sameLabelA, sameLabelB]),
+    /Latest active update: Same label, Searching workspace text\.$/u,
+  );
+  const composedLabel = run("unicode-a", {
+    label: "é",
+    activity: "Reading a workspace file",
+  });
+  const decomposedLabel = run("unicode-b", {
+    label: "e\u0301",
+    activity: "Searching workspace text",
+  });
+  assert.equal(
+    subagentSnapshotLiveSummary([composedLabel, decomposedLabel]),
+    subagentSnapshotLiveSummary([decomposedLabel, composedLabel]),
   );
   assert.equal(subagentSnapshotLiveSummaryIsTerminal([reading.snapshot!, queued.snapshot!]), false);
   assert.equal(
@@ -1080,7 +1116,7 @@ test("activity labels and the single live summary announce meaningful progress",
   );
 });
 
-test("terminal live summaries name success, failure, timeout, interruption, and mixed outcomes", () => {
+test("overview and terminal summaries preserve attention and exact outcomes", () => {
   const completed = run("completed", {
     label: "Private successful task",
     state: "completed",
@@ -1100,6 +1136,16 @@ test("terminal live summaries name success, failure, timeout, interruption, and 
     state: "interrupted",
     finishedAt: 3_000,
   });
+  const stopped = v2Run({
+    runId: "stopped",
+    state: "stopped",
+    finishedAt: 3_000,
+  });
+  const unknown = v2Run({
+    runId: "unknown",
+    state: "unknown",
+    finishedAt: 3_000,
+  });
 
   assert.equal(
     subagentSnapshotLiveSummary([completed]),
@@ -1108,14 +1154,52 @@ test("terminal live summaries name success, failure, timeout, interruption, and 
   assert.equal(subagentSnapshotLiveSummary([failed]), "0 active subagents; 1 failed.");
   assert.equal(subagentSnapshotLiveSummary([timedOut]), "0 active subagents; 1 timed out.");
   assert.equal(subagentSnapshotLiveSummary([interrupted]), "0 active subagents; 1 interrupted.");
-  const mixed = subagentSnapshotLiveSummary([completed, failed, timedOut, interrupted]);
+  assert.equal(subagentSnapshotLiveSummary([stopped]), "0 active subagents; 1 stopped.");
+  assert.equal(subagentSnapshotLiveSummary([unknown]), "0 active subagents; 1 outcome unknown.");
+  const mixed = subagentSnapshotLiveSummary([
+    completed,
+    failed,
+    timedOut,
+    interrupted,
+    stopped,
+    unknown,
+  ]);
   assert.equal(
     mixed,
-    "0 active subagents; 1 completed successfully; 1 failed; 1 timed out; 1 interrupted.",
+    "0 active subagents; 1 completed successfully; 1 failed; 1 timed out; 1 interrupted; 1 stopped; 1 outcome unknown.",
   );
   assert.equal(subagentLiveSummary([view(failed)]), "0 active subagents; 1 failed.");
+  const needsAttention = view(v2Run({
+    runId: "attention",
+    state: "needs_attention",
+    activity: "Approval required",
+    finishedAt: undefined,
+  }));
+  assert.deepEqual(subagentOverviewSummary([needsAttention, view(failed), view(completed)]), {
+    primary: "1 needs attention",
+    secondary: "1 failed · 1 completed",
+    ariaLabel: "1 needs attention, 1 failed, 1 completed",
+  });
+  const activeWithNewerTerminal = run("older-active", {
+    updatedAt: 2_000,
+    activity: "Reading a workspace file",
+  });
+  assert.match(
+    subagentSnapshotLiveSummary([
+      activeWithNewerTerminal,
+      run("newer-failure", { state: "failed", updatedAt: 4_000, finishedAt: 4_000 }),
+    ]),
+    /Latest active update: Code scout, Reading a workspace file\.$/u,
+  );
   assert.equal(
-    subagentSnapshotLiveSummaryIsTerminal([completed, failed, timedOut, interrupted]),
+    subagentSnapshotLiveSummaryIsTerminal([
+      completed,
+      failed,
+      timedOut,
+      interrupted,
+      stopped,
+      unknown,
+    ]),
     true,
   );
   assert.doesNotMatch(mixed, /\bdone\b/u);
@@ -1642,12 +1726,12 @@ test("mounted owner replacement recovers focused detail without stealing outside
                 No subagents yet
               </h2>
             ) : destination === "compact" ? (
-              <button type="button" data-subagent-run-id="compact-run" aria-current="true">
+              <button type="button" data-subagent-run-id="compact-run" aria-selected="true">
                 Compact run
               </button>
             ) : destination === "wide" ? (
               <>
-                <button type="button" data-subagent-run-id="wide-run" aria-current="true">
+                <button type="button" data-subagent-run-id="wide-run" aria-selected="true">
                   Wide run
                 </button>
                 <h2 tabIndex={-1} data-subagent-detail-heading="true">
@@ -1749,7 +1833,9 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(detailSource, /run\.milestones\.map/u);
   assert.match(detailSource, /Model:/u);
   assert.match(detailSource, /run\.modelId/u);
-  assert.match(detailSource, /Tool arguments, results, commands, and paths stay/u);
+  assert.match(detailSource, /Saved details omit raw tool payloads, commands,/u);
+  assert.match(detailSource, /Children can read ordinary source and docs as written/u);
+  assert.match(detailSource, /<Callout color="red" role="note">/u);
 
   assert.match(panelSource, /chatId: string \| null/u);
   assert.match(panelSource, /workspaceId: string \| null/u);
