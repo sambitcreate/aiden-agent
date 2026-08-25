@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
-import type { Readable, Writable } from "node:stream";
+import { Readable, type Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { BotInboundAttachmentHomeLease } from "./bot-inbound-attachment-home.js";
 import { MAX_TELEGRAM_DOWNLOAD_BYTES } from "./telegram/telegram-inbound.js";
 
@@ -67,14 +68,11 @@ function boundedOutput(stream: Readable): Promise<string> {
 }
 
 function writeBytes(stream: Writable, bytes: Uint8Array): Promise<void> {
-  return new Promise((resolve, reject) => {
-    stream.once("error", reject);
-    stream.end(Buffer.from(bytes), (error?: Error | null) => {
-      stream.off("error", reject);
-      if (error) reject(error);
-      else resolve();
-    });
-  });
+  // pipeline retains the writable's error handling through its terminal event.
+  // A fail-closed helper may reject the destination and close stdin before the
+  // parent finishes writing; treating that EPIPE as the operation failure keeps
+  // it from escaping later as an uncaught stream error.
+  return pipeline(Readable.from([Buffer.from(bytes)]), stream);
 }
 
 function oneByte(stream: Readable, expected: string): Promise<void> {
