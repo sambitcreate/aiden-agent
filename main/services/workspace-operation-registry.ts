@@ -93,8 +93,8 @@ export class WorkspaceOperationRegistry {
  * it. A navigation, reload, renderer crash, or WebContents destruction aborts
  * the operation even when the surrounding window survives.
  */
-export function admitRendererOwnedWorkspaceOperation(
-  registry: WorkspaceOperationRegistry,
+export function admitOwnedWorkspaceOperation(
+  registry: Pick<WorkspaceOperationRegistry, "admit">,
   owner: WorkspaceOperationDocumentOwner,
   workspaceId: string,
 ): WorkspaceOperationAdmission {
@@ -126,5 +126,8 @@ export function admitRendererOwnedWorkspaceOperation(
     },
   };
 }
+
+/** Backward-compatible name for renderer-only call sites during extraction. */
+export const admitRendererOwnedWorkspaceOperation = admitOwnedWorkspaceOperation;
 
 export const workspaceOperationRegistry = new WorkspaceOperationRegistry();

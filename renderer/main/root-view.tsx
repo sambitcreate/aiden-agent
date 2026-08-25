@@ -27,6 +27,7 @@ import {
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
 
 export function RootView() {
   useTheme();
@@ -181,6 +182,37 @@ function RootContent() {
     });
   }, [queryClient]);
 
+  React.useEffect(() => {
+    return onNotification("workspaces:changed", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("chats:changed", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("bots:changed", () => {
+      invalidateBotCanonicalPhotos();
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
+        queryClient.invalidateQueries({ queryKey: ["bot"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
+      ]);
+    });
+  }, [queryClient]);
+
   React.useEffect(
     () =>
       subscribeDetachedTerminalChats(
@@ -237,6 +269,10 @@ function RootContent() {
   React.useEffect(() => {
     return onNotification<{ path: string }>("app:navigate", (payload) => {
       if (!payload?.path) return;
+      if (document.querySelector("[data-onboarding-active='true']")) {
+        toast.info("Finish onboarding before opening another part of Aiden.");
+        return;
+      }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;

@@ -5,9 +5,26 @@ import globals from "globals";
 
 export default [
   {
-    ignores: ["build/**", "release/**", "node_modules/**", ".memory/**", ".papercuts/**"],
+    ignores: [
+      "build/**",
+      "release/**",
+      "android/**/build/**",
+      "node_modules/**",
+      ".memory/**",
+      ".papercuts/**",
+    ],
   },
   js.configs.recommended,
+  {
+    files: [
+      "scripts/aiden-remote-*.mjs",
+      "scripts/ios-asc-monitor*.mjs",
+      "scripts/ios-live-activity-process-proof*.mjs",
+    ],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
   {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {

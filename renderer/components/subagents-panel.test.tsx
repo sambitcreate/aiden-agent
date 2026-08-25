@@ -565,7 +565,10 @@ test("workspace-write approvals render exact bounded safety facts and stay wired
   assert.match(chatPaneSource, /isSubagentWorkspaceWriteApprovalDetails\(pending\.details\)/u);
   assert.match(chatPaneSource, /pendingWorkspaceWriteClaim/u);
   assert.match(chatPaneSource, /Invalid privileged approval blocked/u);
-  assert.match(chatPaneSource, /invalidPendingPrivilegedApproval \? null/u);
+  assert.match(chatPaneSource, /pending\?\.canAllow !== false && !invalidPendingPrivilegedApproval/u);
+  assert.match(chatPaneSource, /Aiden cannot safely authorize this action from this view/u);
+  assert.match(approvalCard, /\{pendingCanAllow \? \(/u);
+  assert.match(approvalCard, /\) : null\}/u);
   assert.match(chatPaneSource, /decidingApprovalRef\.current/u);
   assert.match(chatPaneSource, /if \(decidingApprovalRef\.current\) return/u);
   assert.match(approvalCard, /SubagentWorkspaceWriteApproval/u);
@@ -1550,12 +1553,25 @@ test("mounted live announcer stays singular and active in compact and inline sur
       );
     });
   };
+  const waitForAnnouncement = async (matches: (text: string) => boolean) => {
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      flushSync(() => undefined);
+      const regions = mountedElementsWithAttribute(
+        mounted.document,
+        "data-subagent-live-announcer",
+      );
+      if (regions.length === 1 && matches(regions[0].textContent ?? "")) return regions;
+    }
+    throw new Error("The mounted live announcer did not publish the expected message.");
+  };
 
   try {
     renderHarness(true, null);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    flushSync(() => undefined);
-    let regions = mountedElementsWithAttribute(mounted.document, "data-subagent-live-announcer");
+    let regions = await waitForAnnouncement((message) =>
+      /0 active subagents; 1 completed successfully\./u.test(message),
+    );
     assert.equal(regions.length, 1);
     let ancestor: HTMLElement | null = regions[0];
     let modalAncestor: HTMLElement | null = null;
@@ -1573,9 +1589,9 @@ test("mounted live announcer stays singular and active in compact and inline sur
       ownerKey: subagentPanelOwnerKey("chat-1", "workspace-1"),
       message: "Saved activity loaded for Code scout. Review complete.",
     });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    flushSync(() => undefined);
-    regions = mountedElementsWithAttribute(mounted.document, "data-subagent-live-announcer");
+    regions = await waitForAnnouncement(
+      (message) => message === "Saved activity loaded for Code scout. Review complete.",
+    );
     assert.equal(regions.length, 1);
     assert.equal(regions[0].textContent, "Saved activity loaded for Code scout. Review complete.");
 
@@ -1584,9 +1600,9 @@ test("mounted live announcer stays singular and active in compact and inline sur
       ownerKey: subagentPanelOwnerKey("chat-1", "workspace-1"),
       message: "Loading saved activity for Code scout.",
     });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    flushSync(() => undefined);
-    regions = mountedElementsWithAttribute(mounted.document, "data-subagent-live-announcer");
+    regions = await waitForAnnouncement(
+      (message) => message === "Loading saved activity for Code scout.",
+    );
     assert.equal(regions.length, 1);
     assert.ok(
       regions[0].parentNode instanceof HTMLElement &&

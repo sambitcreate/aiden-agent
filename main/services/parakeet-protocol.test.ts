@@ -23,8 +23,20 @@ test("parakeet protocol accepts only versioned request and result frames", () =>
       modelId: "parakeet-v3",
       modelDirectory: "/tmp/model",
       pcmBase64: "AAA=",
+      encoding: "pcm_s16le",
     }),
     true,
+  );
+  assert.equal(
+    isParakeetParentMessage({
+      version: PARAKEET_PROTOCOL_VERSION,
+      kind: "transcribe",
+      requestId: "r1",
+      modelId: "parakeet-v3",
+      modelDirectory: "/tmp/model",
+      pcmBase64: "AAA=",
+    }),
+    false,
   );
   assert.equal(isParakeetParentMessage({ kind: "status", requestId: "r1" }), false);
   assert.equal(

@@ -13,6 +13,7 @@ export type ParakeetParentMessage =
       modelId: string;
       modelDirectory: string;
       pcmBase64: string;
+      encoding: "float32le" | "pcm_s16le";
     }
   | {
       version: typeof PARAKEET_PROTOCOL_VERSION;
@@ -50,7 +51,8 @@ export function isParakeetParentMessage(value: unknown): value is ParakeetParent
     value.kind === "transcribe" &&
     typeof value.modelId === "string" &&
     typeof value.modelDirectory === "string" &&
-    typeof value.pcmBase64 === "string"
+    typeof value.pcmBase64 === "string" &&
+    (value.encoding === "float32le" || value.encoding === "pcm_s16le")
   );
 }
 

@@ -5,7 +5,13 @@ import os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { buildCodingTools, buildSubagentCodingTools, summarizeToolCall } from "./coding-tools.js";
+import {
+  buildCodingTools,
+  buildSubagentCodingTools,
+  DISCLOSURE_APPROVAL_TOOL_NAMES,
+  summarizeToolCall,
+} from "./coding-tools.js";
+import { createShareImageTool } from "./share-image-tool.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,6 +75,77 @@ test("approval summaries describe the consequence of mutating tools", () => {
   );
   assert.equal(summarizeToolCall("edit_file", { path: "src/app.ts" }), "Edit file: src/app.ts");
   assert.equal(summarizeToolCall("run_command", { command: "npm test" }), "Run command: npm test");
+  assert.equal(
+    summarizeToolCall("share_image", { path: "/Users/person/Picture.png" }),
+    "Share image in chat: /Users/person/Picture.png",
+  );
+  assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("share_image"), true);
+});
+
+test("share_image admits verified PNG bytes from absolute paths without exposing the path", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-share-image-"));
+  try {
+    const imagePath = path.join(root, "Preview.png");
+    await fs.writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    );
+    const shared: import("./types.js").Attachment[] = [];
+    const tool = createShareImageTool({ workspaceRoot: root, share: (attachment) => shared.push(attachment) });
+    const result = await tool.execute("share-1", { path: imagePath });
+    assert.equal(shared.length, 1);
+    assert.equal(shared[0]?.name, "Preview.png");
+    assert.equal(shared[0]?.mimeType, "image/png");
+    assert.match(shared[0]?.id ?? "", /^shared_/u);
+    const resultText = result.content[0];
+    assert.equal(resultText?.type, "text");
+    assert.doesNotMatch(resultText?.type === "text" ? resultText.text : "", new RegExp(root, "u"));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("share_image rejects files whose bytes are not a complete PNG or JPEG", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-share-image-invalid-"));
+  try {
+    await fs.writeFile(path.join(root, "fake.png"), "not an image", "utf8");
+    const tool = createShareImageTool({ workspaceRoot: root, share: () => assert.fail("must not share") });
+    await assert.rejects(
+      tool.execute("share-invalid", { path: "fake.png" }),
+      /Only complete PNG and JPEG images/u,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("share_image does not disclose bytes after generation cancellation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-share-image-cancelled-"));
+  try {
+    const imagePath = path.join(root, "Cancelled.png");
+    await fs.writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    );
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled"));
+    const tool = createShareImageTool({
+      workspaceRoot: root,
+      share: () => assert.fail("cancelled image must not be shared"),
+    });
+    await assert.rejects(
+      tool.execute("share-cancelled", { path: imagePath }, controller.signal),
+      /cancelled/u,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("parent coding tools retain hidden-metadata reads and JavaScript regex semantics", async () => {

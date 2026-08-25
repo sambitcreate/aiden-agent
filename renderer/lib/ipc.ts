@@ -38,6 +38,8 @@ import type {
   FoundationModelsConnectionStatus,
   Profile,
   Provider,
+  ProviderCatalogRefreshResult,
+  OnboardingProviderValidationResult,
   ProviderModelMetadata,
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
@@ -58,7 +60,31 @@ import type {
   WorkspaceFileWriteResult,
   WorkspacePermission,
 } from "./types";
+import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import type {
+  BotAvatarSuggestion,
+  BotAvatarSuggestionInput,
+  BotCreateInput,
+  BotDefinition,
+  BotRendererCanonicalPhoto,
+  BotUpdateInput,
+} from "../shared/bots";
+import { botAvatarSuggestionErrorMessage } from "../shared/bots";
+import type {
+  BotAccessUpdate,
+  BotAccessView,
+  BotCapabilityCatalog,
+  BotNoticeAcknowledgement,
+  BotNoticeStatus,
+} from "../shared/bot-capabilities";
+
+/** Bot access plus its current model selection, mirrored from the bot detail. */
+export interface BotAccessState {
+  access: BotAccessView;
+  modelSelection?: { providerId: string; modelId: string };
+  visionModelSelection?: { providerId: string; modelId: string };
+}
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -104,6 +130,11 @@ import {
   type SkillCatalogEntry,
 } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
+import type {
+  AidenRemoteConnectionMode,
+  AidenRemotePairingBootstrapView,
+  AidenRemoteSettingsSnapshot,
+} from "../shared/aiden-remote";
 import {
   parseChatArtifactEventV1,
   type ChatArtifactEventV1,
@@ -134,6 +165,14 @@ export function onNotification<T>(
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
   resetOnboarding: () => invoke<boolean>("app:resetOnboarding"),
+  getOnboardingState: (legacyComplete: boolean) =>
+    invoke<OnboardingSnapshot>("app:getOnboardingState", legacyComplete),
+  setOnboardingOutcome: (
+    outcome: Exclude<OnboardingOutcome, "deferred">,
+    selectedProviderId?: string,
+  ) => invoke<OnboardingSnapshot>("app:setOnboardingOutcome", outcome, selectedProviderId),
+  setOnboardingProgress: (step: "profile" | "provider", selectedProviderId?: string) =>
+    invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
   setCloseGuard: (guard: {
     dirty: boolean;
@@ -161,6 +200,8 @@ export const providersApi = {
   list: () => invoke<Provider[]>("providers:list"),
   save: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<Provider>("providers:save", provider, keyOverride),
+  normalizeArtwork: (input: { name: string; dataBase64: string }) =>
+    invoke<NonNullable<Provider["artwork"]>>("providers:normalizeArtwork", input),
   remove: (id: string) => invoke<void>("providers:remove", id),
   setKey: (id: string, key: string) =>
     invoke<{ hasKey: boolean; provider: Provider | null }>(
@@ -168,7 +209,16 @@ export const providersApi = {
       id,
       key,
     ),
-  refresh: () => invoke<Provider[]>("providers:refresh"),
+  refresh: (providerId?: string) =>
+    invoke<ProviderCatalogRefreshResult>("providers:refresh", providerId),
+  refreshIfStale: () =>
+    invoke<ProviderCatalogRefreshResult>("providers:refreshIfStale"),
+  validateOnboardingApiKey: (providerId: "openai" | "anthropic", key: string) =>
+    invoke<OnboardingProviderValidationResult>(
+      "providers:validateOnboardingApiKey",
+      providerId,
+      key,
+    ),
   test: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<{
       ok: true;
@@ -226,6 +276,15 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setCodexThinking", modelId, level),
   setAnthropicThinking: (modelId: string, level: AnthropicThinkingLevel) =>
     invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
+  setProviderThinking: (
+    providerId: string,
+    modelId: string,
+    level: import("../shared/generation-thinking").GenerationThinkingLevel,
+  ) => invoke<AppSettings>("settings:setProviderThinking", providerId, modelId, level),
+  setModelVisibility: (providerId: string, modelId: string, hidden: boolean) =>
+    invoke<AppSettings>("settings:setModelVisibility", providerId, modelId, hidden),
+  showAllProviderModels: (providerId: string) =>
+    invoke<AppSettings>("settings:showAllProviderModels", providerId),
 };
 
 export const assistantApi = {
@@ -400,6 +459,44 @@ export const telegramApi = {
   onModelSelectionChanged: (
     handler: (selection: { providerId: string; model: string }) => void,
   ) => onNotification("telegram:model-selection-changed", handler),
+};
+
+export const aidenRemoteApi = {
+  get: () => invoke<AidenRemoteSettingsSnapshot>("remote:get"),
+  setEnabled: (enabled: boolean) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),
+  setConnectionMode: (mode: AidenRemoteConnectionMode) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setConnectionMode", mode),
+  setDisplayName: (displayName: string) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setDisplayName", displayName),
+  connectTailscale: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleConnect"),
+  disconnectTailscale: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleDisconnect"),
+  reconcileTailscale: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleReconcile"),
+  reviewTailscaleTakeover: () =>
+    invoke<import("../shared/aiden-remote").AidenRemoteTailscaleTakeoverReviewView>("remote:tailscaleReviewTakeover"),
+  takeOverTailscale: (token: string) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleTakeOver", token),
+  beginPairing: (transport: "lan" | "tailscale") =>
+    invoke<AidenRemotePairingBootstrapView>("remote:beginPairing", transport),
+  closePairing: (pairingSessionId: string) =>
+    invoke<{ closed: boolean }>("remote:closePairing", pairingSessionId),
+  revokeDevice: (deviceId: string) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:revokeDevice", deviceId),
+  addApprovedRoot: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:addApprovedRoot"),
+  removeApprovedRoot: (rootId: string) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
+  pendingApproval: (chatId: string) =>
+    invoke<RemoteApprovalPrompt | null>("remote:getPendingApproval", chatId),
+  respondApproval: (chatId: string, approvalId: string, decision: "allow" | "deny") =>
+    invoke<{ resolved: true }>("remote:respondApprovalFromHost", chatId, approvalId, decision),
+  onChanged: (handler: () => void) =>
+    onNotification("remote:changed", handler),
+  onApprovalChanged: (handler: (payload: { chatId: string }) => void) =>
+    onNotification("remote:approval-changed", handler),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────
@@ -683,6 +780,67 @@ export const chatsApi = {
     invoke<void>("chat:approve", approvalId, decision),
 };
 
+export const botsApi = {
+  getAccessNotice: () =>
+    invoke<BotNoticeStatus>("bots:getAccessNotice"),
+  acknowledgeAccessNotice: (acknowledgement: BotNoticeAcknowledgement) =>
+    invoke<BotNoticeStatus>("bots:acknowledgeAccessNotice", acknowledgement),
+  getTelegramAccessNotice: (profile: string) =>
+    invoke<BotNoticeStatus>("bots:getTelegramAccessNotice", profile),
+  acknowledgeTelegramAccessNotice: (
+    profile: string,
+    acknowledgement: BotNoticeAcknowledgement,
+  ) => invoke<BotNoticeStatus>("bots:acknowledgeTelegramAccessNotice", {
+    profile,
+    acknowledgement,
+  }),
+  list: (includeArchived = false) =>
+    invoke<BotDefinition[]>("bots:list", includeArchived),
+  get: (id: string) => invoke<BotDefinition | null>("bots:get", id),
+  getCanonicalPhoto: (id: string) =>
+    invoke<BotRendererCanonicalPhoto | null>("bots:getCanonicalPhoto", id),
+  create: (input: { bot: BotCreateInput; access: BotAccessUpdate }) =>
+    invoke<BotDefinition>("bots:create", input),
+  suggestAvatar: async (input: BotAvatarSuggestionInput) => {
+    try {
+      return await invoke<BotAvatarSuggestion>("bots:suggestAvatar", input);
+    } catch (error) {
+      throw new Error(botAvatarSuggestionErrorMessage(error));
+    }
+  },
+  cancelAvatarSuggestion: (requestId: string) =>
+    invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
+  update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
+  getCapabilityCatalog: () =>
+    invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog"),
+  getBotAccess: (id: string) =>
+    invoke<BotAccessState | null>("bots:getBotAccess", id),
+  updateBotAccess: (input: {
+    botId: string;
+    expectedRevision: string;
+    access: BotAccessUpdate;
+  }) => invoke<BotAccessView>("bots:updateBotAccess", input),
+  archive: (input: { id: string; expectedRevision: string }) =>
+    invoke<BotDefinition>("bots:archive", input),
+  restore: (input: { id: string; expectedRevision: string }) =>
+    invoke<BotDefinition>("bots:restore", input),
+  listChats: (id: string) => invoke<ChatMeta[]>("bots:listChats", id),
+  createChat: (input: {
+    botId: string;
+    workspaceId: string;
+    providerId?: string;
+    model?: string;
+  }) => invokeChatMutation<Chat>("bots:createChat", input),
+  getTelegramBinding: (id: string) =>
+    invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
+  listTelegramTargets: () =>
+    invoke<import("../shared/bots").TelegramBotTargetOption[]>("bots:listTelegramTargets"),
+  bindTelegram: (input: { botId: string; profile: string; threadId?: number }) =>
+    invoke<import("../shared/bots").TelegramBotBindingView>("bots:bindTelegram", input),
+  unbindTelegram: (id: string) =>
+    invoke<import("../shared/bots").TelegramBotBindingView>("bots:unbindTelegram", id),
+};
+
 export const subagentsApi = {
   get: async (
     chatId: string,
@@ -773,6 +931,20 @@ export interface ApprovalPrompt {
   toolCallId: string;
   toolName: string;
   summary: string;
+  details?: ToolApprovalDetails;
+  canAllow?: boolean;
+  source?: "remote";
+}
+
+export interface RemoteApprovalPrompt {
+  approvalId: string;
+  streamId: string;
+  chatId: string;
+  summary: string;
+  toolCallId: string;
+  toolName: string;
+  expiresAt: string;
+  canAllow: boolean;
   details?: ToolApprovalDetails;
 }
 interface ChatApproval extends ApprovalPrompt {

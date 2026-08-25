@@ -4,12 +4,13 @@
 // effects stay in telegram-service-core so this module remains a leaf in the
 // Telegram domain DAG.
 
-import type {
-  TelegramBotCommand,
-  TelegramInlineKeyboardMarkup,
-} from "./telegram-bot-api.js";
+import type { TelegramBotCommand, TelegramInlineKeyboardMarkup } from "./telegram-bot-api.js";
 import type { QueuedTelegramTurn } from "./telegram-queue.js";
 import type { GenerationThinkingLevel } from "../../../renderer/shared/generation-thinking.js";
+import {
+  isModelHidden,
+  type HiddenModelsByProvider,
+} from "../../../renderer/shared/model-visibility.js";
 
 export const TELEGRAM_COMMANDS = [
   { command: "start", description: "Open the Aiden operator menu" },
@@ -36,6 +37,15 @@ export interface TelegramModelChoice {
   modelLabel?: string;
   reasoning: boolean;
   thinkingLevels?: readonly GenerationThinkingLevel[];
+}
+
+export function visibleTelegramModelChoices(
+  models: readonly TelegramModelChoice[],
+  hiddenModelsByProvider: HiddenModelsByProvider | undefined,
+): readonly TelegramModelChoice[] {
+  return models.filter(
+    (choice) => !isModelHidden(hiddenModelsByProvider, choice.providerId, choice.model),
+  );
 }
 
 export interface TelegramControlStatus {
@@ -95,23 +105,37 @@ export function buildMainMenu(status: TelegramControlStatus): TelegramInlineKeyb
         },
       ],
       [{ text: `🧠 Thinking: ${status.thinkingLevel}`, callback_data: "menu:thinking" }],
-      [{ text: `${status.queueCount ? "⏳" : "⌛"} Queue: ${status.queueCount}`, callback_data: "menu:queue" }],
-      [{ text: `🗂 Workspace: ${truncate(status.workspaceLabel, 40)}`, callback_data: "menu:workspace" }],
+      [
+        {
+          text: `${status.queueCount ? "⏳" : "⌛"} Queue: ${status.queueCount}`,
+          callback_data: "menu:queue",
+        },
+      ],
+      [
+        {
+          text: `🗂 Workspace: ${truncate(status.workspaceLabel, 40)}`,
+          callback_data: "menu:workspace",
+        },
+      ],
       [
         { text: "🗜 Compact", callback_data: "compact:ask" },
         { text: "⚙️ Settings", callback_data: "menu:settings" },
       ],
       ...(status.active
-        ? [[
-            { text: "⏭ Next", callback_data: "turn:next" },
-            { text: "⏹ Abort", callback_data: "turn:abort" },
-            { text: "🛑 Stop all", callback_data: "turn:stop" },
-          ]]
+        ? [
+            [
+              { text: "⏭ Next", callback_data: "turn:next" },
+              { text: "⏹ Abort", callback_data: "turn:abort" },
+              { text: "🛑 Stop all", callback_data: "turn:stop" },
+            ],
+          ]
         : []),
-      ...(status.extensionSections ?? []).map((section) => [{
-        text: section.label,
-        callback_data: section.callbackData,
-      }]),
+      ...(status.extensionSections ?? []).map((section) => [
+        {
+          text: section.label,
+          callback_data: section.callbackData,
+        },
+      ]),
     ],
   };
 }
@@ -128,10 +152,12 @@ export function buildModelMenu(
   const start = safePage * pageSize;
   const rows = models.slice(start, start + pageSize).map((choice, offset) => {
     const selected = choice.providerId === activeProviderId && choice.model === activeModel;
-    return [{
-      text: `${selected ? "🟢" : "⚫"} ${truncate(`${choice.providerLabel}/${choice.modelLabel ?? choice.model}`, 48)}`,
-      callback_data: `model:set:${start + offset}`,
-    }];
+    return [
+      {
+        text: `${selected ? "🟢" : "⚫"} ${truncate(`${choice.providerLabel}/${choice.modelLabel ?? choice.model}`, 48)}`,
+        callback_data: `model:set:${start + offset}`,
+      },
+    ];
   });
   return {
     text: `<b>🤖 Choose a model</b>\n\n${models.length ? "The selected model is used for future Telegram turns." : "No configured models are available. Add a provider in Aiden Settings."}`,
@@ -139,11 +165,16 @@ export function buildModelMenu(
       inline_keyboard: [
         [{ text: "⬆️ Main menu", callback_data: "menu:back" }],
         ...(totalPages > 1
-          ? [[
-              { text: "⬅️", callback_data: `model:page:${Math.max(0, safePage - 1)}` },
-              { text: `${safePage + 1}/${totalPages}`, callback_data: "noop" },
-              { text: "➡️", callback_data: `model:page:${Math.min(totalPages - 1, safePage + 1)}` },
-            ]]
+          ? [
+              [
+                { text: "⬅️", callback_data: `model:page:${Math.max(0, safePage - 1)}` },
+                { text: `${safePage + 1}/${totalPages}`, callback_data: "noop" },
+                {
+                  text: "➡️",
+                  callback_data: `model:page:${Math.min(totalPages - 1, safePage + 1)}`,
+                },
+              ],
+            ]
           : []),
         ...rows,
       ],
@@ -162,10 +193,12 @@ export function buildThinkingMenu(
     markup: {
       inline_keyboard: [
         [{ text: "⬆️ Main menu", callback_data: "menu:back" }],
-        ...levels.map((level) => [{
-          text: `${level === current ? "🟢" : "⚫"} ${level}`,
-          callback_data: `thinking:set:${level}`,
-        }]),
+        ...levels.map((level) => [
+          {
+            text: `${level === current ? "🟢" : "⚫"} ${level}`,
+            callback_data: `thinking:set:${level}`,
+          },
+        ]),
       ],
     },
   };
@@ -175,10 +208,12 @@ export function buildQueueMenu(items: readonly QueuedTelegramTurn[]): {
   text: string;
   markup: TelegramInlineKeyboardMarkup;
 } {
-  const rows = items.map((item, index) => [{
-    text: `${index + 1}. ${item.lane === "priority" ? "⚡ " : ""}${truncate(item.text.replace(/\s+/gu, " "), 42)}`,
-    callback_data: `queue:item:${item.id}`,
-  }]);
+  const rows = items.map((item, index) => [
+    {
+      text: `${index + 1}. ${item.lane === "priority" ? "⚡ " : ""}${truncate(item.text.replace(/\s+/gu, " "), 42)}`,
+      callback_data: `queue:item:${item.id}`,
+    },
+  ]);
   return {
     text: items.length
       ? `<b>⏳ Queue</b>\n\n${items.length} prompt${items.length === 1 ? "" : "s"} waiting.`
@@ -204,7 +239,10 @@ export function buildQueueItemMenu(item: QueuedTelegramTurn): {
       inline_keyboard: [
         [{ text: "⬆️ Back", callback_data: "menu:queue" }],
         [
-          { text: item.lane === "priority" ? "🟡 Priority" : "⚡ Make priority", callback_data: `queue:priority:${item.id}` },
+          {
+            text: item.lane === "priority" ? "🟡 Priority" : "⚡ Make priority",
+            callback_data: `queue:priority:${item.id}`,
+          },
           { text: "🗑 Delete", callback_data: `queue:delete:${item.id}` },
         ],
       ],
@@ -219,20 +257,24 @@ export function confirmationMenu(
   return {
     text: `<b>${escapeHtml(title)}</b>`,
     markup: {
-      inline_keyboard: [[
-        { text: "✅ Confirm", callback_data: confirmData },
-        { text: "❌ Cancel", callback_data: "menu:back" },
-      ]],
+      inline_keyboard: [
+        [
+          { text: "✅ Confirm", callback_data: confirmData },
+          { text: "❌ Cancel", callback_data: "menu:back" },
+        ],
+      ],
     },
   };
 }
 
-export function buildSettingsMenu(options: {
-  draftPreviews?: boolean;
-  activity?: "quiet" | "thinking" | "tools" | "verbose";
-  rendering?: "rich" | "html";
-  voiceMode?: "hidden" | "mirror" | "always";
-} = {}): { text: string; markup: TelegramInlineKeyboardMarkup } {
+export function buildSettingsMenu(
+  options: {
+    draftPreviews?: boolean;
+    activity?: "quiet" | "thinking" | "tools" | "verbose";
+    rendering?: "rich" | "html";
+    voiceMode?: "hidden" | "mirror" | "always";
+  } = {},
+): { text: string; markup: TelegramInlineKeyboardMarkup } {
   return {
     text: [
       "<b>⚙️ Telegram agent settings</b>",
@@ -245,22 +287,30 @@ export function buildSettingsMenu(options: {
         [{ text: "🤖 Model", callback_data: "menu:model" }],
         [{ text: "🧠 Thinking", callback_data: "menu:thinking" }],
         [{ text: "🗂 Workspace", callback_data: "menu:workspace" }],
-        [{
-          text: `${options.draftPreviews ? "🟢" : "⚫"} Draft previews`,
-          callback_data: "settings:drafts:toggle",
-        }],
-        [{
-          text: `🔧 Activity: ${options.activity ?? "quiet"}`,
-          callback_data: "settings:activity:next",
-        }],
-        [{
-          text: `📝 Rendering: ${options.rendering ?? "rich"}`,
-          callback_data: "settings:rendering:toggle",
-        }],
-        [{
-          text: `👄 Voice: ${options.voiceMode ?? "hidden"}`,
-          callback_data: "settings:voice:next",
-        }],
+        [
+          {
+            text: `${options.draftPreviews ? "🟢" : "⚫"} Draft previews`,
+            callback_data: "settings:drafts:toggle",
+          },
+        ],
+        [
+          {
+            text: `🔧 Activity: ${options.activity ?? "quiet"}`,
+            callback_data: "settings:activity:next",
+          },
+        ],
+        [
+          {
+            text: `📝 Rendering: ${options.rendering ?? "rich"}`,
+            callback_data: "settings:rendering:toggle",
+          },
+        ],
+        [
+          {
+            text: `👄 Voice: ${options.voiceMode ?? "hidden"}`,
+            callback_data: "settings:voice:next",
+          },
+        ],
       ],
     },
   };
@@ -277,21 +327,30 @@ export function buildWorkspaceMenu(
       "",
       `Current: ${escapeHtml(selected?.name ?? (selectedWorkspaceId ? "Unavailable" : "Assistant only"))}`,
       "",
-      ...workspaces.map((workspace, index) => `${index + 1}. ${escapeHtml(workspace.name)}\n   <code>${escapeHtml(workspace.folderPath)}</code>`),
-      ...(workspaces.length ? ["", "You can also use <code>/workspace &lt;number&gt;</code>."] : []),
+      ...workspaces.map(
+        (workspace, index) =>
+          `${index + 1}. ${escapeHtml(workspace.name)}\n   <code>${escapeHtml(workspace.folderPath)}</code>`,
+      ),
+      ...(workspaces.length
+        ? ["", "You can also use <code>/workspace &lt;number&gt;</code>."]
+        : []),
       "Workspace authority is captured when each prompt enters the queue.",
     ].join("\n"),
     markup: {
       inline_keyboard: [
         [{ text: "⬆️ Main menu", callback_data: "menu:back" }],
-        [{
-          text: `${selectedWorkspaceId === undefined ? "🟢" : "⚫"} Assistant only`,
-          callback_data: "workspace:set:off",
-        }],
-        ...workspaces.map((workspace, index) => [{
-          text: `${workspace.id === selectedWorkspaceId ? "🟢" : "⚫"} ${truncate(workspace.name, 44)}`,
-          callback_data: `workspace:set:${index}`,
-        }]),
+        [
+          {
+            text: `${selectedWorkspaceId === undefined ? "🟢" : "⚫"} Assistant only`,
+            callback_data: "workspace:set:off",
+          },
+        ],
+        ...workspaces.map((workspace, index) => [
+          {
+            text: `${workspace.id === selectedWorkspaceId ? "🟢" : "⚫"} ${truncate(workspace.name, 44)}`,
+            callback_data: `workspace:set:${index}`,
+          },
+        ]),
       ],
     },
   };

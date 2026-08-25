@@ -92,6 +92,7 @@ test("exposes the virtual Codex provider only for configured OAuth", () => {
     defaultModel: "gpt-5.4",
     needsKey: true,
     isPreset: true,
+    isBuiltin: true,
     hasKey: true,
     canLogout: true,
   });
@@ -111,6 +112,7 @@ test("filters reserved stored collisions and rejects generic credential manageme
 test("forwards each main-process Codex status signal to the global renderer channel", () => {
   let listener = (_needsAttention: boolean): void => undefined;
   let unsubscribed = false;
+  let authorityChanges = 0;
   const events: Array<{ channel: string; event: unknown }> = [];
   const unsubscribe = forwardCodexProviderStatusChanges(
     {
@@ -122,6 +124,9 @@ test("forwards each main-process Codex status signal to the global renderer chan
       },
     },
     (channel, event) => events.push({ channel, event }),
+    () => {
+      authorityChanges += 1;
+    },
   );
 
   listener(false);
@@ -137,6 +142,7 @@ test("forwards each main-process Codex status signal to the global renderer chan
       event: { providerId: "openai-codex", needsAttention: true },
     },
   ]);
+  assert.equal(authorityChanges, 2);
   unsubscribe();
   assert.equal(unsubscribed, true);
 });

@@ -2,7 +2,9 @@ import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-a
 import {
   createModels,
   createProvider,
+  lazyStream,
   type Api,
+  type AuthResult,
   type Model,
   type Models,
   type ProviderHeaders,
@@ -83,6 +85,43 @@ export interface ResolvedModelRuntime {
   ) => Promise<PreparedCodexIsolatedStream>;
   /** One-shot host provenance from the most recently settled isolated request. */
   consumeIsolatedHostFailure?: () => "inference" | "policy" | undefined;
+}
+
+/**
+ * Freeze one already-resolved Pi auth result into a Bot request. The wrapper
+ * delegates directly to the owning provider so Models cannot re-read ambient
+ * env/profile/ADC authority after the Bot admission fence has been checked.
+ */
+export function withPinnedBotProviderAuth(
+  runtime: ResolvedModelRuntime,
+  auth: AuthResult,
+  providerStream: ProviderStreams["streamSimple"],
+): ResolvedModelRuntime {
+  return {
+    ...runtime,
+    streams: {
+      streamSimple: (model, context, options) => lazyStream(model, async () => {
+        if (model.provider !== runtime.model.provider || model.id !== runtime.model.id) {
+          throw new Error("Pinned Bot provider auth cannot be reused for another model.");
+        }
+        const requestModel = auth.auth.baseUrl
+          ? { ...model, baseUrl: auth.auth.baseUrl }
+          : model;
+        let headers = auth.auth.headers || options?.headers
+          ? { ...(options?.headers ?? {}), ...(auth.auth.headers ?? {}) }
+          : undefined;
+        const env = auth.env || options?.env
+          ? { ...(options?.env ?? {}), ...(auth.env ?? {}) }
+          : undefined;
+        return providerStream(requestModel, context, {
+          ...options,
+          apiKey: auth.auth.apiKey,
+          headers,
+          env,
+        });
+      }),
+    },
+  };
 }
 
 export interface ModelRuntimeDependencies {

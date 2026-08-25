@@ -30,6 +30,8 @@ import {
   isLocalProviderDeployment,
   type ProviderDeploymentFields,
 } from "../../renderer/shared/provider-deployment.js";
+import { normalizeProviderThinkingLevel } from "../../renderer/shared/provider-thinking.js";
+import { piThinkingLevelsForModel } from "./pi-model-metadata.js";
 
 /**
  * Pi's current compatibility transports require a non-empty constructor value
@@ -77,15 +79,13 @@ export function resolveGenerationThinkingLevel(
       ? requested
       : normalizeAnthropicThinkingLevel(levels, undefined);
   }
-  if (!model.reasoning || !requested || requested === "off") return "off";
-  if (
-    model.thinkingLevelMap &&
-    (!(requested in model.thinkingLevelMap) ||
-      model.thinkingLevelMap[requested] === null)
-  ) {
-    return "off";
-  }
-  return requested;
+  const levels = piThinkingLevelsForModel(model) ?? [];
+  if (levels.length === 0) return "off";
+  // Custom/local callers do not expose Aiden's generic thinking control and
+  // intentionally omit a request. Preserve their prior cost/latency behavior;
+  // built-in UI surfaces pass the normalized saved/default level explicitly.
+  if (requested === undefined) return "off";
+  return normalizeProviderThinkingLevel(levels, requested);
 }
 
 /** The connection-bound runtime model is the sole request-time image authority. */

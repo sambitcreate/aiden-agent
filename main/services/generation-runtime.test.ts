@@ -58,7 +58,23 @@ test("model thinking preserves native normalization and honors generic Pi reason
       { reasoning: true, thinkingLevelMap: { low: "low" } },
       "high",
     ),
+    "high",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "bedrock",
+      { reasoning: true, thinkingLevelMap: { off: null, low: "low", medium: null } },
+      undefined,
+    ),
     "off",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "bedrock",
+      { reasoning: true, thinkingLevelMap: { off: null, low: "low", medium: null } },
+      "high",
+    ),
+    "high",
   );
   assert.equal(
     resolveGenerationThinkingLevel(

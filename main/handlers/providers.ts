@@ -1,10 +1,15 @@
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
-import { ipcMain, logger } from "../platform.js";
+import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
-import { listModels, normalizeProviderBaseUrl, testConnection } from "../services/models.js";
+import {
+  assertOnboardingTailnetBaseUrl,
+  listModels,
+  normalizeProviderBaseUrl,
+  testConnection,
+} from "../services/models.js";
 import {
   parseProviderAuthProviderId,
   parseProviderAuthResponseRequest,
@@ -13,6 +18,7 @@ import {
 import { providerAuthFlow } from "../services/provider-auth-flow.js";
 import { providerAuthOwner } from "../services/provider-auth-owner.js";
 import { providerRegistry } from "../services/provider-registry.js";
+import { projectPiCatalogRefreshErrors } from "../services/pi-catalog-refresh.js";
 import { isCustomProviderId } from "../services/custom-provider-id.js";
 import {
   canonicalGoogleProvider,
@@ -23,7 +29,6 @@ import { parseAnthropicThinkingSelection } from "../services/anthropic-provider.
 import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
-  mergeCodexProvider,
 } from "../services/provider-list-core.js";
 import { AppearancePreviewState } from "../services/appearance-preview-core.js";
 import {
@@ -35,7 +40,8 @@ import {
   normalizeProviderCredentialInput,
   providerConnectionSnapshot,
 } from "../services/provider-credential-rotation-core.js";
-import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
+import { listConfiguredProviders } from "../services/provider-list-main.js";
+import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import type {
   ProviderDeployment,
   ProviderKind,
@@ -48,6 +54,9 @@ import {
   normalizeAppearanceConfig,
   parseAppearanceConfig,
 } from "../../renderer/shared/appearance.js";
+import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
+import { normalizeProviderArtworkInput } from "../services/provider-artwork.js";
+import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -71,7 +80,14 @@ function optionalPositiveNumber(value: unknown): number | undefined {
 }
 
 function optionalModelType(value: unknown): ProviderModelType | undefined {
-  return value === "llm" || value === "embedding" ? value : undefined;
+  return value === "llm" ||
+    value === "embedding" ||
+    value === "reranker" ||
+    value === "image" ||
+    value === "audio" ||
+    value === "video"
+    ? value
+    : undefined;
 }
 
 function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadata> | undefined {
@@ -118,7 +134,8 @@ function parseProvider(value: unknown): StoredProvider {
   const models = Array.isArray(p.models)
     ? p.models.filter(
         (model): model is string =>
-          typeof model === "string" && modelMetadata?.[model]?.type !== "embedding",
+          typeof model === "string" &&
+          (modelMetadata?.[model]?.type === undefined || modelMetadata[model]?.type === "llm"),
       )
     : [];
   const defaultModel =
@@ -135,6 +152,7 @@ function parseProvider(value: unknown): StoredProvider {
     id: asProviderId(p.id),
     kind,
     label: asString(p.label, "label"),
+    artwork: normalizeProviderArtwork(p.artwork),
     baseUrl,
     models,
     modelMetadata,
@@ -146,6 +164,9 @@ function parseProvider(value: unknown): StoredProvider {
     // a renderer payload that could redirect native credentials.
     isBuiltin: false,
   };
+  if (provider.id === "custom:onboarding-tailscale") {
+    assertOnboardingTailnetBaseUrl(provider.baseUrl);
+  }
   return provider.id === GOOGLE_PROVIDER_ID ? canonicalGoogleProvider(provider) : provider;
 }
 
@@ -196,25 +217,29 @@ async function saveProvider(
 }
 
 async function listProviders() {
-  const customProviders = await listProvidersWithLegacyPiCredentialMigration();
-  const providers = [
-    ...(await providerRegistry.listBuiltinProviders()),
-    ...customProviders.filter((provider) => !providerRegistry.isBuiltinProvider(provider.id)),
-  ];
-  try {
-    return mergeCodexProvider(providers, await providerRegistry.codex.snapshot());
-  } catch {
-    logger.warn("providers", "ChatGPT / Codex status was unavailable while listing providers.");
-    return mergeCodexProvider(providers, null);
-  }
+  return listConfiguredProviders();
+}
+
+async function refreshProviderCatalogs(providerIds?: readonly string[], force = true) {
+  const errors = await providerRegistry.refreshBuiltinCatalogs(providerIds, force);
+  return {
+    providers: await listProviders(),
+    errors: projectPiCatalogRefreshErrors(errors),
+  };
 }
 
 export function registerProviderHandlers(): void {
-  forwardCodexProviderStatusChanges(providerRegistry.codex, (channel, event) =>
-    ipcMain.broadcast(channel, event),
+  forwardCodexProviderStatusChanges(
+    providerRegistry.codex,
+    (channel, event) => ipcMain.broadcast(channel, event),
+    () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
   );
 
   ipcMain.handle("providers:list", listProviders);
+
+  ipcMain.handle("providers:normalizeArtwork", (_event, input: unknown) =>
+    normalizeProviderArtworkInput(input),
+  );
 
   ipcMain.handle("providers:auth:status", async (_event, providerId: unknown) =>
     providerAuthFlow.status(parseProviderAuthProviderId(providerId)),
@@ -238,6 +263,23 @@ export function registerProviderHandlers(): void {
     providerAuthOwner(event);
     return providerAuthFlow.logout(parseProviderAuthProviderId(providerId));
   });
+
+  ipcMain.handle(
+    "providers:validateOnboardingApiKey",
+    async (event, providerIdValue: unknown, keyValue: unknown) => {
+      const owner = providerAuthOwner(event);
+      if (providerIdValue !== "openai" && providerIdValue !== "anthropic") {
+        throw new Error("This provider does not support onboarding API-key validation.");
+      }
+      const key = normalizeProviderCredentialInput(keyValue);
+      if (!key) throw new Error("Enter an API key before validating the connection.");
+      return providerRegistry.validateAndStoreOnboardingApiKey(
+        providerIdValue,
+        key,
+        () => !owner.isDestroyed(),
+      );
+    },
+  );
 
   ipcMain.handle("providers:save", async (event, providerValue: unknown, keyOverride?: unknown) => {
     const owner = providerAuthOwner(event);
@@ -308,16 +350,22 @@ export function registerProviderHandlers(): void {
     },
   );
 
-  ipcMain.handle("providers:refresh", async (event) => {
+  ipcMain.handle("providers:refresh", async (event, providerValue?: unknown) => {
     // A catalog refresh can renew OAuth credentials inside Pi, so treat it as
     // a credential-affecting operation rather than accepting stale documents.
     providerAuthOwner(event);
-    const errors = await providerRegistry.refreshBuiltinCatalogs();
-    if (errors.size > 0) {
-      const [providerId, error] = errors.entries().next().value as [string, Error];
-      throw new Error(`${providerId} model refresh failed: ${error.message}`);
+    const providerId = providerValue === undefined ? undefined : asProviderId(providerValue);
+    if (providerId !== undefined && !providerRegistry.isBuiltinProvider(providerId)) {
+      throw new Error("Only Pi built-in provider catalogs can be refreshed.");
     }
-    return listProviders();
+    return refreshProviderCatalogs(
+      providerId === undefined ? undefined : [providerId],
+    );
+  });
+
+  ipcMain.handle("providers:refreshIfStale", async (event) => {
+    providerAuthOwner(event);
+    return refreshProviderCatalogs(undefined, false);
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
@@ -355,6 +403,40 @@ export function registerProviderHandlers(): void {
       return configStore.setAnthropicThinkingLevel(selection.modelId, selection.level);
     },
   );
+  ipcMain.handle(
+    "settings:setProviderThinking",
+    async (
+      _event,
+      providerIdValue: unknown,
+      modelIdValue: unknown,
+      levelValue: unknown,
+    ) => {
+      const providerId = asProviderId(providerIdValue);
+      const modelId = asString(modelIdValue, "modelId");
+      if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
+        throw new Error("Invalid provider thinking selection.");
+      }
+      const metadata = providerRegistry.builtinProvider(providerId)?.modelMetadata?.[modelId];
+      if (!metadata?.thinkingLevels?.includes(levelValue)) {
+        throw new Error("This thinking level is not supported by the selected model.");
+      }
+      return configStore.setProviderThinkingLevel(providerId, modelId, levelValue);
+    },
+  );
+  ipcMain.handle(
+    "settings:setModelVisibility",
+    async (_event, providerIdValue: unknown, modelIdValue: unknown, hiddenValue: unknown) => {
+      const providerId = asProviderId(providerIdValue);
+      const modelId = asString(modelIdValue, "modelId");
+      if (modelId.length > MAX_CONFIG_ID_LENGTH || typeof hiddenValue !== "boolean") {
+        throw new Error("Invalid model visibility request.");
+      }
+      return configStore.setModelVisibility(providerId, modelId, hiddenValue);
+    },
+  );
+  ipcMain.handle("settings:showAllProviderModels", async (_event, providerIdValue: unknown) => {
+    return configStore.showAllProviderModels(asProviderId(providerIdValue));
+  });
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;

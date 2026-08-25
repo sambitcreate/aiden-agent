@@ -83,6 +83,7 @@ import { subagentsEnabled } from "./services/subagents/feature-flag.js";
 import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
+import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
 import {
   gitDeleteManagedWorktree,
@@ -103,6 +104,18 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
+import {
+  getOnboardingSnapshot,
+  setOnboardingOutcome,
+  setOnboardingProgress,
+} from "./services/onboarding-state.js";
+import { rendererDocumentOwner } from "./services/renderer-document-owner.js";
+import {
+  initializeAidenRemoteService,
+  stopAidenRemoteServiceAndSettle,
+} from "./services/aiden-remote-service-main.js";
+import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
+import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -254,6 +267,7 @@ function cleanupApplication(): void {
   llmClient.abortAll();
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
+  botSkillContentWatcher.dispose();
   void mcpManager.closeAll();
 }
 
@@ -340,8 +354,14 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     );
     // Do not let later asynchronous cleanup give a timed-out receipt writer
     // time to publish evidence after its lifecycle has already failed closed.
+    await flushSubagentRuntimeDiagnostics();
     app.exit(1);
     return;
+  }
+  try {
+    await stopAidenRemoteServiceAndSettle();
+  } catch (error) {
+    logger.error("aiden-remote", "Remote Access did not stop cleanly.", error);
   }
   cleanupApplication();
   try {
@@ -363,6 +383,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       error,
     );
   }
+  await flushSubagentRuntimeDiagnostics();
   forceAppQuit = true;
   if (installUpdateOnQuit) {
     installUpdateOnQuit = false;
@@ -727,6 +748,79 @@ ipcMain.handle("app:resetOnboarding", async (event) => {
     return false;
   return requestOnboardingReset(window);
 });
+
+ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) => {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender.id !== mainWindow.webContents.id
+  ) {
+    throw new Error("Onboarding state is unavailable outside the active application window.");
+  }
+  const owner = rendererDocumentOwner(
+    event,
+    () => new Error("Onboarding state is unavailable outside the active application document."),
+  );
+  return getOnboardingSnapshot(legacyComplete === true, () => !owner.isDestroyed());
+});
+
+ipcMain.handle(
+  "app:setOnboardingOutcome",
+  async (event, outcome: unknown, selectedProviderId: unknown) => {
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      event.sender.id !== mainWindow.webContents.id
+    ) {
+      throw new Error("Onboarding can only be changed from the active application window.");
+    }
+    if (outcome !== "incomplete" && outcome !== "completed") {
+      throw new Error("Invalid onboarding outcome.");
+    }
+    if (
+      selectedProviderId !== undefined &&
+      (typeof selectedProviderId !== "string" ||
+        selectedProviderId.length === 0 ||
+        selectedProviderId.length > 128)
+    ) {
+      throw new Error("Invalid onboarding provider selection.");
+    }
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Onboarding can only be changed from the active application document."),
+    );
+    return setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+  },
+);
+
+ipcMain.handle(
+  "app:setOnboardingProgress",
+  async (event, step: unknown, selectedProviderId: unknown) => {
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      event.sender.id !== mainWindow.webContents.id
+    ) {
+      throw new Error("Onboarding can only be changed from the active application window.");
+    }
+    if (step !== "profile" && step !== "provider") {
+      throw new Error("Invalid onboarding step.");
+    }
+    if (
+      selectedProviderId !== undefined &&
+      (typeof selectedProviderId !== "string" ||
+        selectedProviderId.length === 0 ||
+        selectedProviderId.length > 128)
+    ) {
+      throw new Error("Invalid onboarding provider selection.");
+    }
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Onboarding can only be changed from the active application document."),
+    );
+    return setOnboardingProgress(step, selectedProviderId, () => !owner.isDestroyed());
+  },
+);
 
 ipcMain.handle("app:getUpdateState", (event) => {
   if (
@@ -1534,6 +1628,15 @@ if (!ownsSingleInstanceLock) {
           );
         }
       }
+      try {
+        await initializeBotApplicationService();
+      } catch (error) {
+        logger.error(
+          "bots",
+          "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
+          error,
+        );
+      }
       const visibleChatIds = new Set(
         (await chatStore.list()).map((chat) => chat.id),
       );
@@ -1672,13 +1775,42 @@ if (!ownsSingleInstanceLock) {
       );
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
+      try {
+        await initializeAidenRemoteService();
+      } catch (error) {
+        logger.error(
+          "aiden-remote",
+          "Remote Access could not restore its saved listener state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
+
       await createMainWindow();
       if (packagedSubagentSoak) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;
       }
-      await scheduleService.start();
-      await telegramService.start();
+      try {
+        await scheduleService.start();
+      } catch (error) {
+        logger.error(
+          "scheduled-tasks",
+          "Scheduled tasks could not restore their saved state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
+      // Telegram restoration is optional to desktop availability. Bot-bound
+      // routes independently revalidate their exact managed home and access
+      // policy before queue admission whenever the binding store is healthy.
+      try {
+        await telegramService.start();
+      } catch (error) {
+        logger.error(
+          "telegram",
+          "Telegram could not restore its saved state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
       appUpdateService.start();
     })
     .catch((error: unknown) => {

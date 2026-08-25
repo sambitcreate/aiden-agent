@@ -15,6 +15,7 @@ const inventoryCache = new SubagentMcpInventoryCache();
  */
 export async function resolveProductionSubagentMcpInventory(
   signal: AbortSignal,
+  options: { fresh?: boolean } = {},
 ): Promise<SubagentMcpScopeV2[]> {
   return resolveBoundedSubagentMcpInventory(signal, {
     listServers: () => configStore.listMcpServers(),
@@ -22,5 +23,6 @@ export async function resolveProductionSubagentMcpInventory(
     resolveCredentialRevision: async (server, currentSignal) =>
       (await resolveProductionSubagentMcpCredentialBoundary(server, currentSignal)).revision,
     cache: inventoryCache,
+    bypassCache: options.fresh === true,
   });
 }

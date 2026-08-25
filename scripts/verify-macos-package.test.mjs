@@ -470,8 +470,12 @@ test("package verifier checks the broker's Mach-O deployment target, not only In
   );
 });
 
-test("package verifier requires the exact universal architecture set for both private helpers", () => {
-  for (const target of ["Managed worktree remover", "Private subagent run store"]) {
+test("package verifier requires the exact universal architecture set for private helpers", () => {
+  for (const target of [
+    "Managed worktree remover",
+    "Bot inbox writer",
+    "Private subagent run store",
+  ]) {
     assert.doesNotThrow(() => assertExactUniversalArchitectures("x86_64 arm64\n", target));
     assert.doesNotThrow(() => assertExactUniversalArchitectures("arm64 x86_64\n", target));
     assert.throws(
@@ -494,7 +498,11 @@ test("package verifier requires the exact universal architecture set for both pr
 });
 
 test("package verifier checks each architecture deployment floor independently", () => {
-  for (const target of ["Managed worktree remover", "Private subagent run store"]) {
+  for (const target of [
+    "Managed worktree remover",
+    "Bot inbox writer",
+    "Private subagent run store",
+  ]) {
     for (const architecture of ["arm64", "x86_64"]) {
       assert.doesNotThrow(() =>
         assertMacOSArchitectureMinimum(

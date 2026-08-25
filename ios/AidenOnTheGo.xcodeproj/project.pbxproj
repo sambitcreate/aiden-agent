@@ -1,0 +1,1140 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A0D000000000000000000001 /* AidenRemoteContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000011 /* AidenRemoteContract.swift */; };
+		A0D000000000000000000002 /* AidenServerTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000012 /* AidenServerTrust.swift */; };
+		A0D000000000000000000003 /* AidenRemotePhase0Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000013 /* AidenRemotePhase0Tests.swift */; };
+		A0D600000000000000000001 /* AidenRemoteClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000011 /* AidenRemoteClient.swift */; };
+		A0D600000000000000000002 /* AidenInstallation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000012 /* AidenInstallation.swift */; };
+		A0D600000000000000000003 /* AidenRemoteClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000013 /* AidenRemoteClientTests.swift */; };
+		A0D600000000000000000004 /* AidenRemoteCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000014 /* AidenRemoteCoordinator.swift */; };
+		A0D600000000000000000005 /* AidenPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000015 /* AidenPairingView.swift */; };
+		A0D600000000000000000006 /* AidenWorkspaceShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000016 /* AidenWorkspaceShellView.swift */; };
+		A0D700000000000000000001 /* AidenChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000011 /* AidenChat.swift */; };
+		A0D700000000000000000002 /* AidenSSEParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000012 /* AidenSSEParser.swift */; };
+		A0D700000000000000000003 /* AidenChatCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000013 /* AidenChatCache.swift */; };
+		A0D700000000000000000004 /* AidenChatFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000014 /* AidenChatFeature.swift */; };
+		A0D700000000000000000005 /* AidenChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000015 /* AidenChatTests.swift */; };
+		A0D800000000000000000001 /* AidenAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D800000000000000000011 /* AidenAppearance.swift */; };
+		A0D800000000000000000003 /* AidenVoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D800000000000000000013 /* AidenVoiceInput.swift */; };
+		A0D800000000000000000002 /* AidenAppearanceV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D800000000000000000012 /* AidenAppearanceV1.json */; };
+		A0D900000000000000000001 /* AidenWorkspaceEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D900000000000000000011 /* AidenWorkspaceEnvironment.swift */; };
+		A0D900000000000000000002 /* AidenWorkspaceEnvironmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */; };
+		A0D900000000000000000003 /* AidenWorkspaceEnvironmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D900000000000000000013 /* AidenWorkspaceEnvironmentTests.swift */; };
+		A0DA00000000000000000001 /* AidenScheduledTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000011 /* AidenScheduledTask.swift */; };
+		A0DA00000000000000000002 /* AidenScheduledTasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000012 /* AidenScheduledTasksView.swift */; };
+		A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */; };
+		A0D000000000000000000004 /* AidenRemoteContractV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000014 /* AidenRemoteContractV1.json */; };
+		A0D000000000000000000005 /* AidenManualPairingVectorV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000015 /* AidenManualPairingVectorV1.json */; };
+		1A2B3C4D5E6F700000000001 /* AidenOnTheGoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000011 /* AidenOnTheGoApp.swift */; };
+		1A2B3C4D5E6F700000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000012 /* ContentView.swift */; };
+		1A2B3C4D5E6F700000000338 /* AidenAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000337 /* AidenAppIntents.swift */; };
+		1A2B3C4D5E6F700000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000014 /* Assets.xcassets */; };
+		A1DE00000000000000000001 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A1DE00000000000000000002 /* AppIcon.icon */; };
+		10CA110C0DE000000000B001 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 10CA110C0DE000000000B002 /* Localizable.xcstrings */; };
+		10CA110C0DE000000000B003 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 10CA110C0DE000000000B002 /* Localizable.xcstrings */; };
+		10CA110C0DE000000000B004 /* AppShortcuts.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 10CA110C0DE000000000B005 /* AppShortcuts.xcstrings */; };
+		1A2B3C4D5E6F700000000008 /* KeychainAccess in Frameworks */ = {isa = PBXBuildFile; productRef = 1A2B3C4D5E6F700000000098 /* KeychainAccess */; };
+		BADA00000000000000000001 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BADA00000000000000000003 /* MarkdownUI */; };
+		1A2B3C4D5E6F7000000000A0 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000B0 /* KeychainStore.swift */; };
+		1A2B3C4D5E6F7000000000F8 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F9 /* AppConfig.swift */; };
+		1A2B3C4D5E6F70000000300 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000301 /* PrivacyInfo.xcprivacy */; };
+		9E2A653D968A4ACDA19A8142 /* ThirdPartyNotices in Resources */ = {isa = PBXBuildFile; fileRef = 488791F556304AD2AC59BC5D /* ThirdPartyNotices */; };
+		A04500000000000000000001 /* AgentRunActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000010 /* AgentRunActivityAttributes.swift */; };
+		A04500000000000000000002 /* AidenDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000011 /* AidenDeepLink.swift */; };
+		A04500000000000000000004 /* AgentRunActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000010 /* AgentRunActivityAttributes.swift */; };
+		A04500000000000000000005 /* AidenDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000011 /* AidenDeepLink.swift */; };
+		A04500000000000000000006 /* AgentRunLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */; };
+		A04500000000000000000007 /* AidenLiveActivityWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A04500000000000000000017 /* AidenLiveActivityWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A04500000000000000000008 /* aiden-sidebar-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000018 /* aiden-sidebar-logo.png */; };
+		A0DB00000000000000000001 /* AidenRemoteLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */; };
+		A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */; };
+		B07200000000000000000001 /* AidenBotPrototypeSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07200000000000000000011 /* AidenBotPrototypeSnapshotTests.swift */; };
+		B07300000000000000000001 /* AidenBot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07300000000000000000011 /* AidenBot.swift */; };
+		B07300000000000000000002 /* AidenBotContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07300000000000000000012 /* AidenBotContractTests.swift */; };
+		B07400000000000000000001 /* AidenProductShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07400000000000000000011 /* AidenProductShellView.swift */; };
+		B07400000000000000000002 /* AidenProductShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07400000000000000000012 /* AidenProductShellTests.swift */; };
+		B07500000000000000000001 /* AidenBotCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07500000000000000000011 /* AidenBotCache.swift */; };
+		B07500000000000000000002 /* AidenChatDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07500000000000000000012 /* AidenChatDraftStore.swift */; };
+		B07500000000000000000003 /* AidenBotCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07500000000000000000013 /* AidenBotCacheTests.swift */; };
+		B07600000000000000000001 /* AidenBotCustomAccessFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07600000000000000000011 /* AidenBotCustomAccessFlowView.swift */; };
+		B07700000000000000000001 /* AidenBotsHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07700000000000000000011 /* AidenBotsHomeView.swift */; };
+		B07800000000000000000001 /* AidenBotEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07800000000000000000011 /* AidenBotEditorView.swift */; };
+		B07900000000000000000001 /* AidenBotProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07900000000000000000011 /* AidenBotProfileView.swift */; };
+		B08000000000000000000001 /* AidenBotSemanticAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */; };
+		B07A00000000000000000001 /* AidenBotChatToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07A00000000000000000011 /* AidenBotChatToolsView.swift */; };
+		B07B00000000000000000001 /* AidenBotImagePlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07B00000000000000000011 /* AidenBotImagePlaygroundView.swift */; };
+		B07B00000000000000000002 /* AidenBotImagePlaygroundTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07B00000000000000000012 /* AidenBotImagePlaygroundTests.swift */; };
+		B07C00000000000000000001 /* AidenBotGeneratedAvatarLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07C00000000000000000011 /* AidenBotGeneratedAvatarLifecycle.swift */; };
+		B07C00000000000000000002 /* AidenBotGeneratedAvatarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07C00000000000000000012 /* AidenBotGeneratedAvatarTests.swift */; };
+		A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */; };
+		A0E000000000000000000001 /* Core.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000011 /* Core.swift */; };
+		A0E000000000000000000002 /* Lattice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000012 /* Lattice.swift */; };
+		A0E000000000000000000003 /* Morph.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000013 /* Morph.swift */; };
+		A0E000000000000000000004 /* OrbSpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000014 /* OrbSpec.swift */; };
+		A0E000000000000000000005 /* Orbits.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000015 /* Orbits.swift */; };
+		A0E000000000000000000006 /* Presets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000016 /* Presets.swift */; };
+		A0E000000000000000000007 /* Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000017 /* Snapshot.swift */; };
+		A0E000000000000000000008 /* Strands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000018 /* Strands.swift */; };
+		A0E000000000000000000009 /* ThinkingOrb.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000019 /* ThinkingOrb.swift */; };
+		A0E00000000000000000000A /* Web.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E00000000000000000001A /* Web.swift */; };
+		A0F000000000000000000001 /* AidenProviderIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F000000000000000000011 /* AidenProviderIcon.swift */; };
+		B07100000000000000000001 /* BotFirstPrototype.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07100000000000000000011 /* BotFirstPrototype.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		1A2B3C4D5E6F700000000036 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A2B3C4D5E6F700000000070 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A2B3C4D5E6F700000000040;
+			remoteInfo = AidenOnTheGo;
+		};
+		A04500000000000000000030 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A2B3C4D5E6F700000000070 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A04500000000000000000040;
+			remoteInfo = AidenLiveActivityWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B5A100000000000000000023 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A04500000000000000000007 /* AidenLiveActivityWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		A0D000000000000000000011 /* AidenRemoteContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteContract.swift; sourceTree = "<group>"; };
+		A0D000000000000000000012 /* AidenServerTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenServerTrust.swift; sourceTree = "<group>"; };
+		A0D000000000000000000013 /* AidenRemotePhase0Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemotePhase0Tests.swift; sourceTree = "<group>"; };
+		A0D000000000000000000014 /* AidenRemoteContractV1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = AidenRemoteContractV1.json; path = ../protocol/aiden-remote/v1/fixtures/contract.json; sourceTree = SOURCE_ROOT; };
+		A0D000000000000000000015 /* AidenManualPairingVectorV1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = AidenManualPairingVectorV1.json; path = ../protocol/aiden-remote/v1/fixtures/manual-pairing-vector.json; sourceTree = SOURCE_ROOT; };
+		A0D600000000000000000011 /* AidenRemoteClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteClient.swift; sourceTree = "<group>"; };
+		A0D600000000000000000012 /* AidenInstallation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenInstallation.swift; sourceTree = "<group>"; };
+		A0D600000000000000000013 /* AidenRemoteClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteClientTests.swift; sourceTree = "<group>"; };
+		A0D600000000000000000014 /* AidenRemoteCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteCoordinator.swift; sourceTree = "<group>"; };
+		A0D600000000000000000015 /* AidenPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenPairingView.swift; sourceTree = "<group>"; };
+		A0D600000000000000000016 /* AidenWorkspaceShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceShellView.swift; sourceTree = "<group>"; };
+		A0D700000000000000000011 /* AidenChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChat.swift; sourceTree = "<group>"; };
+		A0D700000000000000000012 /* AidenSSEParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSSEParser.swift; sourceTree = "<group>"; };
+		A0D700000000000000000013 /* AidenChatCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatCache.swift; sourceTree = "<group>"; };
+		A0D700000000000000000014 /* AidenChatFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatFeature.swift; sourceTree = "<group>"; };
+		A0D700000000000000000015 /* AidenChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatTests.swift; sourceTree = "<group>"; };
+		A0D800000000000000000011 /* AidenAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAppearance.swift; sourceTree = "<group>"; };
+		A0D800000000000000000013 /* AidenVoiceInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenVoiceInput.swift; sourceTree = "<group>"; };
+		A0D800000000000000000012 /* AidenAppearanceV1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = AidenAppearanceV1.json; path = ../protocol/aiden-appearance-v1.json; sourceTree = SOURCE_ROOT; };
+		A0D900000000000000000011 /* AidenWorkspaceEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceEnvironment.swift; sourceTree = "<group>"; };
+		A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceEnvironmentView.swift; sourceTree = "<group>"; };
+		A0D900000000000000000013 /* AidenWorkspaceEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceEnvironmentTests.swift; sourceTree = "<group>"; };
+		A0DA00000000000000000011 /* AidenScheduledTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTask.swift; sourceTree = "<group>"; };
+		A0DA00000000000000000012 /* AidenScheduledTasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTasksView.swift; sourceTree = "<group>"; };
+		A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTaskTests.swift; sourceTree = "<group>"; };
+		351C0F1600000000000000A1 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Shared.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000010 /* AidenOnTheGo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AidenOnTheGo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A2B3C4D5E6F700000000011 /* AidenOnTheGoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenOnTheGoApp.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000337 /* AidenAppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAppIntents.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A1DE00000000000000000002 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		10CA110C0DE000000000B002 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		10CA110C0DE000000000B005 /* AppShortcuts.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = AppShortcuts.xcstrings; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000015 /* AidenOnTheGoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AidenOnTheGoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A2B3C4D5E6F7000000000B0 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000F9 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F70000000301 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerVoiceInputController.swift; sourceTree = "<group>"; };
+		B07300000000000000000011 /* AidenBot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBot.swift; sourceTree = "<group>"; };
+		B07300000000000000000012 /* AidenBotContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotContractTests.swift; sourceTree = "<group>"; };
+		B07400000000000000000011 /* AidenProductShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProductShellView.swift; sourceTree = "<group>"; };
+		B07400000000000000000012 /* AidenProductShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProductShellTests.swift; sourceTree = "<group>"; };
+		B07500000000000000000011 /* AidenBotCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCache.swift; sourceTree = "<group>"; };
+		B07500000000000000000012 /* AidenChatDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatDraftStore.swift; sourceTree = "<group>"; };
+		B07500000000000000000013 /* AidenBotCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCacheTests.swift; sourceTree = "<group>"; };
+		B07600000000000000000011 /* AidenBotCustomAccessFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCustomAccessFlowView.swift; sourceTree = "<group>"; };
+		B07700000000000000000011 /* AidenBotsHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotsHomeView.swift; sourceTree = "<group>"; };
+		B07800000000000000000011 /* AidenBotEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotEditorView.swift; sourceTree = "<group>"; };
+		B07900000000000000000011 /* AidenBotProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotProfileView.swift; sourceTree = "<group>"; };
+		B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSemanticAvatarView.swift; sourceTree = "<group>"; };
+		B07A00000000000000000011 /* AidenBotChatToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotChatToolsView.swift; sourceTree = "<group>"; };
+		B07B00000000000000000011 /* AidenBotImagePlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotImagePlaygroundView.swift; sourceTree = "<group>"; };
+		B07B00000000000000000012 /* AidenBotImagePlaygroundTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotImagePlaygroundTests.swift; sourceTree = "<group>"; };
+		B07C00000000000000000011 /* AidenBotGeneratedAvatarLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotGeneratedAvatarLifecycle.swift; sourceTree = "<group>"; };
+		B07C00000000000000000012 /* AidenBotGeneratedAvatarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotGeneratedAvatarTests.swift; sourceTree = "<group>"; };
+		B5A100000000000000000015 /* AidenOnTheGo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AidenOnTheGo.entitlements; sourceTree = "<group>"; };
+		488791F556304AD2AC59BC5D /* ThirdPartyNotices */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ThirdPartyNotices; sourceTree = "<group>"; };
+		A04500000000000000000010 /* AgentRunActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunActivityAttributes.swift; sourceTree = "<group>"; };
+		A04500000000000000000011 /* AidenDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenDeepLink.swift; sourceTree = "<group>"; };
+		A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunLiveActivityWidget.swift; sourceTree = "<group>"; };
+		A04500000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A04500000000000000000018 /* aiden-sidebar-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = "aiden-sidebar-logo.png"; path = AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png; sourceTree = SOURCE_ROOT; };
+		A04500000000000000000017 /* AidenLiveActivityWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AidenLiveActivityWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteLiveActivityManager.swift; sourceTree = "<group>"; };
+		A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNativeIntegrationTests.swift; sourceTree = "<group>"; };
+		B07200000000000000000011 /* AidenBotPrototypeSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPrototypeSnapshotTests.swift; sourceTree = "<group>"; };
+		A0E000000000000000000011 /* Core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Core.swift; sourceTree = "<group>"; };
+		A0E000000000000000000012 /* Lattice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Lattice.swift; sourceTree = "<group>"; };
+		A0E000000000000000000013 /* Morph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Morph.swift; sourceTree = "<group>"; };
+		A0E000000000000000000014 /* OrbSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbSpec.swift; sourceTree = "<group>"; };
+		A0E000000000000000000015 /* Orbits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Orbits.swift; sourceTree = "<group>"; };
+		A0E000000000000000000016 /* Presets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Presets.swift; sourceTree = "<group>"; };
+		A0E000000000000000000017 /* Snapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshot.swift; sourceTree = "<group>"; };
+		A0E000000000000000000018 /* Strands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Strands.swift; sourceTree = "<group>"; };
+		A0E000000000000000000019 /* ThinkingOrb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingOrb.swift; sourceTree = "<group>"; };
+		A0E00000000000000000001A /* Web.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Web.swift; sourceTree = "<group>"; };
+		A0F000000000000000000011 /* AidenProviderIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProviderIcon.swift; sourceTree = "<group>"; };
+		B07100000000000000000011 /* BotFirstPrototype.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotFirstPrototype.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1A2B3C4D5E6F700000000020 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A2B3C4D5E6F700000000008 /* KeychainAccess in Frameworks */,
+				BADA00000000000000000001 /* MarkdownUI in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A2B3C4D5E6F700000000021 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A04500000000000000000061 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1A2B3C4D5E6F700000000030 = {
+			isa = PBXGroup;
+			children = (
+				351C0F1600000000000000A1 /* Shared.xcconfig */,
+				1A2B3C4D5E6F700000000031 /* AidenOnTheGo */,
+				1A2B3C4D5E6F700000000034 /* AidenOnTheGoTests */,
+				A04500000000000000000021 /* AidenLiveActivityWidget */,
+				1A2B3C4D5E6F700000000032 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F700000000031 /* AidenOnTheGo */ = {
+			isa = PBXGroup;
+			children = (
+				1A2B3C4D5E6F700000000011 /* AidenOnTheGoApp.swift */,
+				1A2B3C4D5E6F700000000012 /* ContentView.swift */,
+				1A2B3C4D5E6F7000000000FA /* Config */,
+				1A2B3C4D5E6F700000000339 /* AppIntents */,
+				A04500000000000000000020 /* LiveActivities */,
+				1A2B3C4D5E6F7000000000C0 /* Auth */,
+				1A2B3C4D5E6F7000000000C1 /* Networking */,
+				1A2B3C4D5E6F7000000000C2 /* Models */,
+				1A2B3C4D5E6F7000000000F0 /* Persistence */,
+				1A2B3C4D5E6F7000000000C3 /* Features */,
+				1A2B3C4D5E6F700000000033 /* Resources */,
+			);
+			path = AidenOnTheGo;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F700000000032 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1A2B3C4D5E6F700000000010 /* AidenOnTheGo.app */,
+				1A2B3C4D5E6F700000000015 /* AidenOnTheGoTests.xctest */,
+				A04500000000000000000017 /* AidenLiveActivityWidget.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F700000000033 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A1DE00000000000000000002 /* AppIcon.icon */,
+				1A2B3C4D5E6F700000000014 /* Assets.xcassets */,
+				10CA110C0DE000000000B002 /* Localizable.xcstrings */,
+				10CA110C0DE000000000B005 /* AppShortcuts.xcstrings */,
+				1A2B3C4D5E6F700000000013 /* Info.plist */,
+				B5A100000000000000000015 /* AidenOnTheGo.entitlements */,
+				1A2B3C4D5E6F70000000301 /* PrivacyInfo.xcprivacy */,
+				488791F556304AD2AC59BC5D /* ThirdPartyNotices */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F700000000034 /* AidenOnTheGoTests */ = {
+			isa = PBXGroup;
+			children = (
+				B07C00000000000000000012 /* AidenBotGeneratedAvatarTests.swift */,
+				B07B00000000000000000012 /* AidenBotImagePlaygroundTests.swift */,
+				B07500000000000000000013 /* AidenBotCacheTests.swift */,
+				B07400000000000000000012 /* AidenProductShellTests.swift */,
+				B07300000000000000000012 /* AidenBotContractTests.swift */,
+				B07200000000000000000011 /* AidenBotPrototypeSnapshotTests.swift */,
+				A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */,
+				A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */,
+				A0D900000000000000000013 /* AidenWorkspaceEnvironmentTests.swift */,
+				A0D000000000000000000013 /* AidenRemotePhase0Tests.swift */,
+				A0D600000000000000000013 /* AidenRemoteClientTests.swift */,
+				A0D700000000000000000015 /* AidenChatTests.swift */,
+				A0D800000000000000000012 /* AidenAppearanceV1.json */,
+				A0D000000000000000000014 /* AidenRemoteContractV1.json */,
+				A0D000000000000000000015 /* AidenManualPairingVectorV1.json */,
+			);
+			path = AidenOnTheGoTests;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000C0 /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				1A2B3C4D5E6F7000000000B0 /* KeychainStore.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000C1 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				A0D000000000000000000011 /* AidenRemoteContract.swift */,
+				A0D000000000000000000012 /* AidenServerTrust.swift */,
+				A0D600000000000000000011 /* AidenRemoteClient.swift */,
+				A0D700000000000000000012 /* AidenSSEParser.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000C2 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				B07300000000000000000011 /* AidenBot.swift */,
+				A0DA00000000000000000011 /* AidenScheduledTask.swift */,
+				A0D900000000000000000011 /* AidenWorkspaceEnvironment.swift */,
+				A0D600000000000000000012 /* AidenInstallation.swift */,
+				A0D700000000000000000011 /* AidenChat.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000C3 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				B07100000000000000000020 /* Bots */,
+				A0D600000000000000000020 /* Remote */,
+				1A2B3C4D5E6F7000000000C4 /* Onboarding */,
+				C09300000000000000000010 /* Shared */,
+				1A2B3C4D5E6F7000000000C5 /* SessionList */,
+				1A2B3C4D5E6F7000000000C6 /* Chat */,
+				1A2B3C4D5E6F7000000000C7 /* Workspace */,
+				1A2B3C4D5E6F7000000000F7 /* Settings */,
+				3F91D2A54B9A4F66A2C01020 /* Tasks */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		B07100000000000000000020 /* Bots */ = {
+			isa = PBXGroup;
+			children = (
+				B07C00000000000000000011 /* AidenBotGeneratedAvatarLifecycle.swift */,
+				B07B00000000000000000011 /* AidenBotImagePlaygroundView.swift */,
+				B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */,
+				B07900000000000000000011 /* AidenBotProfileView.swift */,
+				B07800000000000000000011 /* AidenBotEditorView.swift */,
+				B07600000000000000000011 /* AidenBotCustomAccessFlowView.swift */,
+				B07700000000000000000011 /* AidenBotsHomeView.swift */,
+				B07100000000000000000021 /* Prototype */,
+			);
+			path = Bots;
+			sourceTree = "<group>";
+		};
+		B07100000000000000000021 /* Prototype */ = {
+			isa = PBXGroup;
+			children = (
+				B07100000000000000000011 /* BotFirstPrototype.swift */,
+			);
+			path = Prototype;
+			sourceTree = "<group>";
+		};
+		A0D600000000000000000020 /* Remote */ = {
+			isa = PBXGroup;
+			children = (
+				B07A00000000000000000011 /* AidenBotChatToolsView.swift */,
+				B07400000000000000000011 /* AidenProductShellView.swift */,
+				A0DA00000000000000000012 /* AidenScheduledTasksView.swift */,
+				A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */,
+				A0D600000000000000000014 /* AidenRemoteCoordinator.swift */,
+				A0D600000000000000000015 /* AidenPairingView.swift */,
+				A0D600000000000000000016 /* AidenWorkspaceShellView.swift */,
+				A0D700000000000000000014 /* AidenChatFeature.swift */,
+			);
+			path = Remote;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000C4 /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Onboarding;
+			sourceTree = "<group>";
+		};
+		C09300000000000000000010 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				A0F000000000000000000011 /* AidenProviderIcon.swift */,
+				A0E000000000000000000020 /* ThinkingOrbsKit */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		A0E000000000000000000020 /* ThinkingOrbsKit */ = {
+			isa = PBXGroup;
+			children = (
+				A0E000000000000000000011 /* Core.swift */,
+				A0E000000000000000000012 /* Lattice.swift */,
+				A0E000000000000000000013 /* Morph.swift */,
+				A0E000000000000000000014 /* OrbSpec.swift */,
+				A0E000000000000000000015 /* Orbits.swift */,
+				A0E000000000000000000016 /* Presets.swift */,
+				A0E000000000000000000017 /* Snapshot.swift */,
+				A0E000000000000000000018 /* Strands.swift */,
+				A0E000000000000000000019 /* ThinkingOrb.swift */,
+				A0E00000000000000000001A /* Web.swift */,
+			);
+			path = ThinkingOrbsKit;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000C5 /* SessionList */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = SessionList;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000C6 /* Chat */ = {
+			isa = PBXGroup;
+			children = (
+				A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */,
+			);
+			path = Chat;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000C7 /* Workspace */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Workspace;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000F0 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				B07500000000000000000011 /* AidenBotCache.swift */,
+				B07500000000000000000012 /* AidenChatDraftStore.swift */,
+				A0D700000000000000000013 /* AidenChatCache.swift */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000F7 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F7000000000FA /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				1A2B3C4D5E6F7000000000F9 /* AppConfig.swift */,
+				A0D800000000000000000011 /* AidenAppearance.swift */,
+				A0D800000000000000000013 /* AidenVoiceInput.swift */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		A04500000000000000000020 /* LiveActivities */ = {
+			isa = PBXGroup;
+			children = (
+				A04500000000000000000010 /* AgentRunActivityAttributes.swift */,
+				A04500000000000000000011 /* AidenDeepLink.swift */,
+				A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */,
+			);
+			path = LiveActivities;
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F700000000339 /* AppIntents */ = {
+			isa = PBXGroup;
+			children = (
+				1A2B3C4D5E6F700000000337 /* AidenAppIntents.swift */,
+			);
+			path = AppIntents;
+			sourceTree = "<group>";
+		};
+		A04500000000000000000021 /* AidenLiveActivityWidget */ = {
+			isa = PBXGroup;
+			children = (
+				A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */,
+				A04500000000000000000022 /* Resources */,
+			);
+			path = AidenLiveActivityWidget;
+			sourceTree = "<group>";
+		};
+		A04500000000000000000022 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A04500000000000000000014 /* Info.plist */,
+				A04500000000000000000018 /* aiden-sidebar-logo.png */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		3F91D2A54B9A4F66A2C01020 /* Tasks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Tasks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1A2B3C4D5E6F700000000040 /* AidenOnTheGo */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A2B3C4D5E6F700000000041 /* Build configuration list for PBXNativeTarget "AidenOnTheGo" */;
+			buildPhases = (
+				1A2B3C4D5E6F700000000050 /* Sources */,
+				1A2B3C4D5E6F700000000060 /* Resources */,
+				1A2B3C4D5E6F700000000020 /* Frameworks */,
+				B5A100000000000000000023 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A04500000000000000000031 /* PBXTargetDependency */,
+			);
+			name = AidenOnTheGo;
+			packageProductDependencies = (
+				1A2B3C4D5E6F700000000098 /* KeychainAccess */,
+				BADA00000000000000000003 /* MarkdownUI */,
+			);
+			productName = AidenOnTheGo;
+			productReference = 1A2B3C4D5E6F700000000010 /* AidenOnTheGo.app */;
+			productType = "com.apple.product-type.application";
+		};
+		1A2B3C4D5E6F700000000044 /* AidenOnTheGoTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A2B3C4D5E6F700000000045 /* Build configuration list for PBXNativeTarget "AidenOnTheGoTests" */;
+			buildPhases = (
+				1A2B3C4D5E6F700000000052 /* Sources */,
+				A0D000000000000000000060 /* Resources */,
+				1A2B3C4D5E6F700000000021 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1A2B3C4D5E6F700000000037 /* PBXTargetDependency */,
+			);
+			name = AidenOnTheGoTests;
+			packageProductDependencies = (
+			);
+			productName = AidenOnTheGoTests;
+			productReference = 1A2B3C4D5E6F700000000015 /* AidenOnTheGoTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A04500000000000000000040 /* AidenLiveActivityWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A04500000000000000000041 /* Build configuration list for PBXNativeTarget "AidenLiveActivityWidget" */;
+			buildPhases = (
+				A04500000000000000000050 /* Sources */,
+				A04500000000000000000060 /* Resources */,
+				A04500000000000000000061 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AidenLiveActivityWidget;
+			productName = AidenLiveActivityWidget;
+			productReference = A04500000000000000000017 /* AidenLiveActivityWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1A2B3C4D5E6F700000000070 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2640;
+				LastUpgradeCheck = 2640;
+				TargetAttributes = {
+					1A2B3C4D5E6F700000000040 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					1A2B3C4D5E6F700000000044 = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = 1A2B3C4D5E6F700000000040;
+					};
+					A04500000000000000000040 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+				};
+			};
+			buildConfigurationList = 1A2B3C4D5E6F700000000071 /* Build configuration list for PBXProject "AidenOnTheGo" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				de,
+				es,
+				fr,
+				it,
+				pl,
+				"pt-BR",
+				nl,
+				tr,
+				ru,
+				ja,
+				"zh-Hans",
+				ko,
+				ar,
+				he,
+				ur,
+				"zh-Hant",
+				"zh-HK",
+			);
+			mainGroup = 1A2B3C4D5E6F700000000030;
+			packageReferences = (
+				1A2B3C4D5E6F700000000099 /* XCRemoteSwiftPackageReference "KeychainAccess" */,
+				BADA00000000000000000002 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
+			);
+			productRefGroup = 1A2B3C4D5E6F700000000032 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1A2B3C4D5E6F700000000040 /* AidenOnTheGo */,
+				1A2B3C4D5E6F700000000044 /* AidenOnTheGoTests */,
+				A04500000000000000000040 /* AidenLiveActivityWidget */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A0D000000000000000000060 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0D000000000000000000004 /* AidenRemoteContractV1.json in Resources */,
+				A0D000000000000000000005 /* AidenManualPairingVectorV1.json in Resources */,
+				A0D800000000000000000002 /* AidenAppearanceV1.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A2B3C4D5E6F700000000060 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1DE00000000000000000001 /* AppIcon.icon in Resources */,
+				1A2B3C4D5E6F700000000003 /* Assets.xcassets in Resources */,
+				10CA110C0DE000000000B001 /* Localizable.xcstrings in Resources */,
+				1A2B3C4D5E6F70000000300 /* PrivacyInfo.xcprivacy in Resources */,
+				9E2A653D968A4ACDA19A8142 /* ThirdPartyNotices in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A04500000000000000000060 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10CA110C0DE000000000B003 /* Localizable.xcstrings in Resources */,
+				A04500000000000000000008 /* aiden-sidebar-logo.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1A2B3C4D5E6F700000000050 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B07C00000000000000000001 /* AidenBotGeneratedAvatarLifecycle.swift in Sources */,
+				B07B00000000000000000001 /* AidenBotImagePlaygroundView.swift in Sources */,
+				B07A00000000000000000001 /* AidenBotChatToolsView.swift in Sources */,
+				B08000000000000000000001 /* AidenBotSemanticAvatarView.swift in Sources */,
+				B07900000000000000000001 /* AidenBotProfileView.swift in Sources */,
+				B07800000000000000000001 /* AidenBotEditorView.swift in Sources */,
+				B07600000000000000000001 /* AidenBotCustomAccessFlowView.swift in Sources */,
+				B07700000000000000000001 /* AidenBotsHomeView.swift in Sources */,
+				B07500000000000000000001 /* AidenBotCache.swift in Sources */,
+				B07500000000000000000002 /* AidenChatDraftStore.swift in Sources */,
+				B07400000000000000000001 /* AidenProductShellView.swift in Sources */,
+				B07300000000000000000001 /* AidenBot.swift in Sources */,
+				B07100000000000000000001 /* BotFirstPrototype.swift in Sources */,
+				A0E000000000000000000001 /* Core.swift in Sources */,
+				A0E000000000000000000002 /* Lattice.swift in Sources */,
+				A0E000000000000000000003 /* Morph.swift in Sources */,
+				A0E000000000000000000004 /* OrbSpec.swift in Sources */,
+				A0E000000000000000000005 /* Orbits.swift in Sources */,
+				A0E000000000000000000006 /* Presets.swift in Sources */,
+				A0E000000000000000000007 /* Snapshot.swift in Sources */,
+				A0E000000000000000000008 /* Strands.swift in Sources */,
+				A0E000000000000000000009 /* ThinkingOrb.swift in Sources */,
+				A0E00000000000000000000A /* Web.swift in Sources */,
+				A0F000000000000000000001 /* AidenProviderIcon.swift in Sources */,
+				1A2B3C4D5E6F700000000338 /* AidenAppIntents.swift in Sources */,
+				A04500000000000000000001 /* AgentRunActivityAttributes.swift in Sources */,
+				A04500000000000000000002 /* AidenDeepLink.swift in Sources */,
+				A0DB00000000000000000001 /* AidenRemoteLiveActivityManager.swift in Sources */,
+				A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */,
+				A0DA00000000000000000001 /* AidenScheduledTask.swift in Sources */,
+				A0DA00000000000000000002 /* AidenScheduledTasksView.swift in Sources */,
+				A0D900000000000000000001 /* AidenWorkspaceEnvironment.swift in Sources */,
+				A0D900000000000000000002 /* AidenWorkspaceEnvironmentView.swift in Sources */,
+				A0D000000000000000000001 /* AidenRemoteContract.swift in Sources */,
+				A0D000000000000000000002 /* AidenServerTrust.swift in Sources */,
+				A0D600000000000000000001 /* AidenRemoteClient.swift in Sources */,
+				A0D600000000000000000002 /* AidenInstallation.swift in Sources */,
+				A0D600000000000000000004 /* AidenRemoteCoordinator.swift in Sources */,
+				A0D600000000000000000005 /* AidenPairingView.swift in Sources */,
+				A0D600000000000000000006 /* AidenWorkspaceShellView.swift in Sources */,
+				A0D700000000000000000001 /* AidenChat.swift in Sources */,
+				A0D700000000000000000002 /* AidenSSEParser.swift in Sources */,
+				A0D700000000000000000003 /* AidenChatCache.swift in Sources */,
+				A0D700000000000000000004 /* AidenChatFeature.swift in Sources */,
+				A0D800000000000000000001 /* AidenAppearance.swift in Sources */,
+				A0D800000000000000000003 /* AidenVoiceInput.swift in Sources */,
+				1A2B3C4D5E6F700000000001 /* AidenOnTheGoApp.swift in Sources */,
+				1A2B3C4D5E6F700000000002 /* ContentView.swift in Sources */,
+				1A2B3C4D5E6F7000000000F8 /* AppConfig.swift in Sources */,
+				1A2B3C4D5E6F7000000000A0 /* KeychainStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A2B3C4D5E6F700000000052 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B07C00000000000000000002 /* AidenBotGeneratedAvatarTests.swift in Sources */,
+				B07B00000000000000000002 /* AidenBotImagePlaygroundTests.swift in Sources */,
+				B07500000000000000000003 /* AidenBotCacheTests.swift in Sources */,
+				B07400000000000000000002 /* AidenProductShellTests.swift in Sources */,
+				B07300000000000000000002 /* AidenBotContractTests.swift in Sources */,
+				B07200000000000000000001 /* AidenBotPrototypeSnapshotTests.swift in Sources */,
+				A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */,
+				A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */,
+				A0D900000000000000000003 /* AidenWorkspaceEnvironmentTests.swift in Sources */,
+				A0D000000000000000000003 /* AidenRemotePhase0Tests.swift in Sources */,
+				A0D600000000000000000003 /* AidenRemoteClientTests.swift in Sources */,
+				A0D700000000000000000005 /* AidenChatTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A04500000000000000000050 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A04500000000000000000004 /* AgentRunActivityAttributes.swift in Sources */,
+				A04500000000000000000005 /* AidenDeepLink.swift in Sources */,
+				A04500000000000000000006 /* AgentRunLiveActivityWidget.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1A2B3C4D5E6F700000000037 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A2B3C4D5E6F700000000040 /* AidenOnTheGo */;
+			targetProxy = 1A2B3C4D5E6F700000000036 /* PBXContainerItemProxy */;
+		};
+		A04500000000000000000031 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A04500000000000000000040 /* AidenLiveActivityWidget */;
+			targetProxy = A04500000000000000000030 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		1A2B3C4D5E6F700000000080 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 351C0F1600000000000000A1 /* Shared.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APP_DISPLAY_NAME = "Aiden On The Go";
+				APP_URL_SCHEME_SUFFIX = "";
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = targeted;
+			};
+			name = Debug;
+		};
+		1A2B3C4D5E6F700000000081 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 351C0F1600000000000000A1 /* Shared.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APP_DISPLAY_NAME = "Aiden On The Go";
+				APP_URL_SCHEME_SUFFIX = "";
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_STRICT_CONCURRENCY = targeted;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		1A2B3C4D5E6F700000000082 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AIDEN_BOT_FIRST_ENABLED = YES;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIconMonochrome;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = AidenOnTheGo/Resources/AidenOnTheGo.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 22;
+				DEVELOPMENT_ASSET_PATHS = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AidenOnTheGo/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		1A2B3C4D5E6F700000000083 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AIDEN_BOT_FIRST_ENABLED = YES;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIconMonochrome;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = AidenOnTheGo/Resources/AidenOnTheGo.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 22;
+				DEVELOPMENT_ASSET_PATHS = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AidenOnTheGo/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		1A2B3C4D5E6F700000000084 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 22;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER)Tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AidenOnTheGo.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AidenOnTheGo";
+			};
+			name = Debug;
+		};
+		1A2B3C4D5E6F700000000085 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 22;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER)Tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AidenOnTheGo.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AidenOnTheGo";
+			};
+			name = Release;
+		};
+		A04500000000000000000042 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 22;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AidenLiveActivityWidget/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER).LiveActivityWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A04500000000000000000043 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 22;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AidenLiveActivityWidget/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER).LiveActivityWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1A2B3C4D5E6F700000000041 /* Build configuration list for PBXNativeTarget "AidenOnTheGo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A2B3C4D5E6F700000000082 /* Debug */,
+				1A2B3C4D5E6F700000000083 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A2B3C4D5E6F700000000045 /* Build configuration list for PBXNativeTarget "AidenOnTheGoTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A2B3C4D5E6F700000000084 /* Debug */,
+				1A2B3C4D5E6F700000000085 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A2B3C4D5E6F700000000071 /* Build configuration list for PBXProject "AidenOnTheGo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A2B3C4D5E6F700000000080 /* Debug */,
+				1A2B3C4D5E6F700000000081 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A04500000000000000000041 /* Build configuration list for PBXNativeTarget "AidenLiveActivityWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A04500000000000000000042 /* Debug */,
+				A04500000000000000000043 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1A2B3C4D5E6F700000000099 /* XCRemoteSwiftPackageReference "KeychainAccess" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kishikawakatsumi/KeychainAccess.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.2.2;
+			};
+		};
+		BADA00000000000000000002 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1A2B3C4D5E6F700000000098 /* KeychainAccess */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A2B3C4D5E6F700000000099 /* XCRemoteSwiftPackageReference "KeychainAccess" */;
+			productName = KeychainAccess;
+		};
+		BADA00000000000000000003 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BADA00000000000000000002 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 1A2B3C4D5E6F700000000070 /* Project object */;
+}

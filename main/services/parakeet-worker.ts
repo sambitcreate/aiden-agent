@@ -1,4 +1,5 @@
 import { pcmToFloat32 } from "../handlers/voice-codec.js";
+import { decodeAidenRemotePcm16 } from "./aiden-remote-speech-codec.js";
 import { engineStatus, releaseRecognizer, transcribePcm } from "./parakeet-engine.js";
 import {
   isParakeetParentMessage,
@@ -44,7 +45,9 @@ parentPort.on("message", (event) => {
       return;
     }
     const text = transcribePcm(
-      pcmToFloat32(message.pcmBase64),
+      message.encoding === "pcm_s16le"
+        ? decodeAidenRemotePcm16(message.pcmBase64)
+        : pcmToFloat32(message.pcmBase64),
       message.modelId,
       message.modelDirectory,
     );

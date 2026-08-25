@@ -232,6 +232,63 @@ test("removing a provider clears its cache entry and its key", async (t) => {
   assert.equal(h.secrets.keys[provider.id], undefined);
 });
 
+test("model visibility updates are atomic and provider-scoped", async (t) => {
+  const h = await harness(t);
+  await Promise.all([
+    h.store.setModelVisibility("google", "gemini-pro", true),
+    h.store.setModelVisibility("anthropic", "claude-sonnet", true),
+    h.store.setModelVisibility("google", "gemini-flash", true),
+  ]);
+
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    anthropic: ["claude-sonnet"],
+    google: ["gemini-flash", "gemini-pro"],
+  });
+
+  await h.store.setModelVisibility("google", "gemini-pro", false);
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    anthropic: ["claude-sonnet"],
+    google: ["gemini-flash"],
+  });
+  await h.store.showAllProviderModels("google");
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    anthropic: ["claude-sonnet"],
+  });
+});
+
+test("removing a provider clears its model visibility preferences", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setModelVisibility(provider.id, provider.models[0], true);
+  await h.store.setModelVisibility("other", "other-model", true);
+
+  await h.store.removeProvider(provider.id);
+
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    other: ["other-model"],
+  });
+});
+
+test("admitted provider removal finishes cache and visibility cleanup after renderer navigation", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setModelVisibility(provider.id, provider.models[0], true);
+  h.secrets.keys[provider.id] = "ciphertext";
+  let validityChecks = 0;
+
+  await h.store.removeProvider(provider.id, () => {
+    validityChecks += 1;
+    return validityChecks <= 5;
+  });
+
+  assert.equal(validityChecks, 5);
+  assert.deepEqual(await h.store.listProviders(), []);
+  assert.equal((await h.store.getSettings()).hiddenModelsByProvider?.[provider.id], undefined);
+  assert.equal(h.secrets.keys[provider.id], undefined);
+  const cache = await readJson<{ byProvider: Record<string, unknown> }>(h.cacheFile);
+  assert.equal(cache.byProvider[provider.id], undefined);
+});
+
 // ── Store placement ──────────────────────────────────────────────────────────
 
 test("MCP servers and skills are portable; workspaces and settings are not", async (t) => {
@@ -428,7 +485,10 @@ test("released onboarding local identity migration re-homes cache and remembered
         defaultModel: "qwen3-8b",
       },
     ],
-    settings: { lastProviderId: releasedId },
+    settings: {
+      lastProviderId: releasedId,
+      hiddenModelsByProvider: { [releasedId]: ["qwen3-8b"] },
+    },
     seeded: true,
   });
 
@@ -439,6 +499,9 @@ test("released onboarding local identity migration re-homes cache and remembered
   assert.deepEqual(listed.models, provider.models);
   assert.deepEqual(listed.modelMetadata, provider.modelMetadata);
   assert.equal((await h.store.getSettings()).lastProviderId, "custom:lmstudio");
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    "custom:lmstudio": ["qwen3-8b"],
+  });
   const cache = await readJson<{ byProvider: Record<string, unknown> }>(h.cacheFile);
   assert.equal(cache.byProvider[releasedId], undefined);
   assert.deepEqual(cache.byProvider["custom:lmstudio"], {
@@ -2052,6 +2115,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   const googleThinkingByModel = { "future-google": "ultra" };
   const codexThinkingByModel = { "future-codex": "ultra" };
   const anthropicThinkingByModel = { "future-anthropic": "ultra" };
+  const providerThinkingByModel = { "future-provider": { "future-model": "ultra" } };
   await fs.writeFile(
     h.settingsFile,
     JSON.stringify({
@@ -2066,6 +2130,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
         googleThinkingByModel,
         codexThinkingByModel,
         anthropicThinkingByModel,
+        providerThinkingByModel,
       },
     }),
     "utf-8",
@@ -2080,6 +2145,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   assert.deepEqual(saved.googleThinkingByModel, googleThinkingByModel);
   assert.deepEqual(saved.codexThinkingByModel, codexThinkingByModel);
   assert.deepEqual(saved.anthropicThinkingByModel, anthropicThinkingByModel);
+  assert.deepEqual(saved.providerThinkingByModel, providerThinkingByModel);
   assert.equal(saved.voiceProvider, "future-voice");
   assert.equal(saved.chatTitleProviderId, "future-title-policy");
   assert.equal(saved.scheduledDefaultMode, "future-mode");
@@ -2091,6 +2157,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   assert.equal(runtime.googleThinkingByModel, undefined);
   assert.equal(runtime.codexThinkingByModel, undefined);
   assert.equal(runtime.anthropicThinkingByModel, undefined);
+  assert.equal(runtime.providerThinkingByModel, undefined);
   assert.equal(runtime.voiceProvider, undefined);
   assert.equal(runtime.chatTitleProviderId, undefined);
   assert.equal(runtime.scheduledDefaultMode, undefined);
@@ -2100,6 +2167,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   await h.store.setGoogleThinkingLevel("known-google", "high");
   await h.store.setCodexThinkingLevel("known-codex", "xhigh");
   await h.store.setAnthropicThinkingLevel("known-anthropic", "max");
+  await h.store.setProviderThinkingLevel("opencode-go", "ox-alpha-free", "high");
 
   const edited = (await readJson<{ settings: Record<string, unknown> }>(h.settingsFile)).settings;
   assert.equal((edited.assistant as Record<string, unknown>).futureMode, "ambient");
@@ -2109,10 +2177,15 @@ test("future nested settings versions survive unrelated writes", async (t) => {
     (edited.anthropicThinkingByModel as Record<string, unknown>)["future-anthropic"],
     "ultra",
   );
+  assert.deepEqual(
+    (edited.providerThinkingByModel as Record<string, unknown>)["future-provider"],
+    { "future-model": "ultra" },
+  );
   const editedRuntime = await h.store.getSettings();
   assert.equal(editedRuntime.googleThinkingByModel?.["known-google"], "high");
   assert.equal(editedRuntime.codexThinkingByModel?.["known-codex"], "xhigh");
   assert.equal(editedRuntime.anthropicThinkingByModel?.["known-anthropic"], "max");
+  assert.equal(editedRuntime.providerThinkingByModel?.["opencode-go"]?.["ox-alpha-free"], "high");
 });
 
 test("editing MCP servers and skills preserves unknown future fields", async (t) => {

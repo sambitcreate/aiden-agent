@@ -4,6 +4,7 @@
 import { fileURLToPath } from "node:url";
 import type { UtilityProcess } from "electron";
 import { pcmToFloat32 } from "../handlers/voice-codec.js";
+import { decodeAidenRemotePcm16 } from "./aiden-remote-speech-codec.js";
 import { isModelInstalled, modelDir } from "./local-models.js";
 import {
   engineStatus as engineStatusInProcess,
@@ -107,10 +108,36 @@ export async function transcribePcmBase64(pcmBase64: string, modelId: string): P
       modelId,
       modelDirectory: directory,
       pcmBase64,
+      encoding: "float32le",
     });
   } catch (error) {
     if (isolationUnavailable(error)) {
       return transcribePcmInProcess(pcmToFloat32(pcmBase64), modelId, directory);
+    }
+    throw error;
+  }
+}
+
+export async function transcribePcm16Base64(
+  pcmBase64: string,
+  modelId: string,
+): Promise<string> {
+  const directory = modelDir(modelId);
+  if (!directory || !isModelInstalled(modelId)) {
+    throw new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.");
+  }
+  try {
+    return await (
+      await getClient()
+    ).transcribe({
+      modelId,
+      modelDirectory: directory,
+      pcmBase64,
+      encoding: "pcm_s16le",
+    });
+  } catch (error) {
+    if (isolationUnavailable(error)) {
+      return transcribePcmInProcess(decodeAidenRemotePcm16(pcmBase64), modelId, directory);
     }
     throw error;
   }

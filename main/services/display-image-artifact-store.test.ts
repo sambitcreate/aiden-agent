@@ -344,23 +344,25 @@ test("generation stages an artifact before announcing or retaining it in memory"
 });
 
 test("main blocks new sends and copies until staged artifacts are recovered", async () => {
-  const handlers = await fs.readFile(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../handlers/chats.ts"),
-    "utf8",
-  );
-  assert.match(handlers, /displayImageArtifactStore\.hasPending\(chatId\)/u);
+  const [handlers, applicationService] = await Promise.all([
+    fs.readFile(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "../handlers/chats.ts"),
+      "utf8",
+    ),
+    fs.readFile(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "chat-application-service.ts"),
+      "utf8",
+    ),
+  ]);
+  assert.match(applicationService, /deps\.displayImageArtifactStore\.hasPending\(chatId\)/u);
   assert.match(handlers, /displayImageArtifactStore\.hasPending\(parsed\.chatId\)/u);
   assert.match(handlers, /Delete this chat to discard it/iu);
   assert.match(handlers, /developer log to locate the staging file that needs repair/iu);
   const exportHandler = handlers.slice(handlers.indexOf('ipcMain.handle("chats:export"'));
   assert.match(exportHandler, /displayImageArtifactStore\.hasPending\(chatId\)/u);
-  const readHandler = handlers.slice(
-    handlers.indexOf('ipcMain.handle("chats:get"'),
-    handlers.indexOf('ipcMain.handle("chats:waitUntilIdle"'),
-  );
   assert.ok(
-    readHandler.indexOf("displayImageArtifactStore.hasPending(chatId)") <
-      readHandler.indexOf("llmClient.isChatBusy(chatId)"),
+    applicationService.indexOf("deps.displayImageArtifactStore.hasPending(chatId)") <
+      applicationService.indexOf("deps.llmClient.isChatBusy(chatId)"),
   );
 });
 

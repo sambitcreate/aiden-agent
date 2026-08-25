@@ -49,7 +49,7 @@ import {
   readModelSelectionRevision,
   useModelSelection,
 } from "../lib/use-model-selection";
-import { createModelEntries, isUsable } from "../lib/model-picker-data";
+import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
 import { SETTINGS_DESTINATIONS } from "../lib/settings-section";
 import {
   createDefaultAppearanceConfig,
@@ -112,7 +112,11 @@ export function AppCommandPalette({
   const chats = useChats(activeId);
   const providers = useProviders();
   const settings = useSettings();
-  const selection = useModelSelection(providers.data);
+  const selection = useModelSelection(
+    providers.data,
+    settings.data?.hiddenModelsByProvider,
+    settings.data !== undefined,
+  );
   const { binding, canExecute, execute, palette } = useCommandSystem();
   const [query, setQuery] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -127,8 +131,12 @@ export function AppCommandPalette({
     }
   });
   const models = React.useMemo(
-    () => createModelEntries(providers.data ?? []),
-    [providers.data],
+    () =>
+      settings.data ? visibleModelEntries(
+        createModelEntries(providers.data ?? []),
+        settings.data?.hiddenModelsByProvider,
+      ) : [],
+    [providers.data, settings.data?.hiddenModelsByProvider],
   );
   const unavailableModelProviders = React.useMemo(
     () => (providers.data ?? []).filter((provider) => !isUsable(provider)),
@@ -231,9 +239,15 @@ export function AppCommandPalette({
     if (busy) return;
     setBusy(true);
     try {
-      const next = await providersApi.refresh();
-      queryClient.setQueryData(queryKeys.providers, next);
-      toast.success("Provider model catalogs refreshed");
+      const result = await providersApi.refresh();
+      queryClient.setQueryData(queryKeys.providers, result.providers);
+      if (result.errors.length > 0) {
+        toast.warning(
+          `${result.providers.length > 0 ? "Available catalogs refreshed; " : ""}${result.errors.length} provider catalog${result.errors.length === 1 ? "" : "s"} kept cached models.`,
+        );
+      } else {
+        toast.success("Provider model catalogs refreshed");
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Providers could not be refreshed.");
     } finally {

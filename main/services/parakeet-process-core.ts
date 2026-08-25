@@ -49,7 +49,13 @@ export class ParakeetProcessClient {
     message:
       | { kind: "status" }
       | { kind: "release"; modelId: string }
-      | { kind: "transcribe"; modelId: string; modelDirectory: string; pcmBase64: string },
+      | {
+          kind: "transcribe";
+          modelId: string;
+          modelDirectory: string;
+          pcmBase64: string;
+          encoding: "float32le" | "pcm_s16le";
+        },
   ) {
     if (this.closed) return Promise.reject(new Error("On-device transcription process is closed."));
     const requestId = randomUUID();
@@ -93,12 +99,14 @@ export class ParakeetProcessClient {
     modelId: string;
     modelDirectory: string;
     pcmBase64: string;
+    encoding: "float32le" | "pcm_s16le";
   }): Promise<string> {
     const result = await this.request({
       kind: "transcribe",
       modelId: input.modelId,
       modelDirectory: input.modelDirectory,
       pcmBase64: input.pcmBase64,
+      encoding: input.encoding,
     });
     if (result.kind === "failure") throw new Error(result.message);
     return result.text ?? "";

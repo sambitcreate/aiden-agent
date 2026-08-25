@@ -211,6 +211,10 @@ test("safe tool descriptors retain only relative targets", () => {
     label: "Run command",
     detail: undefined,
   });
+  assert.deepEqual(safeToolDescriptor("share_image", { path: "/Users/person/Result.png" }), {
+    label: "Share image",
+    target: undefined,
+  });
   assert.deepEqual(safeToolDescriptor("read_file", { path: "/tmp/private.txt" }), {
     label: "Read file",
     target: undefined,

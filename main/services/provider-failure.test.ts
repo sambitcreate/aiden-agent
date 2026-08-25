@@ -36,6 +36,8 @@ test("provider failures map to a closed privacy-safe category", () => {
     ["request-failed", `Connection error. ${PRIVATE_CANARY}`, "network"],
     ["request-failed", `request timed out ${PRIVATE_CANARY}`, "timeout"],
     ["request-failed", `503 service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
+    ["request-failed", `503 model service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
+    ["request-failed", `404 model gemini-old is not found or unavailable ${PRIVATE_CANARY}`, "invalid_request"],
     ["request-failed", `429 rate limit ${PRIVATE_CANARY}`, "rate_limit"],
     ["request-failed", `401 unauthorized ${PRIVATE_CANARY}`, "authentication"],
     ["request-failed", `API key not valid. ${PRIVATE_CANARY}`, "authentication"],

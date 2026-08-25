@@ -38,6 +38,7 @@ test("process client resolves a transcribe result and fails in-flight work on ex
       modelId: "parakeet-v3",
       modelDirectory: "/tmp/model",
       pcmBase64: "AAA=",
+      encoding: "float32le",
     }),
     "hello",
   );
@@ -47,6 +48,7 @@ test("process client resolves a transcribe result and fails in-flight work on ex
     modelId: "parakeet-v3",
     modelDirectory: "/tmp/model",
     pcmBase64: "AAA=",
+    encoding: "pcm_s16le",
   });
   exits[0]?.(1);
   await assert.rejects(pending, /exited/u);

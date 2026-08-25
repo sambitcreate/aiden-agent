@@ -26,10 +26,13 @@ import { MAX_VISIBLE_COPY_MESSAGES } from "../../renderer/shared/chat-copy-contr
 import { jsonStringBytesBounded } from "./json-representation.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
+import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
 const MAX_VISIBLE_COPY_BYTES = 64 * 1024 * 1024;
+const MAX_CHAT_META_PREVIEW_CHARS = 500;
+const MAX_CHAT_META_PREVIEW_BYTES = 2_000;
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]+$/u;
 const CHAT_DELETE_STAGING =
   /^\.index\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.chat-delete\.tmp$/u;
@@ -149,8 +152,18 @@ export function createChatStore(
       Number.isFinite(meta.updatedAt) &&
       (meta.workspaceId === undefined ||
         typeof meta.workspaceId === "string") &&
+      (meta.botId === undefined ||
+        (typeof meta.botId === "string" &&
+          meta.botId.length > 0 &&
+          meta.botId.length <= 160 &&
+          meta.botId.normalize("NFKC") === meta.botId &&
+          SAFE_CHAT_ID.test(meta.botId))) &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
-      (meta.model === undefined || typeof meta.model === "string")
+      (meta.model === undefined || typeof meta.model === "string") &&
+      (meta.preview === undefined ||
+        (typeof meta.preview === "string" &&
+          Array.from(meta.preview).length <= MAX_CHAT_META_PREVIEW_CHARS &&
+          Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES))
     );
   }
 
@@ -476,12 +489,23 @@ export function createChatStore(
   }
 
   function metaOf(chat: Chat): ChatMeta {
+    const preview = [...chat.messages]
+      .reverse()
+      .find((message) =>
+        (message.role === "user" || message.role === "assistant") &&
+        message.content.trim().length > 0,
+      )?.content;
+    const boundedPreview = preview === undefined
+      ? undefined
+      : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
     return {
       id: chat.id,
       title: chat.title,
       workspaceId: chat.workspaceId ?? DEFAULT_WORKSPACE_ID,
+      ...(chat.botId ? { botId: chat.botId } : {}),
       providerId: chat.providerId,
       model: chat.model,
+      ...(boundedPreview ? { preview: boundedPreview } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
@@ -592,6 +616,14 @@ export function createChatStore(
       });
     },
 
+    async listRegular(workspaceId?: string): Promise<ChatMeta[]> {
+      return (await this.list(workspaceId)).filter((chat) => chat.botId === undefined);
+    },
+
+    async listByBot(botId: string): Promise<ChatMeta[]> {
+      return (await this.list()).filter((chat) => chat.botId === botId);
+    },
+
     async get(id: string): Promise<Chat | null> {
       return serialized(() => readChat(id));
     },
@@ -600,22 +632,40 @@ export function createChatStore(
       id?: string;
       title?: string;
       workspaceId?: string;
+      botId?: string;
       providerId?: string;
       model?: string;
+      /** Main-owned Bot greeting copied once into the new durable conversation. */
+      initialAssistantMessage?: string;
       assertCurrent?: () => void;
     }): Promise<Chat> {
       return serialized(async () => {
         input.assertCurrent?.();
+        if (
+          input.initialAssistantMessage !== undefined &&
+          !isBoundedBotText(input.initialAssistantMessage, 2_000)
+        ) {
+          throw new Error("Invalid initial Bot greeting.");
+        }
         const now = Date.now();
+        const openingGreeting = input.initialAssistantMessage?.trim();
         const chat: Chat = {
           id: input.id ?? newId(),
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          ...(input.botId ? { botId: input.botId } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
           createdAt: now,
           updatedAt: now,
-          messages: [],
+          messages: openingGreeting
+            ? [{
+                id: randomUUID(),
+                role: "assistant",
+                content: openingGreeting,
+                createdAt: now,
+              }]
+            : [],
         };
         return installNewChat(chat, input.assertCurrent);
       });
@@ -624,6 +674,10 @@ export function createChatStore(
     /** Copy only visible linear history; private runtime fields never enter the new payload. */
     async copyVisibleHistory(input: {
       sourceChatId: string;
+      /** Main-owned target identity used by recoverable Bot-copy workflows. */
+      targetChatId?: string;
+      /** Main-owned destination for copies that move legacy Bot history into its hidden home. */
+      targetWorkspaceId?: string;
       expectedWorkspaceId?: string;
       throughAssistantMessageId?: string;
       assertCurrent?: () => void;
@@ -687,7 +741,7 @@ export function createChatStore(
           .join("")}${suffix}`;
         chargedBytes += 1_024;
         charge(title);
-        charge(metadata.workspaceId);
+        charge(input.targetWorkspaceId ?? metadata.workspaceId);
         charge(metadata.providerId);
         charge(metadata.model);
         for (let index = 0; index <= throughIndex; index += 1) {
@@ -733,9 +787,11 @@ export function createChatStore(
         const now = Date.now();
         return installNewChat(
           {
-            id: randomUUID(),
+            id: input.targetChatId ?? randomUUID(),
             title,
-            workspaceId: metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            workspaceId:
+              input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            botId: source.botId,
             providerId: metadata.providerId,
             model: metadata.model,
             createdAt: now,
@@ -747,13 +803,19 @@ export function createChatStore(
       });
     },
 
-    async rename(id: string, title: string): Promise<void> {
+    async rename(
+      id: string,
+      title: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
         chat.title = title.trim() || chat.title;
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
+        return chat;
       });
     },
 
@@ -779,15 +841,44 @@ export function createChatStore(
     async moveEmptyChatToWorkspace(
       id: string,
       workspaceId: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
         if (chat.messages.length > 0) {
           throw new Error("Only a new chat can change workspaces.");
         }
         chat.workspaceId = workspaceId;
         chat.updatedAt = Date.now();
+        await writeChatAndMeta(chat);
+        return chat;
+      });
+    },
+
+    /**
+     * Change the durable provider/model authority for an existing Bot chat
+     * without rewriting or reordering its conversation history.
+     */
+    async setBotModelSelection(
+      id: string,
+      providerId: string,
+      model: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return serialized(async () => {
+        const chat = await readChat(id);
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        if (!chat.botId) throw new Error("Only a Bot chat can change its Bot model authority.");
+        const resolvedProviderId = await resolveProviderId(providerId);
+        if (!resolvedProviderId || !model.trim()) {
+          throw new Error("A Bot model selection requires a provider and model.");
+        }
+        if (chat.providerId === resolvedProviderId && chat.model === model) return chat;
+        chat.providerId = resolvedProviderId;
+        chat.model = model;
         await writeChatAndMeta(chat);
         return chat;
       });
@@ -815,8 +906,13 @@ export function createChatStore(
       });
     },
 
-    async remove(id: string): Promise<void> {
+    async remove(
+      id: string,
+      assertCurrent?: (chat: Chat | null) => void | Promise<void>,
+    ): Promise<void> {
       return serialized(async () => {
+        const chat = await readChat(id);
+        if (assertCurrent) await assertCurrent(chat);
         const payload = await chatPath(id);
         await removeCrashLeftStages(path.dirname(payload));
         let removedPayload = false;

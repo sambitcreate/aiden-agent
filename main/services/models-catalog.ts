@@ -12,6 +12,7 @@ import {
 import { artificialAnalysisRuntime } from "./artificial-analysis-runtime.js";
 import {
   createModelCatalogLoader,
+  lookupCatalogModelInfo,
   resolveModelInfo,
   resolveProviderRuntimeLimits,
   type ModelCatalogProvider,
@@ -58,6 +59,11 @@ export const modelsCatalog = {
     exact?: RuntimeModelMetadata,
   ) {
     return resolveProviderRuntimeLimits(await getModelsDev(), provider, modelId, exact);
+  },
+
+  /** Bundled-only capability lookup for request admission; never reads user credentials/caches. */
+  async bundledInfo(provider: ModelCatalogProvider, modelId: string): Promise<ModelInfo> {
+    return lookupCatalogModelInfo(await getModelsDev(), provider.id, modelId);
   },
 
   /** Capability info for one model. */

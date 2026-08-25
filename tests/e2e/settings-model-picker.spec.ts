@@ -6,6 +6,7 @@ const SETTINGS_SECTIONS = [
   "Skills",
   "MCP Servers",
   "Web Search",
+  "Remote Access",
   "Scheduled tasks",
   "Aiden",
   "Computer Use",
@@ -41,6 +42,20 @@ async function assertRenderedSettingsDestination(
     case "Web Search":
       await expect(
         page.getByRole("heading", { level: 2, name: "Web Search (Exa)", exact: true }),
+      ).toBeVisible();
+      return;
+    case "Remote Access":
+      await expect(
+        page.getByRole("heading", { level: 2, name: "Remote Access", exact: true }),
+      ).toBeVisible();
+      await expect(page.getByRole("switch", { name: "Enable Aiden Remote Access" })).toHaveAttribute(
+        "data-state",
+        "unchecked",
+      );
+      await expect(
+        page.getByRole("group")
+          .filter({ has: page.getByRole("switch", { name: "Enable Aiden Remote Access" }) })
+          .getByText("Off", { exact: true }),
       ).toBeVisible();
       return;
     case "Scheduled tasks":
@@ -127,7 +142,7 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(modelTrigger).toBeVisible();
 
   await modelTrigger.click();
-  await page.getByRole("tab", { name: "List", exact: true }).click();
+  await page.getByRole("tab", { name: "List", exact: true }).press("Enter");
   const filter = page.getByRole("combobox", { name: "Chat model" });
   await expect(filter).toBeFocused();
   await filter.fill("this-model-does-not-exist");
@@ -137,11 +152,13 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(modelTrigger).toBeFocused();
 
   await modelTrigger.click();
-  await page.getByRole("tab", { name: "List", exact: true }).click();
+  await page.getByRole("tab", { name: "List", exact: true }).press("Enter");
   const options = page.locator("[cmdk-item]");
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText(E2E_MODEL_DISPLAY_NAME);
-  await options.first().click();
+  await expect(filter).toBeFocused();
+  await expect(options.first()).toHaveAttribute("data-selected", "true");
+  await filter.press("Enter");
   await expect(modelTrigger).toHaveAttribute(
     "aria-label",
     new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}\\. Choose a model\\.$`, "u"),

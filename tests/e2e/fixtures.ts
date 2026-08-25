@@ -35,9 +35,10 @@ const {
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const PROCESS_EXIT_TIMEOUT_MS = 10_000;
 // Production shutdown owns sequential bounded drains for foreground generation
-// (6s), subagents (5s), and an optional packaged-soak receipt (5s). The release
-// runner can reach those bounds under load even when Electron exits cleanly.
-const ELECTRON_EXIT_TIMEOUT_MS = 20_000;
+// (6s), subagents (5s), an optional packaged-soak receipt (5s), and remaining
+// service cleanup. Hosted macOS runners can reach those bounds under load even
+// when Electron exits cleanly, so keep the harness bound above their aggregate.
+const ELECTRON_EXIT_TIMEOUT_MS = 35_000;
 const DEFAULT_LIVE_LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1";
 const DEFAULT_LM_STUDIO_ORIGIN = new URL(DEFAULT_LIVE_LM_STUDIO_BASE_URL).origin;
 const LM_STUDIO_REDIRECT_ENV = "AIDEN_E2E_LMSTUDIO_REDIRECT_ORIGIN";
@@ -506,13 +507,27 @@ export async function closeAiden(app: ElectronApplication | undefined): Promise<
   const pid = child.pid;
   let closeError: unknown;
   try {
-    await withTimeout(app.close(), "Electron shutdown", ELECTRON_EXIT_TIMEOUT_MS);
+    if (pid) {
+      const closed = await Promise.race([
+        app.close().then(() => true),
+        waitForProcessExit(pid, ELECTRON_EXIT_TIMEOUT_MS),
+      ]);
+      if (!closed) {
+        throw new Error(`Electron shutdown timed out after ${ELECTRON_EXIT_TIMEOUT_MS} ms.`);
+      }
+    } else {
+      await withTimeout(app.close(), "Electron shutdown", ELECTRON_EXIT_TIMEOUT_MS);
+    }
   } catch (error) {
     closeError = error;
   }
   const leaked = Boolean(pid && processIsAlive(pid));
   if (leaked) await terminateOwnedProcess(child);
-  if (closeError || leaked) {
+  // Playwright can miss Electron's child-process exit event on macOS even
+  // after the owned main PID has already terminated. The PID is the
+  // authoritative leak check; do not turn that bookkeeping timeout into a
+  // false test failure when the process is verifiably gone.
+  if (leaked) {
     const detail = closeError instanceof Error ? ` ${closeError.message}` : "";
     throw new Error(
       `Electron teardown did not finish cleanly${pid ? ` for PID ${pid}` : ""}.${detail}`,
@@ -620,6 +635,10 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         const launchEnvironment: Record<string, string> = {
           ...isolatedAppEnvironment(),
           AIDEN_CONFIG_DIR: testConfigDir,
+          // crashReporter.start() launches Crashpad, whose macOS helper can
+          // retain Playwright's worker transport after Electron main exits.
+          // E2E still verifies the owned main PID directly during teardown.
+          AIDEN_E2E_DISABLE_CRASH_REPORTER: "1",
           AIDEN_RUNTIME_PROFILE: "development",
           HOME: testRootDir,
           XDG_CACHE_HOME: testXdgCacheDir,
@@ -630,7 +649,13 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         const launchArgs = [
           "-r",
           ELECTRON_TEST_BOOTSTRAP,
+          // Hosted macOS runners have no stable foreground/GPU presentation.
+          // Keep interaction timing deterministic without changing production.
+          "--disable-backgrounding-occluded-windows",
+          "--disable-gpu",
+          "--disable-renderer-backgrounding",
           "--force-renderer-accessibility",
+          "--force-prefers-reduced-motion=reduce",
           `--user-data-dir=${testUserDataDir}`,
           REPOSITORY_ROOT,
         ];
@@ -675,9 +700,40 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       };
       state = aidenState;
       await use(aidenState);
+      failed = testInfo.status !== testInfo.expectedStatus;
     } catch (error) {
       primaryFailure = error;
       failed = true;
+    }
+
+    if (failed && rootDir) {
+      const child = app?.process();
+      try {
+        await testInfo.attach("electron-process-state", {
+          body: Buffer.from(
+            `${JSON.stringify({
+              pid: child?.pid,
+              exitCode: child?.exitCode,
+              signalCode: child?.signalCode,
+              killed: child?.killed,
+            })}\n`,
+            "utf8",
+          ),
+          contentType: "application/json",
+        });
+      } catch (error) {
+        process.stderr.write(`Could not attach Electron process state: ${formatFailure(error)}\n`);
+      }
+      try {
+        await testInfo.attach("aiden-dev-log", {
+          body: await readFile(path.join(rootDir, "user-data", "logs", "aiden-dev.log")),
+          contentType: "text/plain",
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          process.stderr.write(`Could not attach Aiden dev log: ${formatFailure(error)}\n`);
+        }
+      }
     }
 
     const teardownFailures: unknown[] = [];
@@ -716,7 +772,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       process.stderr.write(`E2E teardown failures:\n${details}\n`);
       if (!failed) throw new Error(`E2E teardown failed:\n${details}`);
     }
-    if (failed) throw primaryFailure;
+    if (primaryFailure !== undefined) throw primaryFailure;
   },
 });
 

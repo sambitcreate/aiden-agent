@@ -154,6 +154,22 @@ test("persists subagent requests as a first-class privacy-safe usage source", as
   assert.equal((await reloaded.summary("7d")).totals.requests, 1);
 });
 
+test("persists bot avatar requests without retaining their design prompts", async () => {
+  const persistence = memoryPersistence();
+  const store = createUsageStore(persistence, () => NOW);
+  await store.record(
+    record({
+      source: "bot-avatar",
+      providerId: "openai-codex",
+      providerLabel: "ChatGPT",
+      modelId: "gpt-5.6-sol",
+    }),
+  );
+  assert.equal(persistence.read().buckets[0]?.source, "bot-avatar");
+  assert.doesNotMatch(JSON.stringify(persistence.read()), /prompt|rationale|appearance/u);
+  assert.equal((await store.summary("7d")).totals.requests, 1);
+});
+
 test("computes calendar streaks and honors inclusive date ranges", async () => {
   const persistence = memoryPersistence();
   const store = createUsageStore(persistence, () => NOW);

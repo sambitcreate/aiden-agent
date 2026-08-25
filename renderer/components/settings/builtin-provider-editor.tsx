@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { ExternalLink } from "lucide-react";
+
 import { Button, Dialog, Field, Input, Text, toast, type DialogLayer } from "../ui";
 import { providersApi } from "../../lib/ipc";
 import {
@@ -8,6 +10,7 @@ import {
   type ProviderAuthSession,
 } from "../../lib/provider-auth-session";
 import type { Provider, ProviderAuthEvent, ProviderAuthPrompt } from "../../lib/types";
+import { ProviderModelVisibility } from "./provider-model-visibility";
 
 interface BuiltinProviderEditorProps {
   provider: Provider;
@@ -21,6 +24,7 @@ function eventCopy(event: ProviderAuthEvent): string {
   if (event.type === "device_code")
     return `Use code ${event.userCode} in the browser that just opened.`;
   if (event.type === "auth_url") return event.instructions ?? "Continue setup in your browser.";
+  if (event.type === "browser_open_failed") return event.message;
   return event.message;
 }
 
@@ -37,11 +41,14 @@ export function BuiltinProviderEditor({
   layer,
 }: BuiltinProviderEditorProps) {
   const sessionRef = React.useRef<ProviderAuthSession | null>(null);
+  const mountedRef = React.useRef(true);
+  const openRef = React.useRef(open);
   const [prompt, setPrompt] = React.useState<ProviderAuthPrompt | null>(null);
   const [value, setValue] = React.useState("");
   const [message, setMessage] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
   const [responding, setResponding] = React.useState(false);
+  const [authLink, setAuthLink] = React.useState<string | null>(null);
   const interactiveMethods = (provider.authMethods ?? []).filter(
     (method): method is { type: PiAuthMethod; label: string; canLogin: true } => method.canLogin,
   );
@@ -50,8 +57,24 @@ export function BuiltinProviderEditor({
     const session = sessionRef.current;
     sessionRef.current = null;
     if (!session?.isActive()) return;
-    void session.cancel().catch(() => session.dispose());
+    void session
+      .cancel()
+      .then((result) => {
+        if (result.cancelled) session.dispose();
+      })
+      .catch(() => session.dispose());
   }, []);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  React.useLayoutEffect(() => {
+    openRef.current = open;
+  }, [open]);
 
   React.useEffect(() => {
     if (!open) {
@@ -61,6 +84,7 @@ export function BuiltinProviderEditor({
       setMessage(null);
       setStarting(false);
       setResponding(false);
+      setAuthLink(null);
     }
   }, [open, provider.id, releaseSession]);
 
@@ -80,40 +104,61 @@ export function BuiltinProviderEditor({
     try {
       const session = createProviderAuthSession(providersApi, provider.id, authType, {
         onPrompt: (nextPrompt) => {
+          setAuthLink(null);
           setPrompt(nextPrompt);
           setValue("");
           setMessage(null);
           setStarting(false);
         },
         onEvent: (event) => {
+          if (event.type === "auth_url" || event.type === "browser_open_failed") {
+            setAuthLink(event.url);
+          } else if (event.type === "device_code") {
+            setAuthLink(event.verificationUri);
+          }
           setMessage(eventCopy(event));
           setStarting(false);
         },
         onDone: async (event) => {
           sessionRef.current = null;
-          setPrompt(null);
-          setStarting(false);
           if (event.cancelled) return;
+          if (mountedRef.current && openRef.current) {
+            setPrompt(null);
+            setStarting(false);
+          }
           try {
-            const providers = await providersApi.refresh();
-            onSaved();
+            const providers = await providersApi.list();
             const refreshed = providers.find((item) => item.id === provider.id);
-            toast.success(
-              refreshed?.hasKey
-                ? `${provider.label} is ready.`
-                : `${provider.label} setup completed.`,
-            );
-            onOpenChange(false);
+            if (!refreshed?.hasKey || refreshed.models.length === 0) {
+              if (mountedRef.current && openRef.current) {
+                setMessage(
+                  `${provider.label} is configured, but no usable chat model is available yet.`,
+                );
+              }
+              return;
+            }
+            // A cancellation request can race the provider's irreversible
+            // credential commit. Reconcile the parent/cache even if this
+            // editor closed while the session reported `finishing`.
+            onSaved();
+            if (mountedRef.current && openRef.current) {
+              if (event.warning) toast.warning(event.warning);
+              else toast.success(`${provider.label} is configured.`);
+              onOpenChange(false);
+            }
           } catch (error) {
-            setMessage(
-              error instanceof Error
-                ? error.message
-                : "Setup completed, but the model catalog could not refresh.",
-            );
+            if (mountedRef.current && openRef.current) {
+              setMessage(
+                error instanceof Error
+                  ? error.message
+                  : "Setup completed, but provider readiness could not be checked.",
+              );
+            }
           }
         },
         onError: (error) => {
           sessionRef.current = null;
+          if (!mountedRef.current || !openRef.current) return;
           setPrompt(null);
           setStarting(false);
           toast.error(error.message);
@@ -228,10 +273,18 @@ export function BuiltinProviderEditor({
             {message}
           </Text>
         ) : null}
+        {authLink ? (
+          <Button asChild variant="filled" size="small" className="justify-self-start">
+            <a href={authLink} target="_blank" rel="noopener noreferrer">
+              Open sign-in page <ExternalLink className="size-3.5" />
+            </a>
+          </Button>
+        ) : null}
         <Text variant="small" color="tertiary">
           {provider.models.length} Pi model{provider.models.length === 1 ? "" : "s"} are currently
           available.
         </Text>
+        <ProviderModelVisibility provider={provider} />
       </div>
     </Dialog>
   );

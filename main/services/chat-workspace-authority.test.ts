@@ -75,6 +75,49 @@ test("generation uses the persisted Assistant mode for handoff, tools, and promp
   assert.doesNotMatch(startSource, /params\.mode\s*===/u);
 });
 
+test("generation initialization persists terminal outcomes before releasing ownership", () => {
+  const llmClientSource = readFileSync(new URL("./llm-client.ts", import.meta.url), "utf8");
+  const startSource = llmClientSource.slice(llmClientSource.indexOf("export const llmClient"));
+  const helperStart = startSource.indexOf("const initializationTerminalState = { attempted: false }");
+  const firstCleanup = startSource.indexOf("releaseGenerationSkillReservation(initialization)");
+  assert.ok(helperStart >= 0, "terminal persistence helper must be part of generation start");
+  assert.ok(
+    helperStart < firstCleanup,
+    "terminal persistence must be established before an initialization cleanup can run",
+  );
+  assert.match(llmClientSource, /import \{ persistGenerationInitializationTerminal \}/u);
+  assert.match(startSource, /await persistGenerationInitializationTerminal\(\{/u);
+  assert.match(startSource, /append: \(message, meta\) => chatStore\.appendMessage\(params\.chatId, message, meta\)/u);
+  assert.match(startSource, /initializing\.get\(streamId\) === initialization/u);
+  assert.match(startSource, /active\.get\(streamId\)\?\.owner === owner/u);
+
+  const cancellationPersists = startSource.match(
+    /await persistInitializationTerminal\(\s*"cancelled",\s*(?:initialization|activeGeneration)\.cancellationOrigin,?\s*\)/gu,
+  );
+  const failurePersists = startSource.match(
+    /await persistInitializationTerminal\("failed"\)/gu,
+  );
+  assert.equal(cancellationPersists?.length, 3);
+  assert.equal(failurePersists?.length, 3);
+
+  for (const status of ["cancelled", "failed"] as const) {
+    const persistIndex = startSource.indexOf(
+      status === "cancelled"
+        ? 'await persistInitializationTerminal(\n          "cancelled"'
+        : 'await persistInitializationTerminal("failed")',
+    );
+    assert.ok(persistIndex >= 0);
+    const cleanupIndex = startSource.indexOf(
+      "releaseGenerationSkillReservation(initialization)",
+      persistIndex,
+    );
+    assert.ok(
+      cleanupIndex > persistIndex,
+      `${status} outcome must become durable before generation ownership is released`,
+    );
+  }
+});
+
 test("historical subagent reads require an exact persisted assistant-message reference", () => {
   const exactReference = {
     role: "assistant",
