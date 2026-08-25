@@ -12,6 +12,7 @@ import {
 import { cn } from "../lib/ui-utils";
 import {
   splitSubagentRunViews,
+  type SubagentRunPresentation,
   type SubagentRunView,
   type SubagentRunViewState,
 } from "../lib/subagent-view-state";
@@ -51,6 +52,7 @@ function RosterNode({
   onFocusRun,
   onSelect,
   onKeyDown,
+  presentationByRunId,
 }: {
   node: SubagentTreeNode;
   expansion: Readonly<Record<string, boolean>>;
@@ -60,11 +62,13 @@ function RosterNode({
   onFocusRun: (runId: string) => void;
   onSelect: (runId: string, trigger: HTMLButtonElement) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, runId: string) => void;
+  presentationByRunId?: ReadonlyMap<string, SubagentRunPresentation>;
 }) {
   const run = node.run;
   const expanded = subagentTreeIsExpanded(node, expansion);
   const selected = run.runId === selectedRunId;
-  const displayState = subagentStateLabel(run.state);
+  const presentation = presentationByRunId?.get(run.runId);
+  const displayState = presentation?.label ?? subagentStateLabel(run.state);
   const hiddenCount = expanded ? 0 : node.descendantCount;
   const activeDescendantLabel = node.activeDescendantCount
     ? `${node.activeDescendantCount} active descendant${node.activeDescendantCount === 1 ? "" : "s"}`
@@ -104,6 +108,7 @@ function RosterNode({
           data-subagent-run-id={run.runId}
           tabIndex={focusedRunId === run.runId ? 0 : -1}
           aria-selected={selected}
+          data-subagent-presentation={presentation?.state}
           aria-label={`${run.label}, ${run.role}, ${displayState}${activeDescendantLabel ? `, ${activeDescendantLabel}` : ""}${hiddenCount ? `, ${hiddenCount} hidden descendant${hiddenCount === 1 ? "" : "s"}` : ""}`}
           onFocus={() => onFocusRun(run.runId)}
           onKeyDown={(event) => onKeyDown(event, run.runId)}
@@ -132,7 +137,11 @@ function RosterNode({
             as="span"
             variant="small"
             color="tertiary"
-            className={cn("max-w-28 shrink truncate", stateTone(run.state))}
+            className={cn(
+              "max-w-36 shrink truncate",
+              stateTone(run.state),
+              presentation?.state === "stale_active" && "text-support-warning",
+            )}
             title={activeDescendantLabel ? `${activeDescendantLabel} · ${displayState}` : displayState}
           >
             {activeDescendantLabel ? `${node.activeDescendantCount} active · ${displayState}` : displayState}
@@ -152,6 +161,7 @@ function RosterNode({
               onFocusRun={onFocusRun}
               onSelect={onSelect}
               onKeyDown={onKeyDown}
+              presentationByRunId={presentationByRunId}
             />
           ))}
         </div>
@@ -174,6 +184,7 @@ function RosterGroup({
   onFocusRun: (runId: string) => void;
   onSelect: (runId: string, trigger: HTMLButtonElement) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, runId: string) => void;
+  presentationByRunId?: ReadonlyMap<string, SubagentRunPresentation>;
 }) {
   if (nodes.length === 0) return null;
   return (
@@ -192,10 +203,17 @@ export interface SubagentRosterProps {
   runs: readonly SubagentRunView[];
   selectedRunId: string | null;
   onSelect: (runId: string, trigger: HTMLButtonElement) => void;
+  presentationByRunId?: ReadonlyMap<string, SubagentRunPresentation>;
   className?: string;
 }
 
-export function SubagentRoster({ runs, selectedRunId, onSelect, className }: SubagentRosterProps) {
+export function SubagentRoster({
+  runs,
+  selectedRunId,
+  onSelect,
+  presentationByRunId,
+  className,
+}: SubagentRosterProps) {
   const treeRef = React.useRef<HTMLDivElement | null>(null);
   const groups = React.useMemo<SubagentTreeGroups>(() => buildSubagentTree(runs), [runs]);
   const [expansion, setExpansion] = React.useState<Readonly<Record<string, boolean>>>({});
@@ -251,6 +269,7 @@ export function SubagentRoster({ runs, selectedRunId, onSelect, className }: Sub
     onFocusRun: setFocusedRunId,
     onSelect,
     onKeyDown: handleKeyDown,
+    presentationByRunId,
   };
   return (
     <nav aria-label="Subagents" className={cn("min-h-0 overflow-y-auto pb-3", className)}>
