@@ -15,9 +15,11 @@ export interface HoldWatchDeps {
 export function startHoldKeyWatch(keyCode: number, deps: HoldWatchDeps): () => void {
   let stopped = false;
   let released = false;
+  let inflight = false;
   const pollMs = deps.pollMs ?? HOLD_POLL_MS;
   const timer = deps.setIntervalFn(() => {
-    if (stopped || released) return;
+    if (stopped || released || inflight) return;
+    inflight = true;
     void deps
       .isKeyDown(keyCode)
       .then((down) => {
@@ -27,6 +29,9 @@ export function startHoldKeyWatch(keyCode: number, deps: HoldWatchDeps): () => v
       })
       .catch(() => {
         // A poll failure must not stop recording; the user can still toggle.
+      })
+      .finally(() => {
+        inflight = false;
       });
   }, pollMs);
   return () => {
