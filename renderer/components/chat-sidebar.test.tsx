@@ -194,6 +194,24 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
+test("Aiden settings uses the canonical sidebar logo", () => {
+  const settings = source("../main/settings-view.tsx");
+  const rendererLogo = readFileSync(
+    new URL("../../resources/aiden-sidebar-logo.png", import.meta.url),
+  );
+  const canonicalLogo = readFileSync(
+    new URL(
+      "../../ios/AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png",
+      import.meta.url,
+    ),
+  );
+
+  assert.match(settings, /assistant: <AidenSidebarLogo\s*\/>/u);
+  assert.match(settings, /resources\/aiden-sidebar-logo\.png/u);
+  assert.doesNotMatch(settings, /assistant: <Sparkles/u);
+  assert.deepEqual(rendererLogo, canonicalLogo);
+});
+
 test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {
   const ui = source("./ui.tsx");
   assert.match(

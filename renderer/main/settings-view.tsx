@@ -18,7 +18,6 @@ import {
   ChartScatter,
   Info,
   Clock3,
-  Sparkles,
   Send,
   Smartphone,
 } from "lucide-react";
@@ -40,6 +39,30 @@ import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-sec
 
 type NavGroup = "Agent" | "App";
 
+const AIDEN_SIDEBAR_LOGO_URL = new URL(
+  "../../resources/aiden-sidebar-logo.png",
+  import.meta.url,
+).href;
+
+function AidenSidebarLogo() {
+  return (
+    <span
+      aria-hidden="true"
+      className="block size-5 shrink-0 bg-current"
+      style={{
+        WebkitMaskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
+        maskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+      }}
+    />
+  );
+}
+
 type NavItem = {
   id: SettingsSection;
   title: string;
@@ -57,7 +80,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
-  assistant: <Sparkles className="size-5" />,
+  assistant: <AidenSidebarLogo />,
   computerUse: <MousePointer2 className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
