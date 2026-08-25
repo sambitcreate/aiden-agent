@@ -407,6 +407,8 @@ test("split and summary helpers deduplicate before counting active and done runs
     failed: 1,
     timedOut: 0,
     interrupted: 0,
+    stopped: 0,
+    unknown: 0,
   });
 });
 
@@ -434,7 +436,7 @@ test("status and elapsed labels are deterministic for active and terminal runs",
 
   assert.equal(subagentStatusLabel("running"), "Working");
   assert.equal(subagentStatusLabel("completed"), "Done");
-  assert.equal(subagentStatusLabel("unknown"), "Finished");
+  assert.equal(subagentStatusLabel("unknown"), "Outcome unknown");
   assert.equal(subagentElapsedLabel(active, 3_725_000), "1h 2m 4s");
   assert.equal(subagentElapsedLabel(done, 9_999_999), "2s");
   assert.equal(formatSubagentElapsed(90_061_000), "1d 1h 1m");
