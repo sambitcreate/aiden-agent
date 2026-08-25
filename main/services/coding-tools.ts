@@ -20,7 +20,6 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
-import { containsHighConfidenceSecretIncludingEncodings } from "./subagents/safe-text.js";
 
 const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
@@ -655,16 +654,20 @@ const PROTECTED_CREDENTIAL_PATH_PREFIXES = [
 const SAFE_HIDDEN_DIRECTORY_NAMES = new Set([
   ".changeset",
   ".circleci",
+  ".claude",
   ".devcontainer",
   ".github",
   ".husky",
   ".storybook",
+  ".vscode",
 ]);
+const SAFE_ENVIRONMENT_FILE_NAMES = new Set([".env.example"]);
 const SAFE_HIDDEN_FILE_NAMES = new Set([
   ".browserslistrc",
   ".commitlintrc",
   ".dockerignore",
   ".editorconfig",
+  ".env.example",
   ".eslintignore",
   ".eslintrc",
   ".gitattributes",
@@ -685,6 +688,10 @@ const SAFE_HIDDEN_FILE_NAMES = new Set([
   ".watchmanconfig",
 ]);
 const SAFE_HIDDEN_CONFIG_EXTENSIONS = [".cjs", ".js", ".json", ".mjs", ".yaml", ".yml"] as const;
+
+function isSafeEnvironmentExample(segment: string): boolean {
+  return SAFE_ENVIRONMENT_FILE_NAMES.has(segment.toLocaleLowerCase("en-US"));
+}
 
 function isSafeHiddenFileName(segment: string): boolean {
   if (SAFE_HIDDEN_FILE_NAMES.has(segment)) return true;
@@ -755,11 +762,12 @@ function isProtectedCredentialFileName(segment: string): boolean {
 }
 
 function containsPrivateKeyMaterial(buffer: Buffer): boolean {
+  // Keep this check limited to unambiguous key encodings; ordinary source and
+  // documentation may contain credential-shaped prose that must remain readable.
   const sample = buffer.toString("utf8");
   return (
     /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/u.test(sample) ||
     /"private_key"\s*:\s*"-----BEGIN/u.test(sample) ||
-    containsHighConfidenceSecretIncludingEncodings(sample) ||
     /-----BEGIN PGP PRIVATE KEY BLOCK-----/u.test(sample) ||
     /^PuTTY-User-Key-File-[123]:/mu.test(sample) ||
     /---- BEGIN SSH2 (?:ENCRYPTED )?PRIVATE KEY ----/u.test(sample)
@@ -773,19 +781,15 @@ function isProtectedCredentialPath(
   relativePath: string,
   finalKind: ProtectedPathFinalKind = "unknown",
 ): boolean {
-  if (containsHighConfidenceSecretIncludingEncodings(relativePath)) return true;
   const rawSegments = relativePath
     .split(/[\\/]/)
     .filter((segment) => segment.length > 0 && segment !== "." && segment !== "..");
-  if (rawSegments.some((segment) => containsHighConfidenceSecretIncludingEncodings(segment))) {
-    return true;
-  }
   const segments = rawSegments.map((segment) => segment.toLocaleLowerCase("en-US"));
   if (
     segments.some(
       (segment) =>
         segment === ".env" ||
-        segment.startsWith(".env.") ||
+        (segment.startsWith(".env.") && !isSafeEnvironmentExample(segment)) ||
         segment === ".envrc" ||
         segment.startsWith(".envrc.") ||
         isProtectedCredentialFileName(segment) ||
@@ -833,7 +837,13 @@ function rejectProtectedCredential(
 function isEnvironmentSecretPath(relativePath: string): boolean {
   return relativePath
     .split(/[\\/]/)
-    .some((segment) => segment === ".env" || segment.startsWith(".env."));
+    .some((segment) => {
+      const normalized = segment.toLocaleLowerCase("en-US");
+      return (
+        normalized === ".env" ||
+        (normalized.startsWith(".env.") && !isSafeEnvironmentExample(normalized))
+      );
+    });
 }
 
 function rejectEnvironmentSecret(root: string, fullPath: string): void {
@@ -1411,10 +1421,6 @@ async function grepSubagentDir(
           return;
         }
         const resultLine = `${rel}:${i + 1}: ${lines[i].trim().slice(0, 200)}`;
-        if (containsHighConfidenceSecretIncludingEncodings(resultLine)) {
-          budget.skippedInputs = true;
-          continue;
-        }
         out.push(resultLine);
       }
     }
