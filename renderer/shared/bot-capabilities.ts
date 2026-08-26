@@ -463,6 +463,55 @@ export function cloneBotCustomSelection(selection: BotCustomSelection): BotCusto
   };
 }
 
+export const BOT_FILE_SCOPE_SELECTION_GUIDANCE =
+  "Choose Full Mac, Bot folder, approved locations with the Bot folder, or Files Off.";
+
+/** True when Custom file scopes match the grant rules the binder will enforce. */
+export function botFileScopeSelectionIsCoherent(
+  fileScopeIds: readonly string[],
+  fileScopes: readonly Pick<BotFileScopeOption, "id" | "kind">[],
+): boolean {
+  const scopes = fileScopeIds.map((id) => fileScopes.find((scope) => scope.id === id));
+  if (scopes.some((scope) => !scope)) return false;
+  const kinds = scopes.map((scope) => scope!.kind);
+  const fullMac = kinds.filter((kind) => kind === "full_mac").length;
+  const botHome = kinds.filter((kind) => kind === "bot_home").length;
+  const approved = kinds.filter((kind) => kind === "approved_location").length;
+  if (fullMac > 0) return fullMac === 1 && kinds.length === 1;
+  if (approved > 0) return botHome === 1;
+  return botHome <= 1;
+}
+
+/** Apply one file-scope toggle while preserving binder-coherent grants. */
+export function nextBotFileScopeIds(
+  fileScopeIds: readonly string[],
+  fileScopes: readonly Pick<BotFileScopeOption, "id" | "kind">[],
+  id: string,
+  enabled: boolean,
+): string[] {
+  const option = fileScopes.find((scope) => scope.id === id);
+  if (!option) return [...fileScopeIds];
+  const selected = new Set(fileScopeIds);
+  const removeKind = (kind: BotFileScopeOption["kind"]) => {
+    for (const scope of fileScopes) {
+      if (scope.kind === kind) selected.delete(scope.id);
+    }
+  };
+  if (!enabled) {
+    selected.delete(id);
+    if (option.kind === "bot_home") removeKind("approved_location");
+    return [...selected];
+  }
+  if (option.kind === "full_mac") return [id];
+  removeKind("full_mac");
+  selected.add(id);
+  if (option.kind === "approved_location") {
+    const botHome = fileScopes.find((scope) => scope.kind === "bot_home");
+    if (botHome) selected.add(botHome.id);
+  }
+  return [...selected];
+}
+
 export function botCustomSelectionIsSubset(
   candidate: BotCustomSelection,
   ceiling: BotCustomSelection,
