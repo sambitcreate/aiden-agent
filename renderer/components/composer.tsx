@@ -1617,6 +1617,11 @@ export function Composer({
                           }}
                           onKeyDown={(event) => {
                             if (disabled) return;
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              if (value !== permission) requestPermission(value);
+                              return;
+                            }
                             let nextIndex: number | undefined;
                             if (event.key === "ArrowDown" || event.key === "ArrowRight") {
                               nextIndex = (index + 1) % PERMISSION_ORDER.length;
@@ -1629,8 +1634,6 @@ export function Composer({
                             if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
                             if (nextIndex === undefined) return;
                             event.preventDefault();
-                            const nextPermission = PERMISSION_ORDER[nextIndex];
-                            if (nextPermission !== permission) requestPermission(nextPermission);
                             const radios =
                               event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
                                 '[role="radio"]',

@@ -214,3 +214,13 @@ test("workspace picker closes and exposes a persistent reason when workspace cha
   assert.match(picker, /disabled=\{pending !== null \|\| Boolean\(blockedReason\)\}/u);
   assert.match(picker, /!pending && !blockedReason && setOpen\(nextOpen\)/u);
 });
+
+test("workspace access keyboard navigation moves focus without changing permission", () => {
+  const composer = source("./composer.tsx");
+  assert.match(
+    composer,
+    /event\.key === "Enter" \|\| event\.key === " "\) \{\s*event\.preventDefault\(\);\s*if \(value !== permission\) requestPermission\(value\);/u,
+  );
+  assert.match(composer, /radios\?\.\[nextIndex\]\?\.focus\(\)/u);
+  assert.doesNotMatch(composer, /requestPermission\(nextPermission\)/u);
+});
