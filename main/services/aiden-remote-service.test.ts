@@ -111,6 +111,7 @@ interface FixtureOptions {
   failSaveWhen?: (document: AidenRemoteStateDocument) => boolean;
   failBonjourStart?: boolean;
   tailscaleServeStatus?: AidenTailscaleStatus;
+  tailscaleStatusFailureAtCall?: number;
   enableTailscaleTakeover?: boolean;
   tailscaleAssessment?: {
     state: "available" | "owned" | "other_aiden_live" | "other_aiden_stale" | "unrelated_conflict" | "funnel_conflict" | "unavailable";
@@ -187,6 +188,12 @@ async function fixture(
     disconnectTargets: [] as string[],
     status: async () => {
       tailscale.statusCalls += 1;
+      if (
+        options.tailscaleStatusFailureAtCall !== undefined
+        && tailscale.statusCalls === options.tailscaleStatusFailureAtCall
+      ) {
+        throw new Error("tailscale status unavailable");
+      }
       return {
         installed: true,
         dnsName: "aiden.tailnet.ts.net",
@@ -833,6 +840,120 @@ test("a paired profile fails closed with typed remediation instead of moving its
     assert.equal(app.persisted().lanPort, pairedPort);
     assert.equal(app.persisted().lanPortCommitted, false);
     assert.equal(app.bonjour.starts, 0);
+    assert.equal(await canBind(alternatePort), true);
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("a paired profile moves only after explicit endpoint repair", async () => {
+  const [pairedPort, alternatePort] = await availablePortPairs(2);
+  const blocker = await reservePort(pairedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: pairedPort,
+    portCandidates: [pairedPort, alternatePort],
+  });
+  try {
+    await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
+    await assert.rejects(app.service.setEnabled(true), AidenRemotePortInUseError);
+
+    await app.service.moveToAvailablePort();
+
+    const status = await app.service.status();
+    assert.equal(status.running, true);
+    assert.equal(status.enabled, true);
+    assert.equal(status.errorCode, undefined);
+    assert.equal(app.persisted().lanPort, alternatePort);
+    assert.equal(app.persisted().lanPortCommitted, true);
+    assert.deepEqual(await insecureHealth(alternatePort), {
+      status: 200,
+      body: { ok: true, protocolVersion: 1 },
+    });
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("explicit endpoint repair fails closed when Tailscale routes cannot be inventoried", async () => {
+  const [pairedPort, alternatePort] = await availablePortPairs(2);
+  const blocker = await reservePort(pairedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: pairedPort,
+    portCandidates: [pairedPort, alternatePort],
+    tailscaleStatusFailureAtCall: 2,
+  });
+  try {
+    await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
+    await assert.rejects(app.service.setEnabled(true), AidenRemotePortInUseError);
+
+    await assert.rejects(
+      app.service.moveToAvailablePort(),
+      /verify existing Tailscale routes/u,
+    );
+
+    const status = await app.service.status();
+    assert.equal(status.errorCode, "remote_port_in_use");
+    assert.equal(app.persisted().lanPort, pairedPort);
+    assert.equal(await canBind(alternatePort), true);
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("explicitly disabling Remote Access clears stale port remediation", async () => {
+  const [pairedPort, alternatePort] = await availablePortPairs(2);
+  const blocker = await reservePort(pairedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: pairedPort,
+    portCandidates: [pairedPort, alternatePort],
+  });
+  try {
+    await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
+    await assert.rejects(app.service.setEnabled(true), AidenRemotePortInUseError);
+    await app.service.setEnabled(false);
+
+    const status = await app.service.status();
+    assert.equal(status.errorCode, undefined);
+    await assert.rejects(
+      app.service.moveToAvailablePort(),
+      /does not currently need a different port/u,
+    );
+    assert.equal(app.persisted().enabled, false);
+    assert.equal(app.persisted().lanPort, pairedPort);
+    assert.equal(await canBind(alternatePort), true);
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("explicit endpoint repair refuses to orphan an owned Tailscale route", async () => {
+  const [pairedPort, alternatePort] = await availablePortPairs(2);
+  const blocker = await reservePort(pairedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: pairedPort,
+    portCandidates: [pairedPort, alternatePort],
+    initial: (state) => {
+      state.tailscaleOwnership = {
+        path: "/api/aiden/v1",
+        target: `http://127.0.0.1:${pairedPort + 1}/api/aiden/v1`,
+      };
+    },
+  });
+  try {
+    await assert.rejects(app.service.setEnabled(true), AidenRemotePortInUseError);
+    await assert.rejects(
+      app.service.moveToAvailablePort(),
+      /Disconnect this profile's Tailscale Serve route/u,
+    );
+    assert.equal(app.persisted().lanPort, pairedPort);
     assert.equal(await canBind(alternatePort), true);
   } finally {
     await app.cleanup();

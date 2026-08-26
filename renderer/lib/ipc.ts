@@ -170,7 +170,7 @@ export const appApi = {
   getOnboardingState: (legacyComplete: boolean) =>
     invoke<OnboardingSnapshot>("app:getOnboardingState", legacyComplete),
   setOnboardingOutcome: (
-    outcome: Exclude<OnboardingOutcome, "deferred">,
+    outcome: OnboardingOutcome,
     selectedProviderId?: string,
   ) => invoke<OnboardingSnapshot>("app:setOnboardingOutcome", outcome, selectedProviderId),
   setOnboardingProgress: (step: "profile" | "provider", selectedProviderId?: string) =>
@@ -471,6 +471,8 @@ export const aidenRemoteApi = {
     invoke<AidenRemoteSettingsSnapshot>("remote:setConnectionMode", mode),
   setDisplayName: (displayName: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setDisplayName", displayName),
+  moveToAvailablePort: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:moveToAvailablePort"),
   connectTailscale: () =>
     invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleConnect"),
   disconnectTailscale: () =>

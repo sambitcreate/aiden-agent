@@ -45,7 +45,7 @@ import {
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
-    return p.hasKey ? <Badge color="green">Ready</Badge> : <Badge color="secondary">Set up</Badge>;
+    return p.hasKey ? <Badge color="green">Ready</Badge> : null;
   }
   if (!p.needsKey) return <Badge color="blue">No auth</Badge>;
   if (p.hasKey) return <Badge color="green">Key set</Badge>;
@@ -202,7 +202,7 @@ export function ProvidersSettings() {
           : template === "ollama"
             ? "http://localhost:11434/v1"
             : template === "tailnet"
-              ? "https://your-machine.your-tailnet.ts.net/v1"
+              ? "http://your-machine.your-tailnet.ts.net:11434/v1"
               : "http://localhost:8000/v1",
       models: [],
       // A user may opt into API-key auth in the editor. Tailscale controls

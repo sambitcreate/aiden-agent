@@ -21,6 +21,7 @@ import type { Provider, StoredProvider } from "./types.js";
 import type { ProviderAuthBackend, ProviderLogoutBackend } from "./provider-auth-flow-core.js";
 import { registerAidenBuiltinProviders } from "./concentrate-provider.js";
 import { validateOnboardingProviderCredential } from "./onboarding-provider-validation.js";
+import { providerDisplayLabel } from "./provider-list-core.js";
 import { withPiRemoteCatalog } from "./pi-remote-catalog.js";
 import { refreshPiCatalogs, staleCatalogProviderIds } from "./pi-catalog-refresh.js";
 import {
@@ -64,7 +65,7 @@ function builtinProviderRecord(
     // This field survives the renderer's legacy DTO. It is never used to
     // choose a transport for Pi-owned providers.
     kind: "openai",
-    label: provider.name,
+    label: providerDisplayLabel(provider.id, provider.name),
     baseUrl: provider.baseUrl ?? "",
     models: modelIds,
     modelMetadata: Object.fromEntries(

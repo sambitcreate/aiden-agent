@@ -386,7 +386,7 @@ export function AppCommandPalette({
                 <button
                   type="button"
                   onClick={() => enterMode("root")}
-                  className="mr-1 flex size-7 items-center justify-center rounded-lg text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection"
+                  className="mr-1 flex size-7 items-center justify-center rounded-full text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection"
                   aria-label="Back to commands"
                 >
                   <ArrowLeft className="size-4" />

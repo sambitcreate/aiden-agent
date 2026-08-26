@@ -842,7 +842,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.equal(JSON.parse(logoDefinition).properties["template-rendering-intent"], "template");
   assert.equal(
     createHash("sha256").update(logoArtwork).digest("hex"),
-    "5119ab28448527d6855b8e4555492686220032d841ecd95fe7037c5a20fb58b6",
+    "e266e0c5421c6544bcb053ac6ada5740ffcea856211f6ba686ca0492913a1568",
   );
 });
 

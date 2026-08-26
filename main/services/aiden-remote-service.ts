@@ -66,6 +66,13 @@ export class AidenRemotePortInUseError extends Error {
   }
 }
 
+class AidenRemoteRelocationPreflightError extends Error {
+  constructor() {
+    super("Aiden couldn't verify existing Tailscale routes before moving this endpoint. Try again when Tailscale is available.");
+    this.name = "AidenRemoteRelocationPreflightError";
+  }
+}
+
 export function aidenRemotePortCandidates(preferredPort: number): number[] {
   const values: number[] = [];
   const add = (port: number) => {
@@ -410,7 +417,10 @@ export class AidenRemoteService {
     });
   }
 
-  private async startConfigured(state: AidenRemoteStateDocument): Promise<void> {
+  private async startConfigured(
+    state: AidenRemoteStateDocument,
+    options: { allowEndpointRelocation?: boolean } = {},
+  ): Promise<void> {
     await this.stopListeners();
     this.lastError = undefined;
     this.lastErrorCode = undefined;
@@ -453,6 +463,8 @@ export class AidenRemoteService {
       const mayMoveFreshProfile = !state.lanPortCommitted
         && state.devices.length === 0
         && state.tailscaleOwnership === undefined;
+      const maySelectAlternatePort = mayMoveFreshProfile
+        || options.allowEndpointRelocation === true;
       const externallyReservedPorts = new Set<number>();
       try {
         const tailscaleStatus = await this.options.tailscale.status();
@@ -464,10 +476,13 @@ export class AidenRemoteService {
           }
         }
       } catch {
+        if (options.allowEndpointRelocation) {
+          throw new AidenRemoteRelocationPreflightError();
+        }
         // A missing/unavailable local Tailscale CLI must not prevent LAN-only
         // startup. Exact route conflicts are still handled before mutation.
       }
-      const candidates = mayMoveFreshProfile
+      const candidates = maySelectAlternatePort
         ? [...(this.options.portCandidates?.(state.lanPort)
           ?? aidenRemotePortCandidates(state.lanPort))]
         : [state.lanPort];
@@ -479,7 +494,7 @@ export class AidenRemoteService {
           && candidate >= 1
           && candidate < 65_535
           && candidate % 2 === 0;
-        const validCommittedLegacy = !mayMoveFreshProfile
+        const validCommittedLegacy = !maySelectAlternatePort
           && Number.isInteger(candidate)
           && candidate >= 1
           && candidate <= 65_535;
@@ -494,7 +509,7 @@ export class AidenRemoteService {
         // reaches the unrelated plaintext service. Reserve both address
         // families as one endpoint pair before committing the port.
         if (!(await ipv4LoopbackPortIsAvailable(candidate))) {
-          if (mayMoveFreshProfile) continue;
+          if (maySelectAlternatePort) continue;
           throw new AidenRemotePortInUseError(state.lanPort);
         }
         let lanServer: HttpsServer | null = null;
@@ -565,7 +580,7 @@ export class AidenRemoteService {
             closeServer(lanServer),
             closeServer(tailscaleServer),
           ]);
-          if (isAddressInUse(error) && mayMoveFreshProfile) continue;
+          if (isAddressInUse(error) && maySelectAlternatePort) continue;
           if (isAddressInUse(error)) throw new AidenRemotePortInUseError(state.lanPort);
           throw error;
         }
@@ -609,8 +624,11 @@ export class AidenRemoteService {
         details: { mode: committedState.connectionMode, lanPort: committedState.lanPort },
       });
     } catch (error) {
-      if (error instanceof AidenRemotePortInUseError) {
-        this.lastErrorCode = error.code;
+      if (
+        error instanceof AidenRemotePortInUseError
+        || error instanceof AidenRemoteRelocationPreflightError
+      ) {
+        this.lastErrorCode = "remote_port_in_use";
         this.lastError = error.message;
       } else if (!this.lastError) {
         this.lastError = error instanceof Error ? error.message : "Aiden Remote failed to start.";
@@ -706,7 +724,41 @@ export class AidenRemoteService {
       }
       await this.stopListeners();
       await this.options.state.setEnabled(false);
+      this.lastError = undefined;
+      this.lastErrorCode = undefined;
       if (disconnectError) throw disconnectError;
+    });
+  }
+
+  /**
+   * Explicit recovery for a saved endpoint occupied by another local Aiden
+   * profile. Ordinary startup remains stable and fail-closed; only a direct
+   * user action may select and persist another available port pair.
+   */
+  async moveToAvailablePort(): Promise<void> {
+    await this.serialized(async () => {
+      const current = await this.options.state.snapshot();
+      if (current.tailscalePendingOutcome) {
+        throw new Error("Verify the pending Tailscale route update before moving this endpoint.");
+      }
+      if (current.tailscaleOwnership) {
+        throw new Error("Disconnect this profile's Tailscale Serve route before moving its endpoint.");
+      }
+      if (this.lastErrorCode !== "remote_port_in_use") {
+        throw new Error("Aiden Remote does not currently need a different port.");
+      }
+      await this.startConfigured(
+        { ...current, enabled: true },
+        { allowEndpointRelocation: true },
+      );
+      if (!current.enabled) {
+        try {
+          await this.options.state.setEnabled(true);
+        } catch (error) {
+          await this.stopListeners();
+          throw error;
+        }
+      }
     });
   }
 

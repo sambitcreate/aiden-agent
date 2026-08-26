@@ -178,7 +178,7 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
     source,
     /data-onboarding-footer[\s\S]*?className="[^"]*shrink-0[^"]*border-t[^"]*"/u,
   );
-  assert.match(source, /h-\[min\(600px,calc\(100vh-32px\)\)\]/u);
+  assert.match(source, /h-\[min\(600px,calc\(100vh-60px\)\)\]/u);
   assert.match(source, /ref=\{scrollContainerRef\}[\s\S]*?data-onboarding-scroll/u);
   assert.match(
     source,
@@ -197,7 +197,10 @@ test("provider setup progressively reveals Pi and uses the dedicated Codex surfa
   assert.match(source, /providers\.refetch\(\)/u);
   assert.match(source, /disabled=\{!canChoose \|\| saving\}/u);
   assert.match(source, /generic API-key login proves only that a credential was entered/u);
-  assert.match(source, /function canChooseBuiltinProvider\(_provider: Provider\): boolean \{[\s\S]*?return false;/u);
+  assert.match(
+    source,
+    /function canChooseBuiltinProvider\(_provider: Provider\): boolean \{[\s\S]*?return false;/u,
+  );
   assert.match(source, /<BuiltinProviderEditor[\s\S]*?layer="onboarding"/u);
   assert.match(source, /<CodexProviderSettings/u);
   assert.match(source, /<CodexProviderSettings layer="onboarding"/u);
@@ -207,7 +210,11 @@ test("provider setup progressively reveals Pi and uses the dedicated Codex surfa
   assert.doesNotMatch(source, /providersApi\.authStart/u);
 });
 
-test("onboarding is an application modal and required setup cannot be skipped", () => {
+test("Tailscale model setup advertises its supported HTTP transport", () => {
+  assert.match(source, /http:\/\/model\.tailnet\.ts\.net:11434\/v1/u);
+});
+
+test("onboarding is an application modal with an explicit provider deferral", () => {
   assert.match(source, /<DialogPrimitive\.Root open>/u);
   assert.match(source, /const \[open, setOpen\] = React\.useState\(true\)/u);
   assert.match(source, /data-onboarding-active="true"/u);
@@ -218,22 +225,28 @@ test("onboarding is an application modal and required setup cannot be skipped", 
   assert.match(source, /aria-busy=\{saving \|\| undefined\}/u);
   assert.match(source, /Profile and provider setup required/u);
   assert.match(source, /aria-current=\{itemIndex === index \? "step" : undefined\}/u);
-  assert.doesNotMatch(source, />\s*Skip\s*</u);
+  assert.match(source, />\s*Skip provider\s*</u);
+  assert.match(source, /setProviderSkipped\(true\)/u);
+  assert.match(source, /providerSkipped \|\| !selectedProviderId \? "deferred" : "completed"/u);
+  assert.match(source, /Provider setup skipped/u);
   assert.doesNotMatch(source, />\s*Set up later\s*</u);
-  assert.doesNotMatch(source, /setOnboardingOutcome\("deferred"/u);
-  assert.match(source, /setOpen\(snapshot\.outcome !== "completed"\)/u);
+  assert.match(source, /setOpen\(shouldOpenOnboarding\(snapshot\.outcome\)\)/u);
   assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
 });
 
 test("hosted keys validate before selection and endpoint routes require discovered models", () => {
+  const hostedKeyFlow = source.slice(
+    source.indexOf("const validateHostedApiKey"),
+    source.indexOf("const skipProvider"),
+  );
+  const validate = hostedKeyFlow.indexOf("providersApi.validateOnboardingApiKey");
+  const publish = hostedKeyFlow.indexOf("queryClient.setQueryData<Provider[]>", validate);
+  const select = hostedKeyFlow.indexOf("persistModelSelection(saved.id", validate);
+  assert.ok(validate >= 0 && validate < publish && publish < select);
   const providerStep = source.slice(
     source.indexOf('if (step === "provider")'),
     source.indexOf("  return (", source.indexOf('if (step === "provider")')),
   );
-  const validate = providerStep.indexOf("providersApi.validateOnboardingApiKey");
-  const publish = providerStep.indexOf("queryClient.setQueryData<Provider[]>", validate);
-  const select = providerStep.indexOf("persistModelSelection(saved.id", validate);
-  assert.ok(validate >= 0 && validate < publish && publish < select);
   assert.match(
     providerStep,
     /needsEndpointDiscovery = isLocalRuntime \|\| choice === "tailscale"/u,
@@ -241,8 +254,11 @@ test("hosted keys validate before selection and endpoint routes require discover
   assert.match(providerStep, /if \(!defaultModel\)[\s\S]*?no chat models were found/u);
   assert.match(
     source,
-    /choice === "openai-key" \|\| choice === "anthropic"[\s\S]*?Validating key…/u,
+    /title=\{`Connect \$\{apiKeyDialogChoice === "openai-key" \? "OpenAI" : "Anthropic"\}`\}/u,
   );
+  assert.match(source, /confirmLabel=\{discovering \? "Validating…" : "Validate & continue"\}/u);
+  assert.match(source, /type="password"[\s\S]*?Paste your API key/u);
+  assert.doesNotMatch(source, /<Text variant="small-strong">API key<\/Text>/u);
 });
 
 test("onboarding presentation stays compact and free of decorative gradients", () => {
@@ -252,6 +268,10 @@ test("onboarding presentation stays compact and free of decorative gradients", (
     providerPresentation,
     /The key stays on this Mac and can be rotated later in Settings\./u,
   );
+  assert.match(source, /shadow-onboarding/u);
+  assert.match(source, /px-4 pb-4 pt-11/u);
+  assert.doesNotMatch(source, /max-\[760px\]:rounded-none|max-\[760px\]:shadow-none/u);
+  assert.match(source, /border-transparent bg-input[\s\S]*?focus:border-transparent/u);
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
