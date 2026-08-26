@@ -126,6 +126,29 @@ test("a provider with every model hidden has no remote default", async () => {
   assert.deepEqual((await service.list()).defaults, {});
 });
 
+test("transcription-only rejects new remote Google chat selection but allows a pinned chat", async () => {
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [
+      provider({ id: "google", models: ["gemini-chat"], defaultModel: "gemini-chat" }),
+    ],
+    getSettings: async () => ({
+      geminiUsageScope: "transcription_only",
+      hiddenModelsByProvider: { google: ["*"] },
+    }),
+  });
+
+  await assert.rejects(
+    service.resolve("google", "gemini-chat"),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  assert.equal(
+    (await service.resolve("google", "gemini-chat", {
+      allowExistingPinnedGemini: true,
+    })).modelId,
+    "gemini-chat",
+  );
+});
+
 test("remote catalog omits oversized model identities instead of truncating or colliding", async () => {
   const prefix = "x".repeat(256);
   const service = new AidenRemoteModelService({

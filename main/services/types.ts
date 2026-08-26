@@ -445,6 +445,7 @@ export interface DiscoveredSkill {
 }
 
 export type VoiceProvider = "openai" | "gemini" | "local";
+export type GeminiUsageScope = "transcription_only" | "models_and_transcription";
 
 export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
 
@@ -514,6 +515,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
+  /** Whether Google is exposed for voice only or for both chat models and voice. */
+  geminiUsageScope?: GeminiUsageScope;
   /** Selected on-device speech model id (see local-models catalog). */
   localVoiceModel?: string;
   shortcutEnabled?: boolean;

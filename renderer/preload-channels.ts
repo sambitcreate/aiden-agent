@@ -38,6 +38,7 @@ export const INVOKE_PREFIXES = [
 ] as const;
 
 export const NATIVE_INVOKE_CHANNELS = {
+  accessibilityOpenSettings: "aiden:accessibility:open-settings",
   accessibilityRequest: "aiden:accessibility:request",
   accessibilityStatus: "aiden:accessibility:status",
   attachmentDroppedRead: "aiden:attachments:dropped-read",

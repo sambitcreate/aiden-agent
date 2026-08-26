@@ -56,6 +56,7 @@ import {
   withModelVisibility,
   withoutProviderVisibility,
 } from "../../renderer/shared/model-visibility.js";
+import { hiddenModelsForGeminiScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type {
   AppSettings,
@@ -697,6 +698,49 @@ export function createConfigStore(
       return runtimeSettingsFrom(saved);
     },
 
+    /**
+     * Commit Gemini's purpose and Voice selection together. The visibility
+     * sentinel hides future Google chat models too, without making a model
+     * pinned by an existing chat unexecutable.
+     */
+    async setGeminiVoiceSetup(
+      scope: import("./types.js").GeminiUsageScope,
+      voiceModel: string,
+    ): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.geminiUsageScope = scope;
+        config.settings.voiceProvider = "gemini";
+        config.settings.voiceModel = voiceModel;
+        config.settings.hiddenModelsByProvider = hiddenModelsForGeminiScope(
+          config.settings.hiddenModelsByProvider,
+          GOOGLE_PROVIDER_ID,
+          scope,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /**
+     * Update Gemini's allowed purpose without changing the active Voice
+     * provider. Provider credential management uses this path so rotating a
+     * Google key cannot silently move transcription away from local or OpenAI.
+     */
+    async setGeminiUsageScope(
+      scope: import("./types.js").GeminiUsageScope,
+    ): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.geminiUsageScope = scope;
+        config.settings.hiddenModelsByProvider = hiddenModelsForGeminiScope(
+          config.settings.hiddenModelsByProvider,
+          GOOGLE_PROVIDER_ID,
+          scope,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
     /** Atomically update one presentation-only model visibility preference. */
     async setModelVisibility(
       providerId: string,
@@ -704,6 +748,13 @@ export function createConfigStore(
       hidden: boolean,
     ): Promise<AppSettings> {
       const saved = await mutateSettings((config) => {
+        if (
+          providerId === GOOGLE_PROVIDER_ID &&
+          config.settings.geminiUsageScope === "transcription_only" &&
+          !hidden
+        ) {
+          return structuredClone(config.settings);
+        }
         config.settings.hiddenModelsByProvider = withModelVisibility(
           config.settings.hiddenModelsByProvider,
           providerId,
@@ -718,6 +769,12 @@ export function createConfigStore(
     /** Atomically restore every model for one provider to picker visibility. */
     async showAllProviderModels(providerId: string): Promise<AppSettings> {
       const saved = await mutateSettings((config) => {
+        if (
+          providerId === GOOGLE_PROVIDER_ID &&
+          config.settings.geminiUsageScope === "transcription_only"
+        ) {
+          return structuredClone(config.settings);
+        }
         config.settings.hiddenModelsByProvider = withoutProviderVisibility(
           config.settings.hiddenModelsByProvider,
           providerId,

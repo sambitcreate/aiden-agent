@@ -60,7 +60,9 @@ test(
 
 test("successful delivery delegates one atomic paste without flattening the clipboard", async () => {
   const subject = harness();
-  assert.equal(await pasteTranscript("hello world", subject.deps), "pasted");
+  assert.deepEqual(await pasteTranscript("hello world", subject.deps), {
+    outcome: "pasted",
+  });
   assert.equal(subject.pastedText(), "hello world");
   assert.deepEqual(subject.clipboard(), {
     image: Buffer.from([1, 2, 3]),
@@ -77,7 +79,11 @@ test("without accessibility access the transcript is copied and paste is not att
       return true;
     },
   });
-  assert.equal(await pasteTranscript("hello world", subject.deps), "copied");
+  assert.deepEqual(await pasteTranscript("hello world", subject.deps), {
+    outcome: "copied",
+    reason: "accessibility-required",
+    message: "Copied — allow Accessibility to paste automatically.",
+  });
   assert.equal(subject.clipboard(), "hello world");
   assert.equal(attempts, 0);
 });
@@ -86,7 +92,11 @@ test("focus changes degrade to the clipboard result returned by the native trans
   const subject = harness({
     pasteWithPreservedClipboard: async () => false,
   });
-  assert.equal(await pasteTranscript("hello world", subject.deps), "copied");
+  assert.deepEqual(await pasteTranscript("hello world", subject.deps), {
+    outcome: "copied",
+    reason: "paste-unavailable",
+    message: "Copied — the original text field was no longer focused.",
+  });
 });
 
 test("paste failures leave the transcript on the clipboard instead of throwing", async () => {
@@ -95,6 +105,10 @@ test("paste failures leave the transcript on the clipboard instead of throwing",
       throw new Error("osascript failed");
     },
   });
-  assert.equal(await pasteTranscript("hello world", subject.deps), "copied");
+  assert.deepEqual(await pasteTranscript("hello world", subject.deps), {
+    outcome: "copied",
+    reason: "paste-unavailable",
+    message: "Copied — Aiden couldn’t paste into the focused app.",
+  });
   assert.equal(subject.clipboard(), "hello world");
 });

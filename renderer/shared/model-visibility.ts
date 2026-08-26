@@ -39,7 +39,8 @@ export function isModelHidden(
   providerId: string,
   modelId: string,
 ): boolean {
-  return hidden?.[providerId]?.includes(modelId) === true;
+  const models = hidden?.[providerId];
+  return models?.includes("*") === true || models?.includes(modelId) === true;
 }
 
 /** Resolve a default for newly-created work without making hidden models unexecutable. */

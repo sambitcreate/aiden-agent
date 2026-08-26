@@ -16,6 +16,7 @@ import {
 } from "../../renderer/shared/anthropic-thinking.js";
 import { normalizeProviderThinkingLevel } from "../../renderer/shared/provider-thinking.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
 
 const MAX_REMOTE_MODEL_ID_LENGTH = 256;
 const MAX_REMOTE_MODEL_CATALOG_BYTES = 900 * 1024;
@@ -173,13 +174,14 @@ export class AidenRemoteModelService {
   async resolve(
     providerId?: string,
     modelId?: string,
+    options: { allowExistingPinnedGemini?: boolean } = {},
   ): Promise<{
     providerId: string;
     modelId: string;
     thinkingLevels: readonly string[];
     supportsImages: boolean;
   }> {
-    const projection = await this.list();
+    const [projection, settings] = await Promise.all([this.list(), this.options.getSettings()]);
     const provider = providerId
       ? projection.providers.find((candidate) => candidate.id === providerId)
       : projection.providers.find((candidate) => candidate.id === projection.defaults.providerId);
@@ -192,6 +194,17 @@ export class AidenRemoteModelService {
       throw new AidenRemoteServiceError(
         "invalid_request",
         "Choose a configured Aiden provider and model before starting this turn.",
+        400,
+      );
+    }
+    if (!canUseGeminiChatModel(
+      settings.geminiUsageScope,
+      provider.id,
+      options.allowExistingPinnedGemini === true,
+    )) {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "Google chat models are off while Gemini is configured for transcription only.",
         400,
       );
     }

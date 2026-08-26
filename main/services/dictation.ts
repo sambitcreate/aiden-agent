@@ -14,17 +14,14 @@ import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
 import { pasteTranscript, runAtomicMacPaste, type PasteDeps } from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
 
-let accessibilityPrompted = false;
 let lastPressAt = 0;
 
 function livePasteDeps(): PasteDeps {
   return {
     writeClipboard: (text) => clipboard.writeText(text),
-    isAccessibilityTrusted: (prompt) => {
-      const effectivePrompt = prompt && !accessibilityPrompted;
-      if (effectivePrompt) accessibilityPrompted = true;
-      return systemPreferences.isTrustedAccessibilityClient(effectivePrompt);
-    },
+    // Delivery must never steal focus with a native permission prompt. Users
+    // grant paste access explicitly from Settings; otherwise we copy safely.
+    isAccessibilityTrusted: () => systemPreferences.isTrustedAccessibilityClient(false),
     pasteWithPreservedClipboard: runAtomicMacPaste,
     log: (message, error) => logger.warn("dictation", message, error),
   };
@@ -60,13 +57,21 @@ export function toggleDictation(): void {
 }
 
 /** Pill finished transcribing. */
-export async function handleDictationResult(text: unknown): Promise<void> {
-  await coordinator.result(text);
+export async function handleDictationResult(text: unknown, operationId: unknown): Promise<void> {
+  await coordinator.result(text, operationId);
 }
 
 /** Pill reports a capture/transcription failure. */
-export async function handleDictationError(message: unknown): Promise<void> {
-  await coordinator.error(message);
+export async function handleDictationError(message: unknown, operationId: unknown): Promise<void> {
+  await coordinator.error(message, operationId);
+}
+
+/** Pill reports a non-terminal transcription phase. */
+export async function handleDictationProgress(
+  progress: unknown,
+  operationId: unknown,
+): Promise<void> {
+  await coordinator.progress(progress, operationId);
 }
 
 /** Pill cancel button. */

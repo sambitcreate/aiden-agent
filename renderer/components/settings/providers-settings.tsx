@@ -30,6 +30,7 @@ import { ProviderIcon } from "../provider-icon";
 import { ProviderEditor } from "./provider-editor";
 import { ProviderEditorFocusTarget } from "./provider-editor-focus";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
+import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
 import { splitPiBuiltinProviders } from "../../lib/pi-provider-display";
@@ -43,8 +44,11 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   type ChatTitleProviderId,
   type FoundationModelsConnectionStatus,
+  type GeminiUsageScope,
   type Provider,
 } from "../../lib/types";
+import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
+import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
@@ -106,9 +110,11 @@ const CHAT_TITLE_PROVIDER_LABELS: Record<ChatTitleProviderId, string> = {
 function BuiltinProviderRows({
   providers,
   onSetUp,
+  geminiUsageScope,
 }: {
   providers: readonly Provider[];
   onSetUp: (provider: Provider) => void;
+  geminiUsageScope?: GeminiUsageScope;
 }) {
   return providers.map((provider, index) => (
     <React.Fragment key={provider.id}>
@@ -130,8 +136,9 @@ function BuiltinProviderRows({
             {statusBadge(provider)}
           </div>
           <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-            {provider.models.length} available model
-            {provider.models.length === 1 ? "" : "s"}
+            {provider.id === GOOGLE_PROVIDER_ID && geminiUsageScope === "transcription_only"
+              ? "Transcription only · chat models hidden"
+              : `${provider.models.length} available model${provider.models.length === 1 ? "" : "s"}`}
           </Text>
         </div>
         <Button variant="filled" size="small" onClick={() => onSetUp(provider)}>
@@ -151,6 +158,10 @@ export function ProvidersSettings() {
   const editingFocusTarget = React.useRef(new ProviderEditorFocusTarget());
   const addProviderTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const [settingUp, setSettingUp] = React.useState<Provider | null>(null);
+  const [geminiDialogOpen, setGeminiDialogOpen] = React.useState(false);
+  const [geminiScope, setGeminiScope] = React.useState<GeminiUsageScope>("transcription_only");
+  const [geminiBusy, setGeminiBusy] = React.useState(false);
+  const [geminiError, setGeminiError] = React.useState<string | null>(null);
   const [removing, setRemoving] = React.useState<Provider | null>(null);
   const [savingTitleProvider, setSavingTitleProvider] = React.useState(false);
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
@@ -165,6 +176,55 @@ export function ProvidersSettings() {
   const customProviders = list.filter((provider) => !provider.isBuiltin);
   const { featured: featuredBuiltins, more: moreBuiltins } = splitPiBuiltinProviders(builtins);
   const titleProviderId = settings.data?.chatTitleProviderId ?? "automatic";
+
+  const openBuiltinSetup = (provider: Provider) => {
+    if (provider.id !== GOOGLE_PROVIDER_ID) {
+      setSettingUp(provider);
+      return;
+    }
+    setGeminiScope(
+      defaultGeminiUsageScope(settings.data?.geminiUsageScope, provider.hasKey === true),
+    );
+    setGeminiError(null);
+    setGeminiDialogOpen(true);
+  };
+
+  const saveGeminiSetup = async () => {
+    const saved = await settingsApi.setGeminiUsageScope(geminiScope);
+    qc.setQueryData(queryKeys.settings, saved);
+    await invalidate();
+  };
+
+  const confirmGeminiSetup = async () => {
+    const google = list.find((provider) => provider.id === GOOGLE_PROVIDER_ID);
+    if (!google) {
+      setGeminiError("Google provider details are not available yet. Refresh and try again.");
+      return;
+    }
+    if (!google.hasKey) {
+      setGeminiDialogOpen(false);
+      setSettingUp(google);
+      return;
+    }
+    setGeminiBusy(true);
+    setGeminiError(null);
+    try {
+      await saveGeminiSetup();
+      setGeminiDialogOpen(false);
+      toast.success("Gemini access updated.");
+    } catch (error) {
+      setGeminiError(error instanceof Error ? error.message : "Couldn't update Gemini access.");
+    } finally {
+      setGeminiBusy(false);
+    }
+  };
+
+  const manageGeminiCredential = () => {
+    const google = list.find((provider) => provider.id === GOOGLE_PROVIDER_ID);
+    if (!google) return;
+    setGeminiDialogOpen(false);
+    setSettingUp(google);
+  };
 
   const setTitleProvider = async (value: ChatTitleProviderId) => {
     setSavingTitleProvider(true);
@@ -450,7 +510,11 @@ export function ProvidersSettings() {
           </Text>
         </div>
         <div className="rounded-card border border-separator">
-          <BuiltinProviderRows providers={featuredBuiltins} onSetUp={setSettingUp} />
+          <BuiltinProviderRows
+            providers={featuredBuiltins}
+            onSetUp={openBuiltinSetup}
+            geminiUsageScope={settings.data?.geminiUsageScope}
+          />
           {moreBuiltins.length > 0 ? (
             <>
               {featuredBuiltins.length > 0 ? <Separator /> : null}
@@ -482,7 +546,11 @@ export function ProvidersSettings() {
               </Text>
             </div>
             <Separator />
-            <BuiltinProviderRows providers={moreBuiltins} onSetUp={setSettingUp} />
+            <BuiltinProviderRows
+              providers={moreBuiltins}
+              onSetUp={openBuiltinSetup}
+              geminiUsageScope={settings.data?.geminiUsageScope}
+            />
           </div>
         ) : null}
       </div>
@@ -560,9 +628,30 @@ export function ProvidersSettings() {
           provider={settingUp}
           open={settingUp !== null}
           onOpenChange={(open) => !open && setSettingUp(null)}
-          onSaved={invalidate}
+          requireChatModel={settingUp.id !== GOOGLE_PROVIDER_ID}
+          onSaved={settingUp.id === GOOGLE_PROVIDER_ID ? saveGeminiSetup : invalidate}
         />
       ) : null}
+
+      <GeminiVoiceSetupDialog
+        open={geminiDialogOpen}
+        scope={geminiScope}
+        activatesVoice={false}
+        hasKey={list.some(
+          (provider) => provider.id === GOOGLE_PROVIDER_ID && provider.hasKey === true,
+        )}
+        busy={geminiBusy}
+        error={geminiError}
+        onScopeChange={setGeminiScope}
+        onOpenChange={(open) => {
+          if (!geminiBusy) {
+            setGeminiDialogOpen(open);
+            if (!open) setGeminiError(null);
+          }
+        }}
+        onConfirm={confirmGeminiSetup}
+        onManageCredential={manageGeminiCredential}
+      />
 
       <AlertDialog
         open={removing !== null}

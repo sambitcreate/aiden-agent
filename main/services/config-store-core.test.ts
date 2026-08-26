@@ -256,6 +256,65 @@ test("model visibility updates are atomic and provider-scoped", async (t) => {
   });
 });
 
+test("Gemini voice setup atomically selects voice and gates every Google chat model", async (t) => {
+  const h = await harness(t);
+  await h.store.setModelVisibility("google", "gemini-private", true);
+  await h.store.setModelVisibility("anthropic", "claude-private", true);
+
+  const voiceOnly = await h.store.setGeminiVoiceSetup(
+    "transcription_only",
+    "gemini-3.5-transcribe-live",
+  );
+  assert.equal(voiceOnly.voiceProvider, "gemini");
+  assert.equal(voiceOnly.voiceModel, "gemini-3.5-transcribe-live");
+  assert.equal(voiceOnly.geminiUsageScope, "transcription_only");
+  assert.deepEqual(voiceOnly.hiddenModelsByProvider, {
+    anthropic: ["claude-private"],
+    google: ["*", "gemini-private"],
+  });
+
+  await h.store.setModelVisibility("google", "future-gemini", false);
+  await h.store.showAllProviderModels("google");
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, [
+    "*",
+    "gemini-private",
+  ]);
+
+  const full = await h.store.setGeminiVoiceSetup(
+    "models_and_transcription",
+    "gemini-3.5-transcribe",
+  );
+  assert.equal(full.geminiUsageScope, "models_and_transcription");
+  assert.deepEqual(full.hiddenModelsByProvider, {
+    anthropic: ["claude-private"],
+    google: ["gemini-private"],
+  });
+});
+
+test("Gemini usage scope gates Google models without changing local or OpenAI voice", async (t) => {
+  const h = await harness(t);
+
+  await h.store.setSettings({
+    voiceProvider: "local",
+    voiceModel: "local-voice-selection",
+  });
+  const local = await h.store.setGeminiUsageScope("transcription_only");
+  assert.equal(local.voiceProvider, "local");
+  assert.equal(local.voiceModel, "local-voice-selection");
+  assert.equal(local.geminiUsageScope, "transcription_only");
+  assert.deepEqual(local.hiddenModelsByProvider?.google, ["*"]);
+
+  await h.store.setSettings({
+    voiceProvider: "openai",
+    voiceModel: "gpt-4o-mini-transcribe",
+  });
+  const openai = await h.store.setGeminiUsageScope("models_and_transcription");
+  assert.equal(openai.voiceProvider, "openai");
+  assert.equal(openai.voiceModel, "gpt-4o-mini-transcribe");
+  assert.equal(openai.geminiUsageScope, "models_and_transcription");
+  assert.equal(openai.hiddenModelsByProvider?.google, undefined);
+});
+
 test("removing a provider clears its model visibility preferences", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

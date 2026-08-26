@@ -42,6 +42,7 @@ import {
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
+import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
   ProviderKind,
@@ -57,6 +58,8 @@ import {
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { normalizeProviderArtworkInput } from "../services/provider-artwork.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js";
+import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -436,6 +439,32 @@ export function registerProviderHandlers(): void {
   );
   ipcMain.handle("settings:showAllProviderModels", async (_event, providerIdValue: unknown) => {
     return configStore.showAllProviderModels(asProviderId(providerIdValue));
+  });
+  ipcMain.handle(
+    "settings:setGeminiVoiceSetup",
+    async (_event, scopeValue: unknown, modelValue: unknown) => {
+      if (!isGeminiUsageScope(scopeValue) || typeof modelValue !== "string") {
+        throw new Error("Invalid Gemini voice setup.");
+      }
+      if (!isGeminiTranscriptionModel(modelValue)) {
+        throw new Error("Choose a supported Gemini transcription model.");
+      }
+      await listProvidersWithLegacyPiCredentialMigration();
+      if (!(await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID))) {
+        throw new Error("Add a Google API key in Providers before enabling Gemini voice.");
+      }
+      return configStore.setGeminiVoiceSetup(scopeValue, modelValue);
+    },
+  );
+  ipcMain.handle("settings:setGeminiUsageScope", async (_event, scopeValue: unknown) => {
+    if (!isGeminiUsageScope(scopeValue)) {
+      throw new Error("Invalid Gemini usage scope.");
+    }
+    await listProvidersWithLegacyPiCredentialMigration();
+    if (!(await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID))) {
+      throw new Error("Add a Google API key in Providers before updating Gemini access.");
+    }
+    return configStore.setGeminiUsageScope(scopeValue);
   });
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");

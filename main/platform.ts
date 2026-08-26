@@ -67,6 +67,16 @@ export const ipcMain = {
 };
 
 let nativeHandlersRegistered = false;
+const ACCESSIBILITY_SETTINGS_URL =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+async function waitForAccessibilityTrust(): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (systemPreferences.isTrustedAccessibilityClient(false)) return true;
+    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+  }
+  return systemPreferences.isTrustedAccessibilityClient(false);
+}
 
 export function registerNativeHandlers(): void {
   if (nativeHandlersRegistered) return;
@@ -103,9 +113,19 @@ export function registerNativeHandlers(): void {
   electronIpcMain.handle("aiden:accessibility:status", () =>
     systemPreferences.isTrustedAccessibilityClient(false),
   );
-  electronIpcMain.handle("aiden:accessibility:request", () =>
-    systemPreferences.isTrustedAccessibilityClient(true),
-  );
+  electronIpcMain.handle("aiden:accessibility:request", async (event) => {
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    parent?.show();
+    parent?.focus();
+    app.focus({ steal: true });
+    if (systemPreferences.isTrustedAccessibilityClient(false)) return true;
+    systemPreferences.isTrustedAccessibilityClient(true);
+    return waitForAccessibilityTrust();
+  });
+  electronIpcMain.handle("aiden:accessibility:open-settings", async () => {
+    await shell.openExternal(ACCESSIBILITY_SETTINGS_URL);
+    return true;
+  });
 
   nativeTheme.on("updated", () => {
     broadcast("aiden:theme:changed", {
