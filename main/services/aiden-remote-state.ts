@@ -7,7 +7,6 @@ import {
 import type { RuntimeProfileId } from "../runtime-profile-core.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import {
-  AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
@@ -351,14 +350,12 @@ export function createDefaultAidenRemoteState(
   };
 }
 
-function canonicalTailscaleTarget(lanPort: number): string {
-  return `http://127.0.0.1:${lanPort + 1}${AIDEN_REMOTE_BASE_PATH}`;
-}
-
 /**
  * Development historically inherited production's listener range. Migrate
  * only ports in that reserved range, and never rewrite custom ports or an
  * unresolved route mutation whose persisted fingerprints must remain intact.
+ * Retain any previous Serve ownership target so connect/disconnect can first
+ * reconcile the exact route that may still be live in the Tailscale daemon.
  */
 export function normalizeAidenRemoteStateForRuntimeProfile(
   document: AidenRemoteStateDocument,
@@ -374,12 +371,6 @@ export function normalizeAidenRemoteStateForRuntimeProfile(
   const migrated = structuredClone(document);
   migrated.lanPort = AIDEN_REMOTE_DEVELOPMENT_LAN_PORT
     + (document.lanPort - AIDEN_REMOTE_PRODUCTION_LAN_PORT);
-  if (
-    migrated.tailscaleOwnership?.target
-    === canonicalTailscaleTarget(document.lanPort)
-  ) {
-    migrated.tailscaleOwnership.target = canonicalTailscaleTarget(migrated.lanPort);
-  }
   return migrated;
 }
 

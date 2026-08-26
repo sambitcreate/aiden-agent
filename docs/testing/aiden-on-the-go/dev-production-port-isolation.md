@@ -7,7 +7,9 @@ Date: 2026-08-26
 - Production retains `49220/49221` and its 64-pair fallback range.
 - Development owns a disjoint range beginning at `50220/50221`.
 - Existing development state in the production range migrates without rotating
-  instance identity, device credentials, or TLS identity.
+  instance identity, device credentials, or TLS identity. Persisted ownership
+  retains its previous target so Aiden can remove that exact live daemon route
+  before reconnecting at the migrated listener.
 - A pending Tailscale route outcome defers migration until a later launch.
 - Tailscale status reads retry/coalesce, while every Serve mutation preserves
   the existing exact ownership, conflict, and post-mutation verification gates.
@@ -19,7 +21,7 @@ Date: 2026-08-26
 - Focused port, state, service, route, and controller suites: 104 passed, 1
   host-dependent legacy-port test skipped.
 - Follow-up port, state, and controller suite: 56 passed.
-- Registered `npm run test:aiden-remote` suite: 332 passed, 1
+- Registered `npm run test:aiden-remote` suite: 334 passed, 1
   host-dependent legacy-port test skipped; all 7 LAN transport spike tests
   passed.
 

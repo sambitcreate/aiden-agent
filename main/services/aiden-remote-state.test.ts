@@ -349,7 +349,7 @@ test("legacy endpoint commitment is inferred conservatively and persisted", asyn
   assert.equal(migrated.writes.length, 1);
 });
 
-test("development migrates only the exact legacy production listener pair", () => {
+test("development migrates the listener while retaining live Serve ownership", () => {
   const legacy = createDefaultAidenRemoteState(() => Buffer.alloc(24, 4));
   legacy.lanPortCommitted = true;
   legacy.tailscaleOwnership = {
@@ -361,7 +361,7 @@ test("development migrates only the exact legacy production listener pair", () =
   assert.equal(migrated.lanPort, AIDEN_REMOTE_DEVELOPMENT_LAN_PORT);
   assert.equal(
     migrated.tailscaleOwnership?.target,
-    "http://127.0.0.1:50221/api/aiden/v1",
+    "http://127.0.0.1:49221/api/aiden/v1",
   );
   assert.equal(legacy.lanPort, AIDEN_REMOTE_PRODUCTION_LAN_PORT);
   assert.equal(
