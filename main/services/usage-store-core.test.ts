@@ -50,8 +50,7 @@ test("assistant request tracking accounts a pre-message-end cancellation exactly
 });
 
 function record(
-  patch: Partial<UsageRequestRecord> &
-    Pick<UsageRequestRecord, "providerId" | "modelId">,
+  patch: Partial<UsageRequestRecord> & Pick<UsageRequestRecord, "providerId" | "modelId">,
 ): UsageRequestRecord {
   return {
     timestamp: NOW,
@@ -132,10 +131,7 @@ test("aggregates reported tokens while keeping unmetered and local requests visi
     summary.models.map((model) => model.modelId),
     ["gpt-test", "claude-test", "qwen-local"],
   );
-  assert.equal(
-    summary.models.find((model) => model.local)?.unmeteredRequests,
-    1,
-  );
+  assert.equal(summary.models.find((model) => model.local)?.unmeteredRequests, 1);
 });
 
 test("persists subagent requests as a first-class privacy-safe usage source", async () => {
@@ -393,10 +389,7 @@ test("maps exact OpenAI and Gemini transcription usage without double-counting c
       total: 45,
     },
   );
-  assert.equal(
-    openAITranscriptionTokens({ type: "duration", seconds: 20 }),
-    null,
-  );
+  assert.equal(openAITranscriptionTokens({ type: "duration", seconds: 20 }), null);
   assert.deepEqual(
     geminiTranscriptionTokens({
       promptTokenCount: 100,
@@ -412,6 +405,23 @@ test("maps exact OpenAI and Gemini transcription usage without double-counting c
       cacheWrite: 0,
       reasoning: 10,
       total: 130,
+    },
+  );
+  assert.deepEqual(
+    geminiTranscriptionTokens({
+      total_input_tokens: 100,
+      total_cached_tokens: 30,
+      total_output_tokens: 30,
+      total_thought_tokens: 10,
+      total_tokens: 140,
+    }),
+    {
+      input: 70,
+      output: 40,
+      cacheRead: 30,
+      cacheWrite: 0,
+      reasoning: 10,
+      total: 140,
     },
   );
 });
@@ -458,9 +468,7 @@ test("counts every assistant turn outcome, including tool loops, failures, and a
       stopReason,
       timestamp: NOW,
     };
-    await store.record(
-      assistantUsageRecord({ message, provider, model, source: "chat" }),
-    );
+    await store.record(assistantUsageRecord({ message, provider, model, source: "chat" }));
   }
 
   const summary = await store.summary("7d");

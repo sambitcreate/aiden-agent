@@ -13,14 +13,24 @@ import {
 import { usageStore } from "./usage-store.js";
 import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-credential-migration.js";
+import {
+  buildGeminiTranscriptionRequest,
+  GEMINI_INTERACTIONS_ENDPOINT,
+  parseGeminiTranscriptionResponse,
+} from "./transcription-core.js";
+import {
+  resolveCloudVoiceModel,
+  resolveGeminiBatchTranscriptionModel,
+} from "../../renderer/shared/voice-models.js";
 
 interface TranscribeInput {
   audioBase64: string;
   mimeType: string;
+  model?: string;
   signal?: AbortSignal;
 }
 
-async function recordTranscription(input: {
+export async function recordTranscription(input: {
   provider: StoredProvider;
   model: string;
   status: "completed" | "failed";
@@ -65,7 +75,7 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
     "",
   );
   const settings = await configStore.getSettings();
-  const model = settings.voiceModel || "whisper-1";
+  const model = resolveCloudVoiceModel("openai", input.model ?? settings.voiceModel);
 
   const bytes = Buffer.from(input.audioBase64, "base64");
   const form = new FormData();
@@ -117,37 +127,27 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
   const key = auth?.auth.apiKey;
   if (!key) throw new Error("Set up Google Gemini in Settings → Providers to use voice input.");
   const settings = await configStore.getSettings();
-  const model = settings.voiceModel || "gemini-2.0-flash";
+  const model = resolveGeminiBatchTranscriptionModel(input.model ?? settings.voiceModel);
   const provider = await providerRegistry.selectionProvider(GOOGLE_PROVIDER_ID);
   if (!provider) throw new Error("Google Gemini provider settings are unavailable.");
 
   let response: Response;
   try {
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: "Transcribe the following audio verbatim. Output only the transcript text, nothing else.",
-                },
-                {
-                  inline_data: {
-                    mime_type: input.mimeType || "audio/webm",
-                    data: input.audioBase64,
-                  },
-                },
-              ],
-            },
-          ],
-        }),
-        signal: input.signal,
+    response = await fetch(GEMINI_INTERACTIONS_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": key,
       },
-    );
+      body: JSON.stringify(
+        buildGeminiTranscriptionRequest({
+          audioBase64: input.audioBase64,
+          mimeType: input.mimeType,
+          model,
+        }),
+      ),
+      signal: input.signal,
+    });
   } catch (error) {
     await recordTranscription({ provider, model, status: "failed" });
     throw error;
@@ -160,27 +160,14 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
     );
   }
   try {
-    const decoded: unknown = await response.json();
-    const data =
-      decoded && typeof decoded === "object"
-        ? (decoded as {
-            candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }>;
-            usageMetadata?: unknown;
-          })
-        : {};
-    const parts = data.candidates?.[0]?.content?.parts;
-    const text = (Array.isArray(parts) ? parts : [])
-      .map((part) => (typeof part?.text === "string" ? part.text : ""))
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+    const data = parseGeminiTranscriptionResponse(await response.json());
     await recordTranscription({
       provider,
       model,
       status: "completed",
-      tokens: geminiTranscriptionTokens(data.usageMetadata),
+      tokens: geminiTranscriptionTokens(data.usage),
     });
-    return text;
+    return data.text;
   } catch (error) {
     await recordTranscription({ provider, model, status: "failed" });
     throw error;
