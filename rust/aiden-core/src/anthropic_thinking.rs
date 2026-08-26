@@ -170,7 +170,7 @@ pub fn parse_anthropic_thinking_preferences(
     for (model_id, level) in object {
         let parsed_level = level.as_str().and_then(AnthropicThinkingLevel::from_str);
         if model_id.is_empty()
-            || model_id.chars().count() > MAX_MODEL_ID_CHARS
+            || model_id.encode_utf16().count() > MAX_MODEL_ID_CHARS
             || parsed_level.is_none()
         {
             return Err(AnthropicThinkingError::new(

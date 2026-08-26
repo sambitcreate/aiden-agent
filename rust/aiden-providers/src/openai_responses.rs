@@ -536,6 +536,7 @@ mod tests {
             base_url: "https://api.openai.com/v1".to_string(),
             reasoning: true,
             thinking_level_map: None,
+            force_adaptive_thinking: false,
             vision: true,
             context_window: 200_000,
             max_tokens_limit: 32_768,

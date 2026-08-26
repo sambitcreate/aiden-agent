@@ -377,8 +377,8 @@ impl ToolExecutor for AssistantToolExecutor {
                 Some(target) => {
                     let result = self
                         .mcp
-                        .call_tool(
-                            &target.server_id,
+                        .call_tool_for_lease(
+                            &target.connection,
                             &target.tool_name,
                             call.arguments.clone(),
                             self.mcp_timeout,

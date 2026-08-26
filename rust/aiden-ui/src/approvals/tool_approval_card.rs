@@ -163,14 +163,6 @@ pub fn tool_approval_card(
                         .on_click(decide(ApprovalDecision::Deny)),
                 )
                 .child(
-                    Button::new("approval-session")
-                        .outline()
-                        .small()
-                        .label(ApprovalDecision::AllowSession.label())
-                        .disabled(deciding)
-                        .on_click(decide(ApprovalDecision::AllowSession)),
-                )
-                .child(
                     Button::new("approval-once")
                         .primary()
                         .small()

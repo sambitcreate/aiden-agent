@@ -37,6 +37,7 @@ use gpui_component::{
 use crate::services::appearance::{
     appearance_to_settings, apply_appearance, resolve_scheme, SETTINGS_APPEARANCE_KEY,
 };
+use crate::services::provider_kit::{merge_codex_configured_provider, ConfiguredProvider};
 use crate::services::stores::Stores;
 
 use state::{
@@ -195,7 +196,54 @@ impl OnboardingView {
             let (settings, providers) = cx
                 .background_spawn(async move {
                     let settings = stores.config.get_settings().unwrap_or_default();
-                    let providers = stores.config.list_providers().unwrap_or_default();
+                    let stored_providers = stores.config.list_providers().unwrap_or_default();
+                    let providers = stored_providers
+                        .iter()
+                        .map(ConfiguredProvider::from)
+                        .collect::<Vec<_>>();
+                    let providers = merge_codex_configured_provider(
+                        providers,
+                        &stores.codex_auth.provider_snapshot(),
+                    )
+                    .into_iter()
+                    .map(|provider| {
+                        if let Some(stored) = stored_providers
+                            .iter()
+                            .find(|stored| stored.id == provider.id)
+                        {
+                            return StoredProvider {
+                                id: stored.id.clone(),
+                                kind: stored.kind,
+                                label: stored.label.clone(),
+                                base_url: stored.base_url.clone(),
+                                models: stored.models.clone(),
+                                model_metadata: stored.model_metadata.clone(),
+                                default_model: stored.default_model.clone(),
+                                needs_key: stored.needs_key,
+                                deployment: stored.deployment,
+                                is_preset: stored.is_preset,
+                                is_builtin: stored.is_builtin,
+                                extra: serde_json::Map::new(),
+                            };
+                        }
+                        let is_codex =
+                            provider.id == aiden_providers::codex::OPENAI_CODEX_PROVIDER_ID;
+                        StoredProvider {
+                            id: provider.id,
+                            kind: provider.kind,
+                            label: provider.label,
+                            base_url: provider.base_url,
+                            models: provider.models,
+                            model_metadata: Some(provider.model_metadata.into_iter().collect()),
+                            default_model: provider.default_model,
+                            needs_key: provider.needs_key,
+                            deployment: None,
+                            is_preset: Some(true),
+                            is_builtin: Some(is_codex),
+                            extra: serde_json::Map::new(),
+                        }
+                    })
+                    .collect::<Vec<StoredProvider>>();
                     (settings, providers)
                 })
                 .await;

@@ -1,6 +1,6 @@
 [package]
 name = "aiden-computer-use"
-description = "Computer Use + Apple Foundation Models integration (port of main/services/computer-use/* and main/services/foundation-models-connection*.ts): broker client over the signed Rust bridge's MCP stdio channel, the cua-driver session protocol, safety/gating/settings/status core logic, and the native helper file-exchange client."
+description = "Computer Use + Apple Foundation Models integration: strict model-facing schema/controller, broker client over the signed Rust bridge, cua-driver session and safety/gating/settings/status cores, and the native helper file-exchange client."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,6 +22,8 @@ regex = "1"
 unicode-normalization = "0.1"
 getrandom = "0.2"
 anyhow.workspace = true
+base64.workspace = true
+image.workspace = true
 # macOS host plumbing (bridge spawn fd3/fd4, process-group signals). The pure
 # protocol, safety, settings, and status logic compiles on every platform; the
 # darwin-gated modules are declared with `#[cfg(target_os = "macos")]`.

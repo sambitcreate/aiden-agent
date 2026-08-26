@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures::StreamExt as _;
 use serde::Serialize;
 
 use crate::registry::ApiKeyResolver;
@@ -46,6 +47,8 @@ pub const EXA_MAX_TEXT_CHARACTERS: usize = 1200;
 pub const EXA_DEFAULT_TIMEOUT_MS: u64 = 20_000;
 /// Error bodies are truncated before they reach the model.
 pub const EXA_MAX_ERROR_BODY_CHARS: usize = 200;
+pub const EXA_MAX_QUERY_CHARACTERS: usize = 4_096;
+pub const EXA_MAX_RESPONSE_BYTES: usize = 2 * 1_048_576;
 /// The secrets key id under which the Exa API key is stored
 /// (`secrets.getKey("exa")`).
 pub const EXA_KEY_ID: &str = "exa";
@@ -53,6 +56,7 @@ pub const EXA_KEY_ID: &str = "exa";
 /// The user-facing tool parameters (`{ query, numResults? }`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct ExaSearchQuery {
     pub query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,6 +84,11 @@ impl ExaSearchQuery {
             return Err(ExaSearchError::InvalidInput(
                 "query must not be blank".to_string(),
             ));
+        }
+        if self.query.chars().count() > EXA_MAX_QUERY_CHARACTERS {
+            return Err(ExaSearchError::InvalidInput(format!(
+                "query must be at most {EXA_MAX_QUERY_CHARACTERS} characters"
+            )));
         }
         if let Some(count) = self.num_results {
             if !(1..=EXA_MAX_RESULTS).contains(&count) {
@@ -157,6 +166,7 @@ pub fn normalize_search_results(
     };
     results
         .iter()
+        .take(EXA_MAX_RESULTS as usize)
         .filter_map(|entry| entry.as_object())
         .map(|result| ExaSearchResult {
             title: result
@@ -169,13 +179,29 @@ pub fn normalize_search_results(
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-            text: result
-                .get("text")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-                .chars()
-                .take(max_text_characters)
-                .collect(),
+            text: truncate_utf16(
+                result
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(""),
+                max_text_characters,
+            ),
+        })
+        .collect()
+}
+
+fn truncate_utf16(value: &str, limit: usize) -> String {
+    let mut units = 0usize;
+    value
+        .chars()
+        .take_while(|character| {
+            let next = units + character.len_utf16();
+            if next > limit {
+                false
+            } else {
+                units = next;
+                true
+            }
         })
         .collect()
 }
@@ -210,17 +236,28 @@ pub enum ExaSearchError {
 }
 
 /// Build the parent tool's HTTP error message verbatim.
-fn format_http_error(status: u16, status_text: &str, body: &[u8]) -> String {
-    let body = String::from_utf8_lossy(body);
+fn redact_secret(value: String, secret: &str) -> String {
+    if secret.is_empty() {
+        value
+    } else {
+        value.replace(secret, "[REDACTED]")
+    }
+}
+
+fn format_http_error(status: u16, status_text: &str, body: &[u8], api_key: &str) -> String {
+    // Redact before truncation so a reflected credential crossing the cutoff
+    // cannot evade an exact match and expose a secret prefix.
+    let body = redact_secret(String::from_utf8_lossy(body).into_owned(), api_key);
     let body = body
         .chars()
         .take(EXA_MAX_ERROR_BODY_CHARS)
         .collect::<String>();
-    if body.is_empty() {
+    let message = if body.is_empty() {
         format!("{status} {status_text}")
     } else {
         format!("{status} {status_text} — {body}")
-    }
+    };
+    redact_secret(message, api_key)
 }
 
 /// A normalized HTTP response handed to the client by a transport. Splitting
@@ -255,10 +292,10 @@ pub struct ReqwestExaTransport {
 impl Default for ReqwestExaTransport {
     fn default() -> Self {
         Self {
-            client: reqwest::Client::builder().build().unwrap_or_else(|error| {
-                tracing::warn!(%error, "could not build the Exa HTTP client");
-                reqwest::Client::new()
-            }),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("the fixed redirect-disabled Exa client configuration must build"),
         }
     }
 }
@@ -282,11 +319,25 @@ impl ExaSearchTransport for ReqwestExaTransport {
             .map_err(|error| error.to_string())?;
         let status = response.status();
         let status_text = status.canonical_reason().unwrap_or("").to_string();
-        let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > EXA_MAX_RESPONSE_BYTES as u64)
+        {
+            return Err("response exceeded the 2 MiB limit".to_string());
+        }
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| error.to_string())?;
+            if bytes.len().saturating_add(chunk.len()) > EXA_MAX_RESPONSE_BYTES {
+                return Err("response exceeded the 2 MiB limit".to_string());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
         Ok(ExaHttpResponse {
             status: status.as_u16(),
             status_text,
-            body: bytes.to_vec(),
+            body: bytes,
         })
     }
 }
@@ -360,11 +411,18 @@ impl ExaClient {
         let body = request.to_json_string();
         let mut last_error: Option<ExaSearchError> = None;
         for attempt in 0..=self.max_retries {
-            let response = self
-                .transport
-                .post(&self.endpoint, api_key, &body)
-                .await
-                .map_err(ExaSearchError::Transport)?;
+            let response = tokio::time::timeout(
+                self.timeout,
+                self.transport.post(&self.endpoint, api_key, &body),
+            )
+            .await
+            .map_err(|_| {
+                ExaSearchError::Transport(format!(
+                    "request timed out after {} ms",
+                    self.timeout.as_millis()
+                ))
+            })?
+            .map_err(|error| ExaSearchError::Transport(redact_secret(error, api_key)))?;
             if (200..300).contains(&response.status) {
                 let parsed: serde_json::Value = serde_json::from_slice(&response.body)
                     .map_err(|error| ExaSearchError::InvalidInput(error.to_string()))?;
@@ -374,6 +432,7 @@ impl ExaClient {
                 response.status,
                 &response.status_text,
                 &response.body,
+                api_key,
             ));
             let transient = response.status == 429 || response.status >= 500;
             if !transient || attempt == self.max_retries {
@@ -480,6 +539,20 @@ mod tests {
         // The child proxy's tighter/different bound is a parameter.
         let results = normalize_search_results(&value, 4096);
         assert_eq!(results[0].text.len(), 4096);
+    }
+
+    #[test]
+    fn result_count_and_utf16_text_are_bounded() {
+        let value = serde_json::json!({
+            "results": (0..20).map(|index| serde_json::json!({
+                "title": index.to_string(),
+                "url": "https://example.test",
+                "text": "😀😀a"
+            })).collect::<Vec<_>>()
+        });
+        let results = normalize_search_results(&value, 3);
+        assert_eq!(results.len(), EXA_MAX_RESULTS as usize);
+        assert_eq!(results[0].text, "😀");
     }
 
     #[test]
@@ -642,6 +715,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reflected_keys_are_redacted_from_http_errors() {
+        let key = "exa-secret-reflected-by-upstream";
+        let transport = FakeTransport::new(vec![ExaHttpResponse {
+            status: 401,
+            status_text: "Unauthorized".to_string(),
+            body: format!(r#"{{"message":"invalid key {key}"}}"#).into_bytes(),
+        }]);
+        let client = ExaClient::new().with_transport(Arc::new(transport));
+        let error = client
+            .search(&ExaSearchQuery::new("aiden"), key, EXA_MAX_TEXT_CHARACTERS)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(!error.contains(key));
+        assert!(error.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
+    async fn reflected_keys_crossing_the_error_cutoff_are_redacted_before_truncation() {
+        let key = "exa-secret-crossing-the-cutoff";
+        let reflected = format!("{}{key}", "x".repeat(EXA_MAX_ERROR_BODY_CHARS - 10));
+        let transport = FakeTransport::new(vec![ExaHttpResponse {
+            status: 401,
+            status_text: "Unauthorized".to_string(),
+            body: reflected.into_bytes(),
+        }]);
+        let client = ExaClient::new().with_transport(Arc::new(transport));
+        let error = client
+            .search(&ExaSearchQuery::new("aiden"), key, EXA_MAX_TEXT_CHARACTERS)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(!error.contains(key));
+        assert!(!error.contains("exa-secret"));
+        assert!(error.contains("[REDACTED]"));
+    }
+
+    struct ReflectingErrorTransport;
+
+    #[async_trait]
+    impl ExaSearchTransport for ReflectingErrorTransport {
+        async fn post(
+            &self,
+            _endpoint: &str,
+            api_key: &str,
+            _body: &str,
+        ) -> Result<ExaHttpResponse, String> {
+            Err(format!("request rejected credential {api_key}"))
+        }
+    }
+
+    #[tokio::test]
+    async fn reflected_keys_are_redacted_from_transport_errors() {
+        let key = "exa-secret-reflected-by-transport";
+        let client = ExaClient::new().with_transport(Arc::new(ReflectingErrorTransport));
+        let error = client
+            .search(&ExaSearchQuery::new("aiden"), key, EXA_MAX_TEXT_CHARACTERS)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(!error.contains(key));
+        assert!(error.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
     async fn default_policy_does_not_retry_transient_failures() {
         let transport = FakeTransport::new(vec![ExaHttpResponse {
             status: 500,
@@ -704,6 +845,40 @@ mod tests {
             )
             .await
             .is_err());
+        assert!(client
+            .search(
+                &ExaSearchQuery::new("x".repeat(EXA_MAX_QUERY_CHARACTERS + 1)),
+                "k",
+                EXA_MAX_TEXT_CHARACTERS,
+            )
+            .await
+            .is_err());
+    }
+
+    struct PendingTransport;
+
+    #[async_trait]
+    impl ExaSearchTransport for PendingTransport {
+        async fn post(
+            &self,
+            _endpoint: &str,
+            _api_key: &str,
+            _body: &str,
+        ) -> Result<ExaHttpResponse, String> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_timeout_bounds_a_stalled_transport() {
+        let client = ExaClient::new()
+            .with_transport(Arc::new(PendingTransport))
+            .with_timeout(Duration::from_millis(10));
+        let error = client
+            .search(&ExaSearchQuery::new("aiden"), "k", EXA_MAX_TEXT_CHARACTERS)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
     }
 
     #[test]

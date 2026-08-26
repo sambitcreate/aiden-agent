@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use aiden_core::subagent_safe_text::contains_high_confidence_secret_including_encodings;
@@ -36,7 +36,7 @@ use aiden_core::{ToolCall, ToolDef};
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::approval::{ApprovalPolicy, ApprovalVerdict, DenyAllApprovalPolicy};
 use crate::runner::{ToolExecutionError, ToolExecutor, ToolOutput};
@@ -59,6 +59,153 @@ pub const MAX_GREP_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_GREP_DURATION_MS: u64 = 5_000;
 pub const MAX_SEARCH_PATTERN_CHARS: usize = 1_000;
 pub const SKIP_DIRS: &[&str] = &[".git", "node_modules", "dist", "build", ".next", ".cache"];
+
+/// Owns one shell process group's lifetime. Dropping the provider driver
+/// (Stop, chat switch, or window close) drops this guard and terminates the
+/// complete group, including grandchildren that outlive `/bin/sh`.
+#[cfg(unix)]
+struct ProcessGroupGuard {
+    pid: Option<libc::pid_t>,
+}
+
+#[cfg(unix)]
+impl ProcessGroupGuard {
+    fn new(child: &tokio::process::Child) -> Self {
+        Self {
+            pid: child.id().map(|pid| pid as libc::pid_t),
+        }
+    }
+
+    fn kill(&mut self) {
+        if let Some(pid) = self.pid.take() {
+            // SAFETY: the child was spawned into a process group whose id is
+            // its pid. ESRCH and permission failures are best-effort cleanup.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// Generation-owned cancellation fence for mutating filesystem commits.
+/// Content is prepared in a sibling temporary file; cancellation is a
+/// nonblocking atomic signal checked immediately before the short rename.
+#[derive(Clone, Default)]
+pub struct ToolCancellation {
+    inner: Arc<ToolCancellationInner>,
+}
+
+#[derive(Default)]
+struct ToolCancellationInner {
+    cancelled: AtomicBool,
+    commit_gate: Mutex<()>,
+}
+
+impl std::fmt::Debug for ToolCancellation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ToolCancellation")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
+
+impl ToolCancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        // This gate covers only the final same-directory rename, never async
+        // file preparation, so the foreground cannot wait on slow file I/O.
+        let _gate = lock_unpoisoned(&self.inner.commit_gate);
+        self.inner.cancelled.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.cancelled.load(Ordering::Acquire)
+    }
+
+    fn commit_staged(
+        &self,
+        staged: &mut StagedWrite,
+        target: &Path,
+    ) -> Result<(), ToolExecutionError> {
+        let _gate = lock_unpoisoned(&self.inner.commit_gate);
+        if self.is_cancelled() {
+            return Err(ToolExecutionError::Message(
+                "The tool call was cancelled before it could modify the workspace.".into(),
+            ));
+        }
+        std::fs::rename(&staged.path, target)
+            .map_err(|error| ToolExecutionError::Message(error.to_string()))?;
+        staged.committed = true;
+        Ok(())
+    }
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+static STAGED_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct StagedWrite {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl Drop for StagedWrite {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+async fn stage_workspace_write(
+    target: &Path,
+    content: &[u8],
+) -> Result<StagedWrite, ToolExecutionError> {
+    let parent = target.parent().ok_or_else(|| {
+        ToolExecutionError::Message("The destination has no parent directory.".into())
+    })?;
+    let counter = STAGED_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_name = format!(".aiden-write-{}-{counter}.tmp", std::process::id());
+    let staged = StagedWrite {
+        path: parent.join(temp_name),
+        committed: false,
+    };
+    let mut file = tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&staged.path)
+        .await
+        .map_err(|error| ToolExecutionError::Message(error.to_string()))?;
+    file.write_all(content)
+        .await
+        .map_err(|error| ToolExecutionError::Message(error.to_string()))?;
+    file.flush()
+        .await
+        .map_err(|error| ToolExecutionError::Message(error.to_string()))?;
+    drop(file);
+    if let Ok(metadata) = tokio::fs::metadata(target).await {
+        tokio::fs::set_permissions(&staged.path, metadata.permissions())
+            .await
+            .map_err(|error| ToolExecutionError::Message(error.to_string()))?;
+    }
+    Ok(staged)
+}
 
 // ===========================================================================
 // Tool definitions
@@ -1310,6 +1457,7 @@ pub struct CodingToolExecutor {
     defs: Vec<CodingTool>,
     subagent: bool,
     policy: Arc<dyn ApprovalPolicy>,
+    cancellation: ToolCancellation,
 }
 
 /// `buildCodingTools` — parent (main agent) executor. `policy` gates the
@@ -1319,11 +1467,21 @@ pub fn build_coding_tool_executor(
     root: PathBuf,
     policy: Arc<dyn ApprovalPolicy>,
 ) -> CodingToolExecutor {
+    build_coding_tool_executor_with_cancellation(root, policy, ToolCancellation::new())
+}
+
+/// Parent executor bound to a generation cancellation fence.
+pub fn build_coding_tool_executor_with_cancellation(
+    root: PathBuf,
+    policy: Arc<dyn ApprovalPolicy>,
+    cancellation: ToolCancellation,
+) -> CodingToolExecutor {
     CodingToolExecutor {
         workspace: WorkspaceRoot::new(root),
         defs: parent_coding_tool_defs(),
         subagent: false,
         policy,
+        cancellation,
     }
 }
 
@@ -1337,6 +1495,7 @@ pub fn build_subagent_coding_tool_executor(
         defs: subagent_coding_tool_defs(allowed),
         subagent: true,
         policy: Arc::new(DenyAllApprovalPolicy::new()),
+        cancellation: ToolCancellation::new(),
     })
 }
 
@@ -2135,8 +2294,13 @@ impl CodingToolExecutor {
         let supplied = required_str(&call.arguments, "path")?;
         let content = required_str(&call.arguments, "content")?;
         let full = resolve_writable_in_root(&self.workspace, &supplied).await?;
-        tokio::fs::write(&full, content.as_bytes())
+        let mut staged = stage_workspace_write(&full, content.as_bytes())
             .await
+            .map_err(|_| {
+                ToolExecutionError::Message(format!("Path \"{supplied}\" could not be written."))
+            })?;
+        self.cancellation
+            .commit_staged(&mut staged, &full)
             .map_err(|_| {
                 ToolExecutionError::Message(format!("Path \"{supplied}\" could not be written."))
             })?;
@@ -2166,8 +2330,13 @@ impl CodingToolExecutor {
             )));
         }
         let replaced = original.replace(&old_string, &new_string);
-        tokio::fs::write(&full, replaced.as_bytes())
+        let mut staged = stage_workspace_write(&full, replaced.as_bytes())
             .await
+            .map_err(|_| {
+                ToolExecutionError::Message(format!("Path \"{supplied}\" could not be written."))
+            })?;
+        self.cancellation
+            .commit_staged(&mut staged, &full)
             .map_err(|_| {
                 ToolExecutionError::Message(format!("Path \"{supplied}\" could not be written."))
             })?;
@@ -2202,11 +2371,14 @@ impl CodingToolExecutor {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        cmd.kill_on_drop(true);
         #[cfg(unix)]
         cmd.process_group(0);
         let mut child = cmd.spawn().map_err(|e| {
             ToolExecutionError::Message(format!("Command could not be started: {e}"))
         })?;
+        #[cfg(unix)]
+        let mut process_group = ProcessGroupGuard::new(&child);
         let stdout = child.stdout.take().ok_or_else(|| {
             ToolExecutionError::Message("Command stdout was not captured.".into())
         })?;
@@ -2221,28 +2393,45 @@ impl CodingToolExecutor {
         let timeout = tokio::time::sleep(Duration::from_millis(COMMAND_TIMEOUT_MS));
         tokio::pin!(timeout);
         let mut timed_out = false;
-        let mut exit_code: Option<i32> = None;
-        loop {
-            tokio::select! {
-                result = child.wait() => {
-                    exit_code = result.ok().and_then(|status| status.code());
-                    break;
-                }
-                _ = &mut timeout => {
-                    timed_out = true;
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
-                    break;
-                }
-                _ = capture.exceeded_notified() => {
-                    // Output cap reached: kill the process group so a
-                    // never-ending producer cannot block the loop.
-                    let _ = child.start_kill();
-                }
+        let exit_code = tokio::select! {
+            result = child.wait() => {
+                #[cfg(unix)]
+                process_group.kill();
+                result.ok().and_then(|status| status.code())
             }
+            _ = &mut timeout => {
+                timed_out = true;
+                #[cfg(unix)]
+                process_group.kill();
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                None
+            }
+            _ = capture.exceeded_notified() => {
+                // Output cap reached: kill the process group so a
+                // never-ending producer cannot block the loop.
+                #[cfg(unix)]
+                process_group.kill();
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                None
+            }
+        };
+        let mut out_task = out_task;
+        let mut err_task = err_task;
+        let readers = async {
+            let _ = (&mut out_task).await;
+            let _ = (&mut err_task).await;
+        };
+        if tokio::time::timeout(Duration::from_secs(2), readers)
+            .await
+            .is_err()
+        {
+            out_task.abort();
+            err_task.abort();
+            let _ = out_task.await;
+            let _ = err_task.await;
         }
-        let _ = out_task.await;
-        let _ = err_task.await;
         let output_exceeded = capture.exceeded();
         let (stdout_bytes, stderr_bytes) = capture.take_parts().await;
 
@@ -2748,6 +2937,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelled_mutating_tools_cannot_commit() {
+        let (_dir, root) = tmp_root();
+        std::fs::write(root.join("existing.txt"), "before").unwrap();
+        let cancellation = ToolCancellation::new();
+        let tools = build_coding_tool_executor_with_cancellation(
+            root.clone(),
+            Arc::new(AllowAllApprovalPolicy::new()),
+            cancellation.clone(),
+        );
+        cancellation.cancel();
+
+        let write = tools
+            .execute(&tool_call(
+                "write_file",
+                json!({ "path": "new.txt", "content": "after" }),
+            ))
+            .await;
+        assert!(write.is_err());
+        assert!(!root.join("new.txt").exists());
+
+        let edit = tools
+            .execute(&tool_call(
+                "edit_file",
+                json!({
+                    "path": "existing.txt",
+                    "old_string": "before",
+                    "new_string": "after"
+                }),
+            ))
+            .await;
+        assert!(edit.is_err());
+        assert_eq!(
+            std::fs::read_to_string(root.join("existing.txt")).unwrap(),
+            "before"
+        );
+    }
+
+    #[tokio::test]
     async fn edit_file_requires_a_unique_old_string() {
         let (_dir, root) = tmp_root();
         std::fs::write(root.join("a.txt"), "one two two\n").unwrap();
@@ -2876,6 +3103,66 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(silent.text, "[no output]");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aborting_run_command_kills_its_process_group() {
+        let (_dir, root) = tmp_root();
+        let tools = Arc::new(parent_executor(&root));
+        let task = {
+            let tools = tools.clone();
+            tokio::spawn(async move {
+                tools
+                    .execute(&tool_call(
+                        "run_command",
+                        json!({
+                            "command": "echo $$ > shell.pid; sleep 120 & echo $! > child.pid; wait"
+                        }),
+                    ))
+                    .await
+            })
+        };
+        for _ in 0..200 {
+            if root.join("shell.pid").exists() && root.join("child.pid").exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let shell_pid: libc::pid_t = std::fs::read_to_string(root.join("shell.pid"))
+            .expect("shell pid written")
+            .trim()
+            .parse()
+            .unwrap();
+        task.abort();
+        let _ = task.await;
+
+        let mut group_alive = true;
+        for _ in 0..200 {
+            // SAFETY: signal 0 only probes whether any process remains in the
+            // process group created by the tool.
+            group_alive = unsafe { libc::kill(-shell_pid, 0) == 0 };
+            if !group_alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(!group_alive, "the shell and its grandchild must be gone");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_command_output_cap_terminates_the_producer() {
+        let (_dir, root) = tmp_root();
+        let tools = parent_executor(&root);
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            tools.execute(&tool_call("run_command", json!({ "command": "yes x" }))),
+        )
+        .await
+        .expect("output-capped command must settle")
+        .unwrap();
+        assert!(result.text.contains("Command exceeded the output limit."));
     }
 
     #[tokio::test]

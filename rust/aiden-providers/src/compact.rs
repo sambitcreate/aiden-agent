@@ -7,6 +7,7 @@
 //! The fallback notice text is byte-identical to the TS constant.
 
 use std::collections::HashSet;
+use std::ops::Range;
 
 use aiden_core::{ContentBlock, Message, TextContent, ToolDef, UserContent, UserMessage};
 
@@ -260,8 +261,38 @@ fn last_user_index(messages: &[Message]) -> isize {
     -1
 }
 
+/// Keep the provider-usage anchor attached to the same logical message while
+/// deterministic compaction removes complete ranges around it.
+fn adjust_usage_anchor_for_drain(anchor_index: &mut Option<usize>, range: Range<usize>) {
+    let Some(index) = *anchor_index else {
+        return;
+    };
+    *anchor_index = if index < range.start {
+        Some(index)
+    } else if index < range.end {
+        None
+    } else {
+        Some(index - (range.end - range.start))
+    };
+}
+
+fn drain_messages(
+    messages: &mut Vec<Message>,
+    range: Range<usize>,
+    usage_anchor_index: &mut Option<usize>,
+) -> usize {
+    let removed = range.end.saturating_sub(range.start);
+    adjust_usage_anchor_for_drain(usage_anchor_index, range.clone());
+    messages.drain(range);
+    removed
+}
+
 /// Drop the oldest historical turn, preserving the N newest user turns.
-fn remove_old_historical_turn(messages: &mut Vec<Message>, preserve_user_turns: usize) -> usize {
+fn remove_old_historical_turn(
+    messages: &mut Vec<Message>,
+    preserve_user_turns: usize,
+    usage_anchor_index: &mut Option<usize>,
+) -> usize {
     let current_user = last_user_index(messages);
     if current_user <= 0 {
         return 0;
@@ -284,8 +315,7 @@ fn remove_old_historical_turn(messages: &mut Vec<Message>, preserve_user_turns: 
     if next_user > current_user as usize {
         return 0;
     }
-    messages.drain(..next_user);
-    next_user
+    drain_messages(messages, 0..next_user, usage_anchor_index)
 }
 
 fn replace_tool_result(messages: &mut [Message], index: usize) -> bool {
@@ -337,7 +367,10 @@ fn protected_recent_tool_results(
     protected
 }
 
-fn remove_oldest_current_turn_batch(messages: &mut Vec<Message>) -> usize {
+fn remove_oldest_current_turn_batch(
+    messages: &mut Vec<Message>,
+    usage_anchor_index: &mut Option<usize>,
+) -> usize {
     let current_user = last_user_index(messages);
     if current_user < 0 {
         return 0;
@@ -350,9 +383,7 @@ fn remove_oldest_current_turn_batch(messages: &mut Vec<Message>) -> usize {
     }
     let start = assistant_indexes[0];
     let end = assistant_indexes[1];
-    let removed = end - start;
-    messages.drain(start..end);
-    removed
+    drain_messages(messages, start..end, usage_anchor_index)
 }
 
 struct GenerationContextLimits {
@@ -402,16 +433,13 @@ pub fn assert_generation_context_capacity(
 
 fn estimated_total_tokens(
     candidate: &[Message],
-    usage_anchor: Option<&Message>,
+    usage_anchor_index: Option<usize>,
     provider_prefix_ratio: f64,
     static_tokens: usize,
 ) -> usize {
     let estimated_messages = message_tokens(candidate);
     let heuristic_total = static_tokens + estimated_messages;
-    let Some(anchor) = usage_anchor else {
-        return (heuristic_total as f64).ceil() as usize;
-    };
-    let Some(anchor_index) = candidate.iter().position(|message| message == anchor) else {
+    let Some(anchor_index) = usage_anchor_index.filter(|index| *index < candidate.len()) else {
         return (heuristic_total as f64).ceil() as usize;
     };
     let retained_prefix_tokens = message_tokens(&candidate[..anchor_index + 1]);
@@ -437,13 +465,11 @@ pub fn compact_generation_context(
     let provider_aware_tokens = provider_estimate.tokens;
     let estimated_tokens_before =
         provider_aware_tokens.max(estimated_message_tokens_before + limits.static_tokens);
-    // Clone the anchor: `transformed` is rebuilt by cloning messages, so the
-    // JS reference-identity `indexOf` is modeled as value equality against a
-    // snapshot of the usage-bearing message.
-    let usage_anchor: Option<Message> = match provider_estimate.last_usage_index {
-        Some(index) => retained.get(index).cloned(),
-        None => None,
-    };
+    // Preserve the exact occurrence selected by the estimator. Structural
+    // equality is insufficient here: two byte-identical assistant messages
+    // can have different positions, while Pi's `indexOf` uses object identity.
+    // Every drain below updates this index alongside the transformed vector.
+    let mut usage_anchor_index = provider_estimate.last_usage_index;
     let estimated_prefix_tokens = match provider_estimate.last_usage_index {
         Some(index) => message_tokens(&retained[..index + 1]),
         None => 0,
@@ -499,10 +525,10 @@ pub fn compact_generation_context(
             truncated_message
         })
         .collect();
-    let over_budget = |transformed: &Vec<Message>| {
+    let over_budget = |transformed: &[Message], anchor_index: Option<usize>| {
         estimated_total_tokens(
             transformed,
-            usage_anchor.as_ref(),
+            anchor_index,
             provider_prefix_ratio,
             limits.static_tokens,
         ) > limits.input_budget_tokens
@@ -513,15 +539,15 @@ pub fn compact_generation_context(
     let mut used_context_fallback = false;
 
     // Match OpenCode's preference for keeping the two newest user turns.
-    while over_budget(&transformed) {
-        let removed = remove_old_historical_turn(&mut transformed, 2);
+    while over_budget(&transformed, usage_anchor_index) {
+        let removed = remove_old_historical_turn(&mut transformed, 2, &mut usage_anchor_index);
         if removed == 0 {
             break;
         }
         removed_history_messages += removed;
     }
 
-    if over_budget(&transformed) {
+    if over_budget(&transformed, usage_anchor_index) {
         let tool_indexes = current_turn_tool_result_indexes(&transformed);
         let recent_budget = RECENT_TOOL_OUTPUT_BUDGET_TOKENS
             .min(MIN_RESERVE_TOKENS.max((message_budget_tokens as f64 * 0.45).floor() as usize));
@@ -529,7 +555,7 @@ pub fn compact_generation_context(
             protected_recent_tool_results(&transformed, &tool_indexes, recent_budget);
 
         for &index in &tool_indexes {
-            if !over_budget(&transformed) {
+            if !over_budget(&transformed, usage_anchor_index) {
                 break;
             }
             if protected_indexes.contains(&index) {
@@ -542,7 +568,9 @@ pub fn compact_generation_context(
 
         let mut newest_protected: Vec<usize> = protected_indexes.iter().copied().collect();
         newest_protected.sort_unstable();
-        while over_budget(&transformed) && newest_protected.len() > MIN_RECENT_TOOL_RESULTS {
+        while over_budget(&transformed, usage_anchor_index)
+            && newest_protected.len() > MIN_RECENT_TOOL_RESULTS
+        {
             let index = newest_protected.remove(0);
             if replace_tool_result(&mut transformed, index) {
                 compacted_tool_results += 1;
@@ -551,16 +579,19 @@ pub fn compact_generation_context(
     }
 
     // Prefer the active request over rehydrated transcript history.
-    if over_budget(&transformed) {
+    if over_budget(&transformed, usage_anchor_index) {
         let current_user = last_user_index(&transformed);
         if current_user > 0 {
-            transformed.drain(..current_user as usize);
-            removed_history_messages += current_user as usize;
+            removed_history_messages += drain_messages(
+                &mut transformed,
+                0..current_user as usize,
+                &mut usage_anchor_index,
+            );
         }
     }
 
-    while over_budget(&transformed) {
-        let removed = remove_oldest_current_turn_batch(&mut transformed);
+    while over_budget(&transformed, usage_anchor_index) {
+        let removed = remove_oldest_current_turn_batch(&mut transformed, &mut usage_anchor_index);
         if removed == 0 {
             break;
         }
@@ -569,10 +600,10 @@ pub fn compact_generation_context(
 
     // Keep the latest tool-call protocol intact; make even its result
     // re-fetchable.
-    if over_budget(&transformed) {
+    if over_budget(&transformed, usage_anchor_index) {
         let tool_indexes = current_turn_tool_result_indexes(&transformed);
         for index in tool_indexes {
-            if !over_budget(&transformed) {
+            if !over_budget(&transformed, usage_anchor_index) {
                 break;
             }
             let message = &transformed[index];
@@ -595,15 +626,16 @@ pub fn compact_generation_context(
     }
 
     // Never knowingly pass an over-window request to the provider.
-    if over_budget(&transformed) {
+    if over_budget(&transformed, usage_anchor_index) {
         removed_current_turn_messages += transformed.len();
         transformed.splice(0.., std::iter::once(fallback_notice));
+        usage_anchor_index = None;
         used_context_fallback = true;
     }
 
     let estimated_tokens_after = estimated_total_tokens(
         &transformed,
-        usage_anchor.as_ref(),
+        usage_anchor_index,
         provider_prefix_ratio,
         limits.static_tokens,
     );
@@ -636,7 +668,9 @@ pub fn create_generation_context_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aiden_core::{AssistantMessage, ImageContent, StopReason, ToolResultMessage, Usage};
+    use aiden_core::{
+        AssistantMessage, ImageContent, StopReason, ToolCall, ToolResultMessage, Usage,
+    };
 
     fn options(window: u32) -> GenerationContextOptions {
         GenerationContextOptions {
@@ -684,6 +718,20 @@ mod tests {
             error_message: None,
             timestamp,
         })
+    }
+
+    fn assistant_tool_call(id: &str, tool_name: &str, timestamp: u64) -> Message {
+        let Message::Assistant(mut assistant) = assistant("", timestamp) else {
+            unreachable!()
+        };
+        assistant.content = vec![ContentBlock::ToolCall(ToolCall {
+            id: id.to_string(),
+            name: tool_name.to_string(),
+            arguments: serde_json::json!({ "path": format!("src/{id}.rs") }),
+            thought_signature: None,
+        })];
+        assistant.stop_reason = StopReason::ToolUse;
+        Message::Assistant(assistant)
     }
 
     fn tool_result(tool_name: &str, text: &str, timestamp: u64, with_image: bool) -> Message {
@@ -913,6 +961,84 @@ mod tests {
         // 130k usage anchor > 105,216 budget → must compact.
         assert!(result.compacted);
         assert!(result.estimated_tokens_before >= 130_000);
+    }
+
+    #[test]
+    fn duplicate_assistant_values_keep_the_exact_usage_anchor_occurrence() {
+        let mut duplicate = assistant(&"x".repeat(400), 2);
+        let Message::Assistant(assistant) = &mut duplicate else {
+            unreachable!()
+        };
+        assistant.usage.total_tokens = 2_000;
+        let messages = vec![duplicate.clone(), duplicate, user("tail", 3)];
+        let ratio = 2.0;
+
+        let anchored = estimated_total_tokens(&messages, Some(1), ratio, 0);
+        let expected_prefix = message_tokens(&messages[..2]);
+        let expected_tail = message_tokens(&messages[2..]);
+
+        assert_eq!(anchored, expected_prefix * 2 + expected_tail);
+        assert!(anchored > estimated_total_tokens(&messages, Some(0), ratio, 0));
+    }
+
+    #[test]
+    fn paired_tool_history_is_compacted_without_mutating_or_orphaning_protocol() {
+        let mut messages = vec![user("Inspect the provider runtime.", 1)];
+        for index in 0..24u64 {
+            let id = format!("read-{index}");
+            messages.push(assistant_tool_call(&id, "read_file", index * 2 + 2));
+            messages.push(Message::ToolResult(ToolResultMessage {
+                tool_call_id: id.clone(),
+                tool_name: "read_file".to_string(),
+                content: vec![ContentBlock::Text(TextContent {
+                    text: format!("{id}\n{}", "x".repeat(20_000)),
+                    text_signature: None,
+                })],
+                details: None,
+                added_tool_names: None,
+                is_error: false,
+                timestamp: index * 2 + 3,
+            }));
+        }
+        let original = messages.clone();
+        let result = compact_generation_context(messages, &options(64_000));
+
+        assert!(result.compacted);
+        assert!(result.estimated_tokens_after <= result.input_budget_tokens);
+        assert_eq!(original.len(), 49);
+        let call_ids: HashSet<String> = result
+            .messages
+            .iter()
+            .flat_map(|message| match message {
+                Message::Assistant(assistant) => assistant
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::ToolCall(call) => Some(call.id.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect();
+        let result_ids: HashSet<String> = result
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::ToolResult(result) => Some(result.tool_call_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(call_ids, result_ids);
+        assert!(result_ids.contains("read-23"));
+
+        let Message::ToolResult(original_first_result) = &original[2] else {
+            panic!("expected original tool result")
+        };
+        let ContentBlock::Text(original_text) = &original_first_result.content[0] else {
+            panic!("expected original text result")
+        };
+        assert_eq!(original_text.text.len(), 20_007);
     }
 
     #[test]

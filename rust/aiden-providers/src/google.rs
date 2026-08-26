@@ -625,9 +625,16 @@ pub fn build_google_request(
     if let Some(temperature) = options.temperature {
         generation_config.insert("temperature".into(), serde_json::json!(temperature));
     }
-    if let Some(max_tokens) = request.max_tokens {
-        generation_config.insert("maxOutputTokens".into(), serde_json::json!(max_tokens));
-    }
+    let max_tokens = request
+        .max_tokens
+        .unwrap_or(request.max_tokens_limit)
+        .max(1);
+    let max_tokens = crate::estimate::clamp_max_tokens_to_context(
+        request.context_window,
+        &request.messages,
+        max_tokens,
+    );
+    generation_config.insert("maxOutputTokens".into(), serde_json::json!(max_tokens));
     let mut config = serde_json::Map::new();
     if !generation_config.is_empty() {
         config.insert(
@@ -1351,6 +1358,7 @@ mod tests {
             base_url: GOOGLE_BASE_URL.to_string(),
             reasoning: true,
             thinking_level_map: None,
+            force_adaptive_thinking: false,
             vision: true,
             context_window: 1_000_000,
             max_tokens_limit: 8192,
@@ -1641,6 +1649,20 @@ data: {"responseId":"resp_abc","candidates":[{"finishReason":"STOP"}]}
         // Medium thinking on a 2.5 model → budgetTokens.
         assert_eq!(body["thinkingConfig"]["includeThoughts"], true);
         assert_eq!(body["thinkingConfig"]["thinkingBudget"], 8192);
+    }
+
+    #[test]
+    fn default_output_cap_is_present_and_clamped_to_remaining_context() {
+        let mut request = request("gemini-2.5-flash");
+        request.context_window = 10_000;
+        request.max_tokens = None;
+        request.max_tokens_limit = 8_192;
+        request.messages = vec![Message::User(UserMessage {
+            content: UserContent::Text("x".repeat(20_000)),
+            timestamp: 1,
+        })];
+        let body = build_google_request_body(&request, &StreamOptions::default());
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 904);
     }
 
     #[test]

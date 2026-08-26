@@ -55,13 +55,25 @@ fn normalize_projected_text(value: &str) -> String {
     sanitize_subagent_snapshot_text(&normalized)
 }
 
+fn floor_char_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
 fn bounded(value: &str, maximum: usize, marker: &str) -> String {
     let safe = normalize_projected_text(value);
     let safe = safe.trim();
     if safe.len() <= maximum {
         return safe.to_string();
     }
+    if marker.len() >= maximum {
+        return marker[..floor_char_boundary(marker, maximum)].to_string();
+    }
     let cut = maximum.saturating_sub(marker.len());
+    let cut = floor_char_boundary(safe, cut);
     format!("{}{}", &safe[..cut], marker)
 }
 
@@ -571,6 +583,25 @@ mod tests {
             snapshot.terminal_markdown.as_deref().unwrap().len()
                 <= MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS
         );
+    }
+
+    #[test]
+    fn bounded_truncation_preserves_multibyte_boundaries_and_byte_budget() {
+        let value = format!("a{}z", "🦀".repeat(100));
+
+        let truncated = bounded(&value, 38, "…");
+
+        assert!(truncated.len() <= 38);
+        assert!(truncated.starts_with('a'));
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn bounded_marker_respects_a_tiny_multibyte_budget() {
+        let truncated = bounded("🦀🦀", 2, "…");
+
+        assert!(truncated.is_empty());
+        assert!(truncated.len() <= 2);
     }
 
     #[test]

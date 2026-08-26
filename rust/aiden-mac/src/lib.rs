@@ -44,6 +44,7 @@
 //! crate provides graceful stubs so `cargo test` passes on any host.
 
 pub mod audio;
+pub mod accessibility;
 pub mod dictation_coordinator;
 pub mod hotkey;
 pub mod local_runtime_status;

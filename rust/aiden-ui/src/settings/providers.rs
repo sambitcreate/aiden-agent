@@ -4,8 +4,7 @@
 //! config, and lets the user add/edit/remove OpenAI-compatible custom
 //! connections: name, base URL, model list, API key (written to the keychain
 //! on the background executor — never displayed, only `hasKey` state), a
-//! per-provider thinking-level select for Anthropic connections, and a default
-//! model persisted into `settings.json` under `modelSelection`.
+//! and a default model persisted into `settings.json` under `modelSelection`.
 
 use aiden_data::config_store::Provider as StoredProviderRow;
 use aiden_data::portable_config::{ProviderDeployment, ProviderKind, StoredProvider};
@@ -25,9 +24,6 @@ use crate::services::provider_kit::ModelSelection;
 
 /// The settings key for the persisted provider+model selection.
 const MODEL_SELECTION_KEY: &str = "modelSelection";
-/// The settings key holding the anthropic per-model thinking preferences.
-const ANTHROPIC_THINKING_KEY: &str = "anthropicThinkingByModel";
-const ANTHROPIC_LEVELS: &[&str] = &["off", "low", "medium", "high", "xhigh", "max"];
 
 /// A provider row as listed (owns key state; the key itself never leaves the
 /// keychain).
@@ -42,6 +38,7 @@ pub struct ProviderRow {
     pub needs_key: bool,
     pub has_key: bool,
     pub is_builtin: bool,
+    pub auth_managed: bool,
 }
 
 impl From<&StoredProviderRow> for ProviderRow {
@@ -56,6 +53,24 @@ impl From<&StoredProviderRow> for ProviderRow {
             needs_key: provider.needs_key,
             has_key: provider.has_key,
             is_builtin: provider.is_builtin.unwrap_or(false),
+            auth_managed: provider.id == aiden_providers::codex::OPENAI_CODEX_PROVIDER_ID,
+        }
+    }
+}
+
+impl From<&crate::services::provider_kit::ConfiguredProvider> for ProviderRow {
+    fn from(provider: &crate::services::provider_kit::ConfiguredProvider) -> Self {
+        Self {
+            id: provider.id.clone(),
+            kind: provider.kind,
+            label: provider.label.clone(),
+            base_url: provider.base_url.clone(),
+            models: provider.models.clone(),
+            default_model: provider.default_model.clone(),
+            needs_key: provider.needs_key,
+            has_key: provider.has_key,
+            is_builtin: provider.id == aiden_providers::codex::OPENAI_CODEX_PROVIDER_ID,
+            auth_managed: provider.id == aiden_providers::codex::OPENAI_CODEX_PROVIDER_ID,
         }
     }
 }
@@ -73,8 +88,6 @@ pub struct ProviderDraft {
     pub has_key: bool,
     /// The default model for new turns (model id or empty).
     pub default_model: String,
-    /// The anthropic thinking level for the default model (empty = unset).
-    pub thinking_level: String,
     pub saving: bool,
 }
 
@@ -113,10 +126,11 @@ impl ProvidersState {
 impl SettingsView {
     /// The Providers section: header, built-in rows, custom rows, editor.
     pub(crate) fn providers_section(
-        &self,
-        _window: &mut Window,
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        self.prepare_codex_prompt_input(window, cx);
         // Owned color copies: closures below borrow `cx` mutably (row render
         // helpers), so the theme reference cannot stay live across them.
         let theme = cx.theme();
@@ -203,6 +217,7 @@ impl SettingsView {
                         .child(message),
                 )
             })
+            .child(self.codex_auth_card(window, cx))
             .child(
                 v_flex()
                     .w_full()
@@ -317,9 +332,14 @@ impl SettingsView {
         let base_url = row.base_url.clone();
         let models = row.models.len();
         let is_builtin = row.is_builtin;
+        let auth_managed = row.auth_managed;
         let needs_key = row.needs_key;
         let has_key = row.has_key;
-        let (badge_label, badge_color) = if !needs_key {
+        let (badge_label, badge_color) = if auth_managed && has_key {
+            ("Configured", theme.success)
+        } else if auth_managed {
+            ("Sign in needed", theme.muted_foreground)
+        } else if !needs_key {
             ("No auth", theme.info)
         } else if has_key {
             ("Key set", theme.success)
@@ -398,7 +418,15 @@ impl SettingsView {
                             }),
                     ),
             )
-            .child(if is_builtin {
+            .child(if auth_managed {
+                Button::new(ElementId::Name(SharedString::from(format!(
+                    "provider-auth-status-{id}"
+                ))))
+                .small()
+                .label("Use sign-in card above")
+                .disabled(true)
+                .into_any_element()
+            } else if is_builtin {
                 let click_id = id.clone();
                 Button::new(ElementId::Name(SharedString::from(format!(
                     "provider-manage-{id}"
@@ -538,54 +566,6 @@ impl SettingsView {
                     )
                     .child(Input::new(&draft.models).small()),
             )
-            .when(draft.kind == ProviderKind::Anthropic, |el| {
-                el.child(
-                    h_flex()
-                        .w_full()
-                        .gap_3()
-                        .items_end()
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.muted_foreground)
-                                        .child("Thinking level"),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child("Applied to the default model."),
-                                ),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .children(ANTHROPIC_LEVELS.iter().map(|level| {
-                                    let active = draft.thinking_level == *level;
-                                    let level = *level;
-                                    let mut button = Button::new(ElementId::Name(
-                                        SharedString::from(format!("thinking-{level}")),
-                                    ))
-                                    .ghost()
-                                    .xsmall()
-                                    .label(level.to_string());
-                                    if active {
-                                        button = button.primary();
-                                    }
-                                    button.on_click(cx.listener(
-                                        move |this, _event, _window, cx| {
-                                            this.providers.set_thinking_level(level, cx);
-                                        },
-                                    ))
-                                })),
-                        ),
-                )
-            })
             .child(
                 h_flex()
                     .w_full()
@@ -740,17 +720,6 @@ impl ProvidersState {
                 String::new(),
             ),
         };
-        let thinking_level = if kind == ProviderKind::Anthropic && !default_model.is_empty() {
-            self.settings
-                .get(ANTHROPIC_THINKING_KEY)
-                .and_then(|value| value.get(&default_model))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("high")
-                .to_string()
-        } else {
-            String::new()
-        };
-
         let make_input = |cx: &mut Context<SettingsView>,
                           window: &mut Window,
                           placeholder: &str,
@@ -793,18 +762,9 @@ impl ProvidersState {
             needs_key,
             has_key,
             default_model,
-            thinking_level,
             saving: false,
         });
         cx.notify();
-    }
-
-    /// Change the thinking-level buttons in the open editor.
-    fn set_thinking_level(&mut self, level: &str, cx: &mut Context<SettingsView>) {
-        if let Some(draft) = self.editing.as_mut() {
-            draft.thinking_level = level.to_string();
-            cx.notify();
-        }
     }
 
     /// Remove the stored keychain key for the provider being edited.
@@ -831,7 +791,7 @@ impl ProvidersState {
     }
 
     /// Persist the editor draft: provider record + keychain key + default
-    /// model selection + anthropic thinking level.
+    /// model selection.
     fn save_editor(&mut self, cx: &mut Context<SettingsView>) {
         let Some(draft) = self.editing.as_mut() else {
             return;
@@ -852,7 +812,6 @@ impl ProvidersState {
         let needs_key = key_draft.is_some() || draft.needs_key;
         let kind = draft.kind;
         let default_model = draft.default_model.clone();
-        let thinking_level = draft.thinking_level.clone();
         draft.saving = true;
 
         let services = self.services(cx);
@@ -900,24 +859,6 @@ impl ProvidersState {
                          keychain."
                             .to_string(),
                     );
-                }
-            }
-            if outcome.is_none() && kind == ProviderKind::Anthropic && !thinking_level.is_empty() {
-                let model = default_model.clone();
-                if !model.is_empty() {
-                    outcome = cx
-                        .background_spawn({
-                            let config = services.config.clone();
-                            let model = model.clone();
-                            let level = thinking_level.clone();
-                            async move {
-                                config
-                                    .set_anthropic_thinking_level(&model, &level)
-                                    .err()
-                                    .map(|error| error.to_string())
-                            }
-                        })
-                        .await;
                 }
             }
             // Persist the default model selection for new turns.

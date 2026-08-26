@@ -6,18 +6,220 @@
 //! from the crate-shared [`crate::sse`] module.
 
 use aiden_core::{
-    AssistantMessage, AssistantMessageEvent, ContentBlock, StopReason, TextContent,
-    ThinkingContent, ToolCall, Usage,
+    AssistantMessage, AssistantMessageEvent, ContentBlock, Message, StopReason, TextContent,
+    ThinkingContent, ToolCall, Usage, UserContent,
 };
 use futures::StreamExt;
 
 use crate::sse::sse_frames;
+use crate::transform::transform_messages;
 use crate::{now_ms, EventStream, Provider, ProviderError, StreamOptions, StreamRequest};
 
 /// Anthropic Messages API version header.
 pub const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 /// Default base URL for the Messages API.
 pub const ANTHROPIC_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+
+/// Convert Aiden's normalized transcript into Anthropic Messages wire values.
+/// Provider-owned metadata and timestamps never cross this boundary.
+pub(crate) fn convert_anthropic_messages(request: &StreamRequest) -> Vec<serde_json::Value> {
+    let normalized = transform_messages(
+        request.messages.clone(),
+        &request.provider_id,
+        request.api.as_str(),
+        &request.model,
+        request.vision,
+        &|id, _, _| normalize_tool_call_id(id),
+        now_ms(),
+    );
+    let mut messages = Vec::new();
+    let mut index = 0;
+    while index < normalized.len() {
+        match &normalized[index] {
+            Message::User(user) => {
+                if let Some(content) = user_content_value(&user.content) {
+                    messages.push(serde_json::json!({ "role": "user", "content": content }));
+                }
+                index += 1;
+            }
+            Message::Assistant(assistant) => {
+                let blocks: Vec<_> = assistant
+                    .content
+                    .iter()
+                    .filter_map(assistant_block_value)
+                    .collect();
+                if !blocks.is_empty() {
+                    messages.push(serde_json::json!({ "role": "assistant", "content": blocks }));
+                }
+                index += 1;
+            }
+            Message::ToolResult(_) => {
+                let mut blocks = Vec::new();
+                while index < normalized.len() {
+                    let Message::ToolResult(result) = &normalized[index] else {
+                        break;
+                    };
+                    blocks.push(serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": result.tool_call_id,
+                        "content": tool_result_content_value(&result.content),
+                        "is_error": result.is_error,
+                    }));
+                    index += 1;
+                }
+                messages.push(serde_json::json!({ "role": "user", "content": blocks }));
+            }
+        }
+    }
+    messages
+}
+
+pub(crate) fn convert_anthropic_tools(request: &StreamRequest) -> Vec<serde_json::Value> {
+    request
+        .tools
+        .iter()
+        .map(|tool| {
+            let properties = tool
+                .parameters
+                .get("properties")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let required = tool
+                .parameters
+                .get("required")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            serde_json::json!({
+                "name": tool.name,
+                "description": tool.description,
+                "eager_input_streaming": true,
+                "input_schema": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                }
+            })
+        })
+        .collect()
+}
+
+fn normalize_tool_call_id(id: &str) -> String {
+    id.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect()
+}
+
+fn user_content_value(content: &UserContent) -> Option<serde_json::Value> {
+    match content {
+        UserContent::Text(text) => (!text.trim().is_empty()).then(|| serde_json::json!(text)),
+        UserContent::Blocks(blocks) => {
+            let blocks: Vec<_> = blocks
+                .iter()
+                .filter_map(|block| match block {
+                    aiden_core::UserBlock::Text(text) if !text.text.trim().is_empty() => {
+                        Some(serde_json::json!({ "type": "text", "text": text.text }))
+                    }
+                    aiden_core::UserBlock::Text(_) => None,
+                    aiden_core::UserBlock::Image(image) => Some(serde_json::json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image.mime_type,
+                            "data": image.data,
+                        }
+                    })),
+                })
+                .collect();
+            (!blocks.is_empty()).then_some(serde_json::Value::Array(blocks))
+        }
+    }
+}
+
+fn assistant_block_value(block: &ContentBlock) -> Option<serde_json::Value> {
+    match block {
+        ContentBlock::Text(text) => (!text.text.trim().is_empty())
+            .then(|| serde_json::json!({ "type": "text", "text": text.text })),
+        ContentBlock::Thinking(thinking) if thinking.redacted == Some(true) => thinking
+            .thinking_signature
+            .as_ref()
+            .filter(|signature| !signature.is_empty())
+            .map(|signature| serde_json::json!({ "type": "redacted_thinking", "data": signature })),
+        ContentBlock::Thinking(thinking) => {
+            match thinking
+                .thinking_signature
+                .as_ref()
+                .filter(|signature| !signature.trim().is_empty())
+            {
+                Some(signature) => Some(serde_json::json!({
+                    "type": "thinking",
+                    "thinking": thinking.thinking,
+                    "signature": signature,
+                })),
+                None => (!thinking.thinking.trim().is_empty()).then(|| {
+                    // Unsigned partial thinking is invalid on replay; Pi
+                    // degrades it to ordinary text for compatible continuity.
+                    serde_json::json!({ "type": "text", "text": thinking.thinking })
+                }),
+            }
+        }
+        ContentBlock::ToolCall(call) => Some(serde_json::json!({
+            "type": "tool_use",
+            "id": call.id,
+            "name": call.name,
+            "input": call.arguments,
+        })),
+        ContentBlock::Image(_) => None,
+    }
+}
+
+fn tool_result_content_value(content: &[ContentBlock]) -> serde_json::Value {
+    let has_images = content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::Image(_)));
+    if !has_images {
+        return serde_json::json!(content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    let mut blocks = Vec::new();
+    let mut has_text = false;
+    for block in content {
+        match block {
+            ContentBlock::Text(text) => {
+                has_text = true;
+                blocks.push(serde_json::json!({ "type": "text", "text": text.text }));
+            }
+            ContentBlock::Image(image) => blocks.push(serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image.mime_type,
+                    "data": image.data,
+                }
+            })),
+            _ => {}
+        }
+    }
+    if !has_text {
+        blocks.insert(
+            0,
+            serde_json::json!({ "type": "text", "text": "(see attached image)" }),
+        );
+    }
+    serde_json::Value::Array(blocks)
+}
 
 // ===========================================================================
 // Stateful frame accumulator
@@ -29,6 +231,9 @@ struct BlockState {
     /// For text/thinking blocks: accumulated text. For tool calls: accumulated
     /// raw JSON fragments.
     buffer: String,
+    /// Extended-thinking signature or opaque redacted payload.
+    signature: String,
+    redacted: bool,
     /// Tool-call identity, present once the start frame arrives.
     tool_call: Option<ToolCall>,
 }
@@ -45,6 +250,8 @@ enum BlockKind {
 /// Anthropic SSE frame to a normalized [`AssistantMessageEvent`] (or nothing,
 /// for frames with no pi-ai equivalent like `ping`/`message_delta`).
 pub struct AnthropicAccumulator {
+    requested_provider: String,
+    requested_model: String,
     message: AssistantMessage,
     started: bool,
     blocks: Vec<BlockState>,
@@ -59,6 +266,8 @@ pub struct AnthropicAccumulator {
 impl Default for AnthropicAccumulator {
     fn default() -> Self {
         Self {
+            requested_provider: "anthropic".to_string(),
+            requested_model: String::new(),
             message: AssistantMessage {
                 content: Vec::new(),
                 api: "anthropic-messages".to_string(),
@@ -100,6 +309,14 @@ impl AnthropicAccumulator {
         Self::default()
     }
 
+    pub fn with_identity(provider: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            requested_provider: provider.into(),
+            requested_model: model.into(),
+            ..Self::default()
+        }
+    }
+
     /// Process one SSE frame; returns the event to emit (if any).
     pub fn step(
         &mut self,
@@ -136,9 +353,15 @@ impl AnthropicAccumulator {
         self.message = AssistantMessage {
             content: Vec::new(),
             api: "anthropic-messages".to_string(),
-            provider: "anthropic".to_string(),
-            model: message.model.unwrap_or_default(),
-            response_model: None,
+            provider: self.requested_provider.clone(),
+            model: if self.requested_model.is_empty() {
+                message.model.clone().unwrap_or_default()
+            } else {
+                self.requested_model.clone()
+            },
+            response_model: message.model.filter(|response| {
+                !self.requested_model.is_empty() && response != &self.requested_model
+            }),
             response_id: message.id,
             usage: usage_from_anthropic(message.usage),
             stop_reason: StopReason::Stop,
@@ -160,6 +383,8 @@ impl AnthropicAccumulator {
         let mut state = BlockState {
             kind: BlockKind::Text,
             buffer: String::new(),
+            signature: String::new(),
+            redacted: false,
             tool_call: None,
         };
         let (event, block) = match frame.content_block.r#type.as_str() {
@@ -180,6 +405,7 @@ impl AnthropicAccumulator {
             "thinking" => {
                 let thinking = frame.content_block.thinking.unwrap_or_default();
                 state.buffer = thinking.clone();
+                state.signature = frame.content_block.signature.unwrap_or_default();
                 state.kind = BlockKind::Thinking;
                 (
                     AssistantMessageEvent::ThinkingStart {
@@ -188,8 +414,26 @@ impl AnthropicAccumulator {
                     },
                     ContentBlock::Thinking(ThinkingContent {
                         thinking,
-                        thinking_signature: None,
+                        thinking_signature: (!state.signature.is_empty())
+                            .then(|| state.signature.clone()),
                         redacted: None,
+                    }),
+                )
+            }
+            "redacted_thinking" => {
+                state.kind = BlockKind::Thinking;
+                state.redacted = true;
+                state.signature = frame.content_block.data.unwrap_or_default();
+                (
+                    AssistantMessageEvent::ThinkingStart {
+                        content_index: index,
+                        partial: self.partial(),
+                    },
+                    ContentBlock::Thinking(ThinkingContent {
+                        thinking: String::new(),
+                        thinking_signature: (!state.signature.is_empty())
+                            .then(|| state.signature.clone()),
+                        redacted: Some(true),
                     }),
                 )
             }
@@ -225,6 +469,8 @@ impl AnthropicAccumulator {
             self.blocks.resize_with(index + 1, || BlockState {
                 kind: BlockKind::Text,
                 buffer: String::new(),
+                signature: String::new(),
+                redacted: false,
                 tool_call: None,
             });
         }
@@ -249,6 +495,22 @@ impl AnthropicAccumulator {
         let thinking_delta = frame.delta.thinking.clone();
         let partial_json = frame.delta.partial_json.clone();
 
+        if delta_type == "signature_delta" {
+            self.blocks[index]
+                .signature
+                .push_str(frame.delta.signature.as_deref().unwrap_or_default());
+            let state = &self.blocks[index];
+            if let Some(target) = self.message.content.get_mut(index) {
+                *target = ContentBlock::Thinking(ThinkingContent {
+                    thinking: state.buffer.clone(),
+                    thinking_signature: (!state.signature.is_empty())
+                        .then(|| state.signature.clone()),
+                    redacted: state.redacted.then_some(true),
+                });
+            }
+            return Ok(None);
+        }
+
         // Apply the delta to the accumulator state FIRST so the event's
         // `partial` reflects the post-delta message.
         let block = match delta_type.as_str() {
@@ -265,8 +527,9 @@ impl AnthropicAccumulator {
                 self.blocks[index].buffer.push_str(&delta);
                 ContentBlock::Thinking(ThinkingContent {
                     thinking: self.blocks[index].buffer.clone(),
-                    thinking_signature: None,
-                    redacted: None,
+                    thinking_signature: (!self.blocks[index].signature.is_empty())
+                        .then(|| self.blocks[index].signature.clone()),
+                    redacted: self.blocks[index].redacted.then_some(true),
                 })
             }
             "input_json_delta" => {
@@ -377,16 +640,32 @@ impl AnthropicAccumulator {
     ) -> Result<Option<AssistantMessageEvent>, ProviderError> {
         let frame: MessageDelta = serde_json::from_str(data)?;
         self.stop_reason = match frame.delta.stop_reason.as_deref() {
-            Some("end_turn") | Some("stop_sequence") | Some("max_tokens") => StopReason::Stop,
+            Some("end_turn") | Some("stop_sequence") | Some("pause_turn") => StopReason::Stop,
+            Some("max_tokens") => StopReason::Length,
             Some("tool_use") => StopReason::ToolUse,
+            Some("refusal") => {
+                self.message.error_message = Some(
+                    frame
+                        .delta
+                        .stop_details
+                        .as_ref()
+                        .and_then(|details| details.explanation.clone())
+                        .unwrap_or_else(|| "The model refused to complete the request".into()),
+                );
+                StopReason::Error
+            }
+            Some("sensitive") => {
+                self.message.error_message = Some("Provider stopped with: sensitive".into());
+                StopReason::Error
+            }
             Some(other) => {
-                tracing::debug!(reason = other, "unmapped stop_reason");
-                StopReason::Stop
+                self.message.error_message =
+                    Some(format!("Unhandled provider stop reason: {other}"));
+                StopReason::Error
             }
             None => StopReason::Stop,
         };
-        // `usage` deltas are folded into the final message by the consumer; the
-        // pi protocol has no direct event for message_delta.
+        merge_anthropic_usage(&mut self.message.usage, frame.usage);
         Ok(None)
     }
 
@@ -398,10 +677,17 @@ impl AnthropicAccumulator {
         }
         self.message_stop_seen = true;
         self.message.stop_reason = self.stop_reason;
-        Ok(Some(AssistantMessageEvent::Done {
-            reason: self.stop_reason,
-            message: self.message.clone(),
-        }))
+        if self.stop_reason == StopReason::Error {
+            Ok(Some(AssistantMessageEvent::Error {
+                reason: StopReason::Error,
+                error: self.message.clone(),
+            }))
+        } else {
+            Ok(Some(AssistantMessageEvent::Done {
+                reason: self.stop_reason,
+                message: self.message.clone(),
+            }))
+        }
     }
 
     /// Finish the stream: when the connection closed before `message_stop`
@@ -498,7 +784,7 @@ impl AnthropicProvider {
         self
     }
 
-    fn build_request(
+    pub(crate) fn build_request(
         &self,
         request: &StreamRequest,
         options: &StreamOptions,
@@ -510,18 +796,22 @@ impl AnthropicProvider {
         let body = crate::anthropic_request_body(request, options);
         let mut builder = reqwest::Client::new()
             .post(&self.base_url)
-            .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_API_VERSION)
             .header("content-type", "application/json")
             .json(&body);
+        if api_key != crate::catalog::PI_AUTH_COMPATIBILITY_TOKEN {
+            builder = builder.header("x-api-key", api_key);
+        }
         if let Some(timeout_ms) = options.timeout_ms {
             builder = builder.timeout(std::time::Duration::from_millis(timeout_ms));
         }
         for (name, value) in &options.headers {
             builder = match value {
                 Some(value) => builder.header(name, value),
-                // A null header suppresses a provider default.
-                None => builder.header(name, ""),
+                // A null header suppresses a provider default. Defaults are
+                // installed conditionally above, so no empty credential
+                // header needs to cross the wire.
+                None => builder,
             };
         }
         Ok(builder)
@@ -544,7 +834,8 @@ impl Provider for AnthropicProvider {
         let request_builder = self.build_request(request, options)?;
         let source = reqwest_eventsource::EventSource::new(request_builder)
             .map_err(|err| ProviderError::Request(err.to_string()))?;
-        let accumulator = AnthropicAccumulator::new();
+        let accumulator =
+            AnthropicAccumulator::with_identity(request.provider_id.clone(), request.model.clone());
 
         let stream = futures::stream::unfold(
             (source, accumulator, false),
@@ -605,21 +896,43 @@ struct AnthropicUsage {
     output_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
     cache_creation_input_tokens: Option<u64>,
+    cache_creation: Option<AnthropicCacheCreation>,
+    output_tokens_details: Option<AnthropicOutputTokenDetails>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct AnthropicCacheCreation {
+    ephemeral_1h_input_tokens: Option<u64>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct AnthropicOutputTokenDetails {
+    thinking_tokens: Option<u64>,
 }
 
 fn usage_from_anthropic(usage: Option<AnthropicUsage>) -> Usage {
     let usage = usage.unwrap_or_default();
+    let cache_write_1h = usage
+        .cache_creation
+        .as_ref()
+        .and_then(|cache| cache.ephemeral_1h_input_tokens);
+    let reasoning = usage
+        .output_tokens_details
+        .as_ref()
+        .and_then(|details| details.thinking_tokens);
     Usage {
         input: usage.input_tokens.unwrap_or(0),
         output: usage.output_tokens.unwrap_or(0),
         cache_read: usage.cache_read_input_tokens.unwrap_or(0),
         cache_write: usage.cache_creation_input_tokens.unwrap_or(0),
-        cache_write_1h: None,
-        reasoning: None,
+        cache_write_1h,
+        reasoning,
         total_tokens: usage
             .input_tokens
             .unwrap_or(0)
-            .saturating_add(usage.output_tokens.unwrap_or(0)),
+            .saturating_add(usage.output_tokens.unwrap_or(0))
+            .saturating_add(usage.cache_read_input_tokens.unwrap_or(0))
+            .saturating_add(usage.cache_creation_input_tokens.unwrap_or(0)),
         cost: aiden_core::UsageCost {
             input: 0.0,
             output: 0.0,
@@ -628,6 +941,42 @@ fn usage_from_anthropic(usage: Option<AnthropicUsage>) -> Usage {
             total: 0.0,
         },
     }
+}
+
+fn merge_anthropic_usage(target: &mut Usage, update: Option<AnthropicUsage>) {
+    let Some(update) = update else {
+        return;
+    };
+    let reasoning = update
+        .output_tokens_details
+        .as_ref()
+        .and_then(|details| details.thinking_tokens);
+    if let Some(value) = update.input_tokens {
+        target.input = value;
+    }
+    if let Some(value) = update.output_tokens {
+        target.output = value;
+    }
+    if let Some(value) = update.cache_read_input_tokens {
+        target.cache_read = value;
+    }
+    if let Some(value) = update.cache_creation_input_tokens {
+        target.cache_write = value;
+    }
+    if let Some(value) = update
+        .cache_creation
+        .and_then(|cache| cache.ephemeral_1h_input_tokens)
+    {
+        target.cache_write_1h = Some(value);
+    }
+    if let Some(value) = reasoning {
+        target.reasoning = Some(value);
+    }
+    target.total_tokens = target
+        .input
+        .saturating_add(target.output)
+        .saturating_add(target.cache_read)
+        .saturating_add(target.cache_write);
 }
 
 #[derive(serde::Deserialize)]
@@ -641,6 +990,8 @@ struct StartBlock {
     r#type: String,
     text: Option<String>,
     thinking: Option<String>,
+    signature: Option<String>,
+    data: Option<String>,
     id: Option<String>,
     name: Option<String>,
 }
@@ -656,6 +1007,7 @@ struct DeltaBlock {
     r#type: String,
     text: Option<String>,
     thinking: Option<String>,
+    signature: Option<String>,
     partial_json: Option<String>,
 }
 
@@ -667,9 +1019,16 @@ struct ContentBlockStop {
 #[derive(serde::Deserialize)]
 struct MessageDelta {
     delta: DeltaReason,
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(serde::Deserialize, Default)]
 struct DeltaReason {
     stop_reason: Option<String>,
+    stop_details: Option<AnthropicStopDetails>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct AnthropicStopDetails {
+    explanation: Option<String>,
 }

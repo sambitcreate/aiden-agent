@@ -2,6 +2,11 @@
 
 Branch: `gpui-rust` | Commit: `8926ff4` | Date: 2026-08-07
 
+> Historical milestone report. A 2026-08-07 end-to-end audit found that this
+> report measured crate/module coverage more broadly than reachable product
+> behavior. The port is again **Partial**; the current source of truth is
+> [`docs/plans/gpui-parity-plan.md`](../plans/gpui-parity-plan.md).
+
 ## Summary
 
 The Aiden Agent Electron/TypeScript codebase (~105K LOC TS + 67K tests, 628 files) has been ported to a native GPUI + Rust macOS application. The Rust workspace contains **11 crates, ~148K LOC, 1,225 passing tests**, with a bootable, smoke-tested GPUI app shell.
@@ -30,11 +35,11 @@ The Aiden Agent Electron/TypeScript codebase (~105K LOC TS + 67K tests, 628 file
 **Live features**:
 - Chat list sidebar (from `ChatStore`), new chat (⌘N), search, delete, model picker
 - Chat pane: streaming message list with markdown rendering, thinking blocks, activity feed (tool/thinking steps from persisted `GenerationTimeline`), error/retry
-- Composer: multiline auto-grow, Enter to send/Shift+Enter newline, stop while streaming
+- Composer: multiline auto-grow, Enter to send/Shift+Enter newline, native validated multi-file attachments with model-aware image gating, stop while streaming, and capability-filtered per-model Gemini/Codex/Claude thinking effort
 - Streaming: real SSE via reqwest-eventsource through providers (anthropic/google/openai/codex), ~30ms batched foreground apply, generation-counter invalidation
-- MCP tools: enabled servers' tools injected into stream requests, tool dispatch via `McpClientManager`, one follow-up pass
+- Normal chat tools: workspace-scoped read/list/glob/grep/edit/write/command tools, configured/filesystem Agent Skills, optional Exa web search, and enabled MCP tools in a bounded 10-round loop; Ask-mode mutations use one-shot inline approvals and external capabilities are generation-pinned
 - Usage recording: terminal events → `UsageStore` → real data in usage panel
-- Settings: providers (add/edit/keychain), appearance (4 presets × 3 modes live), shortcuts (record/rebind/reset), MCP (toggle/test-connect/add stdio), scheduled tasks (list/create/validate cron), about
+- Settings: providers (add/edit/keychain), Skills (configured CRUD plus read-only discovery), Web Search (encrypted Exa key plus explicit enable), appearance (4 presets × 3 modes live), shortcuts (record/rebind/reset), MCP (toggle/test-connect/add stdio), scheduled tasks (list/create/validate cron), about
 - Onboarding: first-run multi-step flow (welcome → provider+key → model → appearance → permissions → finish), completion marker
 - Pill window: ⌘⇧D dictation pill (AVAudioEngine capture → sherpa-onnx transcribe → AppleScript paste), level meter
 - Command palette: ⌘K fuzzy-search (chats/commands/models/settings), recent persistence
@@ -42,7 +47,7 @@ The Aiden Agent Electron/TypeScript codebase (~105K LOC TS + 67K tests, 628 file
 - Workspace bar: folder picker, git status chip (15s poll), branch picker, commit/push dialogs, open-in-editor
 - Assistant panel: proactive assistant thread driving `AgentRunner` with automation tools, approval bridge
 - Approvals: tool/shell/MCP-mutation approval cards with digest pins
-- Subagents panel: live read from V2 run store
+- Subagents panel UI (the current app composition still uses an in-memory source; durable V2 wiring remains open)
 
 **Smoke tested**: both first-run (onboarding) and returning (main window) boot paths — no panics, clean stderr, release build succeeds.
 
@@ -59,13 +64,13 @@ The Aiden Agent Electron/TypeScript codebase (~105K LOC TS + 67K tests, 628 file
 ## TS → Rust coverage map
 
 ### Ported (all `*-core.ts` logic + binding equivalents)
-All pure `*-core.ts` modules across `main/services/` are ported as Rust. Provider streaming (5 API families), chat-store durability protocol, subagent authority system (21K LOC), MCP client, computer-use broker client, Foundation Models helper client, git operations, scheduler runtime, dictation pipeline, macOS integrations (hotkeys, tray, notifications, paste, audio capture, updater).
+All pure `*-core.ts` modules across `main/services/` are ported as Rust. Provider streaming (5 API families), chat-store durability protocol, subagent authority system (21K LOC), MCP client, the internal Computer Use broker/session/safety/controller stack, Foundation Models helper client, git operations, scheduler runtime, dictation pipeline, and macOS integrations (hotkeys, tray, notifications, paste, audio capture, updater) are present. This does not imply GPUI app ownership or user reachability for those stacks.
 
 ### Known gaps (documented, not blocking)
 
 | Area | Status | Reason |
 |---|---|---|
-| Multi-iteration agent tool loop in chat | Single-pass (one follow-up) | The chat driver does one tool round; full multi-round loop needs generation-owner + renderer-epoch coordination |
+| Normal-chat coding-agent loop | Partial | Workspace prompting, seven coding tools, Ask/Full/None permissions, one-shot approvals, configured and bounded filesystem-discovered Agent Skills, optional bounded Exa web search, model-aware thinking, deterministic per-round outbound compaction, bounded validated attachment replay, and bounded MCP interleaving are live. Computer Use has tested internal controller/settings/status/host and fresh-verified runtime foundations but no GPUI app/provider owner; subagents, user-reachable Codex sign-in, and an integrated workflow harness remain open |
 | safeStorage ciphertext migration | Flagged `NeedsRotation` | Electron safeStorage ciphertext is undecryptable outside Electron; Rust writes to macOS Keychain |
 | SSE MCP transport | Returns `SseUnsupported` | rmcp 3.x removed SSE client transport; needs hand-rolled JSON-RPC over reqwest-eventsource |
 | MCP OAuth discovery + DCR | Trait stubs | `.well-known/oauth-authorization-server` + dynamic client registration behind traits |
@@ -75,8 +80,10 @@ All pure `*-core.ts` modules across `main/services/` are ported as Rust. Provide
 | Sparkle/auto-updater install step | Trait stub | Feed parse + sha-256 verify + channel policy ported; `quitAndInstall` is a trait seam |
 | `legacy-pi-credential-migration` | Partial | The migration core types exist; the full Electron-triggered migration flow is a UI concern |
 | Workspace mutation gates (`chat-workspace-mutation-gate`, `workspace-operation-registry`, `workspace-record-removal`, `workspace-schedule-restoration`) | Not ported | Electron WebContents lifecycle management — not applicable to single-process GPUI; the relevant invariants are enforced structurally |
-| `skills-discovery`, `scratch-workspace`, `pi-models-store`, `provider-model-info` (runtime discovery), `attachments` | Not ported | Lower-priority standalone services; types exist where needed |
+| `scratch-workspace`, `pi-models-store`, `provider-model-info` (runtime discovery) | Not ported | Lower-priority standalone services; types exist where needed |
 | Computer-use UI controls | Broker client ported | The in-conversation computer-use control surface is not wired into the chat UI |
+| Scheduled execution | CRUD surfaces only | The scheduler runtime is not owned by `aiden-ui`; Run Now is still a placeholder |
+| Settings destinations | 8 of 12 | Skills provides configured CRUD/toggles and read-only discovery; Web Search provides encrypted key lifecycle and an explicit runtime gate. Model Data, Computer Use, Aiden, and Voice remain unavailable in GPUI |
 
 ## npm scripts added
 

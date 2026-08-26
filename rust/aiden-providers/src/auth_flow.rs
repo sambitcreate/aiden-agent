@@ -21,6 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,7 +30,7 @@ use std::time::Duration;
 use futures::{future::BoxFuture, FutureExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{oneshot, watch, Notify};
 use url::Url;
 
 use crate::codex::OPENAI_CODEX_PROVIDER_ID;
@@ -234,7 +235,7 @@ pub enum AuthEvent {
     DeviceCode {
         user_code: String,
         verification_uri: String,
-        interval_seconds: Option<u64>,
+        interval_seconds: Option<f64>,
         expires_in_seconds: Option<u64>,
     },
     Info {
@@ -299,7 +300,7 @@ pub enum ProviderAuthEventDto {
         user_code: String,
         verification_uri: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        interval_seconds: Option<u64>,
+        interval_seconds: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         expires_in_seconds: Option<u64>,
     },
@@ -696,9 +697,13 @@ impl FinishedFlag {
 
 struct CoordinatorState {
     active_session: Option<Arc<AuthSession>>,
-    logout_in_progress: bool,
-    logout_completion: Option<Arc<Notify>>,
+    logout_operation: Option<Arc<LogoutOperation>>,
     disposed: bool,
+}
+
+struct LogoutOperation {
+    outcome: watch::Receiver<Option<Result<Value, ProviderAuthRequestError>>>,
+    finished: Arc<FinishedFlag>,
 }
 
 enum AuthenticationOutcome {
@@ -722,12 +727,17 @@ pub struct ProviderAuthFlowCoordinator {
     shared: Arc<CoordinatorShared>,
 }
 
+#[cfg(test)]
+type BeforeCommitTransitionFn = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+
 struct CoordinatorShared {
     deps: ProviderAuthFlowDependencies,
     flow_timeout_ms: u64,
     auth_cleanup_timeout_ms: u64,
     create_id: CreateIdFn,
     state: Mutex<CoordinatorState>,
+    #[cfg(test)]
+    before_commit_transition: Mutex<Option<BeforeCommitTransitionFn>>,
 }
 
 impl ProviderAuthFlowCoordinator {
@@ -753,10 +763,11 @@ impl ProviderAuthFlowCoordinator {
                 create_id,
                 state: Mutex::new(CoordinatorState {
                     active_session: None,
-                    logout_in_progress: false,
-                    logout_completion: None,
+                    logout_operation: None,
                     disposed: false,
                 }),
+                #[cfg(test)]
+                before_commit_transition: Mutex::new(None),
             }),
         }
     }
@@ -811,9 +822,30 @@ impl ProviderAuthFlowCoordinator {
         let auth_type = parse_auth_type(Some(&request.auth_type))?;
         let backend = (shared.deps.backend_for)(&provider_id, &auth_type);
 
+        let abort = Arc::new(AbortSignal::new());
+        let session = Arc::new(AuthSession {
+            flow_id: request.flow_id.clone(),
+            provider_id: provider_id.clone(),
+            backend,
+            owner: owner.clone(),
+            abort: abort.clone(),
+            phase: Mutex::new(Phase::Authenticating),
+            timed_out: AtomicBool::new(false),
+            suppress_notifications: AtomicBool::new(false),
+            pending_prompt: Mutex::new(None),
+            timeout_task: Mutex::new(None),
+            owner_invalidation: Mutex::new(None),
+            finished: Arc::new(FinishedFlag::default()),
+        });
+
         {
-            let state = shared.state.lock().unwrap();
-            if state.logout_in_progress {
+            let mut state = shared.state.lock().unwrap();
+            if state.disposed {
+                return Err(ProviderAuthRequestError(
+                    "Provider authentication is shutting down.".to_string(),
+                ));
+            }
+            if state.logout_operation.is_some() {
                 return Err(ProviderAuthRequestError(codex_or(
                     &provider_id,
                     "ChatGPT sign-out is still in progress.",
@@ -832,34 +864,8 @@ impl ProviderAuthFlowCoordinator {
                     "Another provider sign-in is already in progress.",
                 )));
             }
+            state.active_session = Some(session.clone());
         }
-
-        let abort = Arc::new(AbortSignal::new());
-        let session = Arc::new(AuthSession {
-            flow_id: request.flow_id.clone(),
-            provider_id: provider_id.clone(),
-            backend,
-            owner: owner.clone(),
-            abort: abort.clone(),
-            phase: Mutex::new(Phase::Authenticating),
-            timed_out: AtomicBool::new(false),
-            suppress_notifications: AtomicBool::new(false),
-            pending_prompt: Mutex::new(None),
-            timeout_task: Mutex::new(None),
-            owner_invalidation: Mutex::new(None),
-            finished: Arc::new(FinishedFlag::default()),
-        });
-
-        let timeout_task = {
-            let session = session.clone();
-            let shared = shared.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(shared.flow_timeout_ms)).await;
-                session.timed_out.store(true, Ordering::SeqCst);
-                session.abort.abort();
-            })
-        };
-        *session.timeout_task.lock().unwrap() = Some(timeout_task);
 
         let invalidation = {
             let shared = shared.clone();
@@ -881,11 +887,42 @@ impl ProviderAuthFlowCoordinator {
                 Self::abort_session(&shared, &session);
             })
         };
-        {
-            let mut state = shared.state.lock().unwrap();
-            state.active_session = Some(session.clone());
-            *session.owner_invalidation.lock().unwrap() = Some(owner.on_invalidated(invalidation));
+        let registration = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.on_invalidated(invalidation)
+        }));
+        let remove_invalidation = match registration {
+            Ok(remove) => remove,
+            Err(_) => {
+                let mut state = shared.state.lock().unwrap();
+                if state
+                    .active_session
+                    .as_ref()
+                    .is_some_and(|active| Arc::ptr_eq(active, &session))
+                {
+                    state.active_session = None;
+                }
+                session.abort.abort();
+                session.finished.set();
+                return Err(ProviderAuthRequestError(
+                    "Provider authentication window is unavailable.".to_string(),
+                ));
+            }
+        };
+        *session.owner_invalidation.lock().unwrap() = Some(remove_invalidation);
+        if owner.is_destroyed() {
+            session.suppress_notifications.store(true, Ordering::SeqCst);
+            Self::abort_session(&shared, &session);
         }
+
+        let timeout_task = {
+            let session = session.clone();
+            let shared = shared.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(shared.flow_timeout_ms)).await;
+                Self::timeout_session(&shared, &session);
+            })
+        };
+        *session.timeout_task.lock().unwrap() = Some(timeout_task);
 
         let run_shared = shared.clone();
         tokio::spawn(async move {
@@ -957,11 +994,11 @@ impl ProviderAuthFlowCoordinator {
         let shared = self.shared.clone();
         Self::assert_available(&shared)?;
         let session = Self::owned_session(&shared, owner, &request.flow_id, &request.provider_id)?;
-        if *session.phase.lock().unwrap() == Phase::Committing {
-            return Ok(ProviderAuthCancelOutcome::Finishing);
+        if Self::abort_session(&shared, &session) {
+            Ok(ProviderAuthCancelOutcome::Cancelled)
+        } else {
+            Ok(ProviderAuthCancelOutcome::Finishing)
         }
-        Self::abort_session(&shared, &session);
-        Ok(ProviderAuthCancelOutcome::Cancelled)
     }
 
     /// `logout(providerId)` — revoke the provider credential.
@@ -974,47 +1011,72 @@ impl ProviderAuthFlowCoordinator {
         async move {
             let valid_provider_id = parse_provider_id(&provider_id)?;
             Self::assert_available(&shared)?;
+            let backend = (shared.deps.backend_for)(&valid_provider_id, "oauth");
+            let (outcome_tx, outcome_rx) = watch::channel(None);
+            let operation = Arc::new(LogoutOperation {
+                outcome: outcome_rx,
+                finished: Arc::new(FinishedFlag::default()),
+            });
             {
-                let state = shared.state.lock().unwrap();
+                let mut state = shared.state.lock().unwrap();
+                if state.disposed {
+                    return Err(ProviderAuthRequestError(
+                        "Provider authentication is shutting down.".to_string(),
+                    ));
+                }
                 if state.active_session.is_some() {
                     return Err(ProviderAuthRequestError(
                         "Finish or cancel the active provider sign-in before signing out."
                             .to_string(),
                     ));
                 }
-                if state.logout_in_progress {
+                if state.logout_operation.is_some() {
                     return Err(ProviderAuthRequestError(
                         "Provider sign-out is already in progress.".to_string(),
                     ));
                 }
+                state.logout_operation = Some(operation.clone());
             }
-            let completion = Arc::new(Notify::new());
-            {
-                let mut state = shared.state.lock().unwrap();
-                state.logout_in_progress = true;
-                state.logout_completion = Some(completion.clone());
-            }
-            let backend = (shared.deps.backend_for)(&valid_provider_id, "oauth");
-            let result = match backend.logout().await {
-                Ok(()) => match backend.snapshot().await {
-                    Ok(snapshot) => Ok(snapshot),
-                    Err(error) => Err(ProviderAuthRequestError(format!(
-                        "{}: {}",
-                        error.name, error.message
-                    ))),
-                },
-                Err(error) => Err(ProviderAuthRequestError(format!(
-                    "{}: {}",
-                    error.name, error.message
-                ))),
-            };
-            {
-                let mut state = shared.state.lock().unwrap();
-                state.logout_in_progress = false;
-                state.logout_completion = None;
-                completion.notify_waiters();
-            }
-            result
+            let task_shared = shared.clone();
+            let task_operation = operation.clone();
+            tokio::spawn(async move {
+                let task = async {
+                    match backend.logout().await {
+                        Ok(()) => match backend.snapshot().await {
+                            Ok(snapshot) => Ok(snapshot),
+                            Err(error) => Err(ProviderAuthRequestError(format!(
+                                "{}: {}",
+                                error.name, error.message
+                            ))),
+                        },
+                        Err(error) => Err(ProviderAuthRequestError(format!(
+                            "{}: {}",
+                            error.name, error.message
+                        ))),
+                    }
+                };
+                let result = AssertUnwindSafe(task)
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(ProviderAuthRequestError(
+                            "Provider sign-out did not complete.".to_string(),
+                        ))
+                    });
+                {
+                    let mut state = task_shared.state.lock().unwrap();
+                    if state
+                        .logout_operation
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &task_operation))
+                    {
+                        state.logout_operation = None;
+                    }
+                }
+                outcome_tx.send_replace(Some(result));
+                task_operation.finished.set();
+            });
+            Self::wait_for_logout(&operation).await
         }
         .boxed()
     }
@@ -1031,23 +1093,22 @@ impl ProviderAuthFlowCoordinator {
     }
 
     async fn shutdown_impl(shared: Arc<CoordinatorShared>) {
-        let session = {
+        let (session, logout_operation) = {
             let mut state = shared.state.lock().unwrap();
             state.disposed = true;
             if let Some(session) = &state.active_session {
                 session.suppress_notifications.store(true, Ordering::SeqCst);
                 Self::abort_session(&shared, session);
             }
-            state.active_session.clone()
+            (state.active_session.clone(), state.logout_operation.clone())
         };
-        let logout_completion = shared.state.lock().unwrap().logout_completion.clone();
         let mut waits: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = Vec::new();
         if let Some(session) = session {
             let finished = session.finished.clone();
             waits.push(Box::pin(async move { finished.notified().await }));
         }
-        if let Some(completion) = logout_completion {
-            waits.push(Box::pin(async move { completion.notified().await }));
+        if let Some(operation) = logout_operation {
+            waits.push(Box::pin(async move { operation.finished.notified().await }));
         }
         for wait in waits {
             wait.await;
@@ -1083,7 +1144,24 @@ impl ProviderAuthFlowCoordinator {
                 }
             }
             AuthenticationOutcome::Credential(credential) => {
-                if session.abort.is_aborted() {
+                #[cfg(test)]
+                let before_commit = { shared.before_commit_transition.lock().unwrap().clone() };
+                #[cfg(test)]
+                if let Some(hook) = before_commit {
+                    hook().await;
+                }
+                // Credential persistence is the point of no return. Holding the phase lock
+                // across the abort recheck and transition makes cancel/timeout linearizable.
+                let should_commit = {
+                    let mut phase = session.phase.lock().unwrap();
+                    if session.abort.is_aborted() {
+                        false
+                    } else {
+                        *phase = Phase::Committing;
+                        true
+                    }
+                };
+                if !should_commit {
                     if session.timed_out.load(Ordering::SeqCst) {
                         Self::send_error(&shared, &session, &AuthError::cancelled());
                     } else {
@@ -1092,8 +1170,6 @@ impl ProviderAuthFlowCoordinator {
                     Self::finish_session(&shared, &session);
                     return;
                 }
-                // Credential persistence is the point of no return.
-                *session.phase.lock().unwrap() = Phase::Committing;
                 if let Some(task) = session.timeout_task.lock().unwrap().take() {
                     task.abort();
                 }
@@ -1401,13 +1477,43 @@ impl ProviderAuthFlowCoordinator {
         Ok(session)
     }
 
-    fn abort_session(shared: &CoordinatorShared, session: &AuthSession) {
+    fn abort_session(shared: &CoordinatorShared, session: &AuthSession) -> bool {
         let _ = shared;
-        if *session.phase.lock().unwrap() == Phase::Committing {
-            return;
+        let _phase = session.phase.lock().unwrap();
+        if *_phase == Phase::Committing {
+            return false;
         }
         if !session.abort.is_aborted() {
             session.abort.abort();
+        }
+        true
+    }
+
+    fn timeout_session(shared: &CoordinatorShared, session: &AuthSession) {
+        let _ = shared;
+        let _phase = session.phase.lock().unwrap();
+        if *_phase == Phase::Committing {
+            return;
+        }
+        session.timed_out.store(true, Ordering::SeqCst);
+        if !session.abort.is_aborted() {
+            session.abort.abort();
+        }
+    }
+
+    async fn wait_for_logout(
+        operation: &LogoutOperation,
+    ) -> Result<Value, ProviderAuthRequestError> {
+        let mut outcome = operation.outcome.clone();
+        loop {
+            if let Some(result) = outcome.borrow().clone() {
+                return result;
+            }
+            if outcome.changed().await.is_err() {
+                return Err(ProviderAuthRequestError(
+                    "Provider sign-out did not complete.".to_string(),
+                ));
+            }
         }
     }
 
@@ -1892,6 +1998,30 @@ mod tests {
         }
     }
 
+    struct PanickingOwner(FakeOwner);
+
+    impl ProviderAuthOwner for PanickingOwner {
+        fn id(&self) -> u64 {
+            self.0.id()
+        }
+
+        fn document_id(&self) -> &str {
+            self.0.document_id()
+        }
+
+        fn is_destroyed(&self) -> bool {
+            false
+        }
+
+        fn send(&self, channel: &str, payload: &Value) -> Result<(), ()> {
+            self.0.send(channel, payload)
+        }
+
+        fn on_invalidated(&self, _listener: InvalidationListener) -> Box<dyn Fn() + Send + Sync> {
+            panic!("listener registration failed")
+        }
+    }
+
     type LoginFn = Arc<
         dyn Fn(Arc<AuthInteraction>) -> BoxFuture<'static, Result<Value, AuthError>> + Send + Sync,
     >;
@@ -2309,7 +2439,7 @@ mod tests {
                     interaction.notify(AuthEvent::DeviceCode {
                         user_code: "ABCD-EFGH".to_string(),
                         verification_uri: "https://auth.openai.com/codex/device".to_string(),
-                        interval_seconds: Some(5),
+                        interval_seconds: Some(5.0),
                         expires_in_seconds: Some(900),
                     })?;
                     Ok(json!({}))
@@ -2329,7 +2459,7 @@ mod tests {
                 provider_id: PROVIDER_ID.to_string(),
                 user_code: "ABCD-EFGH".to_string(),
                 verification_uri: "https://auth.openai.com/codex/device".to_string(),
-                interval_seconds: Some(5),
+                interval_seconds: Some(5.0),
                 expires_in_seconds: Some(900),
             }]
         );
@@ -2828,6 +2958,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancel_wins_a_paused_precommit_transition_and_the_slot_recovers() {
+        let commits = Arc::new(AtomicU64::new(0));
+        let custom_backend = Arc::new(FakeBackend {
+            snapshot_fn: Arc::new(|| snapshot_value(false)),
+            authenticate_fn: Arc::new(|_| async { Ok(json!({})) }.boxed()),
+            commit_fn: {
+                let commits = commits.clone();
+                Arc::new(move |_| {
+                    let commits = commits.clone();
+                    async move {
+                        commits.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                    .boxed()
+                })
+            },
+            logout_fn: Arc::new(|| async { Ok(()) }.boxed()),
+        });
+        let coordinator = ProviderAuthFlowCoordinator::new(ProviderAuthFlowDependencies {
+            backend_for: Arc::new(move |_, _| custom_backend.clone()),
+            open_external: Arc::new(|_| async { Ok(()) }.boxed()),
+            ..Default::default()
+        });
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        *coordinator.shared.before_commit_transition.lock().unwrap() = Some(Arc::new({
+            let entered = entered.clone();
+            let release = release.clone();
+            move || {
+                let entered = entered.clone();
+                let release = release.clone();
+                async move {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                .boxed()
+            }
+        }));
+        let owner = Arc::new(FakeOwner::new(1));
+        coordinator.start(owner.clone(), request(FLOW_A)).unwrap();
+        entered.notified().await;
+        assert_eq!(
+            coordinator.cancel(owner.clone(), &request(FLOW_A)).unwrap(),
+            ProviderAuthCancelOutcome::Cancelled
+        );
+        release.notify_one();
+        wait_for_messages(&owner, "providers:auth:done").await;
+        assert_eq!(commits.load(Ordering::SeqCst), 0);
+
+        *coordinator.shared.before_commit_transition.lock().unwrap() = None;
+        let next = Arc::new(FakeOwner::new(2));
+        coordinator.start(next.clone(), request(FLOW_B)).unwrap();
+        wait_for_messages(&next, "providers:auth:done").await;
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn timeout_wins_a_paused_precommit_transition_without_persisting() {
+        let commits = Arc::new(AtomicU64::new(0));
+        let custom_backend = Arc::new(FakeBackend {
+            snapshot_fn: Arc::new(|| snapshot_value(false)),
+            authenticate_fn: Arc::new(|_| async { Ok(json!({})) }.boxed()),
+            commit_fn: {
+                let commits = commits.clone();
+                Arc::new(move |_| {
+                    let commits = commits.clone();
+                    async move {
+                        commits.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                    .boxed()
+                })
+            },
+            logout_fn: Arc::new(|| async { Ok(()) }.boxed()),
+        });
+        let coordinator = ProviderAuthFlowCoordinator::new(ProviderAuthFlowDependencies {
+            backend_for: Arc::new(move |_, _| custom_backend.clone()),
+            open_external: Arc::new(|_| async { Ok(()) }.boxed()),
+            flow_timeout_ms: Some(10),
+            ..Default::default()
+        });
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        *coordinator.shared.before_commit_transition.lock().unwrap() = Some(Arc::new({
+            let entered = entered.clone();
+            let release = release.clone();
+            move || {
+                let entered = entered.clone();
+                let release = release.clone();
+                async move {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                .boxed()
+            }
+        }));
+        let owner = Arc::new(FakeOwner::new(1));
+        coordinator.start(owner.clone(), request(FLOW_A)).unwrap();
+        entered.notified().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        release.notify_one();
+        wait_for_messages(&owner, "providers:auth:error").await;
+        assert_eq!(commits.load(Ordering::SeqCst), 0);
+        let errors: Vec<ProviderAuthErrorDto> = messages(&owner, "providers:auth:error");
+        assert_eq!(errors[0].code, "timed_out");
+    }
+
+    #[tokio::test]
     async fn late_provider_callbacks_unwind_through_cleanup_before_the_session_is_released() {
         let (continue_tx, continue_rx) = oneshot::channel::<()>();
         let continue_tx_slot = sender_slot(continue_tx);
@@ -3242,6 +3480,257 @@ mod tests {
         assert!(err.0.contains("sign-out is still in progress"));
         send_value(&finish_tx_slot, ());
         let _ = logout.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_starts_atomically_reserve_the_single_session() {
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let custom_backend = backend(Arc::new(|interaction| {
+            async move {
+                interaction.signal.notified().await;
+                Err(AuthError::cancelled())
+            }
+            .boxed()
+        }));
+        let coordinator = Arc::new(ProviderAuthFlowCoordinator::new(
+            ProviderAuthFlowDependencies {
+                backend_for: Arc::new({
+                    let barrier = barrier.clone();
+                    move |_, _| {
+                        barrier.wait();
+                        custom_backend.clone()
+                    }
+                }),
+                open_external: Arc::new(|_| async { Ok(()) }.boxed()),
+                ..Default::default()
+            },
+        ));
+        let first_owner = Arc::new(FakeOwner::new(1));
+        let second_owner = Arc::new(FakeOwner::new(2));
+        let first = tokio::task::spawn_blocking({
+            let coordinator = coordinator.clone();
+            let owner = first_owner.clone();
+            move || coordinator.start(owner, request(FLOW_A))
+        });
+        let second = tokio::task::spawn_blocking({
+            let coordinator = coordinator.clone();
+            let owner = second_owner.clone();
+            move || coordinator.start(owner, request(FLOW_B))
+        });
+        let first = first.await.unwrap();
+        let second = second.await.unwrap();
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        let (owner, flow) = if first.is_ok() {
+            (first_owner, FLOW_A)
+        } else {
+            (second_owner, FLOW_B)
+        };
+        assert_eq!(
+            coordinator.cancel(owner.clone(), &request(flow)).unwrap(),
+            ProviderAuthCancelOutcome::Cancelled
+        );
+        wait_for_messages(&owner, "providers:auth:done").await;
+    }
+
+    #[tokio::test]
+    async fn listener_registration_failure_rolls_back_the_session_reservation() {
+        let coordinator = make_coordinator(MakeOptions::default());
+        let error = coordinator
+            .start(Arc::new(PanickingOwner(FakeOwner::new(1))), request(FLOW_A))
+            .unwrap_err();
+        assert!(error.0.contains("window is unavailable"));
+
+        let owner = Arc::new(FakeOwner::new(2));
+        coordinator.start(owner.clone(), request(FLOW_B)).unwrap();
+        wait_for_messages(&owner, "providers:auth:done").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_start_and_logout_cannot_both_reserve_the_global_slot() {
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let release_logout = Arc::new(Notify::new());
+        let custom_backend = Arc::new(FakeBackend {
+            snapshot_fn: Arc::new(|| snapshot_value(false)),
+            authenticate_fn: Arc::new(|interaction| {
+                async move {
+                    interaction.signal.notified().await;
+                    Err(AuthError::cancelled())
+                }
+                .boxed()
+            }),
+            commit_fn: Arc::new(|_| async { Ok(()) }.boxed()),
+            logout_fn: Arc::new({
+                let release_logout = release_logout.clone();
+                move || {
+                    let release_logout = release_logout.clone();
+                    async move {
+                        release_logout.notified().await;
+                        Ok(())
+                    }
+                    .boxed()
+                }
+            }),
+        });
+        let coordinator = Arc::new(ProviderAuthFlowCoordinator::new(
+            ProviderAuthFlowDependencies {
+                backend_for: Arc::new({
+                    let barrier = barrier.clone();
+                    move |_, _| {
+                        barrier.wait();
+                        custom_backend.clone()
+                    }
+                }),
+                open_external: Arc::new(|_| async { Ok(()) }.boxed()),
+                ..Default::default()
+            },
+        ));
+        let owner = Arc::new(FakeOwner::new(1));
+        let start = tokio::task::spawn_blocking({
+            let coordinator = coordinator.clone();
+            let owner = owner.clone();
+            move || coordinator.start(owner, request(FLOW_A))
+        });
+        let logout = tokio::spawn({
+            let coordinator = coordinator.clone();
+            async move { coordinator.logout(PROVIDER_ID).await }
+        });
+        let start_result = start.await.unwrap();
+        if start_result.is_ok() {
+            assert!(logout.await.unwrap().is_err());
+            coordinator.cancel(owner.clone(), &request(FLOW_A)).unwrap();
+            wait_for_messages(&owner, "providers:auth:done").await;
+        } else {
+            release_logout.notify_one();
+            assert!(logout.await.unwrap().is_ok());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_logouts_atomically_reserve_one_operation() {
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let logout_started = Arc::new(AtomicU64::new(0));
+        let release_logout = Arc::new(Notify::new());
+        let custom_backend = Arc::new(FakeBackend {
+            snapshot_fn: Arc::new(|| snapshot_value(false)),
+            authenticate_fn: Arc::new(|_| async { Ok(json!({})) }.boxed()),
+            commit_fn: Arc::new(|_| async { Ok(()) }.boxed()),
+            logout_fn: Arc::new({
+                let logout_started = logout_started.clone();
+                let release_logout = release_logout.clone();
+                move || {
+                    let logout_started = logout_started.clone();
+                    let release_logout = release_logout.clone();
+                    async move {
+                        logout_started.fetch_add(1, Ordering::SeqCst);
+                        release_logout.notified().await;
+                        Ok(())
+                    }
+                    .boxed()
+                }
+            }),
+        });
+        let coordinator = Arc::new(ProviderAuthFlowCoordinator::new(
+            ProviderAuthFlowDependencies {
+                backend_for: Arc::new({
+                    let barrier = barrier.clone();
+                    move |_, _| {
+                        barrier.wait();
+                        custom_backend.clone()
+                    }
+                }),
+                open_external: Arc::new(|_| async { Ok(()) }.boxed()),
+                ..Default::default()
+            },
+        ));
+        let handle = tokio::runtime::Handle::current();
+        let first = tokio::task::spawn_blocking({
+            let coordinator = coordinator.clone();
+            let handle = handle.clone();
+            move || handle.block_on(coordinator.logout(PROVIDER_ID))
+        });
+        let second = tokio::task::spawn_blocking({
+            let coordinator = coordinator.clone();
+            move || handle.block_on(coordinator.logout(PROVIDER_ID))
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while logout_started.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+            while !first.is_finished() && !second.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let (winner, loser) = if first.is_finished() {
+            (second, first)
+        } else {
+            (first, second)
+        };
+        assert!(loser.await.unwrap().is_err());
+        release_logout.notify_one();
+        assert!(winner.await.unwrap().is_ok());
+        assert_eq!(logout_started.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_logout_waiter_does_not_release_the_operation() {
+        let logout_started = Arc::new(AtomicBool::new(false));
+        let release_logout = Arc::new(Notify::new());
+        let custom_backend = Arc::new(FakeBackend {
+            snapshot_fn: Arc::new(|| snapshot_value(false)),
+            authenticate_fn: Arc::new(|_| async { Ok(json!({})) }.boxed()),
+            commit_fn: Arc::new(|_| async { Ok(()) }.boxed()),
+            logout_fn: Arc::new({
+                let logout_started = logout_started.clone();
+                let release_logout = release_logout.clone();
+                move || {
+                    let logout_started = logout_started.clone();
+                    let release_logout = release_logout.clone();
+                    async move {
+                        logout_started.store(true, Ordering::SeqCst);
+                        release_logout.notified().await;
+                        Ok(())
+                    }
+                    .boxed()
+                }
+            }),
+        });
+        let coordinator = Arc::new(ProviderAuthFlowCoordinator::new(
+            ProviderAuthFlowDependencies {
+                backend_for: Arc::new(move |_, _| custom_backend.clone()),
+                open_external: Arc::new(|_| async { Ok(()) }.boxed()),
+                ..Default::default()
+            },
+        ));
+        let logout = tokio::spawn({
+            let coordinator = coordinator.clone();
+            async move { coordinator.logout(PROVIDER_ID).await }
+        });
+        wait_for(|| logout_started.load(Ordering::SeqCst)).await;
+        logout.abort();
+        let error = coordinator
+            .start(Arc::new(FakeOwner::new(1)), request(FLOW_A))
+            .unwrap_err();
+        assert!(error.0.contains("sign-out is still in progress"));
+        release_logout.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while coordinator
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .logout_operation
+                .is_some()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let owner = Arc::new(FakeOwner::new(2));
+        coordinator.start(owner.clone(), request(FLOW_B)).unwrap();
+        wait_for_messages(&owner, "providers:auth:done").await;
     }
 
     #[tokio::test]

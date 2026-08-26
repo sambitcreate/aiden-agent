@@ -445,6 +445,18 @@ impl OnboardingView {
                 "Aiden starts every chat with this model. You can refine providers and models later in Settings.",
                 &theme,
             ))
+            .child(
+                div()
+                    .rounded_lg()
+                    .bg(theme.muted.opacity(0.45))
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        "Supported models add a per-model Thinking control in the composer. The defaults are Gemini Off, Codex Medium, and Claude High.",
+                    ),
+            )
             .when(options.is_empty(), |el| {
                 el.child(
                     div()
@@ -646,7 +658,7 @@ impl OnboardingView {
 
     fn permissions_step(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let rows: [(&str, &str); 4] = [
+        let rows: [(&str, &str); 5] = [
             (
                 "Dictation",
                 "Dictation needs microphone access to transcribe your voice. Allow it in System \
@@ -664,9 +676,13 @@ impl OnboardingView {
                  bundles your credentials anywhere else.",
             ),
             (
+                "Optional web search",
+                "Web search is off by default. If you add an Exa key and enable it later, the model may send search queries to Exa when it uses the search tool.",
+            ),
+            (
                 "No silent network access",
                 "This onboarding step makes no network calls. Providers are contacted only when \
-                 you chat or explicitly refresh model data.",
+                 you chat; other services are contacted only after you explicitly configure and enable them.",
             ),
         ];
 

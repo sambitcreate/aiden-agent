@@ -52,8 +52,9 @@ pub use automation::{
     ASSISTANT_AUTOMATION_REJECT_MCP_MSG, ATTENDED_DECLINE_REPLY,
 };
 pub use coding_tools::{
-    build_coding_tool_executor, build_subagent_coding_tool_executor, parent_coding_tool_defs,
-    subagent_coding_tool_defs, summarize_tool_call, CodingTool, CodingToolExecutor,
+    build_coding_tool_executor, build_coding_tool_executor_with_cancellation,
+    build_subagent_coding_tool_executor, parent_coding_tool_defs, subagent_coding_tool_defs,
+    summarize_tool_call, CodingTool, CodingToolExecutor, ToolCancellation,
 };
 pub use mcp_tool::{
     assistant_mcp_server_instruction, assistant_mcp_server_inventory, assistant_mcp_server_status,
@@ -68,7 +69,8 @@ pub use runner::{
     ToolExecutor, ToolOutput,
 };
 pub use system_prompt::{
-    build_assistant_system_prompt, with_unattended_assistant_contract, AssistantPromptInput,
+    build_assistant_system_prompt, build_workspace_system_prompt,
+    with_unattended_assistant_contract, AssistantPromptInput,
 };
 pub use tool_loop_guard::{
     advance_attended_tool_error_state, attended_tool_recovery_message,

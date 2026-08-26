@@ -8,6 +8,8 @@
 #![cfg(target_os = "macos")]
 
 use std::collections::HashMap;
+use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -102,22 +104,61 @@ async fn verify_regular_executable(
 ) -> Result<(), CuaDriverError> {
     throw_if_aborted(signal)?;
     let metadata = tokio::fs::symlink_metadata(candidate).await;
-    match metadata {
-        Ok(metadata) => {
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return Err(CuaDriverError::new("driver_missing", message));
-            }
-            throw_if_aborted(signal)?;
-            tokio::fs::metadata(candidate)
-                .await
-                .map_err(|_| CuaDriverError::new("driver_missing", message))?;
-            Ok(())
-        }
-        Err(_) => {
-            throw_if_aborted(signal)?;
-            Err(CuaDriverError::new("driver_missing", message))
-        }
+    verify_regular_executable_metadata(metadata, message, signal)?;
+    let access_candidate = candidate.to_path_buf();
+    let accessible = tokio::task::spawn_blocking(move || {
+        let Ok(candidate) = CString::new(access_candidate.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: `candidate` is a live, NUL-terminated C string and `access`
+        // only reads the path. Unlike inspecting any mode-bit class, this asks
+        // the OS about Aiden's current credentials.
+        unsafe { libc::access(candidate.as_ptr(), libc::R_OK | libc::X_OK) == 0 }
+    })
+    .await
+    .unwrap_or(false);
+    throw_if_aborted(signal)?;
+    if !accessible {
+        return Err(CuaDriverError::new("driver_missing", message));
     }
+    tokio::fs::metadata(candidate)
+        .await
+        .map_err(|_| CuaDriverError::new("driver_missing", message))?;
+    Ok(())
+}
+
+fn verify_regular_executable_metadata(
+    metadata: std::io::Result<std::fs::Metadata>,
+    message: &str,
+    signal: Option<&CancellationToken>,
+) -> Result<(), CuaDriverError> {
+    // This check intentionally occurs after lstat has returned and before its
+    // result is classified, matching the Electron verifier's abort ordering.
+    throw_if_aborted(signal)?;
+    match metadata {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(()),
+        Ok(_) | Err(_) => Err(CuaDriverError::new("driver_missing", message)),
+    }
+}
+
+fn broker_app_candidate(options: &CuaDriverPathOptions) -> PathBuf {
+    if options.is_packaged {
+        options
+            .resources_path
+            .join("..")
+            .join("Helpers")
+            .join("CuaDriver.app")
+    } else {
+        options
+            .app_path
+            .join("build")
+            .join("computer-use")
+            .join("CuaDriver.app")
+    }
+}
+
+fn executable_is_confined(resolved_app: &Path, executable: &Path) -> bool {
+    executable.starts_with(resolved_app.join("Contents").join("MacOS"))
 }
 
 fn signing_requirement(identifier: &str, team_identifier: &str) -> String {
@@ -293,19 +334,7 @@ pub async fn resolve_cua_driver_installation(
             "Aiden Computer Use currently supports macOS only.",
         ));
     }
-    let broker_app_path = if options.is_packaged {
-        options
-            .resources_path
-            .join("..")
-            .join("Helpers")
-            .join("CuaDriver.app")
-    } else {
-        options
-            .app_path
-            .join("build")
-            .join("computer-use")
-            .join("CuaDriver.app")
-    };
+    let broker_app_path = broker_app_candidate(options);
     let executable_directory = broker_app_path.join("Contents").join("MacOS");
     let driver_path = executable_directory.join("cua-driver");
     let broker_path = executable_directory.join(CUA_DRIVER_BROKER_EXECUTABLE);
@@ -371,14 +400,8 @@ pub async fn resolve_cua_driver_installation(
         )
     })?;
     throw_if_aborted(signal)?;
-    let contents = format!(
-        "{}Contents{}MacOS{}",
-        resolved_app.display(),
-        std::path::MAIN_SEPARATOR,
-        std::path::MAIN_SEPARATOR
-    );
     for executable in [&resolved_driver, &resolved_broker] {
-        if !executable.to_string_lossy().starts_with(&contents) {
+        if !executable_is_confined(&resolved_app, executable) {
             return Err(CuaDriverError::new(
                 "invalid_driver_path",
                 "The Computer Use executable escaped its signed helper bundle.",
@@ -489,6 +512,8 @@ pub async fn resolve_cua_driver_installation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn codesign_verify_arguments_skip_strict_for_live_process_targets() {
@@ -526,5 +551,105 @@ mod tests {
             signing_requirement("cua-driver", "YCK386LBJ7"),
             "anchor apple generic and identifier \"cua-driver\" and certificate leaf[subject.OU] = \"YCK386LBJ7\""
         );
+    }
+
+    #[test]
+    fn helper_candidate_matches_packaged_and_development_layouts() {
+        assert_eq!(
+            broker_app_candidate(&CuaDriverPathOptions {
+                app_path: PathBuf::from("/unused"),
+                is_packaged: true,
+                platform: "darwin".into(),
+                resources_path: PathBuf::from("/Applications/Aiden.app/Contents/Resources"),
+            }),
+            PathBuf::from("/Applications/Aiden.app/Contents/Resources")
+                .join("..")
+                .join("Helpers/CuaDriver.app")
+        );
+        assert_eq!(
+            broker_app_candidate(&CuaDriverPathOptions {
+                app_path: PathBuf::from("/src/aiden-agent"),
+                is_packaged: false,
+                platform: "darwin".into(),
+                resources_path: PathBuf::from("/unused"),
+            }),
+            PathBuf::from("/src/aiden-agent/build/computer-use/CuaDriver.app")
+        );
+    }
+
+    #[test]
+    fn executable_confinement_uses_path_components_not_string_prefixes() {
+        let app = Path::new("/Applications/Aiden.app/Contents/Helpers/CuaDriver.app");
+        assert!(executable_is_confined(
+            app,
+            &app.join("Contents/MacOS/aiden-cua-broker")
+        ));
+        assert!(!executable_is_confined(
+            app,
+            Path::new(
+                "/Applications/Aiden.app/Contents/Helpers/CuaDriver.app-sibling/Contents/MacOS/aiden-cua-broker"
+            )
+        ));
+        assert!(!executable_is_confined(
+            app,
+            &app.join("Contents/Resources/aiden-cua-broker")
+        ));
+    }
+
+    #[tokio::test]
+    async fn regular_executable_requires_read_and_execute_mode() {
+        let root = tempfile::TempDir::new().unwrap();
+        let candidate = root.path().join("helper");
+        File::create(&candidate).unwrap();
+
+        let directory_error = verify_regular_executable(root.path(), "missing", None)
+            .await
+            .unwrap_err();
+        assert_eq!(directory_error.code, "driver_missing");
+
+        let symlink = root.path().join("helper-link");
+        std::os::unix::fs::symlink(&candidate, &symlink).unwrap();
+        let symlink_error = verify_regular_executable(&symlink, "missing", None)
+            .await
+            .unwrap_err();
+        assert_eq!(symlink_error.code, "driver_missing");
+
+        std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let error = verify_regular_executable(&candidate, "missing", None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "driver_missing");
+
+        std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o100)).unwrap();
+        let error = verify_regular_executable(&candidate, "missing", None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "driver_missing");
+
+        // Although "other" has both bits, the owner class applies to Aiden
+        // and denies access. A mode-any-bit approximation incorrectly accepts
+        // this file.
+        std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o005)).unwrap();
+        let error = verify_regular_executable(&candidate, "missing", None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "driver_missing");
+
+        std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o500)).unwrap();
+        verify_regular_executable(&candidate, "missing", None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_lstat_precedes_invalid_file_classification() {
+        let root = tempfile::TempDir::new().unwrap();
+        let metadata = tokio::fs::symlink_metadata(root.path()).await;
+        let signal = CancellationToken::new();
+        signal.cancel();
+
+        let error =
+            verify_regular_executable_metadata(metadata, "missing", Some(&signal)).unwrap_err();
+        assert_eq!(error.code, "cancelled");
     }
 }

@@ -27,7 +27,7 @@
 //! channel — deferred.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use aiden_data::portable_config::{McpServer, McpTransport};
@@ -111,6 +111,24 @@ pub struct McpClient {
     /// serving a reconfigured server.
     pub fingerprint: String,
     running: RunningService<RoleClient, AidenClientHandler>,
+}
+
+/// Opaque identity for the exact cached connection whose schemas were listed.
+/// A manager validates pointer identity before every later call, so replacing
+/// or disconnecting a server under the same id supersedes old tool bindings.
+#[derive(Clone)]
+pub struct McpConnectionLease {
+    server_id: String,
+    client: Weak<McpClient>,
+}
+
+impl std::fmt::Debug for McpConnectionLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpConnectionLease")
+            .field("server_id", &self.server_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for McpClient {
@@ -420,6 +438,49 @@ impl McpClientManager {
             .get(server_id)
             .cloned()
             .ok_or_else(not_connected(server_id))
+    }
+
+    async fn client_for_lease(
+        &self,
+        lease: &McpConnectionLease,
+    ) -> Result<Arc<McpClient>, McpError> {
+        let clients = self.clients.lock().await;
+        let current = clients.get(&lease.server_id).ok_or(McpError::Superseded)?;
+        let leased = lease.client.upgrade().ok_or(McpError::Superseded)?;
+        if !Arc::ptr_eq(current, &leased) {
+            return Err(McpError::Superseded);
+        }
+        Ok(current.clone())
+    }
+
+    /// Capture the exact current connection for generation-pinned discovery
+    /// and dispatch.
+    pub async fn connection_lease(&self, server_id: &str) -> Result<McpConnectionLease, McpError> {
+        let client = self.client_for(server_id).await?;
+        Ok(McpConnectionLease {
+            server_id: server_id.to_string(),
+            client: Arc::downgrade(&client),
+        })
+    }
+
+    pub async fn list_tools_for_lease(
+        &self,
+        lease: &McpConnectionLease,
+    ) -> Result<Vec<McpToolInfo>, McpError> {
+        self.client_for_lease(lease).await?.list_tools().await
+    }
+
+    pub async fn call_tool_for_lease(
+        &self,
+        lease: &McpConnectionLease,
+        tool: &str,
+        args: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<McpToolTextResult, McpError> {
+        self.client_for_lease(lease)
+            .await?
+            .call_tool(tool, args, timeout)
+            .await
     }
 
     /// Connect the server if it is not already connected (or its spec changed),
@@ -1185,6 +1246,7 @@ mod tests {
 
         let spec_a = remote_spec("docs");
         manager.ensure_connected(&spec_a).await.unwrap();
+        let original_lease = manager.connection_lease("docs").await.unwrap();
         assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(manager.connection_generation("docs").await, 1);
 
@@ -1210,6 +1272,14 @@ mod tests {
         assert_eq!(
             manager.cached_fingerprint("docs").await.as_deref(),
             Some(spec_fingerprint(&spec_b).as_str())
+        );
+        assert_eq!(
+            manager
+                .list_tools_for_lease(&original_lease)
+                .await
+                .unwrap_err(),
+            McpError::Superseded,
+            "a schema binding must not cross a reconnect under the same id"
         );
 
         // Back to the original record → reconnect again (double-checked).

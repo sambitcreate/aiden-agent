@@ -259,6 +259,63 @@ pub fn with_unattended_assistant_contract(prompt: &str) -> String {
     format!("{prompt}\n\n{SILENT_CONTRACT}")
 }
 
+/// Build the normal project-chat prompt (`llm-client.ts::buildSystemPrompt`).
+/// The caller supplies already-authorized workspace facts; this pure builder
+/// never reads the filesystem or expands the model's capabilities beyond the
+/// exact permission value.
+pub fn build_workspace_system_prompt(
+    folder_path: Option<&str>,
+    branch: Option<&str>,
+    permission: &str,
+    subagents_available: bool,
+    skills_text: Option<&str>,
+) -> String {
+    let base = "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
+    let skills_suffix = skills_text
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| format!("\n\n{text}"))
+        .unwrap_or_default();
+    let Some(folder_path) = folder_path.filter(|path| !path.is_empty()) else {
+        return format!(
+            "{base} Call the available tools when they help answer the user's request.{skills_suffix}"
+        );
+    };
+    if permission == "none" {
+        return format!(
+            "{base} Call the available tools when they help answer the user's request.{skills_suffix}"
+        );
+    }
+
+    let git = branch
+        .filter(|branch| !branch.is_empty())
+        .map(|branch| format!(" It is a git repository on branch `{branch}`."))
+        .unwrap_or_default();
+    let read_only = permission == "read-only";
+    let capability = if read_only {
+        "You have tools to read, search, and list files in this folder. You cannot edit files or run commands. "
+    } else {
+        "You have tools to read, search, list, and edit files and to run shell commands in this folder. "
+    };
+    let workflow = if read_only {
+        "All file paths are relative to this folder. If the request requires a mutation, explain that this run is read-only."
+    } else {
+        "All file paths are relative to this folder. Prefer editing existing files over creating new ones, read a file before editing it, and keep changes surgical. "
+    };
+    let approval = match permission {
+        "ask" => "The user must approve each file write and shell command before it runs.",
+        "full" => "You may make changes and run commands directly.",
+        _ => "",
+    };
+    let delegation = if subagents_available {
+        " Use the subagent tool for independent bounded investigation, comparison, planning, or fresh review—not trivial work—and always reconcile its ordered results yourself."
+    } else {
+        ""
+    };
+    format!(
+        "{base}\n\nYou are working inside the folder: {folder_path}.{git} {capability}{workflow}{approval}{delegation}{skills_suffix}"
+    )
+}
+
 /// Build the Aiden assistant system prompt (mirrors `buildAssistantSystemPrompt`).
 pub fn build_assistant_system_prompt(input: &AssistantPromptInput) -> String {
     let sections = format!(
@@ -453,6 +510,33 @@ mod tests {
             mcp_omitted_invalid_identities: None,
             unattended: false,
         }
+    }
+
+    #[test]
+    fn workspace_prompt_matches_permission_and_repository_context() {
+        let ask = build_workspace_system_prompt(
+            Some("/tmp/project"),
+            Some("feature/native"),
+            "ask",
+            false,
+            None,
+        );
+        assert!(ask.contains("working inside the folder: /tmp/project"));
+        assert!(ask.contains("branch `feature/native`"));
+        assert!(ask.contains("must approve each file write and shell command"));
+
+        let full = build_workspace_system_prompt(
+            Some("/tmp/project"),
+            None,
+            "full",
+            false,
+            Some("<available_skills />"),
+        );
+        assert!(full.contains("may make changes and run commands directly"));
+        assert!(full.contains("<available_skills />"));
+
+        let none = build_workspace_system_prompt(Some("/tmp/project"), None, "none", false, None);
+        assert!(!none.contains("working inside the folder"));
     }
 
     #[test]

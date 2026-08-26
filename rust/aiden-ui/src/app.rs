@@ -8,15 +8,17 @@
 //! routes the sidebar palette / gear / keyboard actions onto them.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use aiden_core::appearance::Mode;
+use aiden_core::{validate_attachments, Attachment, AttachmentKind};
 use futures::FutureExt;
 use gpui::{
     actions, div, prelude::FluentBuilder as _, px, AppContext as _, Context, Entity, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, Styled as _,
-    Subscription, Window,
+    InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
+    ScrollHandle, SharedString, Styled as _, Subscription, Window,
 };
 use gpui_component::{
     h_flex,
@@ -43,7 +45,7 @@ use crate::panels::usage_panel::{StoreUsageSource, UsageDataSource, UsagePanel, 
 use crate::pill::{
     open_pill_window, LiveAudioSource, PillCoordinator, PillCoordinatorDeps, PillDeps, PillView,
 };
-use crate::services::chat_service::ChatService;
+use crate::services::chat_service::{ChatService, ChatServiceEvent};
 use crate::services::provider_kit::ConfiguredProvider;
 use crate::services::stores::Stores;
 use crate::settings::{SettingsSection, SettingsServices, SettingsView};
@@ -100,6 +102,10 @@ impl AppView {
     }
 }
 
+fn should_hide_codex_auth_for_view_change(from: AppView, to: AppView) -> bool {
+    from == AppView::Settings && to != AppView::Settings
+}
+
 /// Cycle the appearance mode forward (system → light → dark → system). Pure
 /// so the palette's "Toggle appearance" command is unit-testable.
 pub fn cycle_appearance_mode(mode: Mode) -> Mode {
@@ -116,6 +122,8 @@ pub fn settings_section_from_id(id: &str) -> Option<SettingsSection> {
     match id {
         "appearance" => Some(SettingsSection::Appearance),
         "providers" => Some(SettingsSection::Providers),
+        "skills" => Some(SettingsSection::Skills),
+        "websearch" => Some(SettingsSection::WebSearch),
         "shortcuts" => Some(SettingsSection::Shortcuts),
         "mcp" => Some(SettingsSection::Mcp),
         "scheduled-tasks" => Some(SettingsSection::ScheduledTasks),
@@ -217,6 +225,16 @@ pub struct AppState {
     pub(crate) view: AppView,
     /// Multiline auto-growing composer input.
     pub(crate) composer_input: Entity<InputState>,
+    /// Attachment draft owned by the active chat. Source paths never enter
+    /// this state; only validated inline payloads do.
+    pub(crate) composer_attachments: Vec<Attachment>,
+    pub(crate) attaching_files: bool,
+    pub(crate) attachment_error: Option<String>,
+    pub(crate) attachment_image_cache: RefCell<HashMap<String, Arc<gpui::Image>>>,
+    attachment_operation: u64,
+    attachment_read_cancellation: Option<aiden_data::attachments::AttachmentReadCancellation>,
+    pending_send_operation: Option<u64>,
+    draft_owner_chat_id: Option<String>,
     /// Sidebar chat search input.
     pub(crate) search_input: Entity<InputState>,
     /// Model picker (created once; items sync with the provider catalog).
@@ -263,6 +281,14 @@ impl AppState {
             stores,
             view: AppView::default(),
             composer_input,
+            composer_attachments: Vec::new(),
+            attaching_files: false,
+            attachment_error: None,
+            attachment_image_cache: RefCell::new(HashMap::new()),
+            attachment_operation: 0,
+            attachment_read_cancellation: None,
+            pending_send_operation: None,
+            draft_owner_chat_id: None,
             search_input,
             model_select: None,
             model_select_dirty: true,
@@ -291,7 +317,10 @@ impl AppState {
             &this.composer_input,
             window,
             |this, _source, event, window, cx| match event {
-                InputEvent::Change => cx.notify(),
+                InputEvent::Change => {
+                    this.draft_owner_chat_id = this.service.read(cx).active_chat_id.clone();
+                    cx.notify();
+                }
                 InputEvent::PressEnter { secondary: false } => {
                     let text = this.composer_input.read(cx).value().to_string();
                     this.send_composer(&text, window, cx);
@@ -373,6 +402,50 @@ impl AppState {
             .push(cx.observe(&this.service, |this, _service, cx| {
                 this.sync_from_service(cx);
             }));
+
+        // Credential terminal/logout transitions are reconciled by the
+        // process-owned auth host even when Settings is hidden. Each terminal
+        // transition emits exactly one event; the shell refreshes the offline
+        // catalog so Codex appears/disappears in the model picker immediately.
+        let codex_auth = cx
+            .global::<crate::services::codex_auth::GlobalCodexAuthService>()
+            .0
+            .clone();
+        this._subscriptions.push(cx.subscribe(
+            &codex_auth,
+            |this, _service, _: &crate::services::codex_auth::CodexAuthStateChanged, cx| {
+                this.service
+                    .update(cx, |service, cx| service.refresh_providers(cx));
+            },
+        ));
+
+        this._subscriptions.push(cx.subscribe_in(
+            &this.service,
+            window,
+            |this, _service, event: &ChatServiceEvent, window, cx| match event {
+                ChatServiceEvent::UserMessagePersisted { operation, .. }
+                    if this.pending_send_operation == Some(*operation) =>
+                {
+                    this.pending_send_operation = None;
+                    this.composer_attachments.clear();
+                    this.draft_owner_chat_id = this.service.read(cx).active_chat_id.clone();
+                    this.composer_input
+                        .update(cx, |input, inner| input.set_value("", window, inner));
+                    cx.notify();
+                }
+                ChatServiceEvent::UserMessagePersisted { .. } => {}
+                ChatServiceEvent::ActiveChatChanged { chat_id }
+                    if this.draft_owner_chat_id != *chat_id =>
+                {
+                    this.attachment_image_cache.borrow_mut().clear();
+                    this.clear_composer_draft(window, cx);
+                    this.draft_owner_chat_id = chat_id.clone();
+                }
+                ChatServiceEvent::ActiveChatChanged { .. } => {
+                    this.attachment_image_cache.borrow_mut().clear();
+                }
+            },
+        ));
 
         // The chat view is the default view, so the workspace bar is visible
         // from startup (refresh + poll are gated on a folder being present).
@@ -502,22 +575,157 @@ impl AppState {
     /// Send the composer contents (Enter or the send button).
     pub fn send_composer(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let text = text.trim().to_string();
-        if text.is_empty() {
+        if text.is_empty() && self.composer_attachments.is_empty() {
             return;
         }
-        self.composer_input
-            .update(cx, |input, inner| input.set_value("", window, inner));
-        self.service
-            .update(cx, |service, cx| service.send_message(&text, cx));
+        let attachments = self.composer_attachments.clone();
+        let operation = self.service.update(cx, |service, cx| {
+            service.send_message(&text, attachments, cx)
+        });
+        if let Some(operation) = operation {
+            self.pending_send_operation = Some(operation);
+            self.draft_owner_chat_id = self.service.read(cx).active_chat_id.clone();
+        }
+        let _ = window;
     }
 
-    fn on_new_chat(&mut self, _: &NewChat, _: &mut Window, cx: &mut Context<Self>) {
+    /// Open the native multi-file picker, read the chosen batch off the GPUI
+    /// foreground, and publish only an all-or-nothing validated result owned by
+    /// the chat that opened the picker.
+    pub(crate) fn attach_files(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.service.read(cx).snapshot();
+        if self.attaching_files
+            || snapshot.pending_send
+            || snapshot
+                .generation
+                .as_ref()
+                .is_some_and(|generation| !generation.complete)
+        {
+            return;
+        }
+        self.attachment_operation = self.attachment_operation.wrapping_add(1);
+        let operation = self.attachment_operation;
+        if let Some(cancellation) = self.attachment_read_cancellation.take() {
+            cancellation.cancel();
+        }
+        let cancellation = aiden_data::attachments::AttachmentReadCancellation::new();
+        self.attachment_read_cancellation = Some(cancellation.clone());
+        let owner_chat_id = self.service.read(cx).active_chat_id.clone();
+        self.attaching_files = true;
+        self.attachment_error = None;
+        cx.notify();
+
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(SharedString::from("Attach files or images")),
+        });
+        cx.spawn(async move |this, cx| {
+            let selected = match paths.await {
+                Ok(Ok(Some(paths))) => Some(paths),
+                _ => None,
+            };
+            let Some(paths) = selected else {
+                this.update(cx, |this, cx| {
+                    if this.attachment_operation == operation {
+                        this.attaching_files = false;
+                        this.attachment_read_cancellation = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
+                return;
+            };
+            let result = cx
+                .background_spawn(async move {
+                    aiden_data::attachments::read_attachments_with_cancellation(
+                        &paths,
+                        &cancellation,
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.attachment_operation != operation {
+                    return;
+                }
+                this.attaching_files = false;
+                this.attachment_read_cancellation = None;
+                if this.service.read(cx).active_chat_id != owner_chat_id {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(mut attachments) => {
+                        let supports_images = this.service.read(cx).snapshot().supports_images;
+                        if supports_images == Some(false) {
+                            let before = attachments.len();
+                            attachments.retain(|item| item.kind != AttachmentKind::Image);
+                            if attachments.len() != before {
+                                this.attachment_error = Some(
+                                    "The selected model can't read images — image attachments were skipped."
+                                        .into(),
+                                );
+                            }
+                        }
+                        let mut combined = this.composer_attachments.clone();
+                        combined.extend(attachments);
+                        match validate_attachments(&combined) {
+                            Ok(canonical) => {
+                                this.composer_attachments = canonical;
+                                this.draft_owner_chat_id = owner_chat_id.clone();
+                            }
+                            Err(error) => this.attachment_error = Some(error.to_string()),
+                        }
+                    }
+                    Err(error) => this.attachment_error = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn remove_composer_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.composer_attachments.retain(|item| item.id != id);
+        self.attachment_error = None;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_composer_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.attachment_operation = self.attachment_operation.wrapping_add(1);
+        if let Some(cancellation) = self.attachment_read_cancellation.take() {
+            cancellation.cancel();
+        }
+        self.attaching_files = false;
+        self.attachment_error = None;
+        self.composer_attachments.clear();
+        self.pending_send_operation = None;
+        self.draft_owner_chat_id = self.service.read(cx).active_chat_id.clone();
+        self.composer_input
+            .update(cx, |input, inner| input.set_value("", window, inner));
+        cx.notify();
+    }
+
+    fn on_new_chat(&mut self, _: &NewChat, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = window;
         self.set_view(AppView::Chat, cx);
         self.service.update(cx, |service, cx| service.new_chat(cx));
     }
 
     fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
+        Self::begin_codex_auth_shutdown(cx);
         cx.quit();
+    }
+
+    fn begin_codex_auth_shutdown(cx: &mut Context<Self>) {
+        let service = cx
+            .try_global::<crate::services::codex_auth::GlobalCodexAuthService>()
+            .map(|global| global.0.clone());
+        if let Some(service) = service {
+            service.update(cx, |service, _| service.abort_now());
+        }
     }
 
     // =======================================================================
@@ -526,6 +734,11 @@ impl AppState {
 
     /// Route the main content area (session-only; never persisted).
     pub(crate) fn set_view(&mut self, view: AppView, cx: &mut Context<Self>) {
+        if should_hide_codex_auth_for_view_change(self.view, view) {
+            if let Some(settings) = self.settings.as_ref() {
+                settings.update(cx, |settings, cx| settings.hide_codex_auth(cx));
+            }
+        }
         if self.view != view {
             self.view = view;
             cx.notify();
@@ -673,7 +886,10 @@ impl AppState {
             PaletteCommand::OpenUsage => self.set_view(AppView::Usage, cx),
             PaletteCommand::OpenSubagents => self.set_view(AppView::Subagents, cx),
             PaletteCommand::OpenAssistant => self.set_view(AppView::Assistant, cx),
-            PaletteCommand::Quit => cx.quit(),
+            PaletteCommand::Quit => {
+                Self::begin_codex_auth_shutdown(cx);
+                cx.quit();
+            }
             PaletteCommand::ToggleTerminal => self.toggle_terminal(window, cx),
             PaletteCommand::FocusComposer => {
                 self.composer_input
@@ -681,7 +897,7 @@ impl AppState {
             }
             PaletteCommand::NextChat | PaletteCommand::PreviousChat => {
                 let forward = matches!(command, PaletteCommand::NextChat);
-                self.cycle_chat(forward, cx);
+                self.cycle_chat(forward, window, cx);
             }
             PaletteCommand::RefreshProviders => {
                 self.service
@@ -705,7 +921,7 @@ impl AppState {
     }
 
     /// Move to the previous/next chat in the sidebar order (palette arrows).
-    fn cycle_chat(&mut self, forward: bool, cx: &mut Context<Self>) {
+    fn cycle_chat(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let ids: Vec<String> = self
             .service
             .read(cx)
@@ -724,6 +940,7 @@ impl AppState {
             .unwrap_or(0);
         let next = ((index as i64 + step).rem_euclid(ids.len() as i64)) as usize;
         self.set_view(AppView::Chat, cx);
+        let _ = window;
         self.service
             .update(cx, |service, cx| service.select_chat(&ids[next], cx));
     }
@@ -788,11 +1005,18 @@ impl AppState {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SettingsView> {
+        let workspace_root = self.service.read(cx).workspace_folder();
         if let Some(entity) = &self.settings {
+            entity.update(cx, |settings, cx| {
+                settings.set_skill_workspace_root(workspace_root, cx);
+            });
             return entity.clone();
         }
         let services = SettingsServices::from_stores(&self.stores);
         let entity = cx.new(|cx| SettingsView::new(cx, services));
+        entity.update(cx, |settings, cx| {
+            settings.set_skill_workspace_root(workspace_root, cx);
+        });
         self.settings = Some(entity.clone());
         entity
     }
@@ -1191,6 +1415,14 @@ mod tests {
             Some(SettingsSection::Appearance)
         );
         assert_eq!(
+            settings_section_from_id("skills"),
+            Some(SettingsSection::Skills)
+        );
+        assert_eq!(
+            settings_section_from_id("websearch"),
+            Some(SettingsSection::WebSearch)
+        );
+        assert_eq!(
             settings_section_from_id("scheduled-tasks"),
             Some(SettingsSection::ScheduledTasks)
         );
@@ -1204,6 +1436,22 @@ mod tests {
         assert_eq!(cycle_appearance_mode(Mode::System), Mode::Light);
         assert_eq!(cycle_appearance_mode(Mode::Light), Mode::Dark);
         assert_eq!(cycle_appearance_mode(Mode::Dark), Mode::System);
+    }
+
+    #[test]
+    fn leaving_settings_hides_auth_but_reselecting_settings_does_not() {
+        assert!(should_hide_codex_auth_for_view_change(
+            AppView::Settings,
+            AppView::Chat
+        ));
+        assert!(!should_hide_codex_auth_for_view_change(
+            AppView::Settings,
+            AppView::Settings
+        ));
+        assert!(!should_hide_codex_auth_for_view_change(
+            AppView::Chat,
+            AppView::Assistant
+        ));
     }
 
     #[test]

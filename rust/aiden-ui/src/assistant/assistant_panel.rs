@@ -53,7 +53,9 @@ use crate::assistant::view_state::{
     can_send, history_to_messages, AssistantPhase, AssistantViewState,
 };
 use crate::services::mcp_tools::{ChatMcpTools, McpStreamContext};
-use crate::services::provider_kit::{resolve_api_key, ConfiguredProvider, ModelSelection};
+use crate::services::provider_kit::{
+    merge_codex_configured_provider, resolve_api_key, ConfiguredProvider, ModelSelection,
+};
 use crate::services::stores::Stores;
 
 /// The persisted model-selection settings key (shared with the chat service).
@@ -200,8 +202,16 @@ impl AssistantPanel {
                     let providers = stores
                         .config
                         .list_providers()
-                        .map(|list| list.iter().map(ConfiguredProvider::from).collect())
+                        .map(|list| {
+                            list.iter()
+                                .map(ConfiguredProvider::from)
+                                .collect::<Vec<_>>()
+                        })
                         .unwrap_or_default();
+                    let providers = merge_codex_configured_provider(
+                        providers,
+                        &stores.codex_auth.provider_snapshot(),
+                    );
                     let settings = stores.config.get_settings().unwrap_or_default();
                     let recent = stores.schedules.list().unwrap_or_default();
                     let enabled = enabled_mcp_servers(&stores.config);
@@ -389,7 +399,7 @@ impl AssistantPanel {
 
         let (tx, rx) = mpsc::channel(128);
         let keys = stores.keys.clone();
-        let transport = provider.transport();
+        let transport = provider.transport(stores.codex_auth.clone());
         let driver = Tokio::spawn(cx, async move {
             // Keychain access + the provider stream run on the background
             // driver thread, never the GPUI foreground.
@@ -441,7 +451,6 @@ impl AssistantPanel {
         self._driver = None;
         self._watcher = None;
         self.bridge.cancel_all();
-        self.bridge.reset_session();
         self.state.stop_turn();
         self.message_scroll.scroll_to_bottom();
         cx.notify();

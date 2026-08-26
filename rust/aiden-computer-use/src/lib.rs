@@ -22,6 +22,9 @@
 //!   (initialize → tools/list → start_session → tool calls), including the
 //!   local request-too-large loop, per-call timeouts, and the
 //!   broken/closed lifecycle.
+//! - [`schema`] / [`tool`] / [`controller`] — the strict consolidated
+//!   model-facing tool, generation-owned lazy controller, exact-target
+//!   one-shot approvals, screenshot validation, and sanitized result shaping.
 //! - [`host`] (macOS) — `CuaDriverHost`: spawns the broker (via `open` or a
 //!   direct invocation), spawns the bridge with Node-compatible fd 3
 //!   (socketpair) / fd 4 (readiness pipe), reads the exact
@@ -31,6 +34,8 @@
 //!   helper used for the bridge and test brokers.
 //! - [`binary`] (macOS) — installation path resolution, the pinned driver
 //!   sha-256, and code-signing verification.
+//! - [`runtime`] (macOS) — fresh production helper resolution plus the lazy
+//!   controller and probe-owned status adapters.
 //! - [`safety`] / [`generation_gate`] / [`settings_core`] / [`status_core`] —
 //!   the pure policy logic: action normalization and approval summaries, the
 //!   per-generation grant ledger, gating decisions, the durable settings
@@ -52,6 +57,7 @@
 #[cfg(target_os = "macos")]
 pub mod binary;
 pub mod contract;
+pub mod controller;
 #[cfg(unix)]
 pub mod foundation_models;
 pub mod generation_gate;
@@ -61,12 +67,16 @@ pub mod jsonrpc;
 pub mod lines;
 #[cfg(unix)]
 pub mod process;
+#[cfg(target_os = "macos")]
+pub mod runtime;
 pub mod safety;
+pub mod schema;
 pub mod session;
 pub mod settings_core;
 #[cfg(unix)]
 pub mod socket;
 pub mod status_core;
+pub mod tool;
 
 pub use aiden_core::chat_title::{
     FoundationModelsConnectionState, FoundationModelsConnectionStatus,
@@ -78,6 +88,12 @@ pub use contract::{
     CUA_DRIVER_BROKER_BUNDLE_ID, CUA_DRIVER_BROKER_EXECUTABLE, CUA_DRIVER_CAPABILITY_VERSION,
     CUA_DRIVER_HOST_BUNDLE_ID, CUA_DRIVER_REQUIRED_TOOLS, CUA_DRIVER_TCC_HOST_BUNDLE_ID,
     CUA_DRIVER_TOOL_SCHEMA, CUA_DRIVER_VERSION,
+};
+pub use controller::{
+    ComputerUseApprovalDescriptor, ComputerUseContentBlock, ComputerUseController,
+    ComputerUseControllerError, ComputerUseControllerHost, ComputerUseControllerHostFactory,
+    ComputerUseControllerSession, ComputerUseControllerState, ComputerUseEscalation,
+    ComputerUseResult, ComputerUseResultDetails, ComputerUseTargetDetails,
 };
 #[cfg(unix)]
 pub use foundation_models::{
@@ -96,19 +112,22 @@ pub use jsonrpc::{
     process_client_message, process_driver_message, ClientMessage, JsonRpcErrorObject, JsonRpcId,
     JsonRpcMessage, MAX_CLIENT_MESSAGE_BYTES, MAX_DRIVER_MESSAGE_BYTES,
 };
+#[cfg(target_os = "macos")]
+pub use runtime::{ComputerUseRuntime, ComputerUseRuntimeConfig, ComputerUseRuntimeLayout};
 pub use safety::{
     computer_use_needs_approval, normalize_computer_use_args, parse_computer_use_key_chord,
     summarize_computer_use_approval, summarize_typed_approval_payload, ComputerUseBoundTarget,
     ComputerUseGrantConsumed, ComputerUseGrantLedger, ComputerUseGrantPrepared,
     ComputerUseSafetyError, ParsedKeyChord, COMPUTER_USE_READ_ONLY_ACTIONS,
 };
+pub use schema::{computer_use_parameters_schema, COMPUTER_USE_ACTIONS, COMPUTER_USE_MODIFIERS};
 pub use session::{
     CuaDriverCallOptions, CuaDriverSession, SessionTransport, SessionTransportConfig,
     CUA_DRIVER_MAX_CLIENT_MESSAGE_BYTES, CUA_DRIVER_MAX_SERVER_MESSAGE_BYTES,
 };
 pub use settings_core::{
     computer_use_settings_dependencies_from_store, ComputerUseSettingsCoordinator,
-    ComputerUseSettingsDependencies, ComputerUseSettingsError,
+    ComputerUseSettingsDependencies, ComputerUseSettingsError, SettingsReadResult,
 };
 #[cfg(unix)]
 pub use socket::{
@@ -119,4 +138,9 @@ pub use socket::{
 pub use status_core::{
     ComputerUseStatus, ComputerUseStatusDependencies, ComputerUseStatusService,
     ComputerUseStatusState, REQUIRED_HEALTH_CHECKS,
+};
+pub use tool::{
+    computer_use_tool_definition, create_computer_use_agent_tool, ComputerUseAgentTool,
+    ComputerUseExecutionMode, ComputerUseToolDefinition, COMPUTER_USE_TOOL_DESCRIPTION,
+    COMPUTER_USE_TOOL_LABEL, COMPUTER_USE_TOOL_NAME,
 };

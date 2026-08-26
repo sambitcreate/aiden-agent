@@ -114,6 +114,22 @@ fn sanitize_stream(value: &str) -> String {
     crate::safe_text::sanitize_subagent_text(value)
 }
 
+fn floor_char_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn ceil_char_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index < value.len() && !value.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
 fn bounded_stream(label: &str, value: &str) -> String {
     let safe = sanitize_stream(value);
     let allowance = (SUBAGENT_SHELL_MODEL_RESULT_CHARS - 512) / 2;
@@ -124,10 +140,12 @@ fn bounded_stream(label: &str, value: &str) -> String {
         );
     }
     let half = (allowance - 80) / 2;
+    let head_end = floor_char_boundary(&safe, half);
+    let tail_start = ceil_char_boundary(&safe, safe.len() - half);
     format!(
         "{label}:\n{}\n… output truncated …\n{}",
-        &safe[..half],
-        &safe[safe.len() - half..]
+        &safe[..head_end],
+        &safe[tail_start..]
     )
 }
 
@@ -559,5 +577,24 @@ mod tests {
         assert!(text.contains("Shell outcome: exited"));
         assert!(text.contains("Untrusted stdout"));
         assert!(text.len() <= SUBAGENT_SHELL_MODEL_RESULT_CHARS);
+    }
+
+    #[test]
+    fn model_result_truncates_multibyte_streams_on_character_boundaries() {
+        let result = SubagentShellResult {
+            outcome: crate::shell_runner::SubagentShellOutcome::Exited,
+            exit_code: Some(0),
+            signal: None,
+            cleanup_confirmed: true,
+            stdout: format!("a{}z", "🦀".repeat(3_000)),
+            stderr: String::new(),
+        };
+
+        let text = shell_model_result(&result);
+
+        assert!(text.len() <= SUBAGENT_SHELL_MODEL_RESULT_CHARS);
+        assert!(text.contains("… output truncated …"));
+        assert!(text.contains("Untrusted stdout:\na"));
+        assert!(text.contains("z\n\nUntrusted stderr:"));
     }
 }

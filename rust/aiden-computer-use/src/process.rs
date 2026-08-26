@@ -38,6 +38,17 @@ pub struct BoundedProcessResult {
     pub stderr: String,
 }
 
+/// Replace the inherited process environment with the caller's explicit
+/// allowlist. Calling `envs` alone only overrides matching keys and otherwise
+/// inherits every provider token, proxy credential, and loader hook owned by
+/// the Aiden process.
+pub(crate) fn apply_allowlisted_environment(
+    command: &mut tokio::process::Command,
+    environment: &HashMap<String, String>,
+) {
+    command.env_clear().envs(environment);
+}
+
 /// Wait until the child is reaped or the timeout elapses.
 async fn wait_for_child_reaped(child: &mut Child, timeout_ms: u64) -> bool {
     tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait())
@@ -131,10 +142,10 @@ pub async fn run_command(
     command
         .args(invocation.prefix_args.iter())
         .args(args)
-        .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    apply_allowlisted_environment(&mut command, env);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -250,4 +261,82 @@ where
         }
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CHILD_MARKER: &str = "AIDEN_CUA_ENV_CLEAR_CHILD";
+    const FORBIDDEN_PARENT_KEYS: &[&str] = &[
+        "OPENAI_API_KEY",
+        "CODEX_OAUTH_TOKEN",
+        "HTTPS_PROXY",
+        "DYLD_LIBRARY_PATH",
+        "NODE_OPTIONS",
+    ];
+
+    #[tokio::test]
+    async fn spawned_commands_receive_only_the_explicit_allowlist() {
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let current_executable = std::env::current_exe().expect("current test executable");
+            let mut child = std::process::Command::new(current_executable);
+            child
+                .arg("--exact")
+                .arg("process::tests::spawned_commands_receive_only_the_explicit_allowlist")
+                .arg("--nocapture")
+                .env_clear()
+                .env(CHILD_MARKER, "1");
+            for key in FORBIDDEN_PARENT_KEYS {
+                child.env(key, format!("parent-secret-{key}"));
+            }
+            let output = child.output().expect("nested test process starts");
+            assert!(
+                output.status.success(),
+                "nested environment test failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let environment = HashMap::from([
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("HOME".to_string(), "/safe/aiden-home".to_string()),
+            ("LANG".to_string(), "en_US.UTF-8".to_string()),
+            (
+                "CUA_DRIVER_HOST_BUNDLE_ID".to_string(),
+                "com.aiden.safe-host".to_string(),
+            ),
+        ]);
+        let result = run_command(
+            &CuaDriverCommandInvocation::new("/usr/bin/env"),
+            &[],
+            &environment,
+            None,
+            2_000,
+        )
+        .await
+        .expect("environment probe succeeds");
+        let child_environment: HashMap<&str, &str> = result
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .collect();
+
+        assert_eq!(child_environment.get("PATH"), Some(&"/usr/bin:/bin"));
+        assert_eq!(child_environment.get("HOME"), Some(&"/safe/aiden-home"));
+        assert_eq!(child_environment.get("LANG"), Some(&"en_US.UTF-8"));
+        assert_eq!(
+            child_environment.get("CUA_DRIVER_HOST_BUNDLE_ID"),
+            Some(&"com.aiden.safe-host")
+        );
+        assert!(!child_environment.contains_key(CHILD_MARKER));
+        for key in FORBIDDEN_PARENT_KEYS {
+            assert!(
+                !child_environment.contains_key(key),
+                "parent-only {key} reached the helper"
+            );
+        }
+    }
 }

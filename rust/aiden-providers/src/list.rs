@@ -55,6 +55,39 @@ pub struct CodexProviderSnapshot {
     pub models: Vec<CodexModelSummary>,
 }
 
+/// Offline snapshot of the Codex models bundled with this Aiden build. The
+/// configured/attention bits come from the credential backend; reading the
+/// picker catalog must never contact OpenAI.
+pub fn bundled_codex_provider_snapshot(
+    configured: bool,
+    needs_attention: bool,
+) -> CodexProviderSnapshot {
+    CodexProviderSnapshot {
+        id: OPENAI_CODEX_PROVIDER_ID.to_string(),
+        name: "OpenAI Codex".to_string(),
+        auth_name: "OpenAI (ChatGPT Plus/Pro)".to_string(),
+        configured,
+        needs_attention,
+        models: crate::builtin::builtin_models(OPENAI_CODEX_PROVIDER_ID)
+            .iter()
+            .map(|model| CodexModelSummary {
+                id: model.id.to_string(),
+                name: model.name.to_string(),
+                api: "openai-codex-responses".to_string(),
+                reasoning: model.reasoning,
+                vision: model.vision,
+                context_window: u64::from(model.context_window),
+                max_tokens: u64::from(model.max_tokens),
+                thinking_levels: model
+                    .thinking_level_map
+                    .iter()
+                    .map(|(level, _)| (*level).to_string())
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 /// The model-metadata shape embedded in a picker entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -134,6 +134,7 @@ impl StreamReducer {
                 self.final_message = Some(message);
             }
             AssistantMessageEvent::Error { error, .. } => {
+                self.usage = error.usage;
                 self.failure = Some(StreamFailure {
                     message: error
                         .error_message
@@ -525,15 +526,20 @@ mod tests {
     }
 
     #[test]
-    fn error_terminal_keeps_zero_usage_until_a_done_arrives() {
+    fn error_terminal_keeps_reported_usage() {
         let mut reducer = StreamReducer::new();
         let mut failing = partial("partial", "");
         failing.error_message = Some("boom".into());
+        failing.usage.input = 8;
+        failing.usage.output = 3;
+        failing.usage.total_tokens = 11;
         reducer.apply(AssistantMessageEvent::Error {
             reason: StopReason::Error,
             error: failing,
         });
-        assert_eq!(reducer.usage.total_tokens, 0);
+        assert_eq!(reducer.usage.input, 8);
+        assert_eq!(reducer.usage.output, 3);
+        assert_eq!(reducer.usage.total_tokens, 11);
         assert!(reducer.tool_calls.is_empty());
     }
 

@@ -74,6 +74,7 @@ use gpui::{px, size, App, AppContext as _, Bounds, KeyBinding, WindowBounds, Win
 use gpui_component::{Root, TitleBar};
 
 use app::AppState;
+use services::codex_auth::{CodexAuthService, GlobalCodexAuthService};
 use services::stores::Stores;
 
 fn main() {
@@ -159,6 +160,18 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            // Process-owned OAuth host: construction is offline and receives
+            // the exact same encrypted credential authority as request-time
+            // Codex dispatch. It remains invisible until the Settings and
+            // onboarding surfaces are wired in the next phase.
+            let codex_auth =
+                cx.new(|cx| CodexAuthService::production(stores.codex_auth.clone(), cx));
+            cx.set_global(GlobalCodexAuthService(codex_auth.clone()));
+            let codex_auth_for_quit = codex_auth.clone();
+            cx.on_app_quit(move |cx| {
+                codex_auth_for_quit.update(cx, |service, cx| service.shutdown_task(cx))
+            })
+            .detach();
 
             // First run: the onboarding flow owns the app until it completes;
             // its completion callback closes the onboarding window and opens

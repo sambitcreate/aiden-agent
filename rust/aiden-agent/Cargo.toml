@@ -20,6 +20,7 @@ async-trait = "0.1"
 # RE2-style linear-time regular expressions, replacing re2-wasm (subagent
 # grep/glob) and standing in for the JS RegExp used by the parent tools.
 regex = "1"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true

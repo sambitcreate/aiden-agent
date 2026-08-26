@@ -23,6 +23,7 @@ pub mod app_update;
 pub mod appearance;
 pub mod appearance_preview;
 pub mod assistant;
+pub mod attachments;
 pub mod chat_store_core;
 pub mod chat_title;
 pub mod chat_workspace;
@@ -64,6 +65,13 @@ pub use assistant::{
     is_assistant_automation_approval_details, is_subagent_mcp_mutation_approval_details,
     is_subagent_shell_approval_details, is_subagent_workspace_write_approval_details,
     SUBAGENT_MCP_MUTATION_DISPLAY_ESCAPED_CHARS, SUBAGENT_MCP_MUTATION_DISPLAY_INPUT_BYTES,
+};
+pub use attachments::{
+    validate_attachments, validate_message_attachments, AttachmentValidationError,
+    MAX_ATTACHMENTS_AGGREGATE_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_ID_UTF16_UNITS,
+    MAX_ATTACHMENT_NAME_UTF16_UNITS, MAX_IMAGE_BASE64_CHARS, MAX_IMAGE_BYTES,
+    MAX_LEGACY_TEXT_UTF16_UNITS, MAX_MIME_TYPE_UTF16_UNITS, MAX_TEXT_UTF16_UNITS,
+    TEXT_TRUNCATION_SUFFIX, TEXT_TRUNCATION_SUFFIX_UTF16_UNITS,
 };
 pub use chat_store_core::{
     chat_transaction_id, is_chat_delete_staging, is_chat_write_staging, is_index_write_staging,

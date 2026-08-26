@@ -1339,7 +1339,7 @@ impl OpenAICompletionsProvider {
         }
     }
 
-    fn build_request(
+    pub(crate) fn build_request(
         &self,
         request: &StreamRequest,
         options: &StreamOptions,
@@ -1379,8 +1379,10 @@ impl OpenAICompletionsProvider {
         }
         let mut builder = reqwest::Client::new()
             .post(url)
-            .header("content-type", "application/json")
-            .header("Authorization", format!("Bearer {api_key}"));
+            .header("content-type", "application/json");
+        if api_key != crate::catalog::PI_AUTH_COMPATIBILITY_TOKEN {
+            builder = builder.header("Authorization", format!("Bearer {api_key}"));
+        }
         for (name, value) in headers {
             builder = builder.header(name, value);
         }
@@ -1611,6 +1613,7 @@ mod tests {
             base_url: "http://127.0.0.1:1234/v1".to_string(),
             reasoning: true,
             thinking_level_map: None,
+            force_adaptive_thinking: false,
             vision: true,
             context_window: 128_000,
             max_tokens_limit: 8192,

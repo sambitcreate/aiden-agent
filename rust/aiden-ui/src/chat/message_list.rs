@@ -2,10 +2,13 @@
 //! `TextView`), collapsible thinking blocks, the streaming assistant bubble,
 //! and the terminal error banner with retry.
 
-use aiden_core::{ChatMessage, ChatRole};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
+
+use aiden_core::{Attachment, AttachmentKind, ChatMessage, ChatRole};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use gpui::{
-    div, prelude::FluentBuilder as _, px, relative, App, Context, ElementId, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    div, img, prelude::FluentBuilder as _, px, relative, App, Context, ElementId, FontWeight,
+    Image, ImageFormat, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{
@@ -13,7 +16,7 @@ use gpui_component::{
     h_flex,
     spinner::Spinner,
     text::TextView,
-    v_flex, ActiveTheme, Icon, IconName, Sizable as _,
+    v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
 };
 
 use crate::app::AppState;
@@ -32,6 +35,7 @@ impl AppState {
         let snapshot = self.service.read(cx).snapshot();
         let scroll = self.message_scroll.clone();
         let show_stream = should_show_stream_bubble(&snapshot);
+        let stream_content_persisted = stream_content_already_persisted(&snapshot);
         let generation = snapshot.generation.clone();
 
         v_flex()
@@ -43,13 +47,18 @@ impl AppState {
             .px_4()
             .py_3()
             .gap_2()
-            .children(
-                snapshot.messages.iter().map(|message| {
-                    render_persisted_message(message, window, cx).into_any_element()
-                }),
-            )
+            .children(snapshot.messages.iter().map(|message| {
+                render_persisted_message(message, &self.attachment_image_cache, window, cx)
+                    .into_any_element()
+            }))
             .when(show_stream, |el| {
-                el.child(render_stream_bubble(&generation, window, cx))
+                el.child(render_stream_bubble(
+                    &generation,
+                    stream_content_persisted,
+                    snapshot.assistant_persisting,
+                    window,
+                    cx,
+                ))
             })
     }
 
@@ -68,15 +77,25 @@ fn should_show_stream_bubble(snapshot: &ChatSnapshot) -> bool {
     let Some(generation) = &snapshot.generation else {
         return false;
     };
+    // A terminal failure owns the retry affordance even when its partial
+    // content/timeline was durably appended to the transcript.
+    if generation.error.is_some() {
+        return true;
+    }
     if generation.complete {
-        // Hidden once the persisted assistant message landed in the transcript.
-        let already_persisted = snapshot.messages.last().is_some_and(|message| {
-            message.role == ChatRole::Assistant && message.content == generation.text
-        });
-        !already_persisted
+        !stream_content_already_persisted(snapshot)
     } else {
         true
     }
+}
+
+fn stream_content_already_persisted(snapshot: &ChatSnapshot) -> bool {
+    let Some(generation) = &snapshot.generation else {
+        return false;
+    };
+    snapshot.messages.last().is_some_and(|message| {
+        message.role == ChatRole::Assistant && message.content == generation.text
+    })
 }
 
 // ===========================================================================
@@ -85,17 +104,22 @@ fn should_show_stream_bubble(snapshot: &ChatSnapshot) -> bool {
 
 fn render_persisted_message(
     message: &ChatMessage,
+    image_cache: &RefCell<HashMap<String, Arc<Image>>>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
     match message.role {
-        ChatRole::User => render_user_bubble(message, cx).into_any_element(),
+        ChatRole::User => render_user_bubble(message, image_cache, cx).into_any_element(),
         ChatRole::Assistant => render_assistant_message(message, window, cx).into_any_element(),
         ChatRole::System => div().into_any_element(),
     }
 }
 
-fn render_user_bubble(message: &ChatMessage, cx: &mut App) -> impl IntoElement {
+fn render_user_bubble(
+    message: &ChatMessage,
+    image_cache: &RefCell<HashMap<String, Arc<Image>>>,
+    cx: &mut App,
+) -> impl IntoElement {
     let muted = cx.theme().muted;
     h_flex()
         .id(ElementId::Name(SharedString::from(format!(
@@ -105,14 +129,103 @@ fn render_user_bubble(message: &ChatMessage, cx: &mut App) -> impl IntoElement {
         .w_full()
         .justify_end()
         .child(
-            div()
+            v_flex()
                 .max_w(relative(0.8))
-                .rounded_2xl()
-                .bg(muted)
-                .px_4()
-                .py_2()
-                .child(prewrap(&message.content)),
+                .items_end()
+                .gap_1()
+                .children(
+                    message
+                        .attachments
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .enumerate()
+                        .map(|(index, attachment)| {
+                            render_attachment(
+                                attachment,
+                                format!("{}:{index}:{}", message.id, attachment.id),
+                                image_cache,
+                                cx,
+                            )
+                        }),
+                )
+                .when(!message.content.is_empty(), |column| {
+                    column.child(
+                        div()
+                            .rounded_2xl()
+                            .bg(muted)
+                            .px_4()
+                            .py_2()
+                            .child(prewrap(&message.content)),
+                    )
+                }),
         )
+}
+
+fn render_attachment(
+    attachment: &Attachment,
+    cache_key: String,
+    image_cache: &RefCell<HashMap<String, Arc<Image>>>,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    if attachment.kind == AttachmentKind::Image {
+        let image = cached_attachment_image(attachment, cache_key, image_cache);
+        if let Some(image) = image {
+            return v_flex()
+                .gap_0p5()
+                .items_end()
+                .child(
+                    div()
+                        .max_w(px(420.))
+                        .rounded_lg()
+                        .overflow_hidden()
+                        .child(img(image).max_h(px(160.)).max_w_full()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(attachment.name.clone()),
+                )
+                .into_any_element();
+        }
+    }
+
+    h_flex()
+        .max_w(px(320.))
+        .items_center()
+        .gap_1()
+        .rounded_lg()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary)
+        .px_2()
+        .py_1()
+        .child(
+            Icon::new(IconName::File)
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
+        )
+        .child(div().text_xs().truncate().child(attachment.name.clone()))
+        .into_any_element()
+}
+
+pub(crate) fn cached_attachment_image(
+    attachment: &Attachment,
+    cache_key: String,
+    image_cache: &RefCell<HashMap<String, Arc<Image>>>,
+) -> Option<Arc<Image>> {
+    image_cache.borrow().get(&cache_key).cloned().or_else(|| {
+        let format = ImageFormat::from_mime_type(&attachment.mime_type)?;
+        let bytes = STANDARD.decode(attachment.data.as_deref()?).ok()?;
+        let image = Arc::new(Image::from_bytes(format, bytes));
+        let mut cache = image_cache.borrow_mut();
+        if cache.len() >= 64 {
+            cache.clear();
+        }
+        cache.insert(cache_key, image.clone());
+        Some(image)
+    })
 }
 
 fn render_assistant_message(
@@ -181,6 +294,8 @@ fn render_assistant_message(
 
 fn render_stream_bubble(
     generation: &Option<GenerationState>,
+    content_already_persisted: bool,
+    retry_disabled: bool,
     window: &mut Window,
     cx: &mut Context<AppState>,
 ) -> impl IntoElement {
@@ -217,42 +332,54 @@ fn render_stream_bubble(
         .when_some(
             live_timeline
                 .as_ref()
-                .filter(|timeline| !timeline.steps.is_empty()),
+                .filter(|timeline| !content_already_persisted && !timeline.steps.is_empty()),
             |el, timeline| el.child(timeline_feed(timeline, true, cx)),
         )
-        .when(thinking_active || !thinking_text.trim().is_empty(), |el| {
-            el.child(
-                v_flex()
-                    .w_full()
-                    .gap_1()
-                    .child(
-                        thinking_header("stream-thinking-header", true, Some(thinking_active), cx)
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.toggle_stream_thinking(cx);
-                            })),
-                    )
-                    .when(expanded, |el| {
-                        el.child(
-                            div()
-                                .w_full()
-                                .px_3()
-                                .py_2()
-                                .rounded_md()
-                                .bg(muted)
-                                .child(prewrap(&thinking_text)),
+        .when(
+            !content_already_persisted && (thinking_active || !thinking_text.trim().is_empty()),
+            |el| {
+                el.child(
+                    v_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(
+                            thinking_header(
+                                "stream-thinking-header",
+                                true,
+                                Some(thinking_active),
+                                cx,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.toggle_stream_thinking(cx);
+                                },
+                            )),
                         )
-                    }),
+                        .when(expanded, |el| {
+                            el.child(
+                                div()
+                                    .w_full()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(muted)
+                                    .child(prewrap(&thinking_text)),
+                            )
+                        }),
+                )
+            },
+        )
+        .when(!content_already_persisted, |el| {
+            el.child(
+                TextView::markdown(
+                    ElementId::Name(SharedString::from("stream-markdown")),
+                    text,
+                    window,
+                    cx,
+                )
+                .style(Default::default()),
             )
         })
-        .child(
-            TextView::markdown(
-                ElementId::Name(SharedString::from("stream-markdown")),
-                text,
-                window,
-                cx,
-            )
-            .style(Default::default()),
-        )
         .when_some(error, |el, message| {
             el.child(
                 h_flex()
@@ -281,6 +408,7 @@ fn render_stream_bubble(
                             .small()
                             .ghost()
                             .label("Retry")
+                            .disabled(retry_disabled)
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.service
                                     .update(cx, |service, cx| service.retry_last(cx));
@@ -364,7 +492,7 @@ mod tests {
             subagents: None,
         };
         let mut snapshot = ChatSnapshot {
-            messages: vec![persisted],
+            messages: Arc::new(vec![persisted]),
             generation: Some(GenerationState {
                 chat_id: "c".into(),
                 counter: 1,
@@ -375,14 +503,24 @@ mod tests {
                 complete: true,
                 error: None,
                 model: None,
+                provider_id: "provider".into(),
+                provider_label: "Provider".into(),
+                provider_is_local: false,
+                cancellation: aiden_agent::ToolCancellation::new(),
                 timeline: None,
             }),
             ..Default::default()
         };
         assert!(!should_show_stream_bubble(&snapshot));
 
+        // A persisted partial must not hide the terminal error/retry surface.
+        snapshot.generation.as_mut().unwrap().error = Some("network failed".into());
+        assert!(should_show_stream_bubble(&snapshot));
+        assert!(stream_content_already_persisted(&snapshot));
+        snapshot.generation.as_mut().unwrap().error = None;
+
         // Different text than the persisted message → still show it.
-        snapshot.messages[0].content = "older".into();
+        Arc::make_mut(&mut snapshot.messages)[0].content = "older".into();
         assert!(should_show_stream_bubble(&snapshot));
 
         // In-flight generations always show.

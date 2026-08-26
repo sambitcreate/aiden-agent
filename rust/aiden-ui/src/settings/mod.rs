@@ -8,12 +8,13 @@
 //! (cron humanize, shortcut capture encoding, env-line parsing) lives in each
 //! section module with unit tests.
 //!
-//! Section state lives in per-section modules (`providers`, `appearance`,
+//! Section state lives in per-section modules (`providers`, `skills`, `appearance`,
 //! `shortcuts`, `mcp`, `scheduled`, `about`), each implementing render helpers
 //! on `SettingsView`, so this file stays a thin shell + router.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use aiden_data::config_store::ConfigStore;
 use aiden_data::schedule_store::{DataStorePersistence, ScheduleStore};
@@ -28,15 +29,20 @@ use gpui_component::{h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _};
 
 mod about;
 mod appearance;
+mod codex_auth;
 mod mcp;
 mod providers;
 mod scheduled;
 mod shortcuts;
+mod skills;
+mod web_search;
 
 /// The left-nav sections, in display order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     Providers,
+    Skills,
+    WebSearch,
     Appearance,
     Shortcuts,
     Mcp,
@@ -47,16 +53,20 @@ pub enum SettingsSection {
 impl SettingsSection {
     pub const ALL: &'static [SettingsSection] = &[
         SettingsSection::Providers,
-        SettingsSection::Appearance,
-        SettingsSection::Shortcuts,
+        SettingsSection::Skills,
+        SettingsSection::WebSearch,
         SettingsSection::Mcp,
         SettingsSection::ScheduledTasks,
+        SettingsSection::Shortcuts,
+        SettingsSection::Appearance,
         SettingsSection::About,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             SettingsSection::Providers => "Providers",
+            SettingsSection::Skills => "Skills",
+            SettingsSection::WebSearch => "Web Search",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Shortcuts => "Keyboard shortcuts",
             SettingsSection::Mcp => "MCP servers",
@@ -68,6 +78,8 @@ impl SettingsSection {
     pub fn icon(self) -> IconName {
         match self {
             SettingsSection::Providers => IconName::Globe,
+            SettingsSection::Skills => IconName::Bot,
+            SettingsSection::WebSearch => IconName::Globe,
             SettingsSection::Appearance => IconName::Palette,
             SettingsSection::Shortcuts => IconName::Check,
             SettingsSection::Mcp => IconName::SquareTerminal,
@@ -75,6 +87,13 @@ impl SettingsSection {
             SettingsSection::About => IconName::Info,
         }
     }
+}
+
+fn should_hide_codex_auth_for_section_change(
+    from: SettingsSection,
+    to: SettingsSection,
+) -> bool {
+    from == SettingsSection::Providers && to != SettingsSection::Providers
 }
 
 /// Everything the settings surface needs from the data layer. The orchestrator
@@ -86,6 +105,9 @@ pub struct SettingsServices {
     pub keys: Arc<ProviderKeysStore>,
     pub schedules: Arc<ScheduleStore<DataStorePersistence, DataStorePersistence>>,
     pub mcp: Arc<McpClientManager>,
+    /// Coordinates Web Search config/key reads with mutations. This lock is
+    /// only acquired from background tasks.
+    pub web_search_state: Arc<Mutex<()>>,
     /// The portable config directory (`~/.aiden`), for the About section.
     pub config_dir: PathBuf,
 }
@@ -102,9 +124,43 @@ impl SettingsServices {
             keys: stores.keys.clone(),
             schedules: stores.schedules.clone(),
             mcp: Arc::new(McpClientManager::new()),
+            web_search_state: stores.web_search_state.clone(),
             config_dir,
         }
     }
+}
+
+/// Read the portable enable bit and machine-local credential as one
+/// application-level capability snapshot. A copied config can contain an
+/// enabled bit without its device key; repair that state fail-closed so adding
+/// a key later still requires an explicit enable action.
+fn reconcile_web_search_state(
+    services: &SettingsServices,
+    settings: &mut serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    let _guard = services
+        .web_search_state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *settings = services.config.get_settings().unwrap_or_default();
+    let has_key = services
+        .keys
+        .get(aiden_providers::web_search::EXA_KEY_ID)
+        .ok()
+        .flatten()
+        .is_some();
+    let enabled = settings
+        .get("exaEnabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if enabled && !has_key {
+        let mut patch = serde_json::Map::new();
+        patch.insert("exaEnabled".to_string(), serde_json::Value::Bool(false));
+        if services.config.set_settings(&patch, &|| true).is_ok() {
+            settings.insert("exaEnabled".to_string(), serde_json::Value::Bool(false));
+        }
+    }
+    has_key
 }
 
 /// The settings window entity: left nav + active section content.
@@ -112,10 +168,14 @@ pub struct SettingsView {
     services: SettingsServices,
     active: SettingsSection,
     booted: bool,
+    refresh_generation: u64,
     pub(crate) error: Option<String>,
     _subscriptions: Vec<gpui::Subscription>,
 
     pub(crate) providers: providers::ProvidersState,
+    pub(crate) codex_auth: codex_auth::CodexAuthSettingsState,
+    pub(crate) skills: skills::SkillsState,
+    pub(crate) web_search: web_search::WebSearchState,
     pub(crate) appearance: appearance::AppearanceState,
     pub(crate) shortcuts: shortcuts::ShortcutsState,
     pub(crate) mcp: mcp::McpState,
@@ -128,14 +188,29 @@ impl SettingsView {
             services,
             active: SettingsSection::Providers,
             booted: false,
+            refresh_generation: 0,
             error: None,
             _subscriptions: Vec::new(),
             providers: providers::ProvidersState::default(),
+            codex_auth: codex_auth::CodexAuthSettingsState::default(),
+            skills: skills::SkillsState::default(),
+            web_search: web_search::WebSearchState::default(),
             appearance: appearance::AppearanceState::default(),
             shortcuts: shortcuts::ShortcutsState::default(),
             mcp: mcp::McpState::default(),
             scheduled: scheduled::ScheduledState::default(),
         };
+        let codex_service = cx
+            .global::<crate::services::codex_auth::GlobalCodexAuthService>()
+            .0
+            .clone();
+        this.codex_auth.initialize(cx);
+        this.codex_auth.sync(codex_service.read(cx).ui_snapshot());
+        this._subscriptions
+            .push(cx.observe(&codex_service, |this, service, cx| {
+                this.sync_codex_auth(service.read(cx).ui_snapshot(), cx);
+            }));
+        codex_service.update(cx, |service, cx| service.refresh_status(cx));
         this.boot(cx);
         this
     }
@@ -146,11 +221,14 @@ impl SettingsView {
             return;
         }
         self.booted = true;
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        let refresh_generation = self.refresh_generation;
+        let web_search_revision = self.web_search.revision();
         let services = self.services.clone();
         cx.spawn(async move |this, cx| {
             let snapshot = cx
                 .background_spawn(async move {
-                    let providers = services
+                    let mut providers = services
                         .config
                         .list_providers()
                         .map(|list| {
@@ -159,7 +237,10 @@ impl SettingsView {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    let settings = services.config.get_settings().unwrap_or_default();
+                    providers.retain(|provider| {
+                        provider.id != aiden_providers::codex::OPENAI_CODEX_PROVIDER_ID
+                    });
+                    let mut settings = services.config.get_settings().unwrap_or_default();
                     let schedules = services
                         .schedules
                         .list()
@@ -185,16 +266,38 @@ impl SettingsView {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    (providers, settings, schedules, mcp_servers, workspaces)
+                    let skills = services.config.list_skills().unwrap_or_default();
+                    let exa_has_key = reconcile_web_search_state(&services, &mut settings);
+                    (
+                        providers,
+                        settings,
+                        schedules,
+                        mcp_servers,
+                        workspaces,
+                        skills,
+                        exa_has_key,
+                    )
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let (providers, settings, schedules, mcp_servers, workspaces) = snapshot;
+                if this.refresh_generation != refresh_generation {
+                    return;
+                }
+                let (providers, settings, schedules, mcp_servers, workspaces, skills, exa_has_key) =
+                    snapshot;
+                let exa_enabled = settings
+                    .get("exaEnabled")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
                 this.providers.providers = providers;
                 this.providers.settings = settings;
                 this.scheduled.schedules = schedules;
                 this.scheduled.workspaces = workspaces;
                 this.mcp.servers = mcp_servers;
+                this.skills.items = skills;
+                this.web_search
+                    .hydrate(exa_enabled, exa_has_key, web_search_revision);
+                this.skills.finish_reload();
                 let settings = this.providers.settings.clone();
                 this.appearance.hydrate(&settings, cx);
                 this.shortcuts.hydrate(&this.providers.settings);
@@ -208,18 +311,32 @@ impl SettingsView {
     /// Route the settings surface to a section (the shell calls this when the
     /// palette or the sidebar gear opens settings).
     pub(crate) fn select_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        if should_hide_codex_auth_for_section_change(self.active, section) {
+            self.hide_codex_auth(cx);
+        }
         self.active = section;
         self.error = None;
+        if section == SettingsSection::Skills && self.skills.begin_reload() {
+            self.refresh(cx);
+            self.refresh_discovered_skills(cx);
+        } else if section == SettingsSection::WebSearch {
+            self.refresh(cx);
+        } else if section == SettingsSection::Providers {
+            self.refresh_codex_auth(cx);
+        }
         cx.notify();
     }
     /// Refresh the provider + settings snapshots after a mutation (all section
     /// mutations run on the background and then call this).
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        let refresh_generation = self.refresh_generation;
+        let web_search_revision = self.web_search.revision();
         let services = self.services.clone();
         cx.spawn(async move |this, cx| {
             let snapshot = cx
                 .background_spawn(async move {
-                    let providers = services
+                    let mut providers = services
                         .config
                         .list_providers()
                         .map(|list| {
@@ -228,7 +345,19 @@ impl SettingsView {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    let settings = services.config.get_settings().unwrap_or_default();
+                    providers.retain(|provider| {
+                        provider.id != aiden_providers::codex::OPENAI_CODEX_PROVIDER_ID
+                    });
+                    let mut settings = services.config.get_settings().unwrap_or_default();
+                    let schedules = services
+                        .schedules
+                        .list()
+                        .map(|list| {
+                            list.iter()
+                                .map(scheduled::ScheduleRow::from)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
                     let mcp_servers = services
                         .config
                         .list_mcp_servers()
@@ -236,14 +365,49 @@ impl SettingsView {
                         .iter()
                         .map(mcp::McpServerRow::from)
                         .collect::<Vec<_>>();
-                    (providers, settings, mcp_servers)
+                    let workspaces = services
+                        .config
+                        .list_workspaces()
+                        .map(|list| {
+                            list.into_iter()
+                                .map(|workspace| (workspace.id, workspace.name))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let skills = services.config.list_skills().unwrap_or_default();
+                    let exa_has_key = reconcile_web_search_state(&services, &mut settings);
+                    (
+                        providers,
+                        settings,
+                        schedules,
+                        mcp_servers,
+                        workspaces,
+                        skills,
+                        exa_has_key,
+                    )
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let (providers, settings, mcp_servers) = snapshot;
+                if this.refresh_generation != refresh_generation {
+                    return;
+                }
+                let (providers, settings, schedules, mcp_servers, workspaces, skills, exa_has_key) =
+                    snapshot;
+                let exa_enabled = settings
+                    .get("exaEnabled")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
                 this.providers.providers = providers;
                 this.providers.settings = settings;
+                this.scheduled.schedules = schedules;
+                this.scheduled.workspaces = workspaces;
                 this.mcp.servers = mcp_servers;
+                this.skills.items = skills;
+                this.web_search
+                    .hydrate(exa_enabled, exa_has_key, web_search_revision);
+                this.skills.finish_reload();
+                let settings = this.providers.settings.clone();
+                this.appearance.hydrate(&settings, cx);
                 this.shortcuts.hydrate(&this.providers.settings);
                 cx.notify();
             })
@@ -274,7 +438,7 @@ impl Render for SettingsView {
 
 impl SettingsView {
     /// Left navigation column.
-    fn sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let active = self.active;
         v_flex()
@@ -306,6 +470,10 @@ impl SettingsView {
                 let section_id = *section;
                 let label = section.label();
                 let icon = section.icon();
+                let focus = window
+                    .use_keyed_state(("settings-nav", label), cx, |_, cx| cx.focus_handle())
+                    .read(cx)
+                    .clone();
                 h_flex()
                     .id(ElementId::Name(SharedString::from(format!(
                         "settings-nav-{}",
@@ -318,6 +486,8 @@ impl SettingsView {
                     .items_center()
                     .rounded_md()
                     .cursor_pointer()
+                    .track_focus(&focus)
+                    .tab_index(0)
                     .bg(bg)
                     .text_color(fg)
                     .hover(move |style| {
@@ -330,6 +500,12 @@ impl SettingsView {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_section(section_id, cx);
                     }))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space" | " ") {
+                            this.select_section(section_id, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
                     .child(Icon::new(icon).small().text_color(fg))
                     .child(div().text_sm().truncate().child(label))
             }))
@@ -339,6 +515,8 @@ impl SettingsView {
     fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let inner = match self.active {
             SettingsSection::Providers => self.providers_section(window, cx).into_any_element(),
+            SettingsSection::Skills => self.skills_section(window, cx).into_any_element(),
+            SettingsSection::WebSearch => self.web_search_section(window, cx).into_any_element(),
             SettingsSection::Appearance => self.appearance_section(window, cx).into_any_element(),
             SettingsSection::Shortcuts => self.shortcuts_section(window, cx).into_any_element(),
             SettingsSection::Mcp => self.mcp_section(window, cx).into_any_element(),
@@ -383,5 +561,21 @@ mod tests {
         for section in SettingsSection::ALL {
             assert!(!section.label().is_empty());
         }
+    }
+
+    #[test]
+    fn leaving_providers_hides_auth_once_but_reselecting_does_not() {
+        assert!(should_hide_codex_auth_for_section_change(
+            SettingsSection::Providers,
+            SettingsSection::Skills
+        ));
+        assert!(!should_hide_codex_auth_for_section_change(
+            SettingsSection::Providers,
+            SettingsSection::Providers
+        ));
+        assert!(!should_hide_codex_auth_for_section_change(
+            SettingsSection::Skills,
+            SettingsSection::About
+        ));
     }
 }

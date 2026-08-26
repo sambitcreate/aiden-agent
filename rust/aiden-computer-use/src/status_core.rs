@@ -3,12 +3,14 @@
 //! readiness probe with one authenticated helper per probe.
 
 use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use serde_json::{Map, Value};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
@@ -350,6 +352,7 @@ enum ProbeKind {
 struct InFlight {
     revision: u64,
     kind: ProbeKind,
+    controller: CancellationToken,
     result: StdMutex<Option<ComputerUseStatus>>,
     completion: Notify,
 }
@@ -359,18 +362,52 @@ struct CachedStatus {
     status: ComputerUseStatus,
 }
 
+#[derive(Default)]
+struct StatusShutdownCompletion {
+    finished: StdMutex<bool>,
+    completion: Notify,
+}
+
+impl StatusShutdownCompletion {
+    async fn wait(&self) {
+        loop {
+            let mut completed = Box::pin(self.completion.notified());
+            completed.as_mut().enable();
+            if *self.finished.lock().unwrap() {
+                return;
+            }
+            completed.await;
+        }
+    }
+
+    fn finish(&self) {
+        *self.finished.lock().unwrap() = true;
+        self.completion.notify_waiters();
+    }
+}
+
+#[derive(Default)]
+struct ProbeAdmissionState {
+    closed: bool,
+    in_flight: Option<Arc<InFlight>>,
+    controllers: HashSet<CancellationToken>,
+    shutdown: Option<Arc<StatusShutdownCompletion>>,
+}
+
 /// Readiness/permission probing with a short cache and one authenticated
 /// helper per probe.
+#[derive(Clone)]
 pub struct ComputerUseStatusService {
-    cached: StdMutex<Option<CachedStatus>>,
-    in_flight: Mutex<Option<Arc<InFlight>>>,
-    probe_controllers: StdMutex<HashSet<CancellationToken>>,
-    revision: AtomicU64,
-    runtime_enabled: StdMutex<Option<bool>>,
-    closed: AtomicBool,
-    shutdown_promise: Mutex<Option<BoxFuture<'static, ()>>>,
+    cached: Arc<StdMutex<Option<CachedStatus>>>,
+    admission: Arc<StdMutex<ProbeAdmissionState>>,
+    revision: Arc<AtomicU64>,
+    runtime_enabled: Arc<StdMutex<Option<bool>>>,
+    closed: Arc<AtomicBool>,
+    signal_forwarders: Arc<AtomicU64>,
     cache_ms: u64,
     dependencies: Arc<dyn ComputerUseStatusDependencies>,
+    #[cfg(test)]
+    worker_start_gate: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
 }
 
 impl ComputerUseStatusService {
@@ -380,33 +417,40 @@ impl ComputerUseStatusService {
 
     pub fn with_cache(dependencies: Arc<dyn ComputerUseStatusDependencies>, cache_ms: u64) -> Self {
         Self {
-            cached: StdMutex::new(None),
-            in_flight: Mutex::new(None),
-            probe_controllers: StdMutex::new(HashSet::new()),
-            revision: AtomicU64::new(0),
-            runtime_enabled: StdMutex::new(None),
-            closed: AtomicBool::new(false),
-            shutdown_promise: Mutex::new(None),
+            cached: Arc::new(StdMutex::new(None)),
+            admission: Arc::new(StdMutex::new(ProbeAdmissionState::default())),
+            revision: Arc::new(AtomicU64::new(0)),
+            runtime_enabled: Arc::new(StdMutex::new(None)),
+            closed: Arc::new(AtomicBool::new(false)),
+            signal_forwarders: Arc::new(AtomicU64::new(0)),
             cache_ms,
             dependencies,
+            #[cfg(test)]
+            worker_start_gate: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
     pub fn invalidate(&self) {
+        let admission = self.admission.lock().unwrap();
         *self.cached.lock().unwrap() = None;
         self.revision.fetch_add(1, Ordering::SeqCst);
-        for controller in self.probe_controllers.lock().unwrap().iter() {
+        for controller in &admission.controllers {
             controller.cancel();
         }
     }
 
     /// Apply the live gate before a persistence transition can yield.
     pub fn set_runtime_enabled(&self, enabled: bool) {
-        if self.closed.load(Ordering::SeqCst) {
+        let admission = self.admission.lock().unwrap();
+        if admission.closed {
             return;
         }
         *self.runtime_enabled.lock().unwrap() = Some(enabled);
-        self.invalidate();
+        *self.cached.lock().unwrap() = None;
+        self.revision.fetch_add(1, Ordering::SeqCst);
+        for controller in &admission.controllers {
+            controller.cancel();
+        }
     }
 
     async fn enabled_at_revision(&self, revision: u64) -> Option<bool> {
@@ -462,40 +506,38 @@ impl ComputerUseStatusService {
                 }
             }
 
-            if let Some(existing) = self.in_flight.lock().await.clone() {
-                let result = self.await_in_flight(&existing, signal).await?;
-                let _ = result;
+            let claim = {
+                let mut admission = self.admission.lock().unwrap();
+                if admission.closed {
+                    None
+                } else if let Some(existing) = admission.in_flight.as_ref() {
+                    Some((Arc::clone(existing), false))
+                } else {
+                    let controller = CancellationToken::new();
+                    let probe = Arc::new(InFlight {
+                        revision,
+                        kind: ProbeKind::Status,
+                        controller: controller.clone(),
+                        result: StdMutex::new(None),
+                        completion: Notify::new(),
+                    });
+                    admission.controllers.insert(controller);
+                    admission.in_flight = Some(Arc::clone(&probe));
+                    Some((probe, true))
+                }
+            };
+            let Some((probe_in_flight, claimed)) = claim else {
+                return Ok(fixed_error_status(&CuaDriverError::new(
+                    "host_closed",
+                    "closed",
+                )));
+            };
+            if claimed {
+                self.spawn_probe_worker(Arc::clone(&probe_in_flight), signal.cloned());
+            }
+            let result = self.await_in_flight(&probe_in_flight, signal).await?;
+            if probe_in_flight.kind != ProbeKind::Status || probe_in_flight.revision != revision {
                 continue;
-            }
-
-            // There is no await between the revision-bound gate check above and
-            // the probe claim, so disabling cannot interleave before the host is
-            // constructed.
-            let probe_in_flight = Arc::new(InFlight {
-                revision,
-                kind: ProbeKind::Status,
-                result: StdMutex::new(None),
-                completion: Notify::new(),
-            });
-            {
-                let mut slot = self.in_flight.lock().await;
-                if slot.is_some() {
-                    continue;
-                }
-                *slot = Some(Arc::clone(&probe_in_flight));
-            }
-            let result = self.probe(false, signal).await;
-            *probe_in_flight.result.lock().unwrap() = Some(result.clone());
-            probe_in_flight.completion.notify_waiters();
-            {
-                let mut slot = self.in_flight.lock().await;
-                if slot
-                    .as_ref()
-                    .map(|value| Arc::ptr_eq(value, &probe_in_flight))
-                    .unwrap_or(false)
-                {
-                    *slot = None;
-                }
             }
             throw_if_cancelled(&signal.cloned())?;
             if revision != self.revision.load(Ordering::SeqCst) {
@@ -523,10 +565,13 @@ impl ComputerUseStatusService {
     ) -> Result<ComputerUseStatus, CuaDriverError> {
         throw_if_cancelled(&signal.cloned())?;
         {
-            let in_flight = self.in_flight.lock().await;
-            if in_flight.as_ref().map(|value| value.kind) != Some(ProbeKind::Permission) {
-                drop(in_flight);
-                self.invalidate();
+            let admission = self.admission.lock().unwrap();
+            if admission.in_flight.as_ref().map(|value| value.kind) != Some(ProbeKind::Permission) {
+                *self.cached.lock().unwrap() = None;
+                self.revision.fetch_add(1, Ordering::SeqCst);
+                for controller in &admission.controllers {
+                    controller.cancel();
+                }
             }
         }
         loop {
@@ -547,50 +592,39 @@ impl ComputerUseStatusService {
                 return Ok(disabled_status());
             }
 
-            if let Some(existing) = self.in_flight.lock().await.clone() {
-                let result = self.await_in_flight(&existing, signal).await?;
-                if existing.kind == ProbeKind::Permission && existing.revision == revision {
-                    if revision != self.revision.load(Ordering::SeqCst) {
-                        continue;
-                    }
-                    let still_enabled = self.enabled_at_revision(revision).await;
-                    throw_if_cancelled(&signal.cloned())?;
-                    let Some(still_enabled) = still_enabled else {
-                        continue;
-                    };
-                    if !still_enabled {
-                        return Ok(disabled_status());
-                    }
-                    return Ok(result);
+            let claim = {
+                let mut admission = self.admission.lock().unwrap();
+                if admission.closed {
+                    None
+                } else if let Some(existing) = admission.in_flight.as_ref() {
+                    Some((Arc::clone(existing), false))
+                } else {
+                    let controller = CancellationToken::new();
+                    let probe = Arc::new(InFlight {
+                        revision,
+                        kind: ProbeKind::Permission,
+                        controller: controller.clone(),
+                        result: StdMutex::new(None),
+                        completion: Notify::new(),
+                    });
+                    admission.controllers.insert(controller);
+                    admission.in_flight = Some(Arc::clone(&probe));
+                    Some((probe, true))
                 }
+            };
+            let Some((probe_in_flight, claimed)) = claim else {
+                return Ok(fixed_error_status(&CuaDriverError::new(
+                    "host_closed",
+                    "closed",
+                )));
+            };
+            if claimed {
+                self.spawn_probe_worker(Arc::clone(&probe_in_flight), signal.cloned());
+            }
+            let result = self.await_in_flight(&probe_in_flight, signal).await?;
+            if probe_in_flight.kind != ProbeKind::Permission || probe_in_flight.revision != revision
+            {
                 continue;
-            }
-
-            let probe_in_flight = Arc::new(InFlight {
-                revision,
-                kind: ProbeKind::Permission,
-                result: StdMutex::new(None),
-                completion: Notify::new(),
-            });
-            {
-                let mut slot = self.in_flight.lock().await;
-                if slot.is_some() {
-                    continue;
-                }
-                *slot = Some(Arc::clone(&probe_in_flight));
-            }
-            let result = self.prompt_and_recheck(revision, signal).await;
-            *probe_in_flight.result.lock().unwrap() = Some(result.clone());
-            probe_in_flight.completion.notify_waiters();
-            {
-                let mut slot = self.in_flight.lock().await;
-                if slot
-                    .as_ref()
-                    .map(|value| Arc::ptr_eq(value, &probe_in_flight))
-                    .unwrap_or(false)
-                {
-                    *slot = None;
-                }
             }
             throw_if_cancelled(&signal.cloned())?;
             if revision != self.revision.load(Ordering::SeqCst) {
@@ -612,12 +646,66 @@ impl ComputerUseStatusService {
         }
     }
 
+    fn spawn_probe_worker(&self, in_flight: Arc<InFlight>, signal: Option<CancellationToken>) {
+        let service = <ComputerUseStatusService as Clone>::clone(self);
+        tokio::spawn(async move {
+            #[cfg(test)]
+            {
+                let gate = service.worker_start_gate.lock().await.take();
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                }
+            }
+            let outcome = AssertUnwindSafe(async {
+                match in_flight.kind {
+                    ProbeKind::Status => {
+                        service
+                            .probe(false, signal.as_ref(), &in_flight.controller)
+                            .await
+                    }
+                    ProbeKind::Permission => {
+                        service
+                            .prompt_and_recheck(
+                                in_flight.revision,
+                                signal.as_ref(),
+                                &in_flight.controller,
+                            )
+                            .await
+                    }
+                }
+            })
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                fixed_error_status(&CuaDriverError::new(
+                    "status_probe_failed",
+                    "Computer Use readiness probe failed.",
+                ))
+            });
+
+            let mut admission = service.admission.lock().unwrap();
+            if admission
+                .in_flight
+                .as_ref()
+                .is_some_and(|value| Arc::ptr_eq(value, &in_flight))
+            {
+                admission.in_flight = None;
+            }
+            admission.controllers.remove(&in_flight.controller);
+            drop(admission);
+            *in_flight.result.lock().unwrap() = Some(outcome);
+            in_flight.completion.notify_waiters();
+        });
+    }
+
     async fn await_in_flight(
         &self,
         existing: &Arc<InFlight>,
         signal: Option<&CancellationToken>,
     ) -> Result<ComputerUseStatus, CuaDriverError> {
         loop {
+            let mut completed = Box::pin(existing.completion.notified());
+            completed.as_mut().enable();
             if let Some(result) = existing.result.lock().unwrap().clone() {
                 return Ok(result);
             }
@@ -627,7 +715,7 @@ impl ComputerUseStatusService {
                 }
             }
             tokio::select! {
-                _ = existing.completion.notified() => {}
+                _ = &mut completed => {}
                 _ = async {
                     match signal {
                         Some(token) => token.cancelled().await,
@@ -642,8 +730,9 @@ impl ComputerUseStatusService {
         &self,
         revision: u64,
         signal: Option<&CancellationToken>,
+        controller: &CancellationToken,
     ) -> ComputerUseStatus {
-        let prompted = self.probe(true, signal).await;
+        let prompted = self.probe(true, signal, controller).await;
         if revision != self.revision.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
             return prompted;
         }
@@ -657,52 +746,73 @@ impl ComputerUseStatusService {
         }
         // The embedded child can retain a stale TCC answer. probe() has already
         // shut down its host before this fresh helper is constructed.
-        self.probe(false, signal).await
+        self.probe(false, signal, controller).await
     }
 
     pub async fn shutdown(&self) {
-        let mut shutdown_promise = self.shutdown_promise.lock().await;
-        if shutdown_promise.is_some() {
-            let _ = shutdown_promise.as_mut().unwrap().await;
-            return;
-        }
-        self.closed.store(true, Ordering::SeqCst);
-        self.invalidate();
-        let pending = self.in_flight.lock().await.clone();
-        let promise: BoxFuture<'static, ()> = Box::pin(async move {
-            if let Some(existing) = pending {
-                if existing.result.lock().unwrap().is_none() {
-                    let _ = timeout(
-                        Duration::from_millis(SHUTDOWN_GRACE_MS),
-                        existing.completion.notified(),
-                    )
-                    .await;
+        let completion = {
+            let mut admission = self.admission.lock().unwrap();
+            if let Some(existing) = admission.shutdown.as_ref() {
+                Arc::clone(existing)
+            } else {
+                admission.closed = true;
+                self.closed.store(true, Ordering::SeqCst);
+                *self.cached.lock().unwrap() = None;
+                self.revision.fetch_add(1, Ordering::SeqCst);
+                for controller in &admission.controllers {
+                    controller.cancel();
                 }
+                let pending = admission.in_flight.clone();
+                let completion = Arc::new(StatusShutdownCompletion::default());
+                let completion_for_task = Arc::clone(&completion);
+                tokio::spawn(async move {
+                    if let Some(existing) = pending {
+                        loop {
+                            let mut completed = Box::pin(existing.completion.notified());
+                            completed.as_mut().enable();
+                            if existing.result.lock().unwrap().is_some() {
+                                break;
+                            }
+                            completed.await;
+                        }
+                    }
+                    completion_for_task.finish();
+                });
+                admission.shutdown = Some(Arc::clone(&completion));
+                completion
             }
-        });
-        *shutdown_promise = Some(promise);
-        let _ = shutdown_promise.as_mut().unwrap().await;
+        };
+        completion.wait().await;
     }
 
-    async fn probe(&self, prompt: bool, signal: Option<&CancellationToken>) -> ComputerUseStatus {
+    async fn probe(
+        &self,
+        prompt: bool,
+        signal: Option<&CancellationToken>,
+        controller: &CancellationToken,
+    ) -> ComputerUseStatus {
         if signal.as_ref().is_some_and(|token| token.is_cancelled()) {
             return fixed_error_status(&request_cancelled_error());
         }
-        let controller = CancellationToken::new();
-        self.probe_controllers
-            .lock()
-            .unwrap()
-            .insert(controller.clone());
+        if controller.is_cancelled() {
+            return fixed_error_status(&request_cancelled_error());
+        }
+        let controller = controller.clone();
+        let mut signal_forward_task = None;
         if let Some(signal) = signal {
             if signal.is_cancelled() {
                 controller.cancel();
             } else {
                 let signal = signal.clone();
                 let controller = controller.clone();
-                tokio::spawn(async move {
+                self.signal_forwarders.fetch_add(1, Ordering::SeqCst);
+                let forwarders = Arc::clone(&self.signal_forwarders);
+                let guard = SignalForwarderGuard(forwarders);
+                signal_forward_task = Some(tokio::spawn(async move {
+                    let _guard = guard;
                     signal.cancelled().await;
                     controller.cancel();
-                });
+                }));
             }
         }
         let controller_for_timeout = controller.clone();
@@ -712,7 +822,7 @@ impl ComputerUseStatusService {
         });
 
         let mut host: Option<Box<dyn ComputerUseStatusHost>> = None;
-        let outcome = async {
+        let outcome = AssertUnwindSafe(async {
             let created = self.dependencies.create_host(controller.clone()).await;
             let host_value = match created {
                 Ok(host) => host,
@@ -761,15 +871,34 @@ impl ComputerUseStatusService {
                 Ok(status) => status,
                 Err(error) => fixed_error_status(&error),
             }
-        }
+        })
+        .catch_unwind()
         .await;
 
         timeout_task.abort();
-        self.probe_controllers.lock().unwrap().remove(&controller);
-        if let Some(host) = host {
-            let _ = timeout(Duration::from_millis(SHUTDOWN_GRACE_MS), host.shutdown()).await;
+        let _ = timeout_task.await;
+        if let Some(signal_forward_task) = signal_forward_task {
+            signal_forward_task.abort();
+            let _ = signal_forward_task.await;
         }
-        outcome
+        if let Some(host) = host {
+            let shutdown = AssertUnwindSafe(async move { host.shutdown().await }).catch_unwind();
+            let _ = timeout(Duration::from_millis(SHUTDOWN_GRACE_MS), shutdown).await;
+        }
+        outcome.unwrap_or_else(|_| {
+            fixed_error_status(&CuaDriverError::new(
+                "status_probe_failed",
+                "Computer Use readiness probe failed.",
+            ))
+        })
+    }
+}
+
+struct SignalForwarderGuard(Arc<AtomicU64>);
+
+impl Drop for SignalForwarderGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -996,6 +1125,21 @@ mod tests {
         );
         assert_eq!(recorded[1].0, "check_permissions");
         assert_eq!(recorded[1].1, json!({ "prompt": false }));
+    }
+
+    #[tokio::test]
+    async fn a_completed_probe_reaps_its_caller_signal_forwarder() {
+        let deps = Arc::new(FakeDeps::new(true, ready_host()));
+        let service = ComputerUseStatusService::new(deps);
+        let caller = CancellationToken::new();
+
+        let status = service.status(false, Some(&caller)).await.unwrap();
+        assert_eq!(status.state, ComputerUseStatusState::Ready);
+        assert_eq!(service.signal_forwarders.load(Ordering::SeqCst), 0);
+
+        caller.cancel();
+        tokio::task::yield_now().await;
+        assert_eq!(service.signal_forwarders.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -1311,5 +1455,343 @@ mod tests {
         let error = request.await.unwrap_err();
         assert!(error.message.contains("cancelled"));
         assert_eq!(deps.hosts.load(Ordering::SeqCst), 1);
+    }
+
+    struct CancelBlockingSession {
+        started: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl ComputerUseStatusSession for CancelBlockingSession {
+        fn call_tool(
+            &self,
+            _name: &str,
+            _args: Value,
+            options: &StatusCallOptions,
+        ) -> BoxFuture<'static, Result<Value, CuaDriverError>> {
+            let started = Arc::clone(&self.started);
+            let signal = options.signal.clone().expect("probe signal");
+            Box::pin(async move {
+                started.add_permits(1);
+                signal.cancelled().await;
+                Err(CuaDriverError::cancelled("probe cancelled"))
+            })
+        }
+    }
+
+    struct CancelBlockingHost {
+        started: Arc<tokio::sync::Semaphore>,
+        shutdowns: Arc<AtomicU64>,
+    }
+
+    impl ComputerUseStatusHost for CancelBlockingHost {
+        fn create_session(
+            &self,
+            _signal: &CancellationToken,
+        ) -> BoxFuture<'static, Result<Box<dyn ComputerUseStatusSession>, CuaDriverError>> {
+            let session = CancelBlockingSession {
+                started: Arc::clone(&self.started),
+            };
+            Box::pin(async move { Ok(Box::new(session) as Box<dyn ComputerUseStatusSession>) })
+        }
+
+        fn shutdown(&self) -> BoxFuture<'static, ()> {
+            let shutdowns = Arc::clone(&self.shutdowns);
+            Box::pin(async move {
+                shutdowns.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+    }
+
+    struct CancelBlockingDeps {
+        started: Arc<tokio::sync::Semaphore>,
+        hosts: Arc<AtomicU64>,
+        shutdowns: Arc<AtomicU64>,
+    }
+
+    impl ComputerUseStatusDependencies for CancelBlockingDeps {
+        fn is_enabled(&self) -> BoxFuture<'static, bool> {
+            Box::pin(async { true })
+        }
+
+        fn create_host(
+            &self,
+            _signal: CancellationToken,
+        ) -> BoxFuture<'static, Result<Box<dyn ComputerUseStatusHost>, CuaDriverError>> {
+            self.hosts.fetch_add(1, Ordering::SeqCst);
+            let host = CancelBlockingHost {
+                started: Arc::clone(&self.started),
+                shutdowns: Arc::clone(&self.shutdowns),
+            };
+            Box::pin(async move { Ok(Box::new(host) as Box<dyn ComputerUseStatusHost>) })
+        }
+    }
+
+    async fn dropped_first_probe_caller_is_cleanup_safe(permission: bool) {
+        let started = Arc::new(tokio::sync::Semaphore::new(0));
+        let deps = Arc::new(CancelBlockingDeps {
+            started: Arc::clone(&started),
+            hosts: Arc::new(AtomicU64::new(0)),
+            shutdowns: Arc::new(AtomicU64::new(0)),
+        });
+        let service = Arc::new(ComputerUseStatusService::new(deps.clone()));
+        let caller = CancellationToken::new();
+        let first_service = Arc::clone(&service);
+        let first_signal = caller.clone();
+        let first = tokio::spawn(async move {
+            if permission {
+                first_service.request_permissions(Some(&first_signal)).await
+            } else {
+                first_service.status(true, Some(&first_signal)).await
+            }
+        });
+        started.acquire().await.unwrap().forget();
+        first.abort();
+        let _ = first.await;
+
+        let second_service = Arc::clone(&service);
+        let second = tokio::spawn(async move {
+            if permission {
+                second_service.request_permissions(None).await
+            } else {
+                second_service.status(true, None).await
+            }
+        });
+        tokio::task::yield_now().await;
+        tokio::time::timeout(Duration::from_secs(1), service.shutdown())
+            .await
+            .expect("shutdown must join the detached probe worker");
+        let status = tokio::time::timeout(Duration::from_secs(1), second)
+            .await
+            .expect("later caller must not hang")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(status.state, ComputerUseStatusState::Error);
+        assert_eq!(deps.hosts.load(Ordering::SeqCst), 1);
+        assert_eq!(deps.shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(service.signal_forwarders.load(Ordering::SeqCst), 0);
+        let admission = service.admission.lock().unwrap();
+        assert!(admission.controllers.is_empty());
+        assert!(admission.in_flight.is_none());
+    }
+
+    #[tokio::test]
+    async fn dropping_the_first_status_caller_cannot_orphan_the_shared_probe() {
+        dropped_first_probe_caller_is_cleanup_safe(false).await;
+    }
+
+    #[tokio::test]
+    async fn dropping_the_first_permission_caller_cannot_orphan_the_shared_probe() {
+        dropped_first_probe_caller_is_cleanup_safe(true).await;
+    }
+
+    #[tokio::test]
+    async fn a_panicking_host_still_publishes_and_shuts_down_exactly_once() {
+        struct PanicHost {
+            shutdowns: Arc<AtomicU64>,
+        }
+        impl ComputerUseStatusHost for PanicHost {
+            fn create_session(
+                &self,
+                _signal: &CancellationToken,
+            ) -> BoxFuture<'static, Result<Box<dyn ComputerUseStatusSession>, CuaDriverError>>
+            {
+                panic!("injected host panic")
+            }
+
+            fn shutdown(&self) -> BoxFuture<'static, ()> {
+                let shutdowns = Arc::clone(&self.shutdowns);
+                Box::pin(async move {
+                    shutdowns.fetch_add(1, Ordering::SeqCst);
+                })
+            }
+        }
+        struct PanicDeps {
+            shutdowns: Arc<AtomicU64>,
+        }
+        impl ComputerUseStatusDependencies for PanicDeps {
+            fn is_enabled(&self) -> BoxFuture<'static, bool> {
+                Box::pin(async { true })
+            }
+
+            fn create_host(
+                &self,
+                _signal: CancellationToken,
+            ) -> BoxFuture<'static, Result<Box<dyn ComputerUseStatusHost>, CuaDriverError>>
+            {
+                let host = PanicHost {
+                    shutdowns: Arc::clone(&self.shutdowns),
+                };
+                Box::pin(async move { Ok(Box::new(host) as Box<dyn ComputerUseStatusHost>) })
+            }
+        }
+
+        let shutdowns = Arc::new(AtomicU64::new(0));
+        let service = ComputerUseStatusService::new(Arc::new(PanicDeps {
+            shutdowns: Arc::clone(&shutdowns),
+        }));
+        let caller = CancellationToken::new();
+        let status =
+            tokio::time::timeout(Duration::from_secs(1), service.status(true, Some(&caller)))
+                .await
+                .expect("panic must be published")
+                .unwrap();
+
+        assert_eq!(status.state, ComputerUseStatusState::Error);
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(service.signal_forwarders.load(Ordering::SeqCst), 0);
+        let admission = service.admission.lock().unwrap();
+        assert!(admission.controllers.is_empty());
+        assert!(admission.in_flight.is_none());
+    }
+
+    #[tokio::test]
+    async fn sequential_shallow_clone_shutdowns_share_completed_state() {
+        let service = ComputerUseStatusService::new(Arc::new(FakeDeps::new(false, ready_host())));
+        let clone = service.clone();
+
+        service.shutdown().await;
+        let first_completion = service
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+        clone.shutdown().await;
+        let second_completion = clone
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+
+        assert!(Arc::ptr_eq(&first_completion, &second_completion));
+        assert!(*first_completion.finished.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn concurrent_shallow_clone_shutdowns_share_one_completion() {
+        let service = ComputerUseStatusService::new(Arc::new(FakeDeps::new(false, ready_host())));
+        let first = service.clone();
+        let second = service.clone();
+
+        tokio::time::timeout(Duration::from_secs(1), async move {
+            tokio::join!(first.shutdown(), second.shutdown());
+        })
+        .await
+        .expect("concurrent shutdowns must complete");
+
+        let admission = service.admission.lock().unwrap();
+        assert!(admission.closed);
+        assert!(*admission
+            .shutdown
+            .as_ref()
+            .expect("shutdown completion")
+            .finished
+            .lock()
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn shutdown_seals_a_caller_blocked_before_probe_claim() {
+        struct PreClaimDeps {
+            read_started: Arc<tokio::sync::Semaphore>,
+            read_release: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
+            hosts: Arc<AtomicU64>,
+        }
+        impl ComputerUseStatusDependencies for PreClaimDeps {
+            fn is_enabled(&self) -> BoxFuture<'static, bool> {
+                let read_started = Arc::clone(&self.read_started);
+                let read_release = Arc::clone(&self.read_release);
+                Box::pin(async move {
+                    read_started.add_permits(1);
+                    if let Some(release) = read_release.lock().await.take() {
+                        let _ = release.await;
+                    }
+                    true
+                })
+            }
+
+            fn create_host(
+                &self,
+                _signal: CancellationToken,
+            ) -> BoxFuture<'static, Result<Box<dyn ComputerUseStatusHost>, CuaDriverError>>
+            {
+                self.hosts.fetch_add(1, Ordering::SeqCst);
+                let factory = ready_host();
+                Box::pin(async move { Ok(factory()) })
+            }
+        }
+
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        let started = Arc::new(tokio::sync::Semaphore::new(0));
+        let hosts = Arc::new(AtomicU64::new(0));
+        let service = Arc::new(ComputerUseStatusService::new(Arc::new(PreClaimDeps {
+            read_started: Arc::clone(&started),
+            read_release: Arc::new(tokio::sync::Mutex::new(Some(blocked))),
+            hosts: Arc::clone(&hosts),
+        })));
+        let status_service = Arc::clone(&service);
+        let status = tokio::spawn(async move { status_service.status(true, None).await });
+        started.acquire().await.unwrap().forget();
+
+        tokio::time::timeout(Duration::from_secs(1), service.shutdown())
+            .await
+            .expect("shutdown must not wait for an unclaimed probe");
+        release.send(()).unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(1), status)
+            .await
+            .expect("pre-claim caller must complete")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(hosts.load(Ordering::SeqCst), 0);
+        let admission = service.admission.lock().unwrap();
+        assert!(admission.closed);
+        assert!(admission.controllers.is_empty());
+        assert!(admission.in_flight.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_a_claim_reserved_before_worker_launch() {
+        let deps = Arc::new(FakeDeps::new(true, ready_host()));
+        let service = Arc::new(ComputerUseStatusService::new(deps.clone()));
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        *service.worker_start_gate.lock().await = Some(blocked);
+        let status_service = Arc::clone(&service);
+        let status = tokio::spawn(async move { status_service.status(true, None).await });
+        loop {
+            if service.admission.lock().unwrap().in_flight.is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let shutdown_service = Arc::clone(&service);
+        let shutdown = tokio::spawn(async move { shutdown_service.shutdown().await });
+        loop {
+            if service.closed.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(deps.hosts.load(Ordering::SeqCst), 0);
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), shutdown)
+            .await
+            .expect("shutdown must join the pre-cancelled worker")
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(1), status)
+            .await
+            .expect("claiming caller must complete")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(deps.hosts.load(Ordering::SeqCst), 0);
+        let admission = service.admission.lock().unwrap();
+        assert!(admission.controllers.is_empty());
+        assert!(admission.in_flight.is_none());
     }
 }

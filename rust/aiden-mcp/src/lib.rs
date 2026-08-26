@@ -36,7 +36,8 @@ pub mod oauth;
 
 pub use aiden_data::portable_config::{McpServer, McpTransport};
 pub use client::{
-    collect_mcp_agent_tools, McpClient, McpClientManager, McpStatus, McpToolTextResult,
+    collect_mcp_agent_tools, McpClient, McpClientManager, McpConnectionLease, McpStatus,
+    McpToolTextResult,
 };
 pub use config::{
     get_mcp_preset, get_mcp_preset_for_server_id, preset_secret_id, preset_server_id,

@@ -31,7 +31,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use aiden_core::{
-    Chat, ChatMessage, ChatMeta, ChatRole, GenerationTimeline, GenerationTimelineStatus,
+    validate_message_attachments, AttachmentValidationError, Chat, ChatMessage, ChatMeta, ChatRole,
+    GenerationTimeline, GenerationTimelineStatus,
 };
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
@@ -59,6 +60,8 @@ pub enum ChatStoreError {
     DocumentInactive,
     #[error("The chat workspace changed before the message could be saved.")]
     WorkspaceChanged,
+    #[error(transparent)]
+    InvalidAttachments(#[from] AttachmentValidationError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
@@ -1044,6 +1047,10 @@ impl ChatStore {
 
     fn normalize_message(&self, message: &ChatMessage, raw: &Value) -> ChatMessage {
         let mut message = message.clone();
+        message.attachments =
+            validate_message_attachments(message.role, message.attachments.as_deref())
+                .ok()
+                .flatten();
         if message.role == aiden_core::ChatRole::Assistant {
             message.reasoning = message
                 .reasoning
@@ -1437,13 +1444,15 @@ impl ChatStore {
                 "timeline": message.timeline,
                 "subagents": message.subagents,
             });
+            let attachments =
+                validate_message_attachments(message.role, message.attachments.as_deref())?;
             let mut full = ChatMessage {
                 id: message.id.unwrap_or_else(new_id),
                 role: message.role,
                 content: message.content,
                 model: message.model,
                 reasoning: message.reasoning,
-                attachments: message.attachments,
+                attachments,
                 timeline: None,
                 subagents: None,
                 created_at: message.created_at.unwrap_or_else(now_millis),
@@ -1475,6 +1484,31 @@ impl ChatStore {
                     chat.title = derive_chat_title_seed(&full);
                 }
             }
+            self.write_chat_and_meta(inner, &chat)?;
+            Ok(chat)
+        })
+    }
+
+    /// Remove one exact message and durably reconcile the chat/index pair.
+    /// Retry uses this to discard a failed partial assistant turn without
+    /// re-appending the preceding (potentially attachment-heavy) user turn.
+    pub fn remove_message(&self, id: &str, message_id: &str) -> Result<Chat, ChatStoreError> {
+        self.serialized(|inner| {
+            let mut chat = self
+                .read_chat(inner, id)?
+                .ok_or_else(|| ChatStoreError::ChatNotFound(id.to_string()))?;
+            let Some(index) = chat
+                .messages
+                .iter()
+                .position(|message| message.id == message_id)
+            else {
+                return Ok(chat);
+            };
+            chat.messages.remove(index);
+            chat.updated_at = chat
+                .messages
+                .last()
+                .map_or(chat.created_at, |message| message.created_at);
             self.write_chat_and_meta(inner, &chat)?;
             Ok(chat)
         })
@@ -1590,6 +1624,7 @@ pub fn new_uuid_like() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aiden_core::{Attachment, AttachmentKind};
 
     fn store_in(dir: &Path) -> ChatStore {
         let dir = dir.to_path_buf();
@@ -1726,6 +1761,90 @@ mod tests {
         assert!(store
             .move_empty_chat_to_workspace(&chat.id, "other")
             .is_err());
+    }
+
+    #[test]
+    fn attachment_append_is_validated_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let chat = store.create(ChatStoreInput::default()).unwrap();
+        let attachment = Attachment {
+            id: "text-1".into(),
+            name: "notes.txt".into(),
+            mime_type: "text/plain".into(),
+            kind: AttachmentKind::Text,
+            size: 5,
+            data: Some("kind-inapplicable".into()),
+            text: Some("hello".into()),
+        };
+
+        let appended = store
+            .append_message(
+                &chat.id,
+                ChatMessageInput {
+                    id: None,
+                    role: ChatRole::User,
+                    content: String::new(),
+                    model: None,
+                    reasoning: None,
+                    attachments: Some(vec![attachment.clone()]),
+                    timeline: None,
+                    subagents: None,
+                    created_at: None,
+                },
+                None,
+            )
+            .unwrap();
+        let stored = appended.messages[0].attachments.as_ref().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].text.as_deref(), Some("hello"));
+        assert_eq!(stored[0].data, None, "kind-specific fields are canonical");
+        assert_eq!(
+            store.get(&chat.id).unwrap().unwrap().messages[0].attachments,
+            Some(stored.clone())
+        );
+
+        let error = store
+            .append_message(
+                &chat.id,
+                ChatMessageInput {
+                    id: None,
+                    role: ChatRole::Assistant,
+                    content: "reply".into(),
+                    model: None,
+                    reasoning: None,
+                    attachments: Some(vec![attachment]),
+                    timeline: None,
+                    subagents: None,
+                    created_at: None,
+                },
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(error, ChatStoreError::InvalidAttachments(_)));
+        assert_eq!(store.get(&chat.id).unwrap().unwrap().messages.len(), 1);
+
+        let with_partial = store
+            .append_message(
+                &chat.id,
+                ChatMessageInput {
+                    id: Some("failed-partial".into()),
+                    role: ChatRole::Assistant,
+                    content: "partial".into(),
+                    model: Some("model".into()),
+                    reasoning: None,
+                    attachments: None,
+                    timeline: None,
+                    subagents: None,
+                    created_at: Some(10),
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(with_partial.messages.len(), 2);
+        let retriable = store.remove_message(&chat.id, "failed-partial").unwrap();
+        assert_eq!(retriable.messages.len(), 1);
+        assert!(retriable.messages[0].attachments.is_some());
     }
 
     /// The chat service persists the user message, the assistant turn, and a

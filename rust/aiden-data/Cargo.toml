@@ -17,11 +17,13 @@ keyring.workspace = true
 sha2.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
+libc = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10"
 regex = "1"
 iana-time-zone = "0.1"
 unicode-normalization = "0.1"
+walkdir.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

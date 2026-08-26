@@ -6,16 +6,18 @@
 //! an older queued transition, and a persistence failure never reopens the
 //! process.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 /// Error taxonomy for the settings coordinator. Messages mirror the TypeScript
 /// `Error` texts so callers and tests can match on them.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ComputerUseSettingsError {
     #[error("The renderer document is no longer active.")]
     StaleDocument,
@@ -23,16 +25,23 @@ pub enum ComputerUseSettingsError {
     ShuttingDown,
     #[error("Computer Use could not persist its disabled state before quit.")]
     NotDurable,
-    #[error(transparent)]
-    Persist(#[from] anyhow::Error),
+    #[error("{0}")]
+    Persist(String),
 }
 
 pub type SettingsPersistenceResult = Result<(), ComputerUseSettingsError>;
+pub type SettingsReadResult = Result<bool, ComputerUseSettingsError>;
+
+impl From<anyhow::Error> for ComputerUseSettingsError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Persist(error.to_string())
+    }
+}
 
 /// The persistence/gate seam the coordinator drives.
 pub trait ComputerUseSettingsDependencies: Send + Sync + 'static {
     /// The persisted gate state (`computerUseEnabled === true`).
-    fn read_persisted(&self) -> BoxFuture<'static, bool>;
+    fn read_persisted(&self) -> BoxFuture<'static, SettingsReadResult>;
     /// Persist the gate state. `is_current` reports whether the owning
     /// renderer document is still current (like `configStore.setSettings`).
     fn persist(
@@ -46,24 +55,42 @@ pub trait ComputerUseSettingsDependencies: Send + Sync + 'static {
     fn cancel_computer_use_generations(&self);
 }
 
-/// A default wiring for `settings.ts` backed by Aiden's `ConfigStore` (the Rust
-/// port of `configStore.setSettings`): reads and writes the `computerUseEnabled`
-/// key in the machine-local settings JSON.
+/// Build store-backed dependencies with the required process-owned live-gate
+/// and generation-cancellation callbacks.
+///
+/// Requiring these callbacks prevents a persistence-only adapter from being
+/// mistaken for production wiring: disabling must close the runtime gate and
+/// cancel active generations before its first await.
 pub fn computer_use_settings_dependencies_from_store(
     store: Arc<aiden_data::config_store::ConfigStore>,
+    set_runtime_enabled: Arc<dyn Fn(bool) + Send + Sync>,
+    cancel_computer_use_generations: Arc<dyn Fn() + Send + Sync>,
 ) -> impl ComputerUseSettingsDependencies {
     struct StoreDependencies {
         store: Arc<aiden_data::config_store::ConfigStore>,
+        set_runtime_enabled: Arc<dyn Fn(bool) + Send + Sync>,
+        cancel_computer_use_generations: Arc<dyn Fn() + Send + Sync>,
     }
     impl ComputerUseSettingsDependencies for StoreDependencies {
-        fn read_persisted(&self) -> BoxFuture<'static, bool> {
+        fn read_persisted(&self) -> BoxFuture<'static, SettingsReadResult> {
             let store = Arc::clone(&self.store);
             Box::pin(async move {
-                let settings = store.get_settings().unwrap_or_default();
-                settings
+                let settings = tokio::task::spawn_blocking(move || store.get_settings())
+                    .await
+                    .map_err(|_| {
+                        ComputerUseSettingsError::Persist(
+                            "Computer Use persisted-state read task failed.".into(),
+                        )
+                    })?
+                    .map_err(|error| {
+                        ComputerUseSettingsError::Persist(format!(
+                            "Computer Use could not read its persisted state: {error}"
+                        ))
+                    })?;
+                Ok(settings
                     .get("computerUseEnabled")
                     .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
+                    .unwrap_or(false))
             })
         }
 
@@ -74,23 +101,39 @@ pub fn computer_use_settings_dependencies_from_store(
         ) -> BoxFuture<'static, SettingsPersistenceResult> {
             let store = Arc::clone(&self.store);
             Box::pin(async move {
-                let mut patch = serde_json::Map::new();
-                patch.insert(
-                    "computerUseEnabled".into(),
-                    serde_json::Value::Bool(enabled),
-                );
-                store
-                    .set_settings(&patch, &move || is_current())
-                    .map(|_| ())
-                    .map_err(|error| ComputerUseSettingsError::Persist(anyhow::anyhow!(error)))
+                tokio::task::spawn_blocking(move || {
+                    let mut patch = serde_json::Map::new();
+                    patch.insert(
+                        "computerUseEnabled".into(),
+                        serde_json::Value::Bool(enabled),
+                    );
+                    store
+                        .set_settings(&patch, &move || is_current())
+                        .map(|_| ())
+                        .map_err(|error| ComputerUseSettingsError::Persist(error.to_string()))
+                })
+                .await
+                .map_err(|_| {
+                    ComputerUseSettingsError::Persist(
+                        "Computer Use persisted-state write task failed.".into(),
+                    )
+                })?
             })
         }
 
-        fn set_runtime_enabled(&self, _enabled: bool) {}
+        fn set_runtime_enabled(&self, enabled: bool) {
+            (self.set_runtime_enabled)(enabled);
+        }
 
-        fn cancel_computer_use_generations(&self) {}
+        fn cancel_computer_use_generations(&self) {
+            (self.cancel_computer_use_generations)();
+        }
     }
-    StoreDependencies { store }
+    StoreDependencies {
+        store,
+        set_runtime_enabled,
+        cancel_computer_use_generations,
+    }
 }
 
 #[derive(Default)]
@@ -112,16 +155,40 @@ fn always_current() -> Arc<dyn Fn() -> bool + Send + Sync> {
 /// Coordinates persisted gate changes with the live gate.
 pub struct ComputerUseSettingsCoordinator {
     tail: Mutex<Option<JoinHandle<()>>>,
-    shutdown_promise: StdMutex<Option<BoxFuture<'static, Result<(), ComputerUseSettingsError>>>>,
+    shutdown_completion: StdMutex<Option<Arc<ShutdownCompletion>>>,
     shared: Arc<CoordinatorShared>,
     dependencies: Arc<dyn ComputerUseSettingsDependencies>,
+}
+
+#[derive(Default)]
+struct ShutdownCompletion {
+    result: StdMutex<Option<Result<(), ComputerUseSettingsError>>>,
+    completed: tokio::sync::Notify,
+}
+
+impl ShutdownCompletion {
+    async fn wait(&self) -> Result<(), ComputerUseSettingsError> {
+        loop {
+            let mut notified = Box::pin(self.completed.notified());
+            notified.as_mut().enable();
+            if let Some(result) = self.result.lock().unwrap().clone() {
+                return result;
+            }
+            notified.await;
+        }
+    }
+
+    fn finish(&self, result: Result<(), ComputerUseSettingsError>) {
+        *self.result.lock().unwrap() = Some(result);
+        self.completed.notify_waiters();
+    }
 }
 
 impl ComputerUseSettingsCoordinator {
     pub fn new(dependencies: Arc<dyn ComputerUseSettingsDependencies>) -> Self {
         Self {
             tail: Mutex::new(None),
-            shutdown_promise: StdMutex::new(None),
+            shutdown_completion: StdMutex::new(None),
             shared: Arc::new(CoordinatorShared::default()),
             dependencies,
         }
@@ -130,54 +197,67 @@ impl ComputerUseSettingsCoordinator {
     /// Seal new mutations and drain every admitted persistence transaction
     /// before quit. A required disable that cannot become durable is an error.
     pub async fn shutdown(&self) -> Result<(), ComputerUseSettingsError> {
-        {
-            let existing = self.shutdown_promise.lock().unwrap().take();
-            if let Some(existing) = existing {
-                return existing.await;
+        // Holding the admission tail while sealing means a set_enabled call is
+        // either fully admitted into this exact drain or rejected as shutting
+        // down. The drain itself is detached from every caller, so cancelling
+        // the first waiter cannot cancel persistence.
+        let mut tail_guard = self.tail.lock().await;
+        let completion = {
+            let mut slot = self.shutdown_completion.lock().unwrap();
+            if let Some(existing) = slot.as_ref() {
+                Arc::clone(existing)
+            } else {
+                *self.shared.closed.lock().unwrap() = true;
+                let tail = tail_guard.take();
+                let dependencies = Arc::clone(&self.dependencies);
+                let shared = Arc::clone(&self.shared);
+                let completion = Arc::new(ShutdownCompletion::default());
+                let completion_for_task = Arc::clone(&completion);
+                tokio::spawn(async move {
+                    let result = AssertUnwindSafe(async move {
+                        if let Some(tail) = tail {
+                            let _ = tail.await;
+                        }
+                        if !*shared.disable_required.lock().unwrap() {
+                            return Ok(());
+                        }
+                        if !dependencies.read_persisted().await? {
+                            return Ok(());
+                        }
+                        dependencies.persist(false, always_current()).await?;
+                        if dependencies.read_persisted().await? {
+                            return Err(ComputerUseSettingsError::NotDurable);
+                        }
+                        Ok(())
+                    })
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(ComputerUseSettingsError::Persist(
+                            "Computer Use shutdown persistence task failed.".into(),
+                        ))
+                    });
+                    completion_for_task.finish(result);
+                });
+                *slot = Some(Arc::clone(&completion));
+                completion
             }
-        }
-        *self.shared.closed.lock().unwrap() = true;
-        let tail = self.tail.lock().await.take();
-        let dependencies = Arc::clone(&self.dependencies);
-        let shared = Arc::clone(&self.shared);
-        let promise: BoxFuture<'static, Result<(), ComputerUseSettingsError>> =
-            Box::pin(async move {
-                if let Some(tail) = tail {
-                    let _ = tail.await;
-                }
-                if !*shared.disable_required.lock().unwrap() {
-                    return Ok(());
-                }
-                if !dependencies.read_persisted().await {
-                    return Ok(());
-                }
-                dependencies.persist(false, always_current()).await?;
-                if dependencies.read_persisted().await {
-                    return Err(ComputerUseSettingsError::NotDurable);
-                }
-                Ok(())
-            });
-        let existing = self.shutdown_promise.lock().unwrap().take();
-        if let Some(existing) = existing {
-            return existing.await;
-        }
-        {
-            let mut slot = self.shutdown_promise.lock().unwrap();
-            *slot = Some(promise);
-        }
-        let promise = self
-            .shutdown_promise
-            .lock()
-            .unwrap()
-            .take()
-            .expect("stored");
-        promise.await
+        };
+        drop(tail_guard);
+        completion.wait().await
     }
 
     /// Reopen only when quit was cancelled before irreversible service shutdown.
     pub fn resume_after_cancelled_shutdown(&self) {
-        *self.shared.closed.lock().unwrap() = false;
-        *self.shutdown_promise.lock().unwrap() = None;
+        let mut slot = self.shutdown_completion.lock().unwrap();
+        let completed = match slot.as_ref() {
+            Some(completion) => completion.result.lock().unwrap().is_some(),
+            None => true,
+        };
+        if completed {
+            *self.shared.closed.lock().unwrap() = false;
+            *slot = None;
+        }
     }
 
     pub async fn set_enabled(
@@ -185,6 +265,7 @@ impl ComputerUseSettingsCoordinator {
         enabled: bool,
         is_current: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<(), ComputerUseSettingsError> {
+        let mut tail_guard = self.tail.lock().await;
         if *self.shared.closed.lock().unwrap() {
             return Err(ComputerUseSettingsError::ShuttingDown);
         }
@@ -206,7 +287,6 @@ impl ComputerUseSettingsCoordinator {
         let dependencies = Arc::clone(&self.dependencies);
         let shared = Arc::clone(&self.shared);
         let (sender, receiver) = oneshot::channel();
-        let mut tail_guard = self.tail.lock().await;
         let previous = tail_guard.take();
         let operation = tokio::spawn(async move {
             if let Some(previous) = previous {
@@ -248,7 +328,7 @@ async fn apply(
         return Err(stale_document_error());
     }
 
-    let previous = dependencies.read_persisted().await;
+    let previous = dependencies.read_persisted().await?;
     if !is_current()
         || request != shared.latest_request.load(Ordering::SeqCst)
         || *shared.desired_enabled.lock().unwrap() != Some(true)
@@ -302,6 +382,8 @@ mod tests {
         block_persist: Arc<StdMutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
         reject_disable_once: Arc<StdMutex<bool>>,
         reject_disable_always: Arc<StdMutex<bool>>,
+        reject_reads: Arc<StdMutex<bool>>,
+        panic_reads: Arc<StdMutex<bool>>,
     }
 
     impl FakeDependencies {
@@ -313,6 +395,8 @@ mod tests {
                 block_persist: Arc::new(StdMutex::new(None)),
                 reject_disable_once: Arc::new(StdMutex::new(false)),
                 reject_disable_always: Arc::new(StdMutex::new(false)),
+                reject_reads: Arc::new(StdMutex::new(false)),
+                panic_reads: Arc::new(StdMutex::new(false)),
             }
         }
 
@@ -330,6 +414,14 @@ mod tests {
             *self.reject_disable_always.lock().unwrap() = true;
         }
 
+        fn reject_reads(&self) {
+            *self.reject_reads.lock().unwrap() = true;
+        }
+
+        fn panic_reads(&self) {
+            *self.panic_reads.lock().unwrap() = true;
+        }
+
         fn events(&self) -> Vec<String> {
             self.events.lock().unwrap().clone()
         }
@@ -340,9 +432,17 @@ mod tests {
     }
 
     impl ComputerUseSettingsDependencies for FakeDependencies {
-        fn read_persisted(&self) -> BoxFuture<'static, bool> {
+        fn read_persisted(&self) -> BoxFuture<'static, SettingsReadResult> {
             let durable = Arc::clone(&self.durable);
-            Box::pin(async move { *durable.lock().unwrap() })
+            let reject_reads = Arc::clone(&self.reject_reads);
+            let panic_reads = Arc::clone(&self.panic_reads);
+            Box::pin(async move {
+                assert!(!*panic_reads.lock().unwrap(), "injected read panic");
+                if *reject_reads.lock().unwrap() {
+                    return Err(ComputerUseSettingsError::Persist("read failed".into()));
+                }
+                Ok(*durable.lock().unwrap())
+            })
         }
 
         fn persist(
@@ -363,9 +463,7 @@ mod tests {
                         if *reject_once.lock().unwrap() {
                             *reject_once.lock().unwrap() = false;
                         }
-                        return Err(ComputerUseSettingsError::Persist(anyhow::anyhow!(
-                            "disk full"
-                        )));
+                        return Err(ComputerUseSettingsError::Persist("disk full".into()));
                     }
                 }
                 let blocker = block.lock().unwrap().take();
@@ -502,13 +600,142 @@ mod tests {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         fake.with_blocker(receiver);
         let coordinator = coordinator(fake.clone());
-        let disabling = coordinator.set_enabled(false, current(Arc::new(AtomicBool::new(true))));
-        let shutdown = coordinator.shutdown();
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        let disable_coordinator = Arc::clone(&coordinator);
+        let disabling = tokio::spawn(async move {
+            disable_coordinator
+                .set_enabled(false, current(Arc::new(AtomicBool::new(true))))
+                .await
+        });
+        while !fake.events().iter().any(|event| event == "persist:false") {
+            tokio::task::yield_now().await;
+        }
+        let shutdown_coordinator = Arc::clone(&coordinator);
+        let shutdown = tokio::spawn(async move { shutdown_coordinator.shutdown().await });
+        tokio::task::yield_now().await;
+        assert!(!shutdown.is_finished());
         sender.send(()).unwrap();
-        disabling.await.unwrap();
-        shutdown.await.unwrap();
+        disabling.await.unwrap().unwrap();
+        shutdown.await.unwrap().unwrap();
         assert!(!*fake.durable.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn concurrent_shutdown_callers_share_one_admitted_disable_drain() {
+        let fake = Arc::new(FakeDependencies::new(true));
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        fake.with_blocker(receiver);
+        let coordinator = coordinator(fake.clone());
+        let disable_coordinator = Arc::clone(&coordinator);
+        let disabling = tokio::spawn(async move {
+            disable_coordinator
+                .set_enabled(false, current(Arc::new(AtomicBool::new(true))))
+                .await
+        });
+        while !fake.events().iter().any(|event| event == "persist:false") {
+            tokio::task::yield_now().await;
+        }
+
+        let first_coordinator = Arc::clone(&coordinator);
+        let first = tokio::spawn(async move { first_coordinator.shutdown().await });
+        let second_coordinator = Arc::clone(&coordinator);
+        let second = tokio::spawn(async move { second_coordinator.shutdown().await });
+        tokio::task::yield_now().await;
+        assert!(!first.is_finished());
+        assert!(!second.is_finished());
+
+        sender.send(()).unwrap();
+        disabling.await.unwrap().unwrap();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        assert_eq!(
+            fake.events()
+                .iter()
+                .filter(|event| event.as_str() == "persist:false")
+                .count(),
+            1
+        );
+        assert!(!*fake.durable.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn aborting_the_first_shutdown_waiter_does_not_cancel_the_shared_drain() {
+        let fake = Arc::new(FakeDependencies::new(true));
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        fake.with_blocker(receiver);
+        let coordinator = coordinator(fake.clone());
+        let disable_coordinator = Arc::clone(&coordinator);
+        let disabling = tokio::spawn(async move {
+            disable_coordinator
+                .set_enabled(false, current(Arc::new(AtomicBool::new(true))))
+                .await
+        });
+        while !fake.events().iter().any(|event| event == "persist:false") {
+            tokio::task::yield_now().await;
+        }
+
+        let first_coordinator = Arc::clone(&coordinator);
+        let first = tokio::spawn(async move { first_coordinator.shutdown().await });
+        while coordinator.shutdown_completion.lock().unwrap().is_none() {
+            tokio::task::yield_now().await;
+        }
+        first.abort();
+        let _ = first.await;
+        sender.send(()).unwrap();
+        disabling.await.unwrap().unwrap();
+
+        coordinator.shutdown().await.unwrap();
+        assert_eq!(
+            fake.events()
+                .iter()
+                .filter(|event| event.as_str() == "persist:false")
+                .count(),
+            1
+        );
+        assert!(!*fake.durable.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn shutdown_read_failure_cannot_certify_a_durable_disable() {
+        let fake = Arc::new(FakeDependencies::new(false));
+        let coordinator = coordinator(fake.clone());
+        coordinator
+            .set_enabled(false, current(Arc::new(AtomicBool::new(true))))
+            .await
+            .unwrap();
+        fake.reject_reads();
+
+        let error = coordinator.shutdown().await.unwrap_err();
+        assert!(error.to_string().contains("read failed"));
+        assert_eq!(fake.runtime(), vec![false]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_panic_completes_every_waiter_with_a_fail_closed_error() {
+        let fake = Arc::new(FakeDependencies::new(false));
+        let coordinator = coordinator(fake.clone());
+        coordinator
+            .set_enabled(false, current(Arc::new(AtomicBool::new(true))))
+            .await
+            .unwrap();
+        fake.panic_reads();
+
+        let first_coordinator = Arc::clone(&coordinator);
+        let first = tokio::spawn(async move { first_coordinator.shutdown().await });
+        let second_coordinator = Arc::clone(&coordinator);
+        let second = tokio::spawn(async move { second_coordinator.shutdown().await });
+        let (first, second) = tokio::time::timeout(Duration::from_secs(1), async move {
+            (first.await.unwrap(), second.await.unwrap())
+        })
+        .await
+        .expect("shutdown waiters must not be stranded");
+
+        for result in [first, second] {
+            let error = result.unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("shutdown persistence task failed"));
+        }
+        assert_eq!(fake.runtime(), vec![false]);
     }
 
     #[tokio::test]

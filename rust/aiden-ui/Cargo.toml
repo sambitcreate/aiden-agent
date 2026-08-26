@@ -39,7 +39,9 @@ async-compat.workspace = true
 async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
+base64.workspace = true
 chrono.workspace = true
+url = "2"
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
 

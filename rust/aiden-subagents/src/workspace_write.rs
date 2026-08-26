@@ -199,6 +199,22 @@ fn approval_display_label(value: &str, limit: usize, fallback: &str) -> String {
     }
 }
 
+fn floor_char_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn ceil_char_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index < value.len() && !value.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
 fn diff_preview(before: &str, after: &str) -> (String, bool) {
     let mut lines = vec!["--- current".to_string(), "+++ proposed".to_string()];
     for line in before.split(['\r', '\n']) {
@@ -215,8 +231,10 @@ fn diff_preview(before: &str, after: &str) -> (String, bool) {
     let available = SUBAGENT_WORKSPACE_WRITE_DIFF_PREVIEW_LIMIT - marker.len();
     let head = available / 2;
     let tail = available - head;
+    let head_end = floor_char_boundary(&full, head);
+    let tail_start = ceil_char_boundary(&full, full.len() - tail);
     (
-        format!("{}{marker}{}", &full[..head], &full[full.len() - tail..]),
+        format!("{}{marker}{}", &full[..head_end], &full[tail_start..]),
         true,
     )
 }
@@ -538,6 +556,19 @@ mod tests {
         let long_before = "x".repeat(10_000);
         let (_, truncated) = diff_preview(&long_before, "");
         assert!(truncated);
+    }
+
+    #[test]
+    fn diff_preview_truncates_on_multibyte_boundaries() {
+        let before = format!("a{}", "🦀".repeat(3_000));
+
+        let (preview, truncated) = diff_preview(&before, "");
+
+        assert!(truncated);
+        assert!(preview.len() <= SUBAGENT_WORKSPACE_WRITE_DIFF_PREVIEW_LIMIT);
+        assert!(preview.contains("… preview truncated …"));
+        assert!(preview.starts_with("--- current"));
+        assert!(preview.ends_with("\n+"));
     }
 
     #[test]

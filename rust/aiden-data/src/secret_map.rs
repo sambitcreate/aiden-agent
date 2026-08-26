@@ -305,9 +305,10 @@ impl SecretCipher for KeyringCredentialCipher {
     fn delete_entry(&self, account: &str) -> Result<(), SecretCipherError> {
         let entry = keyring::Entry::new(&self.service, account)
             .map_err(|err| SecretCipherError::Keychain(err.to_string()))?;
-        entry
-            .delete_credential()
-            .map_err(|err| SecretCipherError::Keychain(err.to_string()))
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(err) => Err(SecretCipherError::Keychain(err.to_string())),
+        }
     }
 }
 

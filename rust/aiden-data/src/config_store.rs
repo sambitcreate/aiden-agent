@@ -207,6 +207,10 @@ pub struct Provider {
 const MAX_THINKING_MODEL_PREFERENCES: usize = 256;
 const MAX_MODEL_ID_CHARS: usize = 256;
 
+fn model_id_utf16_len(model_id: &str) -> usize {
+    model_id.encode_utf16().count()
+}
+
 fn is_thinking_level(levels: &[&str], value: &Value) -> bool {
     matches!(value, Value::String(level) if levels.contains(&level.as_str()))
 }
@@ -219,7 +223,7 @@ fn merge_thinking_preference(
     too_many: ConfigStoreError,
     invalid: ConfigStoreError,
 ) -> Result<Map<String, Value>, ConfigStoreError> {
-    if model_id.is_empty() || model_id.len() > MAX_MODEL_ID_CHARS {
+    if model_id.is_empty() || model_id_utf16_len(model_id) > MAX_MODEL_ID_CHARS {
         return Err(invalid);
     }
     if !is_thinking_level(levels, &level) {
@@ -228,7 +232,7 @@ fn merge_thinking_preference(
     let mut entries: Vec<(String, Value)> = Vec::new();
     if let Some(Value::Object(current)) = current {
         for (id, value) in current {
-            if id.is_empty() || id.len() > MAX_MODEL_ID_CHARS || id == model_id {
+            if id.is_empty() || model_id_utf16_len(id) > MAX_MODEL_ID_CHARS || id == model_id {
                 continue;
             }
             entries.push((id.clone(), value.clone()));
@@ -1338,6 +1342,14 @@ mod tests {
         assert!(store
             .set_google_thinking_level("gemini-test", "max")
             .is_err());
+
+        // Match JavaScript's 256 UTF-16-code-unit model-id bound exactly.
+        let exactly_256_units = "🧠".repeat(128);
+        assert!(store
+            .set_codex_thinking_level(&exactly_256_units, "medium")
+            .is_ok());
+        let too_long = format!("{exactly_256_units}x");
+        assert!(store.set_codex_thinking_level(&too_long, "medium").is_err());
     }
 
     #[test]

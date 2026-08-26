@@ -227,3 +227,12 @@ same-lock recursion.
   `active_chat_id` is `None` — a UI-jank smell, not a race (the `ChatStore`
   lock serializes it against background writes).
 
+## 2026-08-07 — GPUI parity link smoke disk pressure
+
+- A full `aiden-ui` debug link can fail late with `ld: write() failed, errno=28`
+  even after `cargo check`, tests, and Clippy pass. In this worktree the
+  regenerable `rust/target` cache had grown past 10 GiB while the volume had
+  only 130 MiB free. `cargo clean --manifest-path rust/Cargo.toml` reclaimed
+  10.5 GiB; the clean `cargo build -p aiden-ui` then linked successfully and
+  the `AIDEN_DEV=1` app booted without a panic. Check `df -h` and `du -sh
+  rust/target` before investigating this as a Rust/linker regression.

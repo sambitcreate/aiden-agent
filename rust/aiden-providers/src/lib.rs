@@ -31,6 +31,7 @@ pub mod auth_flow;
 pub mod builtin;
 pub mod catalog;
 pub mod codex;
+pub mod codex_oauth;
 pub mod compact;
 pub mod estimate;
 pub mod gemini_cache;
@@ -223,6 +224,8 @@ pub struct StreamRequest {
     /// `Model.thinkingLevelMap` — pi level → provider value; `None` value =
     /// unsupported.
     pub thinking_level_map: Option<HashMap<String, Option<String>>>,
+    /// Pi `Model.compat.forceAdaptiveThinking` for Anthropic Messages.
+    pub force_adaptive_thinking: bool,
     /// `Model.input` includes `"image"`.
     pub vision: bool,
     pub context_window: u32,
@@ -252,6 +255,7 @@ impl Default for StreamRequest {
             base_url: String::new(),
             reasoning: false,
             thinking_level_map: None,
+            force_adaptive_thinking: false,
             vision: false,
             context_window: 0,
             max_tokens_limit: 0,
@@ -403,28 +407,153 @@ pub fn sse_payload_stream(
     .flatten()
 }
 
-/// Build an Anthropic-style request body from a normalized request (stub shape
-/// for the phase-3 scaffold; the exact prompt-cache/session fields arrive with
-/// the compaction work). Nullable optional fields (`system`, `temperature`)
-/// are omitted rather than emitted as JSON `null`, which the Messages API
-/// rejects with a validation error.
+/// Build an Anthropic-style request body from a normalized request. Nullable
+/// optional fields (`system`, `temperature`) are omitted rather than emitted
+/// as JSON `null`, which the Messages API rejects with a validation error.
 pub fn anthropic_request_body(
     request: &StreamRequest,
     options: &StreamOptions,
 ) -> serde_json::Value {
+    const MIN_ANSWER_TOKENS: u32 = 1024;
+    let model_max_tokens = if request.max_tokens_limit == 0 {
+        8192
+    } else {
+        request.max_tokens_limit
+    };
+    let mut max_tokens = request.max_tokens.unwrap_or(model_max_tokens);
+    let cache_control = match options.cache_retention.unwrap_or(CacheRetention::Short) {
+        CacheRetention::None => None,
+        CacheRetention::Short => Some(serde_json::json!({ "type": "ephemeral" })),
+        CacheRetention::Long => Some(serde_json::json!({ "type": "ephemeral", "ttl": "1h" })),
+    };
     let mut body = serde_json::Map::new();
     body.insert("model".into(), serde_json::json!(request.model));
-    body.insert(
-        "max_tokens".into(),
-        serde_json::json!(request.max_tokens.unwrap_or(8192)),
-    );
     body.insert("stream".into(), serde_json::Value::Bool(true));
     if let Some(system) = &request.system_prompt {
-        body.insert("system".into(), serde_json::json!(system));
+        let mut block = serde_json::json!({ "type": "text", "text": system });
+        if let Some(cache_control) = &cache_control {
+            block["cache_control"] = cache_control.clone();
+        }
+        body.insert("system".into(), serde_json::json!([block]));
     }
-    body.insert("messages".into(), serde_json::json!(request.messages));
-    if let Some(temperature) = options.temperature {
-        body.insert("temperature".into(), serde_json::json!(temperature));
+    let mut messages = anthropic::convert_anthropic_messages(request);
+    if let (Some(cache_control), Some(last)) = (cache_control.as_ref(), messages.last_mut()) {
+        if last.get("role").and_then(serde_json::Value::as_str) == Some("user") {
+            match last.get_mut("content") {
+                Some(content @ serde_json::Value::String(_)) => {
+                    let text = content.as_str().unwrap_or_default().to_string();
+                    *content = serde_json::json!([{
+                        "type": "text",
+                        "text": text,
+                        "cache_control": cache_control,
+                    }]);
+                }
+                Some(serde_json::Value::Array(blocks)) => {
+                    if let Some(block) = blocks.last_mut() {
+                        if matches!(
+                            block.get("type").and_then(serde_json::Value::as_str),
+                            Some("text" | "image" | "tool_result")
+                        ) {
+                            block["cache_control"] = cache_control.clone();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    body.insert("messages".into(), serde_json::Value::Array(messages));
+    let mut tools = anthropic::convert_anthropic_tools(request);
+    if let (Some(cache_control), Some(last_tool)) = (cache_control.as_ref(), tools.last_mut()) {
+        last_tool["cache_control"] = cache_control.clone();
+    }
+    if !tools.is_empty() {
+        body.insert("tools".into(), serde_json::Value::Array(tools));
+    }
+    if let Some(level) = request.thinking_level {
+        if request.force_adaptive_thinking {
+            let mapped = request
+                .thinking_level_map
+                .as_ref()
+                .and_then(|map| map.get(level.as_str()))
+                .and_then(|value| value.as_deref());
+            let effort = mapped.unwrap_or(match level {
+                ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
+                ThinkingLevel::Medium => "medium",
+                ThinkingLevel::High => "high",
+                ThinkingLevel::Xhigh | ThinkingLevel::Max => "high",
+            });
+            body.insert(
+                "thinking".into(),
+                serde_json::json!({ "type": "adaptive", "display": "summarized" }),
+            );
+            body.insert(
+                "output_config".into(),
+                serde_json::json!({ "effort": effort }),
+            );
+        } else {
+            let clamped_level = level.clamped_for_budget();
+            let default_budget = match clamped_level {
+                ThinkingLevel::Minimal => 1024,
+                ThinkingLevel::Low => 2048,
+                ThinkingLevel::Medium => 8192,
+                ThinkingLevel::High => 16384,
+                ThinkingLevel::Xhigh | ThinkingLevel::Max => unreachable!("level was clamped"),
+            };
+            let budget = options
+                .thinking_budgets
+                .as_ref()
+                .and_then(|budgets| budgets.get(clamped_level.as_str()))
+                .copied()
+                .unwrap_or(default_budget);
+            if request.max_tokens.is_some() {
+                max_tokens = max_tokens.saturating_add(budget).min(model_max_tokens);
+            } else {
+                max_tokens = model_max_tokens;
+            }
+            max_tokens = estimate::clamp_max_tokens_to_context(
+                request.context_window,
+                &request.messages,
+                max_tokens,
+            );
+            // Pi's Anthropic request builder falls back to 1,024 when the
+            // answer reserve consumes the whole explicit cap. Preserve that
+            // wire behavior instead of emitting Anthropic's invalid zero
+            // thinking budget.
+            let budget = budget
+                .min(max_tokens.saturating_sub(MIN_ANSWER_TOKENS))
+                .max(1024);
+            body.insert(
+                "thinking".into(),
+                serde_json::json!({
+                    "type": "enabled",
+                    "budget_tokens": budget,
+                    "display": "summarized"
+                }),
+            );
+        }
+    } else if request.reasoning
+        && !matches!(
+            request
+                .thinking_level_map
+                .as_ref()
+                .and_then(|map| map.get("off")),
+            Some(None)
+        )
+    {
+        body.insert("thinking".into(), serde_json::json!({ "type": "disabled" }));
+    }
+    max_tokens = estimate::clamp_max_tokens_to_context(
+        request.context_window,
+        &request.messages,
+        max_tokens,
+    );
+    body.insert("max_tokens".into(), serde_json::json!(max_tokens));
+    // Anthropic rejects temperature when extended thinking is enabled.
+    if request.thinking_level.is_none() {
+        if let Some(temperature) = options.temperature.or(request.temperature) {
+            body.insert("temperature".into(), serde_json::json!(temperature));
+        }
     }
     serde_json::Value::Object(body)
 }
@@ -444,9 +573,293 @@ pub(crate) fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use aiden_core::{
-        AssistantMessage, ContentBlock, StopReason, TextContent, ToolCall, Usage, UsageCost,
+        AssistantMessage, ContentBlock, StopReason, TextContent, ThinkingContent, ToolCall,
+        ToolResultMessage, Usage, UsageCost, UserContent, UserMessage,
     };
     use anthropic::parse_anthropic_sse;
+
+    fn anthropic_thinking_request(level: Option<ThinkingLevel>) -> StreamRequest {
+        StreamRequest {
+            provider_id: "anthropic".into(),
+            api: ApiFamily::AnthropicMessages,
+            model: "claude-sonnet-4-5".into(),
+            reasoning: true,
+            max_tokens_limit: 32_768,
+            max_tokens: Some(8_192),
+            thinking_level: level,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn anthropic_adaptive_thinking_maps_effort_and_omits_temperature() {
+        let mut request = anthropic_thinking_request(Some(ThinkingLevel::Xhigh));
+        request.force_adaptive_thinking = true;
+        request.thinking_level_map = Some(HashMap::from([
+            ("off".into(), None),
+            ("xhigh".into(), Some("xhigh".into())),
+        ]));
+        let body = anthropic_request_body(
+            &request,
+            &StreamOptions {
+                temperature: Some(0.4),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            body["thinking"],
+            serde_json::json!({ "type": "adaptive", "display": "summarized" })
+        );
+        assert_eq!(
+            body["output_config"],
+            serde_json::json!({ "effort": "xhigh" })
+        );
+        assert_eq!(body["max_tokens"], 8_192);
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn anthropic_legacy_thinking_reserves_answer_tokens_and_clamps_large_effort() {
+        let request = anthropic_thinking_request(Some(ThinkingLevel::Max));
+        let body = anthropic_request_body(&request, &StreamOptions::default());
+
+        assert_eq!(
+            body["thinking"],
+            serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": 16_384,
+                "display": "summarized"
+            })
+        );
+        assert_eq!(body["max_tokens"], 24_576);
+    }
+
+    #[test]
+    fn anthropic_legacy_thinking_uses_configured_budget_and_never_emits_zero() {
+        let mut request = anthropic_thinking_request(Some(ThinkingLevel::Medium));
+        let options = StreamOptions {
+            thinking_budgets: Some(HashMap::from([("medium".into(), 4_096)])),
+            ..Default::default()
+        };
+        let body = anthropic_request_body(&request, &options);
+        assert_eq!(body["thinking"]["budget_tokens"], 4_096);
+        assert_eq!(body["max_tokens"], 12_288);
+
+        request.max_tokens = Some(512);
+        request.max_tokens_limit = 512;
+        let tiny = anthropic_request_body(&request, &options);
+        assert_eq!(tiny["thinking"]["budget_tokens"], 1_024);
+        assert_eq!(tiny["max_tokens"], 512);
+    }
+
+    #[test]
+    fn anthropic_off_emits_disabled_only_when_the_model_can_disable() {
+        let mut request = anthropic_thinking_request(None);
+        request.thinking_level_map = Some(HashMap::from([("off".into(), Some("off".into()))]));
+        let body = anthropic_request_body(&request, &StreamOptions::default());
+        assert_eq!(body["thinking"], serde_json::json!({ "type": "disabled" }));
+
+        request.thinking_level_map = Some(HashMap::from([("off".into(), None)]));
+        let hidden = anthropic_request_body(&request, &StreamOptions::default());
+        assert!(hidden.get("thinking").is_none());
+    }
+
+    #[test]
+    fn keyless_compatibility_token_never_crosses_provider_headers() {
+        let options = StreamOptions {
+            api_key: Some(catalog::PI_AUTH_COMPATIBILITY_TOKEN.into()),
+            ..Default::default()
+        };
+        let anthropic = anthropic::AnthropicProvider::new()
+            .build_request(&anthropic_thinking_request(None), &options)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(anthropic.headers().get("x-api-key").is_none());
+        assert!(!format!("{anthropic:?}").contains(catalog::PI_AUTH_COMPATIBILITY_TOKEN));
+
+        let openai_request = StreamRequest {
+            provider_id: "custom:local".into(),
+            api: ApiFamily::OpenAICompletions,
+            model: "local-model".into(),
+            ..Default::default()
+        };
+        let (builder, _) = openai_completions::OpenAICompletionsProvider::with_base_url(
+            "http://127.0.0.1:1234/v1",
+        )
+        .build_request(&openai_request, &options)
+        .unwrap();
+        let openai = builder.build().unwrap();
+        assert!(openai.headers().get("authorization").is_none());
+        assert!(!format!("{openai:?}").contains(catalog::PI_AUTH_COMPATIBILITY_TOKEN));
+    }
+
+    #[test]
+    fn anthropic_body_converts_internal_messages_tools_and_results_to_wire_shape() {
+        let mut request = anthropic_thinking_request(Some(ThinkingLevel::High));
+        request.messages = vec![
+            Message::User(UserMessage {
+                content: UserContent::Text("inspect the workspace".into()),
+                timestamp: 41,
+            }),
+            Message::Assistant(AssistantMessage {
+                content: vec![
+                    ContentBlock::Thinking(ThinkingContent {
+                        thinking: "I should read it".into(),
+                        thinking_signature: Some("sig-1".into()),
+                        redacted: None,
+                    }),
+                    ContentBlock::ToolCall(ToolCall {
+                        id: "toolu_1".into(),
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({ "path": "README.md" }),
+                        thought_signature: None,
+                    }),
+                ],
+                api: "anthropic-messages".into(),
+                provider: "anthropic".into(),
+                model: request.model.clone(),
+                response_model: None,
+                response_id: Some("msg_1".into()),
+                usage: usage_fixture(),
+                stop_reason: StopReason::ToolUse,
+                error_message: None,
+                timestamp: 42,
+            }),
+            Message::ToolResult(ToolResultMessage {
+                tool_call_id: "toolu_1".into(),
+                tool_name: "read_file".into(),
+                content: vec![ContentBlock::Text(TextContent {
+                    text: "contents".into(),
+                    text_signature: None,
+                })],
+                details: None,
+                added_tool_names: None,
+                is_error: false,
+                timestamp: 43,
+            }),
+            Message::ToolResult(ToolResultMessage {
+                tool_call_id: "toolu_2".into(),
+                tool_name: "grep".into(),
+                content: vec![ContentBlock::Text(TextContent {
+                    text: "no matches".into(),
+                    text_signature: None,
+                })],
+                details: None,
+                added_tool_names: None,
+                is_error: true,
+                timestamp: 44,
+            }),
+        ];
+        request.tools = vec![ToolDef {
+            name: "read_file".into(),
+            description: "Read a file".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "path": { "type": "string" } },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+        }];
+
+        let body = anthropic_request_body(&request, &StreamOptions::default());
+        assert_eq!(
+            body["messages"],
+            serde_json::json!([
+                { "role": "user", "content": "inspect the workspace" },
+                {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "thinking", "thinking": "I should read it", "signature": "sig-1" },
+                        { "type": "tool_use", "id": "toolu_1", "name": "read_file", "input": { "path": "README.md" } }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "tool_result", "tool_use_id": "toolu_1", "content": "contents", "is_error": false },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_2",
+                            "content": "no matches",
+                            "is_error": true,
+                            "cache_control": { "type": "ephemeral" }
+                        }
+                    ]
+                }
+            ])
+        );
+        assert_eq!(
+            body["tools"],
+            serde_json::json!([{
+                "name": "read_file",
+                "description": "Read a file",
+                "eager_input_streaming": true,
+                "input_schema": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"]
+                },
+                "cache_control": { "type": "ephemeral" }
+            }])
+        );
+        assert!(!body["messages"].to_string().contains("timestamp"));
+        assert!(!body["messages"].to_string().contains("toolCall"));
+        assert!(!body["messages"].to_string().contains("toolResult"));
+    }
+
+    #[test]
+    fn anthropic_cache_retention_marks_system_last_tool_and_last_user_boundary() {
+        let mut request = anthropic_thinking_request(None);
+        request.system_prompt = Some("Pinned system".into());
+        request.messages = vec![Message::User(UserMessage {
+            content: UserContent::Text("hello".into()),
+            timestamp: 1,
+        })];
+        request.tools = vec![ToolDef {
+            name: "read_file".into(),
+            description: "Read".into(),
+            parameters: serde_json::json!({ "type": "object" }),
+        }];
+
+        let long = anthropic_request_body(
+            &request,
+            &StreamOptions {
+                cache_retention: Some(CacheRetention::Long),
+                ..Default::default()
+            },
+        );
+        let expected = serde_json::json!({ "type": "ephemeral", "ttl": "1h" });
+        assert_eq!(long["system"][0]["cache_control"], expected);
+        assert_eq!(long["tools"][0]["cache_control"], expected);
+        assert_eq!(long["messages"][0]["content"][0]["cache_control"], expected);
+
+        let none = anthropic_request_body(
+            &request,
+            &StreamOptions {
+                cache_retention: Some(CacheRetention::None),
+                ..Default::default()
+            },
+        );
+        assert!(none["system"][0].get("cache_control").is_none());
+        assert!(none["tools"][0].get("cache_control").is_none());
+        assert!(none["messages"][0]["content"].is_string());
+    }
+
+    #[test]
+    fn anthropic_output_cap_is_clamped_to_the_remaining_context() {
+        let mut request = anthropic_thinking_request(None);
+        request.context_window = 10_000;
+        request.max_tokens = None;
+        request.max_tokens_limit = 8_192;
+        request.messages = vec![Message::User(UserMessage {
+            content: UserContent::Text("x".repeat(20_000)),
+            timestamp: 1,
+        })];
+        let body = anthropic_request_body(&request, &StreamOptions::default());
+        assert_eq!(body["max_tokens"], 904);
+    }
 
     /// A captured (abridged) Anthropic Messages SSE byte stream. Deliberately
     /// uses CRLF in one frame to exercise the line normalization.
@@ -566,6 +979,133 @@ data: {"type":"content_block_stop","index":0}
         };
         assert_eq!(tool_call.name, "grep");
         assert_eq!(tool_call.arguments, serde_json::json!({"pattern": "foo"}));
+    }
+
+    #[test]
+    fn signed_thinking_usage_and_length_survive_anthropic_streaming() {
+        let mut accumulator =
+            AnthropicAccumulator::with_identity("custom:anthropic-gateway", "claude-sonnet-4-5");
+        accumulator
+            .step(
+                "message_start",
+                r#"{"message":{"id":"msg_1","model":"claude-sonnet-4-5-20250929","usage":{"input_tokens":12,"output_tokens":1,"cache_read_input_tokens":3,"cache_creation_input_tokens":4,"cache_creation":{"ephemeral_1h_input_tokens":2}}}}"#,
+            )
+            .unwrap();
+        accumulator
+            .step(
+                "content_block_start",
+                r#"{"index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            )
+            .unwrap();
+        accumulator
+            .step(
+                "content_block_delta",
+                r#"{"index":0,"delta":{"type":"thinking_delta","thinking":"private"}}"#,
+            )
+            .unwrap();
+        assert!(accumulator
+            .step(
+                "content_block_delta",
+                r#"{"index":0,"delta":{"type":"signature_delta","signature":"signed-value"}}"#,
+            )
+            .unwrap()
+            .is_none());
+        accumulator
+            .step("content_block_stop", r#"{"index":0}"#)
+            .unwrap();
+        accumulator
+            .step(
+                "message_delta",
+                r#"{"delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":9,"output_tokens_details":{"thinking_tokens":6}}}"#,
+            )
+            .unwrap();
+        let event = accumulator
+            .step("message_stop", r#"{"type":"message_stop"}"#)
+            .unwrap()
+            .unwrap();
+        let AssistantMessageEvent::Done { reason, message } = event else {
+            panic!("expected done");
+        };
+        assert_eq!(reason, StopReason::Length);
+        assert_eq!(message.provider, "custom:anthropic-gateway");
+        assert_eq!(message.model, "claude-sonnet-4-5");
+        assert_eq!(
+            message.response_model.as_deref(),
+            Some("claude-sonnet-4-5-20250929")
+        );
+        let ContentBlock::Thinking(thinking) = &message.content[0] else {
+            panic!("expected thinking");
+        };
+        assert_eq!(thinking.thinking, "private");
+        assert_eq!(thinking.thinking_signature.as_deref(), Some("signed-value"));
+        assert_eq!(message.usage.input, 12);
+        assert_eq!(message.usage.output, 9);
+        assert_eq!(message.usage.cache_read, 3);
+        assert_eq!(message.usage.cache_write, 4);
+        assert_eq!(message.usage.cache_write_1h, Some(2));
+        assert_eq!(message.usage.reasoning, Some(6));
+        assert_eq!(message.usage.total_tokens, 28);
+    }
+
+    #[test]
+    fn anthropic_refusal_is_a_terminal_error_with_provider_explanation() {
+        let mut accumulator = AnthropicAccumulator::new();
+        accumulator
+            .step(
+                "message_start",
+                r#"{"message":{"id":"msg_refused","model":"claude-sonnet-5","usage":{}}}"#,
+            )
+            .unwrap();
+        accumulator
+            .step(
+                "message_delta",
+                r#"{"delta":{"stop_reason":"refusal","stop_details":{"explanation":"Request cannot be completed"}},"usage":{"output_tokens":1}}"#,
+            )
+            .unwrap();
+        let event = accumulator
+            .step("message_stop", r#"{"type":"message_stop"}"#)
+            .unwrap()
+            .unwrap();
+        let AssistantMessageEvent::Error { error, .. } = event else {
+            panic!("expected refusal error");
+        };
+        assert_eq!(error.stop_reason, StopReason::Error);
+        assert_eq!(
+            error.error_message.as_deref(),
+            Some("Request cannot be completed")
+        );
+    }
+
+    #[test]
+    fn redacted_thinking_is_preserved_as_opaque_signed_content() {
+        let fixture = br#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-4-5","content":[],"usage":{}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque-secret"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}
+
+event: message_stop
+data: {"type":"message_stop"}
+"#;
+        let events = parse_anthropic_sse(fixture).unwrap();
+        let AssistantMessageEvent::Done { message, .. } = events.last().unwrap() else {
+            panic!("expected done");
+        };
+        let ContentBlock::Thinking(thinking) = &message.content[0] else {
+            panic!("expected redacted thinking");
+        };
+        assert_eq!(thinking.redacted, Some(true));
+        assert_eq!(
+            thinking.thinking_signature.as_deref(),
+            Some("opaque-secret")
+        );
+        assert!(thinking.thinking.is_empty());
     }
 
     #[test]

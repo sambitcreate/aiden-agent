@@ -1,15 +1,16 @@
 //! Built-in (pi-native) model catalog.
 //!
 //! Port of the pi-ai builtin model records Aiden consumes for its native
-//! providers: `getBuiltinModels("anthropic")` + `getBuiltinModels("google")`
+//! providers: `getBuiltinModels("anthropic")`, `getBuiltinModels("google")`,
+//! and the OAuth-backed `getBuiltinModels("openai-codex")`
 //! (`main/services/anthropic-provider.ts`, `main/services/google-provider.ts`)
 //! and the `piExact` model resolution in `main/services/model-runtime.ts`.
 //!
 //! The data is a snapshot of
-//! `node_modules/@earendil-works/pi-ai/dist/providers/{anthropic,google}.models.js`
-//! at port time. Aiden deliberately ships only the two native providers it
-//! renders as built-ins (anthropic + google); `openai`/`deepseek`/`moonshotai`
-//! builtins remain models.dev-catalog-only, exactly like the TS custom path.
+//! `node_modules/@earendil-works/pi-ai/dist/providers/*.models.js` at port
+//! time. Aiden ships the two API-key-native providers it renders as built-ins
+//! plus the OAuth-backed Codex virtual provider; ordinary
+//! `openai`/`deepseek`/`moonshotai` builtins remain models.dev-catalog-only.
 
 use crate::ApiFamily;
 
@@ -80,6 +81,18 @@ pub const ANTHROPIC_BUILTIN_MODELS: &[BuiltinModel] = &[
         thinking_level_map: &[("xhigh", Some("xhigh")), ("max", Some("max"))], vision: true, context_window: 1_000_000, max_tokens: 128_000, force_adaptive_thinking: false },
 ];
 
+/// Pi-ai Codex model snapshot used by the virtual OAuth provider and the
+/// request-time `piExact` limit resolver.
+#[rustfmt::skip]
+pub const CODEX_BUILTIN_MODELS: &[BuiltinModel] = &[
+    BuiltinModel { id: "gpt-5.4", name: "GPT-5.4", api: ApiFamily::OpenAICodexResponses, reasoning: true,
+        thinking_level_map: &[("low", Some("low")), ("medium", Some("medium")), ("high", Some("high")), ("xhigh", Some("xhigh"))],
+        vision: true, context_window: 272_000, max_tokens: 128_000, force_adaptive_thinking: false },
+    BuiltinModel { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", api: ApiFamily::OpenAICodexResponses, reasoning: true,
+        thinking_level_map: &[("low", Some("low")), ("medium", Some("medium")), ("high", Some("high")), ("xhigh", Some("xhigh")), ("max", Some("max"))],
+        vision: true, context_window: 372_000, max_tokens: 128_000, force_adaptive_thinking: false },
+];
+
 /// Pi-ai `GOOGLE_MODELS` snapshot (`google.models.js`) — the same ids as the
 /// `GOOGLE_PROVIDER_MODEL_IDS` list in `aiden-data/portable_config.rs`.
 #[rustfmt::skip]
@@ -128,6 +141,7 @@ pub fn builtin_models(provider_id: &str) -> &'static [BuiltinModel] {
     match provider_id {
         ANTHROPIC_PROVIDER_ID => ANTHROPIC_BUILTIN_MODELS,
         crate::google::GOOGLE_PROVIDER_ID => GOOGLE_BUILTIN_MODELS,
+        crate::codex::OPENAI_CODEX_PROVIDER_ID => CODEX_BUILTIN_MODELS,
         _ => &[],
     }
 }
@@ -216,6 +230,16 @@ mod tests {
         assert_eq!(gemma.context_window, 262_144);
         assert_eq!(gemma.max_tokens, 32_768);
         assert_eq!(gemma.api, ApiFamily::GoogleGenerativeAi);
+    }
+
+    #[test]
+    fn codex_builtins_drive_the_virtual_catalog_and_runtime_limits() {
+        let model = builtin_model(crate::codex::OPENAI_CODEX_PROVIDER_ID, "gpt-5.6-sol")
+            .expect("bundled Codex model");
+        assert_eq!(model.api, ApiFamily::OpenAICodexResponses);
+        assert_eq!(model.context_window, 372_000);
+        assert_eq!(model.max_tokens, 128_000);
+        assert_eq!(model.thinking_level_map.last().unwrap().0, "max");
     }
 
     #[test]

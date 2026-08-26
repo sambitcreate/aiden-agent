@@ -12,11 +12,7 @@
 //! is one-shot; dropping the panel settles every outstanding request with the
 //! cancelled error (fail closed), mirroring the renderer's abort-signal expiry.
 //!
-//! `AllowSession` records the tool name in a session allow-list so subsequent
-//! calls of the same tool run without pausing until the panel (or bridge) is
-//! recreated.
-
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use aiden_agent::approval::{ApprovalRequest, ApprovalVerdict, APPROVAL_TOOL_NAMES};
@@ -25,13 +21,11 @@ use aiden_core::ToolCall;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-/// The three-way decision the UI sends back for a tool approval.
+/// The one-call decision the UI sends back for a tool approval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecision {
     /// Run this single call, then ask again next time.
     AllowOnce,
-    /// Run this call and every later call of the same tool without asking.
-    AllowSession,
     /// Do not run; feed a blocked error result back to the model.
     Deny,
 }
@@ -40,7 +34,6 @@ impl ApprovalDecision {
     pub fn label(self) -> &'static str {
         match self {
             ApprovalDecision::AllowOnce => "Allow once",
-            ApprovalDecision::AllowSession => "Allow session",
             ApprovalDecision::Deny => "Deny",
         }
     }
@@ -69,17 +62,15 @@ pub fn bridge_requires_approval(tool_name: &str) -> bool {
 /// [`ApprovalBridge::resolve`] takes it; the sender is what [`ApprovalBridge::decide`]
 /// uses.
 struct Pending {
-    tool_name: String,
     tx: mpsc::Sender<ApprovalDecision>,
     rx: Option<mpsc::Receiver<ApprovalDecision>>,
 }
 
 /// The UI-bound approval policy. Cheap to clone: the pending map and the
-/// session allow-list are shared.
+/// pending requests are shared.
 #[derive(Clone)]
 pub struct ApprovalBridge {
     pending: Arc<Mutex<HashMap<String, Pending>>>,
-    session_allow: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Default for ApprovalBridge {
@@ -92,7 +83,6 @@ impl ApprovalBridge {
     pub fn new() -> Self {
         Self {
             pending: Arc::new(Mutex::new(HashMap::new())),
-            session_allow: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -101,15 +91,14 @@ impl ApprovalBridge {
     /// runner's [`ApprovalBridge::resolve`] collects the decision (or
     /// [`ApprovalBridge::cancel_all`] aborts), so `decide` and `resolve` are
     /// order-independent. One-shot: a second `decide` for the same id is a
-    /// no-op (the channel already carries the first decision). `AllowSession`
-    /// additionally records the tool in the session allow-list.
+    /// no-op (the channel already carries the first decision).
     ///
     /// A second `decide` also cleans up a *dead* entry: when the runner was
     /// cancelled after `resolve` took the receiver (so nothing can ever read a
     /// decision again), the entry is removed so the UI queue does not leak a
     /// stale, never-resolvable approval card.
     pub fn decide(&self, approval_id: &str, decision: ApprovalDecision) -> bool {
-        let tool_name = {
+        {
             let mut pending = lock(&self.pending);
             let Some(entry) = pending.get(approval_id) else {
                 return false;
@@ -124,18 +113,8 @@ impl ApprovalBridge {
                 }
                 return false;
             }
-            entry.tool_name.clone()
-        };
-        if decision == ApprovalDecision::AllowSession {
-            let mut session = lock(&self.session_allow);
-            session.insert(tool_name);
         }
         true
-    }
-
-    /// Whether a tool call is currently session-allowed (no approval needed).
-    pub fn is_session_allowed(&self, tool_name: &str) -> bool {
-        lock(&self.session_allow).contains(tool_name)
     }
 
     /// Settle every outstanding request with the cancelled path (panel drop,
@@ -157,11 +136,6 @@ impl ApprovalBridge {
         lock(&self.pending).keys().cloned().collect()
     }
 
-    /// Clear the session allow-list (e.g. on stop).
-    pub fn reset_session(&self) {
-        lock(&self.session_allow).clear();
-    }
-
     /// Register a gated request and publish the ask verdict. Shared by the
     /// automation and tool paths; `details` must already carry the
     /// kind-specific fields (the approval id and tool call id are injected
@@ -179,14 +153,7 @@ impl ApprovalBridge {
         details["summary"] = serde_json::Value::String(summary.to_string());
         let (tx, rx) = mpsc::channel(1);
         let mut pending = lock(&self.pending);
-        pending.insert(
-            approval_id.clone(),
-            Pending {
-                tool_name: call.name.clone(),
-                tx,
-                rx: Some(rx),
-            },
-        );
+        pending.insert(approval_id.clone(), Pending { tx, rx: Some(rx) });
         ApprovalVerdict::Ask(ApprovalRequest {
             approval_id,
             tool_name: call.name.clone(),
@@ -208,9 +175,6 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[async_trait]
 impl aiden_agent::ApprovalPolicy for ApprovalBridge {
     fn evaluate(&self, call: &ToolCall) -> ApprovalVerdict {
-        if self.is_session_allowed(&call.name) {
-            return ApprovalVerdict::Allow;
-        }
         if is_automation_tool(&call.name) {
             let now = aiden_data::now_millis();
             let summary = if call.name == "schedule_task" {
@@ -244,7 +208,7 @@ impl aiden_agent::ApprovalPolicy for ApprovalBridge {
             return Err("approval request is no longer pending".to_string());
         };
         let outcome = match receiver.recv().await {
-            Some(ApprovalDecision::AllowOnce | ApprovalDecision::AllowSession) => Ok(()),
+            Some(ApprovalDecision::AllowOnce) => Ok(()),
             Some(ApprovalDecision::Deny) => Err("The tool call was denied.".to_string()),
             None => Err("The approval request was cancelled.".to_string()),
         };
@@ -537,29 +501,6 @@ mod tests {
             bridge.resolve(&approval_id).await.unwrap_err(),
             "approval request is no longer pending"
         );
-    }
-
-    #[tokio::test]
-    async fn session_allow_runs_later_calls_without_asking() {
-        let bridge = ApprovalBridge::new();
-        let _ = bridge.evaluate(&call("run_command", serde_json::json!({ "command": "ls" })));
-        let approval_id = bridge.pending_ids()[0].clone();
-        assert!(bridge.decide(&approval_id, ApprovalDecision::AllowSession));
-        // The first call resolves allowed.
-        assert_eq!(bridge.resolve(&approval_id).await, Ok(()));
-        // Later calls of the same tool are allowed immediately.
-        assert_eq!(
-            bridge.evaluate(&call(
-                "run_command",
-                serde_json::json!({ "command": "pwd" })
-            )),
-            ApprovalVerdict::Allow
-        );
-        // A different mutating tool still asks.
-        assert!(matches!(
-            bridge.evaluate(&call("write_file", serde_json::json!({ "path": "x" }))),
-            ApprovalVerdict::Ask(_)
-        ));
     }
 
     #[test]

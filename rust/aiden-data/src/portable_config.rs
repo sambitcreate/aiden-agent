@@ -89,6 +89,10 @@ impl GenerationThinkingLevel {
         GenerationThinkingLevel::Xhigh,
         GenerationThinkingLevel::Max,
     ];
+
+    pub fn as_str(self) -> &'static str {
+        thinking_level_as_str(self)
+    }
 }
 
 pub fn is_generation_thinking_level(value: &Value) -> bool {

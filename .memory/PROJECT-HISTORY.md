@@ -1,3 +1,108 @@
+### 2026-08-07 — GPUI Codex auth hardening and Computer Use controller foundation
+
+- Instantiated the Codex OAuth core as an invisible process-owned GPUI host
+  immediately after durable stores open. It reuses the exact request-time
+  `StoreCodexAuth`, keeps a stable non-Entity owner/document identity, bridges
+  every runtime call through the Tokio bridge, bounds typed coordinator and
+  browser channels, and synchronously revokes ownership before explicit or
+  native quit while giving runtime cleanup a bounded best-effort drain. Startup
+  remains offline and opens no browser. A shared lifecycle epoch linearizes
+  event enqueue, queued-message draining, and foreground browser opening with
+  revocation, so no detached event or open can surface after shutdown;
+  Settings/onboarding remain unwired. Focused host tests: 9/9; strict UI clippy
+  passed and independent review was clean.
+- Added the process-owned Codex OAuth runtime core without exposing it in GPUI.
+  It ports Pi 0.80.10's exact browser PKCE/manual fallback and device-code
+  protocol behind fakeable HTTP/browser/listener/clock/entropy seams, reuses the
+  existing provider-auth coordinator for single-operation ownership and
+  cancellation, and commits only through `StoreCodexAuth`'s credential gate.
+  Status is secret-free, legacy Electron profiles are detection-only
+  `NeedsReauth` markers, and access/refresh/account data never crosses events or
+  diagnostics. Start/sign-out reservations and cancel/timeout-to-commit
+  transitions are linearized, sign-out work is coordinator-owned across a
+  dropped caller, and token refresh rejects redirects, oversized/malformed
+  bodies, empty tokens, and access tokens without the required account claim
+  before CAS persistence. Full provider tests: 293/293; focused StoreCodexAuth:
+  7/7; strict provider/UI clippy passed.
+- Reworked request-time Codex auth around a store-scoped shared refresh
+  operation: concurrent callers reuse one one-time-token refresh, callers have
+  a 15-second wait while a bounded 60-second reconciliation can still CAS a
+  late rotation, and blocking Keychain/filesystem work stays off Tokio.
+- Added an atomic credential mutation epoch and dispatch guard. Login, logout,
+  rotation, and partial destructive logout failures now fence pre-dispatch
+  requests and cancel error-body reads, retry waits, and active streams. Store
+  failures use fixed model-visible messages rather than paths or secret-bearing
+  diagnostics. Focused gates: 35 Codex tests and 6 StoreCodexAuth tests.
+- Upgraded the Rust Pi credential document to explicit v2 versioned Keychain
+  accounts. A durable `pendingSecrets` intent is committed before secret
+  creation, promotion is atomic, superseded/orphan cleanup is durable and
+  retryable, v1 Rust entries migrate, and Electron safeStorage markers remain
+  explicit re-auth/delete cases. Reads use no-follow/nonblocking descriptor
+  checks and mutation locks use normalized canonical identities. Pi tests:
+  24/24; strict data/UI clippy passed.
+- Added the internal-only Computer Use consolidated schema/tool/controller.
+  It has exact 14-action TypeBox-compatible schema, sequential execution,
+  generation-owned lazy lifecycle, one-shot target/revision-bound grants,
+  foreground TOCTOU fencing, cancellation/panic-safe cleanup, vision-to-AX
+  degradation, and bounded full PNG/JPEG decoding. Helper, broker, bridge, and
+  Foundation Models subprocesses now start from an explicit secret-free
+  environment; the fixed Node fd-3 IPC variables are restored without
+  inheriting provider, OAuth, proxy, loader, or Node options. Settings reads
+  fail closed, status and Foundation probes have detached shared ownership,
+  host launch/session admission is sealed against shutdown, caller drops and
+  panics cannot strand brokers, IPC cycles, or temporary directories, and
+  repeated shutdown shares one durable completion. It remains deliberately
+  unavailable to normal chat until production runtime/app ownership,
+  content-block provider wiring, specialized approval UI, settings/composer
+  gates, and packaged macOS/TCC acceptance land. Final independent review was
+  clean; 139 unit + 4 integration tests and strict CU clippy passed.
+- Added the internal production Computer Use runtime composition without GPUI
+  or provider exposure. Explicit packaged and development layouts never fall
+  back across one another; every generation or status probe rechecks macOS
+  support and freshly resolves the full helper path/hash/signature/live-process
+  chain before constructing a distinct unstarted host. Controller construction
+  and disabled status stay inert, ConfigStore read failures disable fail closed,
+  and adapters own and drain their fresh hosts. Executable containment is
+  canonical and component-aware, current-process `R_OK | X_OK` is checked off
+  the async executor, and cancellation wins after every filesystem boundary.
+  Final gates: 150 unit + 4 integration tests, strict CU clippy, and a clean
+  independent review. GPUI app ownership, provider content blocks, packaging,
+  and TCC acceptance remain explicitly open.
+- Hardened the still-unreachable subagent primitives so model-facing report,
+  event, workspace-diff, and shell-output truncation cannot panic on multibyte
+  UTF-8 boundaries. All 146 subagent library tests and strict clippy passed.
+
+### 2026-08-07 — GPUI normal-chat attachment lifecycle
+
+- Ported the frozen Electron picker-only attachment contract end to end. The
+  composer uses the native multi-file panel, keeps chat-owned drafts across
+  failed admission/persistence, supports attachment-only sends, filters newly
+  selected images only for a definitely non-vision model, blocks a later
+  non-vision model flip, and renders removable filename chips with supported
+  image thumbnails. Picker reads are cancellable and late results are fenced
+  by operation plus active-chat ownership.
+- Added canonical `aiden-core::attachments` validation and bounded
+  `aiden-data::attachments` reads: 20 items, 8 MiB/image, standard base64 with
+  decoded-size equality, 100k UTF-16 text truncation, Electron's exact image
+  extension map, skipped unreadable paths, all-or-nothing batches, bounded
+  sparse-file reads, and a deliberate 32 MiB aggregate body cap. ChatStore
+  validates again on append and strips invalid loaded payloads before replay.
+- User persistence now precedes provider generation. The store-returned chat is
+  the authoritative first request, append failure preserves the draft, chat
+  navigation abandons a stale generation without erasing a durable user turn,
+  and Retry reuses the existing user message instead of duplicating attachment
+  bodies. Pending drafts are frozen until the append settles.
+- Shared provider projection preserves Electron's text-file prefix, text before
+  image order, attachment-only messages, history replay, persisted timestamps,
+  and the generation-pinned vision gate. The transcript renders images and file
+  chips without an empty text bubble; render snapshots share the transcript so
+  streaming flushes do not clone multi-megabyte base64 bodies, and decoded image
+  caches are composite-keyed, per-chat cleared, and bounded.
+- Verification after this slice: `aiden-ui` 261/261, `aiden-providers` 253/253,
+  `aiden-core` 123/123, and `aiden-data` 151/151 passed. The app still needs a
+  manual real-vision transport/reload smoke before the attachment matrix row can
+  be called Complete under the parity rule.
+
 ### 2026-08-07 — Provider/model catalog parity audit (TS Electron vs Rust GPUI port)
 
 - **`rust/aiden-providers/src/builtin.rs` (new)**: pi-exact builtin model snapshot
@@ -1010,3 +1115,105 @@ Major milestones only. Day-to-day changelog noise lives in git.
 - Cargo: `aiden-ui` gains `aiden-agent`, `aiden-subagents`, `aiden-git` workspace deps (+ `tempfile` dev-dep); `aiden-subagents` added to `workspace.dependencies`.
 - Verified: `cargo test -p aiden-ui` (136 passed, incl. ~18 new), `cargo clippy -p aiden-ui --all-targets -- -D warnings` (clean), `cargo fmt -p aiden-ui --check` (clean), `cargo check --workspace` (passes). Remaining degraded behaviors: single-pass MCP tool loop (a second model tool-use round settles with the recorded timeline), usage is only recorded on terminal Done/Error (not user stops), and preset API-key MCP servers need the keychain resolver wired (keyless presets are skipped).
 - `rust/aiden-mac` dictation port (2026-08-07): new `audio` (AVAudioEngine input-tap capture via `objc2-avf-audio` → downmix + linear resample to mono 16 kHz Float32, `AudioCapture` trait + pure resampler unit tests), `dictation_coordinator` (exact port of `dictation-coordinator.ts` — serialized tokio-mutex queue, idle/starting/recording/transcribing/delivering, hide timers, 100k transcript cap; all four TS tests mirrored + 11 more), `sherpa` + `local_models` (Parakeet catalog, GitHub-release tar.bz2 download w/ progress 0–90/90–100 %, `/usr/bin/tar --strip-components=1` extraction, cancel-by-id registry, env-overridable models root) + `local_runtime_status` (Ollama/LM Studio load-state parsers) — all behind a new `dictation` cargo feature (default ON; `--no-default-features` builds clean). `aiden-ui` pill wiring: `pill/live_audio.rs` (`LiveAudioSource` — background-thread capture feeding a shared `CaptureBuffer` for the meter bars + transcription drain), `pill/coordinator.rs` (`PillCoordinator` — broadcast watcher drives capture → sherpa transcribe → paste via `paste.rs`; missing model → exact "Download it in Settings → Voice" error; fake-capture/fake-transcribe tests), and the app shell (`app.rs` `wire_pill_coordinator` — foreground window-command bridge over `PILL_WINDOW`, `PillCommand` channel, live appearance read at open, cancel button → coordinator). sherpa-onnx 1.13.4 verified: crates.io static feature downloads a prebuilt macOS lib at build time and the FFI links/runs. Verified: `cargo test -p aiden-mac` (72), `cargo test -p aiden-ui` (191), `cargo clippy -p aiden-mac --all-targets -- -D warnings` (clean), `cargo check --workspace` (passes). Live dictation is wired in-app (⌘⇧D → record → transcribe → paste); model download UI in Settings → Voice remains a later-phase surface.
+### 2026-08-07 — GPUI end-to-end parity reopened; MCP chat loop correctness
+
+- Independent Electron (`origin/features-jul30`, `1d019f3`) versus GPUI audit found
+  that the previous completion report described crate/module coverage, not reachable
+  end-to-end parity. Normal chat began this audit as provider+MCP streaming rather than the full
+  coding-agent path; major gaps still remain in composer/workbench, settings, provider
+  auth, onboarding, scheduler, subagents, dictation setup, profile, command runtime,
+  native lifecycle, transcript rendering, and responsive/accessibility behavior.
+- Added `docs/plans/gpui-parity-plan.md` as the workflow-level source of truth and
+  changed the plan inventory from Complete to Partial/Active. The historical
+  completion report now points at the superseding parity plan and corrects its most
+  misleading live-wiring claims.
+- `aiden-ui::provider_kit::drive_stream` now supports up to 10 MCP tool iterations,
+  preserves the required assistant-tool-call → tool-result transcript ordering,
+  carries accumulated text/reasoning through later failures, and aggregates usage
+  across provider passes. `ChatService` persists the complete multi-round answer.
+  Focused regressions cover ordering and usage.
+- Phase 2a wires the authorized chat workspace into the normal stream: the project
+  system prompt and seven coding tools are available under Ask/Full/None permissions;
+  Ask uses one-call inline approvals (no unsafe tool-name-wide session grant). Workspace
+  switching moves only untouched chats and rejects used-chat reassignment, while loading
+  and background-create gates prevent header/tool-root drift. The prompt reports the
+  managed or detected Git branch that the generation is actually operating on.
+- Generation safety now includes staged async writes with a cancellation-fenced atomic
+  rename, process-group teardown on abort/timeout/output cap, terminal Cancelled timelines,
+  abnormal-close partial persistence/approval cleanup, truncated-tool rejection, repeated
+  call guards, pinned provider attribution, and exact MCP connection leases that fail closed
+  after reconnect. Multi-pass text/reasoning and usage are aggregated with live and
+  persisted turn separators, including terminal-error usage, and tool-only timelines are
+  retained even when a provider emits no visible text.
+- Enabled configured Agent Skills and filesystem-discovered skills are now captured in one
+  immutable per-generation registry, XML-escaped in the available-skills prompt, exposed as
+  Electron-compatible `skill_*` tools with deterministic configured/workspace/global collision
+  precedence, and return pinned instructions through the same bounded tool loop. Discovery
+  covers compatible `.agents`, `.claude`, and `.aiden` global/workspace layouts with a shared
+  coalescing cache, traversal/size caps, symlink and containment checks, and bounded support-file
+  context. A seventh native Settings destination provides configured create/edit, multiline
+  instructions, enable/disable, and delete flows plus a separately labeled read-only discovered
+  section. Its async mutations are serialized and operation-fenced, stale reloads and workspace
+  scans are generation-fenced, failed saves retain the draft, and instruction Markdown bytes
+  match Electron.
+- Optional Exa Web Search is now reachable from normal chat and a native eighth Settings
+  destination. It preserves Electron's tool name/schema/result shape and coding → web → Skills
+  → MCP order, but hardens the boundary with a 4k query cap, ten-result/UTF-16 text bounds, a
+  2 MiB response cap, an enforced 20s timeout, disabled redirects, and zero retries. The key is
+  encrypted in the machine keychain, never placed in config, and is captured with the portable
+  enable bit as one serialized per-generation snapshot. Missing/rotated keys fail closed,
+  restoring a key never silently enables network access, and exact-key redaction prevents a
+  reflected HTTP/transport error from entering the model transcript. Settings mutations and
+  refreshes are operation-fenced, reopening reloads durable state, onboarding discloses the
+  optional Exa request, and focused transport/dispatch/settings regressions remain network-free.
+- Verification for this slice: `aiden-agent` 104 tests, `aiden-mcp` 90 tests,
+  `aiden-data` 141 tests, `aiden-providers` 236 tests, and `aiden-ui` 239 tests pass;
+  strict Clippy passes. A fresh
+  `aiden-ui` build and short `AIDEN_DEV=1` native-app startup smoke also pass. The plan keeps
+  normal chat and MCP Partial because a deterministic multi-round driver/persistence
+  harness and the remaining compaction/attachments/computer-use/
+  subagent/Codex path have not landed.
+- Model-aware thinking controls now sit at the composer action point for exact native
+  Gemini, Codex, and Claude connections. Their per-model choices are resolved from
+  runtime/discovered capabilities, saved through the bounded device-local preference
+  maps, fenced against send/model-selection races, and pinned for every provider pass
+  in the generation. The duplicate Anthropic provider-editor control was removed and
+  onboarding explains the implicit Gemini Off, Codex Medium, and Claude High defaults.
+- Anthropic Messages now maps enabled thinking to adaptive `thinking` + `output_config`
+  effort when required, otherwise to bounded legacy budgets with answer-token headroom;
+  true Off emits `disabled`, hidden-minimum models omit that instruction, and enabled
+  requests omit temperature. Claude/Codex thinking events still update activity timing
+  but their raw reasoning is neither streamed nor persisted; Gemini/local reasoning
+  remains visible. Focused provider/data/UI regressions cover payloads, capability
+  filtering, privacy, keyboard navigation, and the exact UTF-16 model-id bound.
+- Anthropic's live transport now converts Aiden messages, signed/redacted thinking,
+  tool calls, grouped tool results, images, and tool schemas into the actual Messages
+  API wire shape rather than serializing internal tagged Rust enums. Stream accumulation
+  preserves provider/model identity, signatures, redacted payloads, cache-aware usage,
+  length stops, and terminal errors. Keyless compatibility tokens are suppressed from
+  both Anthropic and OpenAI-compatible authorization headers. Focused provider fixtures
+  cover the wire body, signature continuity, custom thinking budgets, small-token caps,
+  stop/usage mapping, and credential-header boundary.
+- Normal chat now applies the deterministic generation-context transform before every
+  provider pass. Capacity is checked once against the exact pinned prompt/tools/window
+  before transport construction; each pass compacts a disposable clone while the full
+  authoritative transcript remains available for subsequent tool evidence and durable
+  persistence. Recovery fallback requests expose no tools and reject hallucinated calls.
+  Usage-anchor tracking is occurrence-based rather than structural-equality based, and
+  paired tool-call/result plus immutability regressions cover large multi-round histories.
+- Composer thinking controls now reject models not offered by the selected connection,
+  use Electron's provider-specific declared-level rules, restore native Claude metadata,
+  keep Gemini's UI Off/Hide state, transfer keyboard focus with roving arrow/Home/End
+  navigation, and fence detached model-selection writes/catalog refreshes with intent
+  revisions. The current GPUI stack still lacks a native accessibility role/checked-state
+  bridge, so screen-reader radio semantics remain an explicit parity gap.
+- The Codex request path now reads and refreshes Rust-encrypted Pi OAuth credentials
+  through the shared stores instead of an always-signed-out placeholder. This is backend
+  readiness, not provider-auth completion: GPUI still needs production sign-in/sign-out,
+  superseded-refresh CAS, virtual-provider catalog refresh, and Electron-profile
+  re-auth/migration before Codex is user-reachable.
+- Verification after these slices: `aiden-ui` 253 tests and `aiden-providers` 246 tests
+  pass. Independent compaction review plus strict provider/UI Clippy were clean. A prior
+  fresh startup smoke was blocked by disk exhaustion during linking; the target rebuild
+  consumed most reclaimed space, so the native-app smoke remains to be rerun after the
+  next safe artifact cleanup.

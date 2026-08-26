@@ -54,18 +54,36 @@ fn quote_untrusted_report(text: &str) -> String {
         .join("\n")
 }
 
+fn floor_char_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn ceil_char_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index < value.len() && !value.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
 fn truncate_result_section(text: &str, maximum: usize) -> String {
     if text.len() <= maximum {
         return text.to_string();
     }
     let marker = "\n\n… [middle of this child report truncated] …\n\n";
     if maximum <= marker.len() {
-        return text.chars().take(maximum).collect();
+        return text[..floor_char_boundary(text, maximum)].to_string();
     }
     let available = maximum - marker.len();
     let head = (available / 2).min(512);
     let tail = available - head;
-    format!("{}{marker}{}", &text[..head], &text[text.len() - tail..])
+    let head_end = floor_char_boundary(text, head);
+    let tail_start = ceil_char_boundary(text, text.len() - tail);
+    format!("{}{marker}{}", &text[..head_end], &text[tail_start..])
 }
 
 /// `fairSectionBudgets` — distribute a total budget across sections, giving
@@ -395,5 +413,27 @@ mod tests {
         let truncated = truncate_result_section(&text, 1_000);
         assert!(truncated.len() <= 1_000);
         assert!(truncated.contains("… [middle of this child report truncated] …"));
+    }
+
+    #[test]
+    fn truncation_preserves_multibyte_boundaries_and_byte_budget() {
+        let marker = "\n\n… [middle of this child report truncated] …\n\n";
+        let maximum = marker.len() + 12;
+        let text = format!("a{}z", "🦀".repeat(100));
+
+        let truncated = truncate_result_section(&text, maximum);
+
+        assert!(truncated.len() <= maximum);
+        assert!(truncated.starts_with('a'));
+        assert!(truncated.ends_with('z'));
+        assert!(truncated.contains(marker));
+    }
+
+    #[test]
+    fn truncation_with_tiny_budget_stops_at_multibyte_boundary() {
+        let truncated = truncate_result_section("🦀🦀", 5);
+
+        assert_eq!(truncated, "🦀");
+        assert!(truncated.len() <= 5);
     }
 }

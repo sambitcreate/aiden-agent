@@ -25,6 +25,7 @@ sha2.workspace = true
 base64 = "0.22"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+getrandom = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true

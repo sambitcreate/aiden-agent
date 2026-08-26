@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use aiden_core::chat_title::{FoundationModelsConnectionState, FoundationModelsConnectionStatus};
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -400,15 +401,24 @@ struct CachedFmStatus {
     expires_at: u64,
 }
 
+#[cfg(test)]
+struct FmTestBarrier {
+    release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    reached: tokio::sync::Semaphore,
+}
+
 /// The connection factory from `createFoundationModelsConnection`.
+#[derive(Clone)]
 pub struct FoundationModelsConnection {
     platform: String,
     arch: String,
     system_version: String,
     now: Arc<dyn Fn() -> u64 + Send + Sync>,
     run_request: NativeFoundationModelsRequestRunner,
-    cached: std::sync::Mutex<Option<CachedFmStatus>>,
-    in_flight: tokio::sync::Mutex<Option<Arc<InFlightFm>>>,
+    cached: Arc<std::sync::Mutex<Option<CachedFmStatus>>>,
+    in_flight: Arc<tokio::sync::Mutex<Option<Arc<InFlightFm>>>>,
+    #[cfg(test)]
+    wait_before_result_check: Arc<std::sync::Mutex<Option<Arc<FmTestBarrier>>>>,
 }
 
 impl FoundationModelsConnection {
@@ -425,8 +435,10 @@ impl FoundationModelsConnection {
             system_version: system_version.into(),
             now,
             run_request,
-            cached: std::sync::Mutex::new(None),
-            in_flight: tokio::sync::Mutex::new(None),
+            cached: Arc::new(std::sync::Mutex::new(None)),
+            in_flight: Arc::new(tokio::sync::Mutex::new(None)),
+            #[cfg(test)]
+            wait_before_result_check: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -500,49 +512,64 @@ impl FoundationModelsConnection {
                 }
             }
         }
-        if let Some(existing) = self.in_flight.lock().await.clone() {
-            return self.await_in_flight(&existing).await;
-        }
-        let in_flight = Arc::new(InFlightFm {
-            result: std::sync::Mutex::new(None),
-            completion: tokio::sync::Notify::new(),
-        });
-        {
+        let (in_flight, claimed) = {
             let mut slot = self.in_flight.lock().await;
             if let Some(existing) = slot.as_ref() {
-                return self.await_in_flight(existing).await;
+                (Arc::clone(existing), false)
+            } else {
+                let in_flight = Arc::new(InFlightFm {
+                    result: std::sync::Mutex::new(None),
+                    completion: tokio::sync::Notify::new(),
+                });
+                *slot = Some(Arc::clone(&in_flight));
+                (in_flight, true)
             }
-            *slot = Some(Arc::clone(&in_flight));
-        }
-        let value = self.load_status().await;
-        let ttl = if value
-            .as_ref()
-            .map(|status| {
-                status.state == FoundationModelsConnectionState::ModelPreparing || status.retryable
-            })
-            .unwrap_or(false)
-        {
-            PREPARING_STATUS_TTL_MS
-        } else {
-            STABLE_STATUS_TTL_MS
         };
-        *self.cached.lock().unwrap() = Some(CachedFmStatus {
-            value: value.clone(),
-            expires_at: (self.now)() + ttl,
-        });
-        *in_flight.result.lock().unwrap() = Some(value.clone());
-        in_flight.completion.notify_waiters();
-        {
-            let mut slot = self.in_flight.lock().await;
+        if claimed {
+            self.spawn_status_worker(Arc::clone(&in_flight));
+        }
+        self.await_in_flight(&in_flight).await
+    }
+
+    fn spawn_status_worker(&self, in_flight: Arc<InFlightFm>) {
+        let connection = <FoundationModelsConnection as Clone>::clone(self);
+        tokio::spawn(async move {
+            let value = std::panic::AssertUnwindSafe(async {
+                let value = connection.load_status().await;
+                let ttl = if value.as_ref().is_some_and(|status| {
+                    status.state == FoundationModelsConnectionState::ModelPreparing
+                        || status.retryable
+                }) {
+                    PREPARING_STATUS_TTL_MS
+                } else {
+                    STABLE_STATUS_TTL_MS
+                };
+                *connection.cached.lock().unwrap() = Some(CachedFmStatus {
+                    value: value.clone(),
+                    expires_at: (connection.now)() + ttl,
+                });
+                value
+            })
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Some(connection_status(
+                    FoundationModelsConnectionState::Error,
+                    "Apple Foundation Models could not be checked.",
+                    true,
+                ))
+            });
+            *in_flight.result.lock().unwrap() = Some(value);
+            let mut slot = connection.in_flight.lock().await;
             if slot
                 .as_ref()
-                .map(|existing| Arc::ptr_eq(existing, &in_flight))
-                .unwrap_or(false)
+                .is_some_and(|existing| Arc::ptr_eq(existing, &in_flight))
             {
                 *slot = None;
             }
-        }
-        value
+            drop(slot);
+            in_flight.completion.notify_waiters();
+        });
     }
 
     async fn await_in_flight(
@@ -550,10 +577,22 @@ impl FoundationModelsConnection {
         existing: &Arc<InFlightFm>,
     ) -> Option<FoundationModelsConnectionStatus> {
         loop {
+            let mut completed = Box::pin(existing.completion.notified());
+            completed.as_mut().enable();
+            #[cfg(test)]
+            {
+                let barrier = self.wait_before_result_check.lock().unwrap().clone();
+                if let Some(barrier) = barrier {
+                    barrier.reached.add_permits(1);
+                    if let Some(release) = barrier.release.lock().await.take() {
+                        let _ = release.await;
+                    }
+                }
+            }
             if let Some(value) = existing.result.lock().unwrap().clone() {
                 return value;
             }
-            existing.completion.notified().await;
+            completed.await;
         }
     }
 
@@ -687,10 +726,20 @@ pub trait FoundationHelperSpawner: Send + Sync + 'static {
 /// --cancellation-file <c>`.
 pub struct OpenHelperSpawner {
     pub helper_path: PathBuf,
-    pub environment: HashMap<String, String>,
+    environment: HashMap<String, String>,
 }
 
 impl OpenHelperSpawner {
+    /// Construct the production helper spawner from a parent-environment
+    /// snapshot. The filtered map stays private so callers cannot bypass the
+    /// allowlist by constructing the spawner with provider or OAuth secrets.
+    pub fn new(helper_path: impl Into<PathBuf>, source: &HashMap<String, String>) -> Self {
+        Self {
+            helper_path: helper_path.into(),
+            environment: Self::environment(source),
+        }
+    }
+
     /// The bounded environment from `helperEnvironment()`: a fixed PATH plus
     /// the locale/temp/user passthroughs.
     pub fn environment(source: &HashMap<String, String>) -> HashMap<String, String> {
@@ -805,7 +854,8 @@ impl FoundationHelperSpawner for OpenHelperSpawner {
         cancellation_path: &std::path::Path,
     ) -> Result<Box<dyn FoundationHelperChild>, FoundationModelsConnectionError> {
         use std::process::Stdio;
-        let child = tokio::process::Command::new("/usr/bin/open")
+        let mut command = tokio::process::Command::new("/usr/bin/open");
+        command
             .arg("-W")
             .arg("-n")
             .arg(&self.helper_path)
@@ -818,24 +868,23 @@ impl FoundationHelperSpawner for OpenHelperSpawner {
             .arg(process_path)
             .arg("--cancellation-file")
             .arg(cancellation_path)
-            .envs(&self.environment)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    FoundationModelsConnectionError::new(
-                        "helper_missing",
-                        "The Apple Foundation Models helper is unavailable.",
-                    )
-                } else {
-                    FoundationModelsConnectionError::new(
-                        "helper_failed",
-                        "The Apple Foundation Models helper is unavailable.",
-                    )
-                }
-            })?;
+            .stderr(Stdio::piped());
+        crate::process::apply_allowlisted_environment(&mut command, &self.environment);
+        let child = command.spawn().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                FoundationModelsConnectionError::new(
+                    "helper_missing",
+                    "The Apple Foundation Models helper is unavailable.",
+                )
+            } else {
+                FoundationModelsConnectionError::new(
+                    "helper_failed",
+                    "The Apple Foundation Models helper is unavailable.",
+                )
+            }
+        })?;
         Ok(Box::new(OpenHelperChild { child }))
     }
 }
@@ -1063,6 +1112,51 @@ mod tests {
     #[test]
     fn protocol_version_is_exact() {
         assert_eq!(FOUNDATION_MODELS_PROTOCOL_VERSION, 1);
+    }
+
+    #[test]
+    fn production_helper_constructor_cannot_admit_parent_secrets() {
+        let source = HashMap::from([
+            ("HOME".to_string(), "/Users/aiden".to_string()),
+            ("LANG".to_string(), "en_US.UTF-8".to_string()),
+            ("OPENAI_API_KEY".to_string(), "provider-secret".to_string()),
+            ("CODEX_OAUTH_TOKEN".to_string(), "oauth-secret".to_string()),
+            (
+                "HTTPS_PROXY".to_string(),
+                "https://name:password@proxy.invalid".to_string(),
+            ),
+            (
+                "DYLD_INSERT_LIBRARIES".to_string(),
+                "/tmp/injected.dylib".to_string(),
+            ),
+            (
+                "NODE_OPTIONS".to_string(),
+                "--require /tmp/hook.js".to_string(),
+            ),
+        ]);
+        let spawner = OpenHelperSpawner::new("/Applications/Aiden Helper.app", &source);
+
+        assert_eq!(
+            spawner.environment.get("HOME").map(String::as_str),
+            Some("/Users/aiden")
+        );
+        assert_eq!(
+            spawner.environment.get("LANG").map(String::as_str),
+            Some("en_US.UTF-8")
+        );
+        assert_eq!(
+            spawner.environment.get("PATH").map(String::as_str),
+            Some("/usr/bin:/bin:/usr/sbin:/sbin")
+        );
+        for forbidden in [
+            "OPENAI_API_KEY",
+            "CODEX_OAUTH_TOKEN",
+            "HTTPS_PROXY",
+            "DYLD_INSERT_LIBRARIES",
+            "NODE_OPTIONS",
+        ] {
+            assert!(!spawner.environment.contains_key(forbidden));
+        }
     }
 
     #[test]
@@ -1343,6 +1437,121 @@ mod tests {
             FoundationModelsConnectionState::Unavailable
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_first_status_caller_does_not_orphan_single_flight() {
+        let started = Arc::new(tokio::sync::Semaphore::new(0));
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        let blocked = Arc::new(tokio::sync::Mutex::new(Some(blocked)));
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner: NativeFoundationModelsRequestRunner = Arc::new({
+            let started = Arc::clone(&started);
+            let blocked = Arc::clone(&blocked);
+            let calls = Arc::clone(&calls);
+            move |_, _| {
+                let started = Arc::clone(&started);
+                let blocked = Arc::clone(&blocked);
+                let calls = Arc::clone(&calls);
+                Box::pin(async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    started.add_permits(1);
+                    if let Some(blocked) = blocked.lock().await.take() {
+                        let _ = blocked.await;
+                    }
+                    Ok(FoundationModelsResponse::success(
+                        Some(FoundationModelsState::Ready),
+                        None,
+                    ))
+                })
+            }
+        });
+        let connection =
+            create_foundation_models_connection("darwin", "arm64", "26.0", run(1_000), runner);
+        let first_connection = connection.clone();
+        let first = tokio::spawn(async move { first_connection.status(true).await });
+        started.acquire().await.unwrap().forget();
+        first.abort();
+        let _ = first.await;
+
+        let second_connection = connection.clone();
+        let second = tokio::spawn(async move { second_connection.status(true).await });
+        tokio::task::yield_now().await;
+        release.send(()).unwrap();
+        let status = tokio::time::timeout(Duration::from_secs(1), second)
+            .await
+            .expect("later status caller must complete")
+            .unwrap()
+            .expect("status");
+        assert_eq!(status.state, FoundationModelsConnectionState::Ready);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(connection.in_flight.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_panicking_status_runner_publishes_a_retryable_error() {
+        let runner: NativeFoundationModelsRequestRunner = Arc::new(|_, _| {
+            panic!("injected availability panic");
+        });
+        let connection =
+            create_foundation_models_connection("darwin", "arm64", "26.0", run(1_000), runner);
+
+        let status = tokio::time::timeout(Duration::from_secs(1), connection.status(true))
+            .await
+            .expect("panic must be published")
+            .expect("status");
+        assert_eq!(status.state, FoundationModelsConnectionState::Error);
+        assert!(status.retryable);
+        assert!(connection.in_flight.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn status_notification_between_enabled_wait_and_result_check_is_not_lost() {
+        let runner_started = Arc::new(tokio::sync::Semaphore::new(0));
+        let (runner_release, runner_blocked) = tokio::sync::oneshot::channel();
+        let runner_blocked = Arc::new(tokio::sync::Mutex::new(Some(runner_blocked)));
+        let runner: NativeFoundationModelsRequestRunner = Arc::new({
+            let runner_started = Arc::clone(&runner_started);
+            let runner_blocked = Arc::clone(&runner_blocked);
+            move |_, _| {
+                let runner_started = Arc::clone(&runner_started);
+                let runner_blocked = Arc::clone(&runner_blocked);
+                Box::pin(async move {
+                    runner_started.add_permits(1);
+                    if let Some(blocked) = runner_blocked.lock().await.take() {
+                        let _ = blocked.await;
+                    }
+                    Ok(FoundationModelsResponse::success(
+                        Some(FoundationModelsState::Ready),
+                        None,
+                    ))
+                })
+            }
+        });
+        let connection =
+            create_foundation_models_connection("darwin", "arm64", "26.0", run(1_000), runner);
+        let (wait_release, wait_blocked) = tokio::sync::oneshot::channel();
+        let wait_barrier = Arc::new(FmTestBarrier {
+            release: tokio::sync::Mutex::new(Some(wait_blocked)),
+            reached: tokio::sync::Semaphore::new(0),
+        });
+        *connection.wait_before_result_check.lock().unwrap() = Some(Arc::clone(&wait_barrier));
+        let status_connection = connection.clone();
+        let status = tokio::spawn(async move { status_connection.status(true).await });
+        runner_started.acquire().await.unwrap().forget();
+        wait_barrier.reached.acquire().await.unwrap().forget();
+
+        runner_release.send(()).unwrap();
+        while connection.in_flight.lock().await.is_some() {
+            tokio::task::yield_now().await;
+        }
+        wait_release.send(()).unwrap();
+        let status = tokio::time::timeout(Duration::from_secs(1), status)
+            .await
+            .expect("enabled notification must survive until result check")
+            .unwrap()
+            .expect("status");
+        assert_eq!(status.state, FoundationModelsConnectionState::Ready);
     }
 
     #[tokio::test]

@@ -1175,6 +1175,18 @@ fn settings_destinations() -> Vec<SettingsDestination> {
             keywords: &["api", "key", "catalog"],
         },
         SettingsDestination {
+            id: "skills",
+            title: "Skills",
+            group: "Agent",
+            keywords: &["instructions", "tools", "workflow"],
+        },
+        SettingsDestination {
+            id: "websearch",
+            title: "Web Search",
+            group: "Agent",
+            keywords: &["internet", "exa", "current"],
+        },
+        SettingsDestination {
             id: "scheduled-tasks",
             title: "Scheduled tasks",
             group: "Automation",

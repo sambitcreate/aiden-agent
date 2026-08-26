@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use aiden_core::ToolDef;
 use aiden_data::portable_config::McpServer;
-use aiden_mcp::{mcp_agent_tool_name, resolve_mcp_server, McpClientManager, McpServerSpec};
+use aiden_mcp::{
+    mcp_agent_tool_name, resolve_mcp_server, McpClientManager, McpConnectionLease, McpServerSpec,
+};
 
 /// Upper bounds for one chat turn's tool surface (bounded collection).
 pub const MAX_CHAT_MCP_SERVERS: usize = 16;
@@ -30,10 +32,10 @@ pub type PresetKeyResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// Where a namespaced tool name dispatches: the connected server + the raw
 /// remote tool name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct McpToolTarget {
-    pub server_id: String,
     pub tool_name: String,
+    pub connection: McpConnectionLease,
 }
 
 /// The collected tool surface for one turn: provider tool defs plus the
@@ -94,7 +96,14 @@ pub async fn collect_chat_mcp_tools(
             tracing::warn!(server = %server.id, %error, "Skipping MCP server: connect");
             continue;
         }
-        let listed = match manager.list_tools(&server.id).await {
+        let connection = match manager.connection_lease(&server.id).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                tracing::warn!(server = %server.id, %error, "Skipping MCP server: lease");
+                continue;
+            }
+        };
+        let listed = match manager.list_tools_for_lease(&connection).await {
             Ok(listed) => listed,
             Err(error) => {
                 tracing::warn!(server = %server.id, %error, "Skipping MCP server: tools/list");
@@ -113,8 +122,8 @@ pub async fn collect_chat_mcp_tools(
             tools.dispatch.insert(
                 agent_name,
                 McpToolTarget {
-                    server_id: server.id.clone(),
                     tool_name: tool.name.clone(),
+                    connection: connection.clone(),
                 },
             );
             tools.defs.push(agent.to_tool_def());
@@ -186,17 +195,6 @@ mod tests {
         let agent_name = mcp_agent_tool_name(&docs.id, &docs.name, raw_name);
         assert!(agent_name.starts_with("Docs__lookup_"));
         assert!(agent_name.len() <= 64);
-
-        let dispatch = HashMap::from([(
-            agent_name.clone(),
-            McpToolTarget {
-                server_id: docs.id.clone(),
-                tool_name: raw_name.to_string(),
-            },
-        )]);
-        let target = dispatch.get(&agent_name).expect("dispatch hit");
-        assert_eq!(target.server_id, "docs");
-        assert_eq!(target.tool_name, "lookup");
 
         // A different server id yields a distinct agent name (digest-bound).
         let other = server("docs-clone", "Docs", true);

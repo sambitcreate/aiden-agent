@@ -55,6 +55,7 @@ use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::{symlink, OpenOptionsExt};
 
+pub mod attachments;
 pub mod chat_store;
 pub mod config_dir;
 pub mod config_store;
@@ -67,8 +68,13 @@ pub mod portable_watch;
 pub mod profile;
 pub mod schedule_store;
 pub mod secret_map;
+pub mod skill_discovery;
 pub mod usage_store;
 
+pub use attachments::{
+    read_attachments, read_attachments_with_cancellation, AttachmentReadCancellation,
+    AttachmentReadError, MAX_TEXT_READ_BYTES,
+};
 pub use config_dir::{aiden_config_dir, ConfigDirError, AIDEN_CONFIG_DIR_ENV, AIDEN_DIR_NAME};
 
 // ===========================================================================

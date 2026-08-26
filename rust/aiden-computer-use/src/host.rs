@@ -9,14 +9,16 @@
 
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 
+use futures::FutureExt;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::binary::verify_cua_driver_bridge_process;
@@ -25,7 +27,10 @@ use crate::contract::{
     CUA_DRIVER_TOOL_SCHEMA, CUA_DRIVER_VERSION,
 };
 const READINESS_FRAME_NO_NEWLINE: &[u8] = b"{\"type\":\"ready\",\"protocolVersion\":2}";
-use crate::process::{run_command, BoundedProcessResult, ChildHandle, CuaDriverCommandInvocation};
+use crate::process::{
+    apply_allowlisted_environment, run_command, BoundedProcessResult, ChildHandle,
+    CuaDriverCommandInvocation,
+};
 use crate::session::{CuaDriverSession, CuaDriverSessionOptions, SessionTransportConfig};
 use crate::socket::create_session_directory;
 
@@ -59,9 +64,134 @@ pub struct SessionRuntime {
     pub ipc_peer: std::sync::Mutex<Option<std::os::unix::net::UnixStream>>,
     pub broker_launcher: Option<Arc<ChildHandle>>,
     pub temp_directory: PathBuf,
-    pub session: std::sync::Mutex<Option<Arc<CuaDriverSession>>>,
+    _temp_directory_guard: SessionDirectoryGuard,
+    pub session: std::sync::Mutex<Option<std::sync::Weak<CuaDriverSession>>>,
     pub diagnostic: std::sync::Mutex<String>,
     pub stopping: AtomicBool,
+}
+
+struct SessionDirectoryGuard(PathBuf);
+
+impl Drop for SessionDirectoryGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[derive(Default)]
+struct HostShutdownCompletion {
+    finished: std::sync::Mutex<bool>,
+    completion: tokio::sync::Notify,
+}
+
+impl HostShutdownCompletion {
+    async fn wait(&self) {
+        loop {
+            let mut completed = Box::pin(self.completion.notified());
+            completed.as_mut().enable();
+            if *self.finished.lock().unwrap() {
+                return;
+            }
+            completed.await;
+        }
+    }
+
+    fn finish(&self) {
+        *self.finished.lock().unwrap() = true;
+        self.completion.notify_waiters();
+    }
+}
+
+#[derive(Default)]
+struct HostLaunchCompletion {
+    result: std::sync::Mutex<Option<Result<Arc<CuaDriverSession>, CuaDriverError>>>,
+    completion: tokio::sync::Notify,
+}
+
+impl HostLaunchCompletion {
+    async fn wait(&self) -> Result<Arc<CuaDriverSession>, CuaDriverError> {
+        loop {
+            let mut completed = Box::pin(self.completion.notified());
+            completed.as_mut().enable();
+            if let Some(result) = self.result.lock().unwrap().clone() {
+                return result;
+            }
+            completed.await;
+        }
+    }
+
+    fn finish(&self, result: Result<Arc<CuaDriverSession>, CuaDriverError>) {
+        *self.result.lock().unwrap() = Some(result);
+        self.completion.notify_waiters();
+    }
+}
+
+struct HostLaunchAdmission {
+    token: CancellationToken,
+    completion: Arc<HostLaunchCompletion>,
+}
+
+#[derive(Default)]
+struct HostAdmissionState {
+    closed: bool,
+    next_launch_id: u64,
+    launches: HashMap<u64, HostLaunchAdmission>,
+    shutdown: Option<Arc<HostShutdownCompletion>>,
+}
+
+struct HostLaunchLease {
+    id: u64,
+    token: CancellationToken,
+    completion: Arc<HostLaunchCompletion>,
+    admission: Arc<std::sync::Mutex<HostAdmissionState>>,
+    completed: bool,
+}
+
+struct AbortTaskOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+impl AbortTaskOnDrop {
+    async fn abort_and_wait(mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+impl Drop for AbortTaskOnDrop {
+    fn drop(&mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+        }
+    }
+}
+
+impl Drop for HostLaunchLease {
+    fn drop(&mut self) {
+        let mut admission = self.admission.lock().unwrap();
+        if !self.completed {
+            self.completion.finish(Err(CuaDriverError::retryable(
+                "host_launch_failed",
+                "Computer Use startup ended unexpectedly.",
+            )));
+        }
+        admission.launches.remove(&self.id);
+    }
+}
+
+impl HostLaunchLease {
+    fn finish(mut self, result: Result<Arc<CuaDriverSession>, CuaDriverError>) {
+        let mut admission = self.admission.lock().unwrap();
+        self.completion.finish(result);
+        admission.launches.remove(&self.id);
+        self.completed = true;
+    }
+}
+
+#[cfg(test)]
+struct HostTestBarrier {
+    release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    reached: tokio::sync::Semaphore,
 }
 
 fn startup_timeout_error() -> CuaDriverError {
@@ -86,28 +216,36 @@ fn remaining_milliseconds(deadline: Instant) -> u64 {
     }
 }
 
-type VerifyBridgeFn = Box<
-    dyn Fn(
-            u32,
-            &Path,
-            Option<&CancellationToken>,
-        ) -> std::pin::Pin<
-            Box<dyn futures::future::Future<Output = Result<(), CuaDriverError>> + Send>,
-        > + Send
-        + Sync,
->;
+type VerifyBridgeFn = dyn Fn(
+        u32,
+        &Path,
+        Option<&CancellationToken>,
+    ) -> std::pin::Pin<
+        Box<dyn futures::future::Future<Output = Result<(), CuaDriverError>> + Send>,
+    > + Send
+    + Sync;
 
 /// The production host. Bridge verification is a seam the test harness
 /// overrides; production always validates the exact live bridge process.
+#[derive(Clone)]
 pub struct CuaDriverHost {
     options: CuaDriverHostOptions,
     environment: HashMap<String, String>,
-    manifest: std::sync::Mutex<Option<CuaDriverManifest>>,
+    manifest: Arc<std::sync::Mutex<Option<CuaDriverManifest>>>,
     sessions: Arc<std::sync::Mutex<Vec<Arc<CuaDriverSession>>>>,
     runtimes: Arc<std::sync::Mutex<Vec<Arc<SessionRuntime>>>>,
-    shutdown_controller: CancellationToken,
-    shutdown_promise: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    verify_spawned_bridge: Option<VerifyBridgeFn>,
+    admission: Arc<std::sync::Mutex<HostAdmissionState>>,
+    verify_spawned_bridge: Option<Arc<VerifyBridgeFn>>,
+    #[cfg(test)]
+    after_initial_open_barrier: Arc<std::sync::Mutex<Option<Arc<HostTestBarrier>>>>,
+    #[cfg(test)]
+    after_spawn_before_connect_barrier: Arc<std::sync::Mutex<Option<Arc<HostTestBarrier>>>>,
+    #[cfg(test)]
+    connect_pending_barrier: Arc<std::sync::Mutex<Option<Arc<HostTestBarrier>>>>,
+    #[cfg(test)]
+    before_launch_publication_barrier: Arc<std::sync::Mutex<Option<Arc<HostTestBarrier>>>>,
+    #[cfg(test)]
+    before_registration_barrier: Arc<std::sync::Mutex<Option<Arc<HostTestBarrier>>>>,
 }
 
 impl CuaDriverHost {
@@ -119,18 +257,27 @@ impl CuaDriverHost {
         Self {
             options,
             environment,
-            manifest: std::sync::Mutex::new(None),
+            manifest: Arc::new(std::sync::Mutex::new(None)),
             sessions: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtimes: Arc::new(std::sync::Mutex::new(Vec::new())),
-            shutdown_controller: CancellationToken::new(),
-            shutdown_promise: tokio::sync::Mutex::new(None),
+            admission: Arc::new(std::sync::Mutex::new(HostAdmissionState::default())),
             verify_spawned_bridge: None,
+            #[cfg(test)]
+            after_initial_open_barrier: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            after_spawn_before_connect_barrier: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            connect_pending_barrier: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            before_launch_publication_barrier: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            before_registration_barrier: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
     /// Override bridge verification (tests only).
-    pub fn set_verify_spawned_bridge(&mut self, verify: VerifyBridgeFn) {
-        self.verify_spawned_bridge = Some(verify);
+    pub fn set_verify_spawned_bridge(&mut self, verify: Box<VerifyBridgeFn>) {
+        self.verify_spawned_bridge = Some(Arc::from(verify));
     }
 
     pub fn driver_manifest(&self) -> Option<CuaDriverManifest> {
@@ -146,7 +293,8 @@ impl CuaDriverHost {
     }
 
     pub async fn start(&self) -> Result<(), CuaDriverError> {
-        if self.shutdown_controller.is_cancelled() {
+        let admission = self.admission.lock().unwrap();
+        if admission.closed {
             return Err(CuaDriverError::new(
                 "host_closed",
                 "The Computer Use host has shut down.",
@@ -156,11 +304,12 @@ impl CuaDriverHost {
             schema_version: CUA_DRIVER_TOOL_SCHEMA.into(),
             binary_version: CUA_DRIVER_VERSION.into(),
         });
+        drop(admission);
         Ok(())
     }
 
     fn assert_open(&self, signal: Option<&CancellationToken>) -> Result<(), CuaDriverError> {
-        if self.shutdown_controller.is_cancelled() {
+        if self.admission.lock().unwrap().closed {
             return Err(CuaDriverError::new(
                 "host_closed",
                 "The Computer Use host has shut down.",
@@ -172,12 +321,95 @@ impl CuaDriverHost {
         Ok(())
     }
 
+    fn admit_launch(
+        &self,
+        caller_signal: Option<&CancellationToken>,
+    ) -> Result<HostLaunchLease, CuaDriverError> {
+        let mut admission = self.admission.lock().unwrap();
+        if admission.closed {
+            return Err(CuaDriverError::new(
+                "host_closed",
+                "The Computer Use host has shut down.",
+            ));
+        }
+        if caller_signal.is_some_and(CancellationToken::is_cancelled) {
+            return Err(cancelled_error("Computer Use startup was cancelled."));
+        }
+        admission.next_launch_id = admission.next_launch_id.wrapping_add(1).max(1);
+        let id = admission.next_launch_id;
+        let token = CancellationToken::new();
+        let completion = Arc::new(HostLaunchCompletion::default());
+        admission.launches.insert(
+            id,
+            HostLaunchAdmission {
+                token: token.clone(),
+                completion: Arc::clone(&completion),
+            },
+        );
+        Ok(HostLaunchLease {
+            id,
+            token,
+            completion,
+            admission: Arc::clone(&self.admission),
+            completed: false,
+        })
+    }
+
+    #[cfg(test)]
+    async fn wait_at_barrier(slot: &std::sync::Mutex<Option<Arc<HostTestBarrier>>>) {
+        let barrier = slot.lock().unwrap().clone();
+        if let Some(barrier) = barrier {
+            barrier.reached.add_permits(1);
+            if let Some(release) = barrier.release.lock().await.take() {
+                let _ = release.await;
+            }
+        }
+    }
+
     pub async fn create_session(
         &self,
         signal: Option<&CancellationToken>,
     ) -> Result<Arc<CuaDriverSession>, CuaDriverError> {
+        let launch = self.admit_launch(signal)?;
+        let completion = Arc::clone(&launch.completion);
+        let host = self.clone();
+        let caller_signal = signal.cloned();
+        tokio::spawn(async move {
+            let caller_forwarder = caller_signal.map(|caller| {
+                let launch_token = launch.token.clone();
+                AbortTaskOnDrop(Some(tokio::spawn(async move {
+                    caller.cancelled().await;
+                    launch_token.cancel();
+                })))
+            });
+            let result = AssertUnwindSafe(host.create_session_admitted(&launch.token))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| {
+                    Err(CuaDriverError::retryable(
+                        "host_launch_failed",
+                        "Computer Use startup ended unexpectedly.",
+                    ))
+                });
+            if let Some(caller_forwarder) = caller_forwarder {
+                caller_forwarder.abort_and_wait().await;
+            }
+            #[cfg(test)]
+            Self::wait_at_barrier(&host.before_launch_publication_barrier).await;
+            launch.finish(result);
+        });
+        completion.wait().await
+    }
+
+    async fn create_session_admitted(
+        &self,
+        signal: &CancellationToken,
+    ) -> Result<Arc<CuaDriverSession>, CuaDriverError> {
         self.start().await?;
-        self.assert_open(signal)?;
+        self.assert_open(Some(signal))?;
+        #[cfg(test)]
+        Self::wait_at_barrier(&self.after_initial_open_barrier).await;
+        self.assert_open(Some(signal))?;
         let timeout_ms = self
             .options
             .startup_timeout_ms
@@ -192,6 +424,9 @@ impl CuaDriverHost {
                 .unwrap_or(Path::new("/tmp")),
         )
         .map_err(|error| CuaDriverError::new("bridge_failed", error))?;
+        // Own cleanup immediately: bridge verification and every later async
+        // stage may panic or be cancelled before SessionRuntime exists.
+        let temp_directory_guard = SessionDirectoryGuard(temp_directory.clone());
         let mut broker_launcher: Option<Arc<ChildHandle>> = None;
 
         let bridge = match self
@@ -199,7 +434,7 @@ impl CuaDriverHost {
                 &control_path,
                 &launch_lease_path,
                 &mut broker_launcher,
-                signal,
+                Some(signal),
                 deadline,
             )
             .await
@@ -219,6 +454,7 @@ impl CuaDriverHost {
             ipc_peer: std::sync::Mutex::new(Some(bridge.ipc_peer)),
             broker_launcher,
             temp_directory: temp_directory.clone(),
+            _temp_directory_guard: temp_directory_guard,
             session: std::sync::Mutex::new(None),
             diagnostic: std::sync::Mutex::new(String::new()),
             stopping: AtomicBool::new(false),
@@ -242,7 +478,12 @@ impl CuaDriverHost {
                 let sessions = Arc::clone(&self.sessions);
                 move || {
                     runtime.stopping.store(true, Ordering::SeqCst);
-                    let session = runtime.session.lock().unwrap().clone();
+                    let session = runtime
+                        .session
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade);
                     if let Some(session) = session {
                         sessions
                             .lock()
@@ -253,17 +494,86 @@ impl CuaDriverHost {
             })),
         });
         let session = Arc::new(session);
-        *runtime.session.lock().unwrap() = Some(Arc::clone(&session));
-        self.sessions.lock().unwrap().push(Arc::clone(&session));
-        self.runtimes.lock().unwrap().push(Arc::clone(&runtime));
+        *runtime.session.lock().unwrap() = Some(Arc::downgrade(&session));
 
-        if let Err(error) = session.connect(signal, Some(deadline)).await {
-            session.close().await;
-            let _ = std::fs::remove_dir_all(&temp_directory);
+        #[cfg(test)]
+        Self::wait_at_barrier(&self.after_spawn_before_connect_barrier).await;
+        let connect_result = self.connect_session(&session, signal, deadline).await;
+        if let Err(error) = connect_result {
+            Self::cleanup_unregistered(&session, &runtime).await;
             return Err(error);
         }
-        self.assert_open(signal)?;
+        #[cfg(test)]
+        Self::wait_at_barrier(&self.before_registration_barrier).await;
+        // Registration is serialized against shutdown sealing/snapshotting.
+        let rejection = {
+            let admission = self.admission.lock().unwrap();
+            if admission.closed {
+                Some(CuaDriverError::new(
+                    "host_closed",
+                    "The Computer Use host has shut down.",
+                ))
+            } else if signal.is_cancelled() {
+                Some(cancelled_error("Computer Use startup was cancelled."))
+            } else {
+                self.sessions.lock().unwrap().push(Arc::clone(&session));
+                self.runtimes.lock().unwrap().push(Arc::clone(&runtime));
+                None
+            }
+        };
+        if let Some(error) = rejection {
+            Self::cleanup_unregistered(&session, &runtime).await;
+            return Err(error);
+        }
         Ok(session)
+    }
+
+    async fn cleanup_unregistered(session: &Arc<CuaDriverSession>, runtime: &Arc<SessionRuntime>) {
+        runtime.stopping.store(true, Ordering::SeqCst);
+        session.close().await;
+        runtime.session.lock().unwrap().take();
+        runtime.ipc_peer.lock().unwrap().take();
+        runtime.bridge.terminate();
+        if let Some(launcher) = runtime.broker_launcher.as_ref() {
+            launcher.terminate();
+        }
+        let _ = std::fs::remove_dir_all(&runtime.temp_directory);
+    }
+
+    async fn connect_session(
+        &self,
+        session: &Arc<CuaDriverSession>,
+        signal: &CancellationToken,
+        deadline: Instant,
+    ) -> Result<(), CuaDriverError> {
+        let connect = session.connect(Some(signal), Some(deadline));
+        #[cfg(test)]
+        {
+            use std::future::Future;
+            use std::task::Poll;
+
+            let mut connect = Box::pin(connect);
+            let barrier = { self.connect_pending_barrier.lock().unwrap().clone() };
+            if let Some(barrier) = barrier {
+                let first = futures::future::poll_fn(|context| {
+                    Poll::Ready(match connect.as_mut().poll(context) {
+                        Poll::Ready(result) => Some(result),
+                        Poll::Pending => None,
+                    })
+                })
+                .await;
+                if let Some(result) = first {
+                    return result;
+                }
+                barrier.reached.add_permits(1);
+                if let Some(release) = barrier.release.lock().await.take() {
+                    let _ = release.await;
+                }
+            }
+            return connect.await;
+        }
+        #[cfg(not(test))]
+        connect.await
     }
 
     async fn create_session_internal(
@@ -321,26 +631,53 @@ impl CuaDriverHost {
     }
 
     pub async fn shutdown(&self) {
-        let mut shutdown_promise = self.shutdown_promise.lock().await;
-        if let Some(handle) = shutdown_promise.as_mut() {
-            let _ = handle.await;
-            return;
-        }
-        self.shutdown_controller.cancel();
-        let sessions: Vec<Arc<CuaDriverSession>> = self.sessions.lock().unwrap().clone();
-        let runtimes: Vec<Arc<SessionRuntime>> = self.runtimes.lock().unwrap().clone();
-        let promise = tokio::spawn(async move {
-            for session in sessions {
-                let _ = session.close().await;
+        let completion = {
+            let mut admission = self.admission.lock().unwrap();
+            if let Some(existing) = admission.shutdown.as_ref() {
+                Arc::clone(existing)
+            } else {
+                admission.closed = true;
+                let launches: Vec<Arc<HostLaunchCompletion>> = admission
+                    .launches
+                    .values()
+                    .map(|launch| {
+                        launch.token.cancel();
+                        Arc::clone(&launch.completion)
+                    })
+                    .collect();
+                let sessions = std::mem::take(&mut *self.sessions.lock().unwrap());
+                let runtimes = std::mem::take(&mut *self.runtimes.lock().unwrap());
+                *self.manifest.lock().unwrap() = None;
+                let completion = Arc::new(HostShutdownCompletion::default());
+                let completion_for_task = Arc::clone(&completion);
+                tokio::spawn(async move {
+                    let _ = AssertUnwindSafe(async move {
+                        for launch in launches {
+                            let _ = launch.wait().await;
+                        }
+                        for session in sessions {
+                            session.close().await;
+                        }
+                        for runtime in runtimes {
+                            runtime.stopping.store(true, Ordering::SeqCst);
+                            runtime.session.lock().unwrap().take();
+                            runtime.ipc_peer.lock().unwrap().take();
+                            runtime.bridge.terminate();
+                            if let Some(launcher) = runtime.broker_launcher.as_ref() {
+                                launcher.terminate();
+                            }
+                            let _ = std::fs::remove_dir_all(&runtime.temp_directory);
+                        }
+                    })
+                    .catch_unwind()
+                    .await;
+                    completion_for_task.finish();
+                });
+                admission.shutdown = Some(Arc::clone(&completion));
+                completion
             }
-            for runtime in runtimes {
-                runtime.ipc_peer.lock().unwrap().take();
-                runtime.bridge.terminate();
-                let _ = std::fs::remove_dir_all(&runtime.temp_directory);
-            }
-        });
-        *shutdown_promise = Some(promise);
-        let _ = shutdown_promise.as_mut().unwrap().await;
+        };
+        completion.wait().await;
     }
 }
 
@@ -385,11 +722,11 @@ fn spawn_direct_broker(
         .arg(control_path)
         .arg("--launch-lease-socket")
         .arg(launch_lease_path)
-        .envs(environment)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    apply_allowlisted_environment(&mut command, environment);
     let child = command
         .spawn()
         .map_err(|error| CuaDriverError::new("bridge_failed", format!("{error}")))?;
@@ -442,12 +779,17 @@ fn spawn_bridge(
         .arg(control_path)
         .arg("--launch-lease-socket")
         .arg(launch_lease_path)
-        .envs(environment)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
         .kill_on_drop(true);
+    apply_allowlisted_environment(&mut command, environment);
+    // Node's `ipc` stdio slot sets these fixed protocol variables in addition
+    // to placing the channel at fd 3. They are not inherited caller input.
+    command
+        .env("NODE_CHANNEL_FD", "3")
+        .env("NODE_CHANNEL_SERIALIZATION_MODE", "json");
     // SAFETY: pre_exec runs after fork before exec; dup2 clears CLOEXEC on the
     // target descriptors so the bridge finds fd 3 and fd 4 exactly where Node
     // would have placed them.
@@ -545,5 +887,368 @@ async fn read_bridge_ready(
             }
             return Ok(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inert_options(temp_root: &Path) -> CuaDriverHostOptions {
+        CuaDriverHostOptions {
+            invocation: CuaDriverInvocation::new("/definitely/not/a/driver"),
+            base_env: None,
+            temp_root: Some(temp_root.to_path_buf()),
+            startup_timeout_ms: Some(3_000),
+            broker: BrokerOptions {
+                app_path: PathBuf::from("/definitely/not/a/helper.app"),
+            },
+            direct_broker: None,
+        }
+    }
+
+    fn install_barrier(
+        slot: &std::sync::Mutex<Option<Arc<HostTestBarrier>>>,
+    ) -> (tokio::sync::oneshot::Sender<()>, Arc<HostTestBarrier>) {
+        let (release, receiver) = tokio::sync::oneshot::channel();
+        let barrier = Arc::new(HostTestBarrier {
+            release: tokio::sync::Mutex::new(Some(receiver)),
+            reached: tokio::sync::Semaphore::new(0),
+        });
+        *slot.lock().unwrap() = Some(Arc::clone(&barrier));
+        (release, barrier)
+    }
+
+    fn assert_host_resources_drained(host: &CuaDriverHost, root: &Path) {
+        assert!(host.sessions.lock().unwrap().is_empty());
+        assert!(host.runtimes.lock().unwrap().is_empty());
+        assert!(host.admission.lock().unwrap().launches.is_empty());
+        assert!(!host.running());
+        assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn sequential_shutdowns_share_completed_state_without_repolling() {
+        let root = tempfile::TempDir::new().unwrap();
+        let host = CuaDriverHost::new(inert_options(root.path()));
+
+        host.shutdown().await;
+        let first = host
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+        host.shutdown().await;
+        let second = host
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(*first.finished.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn concurrent_shutdowns_share_one_completion() {
+        let root = tempfile::TempDir::new().unwrap();
+        let host = Arc::new(CuaDriverHost::new(inert_options(root.path())));
+        let first = Arc::clone(&host);
+        let second = Arc::clone(&host);
+
+        tokio::time::timeout(Duration::from_secs(1), async move {
+            tokio::join!(first.shutdown(), second.shutdown());
+        })
+        .await
+        .expect("concurrent shutdowns must complete");
+
+        let admission = host.admission.lock().unwrap();
+        assert!(admission.closed);
+        assert_eq!(admission.launches.len(), 0);
+        assert!(*admission
+            .shutdown
+            .as_ref()
+            .expect("shutdown completion")
+            .finished
+            .lock()
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn shutdown_seals_a_launch_paused_after_initial_open() {
+        let root = tempfile::TempDir::new().unwrap();
+        let host = Arc::new(CuaDriverHost::new(inert_options(root.path())));
+        let (release, barrier) = install_barrier(&host.after_initial_open_barrier);
+        let launch_host = Arc::clone(&host);
+        let launch = tokio::spawn(async move { launch_host.create_session(None).await });
+        barrier.reached.acquire().await.unwrap().forget();
+
+        let shutdown_host = Arc::clone(&host);
+        let shutdown = tokio::spawn(async move { shutdown_host.shutdown().await });
+        while !host.admission.lock().unwrap().closed {
+            tokio::task::yield_now().await;
+        }
+        release.send(()).unwrap();
+        let error = match launch.await.unwrap() {
+            Ok(_) => panic!("sealed launch must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "host_closed");
+        tokio::time::timeout(Duration::from_secs(1), shutdown)
+            .await
+            .expect("shutdown must drain the reserved launch")
+            .unwrap();
+
+        assert!(host.sessions.lock().unwrap().is_empty());
+        assert!(host.runtimes.lock().unwrap().is_empty());
+        assert!(host.admission.lock().unwrap().launches.is_empty());
+    }
+
+    fn fake_driver_host(temp_root: &Path) -> Option<CuaDriverHost> {
+        let node = std::process::Command::new("/usr/bin/which")
+            .arg("node")
+            .output()
+            .ok()?;
+        if !node.status.success() {
+            return None;
+        }
+        let node = String::from_utf8(node.stdout).ok()?.trim().to_string();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../main/services/computer-use/fixtures/fake-cua-driver.mjs");
+        let invocation = CuaDriverInvocation {
+            command: PathBuf::from(node),
+            prefix_args: vec![fixture.to_string_lossy().into_owned()],
+        };
+        let mut host = CuaDriverHost::new(CuaDriverHostOptions {
+            invocation: invocation.clone(),
+            base_env: None,
+            temp_root: Some(temp_root.to_path_buf()),
+            startup_timeout_ms: Some(5_000),
+            broker: BrokerOptions {
+                app_path: PathBuf::from("/test/CuaDriver.app"),
+            },
+            direct_broker: Some(invocation),
+        });
+        host.set_verify_spawned_bridge(Box::new(|_, _, _| Box::pin(async { Ok(()) })));
+        Some(host)
+    }
+
+    #[tokio::test]
+    async fn shutdown_between_connect_and_registration_cleans_unregistered_resources() {
+        let root = tempfile::TempDir::new().unwrap();
+        let Some(host) = fake_driver_host(root.path()) else {
+            return;
+        };
+        let host = Arc::new(host);
+        let (release, barrier) = install_barrier(&host.before_registration_barrier);
+        let launch_host = Arc::clone(&host);
+        let mut launch = tokio::spawn(async move { launch_host.create_session(None).await });
+        tokio::select! {
+            permit = barrier.reached.acquire() => permit.unwrap().forget(),
+            result = &mut launch => match result.unwrap() {
+                Ok(_) => panic!("session returned before registration barrier"),
+                Err(error) => panic!("session failed before registration barrier: {}", error.code),
+            },
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                panic!("fake driver did not reach registration barrier")
+            }
+        }
+        assert!(host.sessions.lock().unwrap().is_empty());
+        assert!(host.runtimes.lock().unwrap().is_empty());
+
+        let shutdown_host = Arc::clone(&host);
+        let shutdown = tokio::spawn(async move { shutdown_host.shutdown().await });
+        while !host.admission.lock().unwrap().closed {
+            tokio::task::yield_now().await;
+        }
+        release.send(()).unwrap();
+        let error = match launch.await.unwrap() {
+            Ok(_) => panic!("sealed registration must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "host_closed");
+        tokio::time::timeout(Duration::from_secs(5), shutdown)
+            .await
+            .expect("shutdown must await unregistered cleanup")
+            .unwrap();
+
+        assert!(host.sessions.lock().unwrap().is_empty());
+        assert!(host.runtimes.lock().unwrap().is_empty());
+        assert!(host.admission.lock().unwrap().launches.is_empty());
+        assert!(!host.running());
+    }
+
+    #[tokio::test]
+    async fn aborting_caller_after_spawn_cannot_escape_shutdown_drain() {
+        let root = tempfile::TempDir::new().unwrap();
+        let Some(host) = fake_driver_host(root.path()) else {
+            return;
+        };
+        let host = Arc::new(host);
+        let (release, barrier) = install_barrier(&host.after_spawn_before_connect_barrier);
+        let launch_host = Arc::clone(&host);
+        let launch = tokio::spawn(async move { launch_host.create_session(None).await });
+        tokio::time::timeout(Duration::from_secs(5), barrier.reached.acquire())
+            .await
+            .expect("launch must spawn bridge before caller abort")
+            .unwrap()
+            .forget();
+
+        launch.abort();
+        let _ = launch.await;
+        assert_eq!(host.admission.lock().unwrap().launches.len(), 1);
+
+        let shutdown_host = Arc::clone(&host);
+        let shutdown = tokio::spawn(async move { shutdown_host.shutdown().await });
+        while !host.admission.lock().unwrap().closed {
+            tokio::task::yield_now().await;
+        }
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), shutdown)
+            .await
+            .expect("shutdown must drain caller-abandoned spawned resources")
+            .unwrap();
+        let first = host
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+        host.shutdown().await;
+        let second = host
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_host_resources_drained(&host, root.path());
+    }
+
+    #[tokio::test]
+    async fn aborting_caller_during_connect_cannot_escape_shutdown_drain() {
+        let root = tempfile::TempDir::new().unwrap();
+        let Some(host) = fake_driver_host(root.path()) else {
+            return;
+        };
+        let host = Arc::new(host);
+        let (release, barrier) = install_barrier(&host.connect_pending_barrier);
+        let launch_host = Arc::clone(&host);
+        let launch = tokio::spawn(async move { launch_host.create_session(None).await });
+        tokio::time::timeout(Duration::from_secs(5), barrier.reached.acquire())
+            .await
+            .expect("session connect must be observably pending")
+            .unwrap()
+            .forget();
+
+        launch.abort();
+        let _ = launch.await;
+        assert_eq!(host.admission.lock().unwrap().launches.len(), 1);
+
+        let shutdown_host = Arc::clone(&host);
+        let shutdown = tokio::spawn(async move { shutdown_host.shutdown().await });
+        while !host.admission.lock().unwrap().closed {
+            tokio::task::yield_now().await;
+        }
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), shutdown)
+            .await
+            .expect("shutdown must drain caller-abandoned pending connect")
+            .unwrap();
+        let first = host
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+        host.shutdown().await;
+        let second = host
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_host_resources_drained(&host, root.path());
+    }
+
+    #[tokio::test]
+    async fn shutdown_cannot_finish_while_launch_result_publication_is_paused() {
+        let root = tempfile::TempDir::new().unwrap();
+        let host = Arc::new(CuaDriverHost::new(inert_options(root.path())));
+        let (release, barrier) = install_barrier(&host.before_launch_publication_barrier);
+        let launch_host = Arc::clone(&host);
+        let launch = tokio::spawn(async move { launch_host.create_session(None).await });
+        barrier.reached.acquire().await.unwrap().forget();
+
+        let launch_completion = host
+            .admission
+            .lock()
+            .unwrap()
+            .launches
+            .values()
+            .next()
+            .map(|launch| Arc::clone(&launch.completion))
+            .expect("launch remains admitted until its result is published");
+        assert!(launch_completion.result.lock().unwrap().is_none());
+
+        let shutdown_host = Arc::clone(&host);
+        let shutdown = tokio::spawn(async move { shutdown_host.shutdown().await });
+        while !host.admission.lock().unwrap().closed {
+            tokio::task::yield_now().await;
+        }
+        let shutdown_completion = host
+            .admission
+            .lock()
+            .unwrap()
+            .shutdown
+            .clone()
+            .expect("shutdown completion");
+        assert!(!*shutdown_completion.finished.lock().unwrap());
+        assert!(launch_completion.result.lock().unwrap().is_none());
+
+        release.send(()).unwrap();
+        let error = match launch.await.unwrap() {
+            Ok(_) => panic!("missing driver launch must fail"),
+            Err(error) => error,
+        };
+        assert_ne!(error.code, "host_launch_failed");
+        tokio::time::timeout(Duration::from_secs(1), shutdown)
+            .await
+            .expect("shutdown must join publication")
+            .unwrap();
+        assert!(launch_completion.result.lock().unwrap().is_some());
+        assert_host_resources_drained(&host, root.path());
+    }
+
+    #[tokio::test]
+    async fn panicking_bridge_verifier_cannot_leak_pre_runtime_temp_resources() {
+        let root = tempfile::TempDir::new().unwrap();
+        let Some(mut host) = fake_driver_host(root.path()) else {
+            return;
+        };
+        host.set_verify_spawned_bridge(Box::new(|_, _, _| {
+            Box::pin(async { panic!("injected bridge verifier panic") })
+        }));
+        let host = Arc::new(host);
+
+        let error = match host.create_session(None).await {
+            Ok(_) => panic!("panicking verification must reject startup"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "host_launch_failed");
+        host.shutdown().await;
+
+        assert_host_resources_drained(&host, root.path());
     }
 }

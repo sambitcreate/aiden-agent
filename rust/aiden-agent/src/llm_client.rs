@@ -119,6 +119,63 @@ const ZERO_USAGE: Usage = Usage {
 
 /// Rehydrate Aiden chat history using the generation's exact image gate
 /// (`toPiMessages`).
+pub fn project_user_chat_message(
+    message: &ChatMessage,
+    supports_images: bool,
+    timestamp: u64,
+) -> UserMessage {
+    let attachments = message.attachments.clone().unwrap_or_default();
+    if attachments.is_empty() {
+        return UserMessage {
+            content: UserContent::Text(message.content.clone()),
+            timestamp,
+        };
+    }
+    let text_files = attachments
+        .iter()
+        .filter(|attachment| attachment.kind == AttachmentKind::Text && attachment.text.is_some())
+        .collect::<Vec<_>>();
+    let text_prefix = text_files
+        .iter()
+        .map(|attachment| {
+            format!(
+                "Attached file: {}\n```\n{}\n```",
+                attachment.name,
+                attachment.text.as_ref().unwrap()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let combined = [text_prefix, message.content.clone()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut parts: Vec<UserBlock> = Vec::new();
+    if !combined.is_empty() {
+        parts.push(UserBlock::Text(TextContent {
+            text: combined,
+            text_signature: None,
+        }));
+    }
+    if supports_images {
+        for attachment in &attachments {
+            if attachment.kind == AttachmentKind::Image && attachment.data.is_some() {
+                parts.push(UserBlock::Image(ImageContent {
+                    data: attachment.data.clone().unwrap(),
+                    mime_type: attachment.mime_type.clone(),
+                }));
+            }
+        }
+    }
+    let content = if parts.is_empty() {
+        UserContent::Text(message.content.clone())
+    } else {
+        UserContent::Blocks(parts)
+    };
+    UserMessage { content, timestamp }
+}
+
 pub fn to_pi_messages(
     params: &ChatStartParams,
     api: &str,
@@ -146,63 +203,7 @@ pub fn to_pi_messages(
                 error_message: None,
                 timestamp: now,
             }),
-            _ => {
-                let attachments = message.attachments.clone().unwrap_or_default();
-                if attachments.is_empty() {
-                    return Message::User(UserMessage {
-                        content: UserContent::Text(message.content.clone()),
-                        timestamp: now,
-                    });
-                }
-                let text_files = attachments
-                    .iter()
-                    .filter(|attachment| {
-                        attachment.kind == AttachmentKind::Text && attachment.text.is_some()
-                    })
-                    .collect::<Vec<_>>();
-                let text_prefix = text_files
-                    .iter()
-                    .map(|attachment| {
-                        format!(
-                            "Attached file: {}\n```\n{}\n```",
-                            attachment.name,
-                            attachment.text.as_ref().unwrap()
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                let combined = [text_prefix, message.content.clone()]
-                    .into_iter()
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                let mut parts: Vec<UserBlock> = Vec::new();
-                if !combined.is_empty() {
-                    parts.push(UserBlock::Text(TextContent {
-                        text: combined,
-                        text_signature: None,
-                    }));
-                }
-                if supports_images {
-                    for attachment in &attachments {
-                        if attachment.kind == AttachmentKind::Image && attachment.data.is_some() {
-                            parts.push(UserBlock::Image(ImageContent {
-                                data: attachment.data.clone().unwrap(),
-                                mime_type: attachment.mime_type.clone(),
-                            }));
-                        }
-                    }
-                }
-                let content = if parts.is_empty() {
-                    UserContent::Text(message.content.clone())
-                } else {
-                    UserContent::Blocks(parts)
-                };
-                Message::User(UserMessage {
-                    content,
-                    timestamp: now,
-                })
-            }
+            _ => Message::User(project_user_chat_message(message, supports_images, now)),
         })
         .collect()
 }
