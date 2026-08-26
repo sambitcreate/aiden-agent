@@ -183,7 +183,7 @@ test("catalog revision and opaque ids are deterministic independent of inventory
   assert.notDeepEqual(accepted.catalog.notice, first.catalog.notice);
 });
 
-test("MCP opaque binding changes on connection, tool schema, or effect drift", () => {
+test("MCP public ids stay identity-stable while private fingerprints still drift", () => {
   const baseline = snapshot();
   const baselineConnection = baseline.resources.connections[0]!;
   assert.equal(baselineConnection.tools.length, 2);
@@ -210,9 +210,11 @@ test("MCP opaque binding changes on connection, tool schema, or effect drift", (
   for (const mutate of mutations) {
     const changed = inventory();
     mutate(changed);
+    const drifted = snapshot(changed);
+    assert.equal(drifted.catalog.connections[0]!.id, baseline.catalog.connections[0]!.id);
     assert.notEqual(
-      snapshot(changed).catalog.connections[0]!.id,
-      baseline.catalog.connections[0]!.id,
+      drifted.resources.connections[0]!.exactFingerprint,
+      baselineConnection.exactFingerprint,
     );
   }
 });
@@ -222,7 +224,11 @@ test("skill grants bind identity and content without projecting content or paths
   const changed = inventory();
   changed.skills[0]!.contentFingerprint = digest("changed-private-skill-content");
   const drifted = snapshot(changed);
-  assert.notEqual(drifted.catalog.skills[0]!.id, baseline.catalog.skills[0]!.id);
+  assert.equal(drifted.catalog.skills[0]!.id, baseline.catalog.skills[0]!.id);
+  assert.notEqual(
+    drifted.resources.skills[0]!.exactFingerprint,
+    baseline.resources.skills[0]!.exactFingerprint,
+  );
   assert.equal(JSON.stringify(drifted.catalog).includes("changed-private-skill-content"), false);
 
   const withPath = inventory() as unknown as {

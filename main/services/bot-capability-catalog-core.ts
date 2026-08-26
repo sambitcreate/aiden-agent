@@ -206,6 +206,7 @@ export type BotCapabilityOpaqueNamespace =
   | "skill"
   | "other";
 
+/** Mint a public selection id. Exact fingerprints are required and stored privately; current minting follows source identity so live fact churn does not rotate checkboxes. */
 export type BotCapabilityOpaqueIdMint = (
   namespace: BotCapabilityOpaqueNamespace,
   sourceIdentity: string,

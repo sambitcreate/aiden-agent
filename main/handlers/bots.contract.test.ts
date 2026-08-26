@@ -55,6 +55,10 @@ test("desktop Bot editor owns access and model selection through revisioned IPC"
   assert.match(bots, /updateBotAccess\(\{\s*audienceId: desktopAudienceId/u);
   assert.match(bots, /modelSelection\(\s*desktopAudienceId/u);
   assert.match(bots, /botAccessUpdateRendererError\(error\)/u);
+  assert.match(
+    bots,
+    /error instanceof BotCapabilityValidationError[\s\S]{0,80}return new Error\(error\.message\)/u,
+  );
   assert.doesNotMatch(bots, /bots:updateBotAccess[\s\S]{0,200}chatStore\./u);
 });
 

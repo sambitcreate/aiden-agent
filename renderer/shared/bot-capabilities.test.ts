@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   botCustomSelectionIsSubset,
+  BOT_FILE_SCOPE_SELECTION_GUIDANCE,
+  botFileScopeSelectionIsCoherent,
   intersectBotCustomSelections,
+  nextBotFileScopeIds,
   parseBotAccessUpdate,
   type BotCustomSelection,
   type BotFileScopeOption,
@@ -78,6 +81,20 @@ test("Full Bot access accepts only an exact optional provider/model pair", () =>
     confirmedForeground: true,
     visionModel: { providerId: "provider:vision" },
   }), /foreground confirmation/u);
+});
+
+test("Custom file-scope toggles stay binder-coherent", () => {
+  assert.equal(botFileScopeSelectionIsCoherent(["full", "home"], scopes), false);
+  assert.equal(botFileScopeSelectionIsCoherent(["home", "documents"], scopes), true);
+  assert.equal(botFileScopeSelectionIsCoherent(["documents"], scopes), false);
+  assert.equal(botFileScopeSelectionIsCoherent(["full"], scopes), true);
+  assert.deepEqual(nextBotFileScopeIds(["home"], scopes, "full", true), ["full"]);
+  assert.deepEqual(
+    nextBotFileScopeIds(["full"], scopes, "documents", true).sort(),
+    ["documents", "home"].sort(),
+  );
+  assert.deepEqual(nextBotFileScopeIds(["home", "documents"], scopes, "home", false), []);
+  assert.equal(BOT_FILE_SCOPE_SELECTION_GUIDANCE.includes("Full Mac"), true);
 });
 
 test("file-scope intersection preserves a chat reduction below Full Mac", () => {

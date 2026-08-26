@@ -59,7 +59,10 @@ import {
 } from "../shared/bot-editor-save";
 import {
   BOT_ACCESS_SUMMARIES,
+  BOT_FILE_SCOPE_SELECTION_GUIDANCE,
   BOT_FULL_ACCESS_NOTICE_VERSION,
+  botFileScopeSelectionIsCoherent,
+  nextBotFileScopeIds,
   type BotAccessUpdate,
   type BotCapabilityCatalog,
   type BotCapabilityOption,
@@ -210,6 +213,9 @@ function buildBotAccessUpdate(
   if (draft.shellEnabled && !catalog.shellAvailable) {
     throw new Error("Run commands is not currently available on this Mac.");
   }
+  if (!botFileScopeSelectionIsCoherent(draft.fileScopeIds, catalog.fileScopes)) {
+    throw new Error(BOT_FILE_SCOPE_SELECTION_GUIDANCE);
+  }
   return {
     accessMode: "custom",
     catalogRevision: catalog.revision,
@@ -344,9 +350,12 @@ function BotEditor({
       if (!committedBot) {
         // Creation is one main-owned transaction: identity, workspace, model,
         // and access either become visible together or are rolled back together.
+        // Re-read the catalog so Custom grants bind against current opaque ids.
+        const latestCatalog = await botsApi.getCapabilityCatalog();
+        qc.setQueryData(queryKeys.botCapabilityCatalog, latestCatalog);
         saved = await botsApi.create({
           bot: createInputFromDraft(draft),
-          access: buildBotAccessUpdate(accessDraft, catalog),
+          access: buildBotAccessUpdate(accessDraft, latestCatalog),
         });
         setCommittedBot(saved);
         setIdentityBaseline(draftFromBot(saved));
@@ -433,7 +442,13 @@ function BotEditor({
     checked: boolean,
   ) =>
     setAccessDraft((current) => {
-      if (!current) return current;
+      if (!current || !catalog) return current;
+      if (key === "fileScopeIds") {
+        return {
+          ...current,
+          fileScopeIds: nextBotFileScopeIds(current.fileScopeIds, catalog.fileScopes, id, checked),
+        };
+      }
       const ids = new Set(current[key]);
       if (checked) ids.add(id);
       else ids.delete(id);
