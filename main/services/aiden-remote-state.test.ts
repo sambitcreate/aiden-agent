@@ -9,10 +9,15 @@ import {
   AidenRemoteStateRegistry,
   createDefaultAidenRemoteState,
   defaultAidenRemoteDisplayName,
+  normalizeAidenRemoteStateForRuntimeProfile,
   parseAidenRemoteStateDocument,
   type AidenRemoteStateDocument,
   type AidenRemoteStateStorage,
 } from "./aiden-remote-state.js";
+import {
+  AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
+  AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+} from "./aiden-remote-ports.js";
 
 function fixture(initial?: unknown) {
   let stored = initial ?? createDefaultAidenRemoteState(() => Buffer.alloc(24, 7));
@@ -342,6 +347,57 @@ test("legacy endpoint commitment is inferred conservatively and persisted", asyn
   assert.equal(initialized.lanPortCommitted, false);
   assert.equal((migrated.stored() as AidenRemoteStateDocument).lanPortCommitted, false);
   assert.equal(migrated.writes.length, 1);
+});
+
+test("development migrates only the exact legacy production listener pair", () => {
+  const legacy = createDefaultAidenRemoteState(() => Buffer.alloc(24, 4));
+  legacy.lanPortCommitted = true;
+  legacy.tailscaleOwnership = {
+    path: "/api/aiden/v1",
+    target: "http://127.0.0.1:49221/api/aiden/v1",
+  };
+
+  const migrated = normalizeAidenRemoteStateForRuntimeProfile(legacy, "development");
+  assert.equal(migrated.lanPort, AIDEN_REMOTE_DEVELOPMENT_LAN_PORT);
+  assert.equal(
+    migrated.tailscaleOwnership?.target,
+    "http://127.0.0.1:50221/api/aiden/v1",
+  );
+  assert.equal(legacy.lanPort, AIDEN_REMOTE_PRODUCTION_LAN_PORT);
+  assert.equal(
+    normalizeAidenRemoteStateForRuntimeProfile(legacy, "production").lanPort,
+    AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  );
+
+  const custom = { ...legacy, lanPort: 51_000 };
+  assert.equal(
+    normalizeAidenRemoteStateForRuntimeProfile(custom, "development").lanPort,
+    51_000,
+  );
+  const secondProductionPair = { ...legacy, lanPort: 49_222 };
+  assert.equal(
+    normalizeAidenRemoteStateForRuntimeProfile(
+      secondProductionPair,
+      "development",
+    ).lanPort,
+    50_222,
+  );
+});
+
+test("development defers port migration while a Tailscale route outcome is unresolved", () => {
+  const legacy = createDefaultAidenRemoteState(() => Buffer.alloc(24, 5));
+  legacy.tailscalePendingOutcome = {
+    operation: "connect",
+    target: "http://127.0.0.1:49221/api/aiden/v1",
+    beforeFingerprint: "a".repeat(64),
+    preservedFingerprint: "b".repeat(64),
+    normalizeListenerScaffolding: false,
+    createdAt: 1_000,
+  };
+  assert.equal(
+    normalizeAidenRemoteStateForRuntimeProfile(legacy, "development").lanPort,
+    AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  );
 });
 
 test("legacy devices default Bot vocabulary negotiation to false and persist the migration", async () => {

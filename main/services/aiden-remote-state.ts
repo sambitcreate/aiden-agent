@@ -4,17 +4,23 @@ import {
   scrypt,
   timingSafeEqual,
 } from "node:crypto";
+import type { RuntimeProfileId } from "../runtime-profile-core.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import {
+  AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
+import {
+  AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
+  AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  isAidenRemoteReservedLanPort,
+} from "./aiden-remote-ports.js";
 import type { AidenTailscaleOwnership } from "./aiden-remote-tailscale-route.js";
 import type { AidenTailscalePendingRouteOutcome } from "./aiden-remote-tailscale.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 
 const STATE_VERSION = 1 as const;
-const DEFAULT_LAN_PORT = 49_220;
 const MAX_DEVICES = 32;
 const MAX_RETAINED_DEVICES = 128;
 const MAX_APPROVED_ROOTS = 32;
@@ -327,18 +333,54 @@ function parsePendingOutcome(value: unknown): AidenTailscalePendingRouteOutcome 
 export function createDefaultAidenRemoteState(
   random: (size: number) => Buffer = randomBytes,
   displayName = FALLBACK_AIDEN_REMOTE_DISPLAY_NAME,
+  lanPort = AIDEN_REMOTE_PRODUCTION_LAN_PORT,
 ): AidenRemoteStateDocument {
+  if (!Number.isInteger(lanPort) || lanPort < 1 || lanPort >= 65_535 || lanPort % 2 !== 0) {
+    throw new Error("Invalid default Aiden Remote listener port.");
+  }
   return {
     version: STATE_VERSION,
     instanceId: `instance_${random(24).toString("base64url")}`,
     displayName: normalizeAidenRemoteDisplayName(displayName),
     enabled: false,
     connectionMode: "lan",
-    lanPort: DEFAULT_LAN_PORT,
+    lanPort,
     lanPortCommitted: false,
     devices: [],
     approvedRoots: [],
   };
+}
+
+function canonicalTailscaleTarget(lanPort: number): string {
+  return `http://127.0.0.1:${lanPort + 1}${AIDEN_REMOTE_BASE_PATH}`;
+}
+
+/**
+ * Development historically inherited production's listener range. Migrate
+ * only ports in that reserved range, and never rewrite custom ports or an
+ * unresolved route mutation whose persisted fingerprints must remain intact.
+ */
+export function normalizeAidenRemoteStateForRuntimeProfile(
+  document: AidenRemoteStateDocument,
+  profile: RuntimeProfileId,
+): AidenRemoteStateDocument {
+  if (
+    profile !== "development"
+    || !isAidenRemoteReservedLanPort(document.lanPort, "production")
+    || document.tailscalePendingOutcome !== undefined
+  ) {
+    return document;
+  }
+  const migrated = structuredClone(document);
+  migrated.lanPort = AIDEN_REMOTE_DEVELOPMENT_LAN_PORT
+    + (document.lanPort - AIDEN_REMOTE_PRODUCTION_LAN_PORT);
+  if (
+    migrated.tailscaleOwnership?.target
+    === canonicalTailscaleTarget(document.lanPort)
+  ) {
+    migrated.tailscaleOwnership.target = canonicalTailscaleTarget(migrated.lanPort);
+  }
+  return migrated;
 }
 
 export function parseAidenRemoteStateDocument(
