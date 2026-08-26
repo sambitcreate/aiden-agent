@@ -2,6 +2,8 @@
 // contract that matters most — that unattended runs carry the [SILENT] rule and
 // attended ones do not — is unit-testable.
 
+import { RESPONSE_FORMAT_GUIDANCE } from "../response-format-guidance.js";
+
 export interface AssistantPromptInput {
   /** Settings section ids the assistant may talk about. */
   settingsSections: readonly string[];
@@ -324,8 +326,9 @@ export function buildAssistantSystemPrompt(input: AssistantPromptInput): string 
       : []),
     telegram
       ? "Be concise and direct. Use Markdown sparingly and never open with a preamble about what you are about to do."
-      : "Be brief — this is a small window. Use Markdown sparingly and never open with a",
+      : "Be brief — this is a small window. Use Markdown purposefully and never open with a",
     ...(telegram ? [] : ["preamble about what you are about to do."]),
+    RESPONSE_FORMAT_GUIDANCE,
   ].join("\n");
   const surfacedPrompt = telegram
     ? withTelegramAgentContract(prompt, { workspaceBound: false })
