@@ -8,6 +8,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -19,6 +23,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import java.time.Instant
@@ -91,15 +96,19 @@ class AidenRemoteClientTest {
 
     @Test
     fun testStartTurnEndpoint() = runBlocking {
+        val exactText = """NFC café | NFD cafe\u0301 | 👩🏽‍💻 | /Users/example/Aiden Projects/π.kt | C:\Users\example\Aiden Projects\pi.kt | /api/aiden/v1/chats/chat_01?after=42 | https://example.test/a%2Fb?q=hello%20world#résumé | UUID 123e4567-e89b-12d3-a456-426614174000 | base64 SGVsbG8sIFdvcmxkIQ== | hex deadbeef0123456789ABCDEF | Authorization: Bearer visible-placeholder | visible prose keys Reasoning_Content Tool-Arguments tool.result S_e.c-r e t"""
         val jsonResponse = """
             {
                 "turnId": "turn_123",
                 "streamId": "stream_456",
                 "status": "running",
+                "subagents": {"version": 2, "runIds": ["run-private"]},
                 "message": {
                     "id": "msg_123",
                     "role": "user",
-                    "text": "Hello Aiden",
+                    "text": ${Json.encodeToString(exactText)},
+                    "childRunId": "run-private",
+                    "childTranscript": [{"role": "assistant", "text": "private child text"}],
                     "createdAt": "2026-08-24T00:00:00Z"
                 }
             }
@@ -107,7 +116,7 @@ class AidenRemoteClientTest {
 
         server.enqueue(MockResponse().setBody(jsonResponse).setResponseCode(202))
 
-        val turnStart = AidenTurnStart(text = "Hello Aiden")
+        val turnStart = AidenTurnStart(text = exactText)
         val idempotencyKey = UUID.randomUUID()
         val response = client.startTurn("chat_1", turnStart, idempotencyKey)
 
@@ -115,9 +124,13 @@ class AidenRemoteClientTest {
         assertEquals("POST", recorded.method)
         assertEquals("/api/aiden/v1/chats/chat_1/turns", recorded.path)
         assertEquals(idempotencyKey.toString().lowercase(), recorded.getHeader("Idempotency-Key"))
+        val requestBody = Json.parseToJsonElement(recorded.body.readUtf8()).jsonObject
+        assertEquals(setOf("text"), requestBody.keys)
+        assertEquals(exactText, requestBody.getValue("text").jsonPrimitive.content)
         assertEquals("turn_123", response.turnId)
         assertEquals("stream_456", response.streamId)
         assertEquals(AidenChatRole.USER, response.message.role)
+        assertEquals(exactText, response.message.text)
     }
 
     @Test
@@ -131,9 +144,13 @@ class AidenRemoteClientTest {
             id: 2
             data: {"protocolVersion":1,"streamId":"stream_test","sequence":2,"timestamp":"2026-08-24T00:00:01Z","type":"text_delta","payload":{"text":"World!"}}
 
-            event: done
+            event: subagent_update
             id: 3
-            data: {"protocolVersion":1,"streamId":"stream_test","sequence":3,"timestamp":"2026-08-24T00:00:02Z","type":"done","payload":{"messageId":"msg_done"}}
+            data: {"protocolVersion":1,"streamId":"stream_test","sequence":3,"timestamp":"2026-08-24T00:00:02Z","type":"subagent_update","payload":{"childRunId":"run-private","childTranscript":["private child text"],"childResult":"private child result"}}
+
+            event: done
+            id: 4
+            data: {"protocolVersion":1,"streamId":"stream_test","sequence":4,"timestamp":"2026-08-24T00:00:03Z","type":"done","payload":{"messageId":"msg_done"}}
 
         """.trimIndent()
 
@@ -146,11 +163,90 @@ class AidenRemoteClientTest {
 
         val events = client.openStream("chat_1", "stream_test").toList()
 
-        assertEquals(3, events.size)
+        assertEquals(4, events.size)
         assertEquals(AidenRemoteEventType.TEXT_DELTA, events[0].type)
         assertEquals(AidenRemoteEventType.TEXT_DELTA, events[1].type)
-        assertEquals(AidenRemoteEventType.DONE, events[2].type)
-        assertTrue(events[2].type.isTerminal)
+        assertEquals("subagent_update", events[2].type.rawValue)
+        assertFalse(events[2].shouldApply)
+        assertNull(events[2].payload)
+        assertEquals(AidenRemoteEventType.DONE, events[3].type)
+        assertTrue(events[3].type.isTerminal)
+        assertEquals(
+            listOf(AidenRemoteEventType.TEXT_DELTA, AidenRemoteEventType.TEXT_DELTA, AidenRemoteEventType.DONE),
+            events.filter { it.shouldApply }.map { it.type }
+        )
+    }
+
+    @Test
+    fun testStartTurnRejectsPrivateMetadataOutsideOpaqueParentText() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(202).setBody(
+                """
+                    {
+                      "turnId":"turn-private",
+                      "streamId":"stream-private",
+                      "status":"running",
+                      "message":{
+                        "id":"message-private",
+                        "role":"user",
+                        "text":"Visible parent text",
+                        "createdAt":"2026-08-25T18:00:00.000Z",
+                        "child":{"providerCredential":"private material"}
+                      }
+                    }
+                """.trimIndent()
+            )
+        )
+
+        try {
+            client.startTurn("chat_1", AidenTurnStart(text = "Visible parent text"))
+            fail("Expected private response metadata to be rejected")
+        } catch (error: AidenRemoteContractException.UnsafePayloadField) {
+            assertEquals("providerCredential", error.field)
+        }
+    }
+
+    @Test
+    fun testEveryChatProjectionEndpointRejectsNormalizedNestedPrivateAliases() = runBlocking {
+        data class EndpointCase(
+            val alias: String,
+            val status: Int,
+            val method: String,
+            val path: String,
+            val call: suspend () -> Unit
+        )
+
+        val cases = listOf(
+            EndpointCase("Reasoning_Content", 200, "GET", "/api/aiden/v1/chats") { client.chats() },
+            EndpointCase("Tool-Arguments", 200, "GET", "/api/aiden/v1/chats/chat-private") { client.chat("chat-private") },
+            EndpointCase("tool.result", 201, "POST", "/api/aiden/v1/chats") { client.createChat("workspace-private") },
+            EndpointCase("S_e.c-r e t", 200, "PATCH", "/api/aiden/v1/chats/chat-private") {
+                client.updateChat("chat-private", "revision-private", "Private")
+            },
+            EndpointCase("Reasoning_Content", 200, "POST", "/api/aiden/v1/chats/chat-private/move") {
+                client.moveChat("chat-private", "revision-private", "workspace-private")
+            },
+            EndpointCase("Tool-Arguments", 202, "POST", "/api/aiden/v1/chats/chat-private/turns") {
+                client.startTurn("chat-private", AidenTurnStart(text = "Visible parent text"))
+            }
+        )
+
+        for (case in cases) {
+            server.enqueue(
+                MockResponse().setResponseCode(case.status).setBody(
+                    """{"futurePublic":{"nested":{"${case.alias}":"private metadata"}}}"""
+                )
+            )
+            try {
+                case.call()
+                fail("Expected ${case.alias} to be rejected for ${case.method} ${case.path}")
+            } catch (error: AidenRemoteContractException.UnsafePayloadField) {
+                assertEquals(case.alias, error.field)
+            }
+            val request = server.takeRequest()
+            assertEquals(case.method, request.method)
+            assertEquals(case.path, request.path)
+        }
     }
 
     @Test

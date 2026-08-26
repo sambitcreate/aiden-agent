@@ -4,6 +4,7 @@ import type {
   AssistantMessageEvent,
   Context,
   Model,
+  ModelsSimpleStreamOptions,
   ProviderHeaders,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
@@ -100,6 +101,8 @@ export interface SubagentInferenceReadyMessage {
   kind: "ready";
   version: typeof SUBAGENT_INFERENCE_PROTOCOL_VERSION;
   requestId: string;
+  /** Non-secret launch nonce delivered to the worker through UtilityProcess argv. */
+  launchToken: string;
 }
 
 export interface SubagentInferenceHookMessage {
@@ -122,6 +125,60 @@ export type SubagentInferenceWorkerMessage =
   | SubagentInferenceEventMessage
   | SubagentInferenceFailureMessage
   | SubagentInferenceHookMessage;
+
+/**
+ * Pi's agent loop passes AgentTool objects through the structurally compatible
+ * Context.tools field. AgentTool adds main-owned execute/argument callbacks,
+ * which must remain in main and cannot cross Electron's structured-clone IPC.
+ */
+export function prepareSubagentInferenceContext(context: Context): Context {
+  return {
+    ...(context.systemPrompt === undefined ? {} : { systemPrompt: context.systemPrompt }),
+    messages: context.messages,
+    ...(context.tools === undefined
+      ? {}
+      : {
+          tools: context.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          })),
+        }),
+  };
+}
+
+/**
+ * Project the documented Pi provider options instead of spreading the agent
+ * loop config. The runtime object also contains callbacks such as getApiKey,
+ * convertToLlm, and tool lifecycle hooks that are deliberately main-owned.
+ */
+export function prepareSubagentInferenceOptions(
+  options: ModelsSimpleStreamOptions = {},
+): SerializableStreamOptions {
+  const projected: SerializableStreamOptions = {};
+  const assign = <K extends keyof SerializableStreamOptions>(
+    key: K,
+    value: SerializableStreamOptions[K] | undefined,
+  ) => {
+    if (value !== undefined) projected[key] = value;
+  };
+  assign("temperature", options.temperature);
+  assign("maxTokens", options.maxTokens);
+  assign("apiKey", options.apiKey);
+  assign("transport", options.transport);
+  assign("cacheRetention", options.cacheRetention);
+  assign("sessionId", options.sessionId);
+  assign("headers", options.headers);
+  assign("timeoutMs", options.timeoutMs);
+  assign("websocketConnectTimeoutMs", options.websocketConnectTimeoutMs);
+  assign("maxRetries", options.maxRetries);
+  assign("maxRetryDelayMs", options.maxRetryDelayMs);
+  assign("metadata", options.metadata);
+  assign("env", options.env);
+  assign("reasoning", options.reasoning);
+  assign("thinkingBudgets", options.thinkingBudgets);
+  return projected;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -188,7 +245,15 @@ export function isSubagentInferenceWorkerMessage(
 ): value is SubagentInferenceWorkerMessage {
   if (!isRecord(value) || value.version !== SUBAGENT_INFERENCE_PROTOCOL_VERSION) return false;
   if (typeof value.requestId !== "string" || value.requestId.length === 0) return false;
-  if (value.kind === "ready") return Object.keys(value).length === 3;
+  if (value.kind === "ready") {
+    return (
+      hasExactKeys(value, ["kind", "version", "requestId", "launchToken"]) &&
+      typeof value.launchToken === "string" &&
+      value.launchToken.length > 0 &&
+      value.launchToken.length <= 128 &&
+      /^[A-Za-z0-9_-]+$/u.test(value.launchToken)
+    );
+  }
   if (value.kind === "failure") {
     return (
       typeof value.message === "string" &&
@@ -296,6 +361,40 @@ export function isSubagentInferenceParentMessage(
     Array.isArray(value.context.messages) &&
     isRecord(value.options)
   );
+}
+
+/**
+ * Electron UtilityProcess uses structured clone, while Pi's provider contract
+ * is JSON data. Normalize at the owned boundary so symbols, undefined values,
+ * prototypes, and any accidentally retained callbacks cannot reach IPC.
+ */
+export function toSubagentInferenceWireMessage<T extends SubagentInferenceParentMessage>(
+  value: T,
+): T {
+  const projected =
+    value.kind === "start"
+      ? {
+          ...value,
+          context: prepareSubagentInferenceContext(value.context),
+          options: prepareSubagentInferenceOptions(value.options),
+        }
+      : value;
+  let encoded: string;
+  try {
+    encoded = JSON.stringify(projected);
+  } catch {
+    throw new Error("The isolated provider request could not be serialized.");
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(encoded) as unknown;
+  } catch {
+    throw new Error("The isolated provider request could not be serialized.");
+  }
+  if (!isSubagentInferenceParentMessage(decoded)) {
+    throw new Error("The isolated provider request did not match its wire contract.");
+  }
+  return decoded as T;
 }
 
 export function serializeError(error: unknown): string {

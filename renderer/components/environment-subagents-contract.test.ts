@@ -14,6 +14,13 @@ import {
   compactSidebarAutoFocusIntent,
   type CompactSidebarFocusState,
 } from "../lib/compact-sidebar-focus.js";
+import {
+  EMPTY_SUBAGENT_STOP_PENDING_STATE,
+  beginSubagentStopPending,
+  clearSubagentStopPending,
+  failSubagentStopPending,
+  replaceSubagentStopPendingOwner,
+} from "../lib/subagent-stop-pending.js";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate.js";
 import type { ChatMessage } from "../lib/types.js";
 
@@ -299,14 +306,8 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(
-    messages,
-    /subagentChips=\{\s*subagentsEnabled && m\.subagents \? \(/u,
-  );
-  assert.match(
-    messages,
-    /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u,
-  );
+  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && m\.subagents \? \(/u);
+  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });
@@ -330,8 +331,12 @@ test("the Environment summary exposes conditional current-chat counts and the sh
     environment,
     /state=\{(?:panel\.)?subagentCounts\.active > 0 \? "running" : "finished"\}/u,
   );
-  assert.match(environment, /\{subagentCounts\.active\} working/u);
-  assert.match(environment, /\{subagentCounts\.done\} done/u);
+  assert.match(environment, /subagentOverviewSummary\(panel\.subagentViews\)/u);
+  assert.match(environment, /\{subagentSummary\.primary\}/u);
+  assert.match(environment, /\{subagentSummary\.secondary\}/u);
+  assert.match(environment, /subagentSummary\.ariaLabel/u);
+  assert.match(environment, /min-w-0 truncate text-regular text-primary/u);
+  assert.match(environment, /max-w-44 min-w-0 truncate text-small/u);
 });
 
 test("live snapshots are owner-checked, revisioned, and released across route transitions", () => {
@@ -350,7 +355,7 @@ test("live snapshots are owner-checked, revisioned, and released across route tr
   assert.match(pane, /mergeSubagentSnapshots\(current, \[snapshot\]/u);
   assert.match(
     pane,
-    /environmentPanel\.syncSubagents\(\s*chatId,\s*effectiveWorkspaceId,\s*subagentReferences,\s*liveSubagents/u,
+    /environmentPanel\.syncSubagents\(\s*chatId,\s*effectiveWorkspaceId,\s*subagentReferences,\s*displayedLiveSubagents/u,
   );
   assert.match(
     pane,
@@ -376,20 +381,110 @@ test("saved detail failures expose a versioned retry path", () => {
   assert.match(environment, /setSubagentDetailRequestVersion\(\(version\) => version \+ 1\)/u);
   assert.match(environment, /subagentDetailRequestVersion,/u);
   assert.match(environment, /retrySubagentDetail/u);
+  assert.match(environment, /setSubagentDetailLoading\(true\)/u);
+  assert.match(environment, /handoffSnapshots=\{panel\.subagents\.handoffSnapshots\}/u);
   assert.match(panel, /onRetryDetail/u);
+  assert.match(panel, /refreshError=\{savedDetailRefreshError\}/u);
+  assert.match(panel, /refreshing=\{savedDetailRefreshing\}/u);
   assert.match(panel, /\sRetry\s*<\/Button>/u);
 });
 
 test("production V2 detail wires Stop without advertising unavailable retry", () => {
   const environment = source("./environment-panel.tsx");
+  const panel = source("./subagents-panel.tsx");
+  const detail = source("./subagent-detail.tsx");
 
   assert.match(environment, /const stopSubagent = React\.useCallback/u);
   assert.match(environment, /await subagentsApi\.stop\(chatId, run\.runId\)/u);
+  assert.match(environment, /beginSubagentStopPending/u);
+  assert.match(environment, /clearSubagentStopPending/u);
+  assert.match(environment, /failSubagentStopPending/u);
+  assert.match(environment, /stopPendingRunIds=\{panel\.subagentStopPendingRunIds\}/u);
+  assert.match(environment, /stopErrorsByRunId=\{panel\.subagentStopErrorsByRunId\}/u);
   assert.match(environment, /onStopRun=\{panel\.stopSubagent\}/u);
+  assert.match(panel, /stopPending=\{selectedStopPending\}/u);
+  assert.match(detail, /disabled=\{stopPending\}/u);
+  assert.doesNotMatch(detail, /useState<"stop"/u);
   assert.doesNotMatch(environment, /onRetryRun=/u);
 });
 
-test("unrelated live revisions cannot restart a saved-detail read", () => {
+test("stop-pending operations are owner-scoped, duplicate-safe, and explicitly settled", () => {
+  const ownerOne = JSON.stringify(["chat-one", "workspace-one"]);
+  const ownerTwo = JSON.stringify(["chat-two", "workspace-two"]);
+  const begun = beginSubagentStopPending(EMPTY_SUBAGENT_STOP_PENDING_STATE, ownerOne, "run-one");
+  assert.equal(begun.accepted, true);
+  assert.deepEqual(begun.state, { ownerKey: ownerOne, runIds: ["run-one"], errors: {} });
+
+  const duplicate = beginSubagentStopPending(begun.state, ownerOne, "run-one");
+  assert.equal(duplicate.accepted, false);
+  assert.equal(duplicate.state, begun.state);
+
+  const selectionIndependent = beginSubagentStopPending(begun.state, ownerOne, "run-two");
+  assert.deepEqual(selectionIndependent.state.runIds, ["run-one", "run-two"]);
+  const terminalSettled = clearSubagentStopPending(
+    selectionIndependent.state,
+    ownerOne,
+    new Set(["run-one"]),
+  );
+  assert.deepEqual(terminalSettled.runIds, ["run-two"]);
+  const errorSettled = clearSubagentStopPending(terminalSettled, ownerOne, new Set(["run-two"]));
+  assert.deepEqual(errorSettled.runIds, []);
+
+  const retryableFailure = failSubagentStopPending(
+    beginSubagentStopPending(errorSettled, ownerOne, "run-two").state,
+    ownerOne,
+    "run-two",
+    "Stop unavailable",
+  );
+  assert.equal(retryableFailure.accepted, true);
+  assert.deepEqual(retryableFailure.state.errors, { "run-two": "Stop unavailable" });
+  assert.deepEqual(
+    beginSubagentStopPending(retryableFailure.state, ownerOne, "run-two").state.errors,
+    {},
+  );
+
+  assert.deepEqual(replaceSubagentStopPendingOwner(selectionIndependent.state, ownerTwo), {
+    ownerKey: ownerTwo,
+    runIds: [],
+    errors: {},
+  });
+});
+
+test("authoritative terminal settlement wins over a late Stop rejection", async () => {
+  const owner = JSON.stringify(["chat-one", "workspace-one"]);
+  let state = beginSubagentStopPending(EMPTY_SUBAGENT_STOP_PENDING_STATE, owner, "run-one").state;
+  let rejectRequest!: (reason: unknown) => void;
+  const request = new Promise<void>((_resolve, reject) => {
+    rejectRequest = reject;
+  });
+  const settled = request.catch((error: unknown) => {
+    const failure = failSubagentStopPending(
+      state,
+      owner,
+      "run-one",
+      error instanceof Error ? error.message : "Stop failed",
+    );
+    state = failure.state;
+    return failure.accepted;
+  });
+
+  state = clearSubagentStopPending(state, owner, new Set(["run-one"]));
+  rejectRequest(new Error("late transport rejection"));
+
+  assert.equal(await settled, false);
+  assert.deepEqual(state, { ownerKey: owner, runIds: [], errors: {} });
+
+  const environment = source("./environment-panel.tsx");
+  const terminalClear = environment.indexOf("const terminalRunIds = new Set(");
+  const stateUpdate = environment.indexOf("commitSubagents((current) => {", terminalClear);
+  assert.ok(terminalClear >= 0 && stateUpdate > terminalClear);
+  assert.match(
+    environment,
+    /if \(failure\.accepted\) commitSubagentStopPending\(failure\.state\)/u,
+  );
+});
+
+test("only a persisted selection starts a saved-detail read and null preserves an error", () => {
   const environment = source("./environment-panel.tsx");
   const detailEffect = between(
     environment,
@@ -401,7 +496,39 @@ test("unrelated live revisions cannot restart a saved-detail read", () => {
   assert.doesNotMatch(detailEffect, /subagents\.loadedSnapshots/u);
   assert.doesNotMatch(detailEffect, /\bsubagentViews\b/u);
   assert.match(detailEffect, /selectedSubagentGenerationId/u);
-  assert.match(detailEffect, /selectedSubagentSnapshotRevision/u);
+  assert.match(detailEffect, /selectedSubagentReferenceMessageId/u);
+  assert.doesNotMatch(detailEffect, /selectedSubagentSnapshotRevision/u);
+  assert.match(detailEffect, /!selectedSubagentReferenceMessageId/u);
+  assert.match(
+    detailEffect,
+    /if \(!safeSnapshot\) \{\s*setSubagentDetailError\("Aiden could not refresh this saved subagent\."\)/u,
+  );
+  assert.match(detailEffect, /const requestBaselineSnapshot = mergeSubagentSnapshots\(/u);
+  assert.match(detailEffect, /\.\.\.subagentsRef\.current\.liveSnapshots/u);
+  assert.match(detailEffect, /requestBaselineSnapshot,/u);
+  assert.match(detailEffect, /const accepted = commitSubagents\(\(current\) => \{/u);
+  assert.match(detailEffect, /mergeSubagentHistorySnapshot\(/u);
+  assert.match(detailEffect, /loadedSnapshots: merged\.loadedSnapshots/u);
+  assert.ok(
+    detailEffect.indexOf("if (!accepted)") < detailEffect.indexOf("setSubagentEffectDetail"),
+  );
+});
+
+test("subagent context commits synchronously through one ref-backed authority", () => {
+  const environment = source("./environment-panel.tsx");
+  assert.doesNotMatch(environment, /subagentsRef\.current = subagents/u);
+  assert.match(environment, /const commitSubagents = React\.useCallback/u);
+  assert.match(environment, /const current = subagentsRef\.current/u);
+  assert.match(environment, /subagentsRef\.current = next/u);
+  assert.match(environment, /setRenderedSubagents\(next\)/u);
+  assert.equal(environment.match(/setRenderedSubagents\(/gu)?.length, 1);
+  assert.doesNotMatch(environment, /\bsetSubagents\(/u);
+  assert.match(environment, /generationId: safeSnapshot\.generationId/u);
+  assert.match(environment, /revision: safeSnapshot\.revision/u);
+  assert.match(
+    environment,
+    /subagentEffectDetail\.revision === displayedSubagentView\?\.snapshot\?\.revision/u,
+  );
 });
 
 test("persisted and live chips share one transcript integration path", () => {
@@ -421,6 +548,7 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   const environment = source("./environment-panel.tsx");
   const announcer = source("./subagent-live-announcer.tsx");
   const panel = source("./subagents-panel.tsx");
+  const detail = source("./subagent-detail.tsx");
   const chips = source("./subagent-chips.tsx");
   const panelState = source("../lib/subagent-panel-state.ts");
 
@@ -437,7 +565,10 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);
   assert.equal(
-    (`${environment}\n${announcer}\n${panel}\n${chips}`.match(/aria-live="polite"/gu) ?? []).length,
+    (
+      `${environment}\n${announcer}\n${panel}\n${detail}\n${chips}`.match(/aria-live="polite"/gu) ??
+      []
+    ).length,
     1,
     "the portaled node is the composed Subagents UI's only polite live region",
   );
@@ -448,12 +579,14 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.match(announcer, /aria-atomic="true"/u);
   assert.doesNotMatch(chips, /aria-live=/u);
   assert.doesNotMatch(panel, /aria-live=/u);
+  assert.doesNotMatch(detail, /aria-live=/u);
   assert.doesNotMatch(panel, /role="status"/u);
   assert.doesNotMatch(panel, /data-subagent-detail-announcer/u);
   assert.match(panel, /onDetailAnnouncement\?\.\(ownerKey, message\)/u);
   assert.match(panelState, /Loading saved activity for/u);
-  assert.match(panelState, /Saved activity loaded for/u);
+  assert.match(panelState, /Saved activity \$\{action\} for/u);
   assert.match(panelState, /Could not load saved activity for/u);
+  assert.match(panelState, /Could not refresh saved activity for/u);
   assert.doesNotMatch(panelState, /return `\$\{next\.label\}: \$\{next\.activity\}\.`/u);
 });
 
@@ -471,10 +604,17 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(
     ipc,
-    /rememberDetachedLifecycleStream\(\{\s+streamId,\s+chatId: params\.chatId,\s+workspaceId: params\.workspaceId \?\? "default",\s+\}\);\s+dispose\(\);/u,
+    /rememberDetachedLifecycleStream\(\s+\{\s+streamId,\s+chatId: params\.chatId,\s+workspaceId: params\.workspaceId \?\? "default",\s+\},\s+\{\s+content: projectedContent,\s+reasoning: projectedReasoning,\s+timeline: projectedTimeline,\s+artifacts: projectedArtifacts,\s+subagents: projectedSubagents,/u,
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
-  assert.match(pane, /detachedGenerationDraining\s+\? "Finishing the previous response…"/u);
+  assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
+  assert.match(pane, /detachedGenerationDraining\s+\? "Response continues in the background…"/u);
+  assert.match(
+    pane,
+    /messages\[messages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
+  );
+  assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
+  assert.match(pane, /streamingText=\{displayedStreamingText\}/u);
   assert.match(
     pane,
     /if \(detachedGenerationDraining\) \{\s+throw new Error\("Wait for the previous response to finish saving before sending again\."\)/u,

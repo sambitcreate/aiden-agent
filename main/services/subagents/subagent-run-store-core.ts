@@ -5,6 +5,8 @@ import {
   isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV1,
   SUBAGENT_ACTIVE_STATES,
+  SUBAGENT_TERMINAL_STATES,
+  subagentProjectionNoticesAreMonotonic,
   type SubagentRunSnapshotV1,
 } from "../../../renderer/shared/subagent-runs.js";
 import { sanitizeSubagentSnapshotText } from "../../../renderer/shared/subagent-safe-text.js";
@@ -552,7 +554,12 @@ function isValidProgression(existing: SubagentRunSnapshotV1, next: SubagentRunSn
     next.tools < existing.tools ||
     next.tokens < existing.tokens ||
     nextMilestones.length < existingMilestones.length ||
-    existingMilestones.some((milestone, index) => nextMilestones[index] !== milestone)
+    existingMilestones.some((milestone, index) => nextMilestones[index] !== milestone) ||
+    !subagentProjectionNoticesAreMonotonic(
+      existing.projectionNotices,
+      next.projectionNotices,
+      SUBAGENT_TERMINAL_STATES.has(next.state),
+    )
   ) {
     return false;
   }

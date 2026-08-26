@@ -13,6 +13,20 @@ import {
 const parentPort = process.parentPort;
 if (!parentPort) throw new Error("Subagent inference worker requires an Electron parent port.");
 
+const LAUNCH_OWNER_PREFIX = "--aiden-inference-owner=";
+const launchOwnerArguments = process.argv.filter((argument) =>
+  argument.startsWith(LAUNCH_OWNER_PREFIX),
+);
+const launchToken = launchOwnerArguments[0]?.slice(LAUNCH_OWNER_PREFIX.length);
+if (
+  launchOwnerArguments.length !== 1 ||
+  !launchToken ||
+  launchToken.length > 128 ||
+  !/^[A-Za-z0-9_-]+$/u.test(launchToken)
+) {
+  throw new Error("Subagent inference worker launch identity is invalid.");
+}
+
 let active: { requestId: string; cancellation: AbortController } | undefined;
 let nextCallId = 0;
 const pendingHooks = new Map<number, (payload: unknown) => void>();
@@ -79,6 +93,7 @@ parentPort.on("message", (messageEvent) => {
         kind: "ready",
         version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
         requestId: message.requestId,
+        launchToken,
       });
       // A provider cannot be constructed or contacted until main has observed
       // readiness. That makes an exit before the acknowledgement safe to retry.

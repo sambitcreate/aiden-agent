@@ -123,7 +123,7 @@ export interface AidenRemoteServiceOptions {
   loadTlsIdentity(): Promise<AidenRemoteTlsIdentity>;
   resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
   tailscale: Pick<AidenRemoteTailscaleController, "status" | "connect" | "disconnect">
-    & Partial<Pick<AidenRemoteTailscaleController, "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
+    & Partial<Pick<AidenRemoteTailscaleController, "inspectRoute" | "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
   bonjour: AidenRemoteBonjourPublisher;
   notifyPairingChanged?: () => void;
   workspaceApi?: (
@@ -897,9 +897,15 @@ export class AidenRemoteService {
         ) {
           throw new Error("Connect the Aiden Tailscale Serve route before pairing.");
         }
-        const status = await this.options.tailscale.status();
-        if (this.options.tailscale.assessRoute) {
-          const assessment = await this.options.tailscale.assessRoute(
+        const inspection = this.options.tailscale.inspectRoute
+          ? await this.options.tailscale.inspectRoute(
+            this.loopbackTarget(state),
+            state.tailscaleOwnership,
+          )
+          : undefined;
+        const status = inspection?.connectionStatus ?? await this.options.tailscale.status();
+        if (inspection || this.options.tailscale.assessRoute) {
+          const assessment = inspection?.assessment ?? await this.options.tailscale.assessRoute!(
             this.loopbackTarget(state),
             state.tailscaleOwnership,
           );
@@ -979,7 +985,15 @@ export class AidenRemoteService {
     await this.operationTail;
     const state = await this.options.state.snapshot();
     let tailscaleStatus: AidenTailscaleConnectionStatus = { installed: false };
-    if (state.connectionMode !== "lan" || state.tailscaleOwnership) {
+    const target = this.loopbackTarget(state);
+    const shouldAssessRoute = !state.tailscalePendingOutcome
+      && (state.connectionMode === "tailscale" || state.connectionMode === "both");
+    const inspection = shouldAssessRoute && this.options.tailscale.inspectRoute
+      ? await this.options.tailscale.inspectRoute(target, state.tailscaleOwnership)
+      : undefined;
+    if (inspection) {
+      tailscaleStatus = inspection.connectionStatus;
+    } else if (state.connectionMode !== "lan" || state.tailscaleOwnership) {
       tailscaleStatus = await this.options.tailscale.status();
     }
     const lanEndpoint = this.lanServer
@@ -989,14 +1003,14 @@ export class AidenRemoteService {
     const tailscaleEndpoint = tailscaleStatus.dnsName
       ? `https://${tailscaleStatus.dnsName}${AIDEN_REMOTE_BASE_PATH}`
       : undefined;
-    const target = this.loopbackTarget(state);
     let tailscaleConnected = false;
     let tailscaleRouteState: AidenTailscaleRouteState = "unavailable";
     let tailscaleErrorCode = tailscaleStatus.errorCode;
     if (state.tailscalePendingOutcome) {
       tailscaleRouteState = "reconciliation_required";
-    } else if (this.options.tailscale.assessRoute && (state.connectionMode === "tailscale" || state.connectionMode === "both")) {
-      const assessment = await this.options.tailscale.assessRoute(target, state.tailscaleOwnership);
+    } else if (inspection || (this.options.tailscale.assessRoute && shouldAssessRoute)) {
+      const assessment = inspection?.assessment
+        ?? await this.options.tailscale.assessRoute!(target, state.tailscaleOwnership);
       tailscaleRouteState = assessment.state;
       tailscaleErrorCode = assessment.errorCode;
       tailscaleConnected = assessment.state === "owned" && assessment.errorCode === undefined;

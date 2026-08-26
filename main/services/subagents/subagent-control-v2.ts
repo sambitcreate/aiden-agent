@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV2,
+  subagentProjectionNoticesAreMonotonic,
   type SubagentRunSnapshotV2,
   type SubagentRunStateV2,
 } from "../../../renderer/shared/subagent-runs.js";
@@ -189,6 +190,11 @@ function assertMonotonicProgress(
     next.tokens < current.tokens ||
     nextMilestones.length < currentMilestones.length ||
     currentMilestones.some((milestone, index) => nextMilestones[index] !== milestone) ||
+    !subagentProjectionNoticesAreMonotonic(
+      current.projectionNotices,
+      next.projectionNotices,
+      TERMINAL_STATES.has(next.state),
+    ) ||
     !validStateProgression(current.state, next.state)
   ) {
     throw new Error("Subagent control lifecycle cannot move backward.");

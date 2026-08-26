@@ -77,6 +77,11 @@ export interface AidenTailscaleRouteAssessment {
   errorCode?: AidenTailscaleConnectionStatus["errorCode"];
 }
 
+export interface AidenTailscaleRouteInspection {
+  connectionStatus: AidenTailscaleConnectionStatus;
+  assessment: AidenTailscaleRouteAssessment;
+}
+
 export interface AidenTailscaleTakeoverReview {
   token: string;
   expiresAt: number;
@@ -353,28 +358,34 @@ export class AidenRemoteTailscaleController {
 
   private async nodeStatus(): Promise<AidenTailscaleNodeStatus> {
     if (!this.runner) throw new Error("tailscale_not_installed");
-    return parseNodeStatus(await this.runner.run(["status", "--json"]));
+    // Peer inventory is irrelevant to Serve ownership and can be large and
+    // volatile on busy tailnets. Request only this node's bounded status.
+    return parseNodeStatus(await this.runner.run(["status", "--json", "--peers=false"]));
+  }
+
+  private async readConnectionStatus(): Promise<AidenTailscaleConnectionStatus> {
+    const [nodeStatus, serveStatus] = await Promise.all([
+      this.nodeStatus(),
+      this.serveStatus(),
+    ]);
+    const errorCode = !nodeStatus.dnsName
+      ? "not_connected" as const
+      : !nodeStatus.httpsAvailable
+        ? "https_unavailable" as const
+        : undefined;
+    return {
+      installed: true,
+      ...(nodeStatus.dnsName ? { dnsName: nodeStatus.dnsName } : {}),
+      httpsAvailable: nodeStatus.httpsAvailable,
+      ...(errorCode ? { errorCode } : {}),
+      serveStatus,
+    };
   }
 
   async status(): Promise<AidenTailscaleConnectionStatus> {
     if (!this.runner) return { installed: false, errorCode: "not_installed" };
     try {
-      const [nodeStatus, serveStatus] = await Promise.all([
-        this.nodeStatus(),
-        this.serveStatus(),
-      ]);
-      const errorCode = !nodeStatus.dnsName
-        ? "not_connected" as const
-        : !nodeStatus.httpsAvailable
-          ? "https_unavailable" as const
-          : undefined;
-      return {
-        installed: true,
-        ...(nodeStatus.dnsName ? { dnsName: nodeStatus.dnsName } : {}),
-        httpsAvailable: nodeStatus.httpsAvailable,
-        ...(errorCode ? { errorCode } : {}),
-        serveStatus,
-      };
+      return await this.readConnectionStatus();
     } catch {
       return { installed: true, errorCode: "status_unavailable" };
     }
@@ -440,6 +451,45 @@ export class AidenRemoteTailscaleController {
           : code === "tailscale_https_unavailable"
             ? "https_unavailable"
             : "status_unavailable",
+      };
+    }
+  }
+
+  /**
+   * Read node identity, HTTPS eligibility, Serve state, and route ownership as
+   * one coherent snapshot. Settings must not combine independent CLI reads.
+   */
+  async inspectRoute(
+    target: string,
+    ownership?: AidenTailscaleOwnership,
+  ): Promise<AidenTailscaleRouteInspection> {
+    if (!this.runner) {
+      const errorCode = "not_installed" as const;
+      return {
+        connectionStatus: { installed: false, errorCode },
+        assessment: { state: "unavailable", errorCode },
+      };
+    }
+    try {
+      const connectionStatus = await this.readConnectionStatus();
+      const serveStatus = connectionStatus.serveStatus;
+      if (!serveStatus) throw new Error("tailscale_status_invalid");
+      const classification = classifyAidenTailscaleRoute(serveStatus, target, ownership);
+      const errorCode = connectionStatus.errorCode;
+      let assessment: AidenTailscaleRouteAssessment;
+      if (classification.kind === "owned") {
+        assessment = { state: "owned", ...(errorCode ? { errorCode } : {}) };
+      } else if (errorCode) {
+        assessment = { state: "unavailable", errorCode };
+      } else {
+        assessment = await this.assessmentFromStatus(serveStatus, target, ownership);
+      }
+      return { connectionStatus, assessment };
+    } catch {
+      const errorCode = "status_unavailable" as const;
+      return {
+        connectionStatus: { installed: true, errorCode },
+        assessment: { state: "unavailable", errorCode },
       };
     }
   }

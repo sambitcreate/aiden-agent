@@ -138,7 +138,9 @@ import type {
 import {
   parseChatArtifactEventV1,
   type ChatArtifactEventV1,
+  type ChatArtifactV1,
 } from "../shared/chat-artifacts";
+import { mergeSubagentSnapshots } from "./subagent-view-state";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -1003,6 +1005,11 @@ export function startGeneration(
   messageTurnId: string,
 ): GenerationHandle {
   const streamId = messageTurnId;
+  let projectedContent = "";
+  let projectedReasoning = "";
+  let projectedTimeline: GenerationTimeline | null = null;
+  let projectedArtifacts: ChatArtifactV1[] = [];
+  let projectedSubagents: SubagentRunSnapshot[] = [];
   const unsubs: Array<() => void> = [];
   const dispose = () => {
     for (const u of unsubs) u();
@@ -1012,13 +1019,22 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDelta>("chat:delta", (p) => {
       if (p.streamId !== streamId) return;
-      if (p.reset) callbacks.onReset?.();
-      else callbacks.onDelta(p.delta);
+      if (p.reset) {
+        projectedContent = "";
+        projectedReasoning = "";
+        callbacks.onReset?.();
+      } else {
+        projectedContent += p.delta;
+        callbacks.onDelta(p.delta);
+      }
     }),
   );
   unsubs.push(
     onNotification<ChatReasoningDelta>("chat:reasoning-delta", (p) => {
-      if (p.streamId === streamId) callbacks.onReasoningDelta?.(p.delta);
+      if (p.streamId === streamId) {
+        projectedReasoning += p.delta;
+        callbacks.onReasoningDelta?.(p.delta);
+      }
     }),
   );
   unsubs.push(
@@ -1049,7 +1065,10 @@ export function startGeneration(
   );
   unsubs.push(
     onNotification<ChatTimelineNotification>("chat:timeline", (p) => {
-      if (p.streamId === streamId) callbacks.onTimeline?.(p.timeline);
+      if (p.streamId === streamId) {
+        projectedTimeline = p.timeline;
+        callbacks.onTimeline?.(p.timeline);
+      }
     }),
   );
   if (callbacks.onArtifactEvent) {
@@ -1057,7 +1076,17 @@ export function startGeneration(
       onNotification<ChatArtifactNotification>("chat:artifact", (p) => {
         if (p.streamId !== streamId) return;
         const event = parseChatArtifactEventV1(p.event);
-        if (event) callbacks.onArtifactEvent?.(event);
+        if (!event) return;
+        if (event.operation === "reset") {
+          projectedArtifacts = [];
+        } else if (
+          !projectedArtifacts.some(
+            (candidate) => candidate.attachment.id === event.artifact.attachment.id,
+          )
+        ) {
+          projectedArtifacts = [...projectedArtifacts, event.artifact];
+        }
+        callbacks.onArtifactEvent?.(event);
       }),
     );
   }
@@ -1066,8 +1095,13 @@ export function startGeneration(
       onNotification<ChatSubagents>("chat:subagents", (p) => {
         if (p.streamId !== streamId) return;
         const snapshot = parseSubagentRunSnapshot(p.snapshot);
-        if (snapshot?.generationId === streamId)
+        if (snapshot?.generationId === streamId) {
+          projectedSubagents = mergeSubagentSnapshots(projectedSubagents, [snapshot], {
+            chatId: params.chatId,
+            workspaceId: params.workspaceId ?? "default",
+          });
           callbacks.onSubagents?.(snapshot);
+        }
       }),
     );
   }
@@ -1133,11 +1167,20 @@ export function startGeneration(
       if (origin === "lifecycle") {
         if (lifecycleDetached) return;
         lifecycleDetached = true;
-        rememberDetachedLifecycleStream({
-          streamId,
-          chatId: params.chatId,
-          workspaceId: params.workspaceId ?? "default",
-        });
+        rememberDetachedLifecycleStream(
+          {
+            streamId,
+            chatId: params.chatId,
+            workspaceId: params.workspaceId ?? "default",
+          },
+          {
+            content: projectedContent,
+            reasoning: projectedReasoning,
+            timeline: projectedTimeline,
+            artifacts: projectedArtifacts,
+            subagents: projectedSubagents,
+          },
+        );
         dispose();
         // Renderer lifecycle only releases this document's subscriptions. The
         // main-owned operation continues and the shell reconciles its durable

@@ -98,9 +98,13 @@ Forbidden: `folderPath`, repository/worktree/Git-admin paths, ownership token, d
 
 ### Chat/message
 
-Allowed: IDs, workspace ID, optional Bot ID when the authenticated device has `bot:read`, visible title/provider/model selections, an optional `titlePending: true` hint while first-turn background naming is active, visible user/assistant messages, bounded attachments, safe reasoning/tool/timeline milestones, timestamps, terminal provider-failure category. A Chat response carries `providerId` and `modelId` together or omits both; a partial pair is invalid.
+Allowed: IDs, workspace ID, optional Bot ID when the authenticated device has `bot:read`, visible title/provider/model selections, an optional `titlePending: true` hint while first-turn background naming is active, visible user/assistant messages, bounded attachments, safe parent reasoning/tool/timeline milestones, timestamps, and the parent turn's terminal provider-failure category. A Chat response carries `providerId` and `modelId` together or omits both; a partial pair is invalid.
 
-Forbidden: Pi journals, raw diagnostics, raw tool arguments/results not already safe for renderer display, subagent private history, hidden/system prompts, credentials or authorization headers, provider/MCP headers and API keys, filesystem/skill paths, owned asset filenames, temporary asset URLs, and filesystem internals.
+Subagents remain a Mac-local implementation detail of the parent Pi turn. When the parent uses subagents, iOS and Android receive only the ordinary parent messages, parent timeline and outcome, and parent stream state. They never receive child/subagent IDs or counts, private histories, lifecycle snapshots, child controls, or child-specific endpoints. A child result may affect the parent's eventual visible reply through the normal parent runtime, but it is never projected as a separately addressable mobile object.
+
+Within its documented 200,000-Unicode-scalar bound, visible parent `message.text` is opaque transcript data and is preserved exactly. Privacy filtering applies to DTO fields and metadata, not to the appearance of visible text: Unicode, path-like text, URLs, UUIDs, base64- or hexadecimal-looking strings, and credential-shaped text are not rewritten, encoded, or replaced with a redaction marker. This does not authorize separate credential metadata; credentials, authorization headers, provider/MCP secrets, and API-key fields remain forbidden outside the visible transcript.
+
+Forbidden: Pi journals, raw diagnostics, raw tool arguments/results not already safe for renderer display, every child/subagent projection described above, hidden/system prompts, credentials or authorization headers outside visible parent message text, provider/MCP headers and API keys, filesystem/skill metadata, owned asset filenames, temporary asset URLs, and filesystem internals.
 
 ### Bot
 
@@ -182,7 +186,7 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `GET /chats/{chatId}/attachments/{attachmentId}/content`: return one authenticated, chat-scoped canonical PNG or JPEG for preview.
 - `GET /streams/{streamId}`
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
-- `POST /streams/{streamId}/cancel`
+- `POST /streams/{streamId}/cancel`: request cancellation of the authenticated parent turn stream. This is not a child/subtree control endpoint; any internal child shutdown is a Mac-owned consequence of cancelling the parent and is never separately addressable by mobile.
 - `POST /approvals/{approvalId}/respond`: `allow` or `deny` only.
 - `GET /streams/{streamId}/approval`: current bounded approval snapshot, or `null` after resolution.
 

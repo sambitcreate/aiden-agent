@@ -1,8 +1,10 @@
 import {
   SUBAGENT_TERMINAL_STATES,
+  adaptSubagentRunSnapshotV2ToV1,
   isSafeSubagentIdentifier,
   parseSubagentMessageReferenceV1,
   parseSubagentRunSnapshot,
+  subagentRunSnapshotUpdateIsMonotonic,
   type SubagentMessageReferenceV1,
   type SubagentRunSnapshot,
   type SubagentRunStateV2,
@@ -50,6 +52,8 @@ export interface SubagentRunViewCounts {
   failed: number;
   timedOut: number;
   interrupted: number;
+  stopped: number;
+  unknown: number;
 }
 
 export interface SubagentRunViewSplit {
@@ -57,9 +61,29 @@ export interface SubagentRunViewSplit {
   done: SubagentRunView[];
 }
 
+export type SubagentRunPresentationState =
+  | "active"
+  | "stale_active"
+  | "stopping"
+  | "saving"
+  | "save_delayed"
+  | "terminal";
+
+export interface SubagentRunPresentation {
+  /** Presentation-only state; the protocol snapshot is never rewritten. */
+  state: SubagentRunPresentationState;
+  /** Bounded, truthful status copy for the current renderer surface. */
+  label: string;
+}
+
 export interface SubagentPersistenceHandoff {
   liveSnapshots: SubagentRunSnapshot[];
   handoffSnapshots: SubagentRunSnapshot[];
+  loadedSnapshots: SubagentRunSnapshot[];
+}
+
+export interface SubagentHistorySnapshotMerge {
+  accepted: boolean;
   loadedSnapshots: SubagentRunSnapshot[];
 }
 
@@ -83,15 +107,11 @@ function snapshotBelongsToOwner(
   return (
     !owner ||
     (snapshot.chatId === owner.chatId &&
-      (owner.workspaceId === undefined ||
-        snapshot.workspaceId === owner.workspaceId))
+      (owner.workspaceId === undefined || snapshot.workspaceId === owner.workspaceId))
   );
 }
 
-function sameRunAuthority(
-  left: SubagentRunSnapshot,
-  right: SubagentRunSnapshot,
-): boolean {
+function sameRunAuthority(left: SubagentRunSnapshot, right: SubagentRunSnapshot): boolean {
   return (
     left.version === right.version &&
     left.runId === right.runId &&
@@ -112,20 +132,13 @@ function sameRunAuthority(
   );
 }
 
-export function isSubagentRunViewStateActive(
-  state: SubagentRunViewState,
-): boolean {
+export function isSubagentRunViewStateActive(state: SubagentRunViewState): boolean {
   return (
-    state === "queued" ||
-    state === "starting" ||
-    state === "running" ||
-    state === "needs_attention"
+    state === "queued" || state === "starting" || state === "running" || state === "needs_attention"
   );
 }
 
-export function isSubagentRunSnapshotTerminal(
-  snapshot: SubagentRunSnapshot,
-): boolean {
+export function isSubagentRunSnapshotTerminal(snapshot: SubagentRunSnapshot): boolean {
   return snapshot.version === 2
     ? snapshot.state === "completed" ||
         snapshot.state === "failed" ||
@@ -134,6 +147,73 @@ export function isSubagentRunSnapshotTerminal(
         snapshot.state === "stopped" ||
         snapshot.state === "unknown"
     : SUBAGENT_TERMINAL_STATES.has(snapshot.state);
+}
+
+/**
+ * A terminal snapshot remains in this pending set only until an exact,
+ * owner- and generation-matched persisted reference promotes it. This helper
+ * deliberately does not infer handoff state from a status string or marker.
+ */
+export function isSubagentRunViewHandoffPending(
+  view: Pick<SubagentRunView, "snapshot">,
+  handoffSnapshots: readonly SubagentRunSnapshot[],
+): boolean {
+  const snapshot = view.snapshot;
+  if (!snapshot || !isSubagentRunSnapshotTerminal(snapshot)) return false;
+  return handoffSnapshots.some(
+    (candidate) =>
+      isSubagentRunSnapshotTerminal(candidate) && sameRunAuthority(snapshot, candidate),
+  );
+}
+
+/**
+ * Staleness is renderer-only presentation derived from an injected clock. It
+ * never changes the protocol state, revision, or timestamp, and terminal runs
+ * can never become stale.
+ */
+export function isSubagentRunViewStale(
+  view: Pick<SubagentRunView, "state" | "snapshot">,
+  now: number,
+  staleAfterMs: number,
+): boolean {
+  const snapshot = view.snapshot;
+  if (
+    !snapshot ||
+    !isSubagentRunViewStateActive(view.state) ||
+    !isSubagentRunViewStateActive(snapshot.state) ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(staleAfterMs) ||
+    staleAfterMs < 0
+  ) {
+    return false;
+  }
+  const age = now - snapshot.updatedAt;
+  return Number.isFinite(age) && age >= staleAfterMs;
+}
+
+/**
+ * A renderer-only timeout for a terminal persistence handoff. This keeps an
+ * unmatched terminal row honest without claiming that its result was saved
+ * or attached. The clock and threshold are injected so callers and tests do
+ * not need to mutate protocol state or wait in real time.
+ */
+export function isSubagentRunViewSaveDelayed(
+  view: Pick<SubagentRunView, "snapshot">,
+  now: number,
+  saveDelayAfterMs: number,
+): boolean {
+  const snapshot = view.snapshot;
+  if (
+    !snapshot ||
+    !isSubagentRunSnapshotTerminal(snapshot) ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(saveDelayAfterMs) ||
+    saveDelayAfterMs < 0
+  ) {
+    return false;
+  }
+  const age = now - snapshot.updatedAt;
+  return Number.isFinite(age) && age >= saveDelayAfterMs;
 }
 
 /**
@@ -148,15 +228,11 @@ export function mergeSubagentSnapshot(
 ): SubagentRunSnapshot | undefined {
   const parsedCurrent = current ? parseSubagentRunSnapshot(current) : undefined;
   const safeCurrent =
-    parsedCurrent && snapshotBelongsToOwner(parsedCurrent, owner)
-      ? parsedCurrent
-      : undefined;
+    parsedCurrent && snapshotBelongsToOwner(parsedCurrent, owner) ? parsedCurrent : undefined;
   const parsedIncoming = parseSubagentRunSnapshot(incoming);
-  if (!parsedIncoming || !snapshotBelongsToOwner(parsedIncoming, owner))
-    return safeCurrent;
+  if (!parsedIncoming || !snapshotBelongsToOwner(parsedIncoming, owner)) return safeCurrent;
   if (!safeCurrent) return parsedIncoming;
-  if (!sameRunAuthority(safeCurrent, parsedIncoming)) return safeCurrent;
-  return parsedIncoming.revision > safeCurrent.revision
+  return subagentRunSnapshotUpdateIsMonotonic(safeCurrent, parsedIncoming)
     ? parsedIncoming
     : safeCurrent;
 }
@@ -176,16 +252,43 @@ export function mergeSubagentSnapshots(
 ): SubagentRunSnapshot[] {
   const merged = new Map<string, SubagentRunSnapshot>();
   for (const candidate of [...current, ...incoming]) {
-    const next = mergeSubagentSnapshot(
-      merged.get(candidate.runId),
-      candidate,
-      owner,
-    );
+    const next = mergeSubagentSnapshot(merged.get(candidate.runId), candidate, owner);
     if (next) merged.set(next.runId, next);
   }
   return [...merged.values()].sort((left, right) =>
     snapshotSortKey(left).localeCompare(snapshotSortKey(right)),
   );
+}
+
+/**
+ * Atomically validate a history result against the latest renderer authority.
+ * A rejected stale or drifting response leaves the last-good loaded cache
+ * untouched so callers can discard its companion effect detail as one unit.
+ */
+export function mergeSubagentHistorySnapshot(
+  loadedSnapshots: readonly SubagentRunSnapshot[],
+  handoffSnapshots: readonly SubagentRunSnapshot[],
+  liveSnapshots: readonly SubagentRunSnapshot[],
+  incoming: SubagentRunSnapshot,
+  owner: SubagentSnapshotOwner,
+): SubagentHistorySnapshotMerge {
+  const current = mergeSubagentSnapshots(
+    [],
+    [...loadedSnapshots, ...handoffSnapshots, ...liveSnapshots],
+    owner,
+  ).find((snapshot) => snapshot.runId === incoming.runId);
+  if (
+    current &&
+    !subagentRunSnapshotUpdateIsMonotonic(current, incoming, {
+      allowExactReplay: true,
+    })
+  ) {
+    return { accepted: false, loadedSnapshots: [...loadedSnapshots] };
+  }
+  return {
+    accepted: true,
+    loadedSnapshots: mergeSubagentSnapshots(loadedSnapshots, [incoming], owner),
+  };
 }
 
 type PersistedSnapshotReference = "absent" | "matching" | "conflicting";
@@ -201,12 +304,15 @@ function persistedSnapshotReference(
     if (runIndex === -1) continue;
     if (reference.generationId !== snapshot.generationId) return "conflicting";
     const item = reference.items?.[runIndex];
+    const referenceSnapshot =
+      snapshot.version === 2 ? adaptSubagentRunSnapshotV2ToV1(snapshot) : snapshot;
+    if (!referenceSnapshot) return "conflicting";
     if (
       item &&
-      (item.runId !== snapshot.runId ||
-        item.label !== snapshot.label ||
-        item.role !== snapshot.role ||
-        item.state !== snapshot.state)
+      (item.runId !== referenceSnapshot.runId ||
+        item.label !== referenceSnapshot.label ||
+        item.role !== referenceSnapshot.role ||
+        item.state !== referenceSnapshot.state)
     ) {
       return "conflicting";
     }
@@ -230,23 +336,15 @@ export function reconcileSubagentPersistenceHandoff(
   references: readonly SubagentReferenceMessage[],
   owner: SubagentSnapshotOwner,
 ): SubagentPersistenceHandoff {
-  const liveSnapshots = mergeSubagentSnapshots(
-    [],
-    incomingLiveSnapshots,
-    owner,
-  );
+  const liveSnapshots = mergeSubagentSnapshots([], incomingLiveSnapshots, owner);
   const liveRunIds = new Set(liveSnapshots.map(({ runId }) => runId));
-  const nextGenerationIds = new Set(
-    liveSnapshots.map(({ generationId }) => generationId),
-  );
+  const nextGenerationIds = new Set(liveSnapshots.map(({ generationId }) => generationId));
   const candidates = mergeSubagentSnapshots(
     [],
     [
       ...handoffSnapshots,
       ...previousLiveSnapshots.filter(
-        (snapshot) =>
-          isSubagentRunSnapshotTerminal(snapshot) &&
-          !liveRunIds.has(snapshot.runId),
+        (snapshot) => isSubagentRunSnapshotTerminal(snapshot) && !liveRunIds.has(snapshot.runId),
       ),
     ],
     owner,
@@ -262,8 +360,7 @@ export function reconcileSubagentPersistenceHandoff(
     }
     if (
       persisted === "conflicting" ||
-      (nextGenerationIds.size > 0 &&
-        !nextGenerationIds.has(snapshot.generationId))
+      (nextGenerationIds.size > 0 && !nextGenerationIds.has(snapshot.generationId))
     ) {
       continue;
     }
@@ -273,11 +370,7 @@ export function reconcileSubagentPersistenceHandoff(
   return {
     liveSnapshots,
     handoffSnapshots: pending,
-    loadedSnapshots: mergeSubagentSnapshots(
-      [],
-      [...loadedSnapshots, ...promoted],
-      owner,
-    ),
+    loadedSnapshots: mergeSubagentSnapshots([], [...loadedSnapshots, ...promoted], owner),
   };
 }
 
@@ -287,9 +380,7 @@ function referenceSortKey(
   runIndex: number,
 ): string {
   const createdAt =
-    Number.isFinite(message.createdAt) && message.createdAt >= 0
-      ? message.createdAt
-      : 0;
+    Number.isFinite(message.createdAt) && message.createdAt >= 0 ? message.createdAt : 0;
   return `0:${String(createdAt).padStart(16, "0")}:${String(messageIndex).padStart(8, "0")}:${String(runIndex).padStart(2, "0")}`;
 }
 
@@ -318,18 +409,12 @@ export function buildSubagentRunViews(
     chatId,
     workspaceId,
   });
-  const snapshotsByRunId = new Map(
-    safeSnapshots.map((snapshot) => [snapshot.runId, snapshot]),
-  );
+  const snapshotsByRunId = new Map(safeSnapshots.map((snapshot) => [snapshot.runId, snapshot]));
   const views: SubagentRunView[] = [];
   const seen = new Set<string>();
   let legacyIndex = 0;
 
-  for (
-    let messageIndex = 0;
-    messageIndex < messages.length;
-    messageIndex += 1
-  ) {
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
     const message = messages[messageIndex]!;
     const reference = parseSubagentMessageReferenceV1(message.subagents);
     if (!reference) continue;
@@ -339,10 +424,7 @@ export function buildSubagentRunViews(
       seen.add(runId);
       const item = reference.items?.[runIndex];
       const candidate = snapshotsByRunId.get(runId);
-      const snapshot =
-        candidate?.generationId === reference.generationId
-          ? candidate
-          : undefined;
+      const snapshot = candidate?.generationId === reference.generationId ? candidate : undefined;
       legacyIndex += 1;
       views.push({
         runId,
@@ -353,9 +435,7 @@ export function buildSubagentRunViews(
         terminal: snapshot ? isSubagentRunSnapshotTerminal(snapshot) : true,
         source: snapshot ? "live" : "message",
         sortKey: referenceSortKey(message, messageIndex, runIndex),
-        ...(isSafeSubagentIdentifier(message.id)
-          ? { referenceMessageId: message.id }
-          : {}),
+        ...(isSafeSubagentIdentifier(message.id) ? { referenceMessageId: message.id } : {}),
         ...(snapshot ? { snapshot } : {}),
       });
     }
@@ -380,15 +460,10 @@ export function buildSubagentRunViews(
   return views.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
 }
 
-function preferRunView(
-  current: SubagentRunView,
-  candidate: SubagentRunView,
-): SubagentRunView {
+function preferRunView(current: SubagentRunView, candidate: SubagentRunView): SubagentRunView {
   if (!current.snapshot) return candidate.snapshot ? candidate : current;
   if (!candidate.snapshot) return current;
-  return candidate.snapshot.revision > current.snapshot.revision
-    ? candidate
-    : current;
+  return candidate.snapshot.revision > current.snapshot.revision ? candidate : current;
 }
 
 function uniqueRunViews(views: readonly SubagentRunView[]): SubagentRunView[] {
@@ -397,14 +472,10 @@ function uniqueRunViews(views: readonly SubagentRunView[]): SubagentRunView[] {
     const current = unique.get(view.runId);
     unique.set(view.runId, current ? preferRunView(current, view) : view);
   }
-  return [...unique.values()].sort((left, right) =>
-    left.sortKey.localeCompare(right.sortKey),
-  );
+  return [...unique.values()].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
 }
 
-export function splitSubagentRunViews(
-  views: readonly SubagentRunView[],
-): SubagentRunViewSplit {
+export function splitSubagentRunViews(views: readonly SubagentRunView[]): SubagentRunViewSplit {
   const active: SubagentRunView[] = [];
   const done: SubagentRunView[] = [];
   for (const view of uniqueRunViews(views)) {
@@ -430,6 +501,8 @@ export function summarizeSubagentRunViews(
     failed: all.filter(({ state }) => state === "failed").length,
     timedOut: all.filter(({ state }) => state === "timed_out").length,
     interrupted: all.filter(({ state }) => state === "interrupted").length,
+    stopped: all.filter(({ state }) => state === "stopped").length,
+    unknown: all.filter(({ state }) => state === "unknown").length,
   };
 }
 
@@ -463,11 +536,63 @@ const STATUS_LABELS: Record<SubagentRunViewState, string> = {
   interrupted: "Interrupted",
   needs_attention: "Needs attention",
   stopped: "Stopped",
-  unknown: "Finished",
+  unknown: "Outcome unknown",
 };
+
+// Keep an adversarially large injected clock from producing unbounded status
+// copy while preserving the useful age unit for ordinary runs.
+const MAX_PRESENTATION_AGE_MS = 1_000_000 * 86_400_000;
 
 export function subagentStatusLabel(state: SubagentRunViewState): string {
   return STATUS_LABELS[state];
+}
+
+function staleActiveLead(state: SubagentRunViewState): string {
+  if (state === "running") return "Still working";
+  if (state === "queued") return "Still queued";
+  if (state === "starting") return "Still starting";
+  return "Needs attention";
+}
+
+function pendingHandoffLabel(snapshot: SubagentRunSnapshot, delayed: boolean): string {
+  const outcome = subagentStatusLabel(snapshot.state);
+  return delayed
+    ? `Save delayed · child outcome: ${outcome}`
+    : `Saving subagent result · child outcome: ${outcome}`;
+}
+
+/**
+ * Derive bounded copy for a row without changing its protocol state. Pending
+ * terminal persistence wins over stale-active copy so a completed child is
+ * never presented as still working while its exact message reference settles.
+ */
+export function deriveSubagentRunPresentation(
+  view: Pick<SubagentRunView, "state" | "snapshot">,
+  handoffSnapshots: readonly SubagentRunSnapshot[],
+  now: number,
+  staleAfterMs: number,
+): SubagentRunPresentation {
+  if (isSubagentRunViewHandoffPending(view, handoffSnapshots)) {
+    const snapshot = view.snapshot!;
+    const delayed = isSubagentRunViewSaveDelayed(view, now, staleAfterMs);
+    return {
+      state: delayed ? "save_delayed" : "saving",
+      label: pendingHandoffLabel(snapshot, delayed),
+    };
+  }
+  if (!isSubagentRunViewStateActive(view.state)) {
+    return { state: "terminal", label: subagentStatusLabel(view.state) };
+  }
+  if (!isSubagentRunViewStale(view, now, staleAfterMs)) {
+    return { state: "active", label: subagentStatusLabel(view.state) };
+  }
+
+  const updatedAt = view.snapshot?.updatedAt ?? now;
+  const age = Math.min(MAX_PRESENTATION_AGE_MS, Math.max(0, now - updatedAt));
+  return {
+    state: "stale_active",
+    label: `${staleActiveLead(view.state)}; last update ${formatSubagentElapsed(age)} ago`,
+  };
 }
 
 export function subagentElapsedMilliseconds(
@@ -496,10 +621,7 @@ export function formatSubagentElapsed(milliseconds: number): string {
   return `${seconds}s`;
 }
 
-export function subagentElapsedLabel(
-  view: SubagentRunView,
-  now = Date.now(),
-): string | undefined {
+export function subagentElapsedLabel(view: SubagentRunView, now = Date.now()): string | undefined {
   const elapsed = subagentElapsedMilliseconds(view, now);
   return elapsed === undefined ? undefined : formatSubagentElapsed(elapsed);
 }
@@ -531,6 +653,7 @@ export function resolveSubagentDetailResult(
   currentChatId: string,
   selectedRunId: string | undefined,
   value: unknown,
+  currentSnapshot?: SubagentRunSnapshot,
 ): SubagentRunSnapshot | undefined {
   if (
     request !== currentRequest ||
@@ -545,10 +668,16 @@ export function resolveSubagentDetailResult(
     snapshot.chatId !== request.chatId ||
     snapshot.runId !== request.runId ||
     snapshot.generationId !== request.generationId ||
-    (request.minimumRevision !== undefined &&
-      snapshot.revision < request.minimumRevision) ||
-    (request.workspaceId !== undefined &&
-      snapshot.workspaceId !== request.workspaceId)
+    (request.minimumRevision !== undefined && snapshot.revision < request.minimumRevision) ||
+    (request.workspaceId !== undefined && snapshot.workspaceId !== request.workspaceId)
+  ) {
+    return undefined;
+  }
+  if (
+    currentSnapshot &&
+    !subagentRunSnapshotUpdateIsMonotonic(currentSnapshot, snapshot, {
+      allowExactReplay: true,
+    })
   ) {
     return undefined;
   }

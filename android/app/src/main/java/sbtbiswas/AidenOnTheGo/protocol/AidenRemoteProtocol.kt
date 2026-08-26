@@ -167,7 +167,7 @@ object AidenRemoteProtocol {
 
 sealed class AidenBotPrivateResponseScope {
     data class Root(val root: String) : AidenBotPrivateResponseScope()
-    object BotClassifiedChat : AidenBotPrivateResponseScope()
+    object ChatProjection : AidenBotPrivateResponseScope()
     object SharedFixture : AidenBotPrivateResponseScope()
 }
 
@@ -213,11 +213,10 @@ object AidenBotPrivateResponseValidator {
             is AidenBotPrivateResponseScope.Root -> {
                 validateElement(element, root = scope.root, path = emptyList())
             }
-            is AidenBotPrivateResponseScope.BotClassifiedChat -> {
-                val obj = element as? kotlinx.serialization.json.JsonObject ?: return
-                if (obj["botId"] is kotlinx.serialization.json.JsonPrimitive) {
-                    validateElement(element, root = "chat", path = emptyList())
-                }
+            is AidenBotPrivateResponseScope.ChatProjection -> {
+                // Chat projections may contain additive public fields, but never
+                // receive the Bot identity exceptions for instructions/greetings.
+                validateElement(element, root = "chatProjection", path = emptyList())
             }
             is AidenBotPrivateResponseScope.SharedFixture -> {
                 val obj = element as? kotlinx.serialization.json.JsonObject

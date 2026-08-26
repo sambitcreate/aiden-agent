@@ -12,6 +12,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
+import java.io.File
 import java.time.Instant
 
 class AidenBotContractTest {
@@ -23,6 +24,22 @@ class AidenBotContractTest {
         val jsonText = stream.bufferedReader().use { it.readText() }
         AidenRawJsonDuplicateKeyScanner.validate(jsonText)
         return json.decodeFromString<AidenRemoteContractFixture>(jsonText)
+    }
+
+    @Test
+    fun testAndroidContractFixtureMatchesCanonicalRepositoryFixtureByteForByte() {
+        val androidFixture = javaClass.classLoader?.getResourceAsStream("contract.json")
+            ?.use { it.readBytes() }
+            ?: throw AssertionError("Android contract fixture resource not found")
+        val canonicalRelativePath = "protocol/aiden-remote/v1/fixtures/contract.json"
+        val workingDirectory = System.getProperty("user.dir")
+            ?: throw AssertionError("JVM user.dir is unavailable")
+        val repositoryRoot = generateSequence(File(workingDirectory).absoluteFile) { it.parentFile }
+            .firstOrNull { File(it, canonicalRelativePath).isFile }
+            ?: throw AssertionError("Canonical contract fixture not found from $workingDirectory")
+        val canonicalFixture = File(repositoryRoot, canonicalRelativePath).readBytes()
+
+        assertArrayEquals(canonicalFixture, androidFixture)
     }
 
     @Test
@@ -58,10 +75,32 @@ class AidenBotContractTest {
     }
 
     @Test
+    fun testPrivateMetadataIsRejectedAtUnknownChildDepth() {
+        val rawForbiddenPayloads = listOf(
+            """{"message":{"child":{"systemPrompt":"private instructions"}}}""",
+            """{"message":{"child":{"absolutePath":"/Users/private/work"}}}""",
+            """{"message":{"child":{"providerCredential":"private material"}}}"""
+        )
+        for (payload in rawForbiddenPayloads) {
+            assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+                AidenRawJsonDuplicateKeyScanner.validate(payload)
+            }
+        }
+
+        val normalizedPrivatePayload = """{"futureChild":{"privateHistory":{"tool.result":"private result"}}}"""
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenBotPrivateResponseValidator.validate(
+                normalizedPrivatePayload,
+                AidenBotPrivateResponseScope.Root("botDetail")
+            )
+        }
+    }
+
+    @Test
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(8, fixture.contractRevision)
+        assertEquals(9, fixture.contractRevision)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
         assertEquals("bot_fixture_01", fixture.botSummary.id)
         assertEquals(256, fixture.botList.maxBots)

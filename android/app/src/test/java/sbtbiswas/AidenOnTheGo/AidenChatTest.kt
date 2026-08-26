@@ -2,6 +2,10 @@ package sbtbiswas.AidenOnTheGo
 
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.*
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
@@ -14,6 +18,71 @@ import java.util.UUID
 
 class AidenChatTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    @Test
+    fun testParentVisibleMessageTextPreservesExactSemanticContent() {
+        val samples = listOf(
+            "NFC café | NFD cafe\u0301 | हिन्दी | 日本語 | العربية",
+            "Emoji 👩🏽‍💻 👨‍👩‍👧‍👦 🇺🇳 1️⃣ 🚀",
+            "/Users/example/Aiden Projects/π.kt | C:\\Users\\example\\Aiden Projects\\pi.kt",
+            "/api/aiden/v1/chats/chat_01?after=42 | https://example.test/a%2Fb?q=hello%20world#résumé",
+            "UUID 123e4567-e89b-12d3-a456-426614174000 | base64 SGVsbG8sIFdvcmxkIQ== | hex deadbeef0123456789ABCDEF",
+            "Benign prose: token=session_token, secret=example-secret, api_key=example_api_key, Authorization: Bearer visible-placeholder"
+        )
+
+        samples.forEachIndexed { index, expected ->
+            val wire = buildJsonObject {
+                put("id", "message-$index")
+                put("role", "assistant")
+                put("text", expected)
+                put("createdAt", "2026-08-25T18:00:00.000Z")
+            }
+            val decoded = json.decodeFromString<AidenChatMessage>(wire.toString())
+            assertArrayEquals("UTF-8 changed for sample $index", expected.toByteArray(), decoded.text.toByteArray())
+            assertArrayEquals("Unicode scalars changed for sample $index", expected.codePoints().toArray(), decoded.text.codePoints().toArray())
+
+            val projected = json.parseToJsonElement(json.encodeToString(decoded)).jsonObject
+            val projectedText = projected.getValue("text").jsonPrimitive.content
+            assertArrayEquals("Encoded UTF-8 changed for sample $index", expected.toByteArray(), projectedText.toByteArray())
+            assertArrayEquals("Encoded Unicode scalars changed for sample $index", expected.codePoints().toArray(), projectedText.codePoints().toArray())
+        }
+    }
+
+    @Test
+    fun testUnknownChildFieldsAreDroppedAndPublicModelsCannotSerializeChildState() {
+        val wire = """
+            {
+              "id":"message-parent",
+              "role":"assistant",
+              "text":"Parent-visible result and report back",
+              "createdAt":"2026-08-25T18:00:00.000Z",
+              "subagents":{"version":2,"runIds":["run-private"]},
+              "childRunId":"run-private",
+              "childTranscript":[{"role":"assistant","text":"private child text"}],
+              "childResult":"private child result"
+            }
+        """.trimIndent()
+
+        val decoded = json.decodeFromString<AidenChatMessage>(wire)
+        val encodedMessage = json.parseToJsonElement(json.encodeToString(decoded)).jsonObject
+        val catalog = AidenModelCatalog(
+            providers = listOf(
+                AidenProvider(
+                    id = "provider-public",
+                    label = "Public provider",
+                    models = listOf(AidenModel(id = "model-public", label = "Public model"))
+                )
+            ),
+            defaults = mapOf("providerId" to "provider-public", "modelId" to "model-public")
+        )
+        val encodedCatalog = json.parseToJsonElement(json.encodeToString(catalog)).jsonObject
+        val childKeys = setOf("subagents", "childId", "childRunId", "childTranscript", "childResult", "task", "result", "privateHistory")
+
+        assertEquals("Parent-visible result and report back", encodedMessage.getValue("text").jsonPrimitive.content)
+        assertTrue(childKeys.intersect(encodedMessage.keys).isEmpty())
+        assertTrue(childKeys.none { encodedMessage.toString().contains("\"$it\"") })
+        assertTrue(childKeys.none { encodedCatalog.toString().contains("\"$it\"") })
+    }
 
     @Test
     fun testPolymorphicAttachmentUploads() {

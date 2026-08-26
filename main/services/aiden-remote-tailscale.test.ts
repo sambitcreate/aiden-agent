@@ -89,6 +89,36 @@ test("Tailscale controller reports stable URL identity without mutating configur
     },
   });
   assert.equal(app.calls.length, 2);
+  assert.deepEqual(app.calls.find((args) => args[0] === "status"), [
+    "status", "--json", "--peers=false",
+  ]);
+});
+
+test("combined route inspection uses one coherent node and Serve snapshot", async () => {
+  const app = takeoverFixture({ incumbent: target, healthy: true });
+  const inspection = await app.controller.inspectRoute(target);
+  assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(inspection.assessment.state, "other_aiden_live");
+  assert.deepEqual(app.calls, [
+    ["status", "--json", "--peers=false"],
+    ["serve", "status", "--json"],
+  ]);
+});
+
+test("combined route inspection fails closed from one command pair", async () => {
+  const calls: string[][] = [];
+  const controller = new AidenRemoteTailscaleController({
+    run: async (args) => {
+      calls.push([...args]);
+      if (args[0] === "status") throw new Error("transient node status failure");
+      return "{}";
+    },
+  });
+  assert.deepEqual(await controller.inspectRoute(target), {
+    connectionStatus: { installed: true, errorCode: "status_unavailable" },
+    assessment: { state: "unavailable", errorCode: "status_unavailable" },
+  });
+  assert.equal(calls.length, 2);
 });
 
 test("Tailscale controller creates the first HTTPS listener only after exact certificate-domain proof", async () => {

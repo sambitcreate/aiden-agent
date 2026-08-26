@@ -27,7 +27,7 @@ import {
   type SubagentContextCapture,
   type SubagentContextMode,
 } from "./forked-context.js";
-import { sanitizeSubagentText } from "./safe-text.js";
+import { normalizeSubagentModelText } from "./model-text.js";
 import {
   SubagentEventProjector,
   type SubagentRunIdentity,
@@ -221,7 +221,7 @@ function safeInterruptedResult(
 }
 
 function quoteUntrustedReport(text: string): string {
-  return sanitizeSubagentText(text)
+  return normalizeSubagentModelText(text)
     .split(/\r\n|[\n\r\u2028\u2029]/u)
     .map((line) => `> ${line}`)
     .join("\n");
@@ -262,7 +262,7 @@ function fairSectionBudgets(
 function formatResults(results: readonly SubagentTaskResult[]): string {
   const sections = results.map((result, index) =>
     [
-      `## ${index + 1}. ${sanitizeSubagentText(result.label)}`,
+      `## ${index + 1}. ${normalizeSubagentModelText(result.label)}`,
       `Role: ${result.role}`,
       `Status: ${result.status}`,
       "",

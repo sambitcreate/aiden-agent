@@ -1,5 +1,5 @@
 {
-  "contractRevision": 8,
+  "contractRevision": 9,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -195,6 +195,35 @@
     "defaultNotify": true,
     "defaultTimezone": "America/New_York"
   },
+  "speechStatus": {
+    "engine": { "ready": true, "error": null },
+    "selectedModelId": "parakeet-v3",
+    "models": [
+      {
+        "id": "parakeet-v3",
+        "name": "Parakeet TDT 0.6B v3",
+        "description": "Fast and accurate. Supports 25 European languages.",
+        "sizeLabel": "620 MB",
+        "quant": "int8",
+        "languagesLabel": "25 languages",
+        "accuracy": 0.8,
+        "speed": 0.85,
+        "recommended": true,
+        "installed": true
+      }
+    ],
+    "input": {
+      "encoding": "pcm_s16le",
+      "sampleRate": 16000,
+      "channels": 1,
+      "maximumSeconds": 60,
+      "partialResults": false
+    }
+  },
+  "speechTranscription": {
+    "text": "Drafted securely on the paired Mac.",
+    "modelId": "parakeet-v3"
+  },
   "scheduleRunAccepted": {
     "taskId": "task_fixture_01",
     "runId": "run_fixture_01",
@@ -301,6 +330,10 @@
     "modelSelection": {
       "providerId": "provider_fixture",
       "modelId": "model_fixture"
+    },
+    "visionModelSelection": {
+      "providerId": "provider_fixture",
+      "modelId": "vision_model_fixture"
     },
     "createdAt": "2026-08-18T17:00:00.000Z",
     "updatedAt": "2026-08-18T18:45:00.000Z",
@@ -540,7 +573,18 @@
         "label": "Fixture Provider",
         "available": true,
         "models": [
-          { "id": "model_fixture", "label": "Fixture Model", "available": true }
+          {
+            "id": "model_fixture",
+            "label": "Fixture Model",
+            "available": true,
+            "supportsImages": false
+          },
+          {
+            "id": "vision_model_fixture",
+            "label": "Fixture Vision Model",
+            "available": true,
+            "supportsImages": true
+          }
         ]
       }
     ],
@@ -613,6 +657,10 @@
         "connectionIds": ["connection.calendar"],
         "skillIds": ["skill.research"],
         "otherCapabilityIds": ["capability.web"]
+      },
+      "visionModel": {
+        "providerId": "provider_fixture",
+        "modelId": "vision_model_fixture"
       }
     },
     "response": {

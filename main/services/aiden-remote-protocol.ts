@@ -616,6 +616,101 @@ const AIDEN_REMOTE_PRIVATE_BOT_WIRE_KEYS = new Set([
   "reasoningcontent",
 ]);
 
+const AIDEN_REMOTE_PRIVATE_CHILD_PROJECTION_BASES = [
+  "children",
+  "subagents",
+  "subagent",
+  "child",
+] as const;
+
+const AIDEN_REMOTE_PRIVATE_CHILD_PROJECTION_PARTS = [
+  // Keep these normalized words aligned with every property in
+  // SubagentMessageReferenceV1, SubagentMessageReferenceItemV1, and
+  // SubagentRunSnapshotV1/V2. Segmentation below also covers compounds such
+  // as `childParentRunId` and `subagentProjectionNotices`.
+  "lifecycles",
+  "histories",
+  "snapshots",
+  "messages",
+  "controls",
+  "projections",
+  "generations",
+  "workspaces",
+  "milestones",
+  "interrupted",
+  "completed",
+  "authority",
+  "projection",
+  "generation",
+  "workspace",
+  "terminal",
+  "execution",
+  "warnings",
+  "finished",
+  "updated",
+  "started",
+  "lifecycle",
+  "history",
+  "snapshot",
+  "message",
+  "counts",
+  "states",
+  "results",
+  "reports",
+  "subagents",
+  "children",
+  "milestone",
+  "notices",
+  "activities",
+  "activity",
+  "markdown",
+  "context",
+  "revision",
+  "version",
+  "latest",
+  "timed",
+  "failed",
+  "parent",
+  "retry",
+  "models",
+  "turns",
+  "tools",
+  "tokens",
+  "items",
+  "count",
+  "state",
+  "control",
+  "result",
+  "report",
+  "subagent",
+  "child",
+  "notice",
+  "warning",
+  "preview",
+  "model",
+  "group",
+  "label",
+  "role",
+  "depth",
+  "text",
+  "error",
+  "total",
+  "item",
+  "turn",
+  "tool",
+  "token",
+  "tasks",
+  "runs",
+  "task",
+  "run",
+  "chat",
+  "at",
+  "out",
+  "of",
+  "ids",
+  "id",
+] as const;
+
 const AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS = new Set([
   "chat",
   "botSummary",
@@ -657,6 +752,30 @@ function isPrivateBotWireKey(key: string): boolean {
   );
 }
 
+function isPrivateChildProjectionKey(key: string): boolean {
+  const normalized = normalizedPrivateWireKey(key);
+  // A subagent run is never a public mobile resource. Reject all of its
+  // obvious flattened variants without turning generic "agent" substrings
+  // into a privacy signal.
+  if (normalized.startsWith("subagentrun")) return true;
+  for (const base of AIDEN_REMOTE_PRIVATE_CHILD_PROJECTION_BASES) {
+    if (normalized === base) return true;
+    if (!normalized.startsWith(base)) continue;
+    const remainder = normalized.slice(base.length);
+    const reachable = new Set([0]);
+    for (let offset = 0; offset < remainder.length; offset += 1) {
+      if (!reachable.has(offset)) continue;
+      for (const part of AIDEN_REMOTE_PRIVATE_CHILD_PROJECTION_PARTS) {
+        if (remainder.startsWith(part, offset)) {
+          reachable.add(offset + part.length);
+        }
+      }
+    }
+    if (reachable.has(remainder.length)) return true;
+  }
+  return false;
+}
+
 function isAllowedBotIdentityField(root: string, path: readonly string[]): boolean {
   const key = path[path.length - 1];
   if (key !== "instructions" && key !== "openingGreeting") return false;
@@ -691,6 +810,26 @@ function assertNoPrivateBotWireFields(value: unknown): void {
   for (const [root, child] of Object.entries(value)) {
     if (AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS.has(root)) visit(child, root, []);
   }
+}
+
+function assertNoPrivateChildProjectionFields(value: unknown, label: string): void {
+  const visit = (current: unknown, path: readonly string[]): void => {
+    if (Array.isArray(current)) {
+      for (const entry of current) visit(entry, [...path, "[]"]);
+      return;
+    }
+    if (!isRecord(current)) return;
+    for (const [key, child] of Object.entries(current)) {
+      const childPath = [...path, key];
+      if (isPrivateChildProjectionKey(key)) {
+        throw new Error(
+          `${label} contains private child field ${childPath.join(".")}.`,
+        );
+      }
+      visit(child, childPath);
+    }
+  };
+  visit(value, []);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1506,6 +1645,7 @@ export function parseAidenRemoteChatProjection(
   ) {
     throw new Error(`${label} exceeds the 1 MiB JSON response ceiling.`);
   }
+  assertNoPrivateChildProjectionFields(value, label);
   if (
     !Array.isArray(value.messages) ||
     value.messages.length > AIDEN_REMOTE_MAX_CHAT_MESSAGES

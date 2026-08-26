@@ -8,6 +8,7 @@ import {
   type AidenRemoteBotTurnAuthorityPreflight,
   type AidenRemoteRetainedBotChatAuthorizer,
 } from "./aiden-remote-chats.js";
+import { parseAidenRemoteChatProjection } from "./aiden-remote-protocol.js";
 import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import {
   AIDEN_REMOTE_ATTACHMENT_TTL_MS,
@@ -246,6 +247,221 @@ test("chat projection is path-free and excludes private Pi protocol and reasonin
   assert.equal(JSON.stringify(projection).includes("reasoning"), false);
   assert.equal(JSON.stringify(projection).includes("/Users/private"), false);
   assert.match(projection.revision, /^rev_[A-Za-z0-9_-]{43}$/u);
+});
+
+test("chat projection preserves visible parent message text exactly regardless of appearance", () => {
+  const exactTexts = [
+    "Unicode stays exact: Zażółć gęślą jaźń — 你好 — 👩🏽‍💻",
+    "/Users/example/workspace/src/index.ts",
+    "https://example.test/api/aiden/v1/chats?cursor=next#message",
+    "550e8400-e29b-41d4-a716-446655440000",
+    "U29tZSB2aXNpYmxlIHBhcmVudCBtZXNzYWdlIHRleHQu",
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "Authorization: Bearer sk-test-visible-parent-message-0123456789",
+    "Visible words stay opaque: children childRunIds subagentRunSnapshot childcareSummary",
+    "Schema-looking prose stays opaque: subagentItems childTotal subagentProjectionNotices childTimedOut",
+  ];
+  const projection = projectAidenRemoteChat(chat({
+    messages: exactTexts.map((content, index): ChatMessage => ({
+      id: `message-${index}`,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content,
+      createdAt: 2_000 + index,
+    })),
+  }));
+
+  assert.deepEqual(
+    projection.messages.map(({ text }) => text),
+    exactTexts,
+  );
+  assert.deepEqual(
+    parseAidenRemoteChatProjection(projection).messages.map(({ text }) => text),
+    exactTexts,
+  );
+});
+
+test("chat projection emits only parent state and rejects private child metadata", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [{
+      id: "assistant-parent",
+      role: "assistant",
+      content: "Visible parent answer.",
+      createdAt: 2_000,
+      providerFailure: {
+        version: 1,
+        category: "interrupted",
+        attempts: 1,
+        retryExhausted: false,
+      },
+      timeline: {
+        version: 3,
+        generationId: "parent-generation",
+        status: "failed",
+        startedAt: 1_000,
+        finishedAt: 2_000,
+        steps: [],
+      },
+      subagents: {
+        version: 1,
+        generationId: "parent-generation",
+        runIds: ["private-child-run"],
+        items: [{
+          runId: "private-child-run",
+          label: "Private child",
+          role: "scout",
+          state: "completed",
+        }],
+        total: 1,
+        completed: 1,
+        failed: 0,
+        timedOut: 0,
+        interrupted: 0,
+      },
+    }],
+  }));
+  const parentMessage = projection.messages[0];
+
+  assert.deepEqual(Object.keys(parentMessage ?? {}), [
+    "id",
+    "role",
+    "text",
+    "createdAt",
+    "outcome",
+    "timeline",
+  ]);
+  assert.equal(parentMessage?.text, "Visible parent answer.");
+  assert.equal(parentMessage?.outcome?.status, "failed");
+  assert.equal(parentMessage?.timeline?.generationId, "parent-generation");
+  assert.equal(JSON.stringify(projection).includes("private-child-run"), false);
+  assert.equal(JSON.stringify(projection).includes("Private child"), false);
+  assert.deepEqual(parseAidenRemoteChatProjection(projection), projection);
+
+  const privateSuffixes = [
+    "Id",
+    "Ids",
+    "Count",
+    "Counts",
+    "History",
+    "Histories",
+    "Lifecycle",
+    "Lifecycles",
+    "State",
+    "States",
+    "Control",
+    "Controls",
+    "Snapshot",
+    "Snapshots",
+    "Message",
+    "Messages",
+    "Task",
+    "Tasks",
+    "Result",
+    "Results",
+    "Report",
+    "Reports",
+    "Run",
+    "Runs",
+  ] as const;
+  const liveSubagentSchemaKeys = [
+    "version",
+    "runId",
+    "runIds",
+    "groupId",
+    "generationId",
+    "childId",
+    "chatId",
+    "workspaceId",
+    "revision",
+    "role",
+    "label",
+    "taskPreview",
+    "state",
+    "activity",
+    "startedAt",
+    "updatedAt",
+    "finishedAt",
+    "modelId",
+    "turns",
+    "tools",
+    "tokens",
+    "milestones",
+    "projectionNotices",
+    "latestText",
+    "terminalMarkdown",
+    "error",
+    "warnings",
+    "items",
+    "total",
+    "completed",
+    "failed",
+    "timedOut",
+    "interrupted",
+    "parentRunId",
+    "retryOfRunId",
+    "depth",
+    "execution",
+    "context",
+    "authorityRevision",
+  ] as const;
+  const schemaCompoundForms = liveSubagentSchemaKeys.flatMap((key) => {
+    const capitalized = `${key[0]?.toUpperCase()}${key.slice(1)}`;
+    const separated = key.replace(/([a-z])([A-Z])/gu, "$1 $2");
+    return [
+      `child${capitalized}`,
+      `subagent${capitalized}`,
+      `CHILD.${separated.toUpperCase().replace(/ /gu, "-")}`,
+      `SUB AGENT_${separated.toUpperCase().replace(/ /gu, ".")}`,
+    ];
+  });
+  const privateFields = new Set([
+    "child",
+    "children",
+    "subagent",
+    "subagents",
+    ...["child", "children", "subagent", "subagents"].flatMap((base) =>
+      privateSuffixes.map((suffix) => `${base}${suffix}`)
+    ),
+    ...["childRun", "childRuns", "subagentRun", "subagentRuns"].flatMap((base) =>
+      privateSuffixes.map((suffix) => `${base}${suffix}`)
+    ),
+    ...schemaCompoundForms,
+    "subagentRunOpaqueExtension",
+    " Child_Run IDs ",
+    "SUB.AGENT run Snapshot",
+    "children life-cycle",
+  ]);
+  const atLocations = (field: string): Record<string, unknown>[] => [
+    { ...projection, [field]: {} },
+    { ...projection, messages: [{ ...parentMessage, [field]: {} }] },
+    {
+      ...projection,
+      futureDisplay: { nested: { [field]: {} } },
+    },
+  ];
+
+  for (const privateField of privateFields) {
+    for (const [location, candidate] of atLocations(privateField).entries()) {
+      assert.throws(
+        () => parseAidenRemoteChatProjection(candidate),
+        /private child field/u,
+        `${privateField} at location ${location}`,
+      );
+    }
+  }
+
+  for (const benignField of [
+    "childcareSummary",
+    "agentiveDisplay",
+    "subagenticTheme",
+  ]) {
+    for (const candidate of atLocations(benignField)) {
+      assert.deepEqual(
+        parseAidenRemoteChatProjection(candidate),
+        projection,
+        benignField,
+      );
+    }
+  }
 });
 
 test("chat projection exposes bot classification without changing regular chat keys", () => {

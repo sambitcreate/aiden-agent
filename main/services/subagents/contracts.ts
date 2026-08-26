@@ -1,6 +1,6 @@
 import { isSubagentRole, type SubagentRole } from "./capability-profile.js";
 import type { SubagentContextMode } from "./forked-context.js";
-import { sanitizeSubagentText } from "./safe-text.js";
+import { normalizeSubagentModelText } from "./model-text.js";
 import { types as utilTypes } from "node:util";
 
 export const MAX_SUBAGENT_TASKS_PER_CALL = 4;
@@ -55,6 +55,8 @@ export interface SubagentTaskResult {
   label: string;
   status: SubagentTaskStatus;
   summary: string;
+  /** Present only when the completed-summary producer shortened the authored report. */
+  summaryTruncated?: true;
   warning?: string;
 }
 
@@ -124,7 +126,11 @@ function boundedText(value: unknown, field: "label" | "task", maximum: number): 
   if (field === "label" && hasDisallowedLabelCharacter(value)) {
     throw new Error("Subagent label must be a single line without control characters.");
   }
-  return sanitizeSubagentText(value);
+  const normalized = normalizeSubagentModelText(value);
+  if (normalized.trim().length === 0) {
+    throw new Error(`Subagent ${field} must contain visible text.`);
+  }
+  return normalized;
 }
 
 function boundedIdentifier(value: unknown, field: string): string {

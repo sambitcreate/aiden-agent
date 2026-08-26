@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { startGeneration, subagentsApi, type StreamCallbacks } from "./ipc.js";
 import {
+  detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
   subscribeDetachedTerminalChats,
 } from "./chat-terminal-sync.js";
@@ -92,10 +93,17 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
     );
     assert.equal(listenerCount(bridge), 8);
     assert.equal(bridge.listeners.has("chat:subagents"), false);
+    for (const listener of bridge.listeners.get("chat:delta") ?? []) {
+      listener({ streamId: handle.streamId, delta: "Visible before navigation" });
+    }
 
     handle.cancel("lifecycle");
     handle.cancel("lifecycle");
     assert.equal(listenerCount(bridge), 0);
+    assert.equal(
+      detachedLifecycleChatProjection("chat-1", "workspace-1")?.content,
+      "Visible before navigation",
+    );
     await Promise.resolve();
     assert.equal(
       bridge.invokes.filter(

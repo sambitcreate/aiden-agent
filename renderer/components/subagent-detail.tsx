@@ -5,6 +5,7 @@ import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
 } from "../lib/subagent-panel-state";
+import type { SubagentRunPresentation } from "../lib/subagent-view-state";
 import type {
   SubagentEffectActivityV1,
   SubagentMilestoneKind,
@@ -13,6 +14,18 @@ import type {
 import { Markdown } from "./markdown";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
+import { CopyButton } from "./copy-button";
+
+export function subagentProjectionNotices(run: SubagentRunSnapshot): string[] {
+  const notices = new Set(run.projectionNotices);
+  return [
+    notices.has("task_truncated") ? "This saved task preview was shortened." : null,
+    notices.has("report_truncated") ? "This saved result was shortened." : null,
+    notices.has("display_filtered")
+      ? "Some text was replaced by a privacy marker in this saved inspector. This display filter does not rewrite the child's task or its report to the main thread."
+      : null,
+  ].filter((notice): notice is string => notice !== null);
+}
 
 export function formatSubagentElapsed(startedAt: number, endedAt: number): string {
   const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1_000));
@@ -66,13 +79,31 @@ export interface SubagentDetailProps {
   run: SubagentRunSnapshot;
   effectActivity?: readonly SubagentEffectActivityV1[];
   onStop?: (run: SubagentRunSnapshot) => Promise<void> | void;
+  stopPending?: boolean;
+  stopError?: string | null;
+  presentation?: SubagentRunPresentation;
+  refreshing?: boolean;
+  refreshError?: string | null;
+  onRetryRefresh?: () => void;
   now?: number;
   className?: string;
 }
 
 export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetailProps>(
   function SubagentDetail(
-    { run, effectActivity = [], onStop, now = Date.now(), className },
+    {
+      run,
+      effectActivity = [],
+      onStop,
+      stopPending = false,
+      stopError = null,
+      presentation,
+      refreshing = false,
+      refreshError = null,
+      onRetryRefresh,
+      now = Date.now(),
+      className,
+    },
     headingRef,
   ) {
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -80,10 +111,10 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const followGrowthRef = React.useRef(false);
     const previousRunRef = React.useRef<{ runId: string; revision: number } | null>(null);
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
-    const [controlPending, setControlPending] = React.useState<"stop" | null>(null);
-    const [controlError, setControlError] = React.useState<string | null>(null);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
+    const resultText = run.terminalMarkdown ?? run.latestText;
+    const projectionNotices = subagentProjectionNotices(run);
     const active =
       run.state === "queued" ||
       run.state === "starting" ||
@@ -92,18 +123,13 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const canStop = run.version === 2 && run.execution === "foreground" && active && onStop;
     const stopLabel = run.version === 2 && run.depth === 1 ? "Stop subtree" : "Stop subagent";
     const invokeControl = async () => {
-      if (controlPending) return;
+      if (stopPending) return;
       if (!onStop) return;
-      setControlPending("stop");
-      setControlError(null);
       try {
         await onStop(run);
-      } catch (error) {
-        setControlError(
-          error instanceof Error ? error.message : "Aiden could not stop this subagent.",
-        );
-      } finally {
-        setControlPending(null);
+      } catch {
+        // The owner boundary retains and presents control failures. A detail
+        // instance must not create a second, selection-scoped error source.
       }
     };
     const updateScrollPosition = React.useCallback(() => {
@@ -207,9 +233,15 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   {run.label}
                 </h2>
                 <Text as="p" variant="small" color="secondary" className="mt-0.5">
-                  {run.role} · {state} · {formatSubagentElapsed(run.startedAt, endedAt)}
+                  {run.role} · {presentation?.label ?? state} ·{" "}
+                  {formatSubagentElapsed(run.startedAt, endedAt)}
                 </Text>
-                <Text as="p" variant="small" color="tertiary" className="mt-0.5 break-words">
+                <Text
+                  as="p"
+                  variant="small"
+                  color="tertiary"
+                  className="mt-0.5 break-words [overflow-wrap:anywhere]"
+                >
                   Model: {run.modelId}
                 </Text>
                 {run.version === 2 ? (
@@ -220,11 +252,60 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                     className="mt-0.5 break-words"
                     data-subagent-context={run.context}
                   >
-                    {run.context === "fresh" ? "Fresh context" : "Forked conversation"}
+                    {run.context === "fresh"
+                      ? "Context: task only (fresh session)"
+                      : "Context: bounded visible conversation text copied at launch"}
                   </Text>
                 ) : null}
               </span>
             </header>
+
+            {presentation?.state === "saving" || presentation?.state === "save_delayed" ? (
+              <Callout role="note" data-subagent-presentation={presentation.state}>
+                <Text variant="small-strong">
+                  {presentation.state === "saving"
+                    ? "Recording subagent outcome"
+                    : "Outcome not yet saved"}
+                </Text>
+                <Text as="p" variant="small" color="secondary">
+                  {state}.{" "}
+                  {presentation.state === "saving"
+                    ? "Aiden is waiting for this outcome to appear in conversation history."
+                    : "This outcome has not appeared in conversation history yet."}
+                </Text>
+              </Callout>
+            ) : presentation?.state === "stale_active" ? (
+              <Callout role="note" data-subagent-presentation="stale_active">
+                <Text variant="small-strong">No recent update</Text>
+                <Text as="p" variant="small" color="secondary">
+                  {presentation.label}. The child is still active; no newer activity has arrived.
+                </Text>
+              </Callout>
+            ) : null}
+
+            {refreshing ? (
+              <Text as="p" variant="small" color="secondary" data-subagent-detail-refreshing="true">
+                Refreshing saved activity…
+              </Text>
+            ) : refreshError ? (
+              <Callout role="note" data-subagent-detail-refresh-error="true">
+                <Text variant="small-strong">Showing the last available activity</Text>
+                <Text as="p" variant="small" color="secondary">
+                  Aiden could not refresh this saved detail. The activity below may be out of date.
+                </Text>
+                {onRetryRefresh ? (
+                  <Button
+                    variant="muted"
+                    size="small"
+                    radius="rounded"
+                    onClick={onRetryRefresh}
+                    className="mt-3 motion-reduce:transition-none"
+                  >
+                    Retry refresh
+                  </Button>
+                ) : null}
+              </Callout>
+            ) : null}
 
             {canStop ? (
               <div
@@ -235,41 +316,61 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   variant="muted"
                   size="small"
                   radius="rounded"
-                  disabled={controlPending !== null}
-                  aria-label={`${stopLabel} ${run.label}`}
+                  disabled={stopPending}
+                  aria-label={stopPending ? `Stopping ${run.label}` : `${stopLabel} ${run.label}`}
+                  aria-busy={stopPending ? true : undefined}
                   onClick={() => void invokeControl()}
                   className="motion-reduce:transition-none"
                 >
                   <Square aria-hidden="true" className="size-3" />
-                  {controlPending === "stop" ? "Stopping…" : stopLabel}
+                  {stopPending ? "Stopping…" : stopLabel}
                 </Button>
               </div>
             ) : null}
 
-            {controlError ? (
-              <Callout color="red" role="alert" data-subagent-control-error="true">
+            {stopError ? (
+              <Callout color="red" role="note" data-subagent-control-error="true">
                 <Text variant="small-strong" color="red">
                   Subagent action failed
                 </Text>
                 <Text as="p" variant="small" color="secondary">
-                  {controlError} Try again if the run is still available.
+                  {stopError} Try again if the run is still available.
                 </Text>
               </Callout>
             ) : null}
 
             <section aria-labelledby={`subagent-task-${run.runId}`}>
-              <Text
-                as="h3"
-                id={`subagent-task-${run.runId}`}
-                variant="small-strong"
-                color="tertiary"
-              >
-                Task
-              </Text>
-              <Text as="p" variant="regular" className="mt-1 break-words">
+              <div className="flex min-w-0 items-center gap-2">
+                <Text
+                  as="h3"
+                  id={`subagent-task-${run.runId}`}
+                  variant="small-strong"
+                  color="tertiary"
+                  className="min-w-0 flex-1"
+                >
+                  Task preview
+                </Text>
+                <CopyButton
+                  text={run.taskPreview}
+                  label={`Copy task preview for ${run.label}`}
+                  className="shrink-0"
+                />
+              </div>
+              <Text as="p" variant="regular" className="mt-1 break-words [overflow-wrap:anywhere]">
                 {run.taskPreview}
               </Text>
             </section>
+
+            {projectionNotices.length > 0 ? (
+              <Callout role="note" data-subagent-projection-notice="true">
+                <Text variant="small-strong">Saved view notice</Text>
+                <ul className="list-disc space-y-1 pl-4 text-small text-secondary">
+                  {projectionNotices.map((notice) => (
+                    <li key={notice}>{notice}</li>
+                  ))}
+                </ul>
+              </Callout>
+            ) : null}
 
             <section aria-labelledby={`subagent-activity-${run.runId}`}>
               <Text
@@ -310,7 +411,8 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                         {effect.label}
                       </Text>
                       <Text as="p" variant="small" color="secondary">
-                        {effect.kind === "shell" ? "Command" : "Remote change"} · State: {effect.state.replace(/_/gu, " ")}
+                        {effect.kind === "shell" ? "Command" : "Remote change"} · State:{" "}
+                        {effect.state.replace(/_/gu, " ")}
                       </Text>
                     </li>
                   ))}
@@ -341,8 +443,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   </Text>
                 )}
                 <Text as="p" variant="small" color="secondary">
-                  {run.tokens} tokens recorded. Tool arguments, results, commands, and paths stay
-                  private.
+                  {run.tokens} tokens recorded. Saved details omit raw tool payloads, commands, and
+                  absolute paths. Children can read ordinary source and docs as written; protected
+                  credential and private-key paths are unavailable.
                 </Text>
               </div>
             </details>
@@ -371,39 +474,31 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </Callout>
             ) : null}
 
-            {run.terminalMarkdown ? (
+            {resultText ? (
               <section aria-labelledby={`subagent-result-${run.runId}`}>
-                <Text
-                  as="h3"
-                  id={`subagent-result-${run.runId}`}
-                  variant="small-strong"
-                  color="tertiary"
-                  className="mb-2"
-                >
-                  Result
-                </Text>
+                <div className="mb-2 flex min-w-0 items-center gap-2">
+                  <Text
+                    as="h3"
+                    id={`subagent-result-${run.runId}`}
+                    variant="small-strong"
+                    color="tertiary"
+                    className="min-w-0 flex-1"
+                  >
+                    Result
+                  </Text>
+                  <CopyButton
+                    text={resultText}
+                    label={`Copy result from ${run.label}`}
+                    className="shrink-0"
+                  />
+                </div>
                 <ErrorBoundary
                   resetKey={`${run.runId}:${run.revision}`}
-                  fallback={<UnrenderableSubagentUpdate content={run.terminalMarkdown} />}
+                  fallback={<UnrenderableSubagentUpdate content={resultText} />}
                 >
-                  <Markdown content={run.terminalMarkdown} />
-                </ErrorBoundary>
-              </section>
-            ) : run.latestText ? (
-              <section aria-labelledby={`subagent-result-${run.runId}`}>
-                <Text
-                  as="h3"
-                  id={`subagent-result-${run.runId}`}
-                  variant="small-strong"
-                  color="tertiary"
-                >
-                  Result
-                </Text>
-                <ErrorBoundary
-                  resetKey={`${run.runId}:${run.revision}:latest`}
-                  fallback={<UnrenderableSubagentUpdate content={run.latestText} />}
-                >
-                  <Markdown content={run.latestText} />
+                  <div className="min-w-0 [overflow-wrap:anywhere]">
+                    <Markdown content={resultText} />
+                  </div>
                 </ErrorBoundary>
               </section>
             ) : null}
