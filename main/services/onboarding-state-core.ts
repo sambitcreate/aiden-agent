@@ -28,6 +28,21 @@ export function onboardingEvidenceProvider(
   );
 }
 
+/** One-time migration evidence from the model selection used by the legacy app. */
+export function legacyOnboardingEvidenceProvider(
+  providers: readonly Provider[],
+  lastProviderId: string | undefined,
+  lastModel: string | undefined,
+): Provider | undefined {
+  if (!lastProviderId || !lastModel) return undefined;
+  return providers.find(
+    (provider) =>
+      provider.id === lastProviderId &&
+      provider.models.includes(lastModel) &&
+      onboardingProviderReady(provider),
+  );
+}
+
 export function legacyOnboardingOutcome(
   legacyComplete: boolean,
   setupReady: boolean,

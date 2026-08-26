@@ -10,13 +10,14 @@ import {
 import {
   assertOnboardingCanComplete,
   legacyOnboardingOutcome,
+  legacyOnboardingEvidenceProvider,
   onboardingEvidenceProvider,
   onboardingProgressState,
   onboardingProviderReady,
   reconcileOnboardingOutcome,
 } from "./onboarding-state-core.js";
 
-async function readiness(): Promise<{
+async function readiness(allowLegacyEvidence = false): Promise<{
   profileReady: boolean;
   providerReady: boolean;
   selectedProviderId?: string;
@@ -26,10 +27,17 @@ async function readiness(): Promise<{
     configStore.getSettings(),
   ]);
   const progress = parseOnboardingState(settings.onboarding);
-  // Static Pi catalogs and ambient credentials are not validation evidence.
-  // A provider becomes onboarding-ready only after the renderer completed one
-  // of the guarded validation/discovery flows and main recorded that exact ID.
-  const selected = onboardingEvidenceProvider(providers, progress);
+  // Outside one-time migration, static Pi catalogs and ambient credentials are
+  // not validation evidence. Migration may retain the exact provider/model the
+  // legacy app last used when it is still structurally ready today.
+  const selected = onboardingEvidenceProvider(providers, progress) ??
+    (allowLegacyEvidence && progress === null
+      ? legacyOnboardingEvidenceProvider(
+          providers,
+          settings.lastProviderId,
+          settings.lastModel,
+        )
+      : undefined);
   return {
     profileReady:
       progress?.lastSatisfiedStep !== undefined &&
@@ -56,12 +64,16 @@ export async function getOnboardingSnapshot(
   legacyComplete = false,
   isCurrent: () => boolean = () => true,
 ): Promise<OnboardingSnapshot> {
-  const [settings, ready] = await Promise.all([configStore.getSettings(), readiness()]);
+  const [settings, ready] = await Promise.all([
+    configStore.getSettings(),
+    readiness(legacyComplete),
+  ]);
   let state = parseOnboardingState(settings.onboarding);
   if (!state) {
-    // Preserve existing installs without trusting the legacy renderer marker as
-    // proof of readiness. Only an explicit provider skip may create a deferred
-    // outcome, so an unproven legacy setup reopens onboarding as incomplete.
+    // Preserve existing installs without trusting the legacy renderer marker by
+    // itself. A matching main-owned legacy provider/model selection may retain
+    // completion; otherwise the unproven setup reopens as incomplete. Only an
+    // explicit provider skip may create a deferred outcome.
     const migratedReady = {
       ...ready,
       profileReady:

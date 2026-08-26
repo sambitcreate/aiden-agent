@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assertOnboardingCanComplete,
   legacyOnboardingOutcome,
+  legacyOnboardingEvidenceProvider,
   onboardingEvidenceProvider,
   onboardingProgressState,
   onboardingProviderReady,
@@ -61,6 +62,37 @@ test("legacy completion reopens onboarding until current setup readiness is prov
   assert.equal(legacyOnboardingOutcome(true, false), "incomplete");
   assert.equal(legacyOnboardingOutcome(true, true), "completed");
   assert.equal(shouldOpenOnboarding(legacyOnboardingOutcome(true, false)), true);
+});
+
+test("legacy migration retains a matching usable provider and model without trusting stale selection", () => {
+  const configured = provider();
+  const selected = legacyOnboardingEvidenceProvider(
+    [configured],
+    configured.id,
+    configured.defaultModel,
+  );
+
+  assert.equal(selected?.id, configured.id);
+  assert.equal(
+    shouldOpenOnboarding(legacyOnboardingOutcome(true, selected !== undefined)),
+    false,
+  );
+  assert.equal(
+    legacyOnboardingEvidenceProvider([configured], configured.id, "removed-model"),
+    undefined,
+  );
+  assert.equal(
+    legacyOnboardingEvidenceProvider(
+      [provider({ hasKey: false })],
+      configured.id,
+      configured.defaultModel,
+    ),
+    undefined,
+  );
+  assert.equal(
+    legacyOnboardingEvidenceProvider([configured], undefined, configured.defaultModel),
+    undefined,
+  );
 });
 
 test("progress is versioned and completion is readiness-gated", () => {
