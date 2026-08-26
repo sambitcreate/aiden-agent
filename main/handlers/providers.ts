@@ -203,7 +203,7 @@ async function saveProvider(
 ) {
   if (providerRegistry.isBuiltinProvider(provider.id)) {
     throw new Error(
-      `${provider.label} is built into Pi and has no editable endpoint configuration.`,
+      `${provider.label} is built into Aiden and has no editable endpoint configuration.`,
     );
   }
   if (!isCustomProviderId(provider.id)) {
@@ -290,7 +290,7 @@ export function registerProviderHandlers(): void {
     const owner = providerAuthOwner(event);
     const providerId = asProviderId(id);
     if (providerRegistry.isBuiltinProvider(providerId)) {
-      throw new Error("Pi built-in providers cannot be removed.");
+      throw new Error("Providers built into Aiden cannot be removed.");
     }
     if (!isCustomProviderId(providerId)) {
       throw new Error("Only Aiden custom connections can be removed.");
@@ -306,7 +306,7 @@ export function registerProviderHandlers(): void {
       // rejected state-changing request to a live document for parity with
       // logout/auth, rather than accepting queued stale renderer work.
       providerAuthOwner(event);
-      throw new Error("Pi built-in providers must be set up through their native sign-in flow.");
+      throw new Error("Providers built into Aiden must use their managed sign-in flow.");
     }
     if (!isCustomProviderId(providerId)) {
       throw new Error("Only Aiden custom connections can store an endpoint key.");
@@ -323,7 +323,7 @@ export function registerProviderHandlers(): void {
     async (_event, providerValue: unknown, keyOverride?: unknown) => {
       const provider = parseProvider(providerValue);
       if (providerRegistry.isBuiltinProvider(provider.id)) {
-        throw new Error("Pi built-in providers use Pi-native connection handling.");
+        throw new Error("Providers built into Aiden use managed connection handling.");
       }
       if (!isCustomProviderId(provider.id)) {
         throw new Error("Only Aiden custom connections support endpoint tests.");
@@ -339,7 +339,7 @@ export function registerProviderHandlers(): void {
     async (_event, providerValue: unknown, keyOverride?: unknown) => {
       const provider = parseProvider(providerValue);
       if (providerRegistry.isBuiltinProvider(provider.id)) {
-        throw new Error("Pi built-in providers use Pi-native model discovery.");
+        throw new Error("Providers built into Aiden use managed model discovery.");
       }
       if (!isCustomProviderId(provider.id)) {
         throw new Error("Only Aiden custom connections support endpoint model discovery.");
@@ -356,7 +356,7 @@ export function registerProviderHandlers(): void {
     providerAuthOwner(event);
     const providerId = providerValue === undefined ? undefined : asProviderId(providerValue);
     if (providerId !== undefined && !providerRegistry.isBuiltinProvider(providerId)) {
-      throw new Error("Only Pi built-in provider catalogs can be refreshed.");
+      throw new Error("Only provider catalogs built into Aiden can be refreshed.");
     }
     return refreshProviderCatalogs(
       providerId === undefined ? undefined : [providerId],

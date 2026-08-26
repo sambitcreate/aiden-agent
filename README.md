@@ -25,7 +25,7 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 - **Commands and explicit skills** - type `/` at the start of the composer to search Aiden app commands, or `$` to search the active workspace's available skills. Commands reuse canonical app workflows; an explicitly selected skill is revalidated for the active workspace, applies to one accepted message, and persists only safe display provenance.
 - **Native Subagents** - a foreground chat can delegate up to four fresh `scout`, `planner`, or `reviewer` tasks. Children are read/search-only, inherit the approved workspace and model, stop with the parent, and appear as live chips plus an inspectable **Subagents** view in Environment.
 - **Workspaces and managed worktrees** - use folders, scratch workspaces, or isolated managed worktrees with three access levels, workspace-scoped tools, Ask-mode approvals, guarded creation/deletion, and crash-aware cleanup.
-- **Models and the Model Pad** - choose from Pi's native hosted-provider catalog, local Ollama or LM Studio models, and declarative compatible endpoints. Provider-specific authentication, model capabilities, availability, and branded marks flow into the picker and Personal Model Pad.
+- **Models and the Model Pad** - choose from Pi's native hosted-provider catalog, local Ollama or LM Studio models, and declarative compatible endpoints. Arrange a personal capability-and-pace map, optionally enrich hosted models with explicitly fetched Artificial Analysis scores through a benchmark-only OpenRouter key, and keep benchmark evidence visibly separate from runtime limits and availability.
 - **Terminal, Git, and review** - keep a terminal drawer beside the conversation, inspect files and diffs in Environment, edit with dirty-file protection, compare branches, commit or push checked snapshots, and open the workspace in a discovered external editor.
 - **macOS integration and appearance** - native menus, **Keychain**, **Parakeet**, the dictation pill, Apple **Foundation Models**, the signed **Rust** Computer Use broker, semantic themes, high contrast, reduced motion, and consistent light/dark rendering.
 - **Extensibility and background work** - use skills, **MCP**, **Exa** search, scheduled tasks, voice, and attachments through typed, allowlisted boundaries.
@@ -116,7 +116,7 @@ npm run package:verify
 
 Distribution builds use `npm run dist` and require Developer ID signing plus notarization. The release pipeline fails closed, verifies the app, DMG, and ZIP, checks the deployed Homebrew and website consumers, and publishes updater metadata only with the matching verified artifacts. Read [macOS releases and automatic updates](docs/releasing.md) before enabling publication.
 
-The checked-in models.dev snapshot is refreshed only through `npm run models:refresh` or the guarded distribution path. Artificial Analysis credentials and data are never bundled; users explicitly fetch suggestions into an encrypted, device-local cache.
+The checked-in models.dev snapshot is refreshed only through `npm run models:refresh` or the guarded distribution path. Artificial Analysis credentials and data are never bundled. Direct Artificial Analysis suggestions require an explicit user fetch. OpenRouter benchmark insights use a separate encrypted Model Pad key only after an explicit Connect & fetch or Fetch latest action, then read normalized public scores from a device-local offline cache. That key never configures an inference provider or imports OpenRouter's model catalog.
 
 ## Project status
 

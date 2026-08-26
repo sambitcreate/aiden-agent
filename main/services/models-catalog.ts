@@ -1,15 +1,12 @@
-// Capability metadata comes from the packaged models.dev snapshot plus the
-// user's device-local Artificial Analysis cache. Reading model info never
-// performs a network request; only explicit connect/refresh actions update it.
+// Capability metadata comes from the packaged models.dev snapshot. Optional
+// benchmark evidence comes from the dedicated device-local OpenRouter cache.
+// Reading model info never performs a network request.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app, logger } from "../platform.js";
-import {
-  EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
-  type ArtificialAnalysisCatalog,
-} from "./artificial-analysis-catalog-core.js";
-import { artificialAnalysisRuntime } from "./artificial-analysis-runtime.js";
+import { EMPTY_ARTIFICIAL_ANALYSIS_CATALOG } from "./artificial-analysis-catalog-core.js";
+import { openRouterBenchmarkRuntime } from "./openrouter-benchmark-runtime.js";
 import {
   createModelCatalogLoader,
   lookupCatalogModelInfo,
@@ -39,16 +36,15 @@ const getModelsDev = createModelCatalogLoader(
   },
 );
 
-async function loadArtificialAnalysis(): Promise<ArtificialAnalysisCatalog> {
+async function loadOpenRouterBenchmarks() {
   try {
-    const local = await artificialAnalysisRuntime.catalog();
-    if (local) return local;
+    return await openRouterBenchmarkRuntime.catalog();
   } catch (error) {
-    logger.warn("models-catalog", "Could not read the device-local Artificial Analysis cache.", {
+    logger.warn("models-catalog", "Could not read the device-local OpenRouter benchmark cache.", {
       error: error instanceof Error ? error.message : String(error),
     });
+    return null;
   }
-  return EMPTY_ARTIFICIAL_ANALYSIS_CATALOG;
 }
 
 export const modelsCatalog = {
@@ -68,11 +64,17 @@ export const modelsCatalog = {
 
   /** Capability info for one model. */
   async info(provider: ModelCatalogProvider, modelId: string): Promise<ModelInfo> {
-    const [modelsDev, artificialAnalysis] = await Promise.all([
+    const [modelsDev, openRouterBenchmarks] = await Promise.all([
       getModelsDev(),
-      loadArtificialAnalysis(),
+      loadOpenRouterBenchmarks(),
     ]);
-    return resolveModelInfo(modelsDev, artificialAnalysis, provider, modelId);
+    return resolveModelInfo(
+      modelsDev,
+      EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
+      provider,
+      modelId,
+      openRouterBenchmarks,
+    );
   },
 
   /** Capability info for many models under one provider. */
@@ -80,12 +82,21 @@ export const modelsCatalog = {
     provider: ModelCatalogProvider,
     modelIds: string[],
   ): Promise<Record<string, ModelInfo>> {
-    const [modelsDev, artificialAnalysis] = await Promise.all([
+    const [modelsDev, openRouterBenchmarks] = await Promise.all([
       getModelsDev(),
-      loadArtificialAnalysis(),
+      loadOpenRouterBenchmarks(),
     ]);
     return Object.fromEntries(
-      modelIds.map((id) => [id, resolveModelInfo(modelsDev, artificialAnalysis, provider, id)]),
+      modelIds.map((id) => [
+        id,
+        resolveModelInfo(
+          modelsDev,
+          EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
+          provider,
+          id,
+          openRouterBenchmarks,
+        ),
+      ]),
     );
   },
 };

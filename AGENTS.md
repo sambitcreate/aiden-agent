@@ -18,6 +18,8 @@ Before adding or materially restyling any UI element or component, always review
 
 `npm run models:refresh` is the explicit development refresh, and `npm run dist` invokes the same release step before packaging. Those are the only paths that may contact models.dev. Never add a models.dev call to normal development, unpacked builds, or ordinary live-app reads. Artificial Analysis data and credentials must never be bundled: the live Electron app may contact its fixed Free endpoint only after the user explicitly chooses Connect & fetch or Fetch latest with their own key, then reads the normalized device-local cache offline.
 
+OpenRouter benchmark insights are also manual-only. The live app may contact only the fixed `/api/v1/benchmarks?source=artificial-analysis&max_results=100` endpoint after the user explicitly chooses Connect & fetch or Fetch latest, using the dedicated encrypted Model Pad credential rather than any inference-provider credential. Never send prompts or model traffic during that action, never import OpenRouter's model catalog, never bundle the returned data, and serve ordinary model-info reads only from the normalized device-local cache.
+
 ## Papercuts
 
 For complex workflows, record concise implementation friction in `.papercuts/troubleshooting.md` as it occurs.

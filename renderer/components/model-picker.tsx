@@ -21,6 +21,7 @@ import { cn } from "../lib/ui-utils";
 import {
   createModelEntries,
   encodeSelection,
+  modelGridSize,
   orderModelEntries,
   PINNED_MODELS_KEY,
   positionSavedModels,
@@ -30,7 +31,11 @@ import {
   type PositionedModel,
 } from "../lib/model-picker-data";
 import { useProvidersModelInfo } from "../lib/queries";
-import { useModelPadLayout } from "../lib/model-pad-layout";
+import {
+  MODEL_PAD_INSET_PERCENT,
+  MODEL_PAD_RANGE_PERCENT,
+  useModelPadLayout,
+} from "../lib/model-pad-layout";
 import type { ModelInfo, Provider } from "../lib/types";
 import { Check, ChevronsUpDown, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
@@ -46,6 +51,8 @@ interface ModelPickerProps {
   hiddenModelsByProvider?: HiddenModelsByProvider;
 }
 
+const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+
 function formatTokens(value: number | undefined): string | null {
   if (!value || !Number.isFinite(value)) return null;
   if (value >= 1_000_000) {
@@ -57,6 +64,12 @@ function formatTokens(value: number | undefined): string | null {
     return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}K`;
   }
   return String(value);
+}
+
+function formatBenchmarkDate(value: string | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? BENCHMARK_DATE_FORMATTER.format(date) : null;
 }
 
 function formatInputs(info: ModelInfo | undefined): string {
@@ -99,6 +112,7 @@ function describeModel(entry: ModelEntry): string {
   if (context) details.push(`Context ${context} tokens`);
   if (output) details.push(`Maximum output ${output} tokens`);
   if (entry.ranking) details.push(`Benchmark ${entry.ranking.source}`);
+  if (entry.info?.benchmark) details.push(`Benchmark ${entry.info.benchmark.sourceLabel}`);
   else if (entry.info?.metadataSource === "artificial-analysis") {
     details.push("Model data Artificial Analysis");
   }
@@ -138,13 +152,14 @@ function useExternalModelDetails(): boolean {
 }
 
 function EmptyModelPad({
+  gridSize,
   onOpenSettings,
   settingsBlockedReason,
 }: {
+  gridSize: number;
   onOpenSettings: () => void;
   settingsBlockedReason?: string;
 }) {
-  const gridSize = 9;
   const blockedReasonId = React.useId();
   return (
     <div className="model-pad relative aspect-square w-full overflow-hidden rounded-card">
@@ -157,8 +172,8 @@ function EmptyModelPad({
               key={index}
               className="absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20"
               style={{
-                left: `${8 + (column / (gridSize - 1)) * 84}%`,
-                top: `${8 + (row / (gridSize - 1)) * 84}%`,
+                left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
+                top: `${MODEL_PAD_INSET_PERCENT + (row / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
               }}
             />
           );
@@ -205,11 +220,9 @@ function EmptyModelPad({
 function ModelHoverDetails({
   model,
   metadataLoading,
-  showArtificialAnalysisAttribution,
 }: {
   model: PositionedModel | undefined;
   metadataLoading: boolean;
-  showArtificialAnalysisAttribution: boolean;
 }) {
   if (!model) return null;
 
@@ -217,13 +230,11 @@ function ModelHoverDetails({
   const context = formatTokens(info?.contextLength);
   const output = formatTokens(info?.outputLimit);
   const inputs = formatInputs(info);
+  const benchmarkAsOf = formatBenchmarkDate(info?.benchmark?.asOf);
   const attributionUrl =
+    info?.benchmark?.sourceUrl ??
     model.ranking?.sourceUrl ??
-    (info?.metadataSource === "artificial-analysis"
-      ? "https://artificialanalysis.ai"
-      : showArtificialAnalysisAttribution
-        ? "https://artificialanalysis.ai"
-        : undefined);
+    (info?.metadataSource === "artificial-analysis" ? "https://artificialanalysis.ai" : undefined);
   const capabilities = [
     info?.vision ? "Vision" : null,
     info?.toolCall ? "Tools" : null,
@@ -237,6 +248,12 @@ function ModelHoverDetails({
     output ? ["Max output", output] : null,
     info?.releaseDate ? ["Released", info.releaseDate] : null,
     info?.knowledge ? ["Knowledge", info.knowledge] : null,
+    info?.benchmark?.intelligence !== undefined
+      ? ["Intelligence", info.benchmark.intelligence.toFixed(1)]
+      : null,
+    info?.benchmark?.coding !== undefined ? ["Coding", info.benchmark.coding.toFixed(1)] : null,
+    info?.benchmark?.agentic !== undefined ? ["Agentic", info.benchmark.agentic.toFixed(1)] : null,
+    benchmarkAsOf ? ["Benchmark as of", benchmarkAsOf] : null,
   ].filter((row): row is [string, string] => Boolean(row));
 
   return (
@@ -263,7 +280,7 @@ function ModelHoverDetails({
         </div>
       </div>
 
-      {info?.matched ? (
+      {info?.matched || info?.benchmark ? (
         <>
           {capabilities.length > 0 ? (
             <p className="mt-2 text-small text-secondary">{capabilities.join(" · ")}</p>
@@ -306,7 +323,9 @@ function ModelHoverDetails({
             rel="noreferrer"
             className="pointer-events-auto mt-1 inline-block text-[10px] leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
           >
-            {model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis
+            {info?.benchmark
+              ? `${info.benchmark.sourceLabel} · ${info.benchmark.license}`
+              : `${model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`}
           </a>
         ) : null}
       </div>
@@ -353,10 +372,8 @@ export function ModelPicker({
   const orderedEntries = orderModelEntries(entries, pinned);
   const detailPositions = positionModels(entries);
   const positioned = positionSavedModels(entries, modelPadLayout.placements);
+  const padGridSize = modelGridSize(entries.length);
   const hasPadModels = positioned.length > 0;
-  const usesArtificialAnalysis =
-    entries.some((entry) => entry.info?.metadataSource === "artificial-analysis") ||
-    positioned.some((entry) => entry.confidence === "suggested");
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
@@ -369,6 +386,18 @@ export function ModelPicker({
       : (detailPosition ??
         detailPositions.find((entry) => entry.value === selectedValue) ??
         detailPositions[0]);
+  const activeAttribution = activePosition?.info?.benchmark
+    ? {
+        url: activePosition.info.benchmark.sourceUrl,
+        label: `${activePosition.info.benchmark.sourceLabel} · ${activePosition.info.benchmark.license}`,
+      }
+    : activePosition?.ranking?.sourceUrl ||
+        activePosition?.info?.metadataSource === "artificial-analysis"
+      ? {
+          url: activePosition?.ranking?.sourceUrl ?? "https://artificialanalysis.ai",
+          label: `${activePosition?.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`,
+        }
+      : null;
   const hasUnavailableSelection = Boolean(selectedValue && !selected);
   const hasModels = entries.length > 0;
   const metadataLoading = catalog.isLoading;
@@ -579,6 +608,7 @@ export function ModelPicker({
             {hasPadModels ? (
               <ModelPickerPad
                 models={positioned}
+                gridSize={padGridSize}
                 selectedValue={selectedValue}
                 previewValue={previewValue}
                 onPreview={setPreviewValue}
@@ -586,6 +616,7 @@ export function ModelPicker({
               />
             ) : (
               <EmptyModelPad
+                gridSize={padGridSize}
                 onOpenSettings={openModelDataSettings}
                 settingsBlockedReason={settingsBlockedReason}
               />
@@ -678,20 +709,16 @@ export function ModelPicker({
         )}
 
         {showExternalDetails && (view === "list" || hasPadModels) ? (
-          <ModelHoverDetails
-            model={activePosition}
-            metadataLoading={metadataLoading}
-            showArtificialAnalysisAttribution={usesArtificialAnalysis}
-          />
-        ) : usesArtificialAnalysis ? (
+          <ModelHoverDetails model={activePosition} metadataLoading={metadataLoading} />
+        ) : activeAttribution ? (
           <div className="border-t border-separator px-3 py-1.5 text-[10px] leading-4">
             <a
-              href="https://artificialanalysis.ai"
+              href={activeAttribution.url}
               target="_blank"
               rel="noreferrer"
               className="text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
             >
-              Model data · Artificial Analysis
+              {activeAttribution.label}
             </a>
           </div>
         ) : null}

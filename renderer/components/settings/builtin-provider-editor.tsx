@@ -249,7 +249,7 @@ export function BuiltinProviderEditor({
         ) : interactiveMethods.length > 0 ? (
           <div className="grid gap-2">
             <Text variant="small" color="secondary">
-              Choose a setup method. Pi will ask only for the details this provider requires.
+              Choose a setup method. Aiden asks only for the details this provider requires.
             </Text>
             {interactiveMethods.map((method) => (
               <Button
@@ -264,8 +264,8 @@ export function BuiltinProviderEditor({
           </div>
         ) : (
           <Text variant="small" color="secondary">
-            This provider uses credentials Pi discovers from your system or environment; there is no
-            endpoint or manual credential configuration in Aiden.
+            This provider uses credentials Aiden discovers from your system or environment; there is
+            no endpoint or manual credential configuration.
           </Text>
         )}
         {message ? (
@@ -281,8 +281,8 @@ export function BuiltinProviderEditor({
           </Button>
         ) : null}
         <Text variant="small" color="tertiary">
-          {provider.models.length} Pi model{provider.models.length === 1 ? "" : "s"} are currently
-          available.
+          {provider.models.length} model
+          {provider.models.length === 1 ? " is" : "s are"} currently available.
         </Text>
         <ProviderModelVisibility provider={provider} />
       </div>

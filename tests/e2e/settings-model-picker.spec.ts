@@ -23,7 +23,9 @@ async function assertRenderedSettingsDestination(
   switch (section) {
     case "Providers":
       await expect(
-        page.getByText(/Pi-native providers need only their credentials/u),
+        page.getByText(
+          /Connect with credentials when required; Aiden keeps their model catalogs current/u,
+        ),
       ).toBeVisible();
       return;
     case "Model Pad":

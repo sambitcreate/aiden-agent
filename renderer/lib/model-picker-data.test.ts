@@ -8,6 +8,7 @@ import {
   findDirectionalModel,
   modelGridSize,
   nearestModel,
+  modelBenchmarkPercentiles,
   orderModelEntries,
   parseModel,
   positionSavedModels,
@@ -34,8 +35,14 @@ test("provider artwork accepts only bounded normalized PNG payloads", () => {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   });
   assert.equal(artwork?.mimeType, "image/png");
-  assert.equal(normalizeProviderArtwork({ mimeType: "image/svg+xml", dataBase64: "PHN2Zz4=" }), undefined);
-  assert.equal(normalizeProviderArtwork({ mimeType: "image/png", dataBase64: "not base64" }), undefined);
+  assert.equal(
+    normalizeProviderArtwork({ mimeType: "image/svg+xml", dataBase64: "PHN2Zz4=" }),
+    undefined,
+  );
+  assert.equal(
+    normalizeProviderArtwork({ mimeType: "image/png", dataBase64: "not base64" }),
+    undefined,
+  );
 });
 
 test("new defaults skip hidden preferred models while explicit execution stays separate", () => {
@@ -244,15 +251,83 @@ test("bundled rankings flow into the pad and stale embedding ids stay out of the
   assert.equal(positionModels(entries)[0].confidence, "benchmark");
 });
 
-test("saved personal placements alone determine membership and exact Pad geometry", () => {
+test("saved personal placements alone determine membership and snap to Pad geometry", () => {
   const entries = [entry("first"), entry("second")];
   const positioned = positionSavedModels(entries, {
-    first: { x: 0.17, y: 0.83, source: "user" },
+    first: { x: 0.17, y: 0.83, xSource: "user", ySource: "user" },
   });
   assert.deepEqual(
     positioned.map(({ value, x, y, confidence }) => ({ value, x, y, confidence })),
-    [{ value: "first", x: 0.17, y: 0.83, confidence: "personal" }],
+    [
+      {
+        value: "first",
+        x: 1 / 6,
+        y: 5 / 6,
+        confidence: "personal",
+      },
+    ],
   );
+});
+
+test("saved geometry uses all visible chat models for sizing while hidden placements reserve no dot", () => {
+  const entries = Array.from({ length: 40 }, (_, index) => entry(`model-${index}`));
+  const positioned = positionSavedModels(entries, {
+    "model-0": { x: 0.19, y: 0.5, xSource: "user", ySource: "user" },
+    hidden: { x: 0.19, y: 0.5, xSource: "user", ySource: "user" },
+  });
+
+  assert.equal(modelGridSize(entries.length), 17);
+  assert.deepEqual(
+    positioned.map(({ value, x, y }) => ({ value, x, y })),
+    [{ value: "model-0", x: 3 / 16, y: 0.5 }],
+  );
+});
+
+test("colliding OpenRouter suggestions snap to distinct dots without outranking personal geometry", () => {
+  const entries = [entry("a-suggested"), entry("b-suggested"), entry("z-personal")];
+  const positioned = positionSavedModels(entries, {
+    "a-suggested": { x: 0.5, y: 0.92, xSource: "neutral", ySource: "benchmark" },
+    "b-suggested": { x: 0.5, y: 0.92, xSource: "neutral", ySource: "benchmark" },
+    "z-personal": { x: 0.5, y: 0.92, xSource: "user", ySource: "user" },
+  });
+  const personal = positioned.find(({ value }) => value === "z-personal")!;
+  const cells = positioned.map(({ x, y }) => `${x}:${y}`);
+
+  assert.deepEqual({ x: personal.x, y: personal.y }, { x: 0.5, y: 1 });
+  assert.equal(new Set(cells).size, positioned.length);
+});
+
+test("OpenRouter benchmark percentiles average ties and axis-aware suggestions disclose neutral pace", () => {
+  const models = [entry("low"), entry("tied-a"), entry("tied-b"), entry("high")];
+  const values = [10, 20, 20, 40];
+  models.forEach((model, index) => {
+    model.info = {
+      id: model.model,
+      matched: true,
+      metadataSource: "models-dev",
+      benchmark: {
+        source: "openrouter",
+        datasetSource: "artificial-analysis",
+        sourceLabel: "Artificial Analysis via OpenRouter",
+        sourceUrl: "https://artificialanalysis.ai",
+        citation: "Source: Artificial Analysis via OpenRouter.",
+        asOf: "2026-06-03T12:00:00.000Z",
+        license: "CC BY 4.0",
+        coding: values[index],
+      },
+    };
+  });
+  assert.deepEqual(Object.fromEntries(modelBenchmarkPercentiles(models, "coding")), {
+    low: 0,
+    "tied-a": 0.5,
+    "tied-b": 0.5,
+    high: 1,
+  });
+  const [suggested] = positionSavedModels(models, {
+    low: { x: 0.5, y: 0.08, xSource: "neutral", ySource: "benchmark" },
+  });
+  assert.equal(suggested.confidence, "suggested");
+  assert.equal(suggested.positionSource, "Benchmark capability · pace unmeasured");
 });
 
 test("embedding-like ids stay out when stale discovery metadata is unavailable", () => {

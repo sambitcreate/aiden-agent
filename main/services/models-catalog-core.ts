@@ -6,6 +6,11 @@ import {
 import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
+import {
+  openRouterBenchmarkForModel,
+  openRouterBenchmarkForModelsDevIdentity,
+  type OpenRouterBenchmarkCache,
+} from "./openrouter-benchmark-catalog-core.js";
 
 interface RawModel {
   id?: string;
@@ -192,7 +197,30 @@ const PROVIDER_SLUG: Record<string, string> = {
   deepseek: "deepseek",
   moonshot: "moonshotai",
   moonshotai: "moonshotai",
+  xai: "xai",
+  mistral: "mistral",
+  minimax: "minimax",
+  zai: "zai",
+  nvidia: "nvidia",
 };
+
+const OPENROUTER_DIRECT_AUTHOR: Readonly<Record<string, string>> = {
+  openai: "openai",
+  "openai-codex": "openai",
+  anthropic: "anthropic",
+  google: "google",
+  gemini: "google",
+  deepseek: "deepseek",
+  moonshot: "moonshotai",
+  moonshotai: "moonshotai",
+  xai: "x-ai",
+  mistral: "mistralai",
+  minimax: "minimax",
+  zai: "z-ai",
+  nvidia: "nvidia",
+};
+
+const TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER = new Set(["concentrate"]);
 
 const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
   openai: "OpenAI",
@@ -218,19 +246,22 @@ function entries(provider: RawProvider | undefined): Array<[string, RawModel]> {
   return provider?.models ? Object.entries(provider.models) : [];
 }
 
-function findRawForProvider(
-  catalog: ModelCatalog,
-  providerId: string,
-  modelId: string,
-): RawModel | null {
-  const provider = catalog[catalogProviderSlug(providerId) ?? ""];
-  if (!provider) return null;
-
+function findRawInProvider(provider: RawProvider | undefined, modelId: string): RawModel | null {
   const exact = modelId.toLocaleLowerCase();
   const normalized = normalizeId(modelId);
   const exactMatch = entries(provider).find(([key]) => key.toLocaleLowerCase() === exact);
   if (exactMatch) return exactMatch[1];
   return entries(provider).find(([key]) => normalizeId(key) === normalized)?.[1] ?? null;
+}
+
+function findRawForProvider(
+  catalog: ModelCatalog,
+  providerId: string,
+  modelId: string,
+): RawModel | null {
+  const provider = catalog[providerId] ?? catalog[catalogProviderSlug(providerId) ?? ""];
+  if (!provider) return null;
+  return findRawInProvider(provider, modelId);
 }
 
 /** Exact matches across the catalog must win before any lossy normalized match. */
@@ -301,6 +332,36 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
     metadataSource: "models-dev",
     matched: true,
   };
+}
+
+function modelsDevBenchmark(
+  catalog: ModelCatalog,
+  cache: OpenRouterBenchmarkCache,
+  provider: ModelCatalogProvider,
+  modelId: string,
+): ModelInfo["benchmark"] {
+  const directAuthor = OPENROUTER_DIRECT_AUTHOR[provider.id];
+  const providerCatalog = catalog[provider.id] ?? catalog[catalogProviderSlug(provider.id) ?? ""];
+  if (
+    directAuthor === undefined &&
+    providerCatalog === undefined &&
+    !TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER.has(provider.id)
+  ) {
+    return undefined;
+  }
+
+  const raw =
+    findRawInProvider(providerCatalog, modelId) ??
+    (TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER.has(provider.id)
+      ? findRaw(catalog, provider.id, modelId)
+      : null);
+  if (!raw?.name) return undefined;
+
+  return openRouterBenchmarkForModelsDevIdentity(cache, {
+    ...(directAuthor === undefined ? {} : { author: directAuthor }),
+    modelId,
+    name: raw.name,
+  });
 }
 
 /** Backward-compatible models.dev-only lookup used by focused tests. */
@@ -398,8 +459,7 @@ function mergeRuntimeMetadata(
     reasoning: primary.reasoning ?? fallback.reasoning,
     input: primary.input ?? fallback.input,
     thinkingLevelMap: primary.thinkingLevelMap ?? fallback.thinkingLevelMap,
-    forceAdaptiveThinking:
-      primary.forceAdaptiveThinking ?? fallback.forceAdaptiveThinking,
+    forceAdaptiveThinking: primary.forceAdaptiveThinking ?? fallback.forceAdaptiveThinking,
   };
 }
 
@@ -455,7 +515,7 @@ function localInfo(
         ? metadata.type
         : fallback.modelType && fallback.modelType !== "llm"
           ? fallback.modelType
-          : metadata.type ?? fallback.modelType,
+          : (metadata.type ?? fallback.modelType),
     parameterCount: metadata.parameterCount,
     format: metadata.format,
     contextLength: metadata.contextLength ?? fallback.contextLength,
@@ -506,11 +566,17 @@ export function resolveModelInfo(
   artificialAnalysis: ArtificialAnalysisCatalog,
   provider: ModelCatalogProvider,
   modelId: string,
+  openRouterBenchmarks?: OpenRouterBenchmarkCache | null,
 ): ModelInfo {
   const fallback = modelsDevInfo(catalog, provider.id, modelId);
   if (isLocalProvider(provider)) {
     const metadata = provider.modelMetadata?.[modelId];
     return metadata ? localInfo(modelId, metadata, fallback) : fallback;
   }
-  return hostedInfo(artificialAnalysis, provider, modelId, fallback);
+  const hosted = hostedInfo(artificialAnalysis, provider, modelId, fallback);
+  const benchmark = openRouterBenchmarks
+    ? (openRouterBenchmarkForModel(openRouterBenchmarks, provider.id, modelId) ??
+      modelsDevBenchmark(catalog, openRouterBenchmarks, provider, modelId))
+    : undefined;
+  return benchmark ? { ...hosted, benchmark } : hosted;
 }

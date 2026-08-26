@@ -12,12 +12,12 @@ import {
   aidenRemoteApi,
   botsApi,
   chatsApi,
-  artificialAnalysisApi,
   computerUseApi,
   exaApi,
   gitApi,
   localVoiceApi,
   mcpApi,
+  modelInsightsApi,
   modelsApi,
   profileApi,
   providersApi,
@@ -31,10 +31,10 @@ import {
   workspacesApi,
 } from "./ipc";
 import type {
-  ArtificialAnalysisStatus,
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
   ModelInfo,
+  ModelInsightsStatus,
   Provider,
   UsageDateRange,
 } from "./types";
@@ -58,8 +58,7 @@ export const queryKeys = {
   scheduledRuns: (taskId: string | undefined) => ["scheduledRuns", taskId ?? "none"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
-  artificialAnalysisStatus: ["artificialAnalysisStatus"] as const,
-  artificialAnalysisModelInfo: ["modelInfo"] as const,
+  modelInsightsStatus: ["modelInsightsStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
   usage: (range: UsageDateRange) => ["usage", range] as const,
@@ -89,51 +88,35 @@ export const queryKeys = {
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
-async function cancelArtificialAnalysisReads(queryClient: QueryClient): Promise<void> {
+async function cancelModelInsightsReads(queryClient: QueryClient): Promise<void> {
   await Promise.all([
-    queryClient.cancelQueries({ queryKey: queryKeys.artificialAnalysisStatus }),
-    queryClient.cancelQueries({ queryKey: queryKeys.artificialAnalysisModelInfo }),
+    queryClient.cancelQueries({ queryKey: queryKeys.modelInsightsStatus }),
+    queryClient.cancelQueries({ queryKey: ["modelInfo"] }),
   ]);
 }
 
-/** Freeze device-local AA reads before a connect, refresh, or disconnect mutation. */
-export async function beginArtificialAnalysisAction(queryClient: QueryClient): Promise<void> {
-  await cancelArtificialAnalysisReads(queryClient);
+export async function beginModelInsightsAction(queryClient: QueryClient): Promise<void> {
+  await cancelModelInsightsReads(queryClient);
 }
 
-/** Make an action result authoritative without retaining rankings from a prior credential. */
-export async function commitArtificialAnalysisState(
+export async function commitModelInsightsState(
   queryClient: QueryClient,
-  status: ArtificialAnalysisStatus,
+  status: ModelInsightsStatus,
 ): Promise<void> {
-  await cancelArtificialAnalysisReads(queryClient);
-  queryClient.removeQueries({
-    queryKey: queryKeys.artificialAnalysisModelInfo,
-    type: "inactive",
-  });
-  queryClient.setQueryData(queryKeys.artificialAnalysisStatus, status);
-  await queryClient.resetQueries({
-    queryKey: queryKeys.artificialAnalysisModelInfo,
-    type: "active",
-  });
+  await cancelModelInsightsReads(queryClient);
+  queryClient.removeQueries({ queryKey: ["modelInfo"], type: "inactive" });
+  queryClient.setQueryData(queryKeys.modelInsightsStatus, status);
+  await queryClient.resetQueries({ queryKey: ["modelInfo"], type: "active" });
 }
 
-/** Re-read only local credential/cache state after a failed or partially applied mutation. */
-export async function refreshArtificialAnalysisState(
+export async function refreshModelInsightsState(
   queryClient: QueryClient,
-  readStatus: () => Promise<ArtificialAnalysisStatus> = artificialAnalysisApi.status,
-): Promise<ArtificialAnalysisStatus> {
-  await cancelArtificialAnalysisReads(queryClient);
-  try {
-    const status = await readStatus();
-    await commitArtificialAnalysisState(queryClient, status);
-    return status;
-  } catch (error) {
-    await cancelArtificialAnalysisReads(queryClient);
-    queryClient.removeQueries({ queryKey: queryKeys.artificialAnalysisModelInfo });
-    await queryClient.invalidateQueries({ queryKey: queryKeys.artificialAnalysisStatus });
-    throw error;
-  }
+  readStatus: () => Promise<ModelInsightsStatus> = modelInsightsApi.status,
+): Promise<ModelInsightsStatus> {
+  await cancelModelInsightsReads(queryClient);
+  const status = await readStatus();
+  await commitModelInsightsState(queryClient, status);
+  return status;
 }
 
 export function useProviders() {
@@ -469,11 +452,11 @@ export function useScheduledTaskSettings() {
   return useQuery({ queryKey: queryKeys.scheduledSettings, queryFn: () => scheduleApi.settings() });
 }
 
-/** Reads only device-local credential/cache state; this query never fetches catalog data. */
-export function useArtificialAnalysisStatus() {
+/** Reads device-local Model Pad credential/cache state; never fetches benchmark data. */
+export function useModelInsightsStatus() {
   return useQuery({
-    queryKey: queryKeys.artificialAnalysisStatus,
-    queryFn: artificialAnalysisApi.status,
+    queryKey: queryKeys.modelInsightsStatus,
+    queryFn: modelInsightsApi.status,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
