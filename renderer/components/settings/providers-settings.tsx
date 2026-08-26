@@ -45,7 +45,7 @@ import {
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
-    return p.hasKey ? <Badge color="green">Ready</Badge> : <Badge color="secondary">Set up</Badge>;
+    return p.hasKey ? <Badge color="green">Ready</Badge> : null;
   }
   if (!p.needsKey) return <Badge color="blue">No auth</Badge>;
   if (p.hasKey) return <Badge color="green">Key set</Badge>;

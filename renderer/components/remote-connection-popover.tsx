@@ -144,7 +144,13 @@ export function RemoteConnectionPopover({
           />
         </Button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" sideOffset={8} className="w-80 p-0">
+      <PopoverContent
+        side="top"
+        align="end"
+        sideOffset={8}
+        collisionPadding={{ top: 8, right: 8, bottom: 8, left: 14 }}
+        className="w-80 p-0"
+      >
         <div className="border-b border-separator px-5 py-3">
           <div className="flex items-start justify-between gap-3">
             <div>

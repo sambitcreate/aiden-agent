@@ -11,6 +11,7 @@ test("pending devices remain visible without formatting the zero last-seen times
 });
 
 test("connection content keeps comfortable leading padding", () => {
+  assert.match(source, /collisionPadding=\{\{ top: 8, right: 8, bottom: 8, left: 14 \}\}/u);
   assert.match(source, /border-b border-separator px-5 py-3/u);
   assert.match(source, /rounded-lg px-3 py-1\.5/u);
   assert.match(
