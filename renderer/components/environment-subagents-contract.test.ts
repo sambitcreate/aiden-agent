@@ -355,7 +355,7 @@ test("live snapshots are owner-checked, revisioned, and released across route tr
   assert.match(pane, /mergeSubagentSnapshots\(current, \[snapshot\]/u);
   assert.match(
     pane,
-    /environmentPanel\.syncSubagents\(\s*chatId,\s*effectiveWorkspaceId,\s*subagentReferences,\s*liveSubagents/u,
+    /environmentPanel\.syncSubagents\(\s*chatId,\s*effectiveWorkspaceId,\s*subagentReferences,\s*displayedLiveSubagents/u,
   );
   assert.match(
     pane,
@@ -604,10 +604,17 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(
     ipc,
-    /rememberDetachedLifecycleStream\(\{\s+streamId,\s+chatId: params\.chatId,\s+workspaceId: params\.workspaceId \?\? "default",\s+\}\);\s+dispose\(\);/u,
+    /rememberDetachedLifecycleStream\(\s+\{\s+streamId,\s+chatId: params\.chatId,\s+workspaceId: params\.workspaceId \?\? "default",\s+\},\s+\{\s+content: projectedContent,\s+reasoning: projectedReasoning,\s+timeline: projectedTimeline,\s+artifacts: projectedArtifacts,\s+subagents: projectedSubagents,/u,
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
-  assert.match(pane, /detachedGenerationDraining\s+\? "Finishing the previous response…"/u);
+  assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
+  assert.match(pane, /detachedGenerationDraining\s+\? "Response continues in the background…"/u);
+  assert.match(
+    pane,
+    /messages\[messages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
+  );
+  assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
+  assert.match(pane, /streamingText=\{displayedStreamingText\}/u);
   assert.match(
     pane,
     /if \(detachedGenerationDraining\) \{\s+throw new Error\("Wait for the previous response to finish saving before sending again\."\)/u,
