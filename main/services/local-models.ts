@@ -4,13 +4,24 @@
 // own directory under userData so it persists and can be managed/deleted.
 
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { app, ipcMain, logger } from "../platform.js";
 
-const execFileAsync = promisify(execFile);
+import { trackDiagnosticChild } from "./performance-child.js";
+
+function extractArchive(archive: string, directory: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      "/usr/bin/tar",
+      ["-xjf", archive, "-C", directory, "--strip-components=1"],
+      { maxBuffer: 10 * 1024 * 1024, timeout: 5 * 60_000 },
+      (error) => (error ? reject(error) : resolve()),
+    );
+    trackDiagnosticChild("local-model-extract", child);
+  });
+}
 
 interface CatalogModel {
   id: string;
@@ -125,7 +136,11 @@ export async function downloadModel(id: string): Promise<void> {
       total,
       // Reserve the last 10% for extraction so the bar keeps moving.
       percentage:
-        phase === "extract" ? 90 + Math.round((downloaded / Math.max(total, 1)) * 10) : total ? Math.round((downloaded / total) * 90) : 0,
+        phase === "extract"
+          ? 90 + Math.round((downloaded / Math.max(total, 1)) * 10)
+          : total
+            ? Math.round((downloaded / total) * 90)
+            : 0,
       phase,
     });
 
@@ -162,10 +177,7 @@ export async function downloadModel(id: string): Promise<void> {
     await fs.promises.mkdir(dir, { recursive: true });
     emit(0, 1, "extract");
     // macOS tar (libarchive) handles bz2; --strip-components=1 drops the archive's top folder.
-    await execFileAsync("/usr/bin/tar", ["-xjf", tmpTar, "-C", dir, "--strip-components=1"], {
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 5 * 60_000,
-    });
+    await extractArchive(tmpTar, dir);
     if (!isModelInstalled(id)) {
       throw new Error("Extracted model is missing expected files.");
     }

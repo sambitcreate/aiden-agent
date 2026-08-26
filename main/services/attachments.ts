@@ -5,6 +5,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { Attachment } from "./types.js";
+import { recordDiagnosticCounter } from "./performance-diagnostics.js";
 
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB
 export const MAX_TEXT_CHARS = 100_000;
@@ -42,6 +43,7 @@ async function readOne(filePath: string): Promise<Attachment | null> {
       throw new Error(`${name} is too large to attach (max 8 MB).`);
     }
     const buf = await fs.readFile(filePath);
+    recordDiagnosticCounter("filesystem:read", { bytesOut: buf.byteLength });
     return {
       id: newId(),
       name,
@@ -54,6 +56,7 @@ async function readOne(filePath: string): Promise<Attachment | null> {
 
   // Treat everything else as text; reject obvious binaries (contain NUL bytes).
   const buf = await fs.readFile(filePath);
+  recordDiagnosticCounter("filesystem:read", { bytesOut: buf.byteLength });
   if (buf.includes(0)) {
     throw new Error(`${name} isn't a supported text or image file.`);
   }

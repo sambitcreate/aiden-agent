@@ -3,6 +3,7 @@
 // and restores only when the transcript is still on the clipboard.
 
 import { execFile } from "node:child_process";
+import { trackDiagnosticChild } from "./performance-child.js";
 
 export type PasteOutcome = "pasted" | "copied";
 
@@ -62,7 +63,7 @@ end run`;
 /** Run an AppleScript handler with data passed as argv, never interpolated. */
 export function runOsascript(script: string, args: string[] = []): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       "/usr/bin/osascript",
       ["-e", script, "--", ...args],
       { timeout: 5_000 },
@@ -71,6 +72,7 @@ export function runOsascript(script: string, args: string[] = []): Promise<strin
         else resolve(stdout.trim());
       },
     );
+    trackDiagnosticChild("dictation-paste", child);
   });
 }
 

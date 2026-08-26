@@ -14,6 +14,8 @@ import {
   type NativeFoundationModelsResponse,
   type NativeFoundationModelsRunOptions,
 } from "./foundation-models-connection-core.js";
+import { trackDiagnosticChild } from "./performance-child.js";
+import { recordDiagnosticCounter } from "./performance-diagnostics.js";
 
 const HELPER_APP_NAME = "Aiden Foundation Models Helper.app";
 const MAX_REQUEST_BYTES = 20_000;
@@ -46,7 +48,10 @@ async function runHelperRequest(
   const payload = Buffer.from(JSON.stringify(request), "utf8");
   if (payload.byteLength > MAX_REQUEST_BYTES) {
     return Promise.reject(
-      new FoundationModelsConnectionError("invalid_request", "The native title request is too large."),
+      new FoundationModelsConnectionError(
+        "invalid_request",
+        "The native title request is too large.",
+      ),
     );
   }
   if (options.signal?.aborted) {
@@ -64,9 +69,13 @@ async function runHelperRequest(
   try {
     await fs.chmod(exchangeDirectory, 0o700);
     await fs.writeFile(requestPath, payload, { mode: 0o600 });
+    recordDiagnosticCounter("filesystem:write", { bytesIn: payload.byteLength });
   } catch {
     await fs.rm(exchangeDirectory, { recursive: true, force: true });
-    throw new FoundationModelsConnectionError("helper_failed", "The native title request could not be prepared.");
+    throw new FoundationModelsConnectionError(
+      "helper_failed",
+      "The native title request could not be prepared.",
+    );
   }
   if (options.signal?.aborted || isDisposingFoundationModelsConnection) {
     await fs.rm(exchangeDirectory, { recursive: true, force: true });
@@ -97,6 +106,7 @@ async function runHelperRequest(
         windowsHide: true,
       },
     );
+    trackDiagnosticChild("foundation-models", child);
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
@@ -134,7 +144,8 @@ async function runHelperRequest(
       cleanupExchange();
       if (error) reject(error);
       else if (response) resolve(response);
-      else reject(new FoundationModelsConnectionError("helper_failed", "The native helper failed."));
+      else
+        reject(new FoundationModelsConnectionError("helper_failed", "The native helper failed."));
     };
     const requestStop = (error: FoundationModelsConnectionError) => {
       if (settled || pendingStopError) return;
@@ -143,10 +154,14 @@ async function runHelperRequest(
       forcedFinish = setTimeout(() => finish(error), 2_000);
     };
     const abort = () => {
-      requestStop(new FoundationModelsConnectionError("cancelled", "Title generation was cancelled."));
+      requestStop(
+        new FoundationModelsConnectionError("cancelled", "Title generation was cancelled."),
+      );
     };
     const timeout = setTimeout(() => {
-      requestStop(new FoundationModelsConnectionError("timeout", "The native helper timed out.", true));
+      requestStop(
+        new FoundationModelsConnectionError("timeout", "The native helper timed out.", true),
+      );
     }, options.timeoutMs);
     const activeRequest = {
       dispose: () => {
@@ -158,8 +173,14 @@ async function runHelperRequest(
 
     options.signal?.addEventListener("abort", abort, { once: true });
     child.on("error", (error) => {
-      const code = (error as NodeJS.ErrnoException).code === "ENOENT" ? "helper_missing" : "helper_failed";
-      finish(new FoundationModelsConnectionError(code, "The Apple Foundation Models helper is unavailable."));
+      const code =
+        (error as NodeJS.ErrnoException).code === "ENOENT" ? "helper_missing" : "helper_failed";
+      finish(
+        new FoundationModelsConnectionError(
+          code,
+          "The Apple Foundation Models helper is unavailable.",
+        ),
+      );
     });
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.byteLength;
@@ -192,7 +213,10 @@ async function runHelperRequest(
       }
       try {
         if (exitCode !== 0) {
-          throw new FoundationModelsConnectionError("helper_failed", "The Apple Foundation Models helper failed.");
+          throw new FoundationModelsConnectionError(
+            "helper_failed",
+            "The Apple Foundation Models helper failed.",
+          );
         }
         const responseStat = await fs.stat(responsePath);
         if (responseStat.size > MAX_STDOUT_BYTES) {
@@ -201,7 +225,11 @@ async function runHelperRequest(
             "The native helper returned too much data.",
           );
         }
-        const response = parseFoundationModelsResponse(await fs.readFile(responsePath, "utf8"));
+        const responseText = await fs.readFile(responsePath, "utf8");
+        recordDiagnosticCounter("filesystem:read", {
+          bytesOut: Buffer.byteLength(responseText, "utf8"),
+        });
+        const response = parseFoundationModelsResponse(responseText);
         finish(undefined, response);
       } catch (error) {
         finish(

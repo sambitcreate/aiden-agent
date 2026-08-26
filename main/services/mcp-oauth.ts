@@ -27,15 +27,18 @@ import {
   sessionForFreshMcpAuthorization,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
-import {
-  McpOAuthOperationGate,
-  type McpOAuthGeneration,
-} from "./mcp-oauth-operation.js";
+import { McpOAuthOperationGate, type McpOAuthGeneration } from "./mcp-oauth-operation.js";
 import type { McpOAuthOperation } from "./mcp-oauth-operation.js";
 import { assertMcpPresetServer } from "./mcp-presets.js";
 import { closeAgainAfterSettled } from "./generation-bound-connection-cache.js";
 import type { McpServer } from "./types.js";
 import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
+import {
+  acquireDiagnosticMcpClient,
+  diagnosticMcpStartedAt,
+  recordDiagnosticMcpOperation,
+  type DiagnosticMcpClientKind,
+} from "./performance-mcp.js";
 
 // Fixed loopback redirect so the registered redirect_uri stays stable across
 // sessions (dynamic client registration records it once).
@@ -43,6 +46,22 @@ const OAUTH_PORT = 41390;
 const OAUTH_REDIRECT_URI = `http://127.0.0.1:${OAUTH_PORT}/callback`;
 const AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const oauthOperations = new McpOAuthOperationGate();
+
+async function closeDiagnosticOAuthClient(
+  client: Client,
+  kind: DiagnosticMcpClientKind,
+  release: () => void,
+): Promise<void> {
+  const started = diagnosticMcpStartedAt();
+  try {
+    await client.close();
+    recordDiagnosticMcpOperation("close", kind, started);
+  } catch {
+    recordDiagnosticMcpOperation("close", kind, started, true);
+  } finally {
+    release();
+  }
+}
 
 const CALLBACK_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Aiden Agent</title>
 <style>body{font-family:-apple-system,system-ui,sans-serif;background:#1c1c1e;color:#fff;display:flex;
@@ -88,10 +107,7 @@ class McpOAuthProvider implements OAuthClientProvider {
   }
 
   private mutationIsCurrent = (): boolean => {
-    return (
-      this.requestIsCurrent() &&
-      oauthOperations.canMutate(this.serverId, this.generation)
-    );
+    return this.requestIsCurrent() && oauthOperations.canMutate(this.serverId, this.generation);
   };
 
   private async saveSession(session: McpOAuthSession): Promise<void> {
@@ -167,16 +183,13 @@ class McpOAuthProvider implements OAuthClientProvider {
 
   async codeVerifier(): Promise<string> {
     const verifier = (await this.boundSession()).codeVerifier;
-    if (!verifier)
-      throw new Error("Missing PKCE code verifier — restart the sign-in.");
+    if (!verifier) throw new Error("Missing PKCE code verifier — restart the sign-in.");
     return verifier;
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     if (!("signal" in this.generation)) {
-      throw new Error(
-        "This MCP server needs sign-in. Open Settings → MCP and click Authorize.",
-      );
+      throw new Error("This MCP server needs sign-in. Open Settings → MCP and click Authorize.");
     }
     this.assertCanMutate();
     await shell.openExternal(authorizationUrl.toString());
@@ -238,13 +251,9 @@ export function oauthProviderFor(
   );
 }
 
-export async function hasOAuthTokens(
-  serverId: string,
-  url?: string,
-): Promise<boolean> {
+export async function hasOAuthTokens(serverId: string, url?: string): Promise<boolean> {
   const session = await mcpOAuthStore.get(serverId);
-  if (url && !sessionMatchesMcpBinding(session, mcpAuthorizationBinding(url)))
-    return false;
+  if (url && !sessionMatchesMcpBinding(session, mcpAuthorizationBinding(url))) return false;
   return Boolean(session.tokens);
 }
 
@@ -252,9 +261,7 @@ export async function clearOAuth(
   serverId: string,
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
-  await withMcpConfigurationPublication(serverId, () =>
-    mcpOAuthStore.clear(serverId, isCurrent),
-  );
+  await withMcpConfigurationPublication(serverId, () => mcpOAuthStore.clear(serverId, isCurrent));
 }
 
 export function invalidateMcpOAuthOperation(serverId: string): void {
@@ -274,9 +281,7 @@ export function reserveMcpAuthorization(serverId: string): McpOAuthOperation {
   return oauthOperations.begin(serverId);
 }
 
-export function endReservedMcpAuthorization(
-  operation: McpOAuthOperation,
-): void {
+export function endReservedMcpAuthorization(operation: McpOAuthOperation): void {
   oauthOperations.end(operation);
 }
 
@@ -307,9 +312,7 @@ function startLoopbackServer(): Promise<Loopback> {
       const error = url.searchParams.get("error");
       if (error)
         rejectCode(
-          new Error(
-            `Authorization denied: ${url.searchParams.get("error_description") || error}`,
-          ),
+          new Error(`Authorization denied: ${url.searchParams.get("error_description") || error}`),
         );
       else if (code) resolveCode(code);
       else rejectCode(new Error("No authorization code was returned."));
@@ -318,18 +321,13 @@ function startLoopbackServer(): Promise<Loopback> {
     server.once("error", (err: NodeJS.ErrnoException) => {
       reject(
         err.code === "EADDRINUSE"
-          ? new Error(
-              `Port ${OAUTH_PORT} is busy — close whatever is using it and try again.`,
-            )
+          ? new Error(`Port ${OAUTH_PORT} is busy — close whatever is using it and try again.`)
           : err,
       );
     });
 
     server.listen(OAUTH_PORT, "127.0.0.1", () => {
-      const timer = setTimeout(
-        () => rejectCode(new Error("Sign-in timed out.")),
-        AUTH_TIMEOUT_MS,
-      );
+      const timer = setTimeout(() => rejectCode(new Error("Sign-in timed out.")), AUTH_TIMEOUT_MS);
       resolve({
         waitForCode: () => codePromise.finally(() => clearTimeout(timer)),
         close: () => server.close(),
@@ -348,12 +346,9 @@ function raceMcpOAuthCancellation<T>(
   operation: Promise<T>,
   signals: ReadonlyArray<AbortSignal | undefined>,
 ): Promise<T> {
-  const activeSignals = signals.filter((signal): signal is AbortSignal =>
-    Boolean(signal),
-  );
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   const alreadyCancelled = activeSignals.find((signal) => signal.aborted);
-  if (alreadyCancelled)
-    return Promise.reject(cancellationError(alreadyCancelled));
+  if (alreadyCancelled) return Promise.reject(cancellationError(alreadyCancelled));
   return new Promise<T>((resolve, reject) => {
     let settled = false;
     const listeners = new Map<AbortSignal, () => void>();
@@ -412,8 +407,7 @@ export async function authorizeMcpServer(
   if (!server.url) throw new Error("Add the server URL before authorizing.");
 
   const binding = mcpAuthorizationBinding(server.url);
-  if (!isCurrent())
-    throw new Error("The renderer document is no longer active.");
+  if (!isCurrent()) throw new Error("The renderer document is no longer active.");
   const operation = reservedOperation ?? oauthOperations.begin(server.id);
   if (!oauthOperations.isCurrent(operation)) {
     oauthOperations.end(operation);
@@ -426,13 +420,7 @@ export async function authorizeMcpServer(
   const transaction = new McpOAuthSessionTransaction(
     sessionForFreshMcpAuthorization(previousSession, binding),
   );
-  const provider = new McpOAuthProvider(
-    server.id,
-    binding,
-    operation,
-    isCurrent,
-    transaction,
-  );
+  const provider = new McpOAuthProvider(server.id, binding, operation, isCurrent, transaction);
   let loopback: Loopback | null = null;
   let commitAttempted = false;
   try {
@@ -442,17 +430,25 @@ export async function authorizeMcpServer(
     // failed provider, or process crash before final verification cannot erase
     // credentials that were still valid when the user started.
     const transport = makeOAuthTransport(server, provider);
-    const client = new Client(
-      { name: "aiden-agent", version: "0.27.0" },
-      { capabilities: {} },
-    );
+    const client = new Client({ name: "aiden-agent", version: "0.27.0" }, { capabilities: {} });
+    const releaseClient = acquireDiagnosticMcpClient("oauth");
+    let clientClosed = false;
+    const closeClient = async () => {
+      if (clientClosed) return;
+      clientClosed = true;
+      await closeDiagnosticOAuthClient(client, "oauth", releaseClient);
+    };
     try {
-      const connection = client.connect(transport);
-      await connectWithMcpOAuthCancellation(client, connection, [
-        operation.signal,
-        ownerSignal,
-      ]);
-      await client.close().catch(() => {});
+      const connectStarted = diagnosticMcpStartedAt();
+      try {
+        const connection = client.connect(transport);
+        await connectWithMcpOAuthCancellation(client, connection, [operation.signal, ownerSignal]);
+        recordDiagnosticMcpOperation("connect", "oauth", connectStarted);
+      } catch (error) {
+        recordDiagnosticMcpOperation("connect", "oauth", connectStarted, true);
+        throw error;
+      }
+      await closeClient();
       commitAttempted = true;
       await withMcpConfigurationPublication(server.id, () =>
         mcpOAuthStore.set(server.id, transaction.read(), () => {
@@ -461,7 +457,7 @@ export async function authorizeMcpServer(
       );
       return;
     } catch (error) {
-      await client.close().catch(() => {});
+      await closeClient();
       if (!(error instanceof UnauthorizedError)) throw error;
       // Expected: connect() triggered redirectToAuthorization (browser opened).
     }
@@ -470,10 +466,7 @@ export async function authorizeMcpServer(
       operation.signal,
       ownerSignal,
     ]);
-    await raceMcpOAuthCancellation(transport.finishAuth(code), [
-      operation.signal,
-      ownerSignal,
-    ]);
+    await raceMcpOAuthCancellation(transport.finishAuth(code), [operation.signal, ownerSignal]);
 
     // Verify the freshly minted tokens actually authorize a connection.
     const verifyTransport = makeOAuthTransport(server, provider);
@@ -481,14 +474,22 @@ export async function authorizeMcpServer(
       { name: "aiden-agent", version: "0.27.0" },
       { capabilities: {} },
     );
+    const releaseVerifyClient = acquireDiagnosticMcpClient("oauth-verify");
     try {
-      const connection = verifyClient.connect(verifyTransport);
-      await connectWithMcpOAuthCancellation(verifyClient, connection, [
-        operation.signal,
-        ownerSignal,
-      ]);
+      const connectStarted = diagnosticMcpStartedAt();
+      try {
+        const connection = verifyClient.connect(verifyTransport);
+        await connectWithMcpOAuthCancellation(verifyClient, connection, [
+          operation.signal,
+          ownerSignal,
+        ]);
+        recordDiagnosticMcpOperation("connect", "oauth-verify", connectStarted);
+      } catch (error) {
+        recordDiagnosticMcpOperation("connect", "oauth-verify", connectStarted, true);
+        throw error;
+      }
     } finally {
-      await verifyClient.close().catch(() => {});
+      await closeDiagnosticOAuthClient(verifyClient, "oauth-verify", releaseVerifyClient);
     }
     commitAttempted = true;
     await withMcpConfigurationPublication(server.id, () =>
@@ -507,9 +508,7 @@ export async function authorizeMcpServer(
           );
         } else {
           await withMcpConfigurationPublication(server.id, () =>
-            mcpOAuthStore.clear(server.id, () =>
-              oauthOperations.isCurrent(operation),
-            ),
+            mcpOAuthStore.clear(server.id, () => oauthOperations.isCurrent(operation)),
           );
         }
       } catch (restoreError) {

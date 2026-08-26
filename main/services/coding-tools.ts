@@ -20,6 +20,8 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
 import { containsHighConfidenceSecretIncludingEncodings } from "./subagents/safe-text.js";
+import { trackDiagnosticChild } from "./performance-child.js";
+import { recordDiagnosticCounter } from "./performance-diagnostics.js";
 
 const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
@@ -762,6 +764,7 @@ function makeParentReadFile(workspace: WorkspaceRootGuard): AgentTool {
       const { root: realRoot, full } = await resolveExistingInRoot(workspace, p);
       rejectEnvironmentSecret(realRoot, full);
       const buffer = await fs.readFile(full);
+      recordDiagnosticCounter("filesystem:read", { bytesOut: buffer.byteLength });
       const text = buffer.subarray(0, MAX_READ_BYTES).toString("utf-8");
       return textResult(
         buffer.length > MAX_READ_BYTES ? `${text}\n… [truncated]` : text || "[empty file]",
@@ -785,6 +788,9 @@ function makeWriteFile(workspace: WorkspaceRootGuard): AgentTool {
       const full = await resolveWritableInRoot(workspace, p, signal);
       throwIfAborted(signal, "File write cancelled.");
       await fs.writeFile(full, content, "utf-8");
+      recordDiagnosticCounter("filesystem:write", {
+        bytesIn: Buffer.byteLength(content, "utf8"),
+      });
       return textResult(`Wrote ${content.length} chars to ${p}.`);
     },
   };
@@ -815,6 +821,9 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
       };
       const { full } = await resolveExistingInRoot(workspace, p, signal);
       const original = await fs.readFile(full, "utf-8");
+      recordDiagnosticCounter("filesystem:read", {
+        bytesOut: Buffer.byteLength(original, "utf8"),
+      });
       throwIfAborted(signal, "File edit cancelled.");
       const count = original.split(old_string).length - 1;
       if (count === 0) throw new Error(`old_string not found in ${p}.`);
@@ -822,7 +831,11 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
         throw new Error(`old_string is not unique in ${p} (${count} matches). Add more context.`);
       await workspace.testObserver?.beforeWriteCommit?.(full);
       throwIfAborted(signal, "File edit cancelled.");
-      await fs.writeFile(full, original.replace(old_string, new_string), "utf-8");
+      const updated = original.replace(old_string, new_string);
+      await fs.writeFile(full, updated, "utf-8");
+      recordDiagnosticCounter("filesystem:write", {
+        bytesIn: Buffer.byteLength(updated, "utf8"),
+      });
       return textResult(`Edited ${p}.`);
     },
   };
@@ -1374,6 +1387,9 @@ async function grepParentDir(
     let content: string;
     try {
       content = await fs.readFile(full, "utf-8");
+      recordDiagnosticCounter("filesystem:read", {
+        bytesOut: Buffer.byteLength(content, "utf8"),
+      });
     } catch {
       continue;
     }
@@ -1457,6 +1473,7 @@ function makeRunCommand(workspace: WorkspaceRootGuard): AgentTool {
           shell: true,
           stdio: ["ignore", "pipe", "pipe"],
         });
+        trackDiagnosticChild("coding-tool", child);
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];
         let bytes = 0;

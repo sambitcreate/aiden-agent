@@ -4,6 +4,7 @@ import {
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
 import * as path from "node:path";
+import { trackDiagnosticChild } from "../performance-child.js";
 import {
   assertPreparedSubagentFileMutation,
   assertSubagentFileInspection,
@@ -17,8 +18,7 @@ import {
 const MAX_RESPONSE_BYTES = 275_000;
 const MAX_COMMAND_BYTES = 275_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-const RECOVERY_NAME =
-  /^\.aiden-subagent-file-[A-Za-z0-9][A-Za-z0-9_-]{0,63}-[a-f0-9-]{36}\.tmp$/u;
+const RECOVERY_NAME = /^\.aiden-subagent-file-[A-Za-z0-9][A-Za-z0-9_-]{0,63}-[a-f0-9-]{36}\.tmp$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 
 export type SubagentFileMutatorFailure =
@@ -55,8 +55,7 @@ export interface SubagentFileMutatorRuntimePaths {
 export function resolveSubagentFileMutatorBinary(
   runtime: SubagentFileMutatorRuntimePaths = {
     defaultApp: process.defaultApp === true,
-    resourcesPath:
-      typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
+    resourcesPath: typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
     cwd: process.cwd(),
   },
 ): string {
@@ -65,12 +64,7 @@ export function resolveSubagentFileMutatorBinary(
     typeof runtime.resourcesPath === "string" &&
     runtime.resourcesPath.length > 0
   ) {
-    return path.resolve(
-      runtime.resourcesPath,
-      "..",
-      "Helpers",
-      "aiden-subagent-file-mutator",
-    );
+    return path.resolve(runtime.resourcesPath, "..", "Helpers", "aiden-subagent-file-mutator");
   }
   return path.resolve(runtime.cwd, "build", "native", "aiden-subagent-file-mutator");
 }
@@ -155,6 +149,7 @@ export class SubagentFileMutatorClient {
   private readonly requestTimeoutMs: number;
   private readonly effectfulRequestTimeoutMs: number;
   private readonly spawnProcess: SpawnMutator;
+  private readonly trackChildDiagnostics: boolean;
   private child: ChildProcessWithoutNullStreams | undefined;
   private startPromise: Promise<void> | undefined;
   private closedPromise: Promise<void> | undefined;
@@ -181,9 +176,7 @@ export class SubagentFileMutatorClient {
       !Number.isFinite(options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) ||
       (options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) <= 0 ||
       !Number.isFinite(
-        options.effectfulRequestTimeoutMs ??
-          options.requestTimeoutMs ??
-          DEFAULT_REQUEST_TIMEOUT_MS,
+        options.effectfulRequestTimeoutMs ?? options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       ) ||
       (options.effectfulRequestTimeoutMs ??
         options.requestTimeoutMs ??
@@ -194,9 +187,9 @@ export class SubagentFileMutatorClient {
     this.workspaceRoot = Object.freeze({ ...options.workspaceRoot });
     this.binary = options.binary ?? resolveSubagentFileMutatorBinary();
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    this.effectfulRequestTimeoutMs =
-      options.effectfulRequestTimeoutMs ?? this.requestTimeoutMs;
+    this.effectfulRequestTimeoutMs = options.effectfulRequestTimeoutMs ?? this.requestTimeoutMs;
     this.spawnProcess = options.spawnProcess ?? (spawn as SpawnMutator);
+    this.trackChildDiagnostics = options.spawnProcess === undefined;
   }
 
   get currentState(): ClientState["kind"] {
@@ -281,8 +274,7 @@ export class SubagentFileMutatorClient {
     operation: Promise<T>,
     signal: AbortSignal | undefined,
     timeoutFailure: () => SubagentFileMutatorError,
-    abortFailure: () => SubagentFileMutatorError = () =>
-      new SubagentFileMutatorError("cancelled"),
+    abortFailure: () => SubagentFileMutatorError = () => new SubagentFileMutatorError("cancelled"),
     timeoutMs = this.requestTimeoutMs,
   ): Promise<T> {
     if (signal?.aborted) throw new SubagentFileMutatorError("cancelled");
@@ -336,6 +328,9 @@ export class SubagentFileMutatorClient {
             stdio: ["pipe", "pipe", "pipe"],
           },
         );
+        if (this.trackChildDiagnostics) {
+          trackDiagnosticChild("subagent-file-mutator", child);
+        }
         this.child = child;
         child.stdout.on("data", (chunk: Buffer) => this.acceptOutput(chunk));
         child.stderr.resume();
@@ -365,11 +360,7 @@ export class SubagentFileMutatorClient {
     return this.startPromise;
   }
 
-  private async request(
-    command: string,
-    signal?: AbortSignal,
-    effectful = false,
-  ): Promise<string> {
+  private async request(command: string, signal?: AbortSignal, effectful = false): Promise<string> {
     if (Buffer.byteLength(command, "utf8") > MAX_COMMAND_BYTES) {
       throw new SubagentFileMutatorError("invalid_input");
     }
@@ -393,27 +384,15 @@ export class SubagentFileMutatorClient {
             });
           }),
           signal,
-          () =>
-            new SubagentFileMutatorError(
-              effectful && sent ? "indeterminate" : "io_failed",
-            ),
-          () =>
-            new SubagentFileMutatorError(
-              effectful && sent ? "indeterminate" : "cancelled",
-            ),
+          () => new SubagentFileMutatorError(effectful && sent ? "indeterminate" : "io_failed"),
+          () => new SubagentFileMutatorError(effectful && sent ? "indeterminate" : "cancelled"),
           effectful ? this.effectfulRequestTimeoutMs : this.requestTimeoutMs,
         );
         response = await this.bounded(
           this.nextLine(),
           signal,
-          () =>
-            new SubagentFileMutatorError(
-              effectful && sent ? "indeterminate" : "io_failed",
-            ),
-          () =>
-            new SubagentFileMutatorError(
-              effectful && sent ? "indeterminate" : "cancelled",
-            ),
+          () => new SubagentFileMutatorError(effectful && sent ? "indeterminate" : "io_failed"),
+          () => new SubagentFileMutatorError(effectful && sent ? "indeterminate" : "cancelled"),
           effectful ? this.effectfulRequestTimeoutMs : this.requestTimeoutMs,
         );
       } catch (error) {
@@ -509,10 +488,7 @@ export class SubagentFileMutatorClient {
     return inspection;
   }
 
-  async prepare(
-    effectValue: PreparedSubagentFileMutation,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  async prepare(effectValue: PreparedSubagentFileMutation, signal?: AbortSignal): Promise<void> {
     let effect: PreparedSubagentFileMutation;
     try {
       assertPreparedSubagentFileMutation(effectValue);

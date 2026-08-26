@@ -98,8 +98,20 @@ export interface AppInfo {
   name: string;
   version: string;
   environment: string;
+  performanceDiagnostics: boolean;
   capabilities: AppCapabilities;
 }
+
+export type RendererDiagnosticReport =
+  | { name: "startup.shell_painted" | "startup.providers_ready" | "startup.composer_ready" }
+  | { name: "renderer.long_task"; durationMs: number }
+  | { name: "renderer.react_commit"; count: number; durationMs: number }
+  | {
+      name: "renderer.scheduler_snapshot";
+      rafCount: number;
+      timerCount: number;
+      scrollWrites: number;
+    };
 
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return bridge().invoke(channel, ...args) as Promise<T>;
@@ -117,6 +129,9 @@ export const appApi = {
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
+  reportDiagnostic: (report: RendererDiagnosticReport) =>
+    invoke<boolean>("app:diagnostics:report", report),
+  exportDiagnostics: () => invoke<{ saved: boolean }>("app:diagnostics:export"),
 };
 
 export const appUpdatesApi = {

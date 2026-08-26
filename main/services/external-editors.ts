@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { trackDiagnosticChild } from "./performance-child.js";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -254,10 +255,16 @@ let discoveryInFlight: Promise<ResolvedExternalEditor[]> | null = null;
 
 function runFile(file: string, args: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, [...args], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
-      if (error) reject(error);
-      else resolve(stdout);
-    });
+    const child = execFile(
+      file,
+      [...args],
+      { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout);
+      },
+    );
+    trackDiagnosticChild("external-editor", child);
   });
 }
 
@@ -411,7 +418,10 @@ async function loadNativeIcon(appPath: string): Promise<string> {
     const { app, nativeImage } = await import("electron");
     const fileIcon = await app.getFileIcon(appPath, { size: "normal" });
     try {
-      const thumbnail = await nativeImage.createThumbnailFromPath(appPath, { width: 32, height: 32 });
+      const thumbnail = await nativeImage.createThumbnailFromPath(appPath, {
+        width: 32,
+        height: 32,
+      });
       if (!thumbnail.isEmpty()) return thumbnail.toDataURL();
     } catch {
       // getFileIcon remains the native fallback when Quick Look cannot render the bundle artwork.

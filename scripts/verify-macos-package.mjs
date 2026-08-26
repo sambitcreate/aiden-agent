@@ -25,6 +25,7 @@ import {
   MAX_MODELS_DEV_SNAPSHOT_BYTES,
   validateModelsDevSnapshot,
 } from "./model-snapshot-core.mjs";
+import { verifyPackagePerformanceBudget } from "./performance-budgets.mjs";
 
 const executeFile = promisify(execFile);
 const modulePath = fileURLToPath(import.meta.url);
@@ -324,9 +325,7 @@ export function assertMinimalComputerUseEntitlements(entitlements) {
 
 function assertExactTrueEntitlements(entitlements, expectedKeys, description) {
   const expected = [...expectedKeys].sort();
-  const actual = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)]
-    .map((match) => match[1])
-    .sort();
+  const actual = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1]).sort();
   const enabled = [...entitlements.matchAll(/<key>([^<]+)<\/key>\s*<true\s*\/>/g)]
     .map((match) => match[1])
     .sort();
@@ -590,6 +589,7 @@ export async function verifyMacPackage(appPath) {
     assertElectronHelperEntitlements(await readEntitlements(electronHelper));
   }
   await verifyAidenFuses(paths.app);
+  await verifyPackagePerformanceBudget(paths.app);
   console.log(`Verified hardened macOS package: ${paths.app}`);
 }
 

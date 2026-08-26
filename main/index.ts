@@ -91,10 +91,29 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
+import {
+  configurePerformanceDiagnosticPersistence,
+  persistPerformanceDiagnosticSession,
+  recordDiagnosticCounter,
+  recordDiagnosticEvent,
+  recordDiagnosticGauge,
+  stopEventLoopDiagnostics,
+} from "./services/performance-diagnostics.js";
+import {
+  resolveFixedVoiceBenchmarkModel,
+  runFixedVoicePerformanceScenario,
+} from "./services/performance-scenario.js";
+import { transcribePcm } from "./services/parakeet.js";
 
+recordDiagnosticEvent({ name: "startup.main_loaded" });
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
+
+function resetRendererSchedulerDiagnosticGauges(): void {
+  recordDiagnosticGauge("live:renderer-raf", 0);
+  recordDiagnosticGauge("live:renderer-timer", 0);
+}
 const mainWindowLoads = createSupersedingTaskGate();
 const rendererReadiness = createRendererReadinessGate();
 let resolveShortcutInitialization: (() => void) | null = null;
@@ -114,6 +133,7 @@ let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
 let installUpdateOnQuit = false;
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
+let rendererCrashTimes: number[] = [];
 const disposeAppUpdateStateSubscription = appUpdateService.subscribe((snapshot) => {
   ipcMain.broadcast("app:update-state", snapshot);
 });
@@ -151,7 +171,7 @@ const SUBAGENT_PACKAGED_SOAK_STOP_SCRIPT = `(() => {
 })()`;
 
 const SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT =
-  'Boolean(document.querySelector(\'nav[aria-label="Settings"]\'))';
+  "Boolean(document.querySelector('nav[aria-label=\"Settings\"]'))";
 
 // The failure callout is the renderer's own generation error. This fixed,
 // test-only reader makes a failed packaged smoke actionable without exposing
@@ -167,6 +187,14 @@ const SUBAGENT_PACKAGED_SOAK_GENERATION_ERROR_SCRIPT = `(() => {
 
 function resetRendererReadiness(): void {
   rendererReadiness.reset();
+}
+
+function diagnosticCategory(value: string): string {
+  const normalized = value
+    .toLocaleLowerCase("en-US")
+    .replace(/[^a-z0-9_-]+/gu, "-")
+    .slice(0, 40);
+  return normalized || "unknown";
 }
 
 function hasCloseGuard(): boolean {
@@ -223,6 +251,7 @@ function confirmProtectedAction(window: BrowserWindow, action: "close" | "reload
 function cleanupApplication(): void {
   if (cleanupStarted) return;
   cleanupStarted = true;
+  stopEventLoopDiagnostics();
   disposeAppUpdateStateSubscription();
   appUpdateService.dispose();
   disposeShortcut();
@@ -232,11 +261,75 @@ function cleanupApplication(): void {
   scheduleService.stop();
   llmClient.abortAll();
   subagentRuntimeRegistry.abortAll();
-  void mcpManager.closeAll();
+}
+
+async function settleMcpShutdown(): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const close = mcpManager.closeAll();
+  const result = await Promise.race([
+    close.then(
+      () => ({ status: "settled" as const }),
+      (error: unknown) => ({ status: "failed" as const, error }),
+    ),
+    new Promise<{ status: "timed_out" }>((resolve) => {
+      timer = setTimeout(() => resolve({ status: "timed_out" }), 3_000);
+      timer.unref();
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (result.status === "timed_out") {
+    recordDiagnosticEvent({ name: "shutdown.timeout", state: "failed" });
+    throw new Error("MCP shutdown exceeded its deadline.");
+  }
+  if (result.status === "failed") throw result.error;
+}
+
+async function runFixedMcpDuplicateConnectBenchmark(): Promise<void> {
+  if (
+    process.env.AIDEN_PERFORMANCE_DIAGNOSTICS !== "1" ||
+    process.env.AIDEN_BENCHMARK_SCENARIO !== "mcp-duplicate-connect"
+  ) {
+    return;
+  }
+  const server = (await configStore.listMcpServers()).find(
+    ({ id }) => id === "performance-mcp-offline",
+  );
+  if (!server) throw new Error("The fixed duplicate-connect MCP fixture is missing.");
+  const results = await Promise.all(
+    Array.from({ length: 100 }, () => mcpManager.status(server, () => true)),
+  );
+  recordDiagnosticCounter("benchmark:mcp-duplicate-connect", {
+    count: results.length,
+    errors: results.filter(({ connected }) => !connected).length,
+  });
+}
+
+async function runFixedVoiceBenchmark(modelId: string | undefined): Promise<void> {
+  const boundModelId = process.env.AIDEN_BENCHMARK_VOICE_MODEL_ID;
+  const effectiveModelId = resolveFixedVoiceBenchmarkModel({
+    diagnosticsEnabled: process.env.AIDEN_PERFORMANCE_DIAGNOSTICS === "1",
+    scenario: process.env.AIDEN_BENCHMARK_SCENARIO,
+    boundModelId,
+    selectedModelId: modelId,
+  });
+  const result = await runFixedVoicePerformanceScenario({
+    diagnosticsEnabled: process.env.AIDEN_PERFORMANCE_DIAGNOSTICS === "1",
+    scenario: process.env.AIDEN_BENCHMARK_SCENARIO,
+    fixtureRoot: process.env.AIDEN_BENCHMARK_FIXTURE_ROOT,
+    modelId: effectiveModelId,
+    transcribe: transcribePcm,
+  });
+  if (result === "complete") {
+    recordDiagnosticCounter("benchmark:voice-fixed-decode", { count: 2 });
+  } else if (result === "model_required") {
+    recordDiagnosticCounter("benchmark:voice-fixed-decode", { errors: 1 });
+  }
 }
 
 async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
+  const diagnosticShutdownStarted = performance.now();
+  let shutdownFailures = 0;
   shutdownStarted = true;
   if (!settingsPrepared) {
     try {
@@ -256,16 +349,21 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   try {
     parentSettled = await llmClient.shutdown();
     if (!parentSettled) {
+      shutdownFailures += 1;
+      recordDiagnosticEvent({ name: "shutdown.timeout", state: "failed" });
       logger.warn(
         "main",
         "Parent generation did not settle before the shutdown deadline; forcing application shutdown.",
       );
     }
   } catch (error) {
+    shutdownFailures += 1;
     logger.error("main", "Parent generation shutdown did not complete cleanly.", error);
   }
   const subagentsSettled = await subagentRuntimeRegistry.shutdown();
   if (!subagentsSettled) {
+    shutdownFailures += 1;
+    recordDiagnosticEvent({ name: "shutdown.timeout", state: "failed" });
     logger.warn(
       "main",
       "Subagent work did not settle before the shutdown deadline; forcing application shutdown.",
@@ -284,16 +382,20 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     },
   );
   if (quitReceiptFinalization.status === "lifecycle_unsettled") {
+    shutdownFailures += 1;
     logger.warn(
       "main",
       "Skipping packaged subagent soak quit receipt because lifecycle teardown was incomplete.",
     );
   } else if (quitReceiptFinalization.status === "timed_out") {
+    shutdownFailures += 1;
+    recordDiagnosticEvent({ name: "shutdown.timeout", state: "failed" });
     logger.warn(
       "main",
       "Packaged subagent soak receipt finalization exceeded its shutdown budget; continuing without a receipt.",
     );
   } else if (quitReceiptFinalization.status === "failed") {
+    shutdownFailures += 1;
     logger.error(
       "main",
       "Packaged subagent soak metrics or receipt could not be finalized; continuing shutdown without a receipt.",
@@ -307,23 +409,32 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     );
     // Do not let later asynchronous cleanup give a timed-out receipt writer
     // time to publish evidence after its lifecycle has already failed closed.
+    const durationMs = performance.now() - diagnosticShutdownStarted;
+    recordDiagnosticEvent({ name: "shutdown.complete", durationMs, state: "failed" });
+    await persistPerformanceDiagnosticSession(durationMs, "failed", Math.max(1, shutdownFailures));
     app.exit(1);
     return;
   }
   cleanupApplication();
-  try {
-    await Promise.all([
-      shutdownProviderAuthFlow(),
-      computerUseStatus.shutdown(),
-      scheduleService.stopAndSettle(),
-      (async () => {
-        await subagentRunStore.flush();
-        await subagentRunStore.close();
-      })(),
-    ]);
-  } catch (error) {
-    logger.error("main", "Application service shutdown did not complete cleanly.", error);
+  const shutdownResults = await Promise.allSettled([
+    shutdownProviderAuthFlow(),
+    settleMcpShutdown(),
+    computerUseStatus.shutdown(),
+    scheduleService.stopAndSettle(),
+    (async () => {
+      await subagentRunStore.flush();
+      await subagentRunStore.close();
+    })(),
+  ]);
+  for (const result of shutdownResults) {
+    if (result.status === "fulfilled") continue;
+    shutdownFailures += 1;
+    logger.error("main", "Application service shutdown did not complete cleanly.", result.reason);
   }
+  const durationMs = performance.now() - diagnosticShutdownStarted;
+  const shutdownStatus = shutdownFailures === 0 ? "complete" : "failed";
+  recordDiagnosticEvent({ name: "shutdown.complete", durationMs, state: shutdownStatus });
+  await persistPerformanceDiagnosticSession(durationMs, shutdownStatus, shutdownFailures);
   forceAppQuit = true;
   if (installUpdateOnQuit) {
     installUpdateOnQuit = false;
@@ -769,16 +880,37 @@ async function createMainWindow(): Promise<void> {
       sandbox: true,
     },
   });
+  recordDiagnosticEvent({ name: "startup.window_created" });
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
   const createdWebContentsId = createdWindow.webContents.id;
   const mainWindowUrl = getWindowUrl("main-window.html");
   createdWindow.webContents.on("did-start-loading", () => {
+    resetRendererSchedulerDiagnosticGauges();
     resetRendererReadiness();
     terminalService.closeForWebContents(createdWebContentsId);
   });
-  createdWindow.webContents.on("render-process-gone", () => {
+  createdWindow.webContents.on("render-process-gone", (_event, details) => {
+    resetRendererSchedulerDiagnosticGauges();
+    const now = Date.now();
+    rendererCrashTimes = rendererCrashTimes.filter((time) => now - time <= 60_000);
+    const crashed = details.reason !== "clean-exit";
+    if (crashed) rendererCrashTimes.push(now);
+    recordDiagnosticEvent({
+      name: "renderer.process_gone",
+      state: details.reason === "clean-exit" ? "complete" : "failed",
+    });
+    if (crashed) {
+      recordDiagnosticEvent({
+        name: "crash_loop.state",
+        count: rendererCrashTimes.length,
+        state: rendererCrashTimes.length >= 3 ? "active" : "unknown",
+      });
+    }
+    recordDiagnosticCounter(`renderer-exit:${details.reason}`, {
+      errors: details.reason === "clean-exit" ? 0 : 1,
+    });
     rendererReadiness.reset();
     terminalService.closeForWebContents(createdWebContentsId);
     if (
@@ -789,13 +921,34 @@ async function createMainWindow(): Promise<void> {
     )
       return;
     const recovery = mainWindowLoads.replace(createdWindow.loadURL(mainWindowUrl));
-    void recovery.promise.catch((error: unknown) => {
-      if (!mainWindowLoads.isCurrent(recovery)) return;
-      logger.error("main", "Could not recover the main renderer after it exited.", error);
-      if (!createdWindow.isDestroyed()) createdWindow.destroy();
-    });
+    void recovery.promise.then(
+      () => {
+        if (!mainWindowLoads.isCurrent(recovery)) return;
+        if (crashed) {
+          recordDiagnosticEvent({
+            name: "crash_loop.state",
+            count: rendererCrashTimes.length,
+            state: "recovered",
+          });
+        }
+      },
+      (error: unknown) => {
+        if (!mainWindowLoads.isCurrent(recovery)) return;
+        logger.error("main", "Could not recover the main renderer after it exited.", error);
+        if (!createdWindow.isDestroyed()) createdWindow.destroy();
+      },
+    );
   });
-  createdWindow.once("ready-to-show", () => createdWindow.show());
+  createdWindow.webContents.on("unresponsive", () => {
+    recordDiagnosticEvent({ name: "renderer.unresponsive", state: "active" });
+  });
+  createdWindow.webContents.on("responsive", () => {
+    recordDiagnosticEvent({ name: "renderer.responsive", state: "recovered" });
+  });
+  createdWindow.once("ready-to-show", () => {
+    recordDiagnosticEvent({ name: "startup.window_ready" });
+    createdWindow.show();
+  });
   createdWindow.on("close", (event) => {
     if (
       protectedAction === "close" ||
@@ -807,6 +960,7 @@ async function createMainWindow(): Promise<void> {
     void requestWindowClose(createdWindow);
   });
   createdWindow.on("closed", () => {
+    resetRendererSchedulerDiagnosticGauges();
     terminalService.closeForWebContents(createdWebContentsId);
     if (mainWindow === createdWindow) {
       mainWindow = null;
@@ -859,6 +1013,7 @@ async function createMainWindow(): Promise<void> {
   });
 
   logger.info("main", "Loading renderer", { url: mainWindowUrl });
+  recordDiagnosticEvent({ name: "startup.navigation_started" });
   mainWindowLoads.replace(createdWindow.loadURL(mainWindowUrl));
   await mainWindowLoads.wait();
   if (createdWindow.isDestroyed() || mainWindow !== createdWindow) return;
@@ -947,8 +1102,9 @@ async function settlePackagedSubagentSoak(session: SubagentPackagedSoakSession):
   if (!(await llmClient.waitForChatIdle(SUBAGENT_PACKAGED_SOAK_CHAT_ID))) {
     throw new Error("Packaged subagent soak did not settle its parent generation.");
   }
-  await waitForPackagedSubagentSoak("child settlement", () =>
-    !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
+  await waitForPackagedSubagentSoak(
+    "child settlement",
+    () => !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
   await subagentHealthMetrics.flush();
   await writeSubagentPackagedSoakReceipt(
@@ -981,8 +1137,9 @@ async function runPackagedSubagentSoak(session: SubagentPackagedSoakSession): Pr
   await waitForPackagedSubagentSoak("child provider response", () =>
     subagentRuntimeRegistry.hasChatProviderResponse(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
-  await waitForPackagedSubagentSoak("aggregate child start", async () =>
-    (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
+  await waitForPackagedSubagentSoak(
+    "aggregate child start",
+    async () => (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
   );
 
   const action = subagentPackagedSoakAction(session.control.mode);
@@ -1139,6 +1296,18 @@ if (!ownsSingleInstanceLock) {
   });
 
   app.on("will-quit", cleanupApplication);
+  app.on("child-process-gone", (_event, details) => {
+    recordDiagnosticEvent({
+      name: "child.process_gone",
+      state: details.reason === "clean-exit" ? "complete" : "failed",
+    });
+    recordDiagnosticCounter(
+      `electron-child-gone:${diagnosticCategory(details.type)}:${diagnosticCategory(details.reason)}`,
+      {
+        errors: details.reason === "clean-exit" ? 0 : 1,
+      },
+    );
+  });
 
   // Only a real content change reaches the renderer, and concurrent triggers
   // coalesce, which is what makes this affordable on every focus.
@@ -1156,10 +1325,8 @@ if (!ownsSingleInstanceLock) {
     async (previous, next) => {
       await Promise.all([
         reconcileExternalProviderCredentialChanges(previous.providers, next.providers),
-        reconcileExternalMcpCredentialChanges(
-          previous.mcpServers,
-          next.mcpServers,
-          (serverId) => mcpManager.disconnect(serverId),
+        reconcileExternalMcpCredentialChanges(previous.mcpServers, next.mcpServers, (serverId) =>
+          mcpManager.disconnect(serverId),
         ),
       ]);
     },
@@ -1175,6 +1342,24 @@ if (!ownsSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      recordDiagnosticEvent({ name: "startup.app_ready" });
+      if (process.env.AIDEN_PERFORMANCE_DIAGNOSTICS === "1") {
+        const expectedPowerSource = process.env.AIDEN_BENCHMARK_POWER_SOURCE;
+        const initialPowerSource = powerMonitor.isOnBatteryPower() ? "battery" : "ac";
+        recordDiagnosticCounter("benchmark:power-source-transition", {
+          count:
+            expectedPowerSource === "ac" || expectedPowerSource === "battery"
+              ? Number(initialPowerSource !== expectedPowerSource)
+              : 1,
+        });
+        powerMonitor.on("on-ac", () => {
+          recordDiagnosticCounter("benchmark:power-source-transition");
+        });
+        powerMonitor.on("on-battery", () => {
+          recordDiagnosticCounter("benchmark:power-source-transition");
+        });
+      }
+      await configurePerformanceDiagnosticPersistence(app.getPath("userData"));
       const runtimeProfile = currentRuntimeProfile();
       if (runtimeProfile.id === "development" && process.platform === "darwin") {
         app.dock?.setBadge("DEV");
@@ -1314,10 +1499,13 @@ if (!ownsSingleInstanceLock) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;
       }
+      await runFixedMcpDuplicateConnectBenchmark();
+      await runFixedVoiceBenchmark(settings.localVoiceModel);
       await scheduleService.start();
       appUpdateService.start();
     })
     .catch((error: unknown) => {
+      recordDiagnosticEvent({ name: "process.error", state: "failed" });
       logger.error("main", "Failed to start Aiden Agent", error);
       void shutdownAndQuit();
     });

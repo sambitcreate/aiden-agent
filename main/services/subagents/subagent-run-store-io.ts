@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as path from "node:path";
+import { trackDiagnosticChild } from "../performance-child.js";
 
 const MAX_RESPONSE_BYTES = 12 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -133,6 +134,7 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
         });
+        trackDiagnosticChild("subagent-run-store", child);
         this.child = child;
         child.stdout.on("data", (chunk: Buffer) => this.acceptOutput(chunk));
         child.stderr.on("data", (chunk: Buffer) => {

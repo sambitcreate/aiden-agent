@@ -19,6 +19,7 @@ import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.j
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
+import { recordDiagnosticCounter, recordDiagnosticGauge } from "./performance-diagnostics.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -308,10 +309,14 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   return {
     async run(task: ScheduledTask): Promise<ScheduledRun> {
       if (activeControllers.has(task.id)) {
+        recordDiagnosticCounter("schedule:run-duplicate", { errors: 1 });
         throw new Error("This scheduled task is already running.");
       }
       const controller = new AbortController();
       activeControllers.set(task.id, controller);
+      recordDiagnosticCounter("schedule:run-start");
+      recordDiagnosticCounter("schedule:run-duplicate", { count: 0 });
+      recordDiagnosticGauge("live:schedule-run", activeControllers.size);
       const startedAt = Date.now();
       let chatId: string | undefined;
       let result: ScheduledRun["result"] = "error";
@@ -355,11 +360,13 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           error,
           chatId,
         });
+        recordDiagnosticCounter(`schedule:run-terminal:${result}`);
         if (result !== "silent") notify(task, error ?? output, chatId);
         ipcMain.broadcast("schedule:updated", { taskId: task.id, run });
         return run;
       } finally {
         activeControllers.delete(task.id);
+        recordDiagnosticGauge("live:schedule-run", activeControllers.size);
       }
     },
 

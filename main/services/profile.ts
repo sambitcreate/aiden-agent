@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import * as os from "node:os";
-import { promisify } from "node:util";
 import { configStore } from "./config-store.js";
 import {
   MAX_PROFILE_NAME_LENGTH,
@@ -8,8 +7,16 @@ import {
   validateProfileName,
 } from "./profile-core.js";
 import type { Profile } from "./types.js";
+import { trackDiagnosticChild } from "./performance-child.js";
 
-const execFileAsync = promisify(execFile);
+function readCommandOutput(file: string, args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, args, { encoding: "utf8", timeout: 1_000 }, (error, stdout) =>
+      error ? reject(error) : resolve(stdout),
+    );
+    trackDiagnosticChild("profile", child);
+  });
+}
 
 function titleCaseUsername(username: string): string {
   const words = username
@@ -25,10 +32,7 @@ function titleCaseUsername(username: string): string {
 async function systemDisplayName(): Promise<string> {
   if (process.platform === "darwin") {
     try {
-      const { stdout } = await execFileAsync("/usr/bin/id", ["-F"], {
-        encoding: "utf8",
-        timeout: 1_000,
-      });
+      const stdout = await readCommandOutput("/usr/bin/id", ["-F"]);
       const fullName = normalizeProfileName(stdout);
       if (fullName) return [...fullName].slice(0, MAX_PROFILE_NAME_LENGTH).join("");
     } catch {

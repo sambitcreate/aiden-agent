@@ -5,6 +5,7 @@
 import { createRequire } from "node:module";
 import { logger } from "../platform.js";
 import { modelDir, isModelInstalled } from "./local-models.js";
+import { recordDiagnosticCounter, recordDiagnosticGauge } from "./performance-diagnostics.js";
 
 // sherpa-onnx-node is a CommonJS native addon, externalized from the bundle.
 const require = createRequire(import.meta.url);
@@ -58,6 +59,7 @@ function getRecognizer(modelId: string): OfflineRecognizer {
   if (!dir || !isModelInstalled(modelId)) {
     throw new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.");
   }
+  const started = performance.now();
   const recognizer = new s.OfflineRecognizer({
     featConfig: { sampleRate: 16000, featureDim: 80 },
     modelConfig: {
@@ -74,21 +76,34 @@ function getRecognizer(modelId: string): OfflineRecognizer {
     },
   });
   recognizers.set(modelId, recognizer);
+  recordDiagnosticGauge("live:recognizer", recognizers.size);
+  recordDiagnosticCounter("resource:recognizer-load", {
+    durationMs: performance.now() - started,
+  });
   logger.info("parakeet", `Loaded recognizer for "${modelId}"`);
   return recognizer;
 }
 
 /** Forget a cached recognizer (e.g. after deleting/replacing a model). */
 export function releaseRecognizer(modelId: string): void {
-  recognizers.delete(modelId);
+  if (recognizers.delete(modelId)) {
+    recordDiagnosticCounter("resource:recognizer-release");
+    recordDiagnosticGauge("live:recognizer", recognizers.size);
+  }
 }
 
 /** Transcribe 16 kHz mono Float32 PCM using the given Parakeet model. */
 export function transcribePcm(samples: Float32Array, modelId: string): string {
   if (samples.length === 0) return "";
+  const started = performance.now();
   const recognizer = getRecognizer(modelId);
   const stream = recognizer.createStream();
   stream.acceptWaveform({ sampleRate: 16000, samples });
   recognizer.decode(stream);
-  return recognizer.getResult(stream).text.trim();
+  const result = recognizer.getResult(stream).text.trim();
+  recordDiagnosticCounter("resource:recognizer-decode", {
+    bytesIn: samples.byteLength,
+    durationMs: performance.now() - started,
+  });
+  return result;
 }

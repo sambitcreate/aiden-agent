@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { CuaDriverInvocation } from "./contract.js";
 import { CuaDriverError, isAbortError } from "./contract.js";
+import { trackDiagnosticChild } from "../performance-child.js";
 
 const MAX_STDOUT_BYTES = 256 * 1024;
 const MAX_STDERR_BYTES = 16 * 1024;
@@ -96,6 +97,7 @@ export async function runCuaDriverCommand(
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    trackDiagnosticChild("computer-use-driver", child);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;

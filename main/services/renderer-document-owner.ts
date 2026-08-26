@@ -1,4 +1,9 @@
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
+import {
+  performanceDiagnosticsEnabled,
+  recordDiagnosticCounter,
+} from "./performance-diagnostics.js";
+import { estimateDiagnosticPayloadBytes } from "./performance-diagnostics-core.js";
 
 export interface RendererDocumentOwner {
   id: number;
@@ -105,7 +110,24 @@ export function rendererDocumentOwner(
       if (isInvalidated()) {
         throw new Error("The renderer document is no longer active.");
       }
-      frame.send(channel, payload);
+      if (!performanceDiagnosticsEnabled) {
+        frame.send(channel, payload);
+        return;
+      }
+      const started = performance.now();
+      try {
+        frame.send(channel, payload);
+        recordDiagnosticCounter(`ipc-out:${channel}`, {
+          bytesOut: estimateDiagnosticPayloadBytes(payload),
+          durationMs: performance.now() - started,
+        });
+      } catch (error) {
+        recordDiagnosticCounter(`ipc-out:${channel}`, {
+          errors: 1,
+          durationMs: performance.now() - started,
+        });
+        throw error;
+      }
     },
     onInvalidated: (listener) => {
       let active = true;

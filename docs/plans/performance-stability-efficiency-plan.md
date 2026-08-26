@@ -1,6 +1,6 @@
 # Performance, Stability, Battery, and Efficiency Master Plan
 
-Status: planned; source audit complete, implementation not started  
+Status: active; Phase 0 instrumentation implemented, laboratory baseline gate open
 Date: 2026-07-27  
 Audit snapshot: dirty working tree on `feature/aiden-assistant-plan-777723` at `7299340282f84fb816f1615f54a27bf97390f6fe`; findings refer to the current filesystem, not only `HEAD`  
 Scope: Electron main/preload, React renderer, native helpers, storage, IPC, networking, background services, packaging, and macOS lifecycle
@@ -40,25 +40,25 @@ The first implementation milestone should therefore be **data safety and bounded
 
 ## Audit evidence
 
-| Priority | Confirmed issue | Evidence | User-visible impact |
-| --- | --- | --- | --- |
-| P0 | Chat and index files are overwritten directly; parse failure becomes an empty index or missing chat | `main/services/chat-store-core.ts` | A crash, power loss, disk-full event, or partial write can hide or destroy history |
-| P0 | Attachments have no count or aggregate budget; text files are fully read before truncation; files are read concurrently | `main/services/attachments.ts`, `main/handlers/attachments.ts`, `main/handlers/chat-params.ts` | A huge file or many images can freeze/crash main and duplicate hundreds of MB across IPC/history |
-| P0 | Several device-local stores treat non-missing read failures as defaults without universal quarantine/recovery | `main/services/data-store.ts`, schedule/settings/usage store construction | Recoverable state can be silently replaced after corruption, permissions, or transient I/O failure |
-| P1 | Streaming reveal schedules `requestAnimationFrame` forever, including when complete or reduced motion is active | `renderer/components/streaming-markdown-reveal.tsx` | Persistent renderer wakeups and battery use after streaming |
-| P1 | Git info polls every 5 s, with review at 4 s; an uncached info call launches about six Git commands | `renderer/lib/queries.ts`, `main/services/git.ts` | Approximately 72 child processes/minute in a normal open chat, plus heavier review work |
-| P1 | Local speech recognition constructs and invokes the native recognizer synchronously in main and caches by model | `main/handlers/local-voice.ts`, `main/services/parakeet.ts` | Whole-app stalls and potentially roughly 1.2 GB retained after using both voice models |
-| P1 | Streaming copies the full accumulated string per frame, reparses growing Markdown, and has overlapping scroll observers | `renderer/main/chat-pane.tsx`, `renderer/components/streaming-markdown-reveal.tsx`, `renderer/components/ui.tsx` | Long-task, layout, and frame-drop risk on long/code-heavy responses |
-| P1 | Stop does not consistently stop recursive repository work or network tools | `main/services/coding-tools.ts`, `main/services/tools.ts` | CPU, disk, and network activity can continue after the user presses Stop |
-| P1 | MCP connect is not single-flight; schemas are fetched per generation; clients have no idle expiry; close is not awaited | `main/services/mcp.ts`, `main/index.ts` | Duplicate/leaked helpers, hangs, stale connections, and incomplete quit |
-| P1 | Renderer exit immediately reloads without reason-aware backoff or a retry ceiling | `main/index.ts` | A deterministic crash can become a hot relaunch loop |
-| P1 | Model installation deletes the usable version before validating a staged replacement and does not own extraction cancellation | `main/services/local-models.ts` | Interrupted installation can remove a working local voice model |
-| P1 | Scheduled catch-up has per-task overlap protection but no global budget or battery/lock policy | `main/services/schedule-service-core.ts` | Multiple missed tasks can stampede after startup/resume |
-| P2 | The closed model picker queries every provider and rebuilds/sorts catalog structures during parent renders | `renderer/components/model-picker.tsx`, `renderer/lib/queries.ts` | Stream-frame work scales with provider/model count |
-| P2 | Startup waits for provider enumeration/auth state before the first React render | `renderer/main/index.tsx`, `main/services/provider-registry.ts` | A slow keychain/provider probe delays visible app chrome |
-| P2 | Routes, settings, xterm, KaTeX, and full Highlight.js are in an eager startup graph | `renderer/main/router.tsx`, `renderer/main/settings-view.tsx`, `renderer/components/code-block.tsx` | Larger parse/compile/startup and update payload |
-| P2 | Terminal output and LLM deltas cross IPC at source cadence; terminal buffers repeatedly copy large strings | `main/services/terminal.ts`, `main/services/llm-client.ts` | Excess wakeups, IPC allocations, and resize churn |
-| P2 | Several realistic lists are unwindowed | files, review, chat/model palettes, transcript | Large workspaces and histories degrade nonlinearly |
+| Priority | Confirmed issue                                                                                                               | Evidence                                                                                                         | User-visible impact                                                                                |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| P0       | Chat and index files are overwritten directly; parse failure becomes an empty index or missing chat                           | `main/services/chat-store-core.ts`                                                                               | A crash, power loss, disk-full event, or partial write can hide or destroy history                 |
+| P0       | Attachments have no count or aggregate budget; text files are fully read before truncation; files are read concurrently       | `main/services/attachments.ts`, `main/handlers/attachments.ts`, `main/handlers/chat-params.ts`                   | A huge file or many images can freeze/crash main and duplicate hundreds of MB across IPC/history   |
+| P0       | Several device-local stores treat non-missing read failures as defaults without universal quarantine/recovery                 | `main/services/data-store.ts`, schedule/settings/usage store construction                                        | Recoverable state can be silently replaced after corruption, permissions, or transient I/O failure |
+| P1       | Streaming reveal schedules `requestAnimationFrame` forever, including when complete or reduced motion is active               | `renderer/components/streaming-markdown-reveal.tsx`                                                              | Persistent renderer wakeups and battery use after streaming                                        |
+| P1       | Git info polls every 5 s, with review at 4 s; an uncached info call launches about six Git commands                           | `renderer/lib/queries.ts`, `main/services/git.ts`                                                                | Approximately 72 child processes/minute in a normal open chat, plus heavier review work            |
+| P1       | Local speech recognition constructs and invokes the native recognizer synchronously in main and caches by model               | `main/handlers/local-voice.ts`, `main/services/parakeet.ts`                                                      | Whole-app stalls and potentially roughly 1.2 GB retained after using both voice models             |
+| P1       | Streaming copies the full accumulated string per frame, reparses growing Markdown, and has overlapping scroll observers       | `renderer/main/chat-pane.tsx`, `renderer/components/streaming-markdown-reveal.tsx`, `renderer/components/ui.tsx` | Long-task, layout, and frame-drop risk on long/code-heavy responses                                |
+| P1       | Stop does not consistently stop recursive repository work or network tools                                                    | `main/services/coding-tools.ts`, `main/services/tools.ts`                                                        | CPU, disk, and network activity can continue after the user presses Stop                           |
+| P1       | MCP connect is not single-flight; schemas are fetched per generation; clients have no idle expiry; close is not awaited       | `main/services/mcp.ts`, `main/index.ts`                                                                          | Duplicate/leaked helpers, hangs, stale connections, and incomplete quit                            |
+| P1       | Renderer exit immediately reloads without reason-aware backoff or a retry ceiling                                             | `main/index.ts`                                                                                                  | A deterministic crash can become a hot relaunch loop                                               |
+| P1       | Model installation deletes the usable version before validating a staged replacement and does not own extraction cancellation | `main/services/local-models.ts`                                                                                  | Interrupted installation can remove a working local voice model                                    |
+| P1       | Scheduled catch-up has per-task overlap protection but no global budget or battery/lock policy                                | `main/services/schedule-service-core.ts`                                                                         | Multiple missed tasks can stampede after startup/resume                                            |
+| P2       | The closed model picker queries every provider and rebuilds/sorts catalog structures during parent renders                    | `renderer/components/model-picker.tsx`, `renderer/lib/queries.ts`                                                | Stream-frame work scales with provider/model count                                                 |
+| P2       | Startup waits for provider enumeration/auth state before the first React render                                               | `renderer/main/index.tsx`, `main/services/provider-registry.ts`                                                  | A slow keychain/provider probe delays visible app chrome                                           |
+| P2       | Routes, settings, xterm, KaTeX, and full Highlight.js are in an eager startup graph                                           | `renderer/main/router.tsx`, `renderer/main/settings-view.tsx`, `renderer/components/code-block.tsx`              | Larger parse/compile/startup and update payload                                                    |
+| P2       | Terminal output and LLM deltas cross IPC at source cadence; terminal buffers repeatedly copy large strings                    | `main/services/terminal.ts`, `main/services/llm-client.ts`                                                       | Excess wakeups, IPC allocations, and resize churn                                                  |
+| P2       | Several realistic lists are unwindowed                                                                                        | files, review, chat/model palettes, transcript                                                                   | Large workspaces and histories degrade nonlinearly                                                 |
 
 The following remain **measurement gaps**, not validated regressions: the GPU/energy cost of the transparent vibrant window, the hidden dictation pill's disabled background throttling, real packaged startup time, KaTeX font subset value, updater cost on battery, and title-generation contention. Phase 0 decides these from traces.
 
@@ -107,7 +107,7 @@ Deliverables:
    - four terminals with idle and high-output workloads;
    - MCP offline/hung/duplicate-connect cases;
    - 20 missed schedules, suspend/resume, lock/unlock, and timezone change.
-4. Record AC and battery runs using Instruments Time Profiler, Energy Log, Core Animation, Chrome Performance, and React Profiler. Use `powermetrics` only when permissions are explicitly available.
+4. Record production-equivalent AC and battery runs with DevTools closed using Instruments Time Profiler, Energy Log, and Core Animation. Capture Chrome Performance and React Profiler only in clearly separate optional attribution passes; they must not be represented as part of the production-equivalent measured interval. Use `powermetrics` only when permissions are explicitly available.
 5. Stamp benchmark output with commit, dirty-state hash, build mode, app/Electron versions, hardware, macOS version, power source, and scenario.
 
 Exit gate:
@@ -272,35 +272,35 @@ Exit gate:
 
 Phase 0 may tighten these numbers. Invariants are hard requirements now; relative performance targets become hard after the reference baseline is recorded.
 
-| Area | Release gate |
-| --- | --- |
-| Durability | Zero acknowledged-message loss across fault injection; recoverable corruption is quarantined, surfaced, and never overwritten |
-| Input bounds | Count, raw-byte, encoded-byte, duration, concurrency, and result caps enforced in main regardless of renderer behavior |
-| Idle renderer | Zero continuous RAF/timer loops after work settles; zero scroll writes without content/viewport change |
-| Idle Git | Zero periodic Git children while hidden/minimized; target zero while visible idle, with at most one slow fallback refresh/minute if watchers prove insufficient |
-| Main responsiveness | Proposed p99 event-loop delay below 50 ms during voice/tool workloads after isolation |
-| Cancellation | Every owned local operation reaches quiescence within a measured deadline; network/helper calls have explicit timeouts |
-| MCP | One client/helper under 100 concurrent connect attempts; a hung server is isolated; zero clients/helpers after quit |
-| Renderer scale | No task over 50 ms at p95 during the reference stream; at most one scroll write/frame; bounded parser/highlighter calls |
-| Memory | Heap/RSS returns within a Phase 0-defined tolerance after repeated attachment, voice, terminal, chat, and model cycles |
-| Startup | Shell first, provider-ready second; proposed p95 shell target at most 1.5 s on the reference Apple Silicon Mac |
-| Bundle/package | Proposed initial JS at most 1.5 MB minified; no initial chunk over 500 KB; no production maps; package allowlist enforced |
-| Battery | At least 50% fewer idle wakeups/CPU time than baseline and no material minimized/background energy impact |
+| Area                | Release gate                                                                                                                                                    |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Durability          | Zero acknowledged-message loss across fault injection; recoverable corruption is quarantined, surfaced, and never overwritten                                   |
+| Input bounds        | Count, raw-byte, encoded-byte, duration, concurrency, and result caps enforced in main regardless of renderer behavior                                          |
+| Idle renderer       | Zero continuous RAF/timer loops after work settles; zero scroll writes without content/viewport change                                                          |
+| Idle Git            | Zero periodic Git children while hidden/minimized; target zero while visible idle, with at most one slow fallback refresh/minute if watchers prove insufficient |
+| Main responsiveness | Proposed p99 event-loop delay below 50 ms during voice/tool workloads after isolation                                                                           |
+| Cancellation        | Every owned local operation reaches quiescence within a measured deadline; network/helper calls have explicit timeouts                                          |
+| MCP                 | One client/helper under 100 concurrent connect attempts; a hung server is isolated; zero clients/helpers after quit                                             |
+| Renderer scale      | No task over 50 ms at p95 during the reference stream; at most one scroll write/frame; bounded parser/highlighter calls                                         |
+| Memory              | Heap/RSS returns within a Phase 0-defined tolerance after repeated attachment, voice, terminal, chat, and model cycles                                          |
+| Startup             | Shell first, provider-ready second; proposed p95 shell target at most 1.5 s on the reference Apple Silicon Mac                                                  |
+| Bundle/package      | Proposed initial JS at most 1.5 MB minified; no initial chunk over 500 KB; no production maps; package allowlist enforced                                       |
+| Battery             | At least 50% fewer idle wakeups/CPU time than baseline and no material minimized/background energy impact                                                       |
 
 ## Verification matrix
 
 Every behavioral change includes narrow unit/contract tests and the relevant existing suites. New test files must be registered in `package.json`.
 
-| Workstream | Automated verification | Runtime verification |
-| --- | --- | --- |
-| Storage | fault-injected atomic writer, recovery, concurrent chat/index, migration, disk/I/O errors | kill during writes, relaunch/recovery, large-history append |
-| Bounds | sparse files, many images, renderer-crafted IPC, oversized history/audio/results | heap trace while adding/removing realistic media |
-| Streaming/scroll | fake RAF/clock, parser/highlighter counters, scroll sentinel contract | Chrome + React profile of long Markdown/code/math stream |
-| Git/query | watcher/debounce/invalidation, child-count assertions, visibility/power state | dirty monorepo Instruments trace, Review closed/open |
-| Voice/tools | worker protocol, cancellation, crash, memory eviction, timeout | cold/warm dictation and stop-under-load trace |
-| MCP/download | concurrent connect, idle expiry, stale config, timeout, atomic install | hung server, offline install, cancel extraction, quit |
-| Startup/package | chunk/map/package manifest budgets, provider hydration contract | cold/warm packaged launch and first-input timing |
-| Scheduler/power | missed-run policy, global queue, resume/DST/timezone, lifecycle matrix | sleep/wake, locked, battery/AC soak |
+| Workstream       | Automated verification                                                                    | Runtime verification                                        |
+| ---------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Storage          | fault-injected atomic writer, recovery, concurrent chat/index, migration, disk/I/O errors | kill during writes, relaunch/recovery, large-history append |
+| Bounds           | sparse files, many images, renderer-crafted IPC, oversized history/audio/results          | heap trace while adding/removing realistic media            |
+| Streaming/scroll | fake RAF/clock, parser/highlighter counters, scroll sentinel contract                     | Chrome + React profile of long Markdown/code/math stream    |
+| Git/query        | watcher/debounce/invalidation, child-count assertions, visibility/power state             | dirty monorepo Instruments trace, Review closed/open        |
+| Voice/tools      | worker protocol, cancellation, crash, memory eviction, timeout                            | cold/warm dictation and stop-under-load trace               |
+| MCP/download     | concurrent connect, idle expiry, stale config, timeout, atomic install                    | hung server, offline install, cancel extraction, quit       |
+| Startup/package  | chunk/map/package manifest budgets, provider hydration contract                           | cold/warm packaged launch and first-input timing            |
+| Scheduler/power  | missed-run policy, global queue, resume/DST/timezone, lifecycle matrix                    | sleep/wake, locked, battery/AC soak                         |
 
 Required commands at each applicable milestone:
 

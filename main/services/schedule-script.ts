@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { trackDiagnosticChild } from "./performance-child.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
@@ -151,6 +152,7 @@ export function runScheduledScript(
       }
     })();
     if (!child) return;
+    trackDiagnosticChild("schedule-script", child);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let bytes = 0;

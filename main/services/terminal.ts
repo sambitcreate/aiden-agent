@@ -7,6 +7,7 @@ import * as fs from "fs/promises";
 import { createRequire } from "module";
 import { spawn, type IPty } from "node-pty";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
+import { recordDiagnosticCounter, recordDiagnosticGauge } from "./performance-diagnostics.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
@@ -117,6 +118,8 @@ export class TerminalService {
       sequence: 0,
     };
     this.sessions.set(id, session);
+    recordDiagnosticCounter("resource:pty", { count: 1 });
+    recordDiagnosticGauge("live:pty", this.sessions.size);
     const removeOwnerInvalidation = owner.onInvalidated(() => {
       const current = this.sessions.get(id);
       if (current === session) this.terminate(id, session);
@@ -136,6 +139,7 @@ export class TerminalService {
       if (!current) return;
       current.buffer = `${current.buffer}${data}`.slice(-MAX_BUFFER_CHARS);
       current.sequence += 1;
+      recordDiagnosticCounter("pty:output", { bytesOut: data.length * 3 });
       try {
         owner.send("terminal:data", { sessionId: id, sequence: current.sequence, data });
       } catch {
@@ -146,7 +150,9 @@ export class TerminalService {
       const current = this.sessions.get(id);
       if (current !== session) return;
       this.sessions.delete(id);
+      recordDiagnosticGauge("live:pty", this.sessions.size);
       current.removeOwnerInvalidation();
+      recordDiagnosticCounter("resource:pty-exit", { errors: exitCode === 0 ? 0 : 1 });
       try {
         owner.send("terminal:exit", { sessionId: id, exitCode, signal });
       } catch {
@@ -167,6 +173,7 @@ export class TerminalService {
       throw new Error("Terminal input must be a non-empty message smaller than 64 KB.");
     }
     this.getOwned(id, owner).pty.write(data);
+    recordDiagnosticCounter("pty:input", { bytesIn: data.length * 3 });
   }
 
   resize(id: string, cols: unknown, rows: unknown, owner: RendererDocumentOwner): void {
@@ -215,6 +222,7 @@ export class TerminalService {
 
   private terminate(id: string, session: TerminalSession): void {
     this.sessions.delete(id);
+    recordDiagnosticGauge("live:pty", this.sessions.size);
     session.removeOwnerInvalidation();
     this.terminatePty(session.pty);
     try {

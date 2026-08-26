@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Github, Loader2, RotateCcw } from "lucide-react";
+import { Download, Github, Loader2, RotateCcw } from "lucide-react";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 import { appApi, type AppInfo } from "../../lib/ipc";
 
@@ -18,6 +18,7 @@ export function AboutSettings() {
   const [confirmReset, setConfirmReset] = React.useState(false);
   const [resetting, setResetting] = React.useState(false);
   const [resetError, setResetError] = React.useState<string | null>(null);
+  const [exportingDiagnostics, setExportingDiagnostics] = React.useState(false);
   const resetButtonRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => {
@@ -55,6 +56,19 @@ export function AboutSettings() {
     }
   };
 
+  const exportDiagnostics = async () => {
+    if (exportingDiagnostics) return;
+    setExportingDiagnostics(true);
+    try {
+      const result = await appApi.exportDiagnostics();
+      if (result.saved) toast.success("Performance diagnostics exported.");
+    } catch {
+      toast.error("Aiden couldn’t export performance diagnostics. Try another location.");
+    } finally {
+      setExportingDiagnostics(false);
+    }
+  };
+
   return (
     <>
       <FieldSet title="About">
@@ -87,6 +101,25 @@ export function AboutSettings() {
             </Button>
           </div>
         </div>
+        {appInfo?.performanceDiagnostics ? (
+          <Field
+            className="border-t border-separator"
+            label="Performance diagnostics"
+            description="Export a bounded device-local report with timings and aggregate counters. Prompts, responses, file paths, credentials, and tool payloads are never included."
+          >
+            <div className="flex justify-end max-[540px]:justify-start">
+              <Button
+                size="small"
+                variant="filled"
+                disabled={exportingDiagnostics}
+                onClick={() => void exportDiagnostics()}
+              >
+                {exportingDiagnostics ? <Loader2 className="animate-spin" /> : <Download />}
+                {exportingDiagnostics ? "Exporting…" : "Export diagnostics…"}
+              </Button>
+            </div>
+          </Field>
+        ) : null}
         <Field
           className="border-t border-separator"
           label="Reset onboarding"

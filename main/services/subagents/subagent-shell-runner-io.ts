@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { trackDiagnosticChild } from "../performance-child.js";
 
 export const SUBAGENT_SHELL_COMMAND_BYTES = 64 * 1024;
 export const SUBAGENT_SHELL_STREAM_BYTES = 512 * 1024;
@@ -224,6 +225,7 @@ export async function runSubagentShellProductionInert(input: {
       stdio: ["pipe", "pipe", "pipe"],
     },
   );
+  if (!input.spawnProcess) trackDiagnosticChild("subagent-shell", child);
   const chunks: Buffer[] = [];
   let bytes = 0;
   let helperErrorBytes = 0;

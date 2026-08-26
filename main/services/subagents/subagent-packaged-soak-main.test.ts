@@ -34,7 +34,7 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
   assert.ok(sendEnabled > inputFill, "the Send readiness check follows the input event");
   assert.ok(sendClick > sendEnabled, "the fixed driver clicks only after Send becomes enabled");
   assert.match(main, /button\[aria-label="Stop generating"\]/u);
-  assert.match(main, /nav\[aria-label="Settings"\]/u);
+  assert.match(main, /nav\[aria-label=\\?"Settings\\?"\]/u);
   assert.match(main, /Generation failed/u);
   assert.match(soak, /SUBAGENT_PACKAGED_SOAK_CHAT_PATH/u);
   assert.match(soak, /SUBAGENT_PACKAGED_SOAK_SEND_SCRIPT/u);
@@ -43,14 +43,23 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
   assert.match(soak, /SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT/u);
   assert.match(soak, /path: action\.path/u);
   assert.match(soak, /subagentRuntimeRegistry\.hasChatChildren\(SUBAGENT_PACKAGED_SOAK_CHAT_ID\)/u);
-  assert.match(soak, /subagentRuntimeRegistry\.hasChatProviderResponse\(SUBAGENT_PACKAGED_SOAK_CHAT_ID\)/u);
+  assert.match(
+    soak,
+    /subagentRuntimeRegistry\.hasChatProviderResponse\(SUBAGENT_PACKAGED_SOAK_CHAT_ID\)/u,
+  );
   assert.match(soak, /\(await subagentHealthMetrics\.snapshotForPackagedSoak\(\)\)\.starts === 1/u);
   assert.match(soak, /await settlePackagedSubagentSoak\(session\)/u);
   assert.match(settlement, /llmClient\.waitForChatIdle\(SUBAGENT_PACKAGED_SOAK_CHAT_ID\)/u);
-  assert.match(settlement, /subagentRuntimeRegistry\.hasChatChildren\(SUBAGENT_PACKAGED_SOAK_CHAT_ID\)/u);
+  assert.match(
+    settlement,
+    /subagentRuntimeRegistry\.hasChatChildren\(SUBAGENT_PACKAGED_SOAK_CHAT_ID\)/u,
+  );
   assert.match(settlement, /subagentHealthMetrics\.snapshotForPackagedSoak\(\)/u);
   assert.match(settlement, /writeSubagentPackagedSoakReceipt\(/u);
-  assert.ok(settlement.lastIndexOf("app.quit()") > settlement.lastIndexOf("writeSubagentPackagedSoakReceipt("));
+  assert.ok(
+    settlement.lastIndexOf("app.quit()") >
+      settlement.lastIndexOf("writeSubagentPackagedSoakReceipt("),
+  );
   const shutdownStart = main.indexOf("async function shutdownAndQuit");
   const shutdownEnd = main.indexOf("\nasync function refreshCloseGuardFromRenderer", shutdownStart);
   const shutdown = main.slice(shutdownStart, shutdownEnd);
@@ -72,10 +81,7 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
   assert.ok(failureExit < cleanup);
   assert.ok(cleanup > quitReceiptFinalization);
   assert.ok(forcedQuit > cleanup);
-  assert.match(
-    shutdown,
-    /parentSettled\s*=\s*await llmClient\.shutdown\(\)/u,
-  );
+  assert.match(shutdown, /parentSettled\s*=\s*await llmClient\.shutdown\(\)/u);
   assert.match(shutdown, /quitReceiptFinalization\.status === "failed"/u);
   assert.match(shutdown, /continuing shutdown without a receipt/u);
   assert.match(shutdown, /quitReceiptFinalization\.status === "timed_out"/u);
@@ -84,7 +90,10 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
     shutdown,
     /requiresSubagentPackagedSoakFailureExit\(session, quitReceiptFinalization\)[\s\S]*app\.exit\(1\);[\s\S]*return;/u,
   );
-  assert.match(soak.slice(quitAction), /pendingPackagedSubagentSoakReceipt = session;[\s\S]*app\.quit\(\)/u);
+  assert.match(
+    soak.slice(quitAction),
+    /pendingPackagedSubagentSoakReceipt = session;[\s\S]*app\.quit\(\)/u,
+  );
   assert.doesNotMatch(soak.slice(quitAction), /writeSubagentPackagedSoakReceipt\(/u);
   assert.ok(startup.indexOf("await runPackagedSubagentSoak(packagedSubagentSoak);") >= 0);
   assert.ok(startup.indexOf("return;", startup.indexOf("await runPackagedSubagentSoak")) >= 0);

@@ -19,6 +19,11 @@ import {
 } from "electron";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import { writeDevLog } from "./services/dev-log.js";
+import {
+  performanceDiagnosticsEnabled,
+  recordDiagnosticCounter,
+} from "./services/performance-diagnostics.js";
+import { estimateDiagnosticPayloadBytes } from "./services/performance-diagnostics-core.js";
 
 type LogValue = unknown;
 
@@ -48,13 +53,61 @@ export const logger = {
 };
 
 function broadcast(channel: NotificationChannel, payload: unknown): void {
+  const started = performanceDiagnosticsEnabled ? performance.now() : 0;
+  let recipients = 0;
+  let errors = 0;
   for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) window.webContents.send(channel, payload);
+    if (!window.isDestroyed()) {
+      try {
+        window.webContents.send(channel, payload);
+        recipients += 1;
+      } catch {
+        // Notifications are best effort. A renderer can disappear between the
+        // liveness check and send without turning a committed main mutation
+        // into a retryable failure.
+        errors += 1;
+      }
+    }
+  }
+  if (performanceDiagnosticsEnabled) {
+    recordDiagnosticCounter(`ipc-out:${channel}`, {
+      count: recipients,
+      errors,
+      bytesOut: estimateDiagnosticPayloadBytes(payload) * recipients,
+      durationMs: performance.now() - started,
+    });
   }
 }
 
+const handle: IpcMain["handle"] = (channel, listener) => {
+  electronIpcMain.handle(channel, async (event, ...args) => {
+    const started = performanceDiagnosticsEnabled ? performance.now() : 0;
+    const bytesIn = performanceDiagnosticsEnabled ? estimateDiagnosticPayloadBytes(args) : 0;
+    try {
+      const result = await listener(event, ...args);
+      if (performanceDiagnosticsEnabled) {
+        recordDiagnosticCounter(`ipc:${channel}`, {
+          bytesIn,
+          bytesOut: estimateDiagnosticPayloadBytes(result),
+          durationMs: performance.now() - started,
+        });
+      }
+      return result;
+    } catch (error) {
+      if (performanceDiagnosticsEnabled) {
+        recordDiagnosticCounter(`ipc:${channel}`, {
+          bytesIn,
+          durationMs: performance.now() - started,
+          errors: 1,
+        });
+      }
+      throw error;
+    }
+  });
+};
+
 export const ipcMain = {
-  handle: electronIpcMain.handle.bind(electronIpcMain) as IpcMain["handle"],
+  handle,
   on: electronIpcMain.on.bind(electronIpcMain) as IpcMain["on"],
   removeHandler: electronIpcMain.removeHandler.bind(electronIpcMain) as IpcMain["removeHandler"],
   broadcast,
@@ -66,40 +119,34 @@ export function registerNativeHandlers(): void {
   if (nativeHandlersRegistered) return;
   nativeHandlersRegistered = true;
 
-  electronIpcMain.handle("aiden:dialog:open", async (event, options?: OpenDialogOptions) => {
+  handle("aiden:dialog:open", async (event, options?: OpenDialogOptions) => {
     const parent = BrowserWindow.fromWebContents(event.sender);
     return parent
       ? dialog.showOpenDialog(parent, options ?? {})
       : dialog.showOpenDialog(options ?? {});
   });
 
-  electronIpcMain.handle("aiden:theme:get", () => ({
+  handle("aiden:theme:get", () => ({
     themeSource: nativeTheme.themeSource,
     shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
     shouldUseHighContrastColors: nativeTheme.shouldUseHighContrastColors,
     shouldUseInvertedColorScheme: nativeTheme.shouldUseInvertedColorScheme,
   }));
-  electronIpcMain.handle("aiden:theme:set", (_event, source: unknown) => {
+  handle("aiden:theme:set", (_event, source: unknown) => {
     if (source !== "system" && source !== "light" && source !== "dark") {
       throw new Error("Invalid native theme source.");
     }
     nativeTheme.themeSource = source;
     return true;
   });
-  electronIpcMain.handle(
-    "aiden:media:status",
-    (_event, mediaType: "microphone" | "camera" | "screen") =>
-      systemPreferences.getMediaAccessStatus(mediaType),
+  handle("aiden:media:status", (_event, mediaType: "microphone" | "camera" | "screen") =>
+    systemPreferences.getMediaAccessStatus(mediaType),
   );
-  electronIpcMain.handle("aiden:media:request", (_event, mediaType: "microphone" | "camera") =>
+  handle("aiden:media:request", (_event, mediaType: "microphone" | "camera") =>
     systemPreferences.askForMediaAccess(mediaType),
   );
-  electronIpcMain.handle("aiden:accessibility:status", () =>
-    systemPreferences.isTrustedAccessibilityClient(false),
-  );
-  electronIpcMain.handle("aiden:accessibility:request", () =>
-    systemPreferences.isTrustedAccessibilityClient(true),
-  );
+  handle("aiden:accessibility:status", () => systemPreferences.isTrustedAccessibilityClient(false));
+  handle("aiden:accessibility:request", () => systemPreferences.isTrustedAccessibilityClient(true));
 
   nativeTheme.on("updated", () => {
     broadcast("aiden:theme:changed", {

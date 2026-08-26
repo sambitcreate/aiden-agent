@@ -51,3 +51,9 @@ jobs:
 
       - name: Build production bundles
         run: npm run build
+
+      - name: Package and enforce the real app payload budget
+        run: npm run package
+
+      - name: Verify the packaged app and package budget
+        run: npm run package:verify

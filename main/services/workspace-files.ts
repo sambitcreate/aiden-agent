@@ -4,6 +4,8 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { trackDiagnosticChild } from "./performance-child.js";
+import { recordDiagnosticCounter } from "./performance-diagnostics.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -80,7 +82,7 @@ export interface WorkspaceFileWriteHooks {
 async function recoveryUse(recoveryPath: string): Promise<"clear" | "open" | "unknown"> {
   if (process.platform !== "darwin") return "unknown";
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       "/usr/sbin/lsof",
       ["-F", "p", "--", recoveryPath],
       { maxBuffer: 64 * 1024, timeout: 2_000 },
@@ -93,6 +95,7 @@ async function recoveryUse(recoveryPath: string): Promise<"clear" | "open" | "un
         resolve(exitCode === 1 && !stdout.trim() ? "clear" : "unknown");
       },
     );
+    trackDiagnosticChild("workspace-search", child);
   });
 }
 
@@ -145,7 +148,8 @@ function assertInRoot(root: string, candidate: string, suppliedPath: string): st
 
 async function canonicalRoot(root: string): Promise<string> {
   const realRoot = await fs.realpath(root);
-  if (!(await fs.stat(realRoot)).isDirectory()) throw new Error("The workspace folder is unavailable.");
+  if (!(await fs.stat(realRoot)).isDirectory())
+    throw new Error("The workspace folder is unavailable.");
   return realRoot;
 }
 
@@ -208,7 +212,10 @@ export async function listWorkspaceFiles(
     children.sort((left, right) => {
       const leftDirectory = left.isDirectory() ? 0 : 1;
       const rightDirectory = right.isDirectory() ? 0 : 1;
-      return leftDirectory - rightDirectory || left.name.localeCompare(right.name, undefined, { numeric: true });
+      return (
+        leftDirectory - rightDirectory ||
+        left.name.localeCompare(right.name, undefined, { numeric: true })
+      );
     });
 
     for (const child of children) {
@@ -255,7 +262,13 @@ export async function listWorkspaceFiles(
       }
 
       if (child.isDirectory()) {
-        entries.push({ path: portablePath, name: child.name, parentPath, depth, kind: "directory" });
+        entries.push({
+          path: portablePath,
+          name: child.name,
+          parentPath,
+          depth,
+          kind: "directory",
+        });
         directories.push({ relativeDirectory: relativePath, depth: depth + 1 });
         continue;
       }
@@ -290,9 +303,12 @@ export async function readWorkspaceFile(
   const stats = await fs.stat(fullPath);
   if (!stats.isFile()) throw new Error(`${relativePath} is not a file.`);
   if (stats.size > MAX_EDITOR_BYTES) {
-    throw new Error(`${relativePath} is too large to edit in Aiden (${Math.ceil(stats.size / 1_000_000)} MB).`);
+    throw new Error(
+      `${relativePath} is too large to edit in Aiden (${Math.ceil(stats.size / 1_000_000)} MB).`,
+    );
   }
   const buffer = await fs.readFile(fullPath);
+  recordDiagnosticCounter("filesystem:read", { bytesOut: buffer.byteLength });
   throwIfAborted(signal);
   return {
     path: relativePath,
@@ -324,6 +340,7 @@ export async function writeWorkspaceFile(
   const stats = await fs.stat(fullPath);
   if (!stats.isFile()) throw new Error(`${relativePath} is not a file.`);
   const currentBuffer = await fs.readFile(fullPath);
+  recordDiagnosticCounter("filesystem:read", { bytesOut: currentBuffer.byteLength });
   if (contentVersion(currentBuffer) !== expectedVersion) {
     throw new WorkspaceFileError(
       "changed_on_disk",
@@ -344,6 +361,7 @@ export async function writeWorkspaceFile(
   let warning: string | undefined;
   try {
     await fs.writeFile(temporaryPath, nextBuffer, { flag: "wx", mode: stats.mode });
+    recordDiagnosticCounter("filesystem:write", { bytesIn: nextBuffer.byteLength });
     // Creation mode is filtered through the process umask. Restore the exact
     // permission and special bits before the inode can become the saved file.
     await fs.chmod(temporaryPath, stats.mode & 0o7777);
@@ -352,6 +370,7 @@ export async function writeWorkspaceFile(
     await fs.rename(fullPath, recoveryPath);
     displaced = true;
     const displacedBuffer = await fs.readFile(recoveryPath);
+    recordDiagnosticCounter("filesystem:read", { bytesOut: displacedBuffer.byteLength });
     if (contentVersion(displacedBuffer) !== expectedVersion) {
       throw new WorkspaceFileError(
         "changed_on_disk",
@@ -378,9 +397,12 @@ export async function writeWorkspaceFile(
       fs.readFile(fullPath),
       fs.readFile(recoveryPath),
     ]);
+    recordDiagnosticCounter("filesystem:read", {
+      bytesOut: savedBuffer.byteLength + verifiedDisplaced.byteLength,
+    });
     if (
-      contentVersion(savedBuffer) !== contentVersion(nextBuffer)
-      || contentVersion(verifiedDisplaced) !== expectedVersion
+      contentVersion(savedBuffer) !== contentVersion(nextBuffer) ||
+      contentVersion(verifiedDisplaced) !== expectedVersion
     ) {
       throw new WorkspaceFileError(
         "changed_on_disk",
@@ -393,7 +415,9 @@ export async function writeWorkspaceFile(
       : await recoveryUse(recoveryPath);
     let recoveryMatches: boolean | undefined;
     try {
-      recoveryMatches = contentVersion(await fs.readFile(recoveryPath)) === expectedVersion;
+      const recoveryBuffer = await fs.readFile(recoveryPath);
+      recordDiagnosticCounter("filesystem:read", { bytesOut: recoveryBuffer.byteLength });
+      recoveryMatches = contentVersion(recoveryBuffer) === expectedVersion;
     } catch {
       recoveryMatches = undefined;
     }
@@ -403,11 +427,12 @@ export async function writeWorkspaceFile(
     } else if (recoveryMatches === false) {
       warning = `Another app wrote to the previous file during Aiden's save. Your draft was saved, and that app's version remains at ${path.basename(recoveryPath)}.`;
     } else {
-      warning = use === "open"
-        ? `Another app still had the previous file open. Aiden saved your draft and kept that app's in-flight copy at ${path.basename(recoveryPath)}.`
-        : recoveryMatches
-          ? `Aiden could not verify that the previous file was closed. Your draft was saved, and a recovery copy remains at ${path.basename(recoveryPath)}.`
-          : "Aiden saved your draft but could not verify the previous file's recovery copy. Review the workspace before making another save.";
+      warning =
+        use === "open"
+          ? `Another app still had the previous file open. Aiden saved your draft and kept that app's in-flight copy at ${path.basename(recoveryPath)}.`
+          : recoveryMatches
+            ? `Aiden could not verify that the previous file was closed. Your draft was saved, and a recovery copy remains at ${path.basename(recoveryPath)}.`
+            : "Aiden saved your draft but could not verify the previous file's recovery copy. Review the workspace before making another save.";
     }
   } catch (error) {
     if (displaced && !installed) {
@@ -422,13 +447,14 @@ export async function writeWorkspaceFile(
         // reconcile the extremely narrow external-write race without loss.
       }
     }
-    const detail = error instanceof WorkspaceFileError
-      ? error
-      : new WorkspaceFileError(
-          "io_error",
-          error instanceof Error ? error.message : `Aiden could not save ${relativePath}.`,
-          { cause: error },
-        );
+    const detail =
+      error instanceof WorkspaceFileError
+        ? error
+        : new WorkspaceFileError(
+            "io_error",
+            error instanceof Error ? error.message : `Aiden could not save ${relativePath}.`,
+            { cause: error },
+          );
     if (displaced) {
       throw new WorkspaceFileError(
         detail.code,

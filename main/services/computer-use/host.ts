@@ -14,6 +14,7 @@ import {
 import { verifyCuaDriverBridgeProcess } from "./binary.js";
 import { runCuaDriverCommand, terminateDirectChild } from "./process.js";
 import { CuaDriverSession } from "./session.js";
+import { trackDiagnosticChild } from "../performance-child.js";
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const MAX_BRIDGE_DIAGNOSTIC_BYTES = 8 * 1024;
@@ -276,6 +277,7 @@ export class CuaDriverHost {
             windowsHide: true,
           },
         );
+        trackDiagnosticChild("computer-use-broker", brokerLauncher);
         brokerLauncher.stderr?.on("data", (chunk: Buffer) => {
           diagnostic = (diagnostic + chunk.toString("utf8")).slice(-MAX_BRIDGE_DIAGNOSTIC_BYTES);
         });
@@ -321,6 +323,7 @@ export class CuaDriverHost {
           windowsHide: true,
         },
       );
+      trackDiagnosticChild("computer-use-driver", bridge);
       bridge.stderr?.on("data", (chunk: Buffer) => {
         diagnostic = (diagnostic + chunk.toString("utf8")).slice(-MAX_BRIDGE_DIAGNOSTIC_BYTES);
         if (runtime) runtime.diagnostic = diagnostic;

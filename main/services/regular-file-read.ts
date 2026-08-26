@@ -1,5 +1,6 @@
 import * as fs from "fs/promises";
 import { constants } from "node:fs";
+import { recordDiagnosticCounter } from "./performance-diagnostics.js";
 
 /**
  * Read through an already-open descriptor so a pathname swap cannot turn a
@@ -17,7 +18,9 @@ export async function readRegularFile(filePath: string): Promise<Buffer> {
       Object.assign(error, { code: "EFTYPE" });
       throw error;
     }
-    return handle.readFile();
+    const bytes = await handle.readFile();
+    recordDiagnosticCounter("filesystem:read", { bytesOut: bytes.byteLength });
+    return bytes;
   } finally {
     await handle.close();
   }

@@ -29,6 +29,7 @@ export const appHandlers = {
       name: app.getName(),
       version: app.getVersion(),
       environment: currentRuntimeProfile().id,
+      performanceDiagnostics: process.env.AIDEN_PERFORMANCE_DIAGNOSTICS === "1",
       capabilities: {
         subagents: subagentsEnabled(),
       },

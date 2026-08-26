@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { trackDiagnosticChild } from "./performance-child.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -78,6 +79,7 @@ export async function finalizeManagedWorktreeRemovalManifest(
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    trackDiagnosticChild("worktree-remover", child);
     const outputChunks: Buffer[] = [];
     const errorChunks: Buffer[] = [];
     let outputBytes = 0;
@@ -283,6 +285,7 @@ export async function removeManagedWorktreeDirectory(
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
+    trackDiagnosticChild("worktree-remover", child);
     const errorChunks: Buffer[] = [];
     const outputChunks: Buffer[] = [];
     let errorBytes = 0;

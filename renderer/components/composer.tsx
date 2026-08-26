@@ -42,16 +42,14 @@ import { useVoiceRecorder } from "../lib/use-voice-recorder";
 import { attachmentsApi, pickFiles } from "../lib/ipc";
 import { useSettings } from "../lib/queries";
 import type { Attachment, Workspace, WorkspacePermission } from "../lib/types";
-import {
-  composerSubmissionAllowed,
-  computerUseControlState,
-} from "../lib/computer-use-control";
+import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
 import {
   dismissComputerUseNotice,
   shouldShowComputerUseNotice,
   useComputerUseNoticeDismissed,
 } from "../lib/computer-use-notice";
 import { composerPlaceholder } from "../lib/composer-placeholder";
+import { reportStartupMilestone } from "../lib/performance-diagnostics";
 
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
@@ -75,9 +73,7 @@ interface ComposerProps {
   gitDetached?: boolean;
   gitUnborn?: boolean;
   onOpenFolder?: () => void;
-  onChangePermission?: (
-    permission: WorkspacePermission,
-  ) => void | Promise<void>;
+  onChangePermission?: (permission: WorkspacePermission) => void | Promise<void>;
   workspacePickerEnabled?: boolean;
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
@@ -172,6 +168,9 @@ export function Composer({
   const [sending, setSending] = React.useState(false);
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
+  React.useEffect(() => {
+    if (ready) reportStartupMilestone("startup.composer_ready");
+  }, [ready]);
   const computerUseDescriptionId = React.useId();
   const computerUseNoticeDismissed = useComputerUseNoticeDismissed();
   const showComputerUseNotice = shouldShowComputerUseNotice(
@@ -187,15 +186,11 @@ export function Composer({
       computerUseSaving: computerUse?.saving === true,
       gitOperationBusy,
     }) && !configurationBusy;
-  const canSend =
-    (text.trim().length > 0 || attachments.length > 0) && submissionAllowed;
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && submissionAllowed;
 
   const settings = useSettings();
   const voice = useVoiceRecorder(
-    (transcript) =>
-      setText((prev) =>
-        prev.trim() ? `${prev.trim()} ${transcript}` : transcript,
-      ),
+    (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
     {
       provider: settings.data?.voiceProvider ?? "openai",
       localModel: settings.data?.localVoiceModel,
@@ -204,9 +199,7 @@ export function Composer({
 
   const handleAttach = async () => {
     if (gitOperationBusy) {
-      toast.info(
-        "Wait for the current Git operation to finish before attaching files.",
-      );
+      toast.info("Wait for the current Git operation to finish before attaching files.");
       return;
     }
     const paths = await pickFiles();
@@ -217,15 +210,11 @@ export function Composer({
       // Drop images when the model can't see them, with a hint.
       if (visionSupported === false && added.some((a) => a.kind === "image")) {
         added = added.filter((a) => a.kind !== "image");
-        toast.info(
-          "The selected model can't read images — image attachments were skipped.",
-        );
+        toast.info("The selected model can't read images — image attachments were skipped.");
       }
       setAttachments((prev) => [...prev, ...added]);
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't read that file.",
-      );
+      toast.error(error instanceof Error ? error.message : "Couldn't read that file.");
     } finally {
       setAttaching(false);
     }
@@ -236,9 +225,7 @@ export function Composer({
 
   const submit = async () => {
     if (gitOperationBusy) {
-      toast.info(
-        "Wait for the current Git operation to finish before sending.",
-      );
+      toast.info("Wait for the current Git operation to finish before sending.");
       return;
     }
     const trimmed = text.trim();
@@ -247,9 +234,7 @@ export function Composer({
       visionSupported === false &&
       attachments.some((attachment) => attachment.kind === "image")
     ) {
-      toast.info(
-        "Switch to a vision-capable model before sending these images.",
-      );
+      toast.info("Switch to a vision-capable model before sending these images.");
       return;
     }
     setSending(true);
@@ -258,20 +243,14 @@ export function Composer({
       setText("");
       setAttachments([]);
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't send this message.",
-      );
+      toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
     } finally {
       setSending(false);
     }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !event.nativeEvent.isComposing
-    ) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void submit();
     }
@@ -286,11 +265,7 @@ export function Composer({
   const computerUseControl = computerUseControlState({
     enabled: computerUse?.enabled ?? false,
     ready: computerUse?.ready ?? false,
-    busy:
-      computerUse?.saving === true ||
-      isGenerating ||
-      sending ||
-      gitOperationBusy,
+    busy: computerUse?.saving === true || isGenerating || sending || gitOperationBusy,
   });
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
@@ -311,11 +286,7 @@ export function Composer({
     try {
       await onChangePermission(nextPermission);
     } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Couldn't change workspace access.",
-      );
+      toast.error(error instanceof Error ? error.message : "Couldn't change workspace access.");
     } finally {
       setPermissionSaving(false);
     }
@@ -347,8 +318,8 @@ export function Composer({
         <div className="pointer-events-auto isolate">
           {computerUse ? (
             <span id={computerUseDescriptionId} className="sr-only">
-              Computer Use may send screenshots and accessibility text to the
-              selected model. Every input action asks for approval.
+              Computer Use may send screenshots and accessibility text to the selected model. Every
+              input action asks for approval.
             </span>
           ) : null}
           {showComputerUseNotice ? (
@@ -356,20 +327,10 @@ export function Composer({
               aria-label="Computer Use privacy notice"
               className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5 outline outline-1 outline-accent/20"
             >
-              <MousePointer2
-                aria-hidden="true"
-                className="size-3.5 shrink-0 text-accent"
-              />
-              <Text
-                as="p"
-                variant="small"
-                color="secondary"
-                className="min-w-0 flex-1 text-pretty"
-              >
-                <span className="font-medium text-primary">
-                  Computer Use is on.
-                </span>{" "}
-                Screen details may go to your model; actions still ask.
+              <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+              <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
+                <span className="font-medium text-primary">Computer Use is on.</span> Screen details
+                may go to your model; actions still ask.
               </Text>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -385,14 +346,10 @@ export function Composer({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onSelect={() => dismissComputerUseNotice("session")}
-                  >
+                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("session")}>
                     Hide for this session
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => dismissComputerUseNotice("permanent")}
-                  >
+                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("permanent")}>
                     Don’t show again
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -401,9 +358,7 @@ export function Composer({
           ) : null}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
-            {workspacePickerEnabled &&
-            onSelectWorkspace &&
-            onCreateScratchWorkspace ? (
+            {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
                 workspaces={workspaces}
                 activeWorkspaceId={workspace?.id}
@@ -423,9 +378,7 @@ export function Composer({
                     aria-label="Choose a workspace"
                   >
                     <Folder className="size-4 shrink-0" />
-                    <span className="max-w-[16rem] truncate">
-                      {folderName ?? "Workspace"}
-                    </span>
+                    <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
                   </Button>
                 }
               />
@@ -436,14 +389,10 @@ export function Composer({
                 className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
                 onClick={onOpenFolder}
                 disabled={!workspace?.folderPath}
-                aria-label={
-                  workspace?.folderPath ? "Open folder in Finder" : "Workspace"
-                }
+                aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
               >
                 <Folder className="size-4 shrink-0" />
-                <span className="max-w-[16rem] truncate">
-                  {folderName ?? "Workspace"}
-                </span>
+                <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
             {/* Execution location — Pi runs locally on this Mac. */}
@@ -492,9 +441,7 @@ export function Composer({
                     ) : (
                       <FileText className="size-4 shrink-0 text-tertiary" />
                     )}
-                    <span className="max-w-[10rem] truncate text-small">
-                      {a.name}
-                    </span>
+                    <span className="max-w-[10rem] truncate text-small">{a.name}</span>
                     <button
                       type="button"
                       onClick={() => removeAttachment(a.id)}
@@ -522,13 +469,7 @@ export function Composer({
               rows={1}
             />
             {!ready && readinessMessage && text.trim().length > 0 ? (
-              <Text
-                as="p"
-                role="status"
-                variant="small"
-                color="tertiary"
-                className="px-1.5 pb-1"
-              >
+              <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
               </Text>
             ) : null}
@@ -540,9 +481,7 @@ export function Composer({
                   iconOnly
                   className="rounded-full"
                   onClick={handleAttach}
-                  disabled={
-                    attaching || isGenerating || sending || gitOperationBusy
-                  }
+                  disabled={attaching || isGenerating || sending || gitOperationBusy}
                   aria-label="Attach files or images"
                 >
                   {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
@@ -584,9 +523,7 @@ export function Composer({
                         gitOperationBusy ||
                         Boolean(workspaceChangeBlockedReason)
                       }
-                      onCheckedChange={(checked) =>
-                        checked && requestPermission("full")
-                      }
+                      onCheckedChange={(checked) => checked && requestPermission("full")}
                     >
                       Full access
                     </DropdownMenuCheckboxItem>
@@ -598,9 +535,7 @@ export function Composer({
                         gitOperationBusy ||
                         Boolean(workspaceChangeBlockedReason)
                       }
-                      onCheckedChange={(checked) =>
-                        checked && requestPermission("ask")
-                      }
+                      onCheckedChange={(checked) => checked && requestPermission("ask")}
                     >
                       Ask first
                     </DropdownMenuCheckboxItem>
@@ -612,9 +547,7 @@ export function Composer({
                         gitOperationBusy ||
                         Boolean(workspaceChangeBlockedReason)
                       }
-                      onCheckedChange={(checked) =>
-                        checked && requestPermission("none")
-                      }
+                      onCheckedChange={(checked) => checked && requestPermission("none")}
                     >
                       No access
                     </DropdownMenuCheckboxItem>
@@ -672,12 +605,8 @@ export function Composer({
                   size="small"
                   iconOnly
                   disabled={voice.transcribing || isGenerating || sending}
-                  onClick={() =>
-                    voice.recording ? voice.stop() : voice.start()
-                  }
-                  aria-label={
-                    voice.recording ? "Stop recording" : "Start voice input"
-                  }
+                  onClick={() => (voice.recording ? voice.stop() : voice.start())}
+                  aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
                   {voice.transcribing ? (
                     <Loader2 className="animate-spin" />
@@ -719,8 +648,8 @@ export function Composer({
         description={
           <Text variant="small" color="secondary">
             Aiden will be able to read and edit files, and run commands in “
-            {folderName ?? "this workspace"}” without asking each time. You can
-            change this any time from the composer.
+            {folderName ?? "this workspace"}” without asking each time. You can change this any time
+            from the composer.
           </Text>
         }
         confirmLabel="Enable Full Access"

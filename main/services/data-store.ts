@@ -7,6 +7,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { createHash, randomUUID } from "node:crypto";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
+import { recordDiagnosticCounter } from "./performance-diagnostics.js";
 
 export interface DataStoreOptions<T> {
   /**
@@ -124,14 +125,9 @@ export class DataStore<T> {
           const parsed = JSON.parse(data) as unknown;
           await this.options.beforeLoadCommit?.();
           this.unsafe = this.options.isSafe ? !this.options.isSafe(parsed) : false;
-          const next = this.options.normalize
-            ? this.options.normalize(parsed)
-            : (parsed as T);
+          const next = this.options.normalize ? this.options.normalize(parsed) : (parsed as T);
           if (this.externalReloadPrevious !== undefined) {
-            this.options.beforeExternalCacheCommit?.(
-              this.externalReloadPrevious,
-              next,
-            );
+            this.options.beforeExternalCacheCommit?.(this.externalReloadPrevious, next);
           }
           this.cache = next;
         } catch (error) {
@@ -156,10 +152,7 @@ export class DataStore<T> {
           this.unsafe = false;
           const next = structuredClone(this.defaultValue);
           if (this.externalReloadPrevious !== undefined) {
-            this.options.beforeExternalCacheCommit?.(
-              this.externalReloadPrevious,
-              next,
-            );
+            this.options.beforeExternalCacheCommit?.(this.externalReloadPrevious, next);
           }
           this.cache = next;
         }
@@ -462,6 +455,9 @@ export class DataStore<T> {
       await fs.rm(staged, { force: true }).catch(() => undefined);
     }
     this.cache = data;
+    recordDiagnosticCounter("filesystem:write", {
+      bytesIn: Buffer.byteLength(serialized, "utf8"),
+    });
     this.diskSnapshot = Buffer.from(serialized, "utf-8");
     this.corrupt = false;
     this.unsafe = false;

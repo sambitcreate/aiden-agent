@@ -15,6 +15,7 @@ import type { Chat, ChatMessage, ChatMeta } from "./types.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
+import { recordDiagnosticCounter } from "./performance-diagnostics.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
@@ -52,7 +53,15 @@ export function createChatStore(
   let operationTail: Promise<void> = Promise.resolve();
   const syncDirectory = durability.syncDirectory ?? syncPath;
   const syncFile = durability.syncFile ?? syncPath;
-  const readFile = durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
+  const readFile =
+    durability.readFile ??
+    (async (target: string) => {
+      const contents = await fs.readFile(target, "utf-8");
+      recordDiagnosticCounter("filesystem:read", {
+        bytesOut: Buffer.byteLength(contents, "utf8"),
+      });
+      return contents;
+    });
   let pendingDirectorySync: string | undefined;
 
   async function syncDirectoryDurably(directory: string): Promise<void> {
@@ -165,12 +174,16 @@ export function createChatStore(
     const directory = path.dirname(target);
     await removeCrashLeftStages(directory);
     const sorted = [...index].sort((a, b) => b.updatedAt - a.updatedAt);
+    const serialized = JSON.stringify(sorted, null, 2);
     const staged = path.join(directory, `.${path.basename(target)}.${randomUUID()}.${purpose}.tmp`);
     try {
-      await fs.writeFile(staged, JSON.stringify(sorted, null, 2), {
+      await fs.writeFile(staged, serialized, {
         encoding: "utf-8",
         flag: "wx",
         mode: 0o600,
+      });
+      recordDiagnosticCounter("filesystem:write", {
+        bytesIn: Buffer.byteLength(serialized, "utf8"),
       });
       await syncFile(staged);
       await fs.rename(staged, target);
@@ -190,6 +203,7 @@ export function createChatStore(
     const handle = await fs.open(target, "wx", 0o600);
     try {
       await handle.writeFile("1\n", "utf8");
+      recordDiagnosticCounter("filesystem:write", { bytesIn: 2 });
       await handle.sync();
     } finally {
       await handle.close();
@@ -363,11 +377,15 @@ export function createChatStore(
     const directory = path.dirname(target);
     await removeCrashLeftStages(directory);
     const staged = path.join(directory, `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`);
+    const serialized = JSON.stringify(chat, null, 2);
     try {
-      await fs.writeFile(staged, JSON.stringify(chat, null, 2), {
+      await fs.writeFile(staged, serialized, {
         encoding: "utf-8",
         flag: "wx",
         mode: 0o600,
+      });
+      recordDiagnosticCounter("filesystem:write", {
+        bytesIn: Buffer.byteLength(serialized, "utf8"),
       });
       await syncFile(staged);
       beforeRename();

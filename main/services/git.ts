@@ -16,6 +16,8 @@ import {
   removeManagedWorktreeDirectory,
   type ManagedWorktreeDirectoryIdentity,
 } from "./managed-worktree-remover.js";
+import { recordDiagnosticCounter } from "./performance-diagnostics.js";
+import { trackDiagnosticChild } from "./performance-child.js";
 
 const DEFAULT_READ_TIMEOUT_MS = 4_000;
 const DEFAULT_MUTATION_TIMEOUT_MS = 20_000;
@@ -817,6 +819,7 @@ export class GitService {
     }
     const timeoutMs =
       options.timeoutMs ?? (options.mutation ? this.mutationTimeoutMs : this.readTimeoutMs);
+    const diagnosticStarted = performance.now();
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
       try {
@@ -842,7 +845,12 @@ export class GitService {
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
         });
+        trackDiagnosticChild("git", child);
       } catch (error) {
+        recordDiagnosticCounter("child-result:git", {
+          errors: 1,
+          durationMs: performance.now() - diagnosticStarted,
+        });
         reject(new GitServiceError("command_failed", publicGitMessage(error, cwd), error));
         return;
       }
@@ -898,6 +906,11 @@ export class GitService {
       };
 
       child.once("error", (error) => {
+        recordDiagnosticCounter("child-result:git", {
+          errors: 1,
+          durationMs: performance.now() - diagnosticStarted,
+          bytesOut: stdoutBytes + stderrBytes,
+        });
         finishError(new GitServiceError("command_failed", publicGitMessage(error, cwd), error));
       });
       child.once("close", (code, signal) => {
@@ -906,6 +919,11 @@ export class GitService {
         cleanup();
         const stdoutText = Buffer.concat(stdout).toString("utf8");
         const stderrText = Buffer.concat(stderr).toString("utf8");
+        recordDiagnosticCounter("child-result:git", {
+          errors: termination || (code ?? 1) !== 0 ? 1 : 0,
+          durationMs: performance.now() - diagnosticStarted,
+          bytesOut: stdoutBytes + stderrBytes,
+        });
         if (termination === "aborted") {
           reject(new GitServiceError("aborted", "Git operation was cancelled."));
           return;
