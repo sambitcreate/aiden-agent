@@ -151,6 +151,14 @@ The immediate onboarding repair now ships in the working tree:
 - OpenAI and Anthropic use their native Pi identities and validate an
   authenticated bounded model catalog from a nested setup dialog before
   replacing the stored key;
+- every other Pi provider with an interactive API-key or OAuth method is
+  configurable from the progressive first-run catalog using the same
+  main-owned setup flow as Settings; providers with already resolved ambient
+  credentials are selectable once they expose a usable model;
+- generic provider setup advances only after the refreshed provider snapshot
+  contains both its required credential and a chat model. Its copy promises
+  credential storage, not remote acceptance; OpenAI and Anthropic retain their
+  stronger provider-specific catalog validation;
 - LM Studio, Ollama, and Tailnet routes must discover a usable model before they
   can advance, and every successful path persists a selected model;
 - secret-bearing discovery rejects redirects, bounds response/model data, emits
@@ -158,9 +166,8 @@ The immediate onboarding repair now ships in the working tree:
 - malformed model IDs and credential control characters fail closed, transport
   errors cannot echo key material, and first-run Tailnet discovery is restricted
   to `.ts.net` names and Tailnet address classes;
-- generic Pi credential entry remains available in Settings but cannot satisfy
-  required onboarding until that provider has an authoritative non-generation
-  validator;
+- generic Pi credential entry is available in both onboarding and Settings,
+  while authoritative non-generation validation remains provider-specific;
 - onboarding blocks the workbench while main-owned state loads, fences state
   writes to the active renderer document, blocks deep-link navigation, and
   reconciles setup that finishes after a close/cancel race;

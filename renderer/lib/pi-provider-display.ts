@@ -136,3 +136,45 @@ export function getOnboardingMoreProviders<T extends { id: string; isBuiltin?: b
   const { featured, more } = splitPiBuiltinProviders(additionalBuiltins);
   return [...featured, ...more];
 }
+
+type OnboardingBuiltinProvider = {
+  hasKey: boolean;
+  models: readonly string[];
+  needsKey: boolean;
+  authMethods?: ReadonlyArray<{
+    type: "api_key" | "oauth";
+    canLogin: boolean;
+  }>;
+};
+
+export function isOnboardingBuiltinProviderReady(provider: OnboardingBuiltinProvider): boolean {
+  return provider.models.length > 0 && (!provider.needsKey || provider.hasKey);
+}
+
+/**
+ * First-run setup can use every Pi-owned interactive credential flow. Providers
+ * that resolve credentials from the system remain selectable once they are
+ * actually ready, without presenting a credential form Aiden cannot fulfill.
+ */
+export function canConfigureOnboardingBuiltinProvider(
+  provider: OnboardingBuiltinProvider,
+): boolean {
+  return (
+    isOnboardingBuiltinProviderReady(provider) ||
+    provider.authMethods?.some((method) => method.canLogin) === true
+  );
+}
+
+export function onboardingBuiltinProviderSetupLabel(provider: OnboardingBuiltinProvider): string {
+  if (isOnboardingBuiltinProviderReady(provider)) return "Ready to use";
+
+  const methods = (provider.authMethods ?? []).filter((method) => method.canLogin);
+  const supportsApiKey = methods.some((method) => method.type === "api_key");
+  const supportsOAuth = methods.some((method) => method.type === "oauth");
+  if (supportsApiKey && supportsOAuth) return "Add an API key or sign in";
+  if (supportsApiKey) return "Add your API key";
+  if (supportsOAuth) return "Sign in to connect";
+  return provider.hasKey
+    ? "Configured; refresh in Settings"
+    : "Available in Settings after onboarding";
+}
