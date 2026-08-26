@@ -60,6 +60,21 @@ function timestamp(value: unknown, field: string): string {
   return parsed;
 }
 
+function isArtificialAnalysisSourceUrl(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const sourceUrl = new URL(value);
+    return sourceUrl.protocol === "https:" && sourceUrl.hostname === "artificialanalysis.ai";
+  } catch {
+    return false;
+  }
+}
+
+function hasRequiredAttribution(value: string): boolean {
+  const normalized = value.toLocaleLowerCase();
+  return normalized.includes("artificial analysis") && normalized.includes("openrouter");
+}
+
 function score(value: unknown, field: string): number | undefined {
   if (value === null || value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
@@ -125,15 +140,19 @@ export function buildOpenRouterBenchmarkCache(
   if (!response || !meta || meta.version !== "v1" || meta.source !== "artificial-analysis") {
     throw new Error("OpenRouter benchmark response metadata is invalid.");
   }
-  if (meta.source_url !== OPENROUTER_BENCHMARK_SOURCE_URL) {
+  if (!isArtificialAnalysisSourceUrl(meta.source_url)) {
     throw new Error("OpenRouter benchmark response has an unexpected source URL.");
   }
   const citation = requiredString(meta.citation, "meta.citation", 2_048);
-  if (!citation.includes("Artificial Analysis") || !citation.includes("OpenRouter")) {
+  if (!hasRequiredAttribution(citation)) {
     throw new Error("OpenRouter benchmark response has an invalid citation.");
   }
   const models = parseModels(response.data);
-  if (meta.model_count !== models.length) {
+  if (
+    typeof meta.model_count !== "number" ||
+    !Number.isSafeInteger(meta.model_count) ||
+    meta.model_count < models.length
+  ) {
     throw new Error("OpenRouter benchmark response model count is invalid.");
   }
   return {
@@ -171,7 +190,7 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
     throw new Error("OpenRouter benchmark cache metadata is invalid.");
   }
   const citation = requiredString(source.citation, "source.citation", 2_048);
-  if (!citation.includes("Artificial Analysis") || !citation.includes("OpenRouter")) {
+  if (!hasRequiredAttribution(citation)) {
     throw new Error("OpenRouter benchmark cache has an invalid citation.");
   }
   return {

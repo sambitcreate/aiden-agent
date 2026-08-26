@@ -300,7 +300,6 @@ export const modelInsightsApi = {
   connect: (apiKey: string) =>
     invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
   refresh: () => invoke<ModelInsightsActionResult>("modelInsights:refresh"),
-  clear: () => invoke<ModelInsightsActionResult>("modelInsights:clear"),
   disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
 };
 

@@ -25,13 +25,6 @@ export function registerModelInsightsHandlers(): void {
       unexpected("Could not refresh model insights."),
     ),
   );
-  ipcMain.handle("modelInsights:clear", async () =>
-    runModelInsightsAction(
-      () => openRouterBenchmarkRuntime.clear(),
-      "Aiden could not clear the device-local model insights.",
-      unexpected("Could not clear model insights."),
-    ),
-  );
   ipcMain.handle("modelInsights:disconnect", async () =>
     runModelInsightsAction(
       () => openRouterBenchmarkRuntime.disconnect(),

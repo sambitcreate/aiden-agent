@@ -266,15 +266,6 @@ export class OpenRouterBenchmarkRuntime {
     });
   }
 
-  async clear(): Promise<ModelInsightsStatus> {
-    return this.actionMutex.run(async () => {
-      return this.stateMutex.run(async () => {
-        await this.dependencies.cache.clear();
-        return statusFrom(await this.dependencies.credentials.read(), null);
-      });
-    });
-  }
-
   async disconnect(): Promise<ModelInsightsStatus> {
     return this.actionMutex.run(async () => {
       return this.stateMutex.run(async () => {

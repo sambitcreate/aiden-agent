@@ -99,6 +99,31 @@ test("rejects unsafe scores, duplicate identities, and invalid citation metadata
   assert.throws(() => buildOpenRouterBenchmarkCache(badCitation), /citation/u);
 });
 
+test("accepts a capped benchmark response when model_count reports a larger total", () => {
+  const capped = responsePayload();
+  capped.meta.model_count = 250;
+  capped.meta.source_url = "https://artificialanalysis.ai/benchmarks";
+  capped.meta.citation = "ARTIFICIAL ANALYSIS data delivered through OPENROUTER.";
+
+  assert.equal(buildOpenRouterBenchmarkCache(capped).models.length, 1);
+
+  const undercounted = responsePayload([
+    responsePayload().data[0],
+    {
+      source: "artificial-analysis",
+      model_permaslug: "anthropic/claude-sonnet-4",
+      display_name: "Claude Sonnet 4",
+      coding_index: 70,
+    },
+  ]);
+  undercounted.meta.model_count = 1;
+  assert.throws(() => buildOpenRouterBenchmarkCache(undercounted), /model count/u);
+
+  const fractional = responsePayload();
+  fractional.meta.model_count = 1.5;
+  assert.throws(() => buildOpenRouterBenchmarkCache(fractional), /model count/u);
+});
+
 test("fetch sends the dedicated key only to the fixed endpoint and maps auth failures", async () => {
   let observedAuthorization = "";
   const cache = await fetchOpenRouterBenchmarkCache("or-secret", {
