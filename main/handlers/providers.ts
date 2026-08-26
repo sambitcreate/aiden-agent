@@ -456,6 +456,16 @@ export function registerProviderHandlers(): void {
       return configStore.setGeminiVoiceSetup(scopeValue, modelValue);
     },
   );
+  ipcMain.handle("settings:setGeminiUsageScope", async (_event, scopeValue: unknown) => {
+    if (!isGeminiUsageScope(scopeValue)) {
+      throw new Error("Invalid Gemini usage scope.");
+    }
+    await listProvidersWithLegacyPiCredentialMigration();
+    if (!(await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID))) {
+      throw new Error("Add a Google API key in Providers before updating Gemini access.");
+    }
+    return configStore.setGeminiUsageScope(scopeValue);
+  });
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;

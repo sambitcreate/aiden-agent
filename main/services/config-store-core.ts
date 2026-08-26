@@ -721,6 +721,26 @@ export function createConfigStore(
       return runtimeSettingsFrom(saved);
     },
 
+    /**
+     * Update Gemini's allowed purpose without changing the active Voice
+     * provider. Provider credential management uses this path so rotating a
+     * Google key cannot silently move transcription away from local or OpenAI.
+     */
+    async setGeminiUsageScope(
+      scope: import("./types.js").GeminiUsageScope,
+    ): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.geminiUsageScope = scope;
+        config.settings.hiddenModelsByProvider = hiddenModelsForGeminiScope(
+          config.settings.hiddenModelsByProvider,
+          GOOGLE_PROVIDER_ID,
+          scope,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
     /** Atomically update one presentation-only model visibility preference. */
     async setModelVisibility(
       providerId: string,

@@ -364,3 +364,15 @@ test("late progress and results from a cancelled operation cannot affect the nex
   await subject.coordinator.result("new", currentId);
   assert.deepEqual(pasted, ["new"]);
 });
+
+test("dictation broadcasts the explicit Gemini retry-consent stage", async () => {
+  const subject = harness();
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  const operationId = subject.coordinator.currentOperationId!;
+  await subject.coordinator.progress("fallback-consent", operationId);
+  const last = subject.events[subject.events.length - 1];
+  assert.equal(last?.state, "fallback-consent");
+  assert.equal(last?.operationId, operationId);
+});

@@ -8,7 +8,7 @@ Status: Complete (August 2026)
 - Keep transcription-only access distinct from Gemini chat-model access.
 - Explain microphone, Google audio transfer, credential storage, and optional local Accessibility paste access.
 - Make hold-to-dictate and press-to-toggle share one bounded, exactly-once operation lifecycle.
-- Preserve committed Live text, bound batch fallback, cancel underlying work, and prevent late delivery.
+- Preserve committed Live text, require explicit cost consent before a recorded-audio Gemini retry, bound work, cancel underlying work, and prevent late delivery.
 - Keep every successful transcript available when macOS cannot paste it.
 - Add explicit Accessibility recovery and development-runtime Apple Events parity.
 - Preserve and verify on-device Parakeet transcription independently of hosted-provider setup.
@@ -23,8 +23,10 @@ Status: Complete (August 2026)
 ## Completion
 
 - Gemini setup is transactional, purpose-scoped, and shared by Providers, Voice, and onboarding.
+- Provider credential changes update Gemini purpose without silently replacing an existing OpenAI or on-device Voice selection.
 - Transcription-only hides future Google chat models and blocks new paired-client, scheduled, and Telegram Google chat work while retaining pinned existing chats.
-- Dictation has operation fencing, bounded Live/fallback work, cancelable cloud and local jobs, explicit terminal delivery states, and reliable hold/toggle startup-stop latching.
+- Dictation has operation fencing, bounded Live/fallback work, explicit consent before any second Gemini request, cancelable cloud and local jobs, explicit terminal delivery states, and reliable hold/toggle startup-stop latching.
 - Accessibility recovery is explicit; paste failure always leaves the transcript on the clipboard.
 - Development signing includes the shipped entitlements and Apple Events usage description.
 - Parakeet v3 completed a real offline inference on the development Mac with the expected transcript.
+- A process-global FIFO isolates Parakeet consumers so cancelling queued or active dictation cannot terminate unrelated composer or remote transcription.

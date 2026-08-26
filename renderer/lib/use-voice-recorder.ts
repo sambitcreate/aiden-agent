@@ -21,12 +21,14 @@ import {
 import { scheduleRecorderStopWithTail, startChunkedMediaRecorder } from "./media-recorder-stop";
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "./live-pcm-capture";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
+import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "./gemini-recorded-retry";
 
 type RecorderOptions = TranscribeOptions;
 
 export function useVoiceRecorder(onTranscript: (text: string) => void, options: RecorderOptions) {
   const [recording, setRecording] = React.useState(false);
   const [transcribing, setTranscribing] = React.useState(false);
+  const [awaitingRecordedRetryConsent, setAwaitingRecordedRetryConsent] = React.useState(false);
   const [liveTranscript, setLiveTranscript] = React.useState<LiveTranscriptSnapshot>({
     committed: "",
     tentative: "",
@@ -41,10 +43,15 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   const batchProviderRef = React.useRef<RecorderOptions["provider"] | null>(null);
   const transcriptionControllerRef = React.useRef<AbortController | null>(null);
   const operationGateRef = React.useRef<DictationOperationGate | null>(null);
+  const recordedRetryConsentRef = React.useRef<GeminiRecordedRetryConsent | null>(null);
   if (operationGateRef.current === null) {
     operationGateRef.current = new DictationOperationGate();
   }
   const operationGate = operationGateRef.current;
+  if (recordedRetryConsentRef.current === null) {
+    recordedRetryConsentRef.current = new GeminiRecordedRetryConsent();
+  }
+  const recordedRetryConsent = recordedRetryConsentRef.current;
   // Keep the latest options available to the recorder's stop callback.
   const optionsRef = React.useRef(options);
   optionsRef.current = options;
@@ -53,6 +60,14 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
+
+  const resolveRecordedRetryConsent = React.useCallback(
+    (approved: boolean) => {
+      setAwaitingRecordedRetryConsent(false);
+      recordedRetryConsent.resolve(approved);
+    },
+    [recordedRetryConsent],
+  );
 
   const start = React.useCallback(async () => {
     if (recorderRef.current) return;
@@ -147,8 +162,19 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
               text = recoverCommittedLiveTranscript("", live.snapshot().committed);
             }
           }
+          if (needsGeminiRecordedRetry(liveEnabled, text, blob.size > 0)) {
+            setAwaitingRecordedRetryConsent(true);
+            const approved = await recordedRetryConsent.request();
+            setAwaitingRecordedRetryConsent(false);
+            if (!approved || !operationGate.isCurrent(token)) return;
+          }
+          if (liveEnabled && !text && blob.size === 0) {
+            toast.error("No speech detected.");
+            return;
+          }
           if (!text) {
-            text = await deadline.run(
+            const batchDeadline = new DictationDeadline(transcriptionBudgetMs(selected.provider));
+            text = await batchDeadline.run(
               transcribeBlob(blob, {
                 ...selected,
                 operationId,
@@ -217,7 +243,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       stopTracks();
       toast.error(microphoneCaptureErrorMessage(error));
     }
-  }, [onTranscript, operationGate, stopTracks]);
+  }, [onTranscript, operationGate, recordedRetryConsent, stopTracks]);
 
   const stop = React.useCallback(() => {
     pendingStopRef.current = true;
@@ -230,6 +256,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   React.useEffect(
     () => () => {
       operationGate.cancel();
+      recordedRetryConsent.resolve(false);
       const recorder = recorderRef.current;
       recorderRef.current = null;
       if (recorder) {
@@ -252,8 +279,16 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       setLiveTranscript({ committed: "", tentative: "" });
       stopTracks();
     },
-    [operationGate, stopTracks],
+    [operationGate, recordedRetryConsent, stopTracks],
   );
 
-  return { recording, transcribing, liveTranscript, start, stop };
+  return {
+    recording,
+    transcribing,
+    liveTranscript,
+    awaitingRecordedRetryConsent,
+    resolveRecordedRetryConsent,
+    start,
+    stop,
+  };
 }

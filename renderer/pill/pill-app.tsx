@@ -31,11 +31,13 @@ import {
 import { startPillAppearanceSync } from "../lib/pill-appearance";
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "../lib/live-pcm-capture";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
+import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "../lib/gemini-recorded-retry";
 
 type Phase =
   | "idle"
   | "recording"
   | "finalizing"
+  | "fallback-consent"
   | "fallback"
   | "delivering"
   | "pasted"
@@ -88,6 +90,11 @@ export function PillApp() {
   const silenceStopRef = React.useRef(false);
   const soundsEnabledRef = React.useRef(false);
   const silenceDetectorRef = React.useRef<SilenceStopDetector | null>(null);
+  const recordedRetryConsentRef = React.useRef<GeminiRecordedRetryConsent | null>(null);
+  if (recordedRetryConsentRef.current === null) {
+    recordedRetryConsentRef.current = new GeminiRecordedRetryConsent();
+  }
+  const recordedRetryConsent = recordedRetryConsentRef.current;
 
   React.useEffect(() => {
     const sync = startPillAppearanceSync();
@@ -248,12 +255,28 @@ export function PillApp() {
                   );
                 }
               }
+              if (needsGeminiRecordedRetry(active.liveStart !== undefined, text, blob.size > 0)) {
+                const consent = recordedRetryConsent.request();
+                setPhase("fallback-consent");
+                await dictationApi.reportProgress(operationId, "fallback-consent");
+                const approved = await consent;
+                if (!approved || active.cancelled || !operationGateRef.current.isCurrent(token)) {
+                  return;
+                }
+              }
+              if (active.liveStart && !text && blob.size === 0) {
+                await dictationApi.reportResult(operationId, "");
+                return;
+              }
               if (!text) {
                 setPhase("fallback");
                 await dictationApi.reportProgress(operationId, "fallback");
                 active.batchOperationId = `${operationId}-batch`;
                 active.batchProvider = settings.voiceProvider ?? "openai";
-                text = await deadline.run(
+                const batchDeadline = new DictationDeadline(
+                  transcriptionBudgetMs(active.batchProvider),
+                );
+                text = await batchDeadline.run(
                   transcribeBlob(blob, {
                     provider: active.batchProvider,
                     localModel: settings.localVoiceModel,
@@ -332,7 +355,7 @@ export function PillApp() {
           .catch(() => {});
       }
     },
-    [releaseRecording, startWaveform],
+    [recordedRetryConsent, releaseRecording, startWaveform],
   );
 
   const stopRecording = React.useCallback(() => {
@@ -345,6 +368,7 @@ export function PillApp() {
 
   const discardRecording = React.useCallback(() => {
     operationGateRef.current.cancel();
+    recordedRetryConsent.resolve(false);
     clearStopTimer();
     const active = recordingRef.current;
     if (active) {
@@ -370,7 +394,7 @@ export function PillApp() {
     operationIdRef.current = null;
     stopWaveform();
     setPhase("idle");
-  }, [clearStopTimer, releaseRecording, stopWaveform]);
+  }, [clearStopTimer, recordedRetryConsent, releaseRecording, stopWaveform]);
 
   React.useEffect(() => {
     let active = true;
@@ -388,6 +412,9 @@ export function PillApp() {
           break;
         case "finalizing":
           setPhase("finalizing");
+          break;
+        case "fallback-consent":
+          setPhase("fallback-consent");
           break;
         case "fallback":
           setPhase("fallback");
@@ -410,6 +437,7 @@ export function PillApp() {
           setPhase("copied");
           break;
         case "error":
+          recordedRetryConsent.resolve(false);
           stopWaveform();
           if (soundsEnabledRef.current) void playDictationCue("error");
           setErrorMessage(payload.message ?? "Dictation failed.");
@@ -432,11 +460,12 @@ export function PillApp() {
       active = false;
       unsubscribe();
     };
-  }, [discardRecording, startRecording, stopRecording, stopWaveform]);
+  }, [discardRecording, recordedRetryConsent, startRecording, stopRecording, stopWaveform]);
 
   React.useEffect(
     () => () => {
       operationGateRef.current.cancel();
+      recordedRetryConsent.resolve(false);
       if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
       const active = recordingRef.current;
       if (active) {
@@ -458,7 +487,7 @@ export function PillApp() {
         }
       }
     },
-    [releaseRecording],
+    [recordedRetryConsent, releaseRecording],
   );
 
   return (
@@ -503,6 +532,27 @@ export function PillApp() {
                 aria-label="Cancel dictation"
                 onClick={() => void dictationApi.cancel()}
                 className="flex size-5 items-center justify-center rounded-full text-tertiary transition-colors duration-150 ease-out hover:bg-control hover:text-primary"
+              >
+                <X className="size-3.5" />
+              </button>
+            </>
+          ) : phase === "fallback-consent" ? (
+            <>
+              <span className="max-w-36 text-mini leading-tight text-secondary">
+                Retry saved audio? May cost more.
+              </span>
+              <button
+                type="button"
+                onClick={() => recordedRetryConsent.resolve(true)}
+                className="rounded-control bg-accent px-2 py-1 text-mini font-medium text-accent-foreground"
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                aria-label="Cancel paid Gemini retry"
+                onClick={() => void dictationApi.cancel()}
+                className="flex size-5 shrink-0 items-center justify-center rounded-full text-tertiary transition-colors duration-150 ease-out hover:bg-control hover:text-primary"
               >
                 <X className="size-3.5" />
               </button>

@@ -17,7 +17,8 @@ test("Gemini setup offers separate scopes and a concrete privacy disclosure", ()
   assert.match(dialogSource, /Transcription only/u);
   assert.match(dialogSource, /Models \+ transcription/u);
   assert.match(dialogSource, /streams[\s\S]*?your recording to Google/u);
-  assert.match(dialogSource, /retained recording once/u);
+  assert.match(dialogSource, /only after you approve a retry/u);
+  assert.match(dialogSource, /another Gemini charge/u);
   assert.match(dialogSource, /Stored encrypted on[\s\S]*?this Mac/u);
   assert.match(dialogSource, /existing chats keep their pinned model/u);
   assert.match(dialogSource, /Accessibility is optional/u);
@@ -42,6 +43,9 @@ test("Voice defers Gemini selection until disclosure and managed auth complete",
 test("Providers routes Google through the same purpose dialog and voice-only auth readiness", () => {
   assert.match(providerSource, /provider\.id !== GOOGLE_PROVIDER_ID/u);
   assert.match(providerSource, /<GeminiVoiceSetupDialog/u);
+  assert.match(providerSource, /activatesVoice=\{false\}/u);
+  assert.match(providerSource, /settingsApi\.setGeminiUsageScope\(geminiScope\)/u);
+  assert.doesNotMatch(providerSource, /settingsApi\.setGeminiVoiceSetup/u);
   assert.match(providerSource, /Transcription only · chat models hidden/u);
   assert.match(providerSource, /requireChatModel=\{settingUp\.id !== GOOGLE_PROVIDER_ID\}/u);
   assert.match(editorSource, /requireChatModel && refreshed\.models\.length === 0/u);

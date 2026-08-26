@@ -292,7 +292,7 @@ export class DictationCoordinator {
         this.stage !== "transcribing" ||
         typeof operationId !== "string" ||
         operationId !== this.operationId ||
-        (value !== "finalizing" && value !== "fallback")
+        (value !== "finalizing" && value !== "fallback-consent" && value !== "fallback")
       ) {
         return;
       }

@@ -9,6 +9,8 @@ export type DictationState =
   | "stopping"
   /** Audio capture has stopped and the live stream is being finalized. */
   | "finalizing"
+  /** Live returned no text; the user must approve a second paid Gemini request. */
+  | "fallback-consent"
   /** Live finalization failed; the retained recording is being transcribed. */
   | "fallback"
   /** The transcript is complete and is being cleaned up or pasted. */
@@ -32,6 +34,6 @@ export interface DictationStatePayload {
   reason?: "accessibility-required" | "paste-unavailable";
 }
 
-export type DictationProgress = "finalizing" | "fallback";
+export type DictationProgress = "finalizing" | "fallback-consent" | "fallback";
 
 export const DICTATION_STATE_CHANNEL = "dictation:state";

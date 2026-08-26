@@ -7,6 +7,7 @@ interface GeminiVoiceSetupDialogProps {
   open: boolean;
   scope: GeminiUsageScope;
   hasKey: boolean;
+  activatesVoice?: boolean;
   busy?: boolean;
   error?: string | null;
   layer?: DialogLayer;
@@ -43,6 +44,7 @@ export function GeminiVoiceSetupDialog({
   open,
   scope,
   hasKey,
+  activatesVoice = true,
   busy = false,
   error,
   layer,
@@ -56,9 +58,11 @@ export function GeminiVoiceSetupDialog({
       open={open}
       onOpenChange={onOpenChange}
       layer={layer}
-      title="Use Google Gemini for voice?"
+      title={activatesVoice ? "Use Google Gemini for voice?" : "Set up Google Gemini access?"}
       description="Choose exactly where Gemini appears, then review what leaves your Mac. You can change this later."
-      confirmLabel={hasKey ? "Use Gemini" : "Continue to API key"}
+      confirmLabel={
+        hasKey ? (activatesVoice ? "Use Gemini" : "Save Gemini access") : "Continue to API key"
+      }
       dismissDisabled={busy}
       busy={busy}
       onConfirm={onConfirm}
@@ -106,7 +110,11 @@ export function GeminiVoiceSetupDialog({
                     color="secondary"
                     className="mt-1 block leading-relaxed"
                   >
-                    {choice.description}
+                    {!activatesVoice
+                      ? choice.scope === "transcription_only"
+                        ? "Allow Gemini transcription without changing your current Voice provider. Google models stay out of new model pickers."
+                        : "Allow Gemini transcription and add Google chat models without changing your current Voice provider."
+                      : choice.description}
                   </Text>
                 </span>
               </label>
@@ -123,8 +131,8 @@ export function GeminiVoiceSetupDialog({
               <Mic2 className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span>
                 <strong className="font-medium text-primary">Cloud audio.</strong> Aiden streams
-                your recording to Google and may upload the retained recording once if live
-                transcription needs a fallback.
+                your recording to Google. If Live transcription fails, Aiden uploads the saved
+                recording only after you approve a retry that may incur another Gemini charge.
               </span>
             </li>
             <li className="flex items-start gap-2">

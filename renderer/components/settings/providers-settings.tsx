@@ -49,7 +49,6 @@ import {
 } from "../../lib/types";
 import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
 import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
-import { resolveCloudVoiceModel } from "../../shared/voice-models";
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
@@ -191,10 +190,7 @@ export function ProvidersSettings() {
   };
 
   const saveGeminiSetup = async () => {
-    const saved = await settingsApi.setGeminiVoiceSetup(
-      geminiScope,
-      resolveCloudVoiceModel("gemini", undefined),
-    );
+    const saved = await settingsApi.setGeminiUsageScope(geminiScope);
     qc.setQueryData(queryKeys.settings, saved);
     await invalidate();
   };
@@ -640,6 +636,7 @@ export function ProvidersSettings() {
       <GeminiVoiceSetupDialog
         open={geminiDialogOpen}
         scope={geminiScope}
+        activatesVoice={false}
         hasKey={list.some(
           (provider) => provider.id === GOOGLE_PROVIDER_ID && provider.hasKey === true,
         )}

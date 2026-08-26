@@ -42,6 +42,10 @@ import { AidenIcon } from "./aiden-icon";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
+import {
+  GEMINI_RECORDED_RETRY_DESCRIPTION,
+  GEMINI_RECORDED_RETRY_TITLE,
+} from "../lib/gemini-recorded-retry";
 import { attachmentsApi } from "../lib/ipc";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
@@ -1711,6 +1715,17 @@ export function Composer({
           </div>
         </div>
       </div>
+      <AlertDialog
+        open={voice.awaitingRecordedRetryConsent}
+        onOpenChange={(open) => {
+          if (!open) voice.resolveRecordedRetryConsent(false);
+        }}
+        title={GEMINI_RECORDED_RETRY_TITLE}
+        description={GEMINI_RECORDED_RETRY_DESCRIPTION}
+        confirmLabel="Retry with recording"
+        returnFocus={() => inputRef?.current ?? null}
+        onConfirm={() => voice.resolveRecordedRetryConsent(true)}
+      />
       <AlertDialog
         open={confirmFullAccess}
         onOpenChange={setConfirmFullAccess}

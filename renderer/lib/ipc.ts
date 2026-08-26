@@ -276,6 +276,8 @@ export const settingsApi = {
     scope: NonNullable<AppSettings["geminiUsageScope"]>,
     model: string,
   ) => invoke<AppSettings>("settings:setGeminiVoiceSetup", scope, model),
+  setGeminiUsageScope: (scope: NonNullable<AppSettings["geminiUsageScope"]>) =>
+    invoke<AppSettings>("settings:setGeminiUsageScope", scope),
   setGoogleThinking: (modelId: string, level: GoogleThinkingLevel) =>
     invoke<AppSettings>("settings:setGoogleThinking", modelId, level),
   setCodexThinking: (modelId: string, level: CodexThinkingLevel) =>
@@ -558,8 +560,11 @@ export const dictationApi = {
   /** Pill reports a capture/transcription failure. */
   reportError: (operationId: string, message: string) =>
     invoke<void>("dictation:error", operationId, message),
-  /** Pill reports finalization/fallback progress for accurate UI and diagnostics. */
-  reportProgress: (operationId: string, progress: "finalizing" | "fallback") =>
+  /** Pill reports finalization/consent/fallback progress for accurate UI and diagnostics. */
+  reportProgress: (
+    operationId: string,
+    progress: "finalizing" | "fallback-consent" | "fallback",
+  ) =>
     invoke<void>("dictation:progress", operationId, progress),
   /** Pill cancel button: discard the in-flight recording/transcription. */
   cancel: () => invoke<void>("dictation:cancel"),

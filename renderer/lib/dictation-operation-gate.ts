@@ -53,7 +53,7 @@ export async function withDictationTimeout<T>(
   }
 }
 
-/** One wall-clock budget shared by live finalization and batch fallback. */
+/** One wall-clock budget for a single transcription attempt. */
 export class DictationDeadline {
   private readonly expiresAt: number;
 

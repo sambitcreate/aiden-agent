@@ -33,7 +33,7 @@ test("transcription timeout recovers instead of waiting forever", async () => {
   );
 });
 
-test("one deadline budget is shared across sequential attempts", async () => {
+test("one deadline budget is shared across sequential operations", async () => {
   let now = 100;
   const deadline = new DictationDeadline(50, () => now);
   assert.equal(await deadline.run(Promise.resolve("live")), "live");

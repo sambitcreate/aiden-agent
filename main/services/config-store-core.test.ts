@@ -291,6 +291,30 @@ test("Gemini voice setup atomically selects voice and gates every Google chat mo
   });
 });
 
+test("Gemini usage scope gates Google models without changing local or OpenAI voice", async (t) => {
+  const h = await harness(t);
+
+  await h.store.setSettings({
+    voiceProvider: "local",
+    voiceModel: "local-voice-selection",
+  });
+  const local = await h.store.setGeminiUsageScope("transcription_only");
+  assert.equal(local.voiceProvider, "local");
+  assert.equal(local.voiceModel, "local-voice-selection");
+  assert.equal(local.geminiUsageScope, "transcription_only");
+  assert.deepEqual(local.hiddenModelsByProvider?.google, ["*"]);
+
+  await h.store.setSettings({
+    voiceProvider: "openai",
+    voiceModel: "gpt-4o-mini-transcribe",
+  });
+  const openai = await h.store.setGeminiUsageScope("models_and_transcription");
+  assert.equal(openai.voiceProvider, "openai");
+  assert.equal(openai.voiceModel, "gpt-4o-mini-transcribe");
+  assert.equal(openai.geminiUsageScope, "models_and_transcription");
+  assert.equal(openai.hiddenModelsByProvider?.google, undefined);
+});
+
 test("removing a provider clears its model visibility preferences", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
