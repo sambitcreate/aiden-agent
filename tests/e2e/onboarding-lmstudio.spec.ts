@@ -51,6 +51,23 @@ async function persistedProviderState(aiden: AidenE2e) {
 test.describe("fresh portable config", () => {
   test.use({ portableConfigSeed: "empty" });
 
+  test("onboarding opens API-key setup for an additional provider", async ({ aiden }) => {
+    const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
+    await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+
+    await onboarding.getByRole("button", { name: /Choose from more/u }).click();
+    const google = onboarding.getByRole("button", { name: "Google Add your API key" });
+    await expect(google).toBeEnabled();
+    await google.click();
+    await expect(google).toHaveAttribute("aria-pressed", "true");
+
+    const setup = aiden.page.getByRole("dialog", { name: "Set up Google" });
+    await expect(setup).toBeVisible();
+    await setup.getByRole("button", { name: "Gemini API key" }).click();
+    await expect(setup.locator('input[type="password"]')).toBeVisible();
+  });
+
   test("onboarding creates the canonical LM Studio provider and survives relaunch", async ({
     aiden,
   }) => {
