@@ -1,3 +1,5 @@
+/* global AudioWorkletProcessor:readonly, sampleRate:readonly, registerProcessor:readonly */
+
 class GeminiLivePcmProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
