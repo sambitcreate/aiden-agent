@@ -680,6 +680,7 @@ export interface DiscoveredSkill {
 }
 
 export type VoiceProvider = "openai" | "gemini" | "local";
+export type GeminiUsageScope = "transcription_only" | "models_and_transcription";
 
 export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
 
@@ -741,6 +742,7 @@ export interface AppSettings {
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
+  geminiUsageScope?: GeminiUsageScope;
   localVoiceModel?: string;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;

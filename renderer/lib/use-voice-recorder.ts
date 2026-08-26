@@ -7,10 +7,17 @@ import {
   ensureMicrophoneAccess,
   microphoneCaptureErrorMessage,
   MICROPHONE_PERMISSION_OFF_MESSAGE,
+  cancelTranscription,
   transcribeBlob,
   type TranscribeOptions,
 } from "./voice-recorder-core";
-import { DictationOperationGate } from "./dictation-operation-gate";
+import {
+  DictationDeadline,
+  DictationOperationGate,
+  recoverCommittedLiveTranscript,
+  transcriptionBudgetMs,
+  voiceErrorMessage,
+} from "./dictation-operation-gate";
 import { scheduleRecorderStopWithTail, startChunkedMediaRecorder } from "./media-recorder-stop";
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "./live-pcm-capture";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
@@ -28,6 +35,11 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   const chunksRef = React.useRef<Blob[]>([]);
   const streamRef = React.useRef<MediaStream | null>(null);
   const liveRef = React.useRef<GeminiLiveCapture | null>(null);
+  const liveStartRef = React.useRef<Promise<GeminiLiveCapture | null> | null>(null);
+  const pendingStopRef = React.useRef(false);
+  const batchOperationIdRef = React.useRef<string | null>(null);
+  const batchProviderRef = React.useRef<RecorderOptions["provider"] | null>(null);
+  const transcriptionControllerRef = React.useRef<AbortController | null>(null);
   const operationGateRef = React.useRef<DictationOperationGate | null>(null);
   if (operationGateRef.current === null) {
     operationGateRef.current = new DictationOperationGate();
@@ -46,6 +58,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     if (recorderRef.current) return;
     const token = operationGate.beginStart();
     if (token === null) return;
+    pendingStopRef.current = false;
     try {
       // Native permission gate before capture.
       const status = await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
@@ -71,45 +84,92 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       setLiveTranscript({ committed: "", tentative: "" });
       const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
       const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const selected: RecorderOptions = { ...optionsRef.current };
+      const liveEnabled = shouldUseGeminiLiveTranscription(selected.provider, selected.model);
+      const operationId = crypto.randomUUID();
+      batchOperationIdRef.current = operationId;
+      batchProviderRef.current = selected.provider;
+      const transcriptionController = new AbortController();
+      transcriptionControllerRef.current = transcriptionController;
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
       recorder.onstop = async () => {
-        const live = liveRef.current;
+        const liveStart = liveStartRef.current;
         liveRef.current = null;
         const isCurrent = operationGate.isCurrent(token);
-        const liveResult = isCurrent ? live?.finish() : live?.cancel().then(() => "");
         stopTracks();
         if (!isCurrent) {
-          await liveResult?.catch(() => {});
+          void liveStart?.then((live) => live?.cancel()).catch(() => {});
           return;
         }
         setRecording(false);
         const blob = new Blob(chunksRef.current, {
           type: recorder.mimeType || "audio/webm",
         });
-        if (blob.size === 0 && !liveResult) {
+        if (blob.size === 0 && !liveEnabled) {
+          if (batchOperationIdRef.current === operationId) batchOperationIdRef.current = null;
+          if (batchProviderRef.current === selected.provider) batchProviderRef.current = null;
+          if (transcriptionControllerRef.current === transcriptionController) {
+            transcriptionControllerRef.current = null;
+          }
           if (recorderRef.current === recorder) recorderRef.current = null;
           return;
         }
         setTranscribing(true);
+        const deadline = new DictationDeadline(transcriptionBudgetMs(selected.provider));
         try {
           let text = "";
-          if (liveResult) {
+          let live: GeminiLiveCapture | null = null;
+          if (liveStart) {
             try {
-              text = await liveResult;
+              live = await deadline.run(liveStart, () => {
+                void liveStart.then((capture) => capture?.cancel()).catch(() => {});
+              });
             } catch {
-              // Keep the MediaRecorder blob as a controlled one-shot fallback.
+              live = null;
             }
           }
-          if (!text) text = await transcribeBlob(blob, optionsRef.current);
+          if (live) {
+            if (!operationGate.isCurrent(token)) {
+              await live.cancel();
+              return;
+            }
+            liveRef.current = live;
+            try {
+              text = recoverCommittedLiveTranscript(
+                await deadline.run(live.finish(), () => live?.cancel()),
+                live.snapshot().committed,
+              );
+            } catch {
+              // A committed Live segment is safer than discarding text the
+              // user already saw just because the closing handshake failed.
+              text = recoverCommittedLiveTranscript("", live.snapshot().committed);
+            }
+          }
+          if (!text) {
+            text = await deadline.run(
+              transcribeBlob(blob, {
+                ...selected,
+                operationId,
+                signal: transcriptionController.signal,
+              }),
+              () => cancelTranscription(selected.provider, operationId),
+            );
+          }
           if (!operationGate.isCurrent(token)) return;
           if (text) onTranscript(text);
           else toast.error("No speech detected.");
         } catch (error) {
           if (!operationGate.isCurrent(token)) return;
-          toast.error(error instanceof Error ? error.message : String(error));
+          toast.error(voiceErrorMessage(error));
         } finally {
+          if (liveStartRef.current === liveStart) liveStartRef.current = null;
+          if (batchOperationIdRef.current === operationId) batchOperationIdRef.current = null;
+          if (batchProviderRef.current === selected.provider) batchProviderRef.current = null;
+          if (transcriptionControllerRef.current === transcriptionController) {
+            transcriptionControllerRef.current = null;
+          }
           if (recorderRef.current === recorder) recorderRef.current = null;
           if (operationGate.isCurrent(token)) setTranscribing(false);
           if (operationGate.isCurrent(token)) {
@@ -118,17 +178,15 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
         }
       };
       recorderRef.current = recorder;
-      const selected = optionsRef.current;
-      if (shouldUseGeminiLiveTranscription(selected.provider, selected.model)) {
-        try {
-          liveRef.current = await GeminiLiveCapture.start(stream, setLiveTranscript);
-        } catch {
-          // Recording continues so the one-shot Gemini companion can transcribe on stop.
-          liveRef.current = null;
-        }
+      if (liveEnabled) {
+        liveStartRef.current = GeminiLiveCapture.start(stream, setLiveTranscript).catch(() => null);
+      } else {
+        liveStartRef.current = Promise.resolve(null);
       }
       if (!operationGate.isCurrent(token)) {
-        await liveRef.current?.cancel();
+        transcriptionController.abort();
+        void liveStartRef.current?.then((live) => live?.cancel()).catch(() => {});
+        liveStartRef.current = null;
         liveRef.current = null;
         if (recorderRef.current === recorder) recorderRef.current = null;
         recorder.ondataavailable = null;
@@ -139,10 +197,20 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       startChunkedMediaRecorder(recorder);
       operationGate.finishStart(token);
       setRecording(true);
+      if (pendingStopRef.current && recorder.state !== "inactive") {
+        scheduleRecorderStopWithTail(recorder, setTimeout);
+      }
     } catch (error) {
       const live = liveRef.current;
       liveRef.current = null;
+      const liveStart = liveStartRef.current;
+      liveStartRef.current = null;
       await live?.cancel().catch(() => {});
+      void liveStart?.then((capture) => capture?.cancel()).catch(() => {});
+      transcriptionControllerRef.current?.abort();
+      transcriptionControllerRef.current = null;
+      batchOperationIdRef.current = null;
+      batchProviderRef.current = null;
       if (!operationGate.isCurrent(token)) return;
       operationGate.finishStart(token);
       recorderRef.current = null;
@@ -152,6 +220,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   }, [onTranscript, operationGate, stopTracks]);
 
   const stop = React.useCallback(() => {
+    pendingStopRef.current = true;
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       scheduleRecorderStopWithTail(recorder, setTimeout);
@@ -171,6 +240,15 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       chunksRef.current = [];
       void liveRef.current?.cancel();
       liveRef.current = null;
+      void liveStartRef.current?.then((live) => live?.cancel()).catch(() => {});
+      liveStartRef.current = null;
+      const operationId = batchOperationIdRef.current;
+      batchOperationIdRef.current = null;
+      const batchProvider = batchProviderRef.current;
+      batchProviderRef.current = null;
+      transcriptionControllerRef.current?.abort();
+      transcriptionControllerRef.current = null;
+      if (operationId && batchProvider) void cancelTranscription(batchProvider, operationId);
       setLiveTranscript({ committed: "", tentative: "" });
       stopTracks();
     },

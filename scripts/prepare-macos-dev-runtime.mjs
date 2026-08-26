@@ -20,9 +20,11 @@ import { fileURLToPath } from "node:url";
 
 const modulePath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
-const BRANDING_SCHEMA_VERSION = 5;
+const BRANDING_SCHEMA_VERSION = 6;
 const MICROPHONE_USAGE_DESCRIPTION =
   "Aiden Agent uses the microphone only when you choose voice input or dictation.";
+const APPLE_EVENTS_USAGE_DESCRIPTION =
+  "Aiden Agent pastes dictated text into the app you are typing in.";
 
 export function macDevLauncherLogPath(environment = process.env) {
   const explicit = environment.AIDEN_DEV_LAUNCHER_LOG?.trim();
@@ -193,6 +195,7 @@ export async function validateMacDevRuntime(
       CFBundleExecutable: layout.executableName,
       CFBundleIdentifier: layout.bundleIdentifier,
       CFBundleName: layout.productName,
+      NSAppleEventsUsageDescription: APPLE_EVENTS_USAGE_DESCRIPTION,
       NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
     },
     run,
@@ -286,12 +289,20 @@ export async function brandMacDevRuntime(
     MICROPHONE_USAGE_DESCRIPTION,
     run,
   );
+  await setPlistString(
+    mainPlist,
+    "NSAppleEventsUsageDescription",
+    APPLE_EVENTS_USAGE_DESCRIPTION,
+    run,
+  );
   await setPlistString(mainPlist, "CFBundleShortVersionString", version, run);
   await setPlistString(mainPlist, "CFBundleVersion", version, run);
 
   await run("/usr/bin/codesign", [
     "--force",
     "--deep",
+    "--entitlements",
+    path.join(repositoryRoot, "resources", "entitlements.mac.plist"),
     "--sign",
     "-",
     "--timestamp=none",

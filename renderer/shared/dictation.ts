@@ -7,6 +7,12 @@ export type DictationState =
   | "recording"
   /** Hotkey pressed while recording: pill should stop, transcribe, then report. */
   | "stopping"
+  /** Audio capture has stopped and the live stream is being finalized. */
+  | "finalizing"
+  /** Live finalization failed; the retained recording is being transcribed. */
+  | "fallback"
+  /** The transcript is complete and is being cleaned up or pasted. */
+  | "delivering"
   /** Transcript was pasted into the focused text field. */
   | "pasted"
   /** Nothing editable was focused (or paste was unavailable): transcript is on the clipboard. */
@@ -18,8 +24,14 @@ export type DictationState =
 
 export interface DictationStatePayload {
   state: DictationState;
+  /** Identifies one press/record/transcribe/deliver lifecycle. */
+  operationId?: string;
   /** Human-readable detail for the "error" state. */
   message?: string;
+  /** Why a completed transcript could not be pasted automatically. */
+  reason?: "accessibility-required" | "paste-unavailable";
 }
+
+export type DictationProgress = "finalizing" | "fallback";
 
 export const DICTATION_STATE_CHANNEL = "dictation:state";

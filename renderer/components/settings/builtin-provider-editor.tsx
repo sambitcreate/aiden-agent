@@ -16,7 +16,9 @@ interface BuiltinProviderEditorProps {
   provider: Provider;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
+  /** Voice-only setup needs a credential but does not require a chat catalog. */
+  requireChatModel?: boolean;
   layer?: DialogLayer;
 }
 
@@ -38,6 +40,7 @@ export function BuiltinProviderEditor({
   open,
   onOpenChange,
   onSaved,
+  requireChatModel = true,
   layer,
 }: BuiltinProviderEditorProps) {
   const sessionRef = React.useRef<ProviderAuthSession | null>(null);
@@ -129,7 +132,7 @@ export function BuiltinProviderEditor({
           try {
             const providers = await providersApi.list();
             const refreshed = providers.find((item) => item.id === provider.id);
-            if (!refreshed?.hasKey || refreshed.models.length === 0) {
+            if (!refreshed?.hasKey || (requireChatModel && refreshed.models.length === 0)) {
               if (mountedRef.current && openRef.current) {
                 setMessage(
                   `${provider.label} is configured, but no usable chat model is available yet.`,
@@ -140,7 +143,7 @@ export function BuiltinProviderEditor({
             // A cancellation request can race the provider's irreversible
             // credential commit. Reconcile the parent/cache even if this
             // editor closed while the session reported `finishing`.
-            onSaved();
+            await onSaved();
             if (mountedRef.current && openRef.current) {
               if (event.warning) toast.warning(event.warning);
               else toast.success(`${provider.label} is configured.`);
@@ -280,11 +283,20 @@ export function BuiltinProviderEditor({
             </a>
           </Button>
         ) : null}
-        <Text variant="small" color="tertiary">
-          {provider.models.length} model
-          {provider.models.length === 1 ? " is" : "s are"} currently available.
-        </Text>
-        <ProviderModelVisibility provider={provider} />
+        {requireChatModel ? (
+          <>
+            <Text variant="small" color="tertiary">
+              {provider.models.length} model
+              {provider.models.length === 1 ? " is" : "s are"} currently available.
+            </Text>
+            <ProviderModelVisibility provider={provider} />
+          </>
+        ) : (
+          <Text variant="small" color="tertiary">
+            This setup stores the credential for Gemini voice. Chat-model access follows the choice
+            you made in the previous step.
+          </Text>
+        )}
       </div>
     </Dialog>
   );

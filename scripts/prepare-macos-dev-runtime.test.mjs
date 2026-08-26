@@ -190,12 +190,16 @@ test("branding mutates and validates the complete cached app layout", async (t) 
   await chmod(firstHelperExecutable, 0o755);
   const codeIdentityAfter = await macDevRuntimeCodeIdentity(appPath);
   assert.notDeepEqual(codeIdentityAfter, codeIdentityBefore);
+  const commands = [];
   const branded = await brandMacDevRuntime(appPath, {
     appId: "com.sambitcreate.aiden-agent",
     iconPath,
     productName: "Aiden Agent",
     version: "0.27.0",
-    run: plistRunner,
+    run: async (command, args) => {
+      commands.push([command, args]);
+      return plistRunner(command, args);
+    },
   });
 
   await validateMacDevRuntime(appPath, {
@@ -225,6 +229,22 @@ test("branding mutates and validates the complete cached app layout", async (t) 
       "NSMicrophoneUsageDescription",
     ),
     "Aiden Agent uses the microphone only when you choose voice input or dictation.",
+  );
+  assert.equal(
+    await plistValue(
+      path.join(appPath, "Contents", "Info.plist"),
+      "NSAppleEventsUsageDescription",
+    ),
+    "Aiden Agent pastes dictated text into the app you are typing in.",
+  );
+  assert.ok(
+    commands.some(
+      ([command, args]) =>
+        command === "/usr/bin/codesign" &&
+        args.includes("--entitlements") &&
+        args.some((value) => value.endsWith("resources/entitlements.mac.plist")),
+    ),
+    "the development app must be signed with the release Apple Events entitlement",
   );
 
   await assert.rejects(

@@ -548,6 +548,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   else delete normalized.telegramProfiles;
   for (const key of [
     "voiceProvider",
+    "geminiUsageScope",
     "chatTitleProviderId",
     "scheduledDefaultMode",
     "scheduledDefaultPermission",
@@ -599,6 +600,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
     }
   };
   retainKnownValue("voiceProvider", ["openai", "gemini", "local"]);
+  retainKnownValue("geminiUsageScope", ["transcription_only", "models_and_transcription"]);
   retainKnownValue("chatTitleProviderId", ["automatic", "apple-foundation-models", "chat-model"]);
   retainKnownValue("scheduledDefaultMode", ["llm", "script"]);
   retainKnownValue("scheduledDefaultPermission", ["read-only", "full"]);

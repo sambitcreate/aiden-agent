@@ -116,7 +116,10 @@ export class Pcm16ChunkEncoder {
 
 export class GeminiLiveCapture {
   private failure: Error | undefined;
-  private closed = false;
+  private audioStopped = false;
+  private settled = false;
+  private finishPromise: Promise<string> | undefined;
+  private latestSnapshot: LiveTranscriptSnapshot = { committed: "", tentative: "" };
   private resolveWorkletFlush: (() => void) | undefined;
   private rejectWorkletFlush: ((error: Error) => void) | undefined;
   private readonly encoder: Pcm16ChunkEncoder;
@@ -136,7 +139,13 @@ export class GeminiLiveCapture {
       voiceApi.streamPush(this.sessionId, base64),
     );
     this.unsubscribe = voiceApi.onStreamText((payload) => {
-      if (!this.closed && payload.sessionId === sessionId) onTranscript(payload);
+      if (!this.settled && payload.sessionId === sessionId) {
+        this.latestSnapshot = {
+          committed: payload.committed,
+          tentative: payload.tentative,
+        };
+        onTranscript(this.latestSnapshot);
+      }
     });
     worklet.port.onmessage = (event: MessageEvent<Float32Array | { type?: string }>) => {
       if (event.data instanceof Float32Array) {
@@ -178,13 +187,24 @@ export class GeminiLiveCapture {
   }
 
   async finish(): Promise<string> {
-    if (this.closed) throw new Error("Gemini Live transcription is no longer active.");
+    if (this.finishPromise) return this.finishPromise;
+    if (this.settled) throw new Error("Gemini Live transcription is no longer active.");
+    this.finishPromise = this.finishOnce();
+    return this.finishPromise;
+  }
+
+  snapshot(): LiveTranscriptSnapshot {
+    return { ...this.latestSnapshot };
+  }
+
+  private async finishOnce(): Promise<string> {
     try {
       await this.flushWorklet();
     } catch (error) {
       this.failure = error instanceof Error ? error : new Error(String(error));
     }
-    this.disconnect();
+    if (this.settled) throw new Error("Gemini Live transcription was cancelled.");
+    this.stopCapture();
     this.enqueue(this.encoder.flush());
     try {
       await this.sendQueue.drain();
@@ -193,14 +213,25 @@ export class GeminiLiveCapture {
     }
     if (this.failure || this.sendQueue.failure) {
       await voiceApi.streamCancel(this.sessionId).catch(() => {});
+      this.settled = true;
+      this.unsubscribe();
       throw this.failure ?? this.sendQueue.failure;
     }
-    return (await voiceApi.streamFinish(this.sessionId)).trim();
+    try {
+      const text = (await voiceApi.streamFinish(this.sessionId)).trim();
+      return text;
+    } finally {
+      this.settled = true;
+      this.unsubscribe();
+    }
   }
 
   async cancel(): Promise<void> {
-    if (this.closed) return;
-    this.disconnect();
+    if (this.settled) return;
+    this.settled = true;
+    this.rejectWorkletFlush?.(new Error("Gemini Live transcription was cancelled."));
+    this.stopCapture();
+    this.unsubscribe();
     await voiceApi.streamCancel(this.sessionId).catch(() => {});
   }
 
@@ -234,10 +265,9 @@ export class GeminiLiveCapture {
     });
   }
 
-  private disconnect(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.unsubscribe();
+  private stopCapture(): void {
+    if (this.audioStopped) return;
+    this.audioStopped = true;
     this.worklet.port.onmessage = null;
     this.worklet.port.onmessageerror = null;
     this.source.disconnect();

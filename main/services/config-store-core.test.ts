@@ -256,6 +256,41 @@ test("model visibility updates are atomic and provider-scoped", async (t) => {
   });
 });
 
+test("Gemini voice setup atomically selects voice and gates every Google chat model", async (t) => {
+  const h = await harness(t);
+  await h.store.setModelVisibility("google", "gemini-private", true);
+  await h.store.setModelVisibility("anthropic", "claude-private", true);
+
+  const voiceOnly = await h.store.setGeminiVoiceSetup(
+    "transcription_only",
+    "gemini-3.5-transcribe-live",
+  );
+  assert.equal(voiceOnly.voiceProvider, "gemini");
+  assert.equal(voiceOnly.voiceModel, "gemini-3.5-transcribe-live");
+  assert.equal(voiceOnly.geminiUsageScope, "transcription_only");
+  assert.deepEqual(voiceOnly.hiddenModelsByProvider, {
+    anthropic: ["claude-private"],
+    google: ["*", "gemini-private"],
+  });
+
+  await h.store.setModelVisibility("google", "future-gemini", false);
+  await h.store.showAllProviderModels("google");
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, [
+    "*",
+    "gemini-private",
+  ]);
+
+  const full = await h.store.setGeminiVoiceSetup(
+    "models_and_transcription",
+    "gemini-3.5-transcribe",
+  );
+  assert.equal(full.geminiUsageScope, "models_and_transcription");
+  assert.deepEqual(full.hiddenModelsByProvider, {
+    anthropic: ["claude-private"],
+    google: ["gemini-private"],
+  });
+});
+
 test("removing a provider clears its model visibility preferences", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

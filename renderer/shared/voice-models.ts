@@ -25,6 +25,10 @@ export function isGeminiLiveTranscriptionModel(model: string | undefined): boole
   return model === GEMINI_LIVE_TRANSCRIPTION_MODEL;
 }
 
+export function isGeminiTranscriptionModel(model: string | undefined): boolean {
+  return (CLOUD_VOICE_MODELS.gemini as readonly string[]).includes(model ?? "");
+}
+
 /** Apply legacy-model normalization at recording boundaries, not only in Settings UI. */
 export function shouldUseGeminiLiveTranscription(
   provider: string | undefined,

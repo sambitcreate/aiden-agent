@@ -36,8 +36,24 @@ import { geminiLiveTranscription } from "../services/gemini-live-transcription.j
 import { asString } from "./voice-codec.js";
 import { parseSkill, parseMcpServer } from "./phase2-parse.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { mutatePortableConfigAndSync } from "../services/portable-credential-snapshot.js";
 import { withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
+
+interface ActiveVoiceTranscription {
+  controller: AbortController;
+  removeOwnerInvalidation: () => void;
+}
+
+const activeVoiceTranscriptions = new Map<string, ActiveVoiceTranscription>();
+
+function voiceOperationKey(owner: RendererDocumentOwner, value: unknown): string {
+  const operationId = asString(value, "operationId");
+  if (operationId.length > 128 || !/^[A-Za-z0-9._:-]+$/u.test(operationId)) {
+    throw new Error("Invalid voice transcription operation.");
+  }
+  return `${owner.id}:${owner.documentId}:${operationId}`;
+}
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { asString, parseSkill, parseMcpServer };
@@ -267,15 +283,44 @@ export function registerPhase2Handlers(): void {
   // ── Voice transcription ──────────────────────────────────────────────
   ipcMain.handle(
     "voice:transcribe",
-    async (_event, audioBase64: unknown, mimeType: unknown, model: unknown) => {
-      return transcribe({
-        audioBase64: asString(audioBase64, "audioBase64"),
-        mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
-        model: typeof model === "string" ? model : undefined,
-        signal: AbortSignal.timeout(120_000),
-      });
+    async (
+      event,
+      audioBase64: unknown,
+      mimeType: unknown,
+      model: unknown,
+      operationId: unknown,
+    ) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Voice transcription must come from the active application document."),
+      );
+      const key = voiceOperationKey(owner, operationId);
+      activeVoiceTranscriptions.get(key)?.controller.abort();
+      const controller = new AbortController();
+      const removeOwnerInvalidation = owner.onInvalidated(() => controller.abort());
+      activeVoiceTranscriptions.set(key, { controller, removeOwnerInvalidation });
+      try {
+        return await transcribe({
+          audioBase64: asString(audioBase64, "audioBase64"),
+          mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
+          model: typeof model === "string" ? model : undefined,
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+        });
+      } finally {
+        removeOwnerInvalidation();
+        if (activeVoiceTranscriptions.get(key)?.controller === controller) {
+          activeVoiceTranscriptions.delete(key);
+        }
+      }
     },
   );
+  ipcMain.handle("voice:transcribeCancel", (event, operationId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Voice transcription must come from the active application document."),
+    );
+    activeVoiceTranscriptions.get(voiceOperationKey(owner, operationId))?.controller.abort();
+  });
   ipcMain.handle("voice:streamStart", async (event) => {
     const owner = rendererDocumentOwner(
       event,

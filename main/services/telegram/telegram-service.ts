@@ -66,6 +66,7 @@ import {
 } from "./telegram-markdown.js";
 import { registerTelegramDirectRuntime } from "./telegram-direct-runtime.js";
 import { firstVisibleModelForProvider } from "../../../renderer/shared/model-visibility.js";
+import { canUseGeminiChatModel } from "../../../renderer/shared/gemini-usage-scope.js";
 import { botStore } from "../bot-store.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botManagedWorkspace } from "../bot-capability-services-main.js";
@@ -148,6 +149,7 @@ async function resolveProvider(
     (await providerRegistry.selectionProvider(providerId)) ??
     (await configStore.getProvider(providerId));
   if (!provider) return null;
+  if (!canUseGeminiChatModel(settings.geminiUsageScope, providerId)) return null;
   const model =
     requestedModel ?? settings.telegramModel ??
     firstVisibleModelForProvider(

@@ -5,42 +5,143 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Badge, Button, Field, FieldSet, Switch, Text, toast } from "../ui";
+import {
+  Badge,
+  Button,
+  Callout,
+  Field,
+  FieldSet,
+  Label,
+  RadioGroup,
+  RadioGroupItem,
+  Switch,
+  Text,
+  toast,
+} from "../ui";
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useSettings, useShortcuts } from "../../lib/queries";
 import { prettyAccelerator } from "../../shared/keybindings";
 import { installAccessibilityRefresh } from "../../lib/accessibility-refresh";
+import {
+  checkAccessibilityPermission,
+  requestAccessibilityPermission,
+  type AccessibilityPermissionState,
+} from "../../lib/accessibility-permission-core";
+
+async function openAccessibilitySettings(): Promise<void> {
+  try {
+    await window.aidenAPI.accessibility.openSettings();
+  } catch {
+    toast.error(
+      "Aiden couldn’t open Accessibility Settings. Open Privacy & Security → Accessibility manually.",
+    );
+  }
+}
 
 function AccessibilityAccess() {
-  const [trusted, setTrusted] = React.useState<boolean | null>(null);
+  const [permission, setPermission] = React.useState<AccessibilityPermissionState>({
+    status: "checking",
+  });
+  const [requesting, setRequesting] = React.useState(false);
+  const permissionRevision = React.useRef(0);
+  const requestingRef = React.useRef(false);
 
-  React.useEffect(() => {
-    const refresh = () => void window.aidenAPI.accessibility.isTrusted().then(setTrusted);
-    refresh();
-    return installAccessibilityRefresh(refresh);
+  const refresh = React.useCallback(async (showChecking = false) => {
+    if (requestingRef.current) return;
+    const revision = ++permissionRevision.current;
+    if (showChecking) setPermission({ status: "checking" });
+    const next = await checkAccessibilityPermission(window.aidenAPI.accessibility.isTrusted);
+    if (revision === permissionRevision.current) setPermission(next);
   }, []);
 
+  React.useEffect(() => {
+    void refresh(true);
+    return installAccessibilityRefresh(() => void refresh());
+  }, [refresh]);
+
   const grant = async () => {
-    const granted = await window.aidenAPI.accessibility.request();
-    setTrusted(granted);
-    if (!granted) {
-      toast.info("Enable Aiden Agent in System Settings → Privacy & Security → Accessibility, then come back.");
+    requestingRef.current = true;
+    const revision = ++permissionRevision.current;
+    setRequesting(true);
+    const next = await requestAccessibilityPermission(window.aidenAPI.accessibility.request);
+    if (revision === permissionRevision.current) setPermission(next);
+    requestingRef.current = false;
+    setRequesting(false);
+    if (next.status === "needed") {
+      toast.info(
+        "Enable Aiden Agent in System Settings → Privacy & Security → Accessibility, then come back.",
+      );
     }
   };
 
-  if (trusted === null) return null;
+  if (permission.status === "checking") {
+    return (
+      <Field
+        label="Accessibility access"
+        description="Checking whether Aiden can paste dictated text into other apps."
+      >
+        <Badge>Checking…</Badge>
+      </Field>
+    );
+  }
+
+  if (permission.status === "granted") {
+    return (
+      <Field
+        label="Accessibility access"
+        description="Lets Aiden paste dictated text into the focused text field. This access is local and is not shared with the transcription provider."
+      >
+        <div className="flex items-center gap-2">
+          <Badge color="green">Granted</Badge>
+          <Button size="small" variant="transparent" onClick={() => void refresh(true)}>
+            Check again
+          </Button>
+        </div>
+      </Field>
+    );
+  }
+
   return (
     <Field
       label="Accessibility access"
-      description="Lets Aiden paste dictated text into the focused text field. Without it, transcripts are copied to the clipboard instead."
+      description="Optional and used only for local paste. Dictation still works without it and keeps the transcript on your clipboard."
+      orientation="vertical"
     >
-      {trusted ? (
-        <Badge color="green">Granted</Badge>
-      ) : (
-        <Button variant="filled" onClick={() => void grant()}>
-          Grant Access
-        </Button>
-      )}
+      <Callout
+        color={permission.status === "error" ? "red" : "blue"}
+        role={permission.status === "error" ? "alert" : undefined}
+        aria-live="polite"
+        aria-busy={requesting}
+      >
+        <Text variant="small-strong">
+          {permission.status === "error" ? "Accessibility check failed" : "Paste access needed"}
+        </Text>
+        <Text as="p" variant="small" color="secondary">
+          {permission.status === "error"
+            ? permission.message
+            : "Allow the current Aiden app to paste automatically. Until then, completed transcripts are copied."}
+        </Text>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button size="small" variant="filled" onClick={() => void grant()} disabled={requesting}>
+            {requesting ? "Checking…" : "Grant access"}
+          </Button>
+          <Button
+            size="small"
+            onClick={() => void openAccessibilitySettings()}
+            disabled={requesting}
+          >
+            Open System Settings
+          </Button>
+          <Button
+            size="small"
+            variant="transparent"
+            onClick={() => void refresh(true)}
+            disabled={requesting}
+          >
+            Check again
+          </Button>
+        </div>
+      </Callout>
     </Field>
   );
 }
@@ -51,10 +152,7 @@ function DictationHotkey() {
 
   if (shortcuts.isError) {
     return (
-      <Field
-        label="Dictation hotkey"
-        description="The saved shortcut could not be read."
-      >
+      <Field label="Dictation hotkey" description="The saved shortcut could not be read.">
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Badge color="red">Unavailable</Badge>
           <Button size="small" onClick={() => void shortcuts.refetch()}>
@@ -63,9 +161,7 @@ function DictationHotkey() {
           <Button
             size="small"
             variant="filled"
-            onClick={() =>
-              void navigate({ to: "/settings", search: { section: "shortcut" } })
-            }
+            onClick={() => void navigate({ to: "/settings", search: { section: "shortcut" } })}
           >
             Manage shortcuts
           </Button>
@@ -76,10 +172,7 @@ function DictationHotkey() {
 
   if (shortcuts.isLoading || !shortcuts.data) {
     return (
-      <Field
-        label="Dictation hotkey"
-        description="Checking the saved global shortcut."
-      >
+      <Field label="Dictation hotkey" description="Checking the saved global shortcut.">
         <Badge>Checking…</Badge>
       </Field>
     );
@@ -94,7 +187,15 @@ function DictationHotkey() {
       description="Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
     >
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <Badge color={runtime?.state === "active" ? "green" : runtime?.state === "unavailable" ? "red" : undefined}>
+        <Badge
+          color={
+            runtime?.state === "active"
+              ? "green"
+              : runtime?.state === "unavailable"
+                ? "red"
+                : undefined
+          }
+        >
           {runtime?.state === "active"
             ? "Active"
             : runtime?.state === "unavailable"
@@ -137,17 +238,39 @@ export function DictationShortcutSettings() {
       <DictationHotkey />
       <AccessibilityAccess />
       <Field
-        label="Hold to talk"
-        description="Hold the shortcut to record and release it to transcribe. Leave off to press once to start and again to stop."
+        label="Shortcut behavior"
+        description="Choose how the global dictation shortcut starts and stops each recording."
+        orientation="vertical"
       >
-        <Switch
-          checked={holdToTalk}
-          onCheckedChange={(value) => void patch({ dictationHoldToTalk: value })}
-        />
+        <RadioGroup
+          value={holdToTalk ? "hold" : "toggle"}
+          onValueChange={(value) => void patch({ dictationHoldToTalk: value === "hold" })}
+          orientation="vertical"
+          aria-label="Dictation shortcut behavior"
+        >
+          <Label className="cursor-pointer items-start rounded-control border border-field px-3 py-2.5 hover:border-primary/30 hover:bg-list-hover">
+            <RadioGroupItem value="hold" className="mt-0.5 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-regular text-primary">Hold to dictate</span>
+              <span className="mt-0.5 block text-small text-secondary">
+                Hold the shortcut while speaking; release it to transcribe.
+              </span>
+            </span>
+          </Label>
+          <Label className="cursor-pointer items-start rounded-control border border-field px-3 py-2.5 hover:border-primary/30 hover:bg-list-hover">
+            <RadioGroupItem value="toggle" className="mt-0.5 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-regular text-primary">Press to toggle</span>
+              <span className="mt-0.5 block text-small text-secondary">
+                Press once to start; press again to stop and transcribe.
+              </span>
+            </span>
+          </Label>
+        </RadioGroup>
       </Field>
       <Field
         label="Stop after silence"
-        description="Ends recording shortly after you stop speaking. You can still stop with the shortcut."
+        description="Applies to both shortcut behaviors. Release or press the shortcut again to stop manually."
       >
         <Switch
           checked={silenceStop}
