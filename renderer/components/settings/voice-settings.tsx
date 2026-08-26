@@ -15,20 +15,20 @@ import {
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useSettings } from "../../lib/queries";
 import type { VoiceProvider } from "../../lib/types";
+import {
+  CLOUD_VOICE_MODELS,
+  resolveCloudVoiceModel,
+  type CloudVoiceProvider,
+} from "../../shared/voice-models";
 import { DictationShortcutSettings } from "./dictation-shortcut-settings";
 import { LocalVoiceSettings } from "./local-voice-settings";
-
-const CLOUD_MODELS: Record<"openai" | "gemini", string[]> = {
-  openai: ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
-  gemini: ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"],
-};
 
 export function VoiceSettings() {
   const qc = useQueryClient();
   const settings = useSettings();
   const provider: VoiceProvider = settings.data?.voiceProvider ?? "openai";
   const isCloud = provider === "openai" || provider === "gemini";
-  const model = settings.data?.voiceModel ?? (isCloud ? CLOUD_MODELS[provider][0] : "");
+  const model = isCloud ? resolveCloudVoiceModel(provider, settings.data?.voiceModel) : "";
 
   const patch = async (next: { voiceProvider?: VoiceProvider; voiceModel?: string }) => {
     await settingsApi.set(next);
@@ -38,7 +38,13 @@ export function VoiceSettings() {
   const changeProvider = (value: string) => {
     const p = value as VoiceProvider;
     if (p === "local") void patch({ voiceProvider: p });
-    else void patch({ voiceProvider: p, voiceModel: CLOUD_MODELS[p][0] });
+    else {
+      const cloudProvider = p as CloudVoiceProvider;
+      void patch({
+        voiceProvider: cloudProvider,
+        voiceModel: resolveCloudVoiceModel(cloudProvider, undefined),
+      });
+    }
   };
 
   return (
@@ -46,7 +52,11 @@ export function VoiceSettings() {
       <FieldSet title="Voice Input">
         <Field
           label="Provider"
-          description={provider === "local" ? "Transcribes on this Mac after an on-device model is downloaded." : `Sends recordings to ${provider === "openai" ? "OpenAI" : "Google"} for transcription.`}
+          description={
+            provider === "local"
+              ? "Transcribes on this Mac after an on-device model is downloaded."
+              : `Sends recordings to ${provider === "openai" ? "OpenAI" : "Google"} for transcription.`
+          }
         >
           <Select value={provider} onValueChange={changeProvider}>
             <SelectTrigger size="small">
@@ -66,7 +76,7 @@ export function VoiceSettings() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CLOUD_MODELS[provider].map((m) => (
+                {CLOUD_VOICE_MODELS[provider].map((m) => (
                   <SelectItem key={m} value={m}>
                     {m}
                   </SelectItem>

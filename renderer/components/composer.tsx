@@ -401,6 +401,7 @@ export function Composer({
     {
       provider: settings.data?.voiceProvider ?? "openai",
       localModel: settings.data?.localVoiceModel,
+      model: settings.data?.voiceModel,
     },
   );
 
@@ -1655,6 +1656,18 @@ export function Composer({
                   thinkingControl && "composer-action-row max-[520px]:w-full",
                 )}
               >
+                {voice.recording &&
+                (voice.liveTranscript.committed || voice.liveTranscript.tentative) ? (
+                  <span
+                    className="max-w-56 truncate text-small"
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Live transcription"
+                  >
+                    <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
+                    <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
+                  </span>
+                ) : null}
                 {thinkingControl}
                 {modelPicker}
                 <Button

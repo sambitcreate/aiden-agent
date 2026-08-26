@@ -32,6 +32,7 @@ import {
 } from "../services/mcp-presets.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import { transcribe } from "../services/transcription.js";
+import { geminiLiveTranscription } from "../services/gemini-live-transcription.js";
 import { asString } from "./voice-codec.js";
 import { parseSkill, parseMcpServer } from "./phase2-parse.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
@@ -264,11 +265,43 @@ export function registerPhase2Handlers(): void {
   });
 
   // ── Voice transcription ──────────────────────────────────────────────
-  ipcMain.handle("voice:transcribe", async (_event, audioBase64: unknown, mimeType: unknown) => {
-    return transcribe({
-      audioBase64: asString(audioBase64, "audioBase64"),
-      mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
-      signal: AbortSignal.timeout(120_000),
-    });
+  ipcMain.handle(
+    "voice:transcribe",
+    async (_event, audioBase64: unknown, mimeType: unknown, model: unknown) => {
+      return transcribe({
+        audioBase64: asString(audioBase64, "audioBase64"),
+        mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
+        model: typeof model === "string" ? model : undefined,
+        signal: AbortSignal.timeout(120_000),
+      });
+    },
+  );
+  ipcMain.handle("voice:streamStart", async (event) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Voice streaming must come from the active application document."),
+    );
+    return geminiLiveTranscription.start(owner);
+  });
+  ipcMain.handle("voice:streamPush", (event, sessionId: unknown, pcmBase64: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Voice streaming must come from the active application document."),
+    );
+    geminiLiveTranscription.push(owner, asString(sessionId, "sessionId"), pcmBase64);
+  });
+  ipcMain.handle("voice:streamFinish", async (event, sessionId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Voice streaming must come from the active application document."),
+    );
+    return geminiLiveTranscription.finish(owner, asString(sessionId, "sessionId"));
+  });
+  ipcMain.handle("voice:streamCancel", (event, sessionId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Voice streaming must come from the active application document."),
+    );
+    geminiLiveTranscription.cancel(owner, asString(sessionId, "sessionId"));
   });
 }

@@ -117,6 +117,7 @@ import {
 } from "./services/aiden-remote-service-main.js";
 import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
+import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
@@ -270,6 +271,7 @@ function cleanupApplication(): void {
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
+  geminiLiveTranscription.dispose();
   void mcpManager.closeAll();
 }
 

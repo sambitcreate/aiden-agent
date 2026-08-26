@@ -500,11 +500,19 @@ export const aidenRemoteApi = {
 
 // ── Voice + shortcut ──────────────────────────────────────────────────
 export const voiceApi = {
-  transcribe: (audioBase64: string, mimeType: string) =>
-    invoke<string>("voice:transcribe", audioBase64, mimeType),
+  transcribe: (audioBase64: string, mimeType: string, model?: string) =>
+    invoke<string>("voice:transcribe", audioBase64, mimeType, model),
   /** On-device transcription: base64 raw 16 kHz mono Float32 PCM + downloaded model id. */
   transcribeLocal: (pcmBase64: string, modelId: string) =>
     invoke<string>("voice:transcribeLocal", pcmBase64, modelId),
+  streamStart: () => invoke<{ sessionId: string }>("voice:streamStart"),
+  streamPush: (sessionId: string, pcmBase64: string) =>
+    invoke<void>("voice:streamPush", sessionId, pcmBase64),
+  streamFinish: (sessionId: string) => invoke<string>("voice:streamFinish", sessionId),
+  streamCancel: (sessionId: string) => invoke<void>("voice:streamCancel", sessionId),
+  onStreamText: (
+    handler: (payload: { sessionId: string; committed: string; tentative: string }) => void,
+  ) => onNotification("voice:stream-text", handler),
 };
 
 /** On-device (sherpa-onnx / Parakeet) engine + model management. */

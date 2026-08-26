@@ -340,7 +340,8 @@ const featureBentos: FeatureBento[] = [
     id: "voice",
     group: "control",
     title: "Voice & Dictation",
-    description: "Speak into the composer or dictate system-wide with cloud or on-device voice.",
+    description:
+      "Speak into the composer or dictate system-wide with live Gemini, cloud, or on-device voice.",
     icon: Mic2,
     imageUrl: FEATURE_ILLUSTRATIONS.voice,
     size: "standard",
