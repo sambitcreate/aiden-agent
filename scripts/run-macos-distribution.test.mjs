@@ -133,6 +133,7 @@ test("release artifact configuration uses stable GitHub-safe names", async () =>
   );
   assert.equal(packageJson.build.mac.artifactName, "Aiden-Agent-${version}-${arch}-mac.${ext}");
   assert.equal(packageJson.build.dmg.artifactName, "Aiden-Agent-Beta-${version}-${arch}.${ext}");
+  assert.equal(packageJson.build.linux.artifactName, "Aiden-Agent-${version}-${arch}-linux.${ext}");
 });
 
 test("release assets stay draft-only until the complete update set is uploaded", async () => {
@@ -142,6 +143,21 @@ test("release assets stay draft-only until the complete update set is uploaded",
   );
   const publisher = await readFile(new URL("./publish-github-release.sh", import.meta.url), "utf8");
   assert.match(workflow, /bash scripts\/publish-github-release\.sh release\/distribution/u);
+  assert.match(workflow, /ubuntu-24\.04-arm/u);
+  assert.match(workflow, /needs:[\s\S]*?- release[\s\S]*?- linux-release/u);
+
+  const ciWorkflow = await readFile(
+    new URL("../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(ciWorkflow, /container: fedora:44/u);
+  assert.match(ciWorkflow, /dpkg --verify aiden-agent/u);
+  assert.match(ciWorkflow, /rpm --verify aiden-agent/u);
+  assert.match(
+    ciWorkflow,
+    /test "\$rpm_verify_output" = '\.M\.\.\.\.\.\.\. {4}\/opt\/Aiden Agent\/chrome-sandbox'/u,
+  );
+  assert.match(ciWorkflow, /4755:root:root/u);
 
   const existingReleaseGuard = publisher.indexOf("if lookup_release_with_retry");
   const draftAwareLookup = publisher.indexOf('gh release view "$RELEASE_TAG"');

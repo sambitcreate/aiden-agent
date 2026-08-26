@@ -77,7 +77,53 @@ export interface WorkspaceFileWriteHooks {
   recoveryUse?: (recoveryPath: string) => Promise<"clear" | "open" | "unknown">;
 }
 
+export async function linuxRecoveryUse(
+  recoveryPath: string,
+  procRoot = "/proc",
+): Promise<"clear" | "open" | "unknown"> {
+  let target: { dev: number; ino: number };
+  try {
+    const stats = await fs.stat(recoveryPath);
+    target = { dev: stats.dev, ino: stats.ino };
+  } catch {
+    return "unknown";
+  }
+
+  let processEntries: string[];
+  try {
+    processEntries = (await fs.readdir(procRoot)).filter((entry) => /^\d+$/u.test(entry));
+  } catch {
+    return "unknown";
+  }
+
+  const currentUid = process.getuid?.();
+  let complete = true;
+  for (const pid of processEntries) {
+    const processPath = path.join(procRoot, pid);
+    try {
+      const processStats = await fs.stat(processPath);
+      if (currentUid !== undefined && processStats.uid !== currentUid) continue;
+      const descriptors = await fs.readdir(path.join(processPath, "fd"));
+      for (const descriptor of descriptors) {
+        try {
+          const stats = await fs.stat(path.join(processPath, "fd", descriptor));
+          if (stats.dev === target.dev && stats.ino === target.ino) return "open";
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") complete = false;
+        }
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A same-user /proc entry that cannot be inspected must fail closed so
+      // recovery data is never removed while a descriptor may still be open.
+      if (code !== "ENOENT") complete = false;
+    }
+  }
+  return complete ? "clear" : "unknown";
+}
+
 async function recoveryUse(recoveryPath: string): Promise<"clear" | "open" | "unknown"> {
+  if (process.platform === "linux") return linuxRecoveryUse(recoveryPath);
   if (process.platform !== "darwin") return "unknown";
   return new Promise((resolve) => {
     execFile(

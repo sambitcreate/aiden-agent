@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import Bonjour from "bonjour-service";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
@@ -301,6 +302,87 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
   }
 }
 
+export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublisher {
+  private bonjour: Bonjour | null = null;
+  private generation = 0;
+
+  constructor(
+    private readonly log: (entry: AidenRemoteServiceLogEntry) => void = () => undefined,
+  ) {}
+
+  async start(
+    input: { instanceId: string; displayName: string; port: number },
+    onUnexpectedFailure: (error: Error) => void,
+  ): Promise<void> {
+    this.stop();
+    const generation = ++this.generation;
+    let ready = false;
+    let failed = false;
+    let rejectStartup: (error: Error) => void = () => undefined;
+    const startupFailure = new Promise<never>((_resolve, reject) => {
+      rejectStartup = reject;
+    });
+    const fail = (value: unknown) => {
+      if (failed || this.generation !== generation) return;
+      failed = true;
+      const error = value instanceof Error ? value : new Error(String(value));
+      this.log({ level: "warn", event: "bonjour_failed", details: { message: error.message } });
+      if (!ready) rejectStartup(error);
+      else onUnexpectedFailure(error);
+    };
+    const bonjour = new Bonjour(undefined, fail);
+    this.bonjour = bonjour;
+    const service = bonjour.publish({
+      name: aidenRemoteBonjourServiceName(input.displayName, input.instanceId),
+      type: "aiden-agent",
+      protocol: "tcp",
+      port: input.port,
+      txt: { v: "1", instance: input.instanceId },
+    });
+    const readySignal = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Local discovery did not become ready in time.")),
+        3_000,
+      );
+      timer.unref();
+      service.once("up", () => {
+        clearTimeout(timer);
+        if (this.generation !== generation) {
+          reject(new Error("Local discovery was stopped before it became ready."));
+          return;
+        }
+        ready = true;
+        resolve();
+      });
+    });
+    await Promise.race([readySignal, startupFailure]).catch((error: unknown) => {
+      this.stop();
+      throw error;
+    });
+  }
+
+  stop(): void {
+    this.generation += 1;
+    const bonjour = this.bonjour;
+    this.bonjour = null;
+    bonjour?.destroy();
+  }
+}
+
+export function aidenRemoteBonjourBackend(
+  platform: NodeJS.Platform = process.platform,
+): "dns-sd" | "node" {
+  return platform === "darwin" ? "dns-sd" : "node";
+}
+
+export function createAidenRemoteBonjourPublisher(
+  log: (entry: AidenRemoteServiceLogEntry) => void = () => undefined,
+): AidenRemoteBonjourPublisher {
+  return aidenRemoteBonjourBackend() === "dns-sd"
+    ? new DnsSdAidenRemoteBonjourPublisher(log)
+    : new NodeAidenRemoteBonjourPublisher(log);
+}
+
 export class AidenRemoteService {
   private lanServer: HttpsServer | null = null;
   private tailscaleServer: HttpServer | null = null;
@@ -594,6 +676,10 @@ export class AidenRemoteService {
     this.destroyConnections(this.tailscaleConnections);
     this.lanServer?.close();
     this.tailscaleServer?.close();
+  }
+
+  keepsApplicationAlive(): boolean {
+    return this.lanServer !== null || this.tailscaleServer !== null;
   }
 
   async setEnabled(enabled: boolean): Promise<void> {

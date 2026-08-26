@@ -119,6 +119,9 @@ cd "$distribution_dir"
 shopt -s nullglob
 dmg_assets=( *.dmg )
 zip_assets=( *.zip )
+appimage_assets=( *.AppImage )
+deb_assets=( *.deb )
+rpm_assets=( *.rpm )
 if [[ "${#dmg_assets[@]}" -ne 1 || ! -f "${dmg_assets[0]}" ]]; then
   echo "Expected exactly one verified versioned DMG before publishing." >&2
   exit 1
@@ -131,16 +134,57 @@ if [[ ! -f latest-mac.yml ]]; then
   echo "Expected verified latest-mac.yml before publishing." >&2
   exit 1
 fi
+for linux_kind in appimage deb rpm; do
+  case "$linux_kind" in
+    appimage)
+      linux_assets=( "${appimage_assets[@]}" )
+      linux_arches=( x86_64 arm64 )
+      ;;
+    deb)
+      linux_assets=( "${deb_assets[@]}" )
+      linux_arches=( amd64 arm64 )
+      ;;
+    rpm)
+      linux_assets=( "${rpm_assets[@]}" )
+      linux_arches=( x86_64 aarch64 )
+      ;;
+  esac
+  if [[ "${#linux_assets[@]}" -ne 2 ]]; then
+    echo "Expected exactly two verified Linux $linux_kind assets before publishing." >&2
+    exit 1
+  fi
+  for linux_arch in "${linux_arches[@]}"; do
+    matching=0
+    for linux_asset in "${linux_assets[@]}"; do
+      if [[ "$linux_asset" == *-"$linux_arch"-linux.* ]]; then
+        matching=$((matching + 1))
+      fi
+    done
+    if [[ "$matching" -ne 1 ]]; then
+      echo "Expected one verified Linux $linux_kind asset for $linux_arch." >&2
+      exit 1
+    fi
+  done
+done
 
 website_dmg="$RUNNER_TEMP/Aiden-Agent-Beta-arm64.dmg"
 cp -- "${dmg_assets[0]}" "$website_dmg"
-shasum -a 256 -- "${dmg_assets[@]}" "${zip_assets[@]}" latest-mac.yml > SHA256SUMS
+shasum -a 256 -- \
+  "${dmg_assets[@]}" \
+  "${zip_assets[@]}" \
+  "${appimage_assets[@]}" \
+  "${deb_assets[@]}" \
+  "${rpm_assets[@]}" \
+  latest-mac.yml > SHA256SUMS
 website_sha256="$(shasum -a 256 -- "$website_dmg" | awk '{ print $1 }')"
 printf '%s  %s\n' "$website_sha256" "$(basename "$website_dmg")" >> SHA256SUMS
 
 release_assets=(
   "${dmg_assets[@]}"
   "${zip_assets[@]}"
+  "${appimage_assets[@]}"
+  "${deb_assets[@]}"
+  "${rpm_assets[@]}"
   latest-mac.yml
   SHA256SUMS
   "$website_dmg"
@@ -148,6 +192,9 @@ release_assets=(
 expected_asset_names=(
   "${dmg_assets[@]}"
   "${zip_assets[@]}"
+  "${appimage_assets[@]}"
+  "${deb_assets[@]}"
+  "${rpm_assets[@]}"
   latest-mac.yml
   SHA256SUMS
   "$(basename "$website_dmg")"

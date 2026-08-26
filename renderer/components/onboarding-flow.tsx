@@ -57,6 +57,7 @@ import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries"
 import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
 import { onboardingStepIndex, type OnboardingSnapshot } from "../shared/onboarding";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 type Step = "profile" | "provider" | "tour";
 const steps: Step[] = ["profile", "provider", "tour"];
@@ -242,7 +243,7 @@ const featureBentos: FeatureBento[] = [
     id: "models",
     group: "extend",
     title: "Model Freedom",
-    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or local endpoints.",
+    description: "Choose from 30+ Pi providers, ChatGPT sign-in, or local and private endpoints.",
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
@@ -449,6 +450,19 @@ function canChooseBuiltinProvider(_provider: Provider): boolean {
 
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
+  const capabilities = useAppCapabilities();
+  const visibleFeatureBentos = React.useMemo(() => {
+    const visible: FeatureBento[] = [];
+    for (const feature of featureBentos) {
+      if (!capabilities.computerUse && feature.id === "computerUse") continue;
+      visible.push(
+        feature.id === "commands" && capabilities.platform === "linux"
+          ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
+          : feature,
+      );
+    }
+    return visible;
+  }, [capabilities.computerUse, capabilities.platform]);
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();
   // Main-owned state is authoritative. Block the workbench until it has been
@@ -820,7 +834,7 @@ export function OnboardingFlow() {
                       What should Aiden call you?
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
-                      This personalizes your profile and model context on this Mac.
+                      This personalizes your profile and model context on this device.
                     </Text>
                   </div>
                 </div>
@@ -842,7 +856,7 @@ export function OnboardingFlow() {
                 <div className="mt-4 flex items-center gap-2 text-secondary">
                   <Lock className="size-4 text-accent" />
                   <Text variant="small" color="secondary">
-                    Stored privately on this Mac.
+                    Stored privately on this device.
                   </Text>
                 </div>
               </div>
@@ -1068,7 +1082,7 @@ export function OnboardingFlow() {
                       Everything Aiden brings together
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
-                      Explore all {featureBentos.length} shipped features. Scroll, then hover or
+                      Explore all {visibleFeatureBentos.length} shipped features. Scroll, then hover or
                       focus a tile to learn more.
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
@@ -1079,11 +1093,13 @@ export function OnboardingFlow() {
                 </div>
                 <div
                   data-onboarding-bento
-                  data-onboarding-feature-count={featureBentos.length}
+                  data-onboarding-feature-count={visibleFeatureBentos.length}
                   className="mt-5 space-y-7 pb-1"
                 >
                   {featureGroups.map((group) => {
-                    const features = featureBentos.filter((feature) => feature.group === group.id);
+                    const features = visibleFeatureBentos.filter(
+                      (feature) => feature.group === group.id,
+                    );
                     const headingId = `onboarding-feature-group-${group.id}`;
                     return (
                       <section key={group.id} aria-labelledby={headingId}>

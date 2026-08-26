@@ -464,6 +464,7 @@ async function prepareGeneration(
   let computerUse: ComputerUseController | undefined;
   if (
     options.allowComputerUse !== false &&
+    process.platform === "darwin" &&
     settings.computerUseEnabled === true &&
     chat.computerUseEnabled === true &&
     computerUseGenerationGate.isCurrent(computerUseGateSnapshot)

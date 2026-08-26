@@ -3,6 +3,7 @@ import {
   matchesAccelerator,
   type CommandId,
   type KeyboardEventLike,
+  type KeyboardPlatform,
 } from "../shared/keybindings";
 
 export interface CommandDispatchContext {
@@ -51,12 +52,13 @@ export function resolveCommandForKeyEvent(
   event: KeyboardEventLike,
   bindings: Record<CommandId, string | null>,
   context: CommandDispatchContext,
+  platform: KeyboardPlatform = "darwin",
 ): CommandId | null {
   if (context.defaultPrevented || context.composing || context.recording) return null;
   for (const definition of COMMANDS) {
     if (definition.global) continue;
     const binding = bindings[definition.id];
-    if (!binding || !matchesAccelerator(event, binding)) continue;
+    if (!binding || !matchesAccelerator(event, binding, platform)) continue;
     if (context.repeat && !definition.allowRepeat) continue;
     if (
       context.modal &&

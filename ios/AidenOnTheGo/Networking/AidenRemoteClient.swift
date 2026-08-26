@@ -146,7 +146,7 @@ enum AidenRemoteClientError: Error, LocalizedError {
         case .missingTrustConfiguration:
             return "This Aiden installation must be paired again to establish secure server trust."
         case .installationChanged:
-            return "The active Aiden Agent changed. Try again on the selected Mac."
+            return "The active Aiden Agent changed. Try again on the selected desktop."
         }
     }
 }
@@ -281,7 +281,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             )
         } catch let AidenRemoteClientError.server(statusCode, body)
             where statusCode == 400 && body.code.rawValue == "invalid_request" {
-            // Strict early-v1 Macs reject additive request keys before consuming
+            // Strict early-v1 desktops reject additive request keys before consuming
             // the one-time secret. Retry once with the frozen four-field shape.
             exchange = try await client.send(
                 method: "POST",

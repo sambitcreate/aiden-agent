@@ -169,7 +169,7 @@ test("shell tool is exact and inert until the main-owned broker wraps it", () =>
   const created = createSubagentShellTool();
   assert.equal(created.tool.name, "run_command");
   assert.deepEqual(created.binding, { toolName: "run_command" });
-  assert.match(created.tool.description, /full macOS-user host authority/u);
+  assert.match(created.tool.description, /full host-user authority/u);
 });
 
 test("exact multiline approval is durable before one helper dispatch", async (t) => {

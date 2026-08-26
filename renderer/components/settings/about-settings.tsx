@@ -4,9 +4,11 @@ import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 const APP_ICON_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 const REPOSITORY_URL = "https://github.com/sambitcreate/aiden-agent";
+const RELEASES_URL = `${REPOSITORY_URL}/releases`;
 
 function buildLabel(environment: string): string {
   return environment.toLocaleLowerCase() === "development"
@@ -55,6 +57,7 @@ function updateRestartError(result: AppUpdateRestartResult): string | null {
 }
 
 export function AboutSettings() {
+  const capabilities = useAppCapabilities();
   const [appInfo, setAppInfo] = React.useState<AppInfo | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [confirmReset, setConfirmReset] = React.useState(false);
@@ -205,8 +208,19 @@ export function AboutSettings() {
         <Field
           className="border-t border-separator"
           label="Software update"
-          description={updateDescription(updateSnapshot)}
+          description={
+            capabilities.platform === "linux"
+              ? "Install updates through your package manager, or download the newest Linux package from GitHub Releases."
+              : updateDescription(updateSnapshot)
+          }
         >
+          {capabilities.platform === "linux" ? (
+            <Button asChild size="small" variant="filled">
+              <a href={RELEASES_URL} target="_blank" rel="noreferrer">
+                <Download /> Open releases
+              </a>
+            </Button>
+          ) : (
           <div className="flex flex-col items-end gap-2 max-[540px]:items-start">
             {updateSnapshot.status === "downloading" && updateSnapshot.percent !== null ? (
               <div
@@ -249,6 +263,7 @@ export function AboutSettings() {
                       : "Check for updates"}
             </Button>
           </div>
+          )}
         </Field>
         <Field
           className="border-t border-separator"

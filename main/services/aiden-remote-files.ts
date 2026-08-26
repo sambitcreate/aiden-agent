@@ -235,7 +235,7 @@ export class AidenRemoteFileService {
       if (error instanceof AidenRemoteServiceError) throw error;
       throw new AidenRemoteServiceError(
         "workspace_unavailable",
-        "This workspace's files are not currently available on the Mac.",
+        "This workspace's files are not currently available on the desktop.",
         409,
       );
     });
@@ -321,13 +321,13 @@ export class AidenRemoteFileService {
         if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {
           throw new AidenRemoteServiceError(
             "revision_conflict",
-            "This file changed on the Mac. Reload it before saving.",
+            "This file changed on the desktop. Reload it before saving.",
             409,
           );
         }
         throw new AidenRemoteServiceError(
           "workspace_unavailable",
-          "Aiden could not safely save this file on the Mac.",
+          "Aiden could not safely save this file on the desktop.",
           409,
         );
       }

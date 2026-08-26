@@ -1282,7 +1282,7 @@ final class AidenChatViewModel {
                     return
                 } catch {
                     // Keep the durable stream cursor and continue retrying while
-                    // this Mac connection remains current. Long Tailscale or
+                    // this desktop connection remains current. Long Tailscale or
                     // local-network outages must not erase terminal evidence.
                 }
                 attempt += 1
@@ -1703,7 +1703,7 @@ struct AidenMessageOutcomePresentation: Equatable {
         case "rate_limit":
             detail = "The model provider is receiving too many requests. Try again shortly."
         case "authentication":
-            detail = "The model provider rejected its credentials. Check Provider Settings on your Mac."
+            detail = "The model provider rejected its credentials. Check Provider Settings on your desktop."
         case "quota":
             detail = "The model provider account has no available quota."
         case "invalid_request":

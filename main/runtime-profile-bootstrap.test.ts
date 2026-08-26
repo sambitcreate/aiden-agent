@@ -37,7 +37,7 @@ test("development shortcut registration is gated without removing in-app menu ac
 test("visible main-process branding derives from the configured app name", () => {
   const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
   assert.match(main, /title: app\.getName\(\)/u);
-  assert.match(main, /label: app\.getName\(\)/u);
+  assert.match(main, /appName: app\.getName\(\)/u);
   assert.match(main, /app\.dock\?\.setBadge\("DEV"\)/u);
 });
 

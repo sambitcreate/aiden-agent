@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -29,6 +30,25 @@ export async function createProfileShareFile(
 
 export async function removeProfileShareDirectory(directory: string): Promise<void> {
   await fs.rm(directory, { recursive: true, force: true });
+}
+
+export async function writeProfileShareExport(filePath: string, image: Buffer): Promise<void> {
+  const handle = await fs.open(
+    filePath,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_TRUNC |
+      fsConstants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    // Opening an existing path does not apply the mode argument. Normalize it
+    // before writing so a user-selected export never inherits public bits.
+    await handle.chmod(0o600);
+    await handle.writeFile(image);
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function cleanupStaleProfileShareDirectories(options?: {

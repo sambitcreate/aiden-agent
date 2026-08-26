@@ -161,7 +161,7 @@ export async function downloadModel(id: string): Promise<void> {
     await fs.promises.rm(dir, { recursive: true, force: true });
     await fs.promises.mkdir(dir, { recursive: true });
     emit(0, 1, "extract");
-    // macOS tar (libarchive) handles bz2; --strip-components=1 drops the archive's top folder.
+    // The system tar handles bz2; --strip-components=1 drops the archive's top folder.
     await execFileAsync("/usr/bin/tar", ["-xjf", tmpTar, "-C", dir, "--strip-components=1"], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 5 * 60_000,

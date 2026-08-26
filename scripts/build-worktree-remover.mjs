@@ -1,10 +1,10 @@
 /* global console, process */
 
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { buildNativeCExecutable } from "./native-c-build-core.mjs";
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,29 +16,17 @@ const output = path.join(
   testing ? "aiden-worktree-remover-test" : "aiden-worktree-remover",
 );
 
-if (process.platform !== "darwin") {
-  console.log("Skipping the macOS managed-worktree remover build on this platform.");
+if (process.platform !== "darwin" && process.platform !== "linux") {
+  console.log("Skipping the managed-worktree remover build on this platform.");
   process.exit(0);
 }
 
-await mkdir(path.dirname(output), { recursive: true });
-const args = [
-  "clang",
-  "-std=c17",
-  "-Wall",
-  "-Wextra",
-  "-Werror",
-  "-O2",
-  "-mmacosx-version-min=14.4",
-  ...(testing ? ["-DAIDEN_REMOVER_TESTING=1"] : ["-arch", "arm64", "-arch", "x86_64"]),
-  path.join(repositoryRoot, "native", "worktree-remover", "main.c"),
-  "-o",
+await buildNativeCExecutable({
+  executeFile,
+  repositoryRoot,
+  source: path.join(repositoryRoot, "native", "worktree-remover", "main.c"),
   output,
-];
-await executeFile("/usr/bin/xcrun", args, {
-  cwd: repositoryRoot,
-  env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
-  maxBuffer: 1024 * 1024,
-  timeout: 120_000,
+  testing,
+  testingDefine: "AIDEN_REMOVER_TESTING",
 });
 console.log(`Built ${path.relative(repositoryRoot, output)}`);

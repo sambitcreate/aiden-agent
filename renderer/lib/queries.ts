@@ -437,10 +437,11 @@ export function useUsageSummary(range: UsageDateRange) {
   });
 }
 
-export function useFoundationModelsConnection() {
+export function useFoundationModelsConnection(enabled = true) {
   return useQuery({
     queryKey: queryKeys.foundationModelsConnection,
     queryFn: titleProvidersApi.status,
+    enabled,
     refetchOnWindowFocus: true,
     refetchInterval: (query) => (query.state.data?.state === "model_preparing" ? 5_000 : false),
   });

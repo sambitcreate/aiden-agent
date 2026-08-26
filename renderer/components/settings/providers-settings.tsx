@@ -42,6 +42,7 @@ import {
   type FoundationModelsConnectionStatus,
   type Provider,
 } from "../../lib/types";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
@@ -110,9 +111,10 @@ function BuiltinProviderRows({
 
 export function ProvidersSettings() {
   const qc = useQueryClient();
+  const capabilities = useAppCapabilities();
   const providers = useProviders();
   const settings = useSettings();
-  const foundationModels = useFoundationModelsConnection();
+  const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const [editing, setEditing] = React.useState<Provider | null>(null);
   const editingFocusTarget = React.useRef(new ProviderEditorFocusTarget());
   const addProviderTriggerRef = React.useRef<HTMLButtonElement | null>(null);
@@ -130,7 +132,11 @@ export function ProvidersSettings() {
   const builtins = list.filter((provider) => provider.isBuiltin);
   const customProviders = list.filter((provider) => !provider.isBuiltin);
   const { featured: featuredBuiltins, more: moreBuiltins } = splitPiBuiltinProviders(builtins);
-  const titleProviderId = settings.data?.chatTitleProviderId ?? "automatic";
+  const titleProviderId =
+    !capabilities.appleFoundationModels &&
+    settings.data?.chatTitleProviderId === "apple-foundation-models"
+      ? "automatic"
+      : (settings.data?.chatTitleProviderId ?? "automatic");
 
   const setTitleProvider = async (value: ChatTitleProviderId) => {
     setSavingTitleProvider(true);
@@ -309,7 +315,7 @@ export function ProvidersSettings() {
 
       <CodexProviderSettings />
 
-      {foundationModels.data ? (
+      {capabilities.appleFoundationModels && foundationModels.data ? (
         <div
           className="rounded-card border border-separator"
           aria-busy={refreshingFoundationModels}
@@ -375,6 +381,37 @@ export function ProvidersSettings() {
               <SelectContent>
                 <SelectItem value="automatic">Automatic</SelectItem>
                 <SelectItem value="apple-foundation-models">On-device only</SelectItem>
+                <SelectItem value="chat-model">Selected chat model</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      ) : !capabilities.appleFoundationModels ? (
+        <div className="rounded-card border border-separator px-3.5 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <Text variant="small-strong" as="p">
+                Chat title provider
+              </Text>
+              <Text variant="small" color="tertiary" as="p" className="mt-0.5">
+                Automatic uses your selected chat model. Apple Foundation Models are available only
+                in the macOS version.
+              </Text>
+            </div>
+            <Select
+              value={titleProviderId}
+              disabled={savingTitleProvider}
+              onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
+            >
+              <SelectTrigger
+                size="small"
+                className="w-full shrink-0 sm:w-48"
+                aria-label="Chat title provider"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="automatic">Automatic</SelectItem>
                 <SelectItem value="chat-model">Selected chat model</SelectItem>
               </SelectContent>
             </Select>

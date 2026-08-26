@@ -2,13 +2,14 @@
   "name": "aiden-agent",
   "version": "0.30.0",
   "private": true,
-  "description": "A macOS AI workspace agent for local and hosted models",
+  "description": "A desktop AI workspace agent for local and hosted models",
   "keywords": [
     "ai-agent",
     "developer-tools",
     "electron",
     "lm-studio",
     "local-ai",
+    "linux",
     "macos",
     "mcp",
     "ollama",
@@ -20,6 +21,8 @@
     "url": "https://github.com/sambitcreate/aiden-agent/issues"
   },
   "author": "Sambit Biswas",
+  "license": "MIT",
+  "desktopName": "com.sambitcreate.aiden-agent.desktop",
   "repository": {
     "type": "git",
     "url": "https://github.com/sambitcreate/aiden-agent.git"
@@ -38,7 +41,7 @@
     "build:electron": "node scripts/build-electron.mjs",
     "dev": "npm run build:native:optional && npm run build:electron && concurrently -k -s first \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite --host 127.0.0.1 --port 4143 --strictPort",
-    "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && node scripts/prepare-macos-dev-runtime.mjs --run",
+    "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && node scripts/run-development-runtime.mjs",
     "dev:brand": "node scripts/prepare-macos-dev-runtime.mjs",
     "lint": "eslint .",
     "pretest": "npm run build:worktree-remover && npm run test:aiden-remote && npm run test:aiden-service-boundary && npm run test:ios-release && npm run test:terminal:coverage && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:provider-failure && npm run test:compaction && npm run test:subagents && tsx --test main/services/pi-remote-catalog.test.ts main/services/provider-model-info-core.test.ts main/services/aiden-remote-models.test.ts renderer/shared/provider-thinking.test.ts",
@@ -94,12 +97,18 @@
     "format": "oxfmt .",
     "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run build:native && npm run build && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
     "package:verify": "node scripts/verify-macos-package.mjs --development",
+    "package:linux": "npm run build && electron-builder --linux dir --config.forceCodeSigning=false --config.directories.output=release/linux-development --publish never",
+    "package:linux:verify": "node scripts/verify-linux-package.mjs release/linux-development",
     "release:preflight": "node scripts/check-macos-release.mjs",
     "release:check-consumers": "node scripts/check-release-consumers.mjs",
     "release:verify": "node scripts/verify-macos-package.mjs --release",
     "models:refresh": "node scripts/update-model-capabilities.mjs",
     "release:update-model-capabilities": "npm run models:refresh",
     "dist": "node scripts/run-macos-distribution.mjs",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb rpm --config.forceCodeSigning=false --config.directories.output=release/linux-distribution --publish never",
+    "test:linux-native": "node scripts/build-worktree-remover.mjs && node scripts/build-worktree-remover.mjs --test && node --test scripts/worktree-remover.test.mjs && node scripts/build-subagent-run-store.mjs && node scripts/build-subagent-run-store.mjs --test && node --test scripts/subagent-run-store.test.mjs && tsx --test main/services/subagents/subagent-run-store-io.test.ts && node scripts/build-subagent-file-mutator.mjs && node scripts/build-subagent-file-mutator.mjs --test && node --test scripts/subagent-file-mutator.test.mjs && node scripts/build-subagent-shell-runner.mjs && node scripts/build-subagent-shell-runner.mjs --test && tsx --test main/services/subagents/subagent-shell-runner-io.test.ts",
+    "test:linux-contracts": "tsx --test main/application-lifecycle-core.test.ts main/desktop-cli-core.test.ts main/services/application-menu-core.test.ts main/services/computer-use/platform.test.ts main/services/external-editors.test.ts main/services/profile-share-files.test.ts main/services/provider-key-policy.test.ts main/services/secure-storage-core.test.ts main/windows/main-window-options.test.ts main/windows/pill-window-platform.test.ts renderer/components/environment-subagents-contract.test.ts renderer/lib/command-system-core.test.ts renderer/shared/keybindings.test.ts && node --test scripts/native-c-build-core.test.mjs scripts/configure-electron-fuses.test.mjs scripts/verify-linux-package.test.mjs",
+    "test:tailscale-live": "tsx scripts/aiden-remote-tailscale-live-acceptance.ts",
     "test:portable-config": "tsx --test main/services/aiden-config-dir.test.ts main/services/portable-config-core.test.ts main/services/portable-config-core.roundtrip.test.ts main/services/portable-config-watch-core.test.ts main/services/data-store.test.ts main/services/data-store.resilience.test.ts main/services/config-store-core.test.ts main/services/secret-map-core.test.ts"
   },
   "dependencies": {
@@ -111,6 +120,7 @@
     "@tanstack/react-router": "^1.131.36",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "bonjour-service": "1.4.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -195,6 +205,7 @@
     "asarUnpack": [
       "**/node_modules/sherpa-onnx-node/**",
       "**/node_modules/sherpa-onnx-darwin-*/**",
+      "**/node_modules/sherpa-onnx-linux-*/**",
       "**/node_modules/node-pty/**"
     ],
     "directories": {
@@ -216,14 +227,6 @@
       {
         "from": "resources/app-icon-monochrome.png",
         "to": "app-icon-monochrome.png"
-      },
-      {
-        "from": "resources/computer-use/cua-driver-artifact.json",
-        "to": "computer-use/cua-driver-artifact.json"
-      },
-      {
-        "from": "resources/computer-use/LICENSE.cua-driver.md",
-        "to": "computer-use/LICENSE.cua-driver.md"
       }
     ],
     "mac": {
@@ -241,6 +244,16 @@
         "Contents/Helpers/aiden-subagent-file-mutator",
         "Contents/Helpers/aiden-subagent-shell-runner",
         "Contents/Helpers/aiden-worktree-remover"
+      ],
+      "extraResources": [
+        {
+          "from": "resources/computer-use/cua-driver-artifact.json",
+          "to": "computer-use/cua-driver-artifact.json"
+        },
+        {
+          "from": "resources/computer-use/LICENSE.cua-driver.md",
+          "to": "computer-use/LICENSE.cua-driver.md"
+        }
       ],
       "extraFiles": [
         {
@@ -276,6 +289,70 @@
         "NSMicrophoneUsageDescription": "Aiden Agent uses the microphone only when you choose voice input or dictation.",
         "NSAppleEventsUsageDescription": "Aiden Agent pastes dictated text into the app you are typing in."
       }
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
+    },
+    "linux": {
+      "artifactName": "Aiden-Agent-${version}-${arch}-linux.${ext}",
+      "category": "Development",
+      "description": "A desktop AI workspace agent for local and hosted models",
+      "executableName": "aiden-agent",
+      "icon": "resources/app-icon.png",
+      "maintainer": "Sambit Biswas",
+      "synopsis": "Private AI workspace agent",
+      "syncDesktopName": true,
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "extraFiles": [
+        {
+          "from": "build/native/aiden-worktree-remover",
+          "to": "Helpers/aiden-worktree-remover"
+        },
+        {
+          "from": "build/native/aiden-subagent-run-store",
+          "to": "Helpers/aiden-subagent-run-store"
+        },
+        {
+          "from": "build/native/aiden-subagent-file-mutator",
+          "to": "Helpers/aiden-subagent-file-mutator"
+        },
+        {
+          "from": "build/native/aiden-subagent-shell-runner",
+          "to": "Helpers/aiden-subagent-shell-runner"
+        }
+      ]
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2t64 (>= 1.0.17) | libasound2 (>= 1.0.17)"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "(libXtst or libXtst6)",
+        "xdg-utils",
+        "at-spi2-core",
+        "(libuuid or libuuid1)",
+        "(libsecret or libsecret-1-0)",
+        "(alsa-lib or libasound2)"
+      ]
     },
     "dmg": {
       "artifactName": "Aiden-Agent-Beta-${version}-${arch}.${ext}",

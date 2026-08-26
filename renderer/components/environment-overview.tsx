@@ -128,7 +128,7 @@ export function EnvironmentOverview({
     );
   }
 
-  const localDetail = workspace.managedWorktree ? "Isolated worktree" : "Runs on this Mac";
+  const localDetail = workspace.managedWorktree ? "Isolated worktree" : "Runs on this device";
   const accessLabel = workspace.permission === "full" ? "Full access" : "Ask first";
   const changesLabel = review.isLoading && !review.data
     ? "Changes, loading working tree status"

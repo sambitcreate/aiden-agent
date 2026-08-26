@@ -1,3 +1,8 @@
+#ifndef __APPLE__
+#define _GNU_SOURCE
+#endif
+
+#include "../shared/aiden-platform.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -41,21 +46,36 @@ static int is_exclusive_regular_file(const struct stat *identity) {
 
 static int same_file_identity(const struct stat *left,
                               const struct stat *right) {
+#ifdef __APPLE__
   return is_exclusive_regular_file(left) && is_exclusive_regular_file(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
          same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
          same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+#else
+  return is_exclusive_regular_file(left) && is_exclusive_regular_file(right) &&
+         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_size == right->st_size &&
+         same_timestamp(left->st_mtim, right->st_mtim) &&
+         same_timestamp(left->st_ctim, right->st_ctim);
+#endif
 }
 
 static int same_renamed_file_identity(const struct stat *left,
                                       const struct stat *right) {
+#ifdef __APPLE__
   return is_exclusive_regular_file(left) && is_exclusive_regular_file(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
          same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+#else
+  return is_exclusive_regular_file(left) && is_exclusive_regular_file(right) &&
+         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_size == right->st_size &&
+         same_timestamp(left->st_mtim, right->st_mtim);
+#endif
 }
 
 static int requested_contents_match(int descriptor,
@@ -115,6 +135,7 @@ static int capture_installed_identity(int staged_fd,
 
 static int make_token(const struct stat *identity, char *token,
                       size_t capacity) {
+#ifdef __APPLE__
   int length =
       snprintf(token, capacity, "%llx-%llx-%llx-%llx-%llx-%llx-%llx-%llx-%llx",
                (unsigned long long)identity->st_dev,
@@ -126,6 +147,17 @@ static int make_token(const struct stat *identity, char *token,
                (unsigned long long)identity->st_ctimespec.tv_nsec,
                (unsigned long long)identity->st_birthtimespec.tv_sec,
                (unsigned long long)identity->st_birthtimespec.tv_nsec);
+#else
+  int length =
+      snprintf(token, capacity, "%llx-%llx-%llx-%llx-%llx-%llx-%llx",
+               (unsigned long long)identity->st_dev,
+               (unsigned long long)identity->st_ino,
+               (unsigned long long)identity->st_size,
+               (unsigned long long)identity->st_mtim.tv_sec,
+               (unsigned long long)identity->st_mtim.tv_nsec,
+               (unsigned long long)identity->st_ctim.tv_sec,
+               (unsigned long long)identity->st_ctim.tv_nsec);
+#endif
   return length > 0 && (size_t)length < capacity ? 0 : -1;
 }
 

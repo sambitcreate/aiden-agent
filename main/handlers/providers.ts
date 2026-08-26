@@ -446,7 +446,7 @@ export function registerProviderHandlers(): void {
       next.dictationAccelerator = p.dictationAccelerator;
     if (
       p.chatTitleProviderId === "automatic" ||
-      p.chatTitleProviderId === "apple-foundation-models" ||
+      (p.chatTitleProviderId === "apple-foundation-models" && process.platform === "darwin") ||
       p.chatTitleProviderId === "chat-model"
     ) {
       next.chatTitleProviderId = p.chatTitleProviderId;

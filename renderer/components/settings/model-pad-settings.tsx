@@ -148,7 +148,7 @@ export function ModelPadSettings() {
           : `${draftPlacementCount} model${draftPlacementCount === 1 ? "" : "s"} saved to your Pad.`,
       );
     } catch {
-      toast.error("Aiden couldn’t save your Model Pad on this Mac.");
+      toast.error("Aiden couldn’t save your Model Pad on this device.");
     }
   };
 

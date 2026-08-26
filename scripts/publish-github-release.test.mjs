@@ -79,6 +79,12 @@ async function fixture(initialState) {
   await Promise.all([
     writeFile(path.join(distribution, "Aiden-Agent-Beta-0.30.1-arm64.dmg"), "dmg"),
     writeFile(path.join(distribution, "Aiden-Agent-0.30.1-arm64-mac.zip"), "zip"),
+    writeFile(path.join(distribution, "Aiden-Agent-0.30.1-x86_64-linux.AppImage"), "appimage"),
+    writeFile(path.join(distribution, "Aiden-Agent-0.30.1-arm64-linux.AppImage"), "appimage"),
+    writeFile(path.join(distribution, "Aiden-Agent-0.30.1-amd64-linux.deb"), "deb"),
+    writeFile(path.join(distribution, "Aiden-Agent-0.30.1-arm64-linux.deb"), "deb"),
+    writeFile(path.join(distribution, "Aiden-Agent-0.30.1-x86_64-linux.rpm"), "rpm"),
+    writeFile(path.join(distribution, "Aiden-Agent-0.30.1-aarch64-linux.rpm"), "rpm"),
     writeFile(path.join(distribution, "latest-mac.yml"), "version: 0.30.1\n"),
   ]);
   const ghPath = path.join(bin, "gh");
@@ -137,6 +143,12 @@ test("reconciles transient lookup, create, and publish failures without replacin
       "Aiden-Agent-0.30.1-arm64-mac.zip",
       "Aiden-Agent-Beta-0.30.1-arm64.dmg",
       "Aiden-Agent-Beta-arm64.dmg",
+      "Aiden-Agent-0.30.1-x86_64-linux.AppImage",
+      "Aiden-Agent-0.30.1-arm64-linux.AppImage",
+      "Aiden-Agent-0.30.1-amd64-linux.deb",
+      "Aiden-Agent-0.30.1-arm64-linux.deb",
+      "Aiden-Agent-0.30.1-x86_64-linux.rpm",
+      "Aiden-Agent-0.30.1-aarch64-linux.rpm",
       "SHA256SUMS",
       "latest-mac.yml",
     ].sort(),

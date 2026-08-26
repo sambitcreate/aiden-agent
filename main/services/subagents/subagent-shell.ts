@@ -231,7 +231,7 @@ export function createSubagentShellTool(): {
       name: SUBAGENT_RUN_COMMAND_TOOL_NAME,
       label: "Run approved host command",
       description:
-        "Run one exact command with full macOS-user host authority after attended Allow once approval. Minimal environment only; no OS sandbox or rollback.",
+        "Run one exact command with full host-user authority after attended Allow once approval. Minimal environment only; no OS sandbox or rollback.",
       parameters: Type.Object(
         {
           command: Type.String({

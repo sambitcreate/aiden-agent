@@ -414,8 +414,43 @@ export function normalizeAccelerator(value: unknown): string | null {
 }
 
 export function prettyAccelerator(value: string | null | undefined): string {
+  return prettyAcceleratorForPlatform(value, detectedKeyboardPlatform());
+}
+
+export type KeyboardPlatform = "darwin" | "linux" | "other";
+
+export function detectedKeyboardPlatform(): KeyboardPlatform {
+  if (typeof navigator === "undefined") return "darwin";
+  const identity = `${navigator.platform ?? ""} ${navigator.userAgent ?? ""}`;
+  if (/linux/iu.test(identity)) return "linux";
+  if (/mac|iphone|ipad/iu.test(identity)) return "darwin";
+  return "other";
+}
+
+export function prettyAcceleratorForPlatform(
+  value: string | null | undefined,
+  platform: KeyboardPlatform,
+): string {
   if (!value) return "Unassigned";
   const normalized = normalizeAccelerator(value) ?? value;
+  if (platform !== "darwin") {
+    const labels: Record<string, string> = {
+      Command: "Ctrl",
+      Control: "Super",
+      Alt: "Alt",
+      Shift: "Shift",
+      Return: "Enter",
+      Escape: "Esc",
+      Up: "↑",
+      Down: "↓",
+      Left: "←",
+      Right: "→",
+    };
+    return normalized
+      .split("+")
+      .map((part) => labels[part] ?? part)
+      .join("+");
+  }
   const symbols: Record<string, string> = {
     Command: "⌘",
     Control: "⌃",
@@ -436,18 +471,30 @@ export function prettyAccelerator(value: string | null | undefined): string {
 }
 
 export function ariaKeyShortcut(value: string | null | undefined): string | undefined {
+  return ariaKeyShortcutForPlatform(value, detectedKeyboardPlatform());
+}
+
+export function ariaKeyShortcutForPlatform(
+  value: string | null | undefined,
+  platform: KeyboardPlatform,
+): string | undefined {
   const normalized = value ? normalizeAccelerator(value) : null;
   if (!normalized) return undefined;
+  const replacements: Record<string, string> = {
+    Command: platform === "darwin" ? "Meta" : "Control",
+    Control: platform === "darwin" ? "Control" : "Meta",
+    Alt: "Alt",
+    Shift: "Shift",
+    Return: "Enter",
+    Up: "ArrowUp",
+    Down: "ArrowDown",
+    Left: "ArrowLeft",
+    Right: "ArrowRight",
+  };
   return normalized
-    .replace("Command", "Meta")
-    .replace("Control", "Control")
-    .replace("Alt", "Alt")
-    .replace("Shift", "Shift")
-    .replace("Return", "Enter")
-    .replace("Up", "ArrowUp")
-    .replace("Down", "ArrowDown")
-    .replace("Left", "ArrowLeft")
-    .replace("Right", "ArrowRight");
+    .split("+")
+    .map((part) => replacements[part] ?? part)
+    .join("+");
 }
 
 export interface KeyboardEventLike {
@@ -459,7 +506,10 @@ export interface KeyboardEventLike {
   shiftKey: boolean;
 }
 
-export function acceleratorFromKeyboardEvent(event: KeyboardEventLike): string | null {
+export function acceleratorFromKeyboardEvent(
+  event: KeyboardEventLike,
+  platform: KeyboardPlatform = detectedKeyboardPlatform(),
+): string | null {
   let key: string | null = null;
   if (event.code === "Space" || event.key === " ") key = "Space";
   else if (event.code?.startsWith("Key") && event.code.length === 4) key = event.code.slice(3);
@@ -483,16 +533,44 @@ export function acceleratorFromKeyboardEvent(event: KeyboardEventLike): string |
   if (!key) key = normalizeBaseKey(event.key);
   if (!key) return null;
   const modifiers = [
-    event.metaKey ? "Command" : null,
-    event.ctrlKey ? "Control" : null,
+    platform === "darwin"
+      ? event.metaKey
+        ? "Command"
+        : null
+      : event.ctrlKey
+        ? "Command"
+        : null,
+    platform === "darwin"
+      ? event.ctrlKey
+        ? "Control"
+        : null
+      : event.metaKey
+        ? "Control"
+        : null,
     event.altKey ? "Alt" : null,
     event.shiftKey ? "Shift" : null,
   ].filter((part): part is string => Boolean(part));
   return modifiers.length > 0 ? [...modifiers, key].join("+") : null;
 }
 
-export function matchesAccelerator(event: KeyboardEventLike, accelerator: string): boolean {
-  return acceleratorFromKeyboardEvent(event) === normalizeAccelerator(accelerator);
+export function matchesAccelerator(
+  event: KeyboardEventLike,
+  accelerator: string,
+  platform: KeyboardPlatform = detectedKeyboardPlatform(),
+): boolean {
+  return acceleratorFromKeyboardEvent(event, platform) === normalizeAccelerator(accelerator);
+}
+
+export function electronAcceleratorForPlatform(
+  value: string,
+  platform: NodeJS.Platform,
+): string {
+  const normalized = normalizeAccelerator(value) ?? value;
+  if (platform === "darwin") return normalized;
+  return normalized
+    .split("+")
+    .map((part) => (part === "Command" ? "CommandOrControl" : part === "Control" ? "Super" : part))
+    .join("+");
 }
 
 function futureKeybindingFields(
@@ -837,7 +915,7 @@ export function validateEffectiveBindings(bindings: Record<CommandId, string | n
     }
     if (RESERVED_BINDINGS.has(normalized)) {
       throw new KeybindingValidationError(
-        `${prettyAccelerator(normalized)} is reserved by Aiden or macOS.`,
+        `${prettyAccelerator(normalized)} is reserved by Aiden or the operating system.`,
         "reserved",
         id,
       );

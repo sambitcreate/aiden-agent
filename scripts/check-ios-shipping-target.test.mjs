@@ -201,7 +201,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.ok(homeNavigationIndex >= 0 && homeNavigationIndex < chatsIndex);
   assert.match(shell, /Image\("AidenAppIcon"\)[\s\S]*?searchChrome/u);
   assert.match(shell, /Image\(systemName: "magnifyingglass"\)[\s\S]*?person\.crop\.circle\.fill/u);
-  assert.match(shell, /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Mac Folder"/u);
+  assert.match(shell, /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Desktop Folder"/u);
   assert.match(shell, /Image\(systemName: "square\.and\.pencil"\)[\s\S]*?aidenProminentGlassButton\(\)[\s\S]*?accessibilityLabel\("New Agent"\)/u);
   assert.match(shell, /content\.buttonStyle\(\.glass\)/u);
   assert.match(shell, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
@@ -247,7 +247,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /Archived Workspaces[\s\S]*?hidden only on this device/u);
   assert.match(shell, /swipeActions\(edge: \.leading, allowsFullSwipe: false\)/u);
   assert.match(shell, /swipeActions\(edge: \.trailing, allowsFullSwipe: false\)/u);
-  assert.match(shell, /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your Mac and on other devices/u);
+  assert.match(shell, /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your desktop and on other devices/u);
   assert.match(shell, /onRemove: workspace\.isManagedWorktree \|\| coordinator\.workspaces\.count <= 1/u);
   assert.match(shell, /if isArchived \{[\s\S]*?Button\(action: onToggleArchive\)/u);
   assert.match(shell, /activeWorkspaceIDSet[\s\S]*?visibleChats = homeModel\.chats\.filter/u);
@@ -260,7 +260,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(pairing, /static let advanced: \[AidenPairingMethod\] = \[\.pastePayload\]/u);
   assert.match(pairing, /case \.scanQRCode: return String\(localized: "Scan QR Code"\)/u);
-  assert.match(pairing, /case \.nearbyMac: return String\(localized: "Nearby Mac \+ Setup Code"\)/u);
+  assert.match(pairing, /case \.nearbyMac: return String\(localized: "Nearby Desktop \+ Setup Code"\)/u);
   assert.match(pairing, /case \.privateAddress: return String\(localized: "Private Address \+ Setup Code"\)/u);
   assert.match(pairing, /case \.nearbyMac: return String\(localized: "Local Network"\)/u);
   assert.match(pairing, /case \.privateAddress: return String\(localized: "Tailscale"\)/u);
@@ -303,8 +303,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(content, /showsIntroduction: !hasCompletedMobileOnboarding/u);
   assert.match(content, /onIntroductionComplete:[\s\S]*?hasCompletedMobileOnboarding = true/u);
   assert.match(pairing, /The QR already contains the selected Local Network or Tailscale address/u);
-  assert.match(pairing, /https:\/\/mac-name\.local:49220\/api\/aiden\/v1/u);
-  assert.match(pairing, /https:\/\/mac-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/desktop-name\.local:49220\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/desktop-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
   assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
   assert.match(chat, /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u);
   assert.doesNotMatch(chat, /PhotosPicker\(selection:/u);

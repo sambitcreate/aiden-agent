@@ -138,7 +138,7 @@ enum AidenPairingMethod: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .scanQRCode: return String(localized: "Scan QR Code")
-        case .nearbyMac: return String(localized: "Nearby Mac + Setup Code")
+        case .nearbyMac: return String(localized: "Nearby Desktop + Setup Code")
         case .privateAddress: return String(localized: "Private Address + Setup Code")
         case .pastePayload: return String(localized: "Paste Pairing Payload")
         }
@@ -149,9 +149,9 @@ enum AidenPairingMethod: String, CaseIterable, Identifiable, Hashable {
         case .scanQRCode:
             return String(localized: "Scan the one-time QR shown by Aiden Agent.")
         case .nearbyMac:
-            return String(localized: "Find your Mac on local Wi-Fi, then enter its setup code.")
+            return String(localized: "Find your desktop on local Wi-Fi, then enter its setup code.")
         case .privateAddress:
-            return String(localized: "Enter the private Tailscale address and setup code shown on your Mac.")
+            return String(localized: "Enter the private Tailscale address and setup code shown on your desktop.")
         case .pastePayload:
             return String(localized: "Use the complete one-time payload when the camera is unavailable.")
         }
@@ -193,7 +193,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .build: return String(localized: "Your Mac, ready to work")
+        case .build: return String(localized: "Your desktop, ready to work")
         case .extend: return String(localized: "Bring the right intelligence")
         case .control: return String(localized: "Keep Aiden moving")
         }
@@ -568,19 +568,19 @@ struct AidenPairingView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Prepare your Mac").font(.largeTitle.bold())
-                    Text("Aiden Agent remains the server and keeps provider credentials on your Mac.")
+                    Text("Prepare your desktop").font(.largeTitle.bold())
+                    Text("Aiden Agent remains the server and keeps provider credentials on your desktop.")
                         .foregroundStyle(palette.secondary)
                 }
 
-                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your Mac, go to Settings → Remote Access.")
+                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your desktop, go to Settings → Remote Access.")
                 pairingStep(number: 2, title: "Turn on Remote Access", detail: "Choose Local Network, Tailscale, or both. Tailscale is best when you are away from home.")
                 pairingStep(number: 3, title: "Create a pairing code", detail: "Keep the QR or setup code visible. Both expire after five minutes and can be used once.")
 
                 VStack(alignment: .leading, spacing: 10) {
                     Label("Per-device credential", systemImage: "key.fill")
                     Label("Pinned HTTPS identity", systemImage: "lock.shield.fill")
-                    Label("Revocable from your Mac", systemImage: "checkmark.shield")
+                    Label("Revocable from your desktop", systemImage: "checkmark.shield")
                 }
                 .font(.subheadline)
                 .foregroundStyle(palette.secondary)
@@ -663,11 +663,11 @@ struct AidenPairingView: View {
                 Label("Open Aiden Agent’s Add Device window and keep the one-time QR visible.", systemImage: "desktopcomputer")
                 Label("The QR already contains the selected Local Network or Tailscale address.", systemImage: "network")
             } header: {
-                Text("On your Mac")
+                Text("On your desktop")
             }
 
             Section("Private pairing") {
-                Text("The QR expires after five minutes and can be used once. Aiden pins the Mac’s HTTPS identity during pairing.")
+                Text("The QR expires after five minutes and can be used once. Aiden pins the desktop’s HTTPS identity during pairing.")
                     .foregroundStyle(palette.secondary)
             }
         }
@@ -695,14 +695,14 @@ struct AidenPairingView: View {
                     }
                 }
             } header: {
-                Text("Nearby Macs")
+                Text("Nearby desktops")
             } footer: {
-                Text("Your iPhone or iPad and Mac must be on the same local network. Select the Mac shown in Aiden Agent’s Add Device window.")
+                Text("Your iPhone or iPad and desktop must be on the same local network. Select the desktop shown in Aiden Agent’s Add Device window.")
             }
 
             Section {
                 manualEndpointField(
-                    placeholder: "https://mac-name.local:49220/api/aiden/v1",
+                    placeholder: "https://desktop-name.local:49220/api/aiden/v1",
                     accessibilityLabel: "Nearby Aiden Agent address"
                 )
                 manualSetupCodeField
@@ -710,7 +710,7 @@ struct AidenPairingView: View {
             } header: {
                 Text("Setup code")
             } footer: {
-                Text("If discovery is unavailable, enter the exact nearby Mac address shown in Aiden Agent. The setup code is encrypted and can be used once.")
+                Text("If discovery is unavailable, enter the exact nearby desktop address shown in Aiden Agent. The setup code is encrypted and can be used once.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -721,7 +721,7 @@ struct AidenPairingView: View {
         Form {
             Section {
                 manualEndpointField(
-                    placeholder: "https://mac-name.tailnet.ts.net/api/aiden/v1",
+                    placeholder: "https://desktop-name.tailnet.ts.net/api/aiden/v1",
                     accessibilityLabel: "Private Tailscale address"
                 )
                 manualSetupCodeField
@@ -734,7 +734,7 @@ struct AidenPairingView: View {
 
             Section("Before pairing") {
                 Label("Sign in to the same Tailscale network on both devices", systemImage: "network")
-                Label("Keep Aiden Agent open on your Mac", systemImage: "desktopcomputer")
+                Label("Keep Aiden Agent open on your desktop", systemImage: "desktopcomputer")
             }
         }
         .scrollContentBackground(.hidden)
@@ -763,7 +763,7 @@ struct AidenPairingView: View {
             } header: {
                 Text("One-time pairing payload")
             } footer: {
-                Text("Use only the complete payload copied from your own Mac. It contains a one-time secret and expires after five minutes.")
+                Text("Use only the complete payload copied from your own desktop. It contains a one-time secret and expires after five minutes.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -801,8 +801,8 @@ struct AidenPairingView: View {
         .accessibilityValue(selectedAgentID == agent.id ? "Selected" : "Not selected")
         .accessibilityAddTraits(selectedAgentID == agent.id ? .isSelected : [])
         .accessibilityHint(agent.endpoint == nil
-            ? "This Mac is still resolving its network address."
-            : "Use this Mac for setup-code pairing.")
+            ? "This desktop is still resolving its network address."
+            : "Use this desktop for setup-code pairing.")
     }
 
     private func manualEndpointField(

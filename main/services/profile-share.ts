@@ -1,4 +1,4 @@
-import { BrowserWindow, ShareMenu, logger, nativeImage } from "../platform.js";
+import { BrowserWindow, ShareMenu, dialog, logger, nativeImage } from "../platform.js";
 import {
   decodeProfileSharePng,
   MAX_SHARE_IMAGE_BYTES,
@@ -8,7 +8,9 @@ import {
 import {
   cleanupStaleProfileShareDirectories,
   createProfileShareFile,
+  PROFILE_SHARE_FILE_NAME,
   removeProfileShareDirectory,
+  writeProfileShareExport,
 } from "./profile-share-files.js";
 
 const SHARE_FILE_RETENTION_MS = 5 * 60 * 1_000;
@@ -77,19 +79,27 @@ function canonicalProfileSharePng(dataUrl: unknown): Buffer {
 export async function shareProfilePng(
   dataUrl: unknown,
   parent: BrowserWindow | null,
-): Promise<void> {
-  if (process.platform !== "darwin") {
-    throw new Error("The native profile share sheet is available on macOS.");
-  }
+): Promise<boolean> {
   if (!parent || parent.isDestroyed()) {
     throw new Error("The profile window is no longer available for sharing.");
+  }
+  const image = canonicalProfileSharePng(dataUrl);
+  if (process.platform !== "darwin") {
+    const result = await dialog.showSaveDialog(parent, {
+      title: "Save profile snapshot",
+      defaultPath: PROFILE_SHARE_FILE_NAME,
+      buttonLabel: "Save",
+      filters: [{ name: "PNG image", extensions: ["png"] }],
+    });
+    if (result.canceled || !result.filePath) return false;
+    await writeProfileShareExport(result.filePath, image);
+    return true;
   }
   if (activeShareSessions.size > 0) {
     throw new Error("Close the current share menu before opening another one.");
   }
 
   await beginStaleCleanup();
-  const image = canonicalProfileSharePng(dataUrl);
   const { directory, filePath } = await createProfileShareFile(image);
   ownedShareDirectories.add(directory);
   let session: ShareSession | null = null;
@@ -112,6 +122,7 @@ export async function shareProfilePng(
         scheduleCleanup(session, SHARE_FILE_RETENTION_MS);
       },
     });
+    return true;
   } catch (error) {
     if (session) {
       clearTimeout(session.timer);

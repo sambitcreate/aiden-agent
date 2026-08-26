@@ -30,11 +30,11 @@ Developer Tools is the closest current Apple category: Apple describes it as app
 
 Description draft:
 
-> Aiden On The Go is the native iPhone and iPad companion for Aiden Agent on your Mac. Pair directly with a Mac you control over your local network or Tailscale, then continue Aiden chats and manage workspaces from your mobile device.
+> Aiden On The Go is the native iPhone and iPad companion for Aiden Agent on your macOS or Linux desktop. Pair directly with a desktop you control over your local network or Tailscale, then continue Aiden chats and manage workspaces from your mobile device.
 >
 > Review conversations, stream responses, handle approval requests, inspect workspace files, work with supported Git flows, and manage scheduled tasks. App Intents provide quick navigation, Live Activities show bounded run status, and optional voice dictation and read-aloud stay on device.
 >
-> Your Mac remains the execution authority. Remote Access is off by default, each mobile device uses a revocable credential, and provider credentials remain on the Mac.
+> Your desktop remains the execution authority. Remote Access is off by default, each mobile device uses a revocable credential, and provider credentials remain on the desktop.
 
 Review-notes draft:
 
@@ -75,10 +75,10 @@ Current Apple references:
 Evidence for that answer in the current distribution candidate:
 
 - The app contains no analytics, advertising, crash-reporting, account, or Aiden-hosted relay SDK.
-- Pairing credentials and custom headers stay in Keychain. Cached chats/settings stay on the user's device; authoritative chats/files remain on the Mac the user pairs.
+- Pairing credentials and custom headers stay in Keychain. Cached chats/settings stay on the user's device; authoritative chats/files remain on the desktop the user pairs.
 - QR camera frames are processed for pairing and are not uploaded to Aiden's developer.
 - Dictation and read-aloud use Apple system frameworks locally; Aiden does not operate a speech collection endpoint.
-- Photos/files selected by the user are sent directly to their paired Mac and may then be sent to model providers the user configured on that Mac. Aiden's developer cannot access them. Provider processing remains governed by each selected provider and should be described in the public policy.
+- Photos/files selected by the user are sent directly to their paired desktop and may then be sent to model providers the user configured there. Aiden's developer cannot access them. Provider processing remains governed by each selected provider and should be described in the public policy.
 - Local Network or Tailscale traffic goes directly to the paired installation. Aiden does not run a central account, synchronization service, analytics endpoint, or proxy.
 - Live Activity state is device-local and response excerpts are off by default.
 - External transcript media can contact the media host without forwarding Aiden credentials; the public policy should disclose that a remote host can observe an ordinary network request when its media is displayed.

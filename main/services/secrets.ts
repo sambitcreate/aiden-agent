@@ -4,7 +4,8 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
-import { app, safeStorage, logger } from "../platform.js";
+import { app, logger } from "../platform.js";
+import { secureStorage } from "./secure-storage.js";
 import {
   bindSecretEntryIfUnbound,
   deleteSecretKeyEntry,
@@ -94,17 +95,17 @@ async function getKeyStrict(providerId: string): Promise<string | null> {
   await mutationTail;
   const b64 = secretKeyEntry(await readMap(), providerId);
   if (!b64) return null;
-  return safeStorage.decryptString(Buffer.from(b64, "base64"));
+  return secureStorage.decryptString(Buffer.from(b64, "base64"));
 }
 
 async function encryptValue(value: string): Promise<string> {
-  const encrypted = await safeStorage.encryptString(value);
+  const encrypted = await secureStorage.encryptString(value);
   return Buffer.from(encrypted).toString("base64");
 }
 
 async function decryptedEntry(map: KeyMap, id: string): Promise<string | null> {
   const b64 = secretKeyEntry(map, id);
-  return b64 ? safeStorage.decryptString(Buffer.from(b64, "base64")) : null;
+  return b64 ? secureStorage.decryptString(Buffer.from(b64, "base64")) : null;
 }
 
 function setKeyWithBound(
@@ -118,12 +119,12 @@ function setKeyWithBound(
     if (key.length > maxLength) {
       throw new Error(`Encrypted values cannot exceed ${maxLength} characters.`);
     }
-    if (!(await safeStorage.isEncryptionAvailable())) {
-      throw new Error("Secure storage is unavailable on this system; cannot save the API key.");
+    if (!secureStorage.isEncryptionAvailable()) {
+      throw new Error(`${secureStorage.unavailableMessage()} Cannot save the API key.`);
     }
     const map = await readMap();
     assertMutationCurrent(isCurrent);
-    const encrypted = await safeStorage.encryptString(key);
+    const encrypted = await secureStorage.encryptString(key);
     assertMutationCurrent(isCurrent);
     setSecretKeyEntry(map, providerId, Buffer.from(encrypted).toString("base64"));
     await writeMap(map, isCurrent);
@@ -213,8 +214,8 @@ export const secrets = {
     return serialized(async () => {
       assertMutationCurrent(isCurrent);
       assertProviderCredentialLength(key);
-      if (!(await safeStorage.isEncryptionAvailable())) {
-        throw new Error("Secure storage is unavailable on this system; cannot save the API key.");
+      if (!secureStorage.isEncryptionAvailable()) {
+        throw new Error(`${secureStorage.unavailableMessage()} Cannot save the API key.`);
       }
       const map = await readMap();
       assertMutationCurrent(isCurrent);

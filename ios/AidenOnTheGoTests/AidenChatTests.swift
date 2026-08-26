@@ -454,7 +454,7 @@ final class AidenChatTests: XCTestCase {
             )),
             .init(
                 title: "Generation failed",
-                detail: "The model provider rejected its credentials. Check Provider Settings on your Mac.",
+                detail: "The model provider rejected its credentials. Check Provider Settings on your desktop.",
                 symbol: "exclamationmark.triangle",
                 isFailure: true
             )

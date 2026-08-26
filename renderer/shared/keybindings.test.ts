@@ -5,12 +5,13 @@ import {
   applyKeybindingMutation,
   effectiveBinding,
   effectiveBindings,
+  electronAcceleratorForPlatform,
   hasFutureKeybindings,
   KeybindingValidationError,
   migrateLegacyKeybindings,
   normalizeAccelerator,
   normalizeKeybindingOverrides,
-  prettyAccelerator,
+  prettyAcceleratorForPlatform,
   repairKeybindingOverrides,
   shouldPersistCanonicalKeybindings,
   validateEffectiveBindings,
@@ -42,42 +43,70 @@ test("normalizes aliases, modifier order, and punctuation", () => {
   assert.equal(normalizeAccelerator("shift+cmd+["), "Command+Shift+[");
   assert.equal(normalizeAccelerator("option+control+space"), "Control+Alt+Space");
   assert.equal(normalizeAccelerator("K"), null);
-  assert.equal(prettyAccelerator("Command+Alt+Space"), "⌘⌥Space");
+  assert.equal(prettyAcceleratorForPlatform("Command+Alt+Space", "darwin"), "⌘⌥Space");
 });
 
 test("records physical letter and exact modifiers", () => {
   assert.equal(
-    acceleratorFromKeyboardEvent({
-      key: "k",
-      code: "KeyK",
-      metaKey: true,
-      ctrlKey: false,
-      altKey: false,
-      shiftKey: false,
-    }),
+    acceleratorFromKeyboardEvent(
+      {
+        key: "k",
+        code: "KeyK",
+        metaKey: true,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+      },
+      "darwin",
+    ),
     "Command+K",
   );
   assert.equal(
-    acceleratorFromKeyboardEvent({
-      key: "{",
-      code: "BracketLeft",
-      metaKey: true,
-      ctrlKey: false,
-      altKey: false,
-      shiftKey: true,
-    }),
+    acceleratorFromKeyboardEvent(
+      {
+        key: "{",
+        code: "BracketLeft",
+        metaKey: true,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: true,
+      },
+      "darwin",
+    ),
     "Command+Shift+[",
   );
   assert.equal(
-    acceleratorFromKeyboardEvent({
-      key: "+",
-      code: "Equal",
-      metaKey: true,
-      ctrlKey: false,
-      altKey: false,
-      shiftKey: true,
-    }),
+    acceleratorFromKeyboardEvent(
+      {
+        key: "+",
+        code: "Equal",
+        metaKey: true,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: true,
+      },
+      "darwin",
+    ),
     "Command+Shift+=",
+  );
+});
+
+test("Linux uses Control as the portable primary modifier", () => {
+  assert.equal(prettyAcceleratorForPlatform("Command+Alt+Space", "linux"), "Ctrl+Alt+Space");
+  assert.equal(electronAcceleratorForPlatform("Command+Shift+D", "linux"), "CommandOrControl+Shift+D");
+  assert.equal(
+    acceleratorFromKeyboardEvent(
+      {
+        key: "k",
+        code: "KeyK",
+        metaKey: false,
+        ctrlKey: true,
+        altKey: false,
+        shiftKey: false,
+      },
+      "linux",
+    ),
+    "Command+K",
   );
 });
 

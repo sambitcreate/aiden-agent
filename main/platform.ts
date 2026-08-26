@@ -95,16 +95,24 @@ export function registerNativeHandlers(): void {
   electronIpcMain.handle(
     "aiden:media:status",
     (_event, mediaType: "microphone" | "camera" | "screen") =>
-      systemPreferences.getMediaAccessStatus(mediaType),
+      process.platform === "darwin"
+        ? systemPreferences.getMediaAccessStatus(mediaType)
+        : "unknown",
   );
   electronIpcMain.handle("aiden:media:request", (_event, mediaType: "microphone" | "camera") =>
-    systemPreferences.askForMediaAccess(mediaType),
+    process.platform === "darwin"
+      ? systemPreferences.askForMediaAccess(mediaType)
+      : true,
   );
   electronIpcMain.handle("aiden:accessibility:status", () =>
-    systemPreferences.isTrustedAccessibilityClient(false),
+    process.platform === "darwin"
+      ? systemPreferences.isTrustedAccessibilityClient(false)
+      : false,
   );
   electronIpcMain.handle("aiden:accessibility:request", () =>
-    systemPreferences.isTrustedAccessibilityClient(true),
+    process.platform === "darwin"
+      ? systemPreferences.isTrustedAccessibilityClient(true)
+      : false,
   );
 
   nativeTheme.on("updated", () => {

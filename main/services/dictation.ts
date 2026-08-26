@@ -12,14 +12,18 @@ import { DictationCoordinator } from "./dictation-coordinator.js";
 let accessibilityPrompted = false;
 
 function livePasteDeps(): PasteDeps {
+  const supportsAccessibilityPaste = process.platform === "darwin";
   return {
     writeClipboard: (text) => clipboard.writeText(text),
     isAccessibilityTrusted: (prompt) => {
+      if (!supportsAccessibilityPaste) return false;
       const effectivePrompt = prompt && !accessibilityPrompted;
       if (effectivePrompt) accessibilityPrompted = true;
       return systemPreferences.isTrustedAccessibilityClient(effectivePrompt);
     },
-    pasteWithPreservedClipboard: runAtomicMacPaste,
+    pasteWithPreservedClipboard: supportsAccessibilityPaste
+      ? runAtomicMacPaste
+      : async () => false,
     log: (message, error) => logger.warn("dictation", message, error),
   };
 }

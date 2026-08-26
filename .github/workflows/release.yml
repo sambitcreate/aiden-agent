@@ -1,4 +1,4 @@
-name: Release macOS
+name: Release desktop
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: aiden-agent-macos-release
+  group: aiden-agent-desktop-release
   cancel-in-progress: false
 
 jobs:
@@ -105,12 +105,138 @@ jobs:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
         run: npm run dist
 
+      - name: Stage verified macOS release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-macos
+          path: release/distribution
+          if-no-files-found: error
+          retention-days: 2
+
+  linux-release:
+    if: vars.RELEASES_ENABLED == 'true'
+    name: Linux ${{ matrix.arch }} release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    environment: release
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install Linux package dependencies
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Assign the matching main-push version
+        run: npm version "$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER")" --no-git-tag-version
+
+      - name: Verify Linux contracts and native helpers
+        run: npm run type-check && npm run lint && npm run test:linux-contracts && npm run test:linux-native
+
+      - name: Build and verify Linux distributions
+        run: |
+          set -euo pipefail
+          npm run models:refresh
+          npm run dist:linux
+          node scripts/verify-linux-package.mjs release/linux-distribution
+          sudo apt-get install --yes ./release/linux-distribution/*.deb
+          dpkg --verify aiden-agent
+          ! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"
+          expected_version="$(node -p 'require("./package.json").version')"
+          test "$(aiden-agent --no-sandbox --version)" = "$expected_version"
+          chmod +x ./release/linux-distribution/*.AppImage
+          appimage_output="$(./release/linux-distribution/*.AppImage --appimage-extract-and-run --no-sandbox --version)"
+          grep -F "$expected_version" <<<"$appimage_output"
+
+      - name: Smoke the exact release GUI without a keyring session
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_root="$RUNNER_TEMP/aiden-linux-release-smoke-${{ matrix.arch }}"
+          mkdir -p "$smoke_root/home" "$smoke_root/config" "$smoke_root/cache" "$smoke_root/data"
+          set +e
+          HOME="$smoke_root/home" \
+          XDG_CONFIG_HOME="$smoke_root/config" \
+          XDG_CACHE_HOME="$smoke_root/cache" \
+          XDG_DATA_HOME="$smoke_root/data" \
+            timeout --kill-after=5s 15s xvfb-run --auto-servernum aiden-agent --no-sandbox \
+              >"$smoke_root/output.log" 2>&1
+          status=$?
+          set -e
+          if [[ "$status" -ne 124 ]]; then
+            cat "$smoke_root/output.log"
+            exit 1
+          fi
+          if grep -Eiq '(FATAL|symbol lookup error|error while loading shared libraries|Failed to start Aiden Agent)' "$smoke_root/output.log"; then
+            cat "$smoke_root/output.log"
+            exit 1
+          fi
+
+      - name: Stage verified Linux release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: |
+            release/linux-distribution/*.AppImage
+            release/linux-distribution/*.deb
+            release/linux-distribution/*.rpm
+          if-no-files-found: error
+          retention-days: 2
+
+  publish:
+    if: vars.RELEASES_ENABLED == 'true'
+    name: Publish verified desktop release
+    needs:
+      - release
+      - linux-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+
+      - name: Download verified desktop assets
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          pattern: release-*
+          path: release/distribution
+          merge-multiple: true
+
+      - name: Resolve release identity
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_version="$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER")"
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$release_version" >> "$GITHUB_OUTPUT"
+
       - name: Publish verified release assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          bash scripts/publish-github-release.sh release/distribution
+        run: bash scripts/publish-github-release.sh release/distribution

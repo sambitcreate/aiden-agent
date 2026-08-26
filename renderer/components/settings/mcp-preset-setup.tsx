@@ -1,6 +1,6 @@
 // Setup dialog for a built-in MCP provider preset (Composio, Notion, Linear, …).
 // Mirrors the manual McpEditor but everything is prefilled from the catalog:
-// API-key presets collect a key that is stored encrypted in the macOS keychain
+// API-key presets collect a key that is stored encrypted in the system credential store
 // (never in config.json); OAuth presets reuse the browser sign-in flow.
 
 import * as React from "react";
@@ -222,8 +222,8 @@ export function PresetSetupDialog({
             label={preset.auth.keyLabel}
             description={
               hasKey
-                ? "Saved encrypted in the macOS keychain. Paste a new key to replace it."
-                : "Stored encrypted in the macOS keychain — never written to the app configuration."
+                ? "Saved encrypted in the system credential store. Paste a new key to replace it."
+                : "Stored encrypted in the system credential store — never written to the app configuration."
             }
           >
             <div className="flex flex-col gap-1.5">

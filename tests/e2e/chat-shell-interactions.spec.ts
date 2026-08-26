@@ -1,6 +1,7 @@
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
+const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 
@@ -109,20 +110,23 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
 
   await sidebarSearch.evaluate((element) => element.blur());
   const visibleSidebarToggle = page.getByRole("button", { name: "Hide sidebar" });
-  await expect(visibleSidebarToggle).toHaveAttribute("aria-keyshortcuts", "Meta+B");
-  await page.keyboard.press("Meta+B");
+  await expect(visibleSidebarToggle).toHaveAttribute(
+    "aria-keyshortcuts",
+    `${PRIMARY_MODIFIER}+B`,
+  );
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+B`);
   const sidebarToggle = page.getByRole("button", { name: "Show sidebar" });
   await expect(sidebarToggle).toHaveAttribute("aria-pressed", "false");
   await expect(
     page.locator("aside").filter({ has: page.locator("[data-sidebar]") }),
   ).toHaveAttribute("aria-hidden", "true");
-  await page.keyboard.press("Meta+B");
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+B`);
   await expect(page.getByRole("button", { name: "Hide sidebar" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
 
-  await page.keyboard.press("Meta+K");
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+K`);
   const palette = page.locator("[data-command-palette-content]");
   await expect(palette).toBeVisible();
   const commandSearch = page.getByRole("combobox", { name: "Search commands" });

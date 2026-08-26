@@ -173,7 +173,7 @@ export function ScheduledTaskEditor({
       open={open}
       onOpenChange={onOpenChange}
       title={draft.id ? "Edit scheduled task" : "Create scheduled task"}
-      description="Aiden runs this task on your Mac while the app is open."
+      description="Aiden runs this task on your device while the app is open."
       size="large"
       busy={busy}
       confirmLabel={draft.id ? "Save" : "Create"}

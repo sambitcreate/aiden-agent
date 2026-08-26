@@ -11,7 +11,8 @@ import {
   KeybindingValidationError,
   effectiveBindings,
   migrateLegacyKeybindings,
-  prettyAccelerator,
+  prettyAcceleratorForPlatform,
+  electronAcceleratorForPlatform,
   shouldPersistCanonicalKeybindings,
   validateEffectiveBindings,
   type CommandId,
@@ -35,6 +36,17 @@ let onBindingsChanged: ((settings: AppSettings, acceleratorsEnabled: boolean) =>
 let recordingSuspended = false;
 let lastAppliedSettings: AppSettings | null = null;
 const transactions = createShortcutTransactionQueue<AppSettings, KeybindingSnapshot>();
+
+function nativeAccelerator(accelerator: string): string {
+  return electronAcceleratorForPlatform(accelerator, process.platform);
+}
+
+function displayAccelerator(accelerator: string | null | undefined): string {
+  return prettyAcceleratorForPlatform(
+    accelerator,
+    process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : "other",
+  );
+}
 
 function logRollbackFailure(error: unknown): void {
   if (error instanceof ShortcutPersistenceRollbackError) {
@@ -93,7 +105,7 @@ function globalStatuses(
         ? {
             message:
               lastUnavailable.get(definition.id) ??
-              `${prettyAccelerator(binding)} is not registered.`,
+              `${displayAccelerator(binding)} is not registered.`,
           }
         : {}),
     };
@@ -131,7 +143,7 @@ async function applyNow(settings: AppSettings): Promise<KeybindingSnapshot> {
     {
       register: async (accelerator, handler) => {
         try {
-          const ok = await globalShortcut.register(accelerator, handler);
+          const ok = await globalShortcut.register(nativeAccelerator(accelerator), handler);
           if (!ok) {
             logger.warn(
               "shortcut",
@@ -149,7 +161,7 @@ async function applyNow(settings: AppSettings): Promise<KeybindingSnapshot> {
           return false;
         }
       },
-      unregister: (accelerator) => globalShortcut.unregister(accelerator),
+      unregister: (accelerator) => globalShortcut.unregister(nativeAccelerator(accelerator)),
     },
     registered,
     desired,
@@ -157,8 +169,8 @@ async function applyNow(settings: AppSettings): Promise<KeybindingSnapshot> {
   registered = result.registered;
   if (!result.ok && result.failedCommandId) {
     const message = result.rollbackFailed
-      ? `${prettyAccelerator(result.failedAccelerator)} could not be registered, and macOS did not restore every previous shortcut.`
-      : `${prettyAccelerator(result.failedAccelerator)} is unavailable. Another app may be using it.`;
+      ? `${displayAccelerator(result.failedAccelerator)} could not be registered, and the system did not restore every previous shortcut.`
+      : `${displayAccelerator(result.failedAccelerator)} is unavailable. Another app may be using it.`;
     lastUnavailable = new Map([[result.failedCommandId, message]]);
     throw new KeybindingValidationError(message, "registration", result.failedCommandId);
   }
@@ -254,7 +266,7 @@ export async function applyShortcutFromSettings(): Promise<KeybindingSnapshot> {
       const needsMigration = shouldPersistCanonicalKeybindings(settings.keybindings, keybindings);
       // Semantic V1 repair is durable configuration normalization, not a user
       // shortcut transaction. Persist it even when an unrelated global chord
-      // is currently owned by another macOS app and runtime registration fails.
+      // is currently owned by another operating-system app and runtime registration fails.
       if (needsMigration) {
         try {
           await configStore.setSettings({ keybindings });
@@ -277,7 +289,7 @@ export async function applyShortcutFromSettings(): Promise<KeybindingSnapshot> {
 export function disposeShortcut(): void {
   for (const item of registered.values()) {
     try {
-      globalShortcut.unregister(item.accelerator);
+      globalShortcut.unregister(nativeAccelerator(item.accelerator));
     } catch {
       // App teardown must continue even when Electron has already disposed.
     }

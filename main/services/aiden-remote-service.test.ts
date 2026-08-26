@@ -11,6 +11,7 @@ import {
   AidenRemotePortInUseError,
   AidenRemoteService,
   aidenRemoteBonjourServiceName,
+  aidenRemoteBonjourBackend,
   aidenRemotePortCandidates,
 } from "./aiden-remote-service.js";
 import {
@@ -21,6 +22,12 @@ import {
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
 import type { AidenTailscaleStatus } from "./aiden-remote-tailscale-route.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
+
+test("remote discovery uses the system daemon on macOS and bundled mDNS elsewhere", () => {
+  assert.equal(aidenRemoteBonjourBackend("darwin"), "dns-sd");
+  assert.equal(aidenRemoteBonjourBackend("linux"), "node");
+  assert.equal(aidenRemoteBonjourBackend("win32"), "node");
+});
 
 async function canBind(port: number): Promise<boolean> {
   const server = createServer();

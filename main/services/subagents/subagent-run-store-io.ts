@@ -55,7 +55,13 @@ function defaultStorageBinary(): string {
 }
 
 function safeGeneration(value: string): boolean {
-  return value === "missing" || /^[0-9a-f]+(?:-[0-9a-f]+){8}$/u.test(value);
+  // macOS includes birth-time seconds/nanoseconds in addition to the seven
+  // identity fields available from Linux stat. Accept only those two exact
+  // native wire shapes; an intermediate field count is never canonical.
+  return (
+    value === "missing" ||
+    /^[0-9a-f]+(?:(?:-[0-9a-f]+){6}|(?:-[0-9a-f]+){8})$/u.test(value)
+  );
 }
 
 class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
@@ -240,8 +246,10 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
       if (!safeGeneration(generation)) throw new SubagentRunStoreStorageError("io_failed");
       return { status: "oversized", contents: undefined, generation };
     }
-    const match = /^data ([0-9a-f]+(?:-[0-9a-f]+){8}) ([A-Za-z0-9+/]*={0,2})$/u.exec(response);
-    if (!match) throw new SubagentRunStoreStorageError("io_failed");
+    const match = /^data (\S+) ([A-Za-z0-9+/]*={0,2})$/u.exec(response);
+    if (!match || !safeGeneration(match[1])) {
+      throw new SubagentRunStoreStorageError("io_failed");
+    }
     return {
       status: "data",
       generation: match[1],
@@ -254,8 +262,10 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
     const response = await this.request(
       `write ${expected} ${Buffer.from(contents, "utf8").toString("base64")}`,
     );
-    const match = /^ok ([0-9a-f]+(?:-[0-9a-f]+){8})$/u.exec(response);
-    if (!match) throw new SubagentRunStoreStorageError("io_failed");
+    const match = /^ok (\S+)$/u.exec(response);
+    if (!match || !safeGeneration(match[1])) {
+      throw new SubagentRunStoreStorageError("io_failed");
+    }
     return match[1];
   }
 

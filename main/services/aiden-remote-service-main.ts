@@ -7,7 +7,7 @@ import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js
 import { DataStore } from "./data-store.js";
 import {
   AidenRemoteService,
-  DnsSdAidenRemoteBonjourPublisher,
+  createAidenRemoteBonjourPublisher,
   type AidenRemoteServiceLogEntry,
 } from "./aiden-remote-service.js";
 import {
@@ -75,7 +75,8 @@ const STREAMS_FILE = "aiden-remote-streams-v1.json";
 const MAX_STATE_BYTES = 512 * 1_024;
 const execFileAsync = promisify(execFile);
 
-async function macComputerName(): Promise<string> {
+async function computerDisplayName(): Promise<string> {
+  if (process.platform !== "darwin") return os.hostname();
   try {
     const { stdout } = await execFileAsync(
       "/usr/sbin/scutil",
@@ -116,11 +117,12 @@ export interface AidenRemoteRuntime {
 }
 
 let runtimePromise: Promise<AidenRemoteRuntime> | null = null;
+let activeRuntime: AidenRemoteRuntime | null = null;
 
 async function createRuntime(): Promise<AidenRemoteRuntime> {
   const userData = app.getPath("userData");
   const hostname = os.hostname();
-  const defaultDisplayName = defaultAidenRemoteDisplayName(await macComputerName());
+  const defaultDisplayName = defaultAidenRemoteDisplayName(await computerDisplayName());
   const store = new DataStore<AidenRemoteStateDocument>(
     STATE_FILE,
     createDefaultAidenRemoteState(undefined, defaultDisplayName),
@@ -226,7 +228,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     appVersion: app.getVersion(),
     hostname,
     tailscale,
-    bonjour: new DnsSdAidenRemoteBonjourPublisher(writeRemoteLog),
+    bonjour: createAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
     workspaceApi: async (instanceId) => {
       if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
@@ -357,7 +359,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     }),
     log: writeRemoteLog,
   });
-  return {
+  const runtime: AidenRemoteRuntime = {
     service,
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
@@ -368,6 +370,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       workspaceOwners,
     }, deviceId),
   };
+  activeRuntime = runtime;
+  return runtime;
 }
 
 export function getAidenRemoteService(): Promise<AidenRemoteService> {
@@ -378,6 +382,10 @@ export function getAidenRemoteService(): Promise<AidenRemoteService> {
 export function getAidenRemoteRuntime(): Promise<AidenRemoteRuntime> {
   runtimePromise ??= createRuntime();
   return runtimePromise;
+}
+
+export function aidenRemoteServiceKeepsApplicationAlive(): boolean {
+  return activeRuntime?.service.keepsApplicationAlive() === true;
 }
 
 export async function initializeAidenRemoteService(): Promise<void> {

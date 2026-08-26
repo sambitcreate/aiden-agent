@@ -68,6 +68,7 @@ import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 /** Must match aiden-app-update-banner-out in styles.css. */
@@ -373,6 +374,7 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
+  const capabilities = useAppCapabilities();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const qc = useQueryClient();
   const { workspaces, active, activeId, select } = useActiveWorkspace();
@@ -380,7 +382,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const activeChatIds = useActiveChatIds();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useChats(activeId);
-  const foundationModels = useFoundationModelsConnection();
+  const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const [search, setSearch] = React.useState("");
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
@@ -961,7 +963,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                         >
                           Rename
                         </ContextMenuItem>
-                        {foundationModels.data !== null ? (
+                        {capabilities.appleFoundationModels && foundationModels.data !== null ? (
                           <ContextMenuItem
                             disabled={!appleRenameReady || renamingWithAppleId !== null}
                             aria-label={

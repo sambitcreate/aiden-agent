@@ -103,6 +103,7 @@ import {
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -120,11 +121,13 @@ function toolLabel(toolName: string): string {
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const capabilities = useAppCapabilities();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
   const chat = useChat(chatId);
   const settings = useSettings();
-  const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
+  const computerUseGloballyEnabled =
+    capabilities.computerUse && settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
   const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] = React.useState<

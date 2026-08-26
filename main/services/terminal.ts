@@ -53,7 +53,7 @@ export interface TerminalServiceOptions {
   spawnPty?: typeof spawn;
   /**
    * Ordered shell candidates. The first that exists and is executable wins.
-   * Exposed for tests; production resolves `$SHELL` then the macOS defaults.
+   * Exposed for tests; production resolves `$SHELL` then platform defaults.
    */
   shellCandidates?: () => string[];
   /** Test seam for candidate executability checks. */
@@ -100,12 +100,16 @@ function clamp(value: unknown, min: number, max: number, fallback: number): numb
  * being handed to node-pty: a stale `$SHELL` pointing at a removed Homebrew
  * install would otherwise surface as an opaque `posix_spawnp failed.`.
  */
-function defaultShellCandidates(): string[] {
+export function defaultShellCandidates(
+  platform: NodeJS.Platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
   const candidates: string[] = [];
-  const shell = process.env.SHELL;
+  const shell = environment.SHELL;
   if (shell && path.isAbsolute(shell)) candidates.push(shell);
-  candidates.push("/bin/zsh", "/bin/bash", "/bin/sh");
-  // De-duplicate while preserving order (e.g. SHELL=/bin/zsh).
+  if (platform === "darwin") candidates.push("/bin/zsh", "/bin/bash", "/bin/sh");
+  else candidates.push("/bin/bash", "/bin/sh", "/bin/zsh");
+  // De-duplicate while preserving order (e.g. SHELL=/bin/bash).
   return [...new Set(candidates)];
 }
 
@@ -207,7 +211,7 @@ async function trySpawnShell(
         ? lastError
         : "unknown error";
   throw new Error(
-    `Could not launch any shell (tried ${attempted}). Last failure: ${causeMessage}. Set $SHELL to an installed shell or reinstall macOS.`,
+    `Could not launch any shell (tried ${attempted}). Last failure: ${causeMessage}. Set $SHELL to an installed executable shell.`,
   );
 }
 
@@ -280,9 +284,9 @@ export class TerminalService {
     const executableCandidates = candidates.filter(shellIsExecutable);
     if (executableCandidates.length === 0) {
       throw new Error(
-        `No executable shell found on this Mac (checked ${candidates
+        `No executable shell found on this system (checked ${candidates
           .map((candidate) => JSON.stringify(candidate))
-          .join(", ")}). Set $SHELL to an installed shell, or reinstall macOS.`,
+          .join(", ")}). Set $SHELL to an installed executable shell.`,
       );
     }
     const { pty, shell: resolvedShell, preferredShellSkipped } = await trySpawnShell(
@@ -458,8 +462,8 @@ export class TerminalService {
     }
   }
 
-  // node-pty's macOS helper can be restored without its execute bit by npm's
-  // prebuilt archive, and `posix_spawn` of a non-executable file is exactly
+  // node-pty's helper can be restored without its execute bit by a prebuilt
+  // archive, and `posix_spawn` of a non-executable file is exactly
   // what surfaces to users as `posix_spawnp failed.`. Guard every helper that
   // node-pty may load: chmod if needed, then verify (never assume). A failure
   // here must be descriptive so the user can fix it, not opaque.
@@ -477,12 +481,10 @@ export class TerminalService {
 /**
  * Resolve every `spawn-helper` node-pty may load on this machine.
  *
- * node-pty 1.1.0 loads the helper from `prebuilds/<platform>-<arch>/spawn-helper`
- * via `utils.loadNativeModule`, and in a packaged Electron app the same file
- * lives under `app.asar.unpacked`. We resolve from `node-pty/package.json`, move
- * to the real unpacked directory before any filesystem operation, and enumerate
- * every `prebuilds/*` directory so a wrong-arch guess, a Rosetta run, or an extra
- * prebuild still gets fixed up.
+ * node-pty 1.1.0 loads the helper beside its native module: normally
+ * `prebuilds/<platform>-<arch>` on macOS and `build/Release` after a Linux
+ * node-gyp build. In a packaged Electron app the same files live under
+ * `app.asar.unpacked`. Resolve both legitimate layouts from package.json.
  */
 async function defaultSpawnHelperPaths(): Promise<string[]> {
   const require = createRequire(import.meta.url);

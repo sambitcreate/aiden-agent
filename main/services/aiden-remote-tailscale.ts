@@ -17,10 +17,15 @@ import {
 } from "./aiden-remote-tailscale-route.js";
 
 const execFileAsync = promisify(execFile);
-const TAILSCALE_CANDIDATES = [
+const DARWIN_TAILSCALE_CANDIDATES = [
   "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
   "/usr/local/bin/tailscale",
   "/opt/homebrew/bin/tailscale",
+] as const;
+const LINUX_TAILSCALE_CANDIDATES = [
+  "/usr/bin/tailscale",
+  "/usr/local/bin/tailscale",
+  "/run/current-system/sw/bin/tailscale",
 ] as const;
 const MAX_STATUS_BYTES = 256 * 1_024;
 const MAX_HEALTH_BYTES = 1_024;
@@ -105,8 +110,28 @@ export interface AidenTailscaleRouteLockOptions {
 }
 
 interface AidenTailscaleNodeStatus {
+  connected: boolean;
   dnsName?: string;
   httpsAvailable: boolean;
+}
+
+export function tailscaleBinaryCandidates(
+  platform: NodeJS.Platform = process.platform,
+): readonly string[] {
+  if (platform === "darwin") return DARWIN_TAILSCALE_CANDIDATES;
+  if (platform === "linux") return LINUX_TAILSCALE_CANDIDATES;
+  return [];
+}
+
+export function tailscaleCommandErrorCode(
+  error: unknown,
+): "tailscale_permission_denied" | undefined {
+  const value = record(error);
+  const stderr = typeof value?.stderr === "string" ? value.stderr : "";
+  return stderr.includes("Access denied: serve config denied")
+    && stderr.includes("tailscale set --operator=")
+    ? "tailscale_permission_denied"
+    : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -133,11 +158,13 @@ function normalizeDnsName(value: unknown): string | undefined {
 function parseNodeStatus(serialized: string): AidenTailscaleNodeStatus {
   const root = record(parseBoundedJson(serialized, "Tailscale status"));
   const self = record(root?.Self);
+  const connected = root?.BackendState === "Running" && self?.Online === true;
   const dnsName = normalizeDnsName(self?.DNSName);
   const certDomains = Array.isArray(root?.CertDomains)
     ? root.CertDomains.map(normalizeDnsName).filter((value): value is string => value !== undefined)
     : [];
   return {
+    connected,
     ...(dnsName ? { dnsName } : {}),
     // An exact certificate-domain match proves that the tailnet owner has
     // already enabled HTTPS. Aiden never follows or accepts Tailscale's
@@ -297,7 +324,7 @@ export async function withAidenTailscaleRouteLock<T>(
 }
 
 export async function resolveTailscaleBinary(): Promise<string | null> {
-  for (const candidate of TAILSCALE_CANDIDATES) {
+  for (const candidate of tailscaleBinaryCandidates()) {
     try {
       await fs.access(candidate, fs.constants.X_OK);
       return candidate;
@@ -313,13 +340,19 @@ export async function createSystemTailscaleCommandRunner(): Promise<AidenTailsca
   if (!binary) return null;
   return {
     run: async (args) => {
-      const { stdout } = await execFileAsync(binary, [...args], {
-        encoding: "utf8",
-        maxBuffer: MAX_STATUS_BYTES,
-        timeout: 15_000,
-        windowsHide: true,
-      });
-      return stdout;
+      try {
+        const { stdout } = await execFileAsync(binary, [...args], {
+          encoding: "utf8",
+          maxBuffer: MAX_STATUS_BYTES,
+          timeout: 15_000,
+          windowsHide: true,
+        });
+        return stdout;
+      } catch (error) {
+        const code = tailscaleCommandErrorCode(error);
+        if (code) throw new Error(code);
+        throw error;
+      }
     },
   };
 }
@@ -363,7 +396,7 @@ export class AidenRemoteTailscaleController {
         this.nodeStatus(),
         this.serveStatus(),
       ]);
-      const errorCode = !nodeStatus.dnsName
+      const errorCode = !nodeStatus.connected || !nodeStatus.dnsName
         ? "not_connected" as const
         : !nodeStatus.httpsAvailable
           ? "https_unavailable" as const
@@ -389,7 +422,9 @@ export class AidenRemoteTailscaleController {
       this.nodeStatus(),
       this.serveStatus(),
     ]);
-    if (!nodeStatus.dnsName) throw new Error("tailscale_not_connected");
+    if (!nodeStatus.connected || !nodeStatus.dnsName) {
+      throw new Error("tailscale_not_connected");
+    }
     if (!nodeStatus.httpsAvailable) throw new Error("tailscale_https_unavailable");
     return { nodeStatus, serveStatus };
   }
@@ -421,7 +456,7 @@ export class AidenRemoteTailscaleController {
         this.serveStatus(),
       ]);
       const classification = classifyAidenTailscaleRoute(serveStatus, target, ownership);
-      const errorCode = !nodeStatus.dnsName
+      const errorCode = !nodeStatus.connected || !nodeStatus.dnsName
         ? "not_connected" as const
         : !nodeStatus.httpsAvailable
           ? "https_unavailable" as const
@@ -533,11 +568,15 @@ export class AidenRemoteTailscaleController {
       createdAt: this.now(),
     });
     let commandFailed = false;
+    let commandFailureCode: string | undefined;
     try {
       if (nextTarget) await this.setExactRoute(nextTarget);
       else await this.clearExactRoute();
-    } catch {
+    } catch (error) {
       commandFailed = true;
+      if (error instanceof Error && error.message === "tailscale_permission_denied") {
+        commandFailureCode = error.message;
+      }
     }
     const observed = await this.serveStatusAfterMutation("tailscale_route_outcome_unknown");
     const observedSnapshot = aidenTailscaleCanonicalRouteSnapshot(observed);
@@ -563,6 +602,7 @@ export class AidenRemoteTailscaleController {
         await this.outcomeStore?.clear();
       } else if (observedFingerprint === serveFingerprint(before)) {
         await this.outcomeStore?.clear();
+        if (commandFailureCode) throw new Error(commandFailureCode);
       }
       throw new Error(commandFailed
         ? "tailscale_route_outcome_unknown"

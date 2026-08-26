@@ -30,7 +30,7 @@ test("pairing offers QR and a distinct IPC-only manual setup code", () => {
   assert.match(source, /pairingRequestGeneration/u);
   assert.match(source, /remotePairingPresentation/u);
   assert.match(source, /effectiveRemotePairingLifecycle/u);
-  assert.match(source, /Copy Mac address/u);
+  assert.match(source, /Copy desktop address/u);
   assert.match(source, /Private Tailscale address/u);
   assert.match(source, /Code unavailable/u);
   assert.match(source, /aria-disabled=\{pairingPresentation\.qrDisabled\}/u);
@@ -51,7 +51,7 @@ test("Tailscale takeover is disclosed only for a stale Aiden route with bounded 
   assert.match(source, /aidenRemoteApi\.takeOverTailscale\(takeoverReview\.token\)/u);
   assert.match(source, /replace only \/api\/aiden\/v1/u);
   assert.match(source, /preserve every other Serve handler/u);
-  assert.match(source, /Another running Aiden profile owns this Mac’s mobile route/u);
+  assert.match(source, /Another running Aiden profile owns this desktop’s mobile route/u);
   assert.doesNotMatch(source, /tailscale_route_conflict.*toast\.error/u);
 });
 
@@ -61,6 +61,7 @@ test("Tailscale setup failures retain typed actionable remediation", () => {
   assert.match(source, /status\.tailscaleErrorCode === "https_unavailable"/u);
   assert.match(source, /Open Tailscale and sign in/u);
   assert.match(source, /Enable HTTPS for this Tailscale device name/u);
+  assert.match(source, /tailscale_permission_denied[\s\S]*?sudo tailscale set --operator=\$USER/u);
   assert.match(source, /<Badge color=\{status\.tailscaleConnected \? "green"/u);
 });
 
@@ -81,8 +82,8 @@ test("primary connection tasks stay visible while advanced details use progressi
   assert.match(source, /groupRemoteDevices/u);
 });
 
-test("the persisted Mac label is editable without presenting it as identity", () => {
-  assert.match(source, /label="Mac name"/u);
+test("the persisted desktop label is editable without presenting it as identity", () => {
+  assert.match(source, /label="Desktop name"/u);
   assert.match(source, /aidenRemoteApi\.setDisplayName/u);
   assert.match(source, /Identity remains/u);
   assert.match(source, /maxLength=\{80\}/u);

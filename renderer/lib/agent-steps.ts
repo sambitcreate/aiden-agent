@@ -31,7 +31,7 @@ const VERBS: Record<string, VerbPair> = {
   web_search: { active: "Searching the web", complete: "Searched the web" },
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
-  computer_use: { active: "Using Mac", complete: "Used Mac" },
+  computer_use: { active: "Using computer", complete: "Used computer" },
   compact_context: { active: "Compacting context", complete: "Compacted context" },
 };
 

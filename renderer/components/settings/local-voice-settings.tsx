@@ -1,6 +1,6 @@
 // On-device voice settings: engine status, the active Parakeet model (with a
 // button into the full model-management subview), and the dictation hotkey.
-// Everything runs locally — recordings are transcribed on the user's Mac.
+// Everything runs locally — recordings are transcribed on the user's device.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -12,6 +12,7 @@ import { queryKeys, useEngineStatus, useLocalModels, useSettings, useShortcuts }
 import { prettyAccelerator } from "../../shared/keybindings";
 import { ModelManagerView } from "./model-manager-view";
 import { installAccessibilityRefresh } from "../../lib/accessibility-refresh";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 function EngineStatus() {
   const status = useEngineStatus();
@@ -182,6 +183,7 @@ function DictationHotkey() {
 
 export function LocalVoiceSettings() {
   const [managing, setManaging] = React.useState(false);
+  const capabilities = useAppCapabilities();
 
   if (managing) return <ModelManagerView onBack={() => setManaging(false)} />;
 
@@ -194,7 +196,16 @@ export function LocalVoiceSettings() {
 
       <FieldSet title="Dictation Shortcut">
         <DictationHotkey />
-        <AccessibilityAccess />
+        {capabilities.accessibilityPaste ? (
+          <AccessibilityAccess />
+        ) : (
+          <Callout color="blue">
+            <Text variant="small">
+              On Linux, dictation copies the transcript to the clipboard so you can paste it into
+              any app. Automatic paste is currently available only on macOS.
+            </Text>
+          </Callout>
+        )}
       </FieldSet>
     </div>
   );

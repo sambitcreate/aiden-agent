@@ -276,7 +276,7 @@ actor AidenChatCache {
             // Older active-stream records did not contain deviceId and cannot
             // decode with the current schema. Their outer envelope still has
             // an exact installation identity, so explicit forget/re-pair can
-            // remove them without touching another Mac's cache.
+            // remove them without touching another desktop's cache.
             guard let data = try? Data(contentsOf: url),
                   data.count <= maxCacheFileBytes,
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

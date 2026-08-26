@@ -30,7 +30,16 @@ export const appHandlers = {
       version: app.getVersion(),
       environment: currentRuntimeProfile().id,
       capabilities: {
+        platform:
+          process.platform === "darwin" || process.platform === "linux"
+            ? process.platform
+            : "other",
         subagents: subagentsEnabled(),
+        computerUse: process.platform === "darwin",
+        dockIcon: process.platform === "darwin",
+        accessibilityPaste: process.platform === "darwin",
+        nativeShare: process.platform === "darwin",
+        appleFoundationModels: process.platform === "darwin",
       },
     };
   },

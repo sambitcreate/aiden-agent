@@ -61,7 +61,7 @@ const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 const APPEARANCE_VERSION = 1 as const;
 
 export const UI_FONT_OPTIONS: ReadonlyArray<{ id: UiFontId; label: string; preview: string }> = [
-  { id: "system", label: "System", preview: "-apple-system, BlinkMacSystemFont" },
+  { id: "system", label: "System", preview: "-apple-system, BlinkMacSystemFont, system-ui" },
   { id: "rounded", label: "Rounded", preview: "SF Pro Rounded" },
   { id: "humanist", label: "Humanist", preview: "Avenir Next" },
 ];
@@ -550,9 +550,9 @@ function selectedPalette(variant: ThemeVariantConfig, scheme: AppearanceScheme):
 }
 
 export function uiFontStack(id: UiFontId): string {
-  if (id === "rounded") return '"SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif';
-  if (id === "humanist") return '"Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, sans-serif';
-  return '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif';
+  if (id === "rounded") return '"SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif';
+  if (id === "humanist") return '"Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+  return '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif';
 }
 
 export function codeFontStack(id: CodeFontId): string {

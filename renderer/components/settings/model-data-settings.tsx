@@ -41,7 +41,7 @@ function connectionDetail(
   state: { loading: boolean; failed: boolean },
 ): string {
   if (state.failed) return "Aiden couldn’t read the local Artificial Analysis connection.";
-  if (state.loading || !status) return "Aiden is checking for cached suggestions on this Mac.";
+  if (state.loading || !status) return "Aiden is checking for cached suggestions on this device.";
   if (status.ready) {
     return `${status.rankedModelCount} benchmark position${status.rankedModelCount === 1 ? " is" : "s are"} available as optional suggestions.`;
   }
@@ -103,7 +103,7 @@ export function ModelDataSettings() {
       }
       setKeyDraft("");
       await commitStatus(result.status);
-      toast.success("Artificial Analysis suggestions are cached on this Mac.");
+      toast.success("Artificial Analysis suggestions are cached on this device.");
     } catch {
       await reconcileAfterFailure();
       const message = "Aiden couldn’t connect to Artificial Analysis. Try again.";
@@ -364,7 +364,7 @@ export function ModelDataSettings() {
             color="secondary"
             className="min-w-0 flex-1 basis-80 text-pretty"
           >
-            Aiden stores the key encrypted on this Mac and sends it only to Artificial Analysis when
+            Aiden stores the key encrypted on this device and sends it only to Artificial Analysis when
             you choose Connect & fetch or Fetch latest. Normalized model data stays in Aiden’s local
             cache for offline use; model reads never trigger a network request. Data by{" "}
             <a
@@ -395,8 +395,8 @@ export function ModelDataSettings() {
         }
         description={
           status?.cleanupNeeded
-            ? "Aiden will retry removing the remaining cached model data from this Mac."
-            : "Aiden will remove the encrypted API key and cached benchmark data from this Mac. Your saved personal Pad positions will remain available."
+            ? "Aiden will retry removing the remaining cached model data from this device."
+            : "Aiden will remove the encrypted API key and cached benchmark data from this device. Your saved personal Pad positions will remain available."
         }
         confirmLabel={status?.cleanupNeeded ? "Finish disconnect" : "Disconnect"}
         confirmVariant="destructive"

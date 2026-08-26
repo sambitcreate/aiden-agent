@@ -1,23 +1,40 @@
 import * as React from "react";
 
 export interface AppCapabilities {
+  platform: "darwin" | "linux" | "other";
   subagents: boolean;
+  computerUse: boolean;
+  dockIcon: boolean;
+  accessibilityPaste: boolean;
+  nativeShare: boolean;
+  appleFoundationModels: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
+  platform: "other",
   subagents: false,
+  computerUse: false,
+  dockIcon: false,
+  accessibilityPaste: false,
+  nativeShare: false,
+  appleFoundationModels: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("subagents" in value) ||
-    value.subagents !== true
-  ) {
-    return DISABLED_APP_CAPABILITIES;
-  }
-  return { subagents: true };
+  if (typeof value !== "object" || value === null) return DISABLED_APP_CAPABILITIES;
+  const record = value as Record<string, unknown>;
+  return {
+    platform:
+      record.platform === "darwin" || record.platform === "linux"
+        ? record.platform
+        : "other",
+    subagents: record.subagents === true,
+    computerUse: record.computerUse === true,
+    dockIcon: record.dockIcon === true,
+    accessibilityPaste: record.accessibilityPaste === true,
+    nativeShare: record.nativeShare === true,
+    appleFoundationModels: record.appleFoundationModels === true,
+  };
 }
 
 const AppCapabilitiesContext = React.createContext<AppCapabilities>(DISABLED_APP_CAPABILITIES);

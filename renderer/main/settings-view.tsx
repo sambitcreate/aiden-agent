@@ -37,6 +37,7 @@ import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-s
 import { AssistantSettings } from "../components/settings/assistant-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 type NavGroup = "Agent" | "App";
 
@@ -93,13 +94,22 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
   const router = useRouter();
   const navigate = useNavigate();
-  const section = initialSection ?? "providers";
+  const capabilities = useAppCapabilities();
+  const section =
+    initialSection === "computerUse" && !capabilities.computerUse
+      ? "providers"
+      : (initialSection ?? "providers");
   const [search, setSearch] = React.useState("");
 
   const query = search.trim().toLocaleLowerCase();
+  const availableNav = capabilities.computerUse
+    ? NAV
+    : NAV.filter((item) => item.id !== "computerUse");
   const filteredNav = query
-    ? NAV.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
-    : NAV;
+    ? availableNav.filter((item) =>
+        `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query),
+      )
+    : availableNav;
   const ActiveSection = CONTENT[section];
 
   return (
