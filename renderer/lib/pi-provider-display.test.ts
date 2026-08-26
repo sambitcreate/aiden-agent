@@ -89,7 +89,6 @@ test("onboarding can configure every provider with an interactive credential met
   const apiKeyProvider = {
     hasKey: false,
     models: ["chat-model"],
-    needsKey: true,
     authMethods: [{ type: "api_key" as const, canLogin: true }],
   };
   const oauthProvider = {
@@ -116,13 +115,11 @@ test("onboarding distinguishes ready providers from unavailable setup methods", 
   const readyProvider = {
     hasKey: true,
     models: ["chat-model"],
-    needsKey: true,
     authMethods: [{ type: "api_key" as const, canLogin: false }],
   };
   const unavailableProvider = {
     hasKey: false,
     models: ["chat-model"],
-    needsKey: true,
     authMethods: [{ type: "api_key" as const, canLogin: false }],
   };
 

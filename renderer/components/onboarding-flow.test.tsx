@@ -38,14 +38,17 @@ const featureAssetPaths = [
   "features/web-search.png",
   "features/workspaces-worktrees.png",
 ] as const;
-const providerPresentation = source.slice(
-  source.indexOf("const providerChoices"),
-  source.indexOf("function builtinProviderSetupLabel"),
-);
-const featurePresentation = source.slice(
-  source.indexOf("const featureBentos"),
-  source.indexOf("function builtinProviderSetupLabel"),
-);
+
+function sourceSection(startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0, `Missing source section start: ${startMarker}`);
+  assert.ok(end > start, `Missing source section end: ${endMarker}`);
+  return source.slice(start, end);
+}
+
+const providerPresentation = sourceSection("const providerChoices", "type FeatureGroupId");
+const featurePresentation = sourceSection("const featureBentos", "const FEATURE_LAYOUTS");
 
 test("onboarding uses the Aiden mark and the existing provider icon system", () => {
   assert.match(source, /resources\/app-icon\.png/u);

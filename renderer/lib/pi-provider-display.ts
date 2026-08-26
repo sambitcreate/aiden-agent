@@ -140,7 +140,6 @@ export function getOnboardingMoreProviders<T extends { id: string; isBuiltin?: b
 type OnboardingBuiltinProvider = {
   hasKey: boolean;
   models: readonly string[];
-  needsKey: boolean;
   authMethods?: ReadonlyArray<{
     type: "api_key" | "oauth";
     canLogin: boolean;
@@ -148,7 +147,9 @@ type OnboardingBuiltinProvider = {
 };
 
 export function isOnboardingBuiltinProviderReady(provider: OnboardingBuiltinProvider): boolean {
-  return provider.models.length > 0 && (!provider.needsKey || provider.hasKey);
+  // Pi projects ambient and stored credentials alike through hasKey, while
+  // builtinProviderRecord marks every provider in this catalog as needsKey.
+  return provider.models.length > 0 && provider.hasKey;
 }
 
 /**
