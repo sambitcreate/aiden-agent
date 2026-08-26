@@ -6,6 +6,7 @@ import {
   logger,
   powerMonitor,
   registerNativeHandlers,
+  screen,
   shell,
 } from "./platform.js";
 import { Menu, nativeImage, nativeTheme } from "electron";
@@ -117,6 +118,7 @@ import {
 import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
+import { mainWindowState } from "./services/main-window-state.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -492,11 +494,22 @@ async function authorizeProtectedAction(
   return false;
 }
 
+async function persistMainWindowState(window: BrowserWindow): Promise<void> {
+  try {
+    await mainWindowState.save(window);
+  } catch (error) {
+    // Window placement is a convenience preference. A transient persistence
+    // failure must never trap the user in the app during Close or Quit.
+    logger.warn("main-window", "Could not save the main window state", error);
+  }
+}
+
 async function requestWindowClose(window: BrowserWindow): Promise<void> {
   if (lifecycleCheckInFlight || window.isDestroyed()) return;
   lifecycleCheckInFlight = true;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return;
+    await persistMainWindowState(window);
     protectedAction = "close";
     window.close();
   } finally {
@@ -531,6 +544,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   lifecycleCheckInFlight = true;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return false;
+    await persistMainWindowState(window);
     try {
       await computerUseSettings.shutdown();
     } catch (error) {
@@ -658,6 +672,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
 
     const onboardingWasComplete =
       await clearRendererOnboardingCompletion(window);
+    await persistMainWindowState(window);
     protectedAction = "onboarding-reset";
     if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
@@ -776,7 +791,7 @@ ipcMain.handle(
     ) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
-    if (outcome !== "incomplete" && outcome !== "completed") {
+    if (outcome !== "incomplete" && outcome !== "deferred" && outcome !== "completed") {
       throw new Error("Invalid onboarding outcome.");
     }
     if (
@@ -976,9 +991,25 @@ async function createMainWindow(): Promise<void> {
     return;
   }
 
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const displays = [
+    primaryDisplay,
+    ...screen.getAllDisplays().filter((display) => display.id !== primaryDisplay.id),
+  ];
+  const restoredWindowState = await mainWindowState.restore(
+    displays.map((display) => display.workArea),
+  );
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const existingWindow = mainWindow;
+    await mainWindowLoads.wait();
+    if (existingWindow.isDestroyed() || mainWindow !== existingWindow) return;
+    existingWindow.show();
+    existingWindow.focus();
+    return;
+  }
+
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 700,
+    ...restoredWindowState.bounds,
     minWidth: 390,
     minHeight: 456,
     title: app.getName(),
@@ -1070,7 +1101,11 @@ async function createMainWindow(): Promise<void> {
       );
     },
   );
-  createdWindow.once("ready-to-show", () => createdWindow.show());
+  createdWindow.once("ready-to-show", () => {
+    if (restoredWindowState.maximized) createdWindow.maximize();
+    if (restoredWindowState.fullScreen) createdWindow.setFullScreen(true);
+    createdWindow.show();
+  });
   createdWindow.on("close", (event) => {
     if (
       protectedAction === "close" ||

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { onboardingStepIndex, parseOnboardingState } from "./onboarding.js";
+import {
+  onboardingStepIndex,
+  parseOnboardingState,
+  shouldOpenOnboarding,
+} from "./onboarding.js";
 
 test("onboarding state accepts only the current bounded non-secret contract", () => {
   assert.deepEqual(
@@ -38,4 +42,10 @@ test("resume position is derived from authoritative readiness", () => {
   assert.equal(onboardingStepIndex({ ...base, profileReady: false, providerReady: false }), 0);
   assert.equal(onboardingStepIndex({ ...base, profileReady: true, providerReady: false }), 1);
   assert.equal(onboardingStepIndex({ ...base, profileReady: true, providerReady: true }), 2);
+});
+
+test("only incomplete setup opens onboarding automatically", () => {
+  assert.equal(shouldOpenOnboarding("incomplete"), true);
+  assert.equal(shouldOpenOnboarding("deferred"), false);
+  assert.equal(shouldOpenOnboarding("completed"), false);
 });

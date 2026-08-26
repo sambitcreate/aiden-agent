@@ -73,10 +73,12 @@ ordinary startup.
 1. **Setup completion is authoritative.** `completed` means the main process can
    identify at least one selectable model on a configured provider whose setup
    state satisfies that provider class's readiness contract.
-2. **Do not keep the current global Skip.** Required profile/provider steps
-   cannot be dismissed as complete or deferred. The `deferred` state exists only
-   to migrate old renderer completion markers that never established a usable
-   provider; Settings offers a non-destructive **Show onboarding** recovery path.
+2. **Keep profile required; let provider setup defer explicitly.** The provider
+   step offers **Skip provider** in the top-right and records `deferred` only
+   after the user finishes the tour. Deferred setup is never called completed,
+   carries no stale selected-provider ID, and directs the user to Settings →
+   Providers before chatting. Settings retains the non-destructive **Show
+   onboarding** recovery path.
 3. **The tour is optional.** Once required setup is ready, the user may choose
    **Start using Aiden** without traversing the entire feature gallery.
 4. **Use native provider identities.** OpenAI and Anthropic onboarding configure
@@ -124,16 +126,18 @@ boot.checking
      -> codex.starting/waiting/prompt/responding/cancelling/finishing
      -> api_key.validating/saving/reconciling
      -> endpoint.validating/saving/reconciling
+     -> provider.defer_explicitly
   -> tour
-  -> completion.persisting/error/completed
+  -> completion.persisting/error/completed_or_deferred
 
 any idle setup state
-  -> close only after authoritative completion
+  -> close after authoritative completion or explicit provider deferral
 ```
 
 Normal completion is allowed only after a fresh selected-provider reconciliation
-passes the shared usable-provider predicate. Migrated deferred records reopen
-required setup and cannot be written through renderer IPC.
+passes the shared usable-provider predicate. An explicit deferred record keeps
+its distinct outcome, dismisses first-run setup, and can be reopened from
+Settings without deleting configuration.
 
 ## Implementation checkpoint
 
@@ -142,10 +146,11 @@ The immediate onboarding repair now ships in the working tree:
 - onboarding renders the dedicated Codex sign-in surface and advances only from
   its configured, healthy model-bearing status;
 - profile/provider progress and completion are versioned in main-owned settings,
-  required setup has no Skip/defer action, migrated false-completion records
-  reopen, and Settings can reopen onboarding without deleting configuration;
+  profile remains required, provider setup has an explicit truthful defer path,
+  and Settings can reopen onboarding without deleting configuration;
 - OpenAI and Anthropic use their native Pi identities and validate an
-  authenticated bounded model catalog before replacing the stored key;
+  authenticated bounded model catalog from a nested setup dialog before
+  replacing the stored key;
 - LM Studio, Ollama, and Tailnet routes must discover a usable model before they
   can advance, and every successful path persists a selected model;
 - secret-bearing discovery rejects redirects, bounds response/model data, emits
@@ -160,9 +165,10 @@ The immediate onboarding repair now ships in the working tree:
   writes to the active renderer document, blocks deep-link navigation, and
   reconciles setup that finishes after a close/cancel race;
 - the onboarding shell is an application modal, nested confirmations render in
-  the onboarding layer, browser-launch failures retain a manual link, step
-  headings receive focus, progress exposes `aria-current`, and the feature
-  gallery no longer adds 24 noninteractive tab stops.
+  the onboarding layer, compact windows keep the native traffic-light strip
+  behind the rounded setup surface, browser-launch failures retain a manual
+  link, step headings receive focus, progress exposes `aria-current`, and the
+  feature gallery no longer adds 24 noninteractive tab stops.
 
 The broader cross-provider evidence registry, Settings evidence UI, and the
 Phase 6 credential-owner decision remain future architecture work; they are not

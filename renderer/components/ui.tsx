@@ -67,8 +67,9 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     <Component
       ref={ref}
       type={asChild ? undefined : type}
+      data-slot="button"
       className={cn(
-        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border border-transparent text-strong outline-none transition-[background-color,border-color,color,box-shadow,opacity] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 [&_svg:not([class*='size-'])]:size-4",
+        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform] duration-150 ease-out active:scale-[0.985] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
         radius === "full" ? "rounded-pill" : "rounded-control",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
@@ -1017,8 +1018,8 @@ export function Dialog({
           onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           className={cn(
-            "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
-            layer === "onboarding" ? "z-[70]" : "z-50",
+            "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
+            layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
             size === "large" && "w-[min(92vw,680px)]",
           )}
         >
@@ -1101,10 +1102,7 @@ export function AlertDialog({
       <AlertDialogPrimitive.Portal>
         <AlertDialogPrimitive.Overlay
           data-slot="dialog-overlay"
-          className={cn(
-            "fixed inset-0 bg-transparent",
-            layer === "onboarding" ? "z-[70]" : "z-50",
-          )}
+          className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <AlertDialogPrimitive.Content
           data-slot="dialog-content"
@@ -1119,8 +1117,8 @@ export function AlertDialog({
           }}
           onEscapeKeyDown={(event) => busy && event.preventDefault()}
           className={cn(
-            "fixed left-1/2 top-1/2 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
-            layer === "onboarding" ? "z-[70]" : "z-50",
+            "fixed left-1/2 top-1/2 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 outline-none",
+            layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
           )}
         >
           <AlertDialogPrimitive.Title className="text-heading2 font-semibold">
@@ -1562,3 +1560,5 @@ export function ErrorBoundaryView({ error, reset }: { error?: unknown; reset?: (
     </div>
   );
 }
+
+export { AidenIcon, type AidenIconProps } from "./aiden-icon";

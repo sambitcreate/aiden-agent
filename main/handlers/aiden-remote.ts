@@ -98,6 +98,11 @@ export function registerAidenRemoteHandlers(): void {
     return settingsSnapshot();
   });
 
+  ipcMain.handle("remote:moveToAvailablePort", async () => {
+    await (await getAidenRemoteRuntime()).service.moveToAvailablePort();
+    return settingsSnapshot();
+  });
+
   ipcMain.handle("remote:tailscaleConnect", async () => {
     await (await getAidenRemoteRuntime()).service.connectTailscale();
     return settingsSnapshot();

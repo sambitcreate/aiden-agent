@@ -20,6 +20,7 @@ test("the onboarding reset closes the renderer before destructive cleanup and pr
   const clearCompletion = reset.indexOf(
     "await clearRendererOnboardingCompletion(window)",
   );
+  const persistWindowState = reset.indexOf("await persistMainWindowState(window)");
   const closeRenderer = reset.indexOf(
     "await closeRendererBeforeShutdown(window)",
   );
@@ -35,6 +36,10 @@ test("the onboarding reset closes the renderer before destructive cleanup and pr
   assert.ok(
     closeRenderer > clearCompletion,
     "renderer close begins after its completion marker is cleared",
+  );
+  assert.ok(
+    persistWindowState > clearCompletion && persistWindowState < closeRenderer,
+    "window state is persisted before onboarding reset closes the renderer",
   );
   assert.ok(
     clearData > closeRenderer,

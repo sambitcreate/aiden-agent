@@ -46,3 +46,9 @@ test("Remote approval IPC is bound to the current main-frame document across awa
   assert.match(approvalHandlers, /owner\.isDestroyed\(\)/u);
   assert.doesNotMatch(approvalHandlers, /async \(_event/u);
 });
+
+test("saved endpoint repair is an explicit IPC action", async () => {
+  const source = await readFile(new URL("./aiden-remote.ts", import.meta.url), "utf8");
+  assert.match(source, /ipcMain\.handle\("remote:moveToAvailablePort"/u);
+  assert.match(source, /service\.moveToAvailablePort\(\)/u);
+});

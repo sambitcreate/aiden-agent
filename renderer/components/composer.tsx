@@ -35,10 +35,10 @@ import {
   OctagonAlert,
   Plus,
   ShieldQuestion,
-  Sparkles,
   Square,
   X,
 } from "lucide-react";
+import { AidenIcon } from "./aiden-icon";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -1380,7 +1380,7 @@ export function Composer({
                   {selectedSkillState?.state === "checking" ? (
                     <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />
                   ) : (
-                    <Sparkles aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+                    <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
                   )}
                   <span className="truncate font-medium">
                     {selectedSkill.invocation.displayName}

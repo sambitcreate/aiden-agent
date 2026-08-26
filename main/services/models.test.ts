@@ -613,10 +613,23 @@ test("normalizes safe provider URLs and rejects credentials or request decoratio
     assert.throws(() => normalizeProviderBaseUrl(target), /metadata service/u);
   }
   assert.doesNotThrow(() => assertOnboardingTailnetBaseUrl("https://model.tailnet.ts.net/v1"));
+  assert.doesNotThrow(() => assertOnboardingTailnetBaseUrl("http://model.tailnet.ts.net:11434/v1"));
   assert.doesNotThrow(() => assertOnboardingTailnetBaseUrl("http://100.64.20.5:11434/v1"));
+  assert.throws(
+    () => assertOnboardingTailnetBaseUrl("ftp://model.tailnet.ts.net/v1"),
+    /HTTP or HTTPS/u,
+  );
   assert.throws(
     () => assertOnboardingTailnetBaseUrl("http://foo.100.100.100.200.nip.io/v1"),
     /Tailscale/u,
+  );
+  assert.throws(
+    () => assertOnboardingTailnetBaseUrl("http://user:secret@model.tailnet.ts.net/v1"),
+    /API key field/u,
+  );
+  assert.throws(
+    () => assertOnboardingTailnetBaseUrl("http://model.tailnet.ts.net/v1?key=secret"),
+    /query string/u,
   );
 });
 

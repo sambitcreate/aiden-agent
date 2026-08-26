@@ -5,6 +5,7 @@ import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
   mergeCodexProvider,
+  providerDisplayLabel,
 } from "./provider-list-core.js";
 import type { CodexProviderSnapshot } from "./codex-provider.js";
 import type { Provider } from "./types.js";
@@ -107,6 +108,12 @@ test("filters reserved stored collisions and rejects generic credential manageme
   assert.deepEqual(mergeCodexProvider([collision, legacy], null), [legacy]);
   assert.throws(() => assertMutableProviderId("openai-codex"), /built-in sign-in/u);
   assert.doesNotThrow(() => assertMutableProviderId("custom-provider"));
+});
+
+test("uses the concise OpenCode Zen product name", () => {
+  assert.equal(providerDisplayLabel("opencode-go", "OpenCode Zen Go"), "OpenCode Zen");
+  assert.equal(providerDisplayLabel("opencode", "OpenCode Zen"), "OpenCode Zen");
+  assert.equal(providerDisplayLabel("openai", "OpenAI"), "OpenAI");
 });
 
 test("forwards each main-process Codex status signal to the global renderer channel", () => {
