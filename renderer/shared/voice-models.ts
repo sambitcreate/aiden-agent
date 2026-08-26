@@ -34,8 +34,3 @@ export function shouldUseGeminiLiveTranscription(
     provider === "gemini" && isGeminiLiveTranscriptionModel(resolveCloudVoiceModel("gemini", model))
   );
 }
-
-/** Recorded audio always uses the one-shot companion, even when Live is selected. */
-export function resolveGeminiBatchTranscriptionModel(model: string | undefined): string {
-  return model === GEMINI_TRANSCRIPTION_MODEL ? model : GEMINI_TRANSCRIPTION_MODEL;
-}

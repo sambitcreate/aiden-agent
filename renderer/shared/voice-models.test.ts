@@ -4,7 +4,6 @@ import {
   CLOUD_VOICE_MODELS,
   GEMINI_LIVE_TRANSCRIPTION_MODEL,
   GEMINI_TRANSCRIPTION_MODEL,
-  resolveGeminiBatchTranscriptionModel,
   resolveCloudVoiceModel,
   shouldUseGeminiLiveTranscription,
 } from "./voice-models.js";
@@ -24,10 +23,6 @@ test("legacy Gemini voice selections upgrade to Gemini 3.5 Transcribe", () => {
   }
   assert.equal(
     resolveCloudVoiceModel("gemini", GEMINI_TRANSCRIPTION_MODEL),
-    GEMINI_TRANSCRIPTION_MODEL,
-  );
-  assert.equal(
-    resolveGeminiBatchTranscriptionModel(GEMINI_LIVE_TRANSCRIPTION_MODEL),
     GEMINI_TRANSCRIPTION_MODEL,
   );
   assert.equal(resolveCloudVoiceModel("openai", "gpt-4o-transcribe"), "gpt-4o-transcribe");

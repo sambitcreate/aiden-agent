@@ -13,7 +13,7 @@ export interface GeminiLiveServerMessageLike {
 }
 
 /**
- * Finalization starts after a documented authoritative final segment or Gemini's
+ * Finalization starts after a non-empty inputTranscription segment or Gemini's
  * supplementary turn-complete signal. Every later transcript update restarts
  * the manager's quiet-period timer.
  */
@@ -90,6 +90,8 @@ export function bindOwnerInvalidation(
 }
 
 function appendTranscript(left: string, right: string): string {
+  // Gemini 3.5 Transcribe Live emits finalized per-utterance segments. Normalize
+  // those segment boundaries here; this accumulator is intentionally model-specific.
   const next = right.trim();
   if (!next) return left;
   if (!left) return next;

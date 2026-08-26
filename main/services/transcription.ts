@@ -19,8 +19,8 @@ import {
   parseGeminiTranscriptionResponse,
 } from "./transcription-core.js";
 import {
+  GEMINI_TRANSCRIPTION_MODEL,
   resolveCloudVoiceModel,
-  resolveGeminiBatchTranscriptionModel,
 } from "../../renderer/shared/voice-models.js";
 
 interface TranscribeInput {
@@ -126,8 +126,8 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
   const auth = await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID);
   const key = auth?.auth.apiKey;
   if (!key) throw new Error("Set up Google Gemini in Settings → Providers to use voice input.");
-  const settings = await configStore.getSettings();
-  const model = resolveGeminiBatchTranscriptionModel(input.model ?? settings.voiceModel);
+  // Recorded Gemini audio always uses the one-shot companion, even when Live is selected.
+  const model = GEMINI_TRANSCRIPTION_MODEL;
   const provider = await providerRegistry.selectionProvider(GOOGLE_PROVIDER_ID);
   if (!provider) throw new Error("Google Gemini provider settings are unavailable.");
 

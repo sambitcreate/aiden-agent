@@ -8,7 +8,7 @@ import { voiceApi } from "./ipc";
 import type { VoiceProvider } from "./types";
 import { bytesToBase64 } from "./live-pcm-capture";
 import { encodeMonoPcm16Wav } from "./wav-audio";
-import { resolveGeminiBatchTranscriptionModel } from "../shared/voice-models";
+import { GEMINI_TRANSCRIPTION_MODEL } from "../shared/voice-models";
 
 export interface TranscribeOptions {
   provider: VoiceProvider;
@@ -114,13 +114,7 @@ export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Pr
   if (options.provider === "gemini") {
     const samples = await blobToMono16k(blob);
     const wav = bytesToBase64(encodeMonoPcm16Wav(samples, 16_000));
-    return (
-      await voiceApi.transcribe(
-        wav,
-        "audio/wav",
-        resolveGeminiBatchTranscriptionModel(options.model),
-      )
-    ).trim();
+    return (await voiceApi.transcribe(wav, "audio/wav", GEMINI_TRANSCRIPTION_MODEL)).trim();
   }
   const base64 = await blobToBase64(blob);
   return (await voiceApi.transcribe(base64, blob.type, options.model)).trim();
