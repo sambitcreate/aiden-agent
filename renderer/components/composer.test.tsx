@@ -28,13 +28,22 @@ test("composer context controls stay compact without exposing provider copy", ()
   const composer = source("./composer.tsx");
   const modelPicker = source("./model-picker.tsx");
 
-  assert.match(composer, /h-7 gap-1\.5 px-2 max-\[520px\]:size-7 max-\[520px\]:px-0/u);
-  assert.match(
-    composer,
-    /<span className="composer-permission-label max-\[520px\]:hidden">\s*\{permissionSaving \? "Updating…" : perm\.label\}/u,
-  );
+  assert.match(composer, /group\/access relative h-8 w-34/u);
+  assert.match(composer, /role="radiogroup"\s*aria-label="Workspace access"/u);
+  assert.match(composer, /absolute bottom-full left-0/u);
+  assert.match(composer, /group-hover\/access:visible/u);
+  assert.match(composer, /group-focus-within\/access:visible/u);
+  assert.match(composer, /group-data-\[open=true\]\/access:visible/u);
+  assert.match(composer, /bg-control\/80/u);
+  assert.match(composer, /selected\s*\? "bg-popover shadow-control"/u);
+  assert.doesNotMatch(composer, /group-hover\/access:max-h/u);
+  assert.match(composer, /aria-disabled=\{disabled \|\| undefined\}/u);
+  assert.doesNotMatch(composer, /group\/access[^\n]*disabled:opacity-45/u);
+  assert.doesNotMatch(composer, /DropdownMenuCheckboxItem/u);
+  assert.doesNotMatch(composer, /<DropdownMenuLabel>Workspace access/u);
   assert.match(modelPicker, /\? selected\.label\s*: hasUnavailableSelection/u);
   assert.match(modelPicker, /`Selected model: \$\{selected\.label\}\. Choose a model\.`/u);
+  assert.doesNotMatch(modelPicker, /ChevronsUpDown/u);
   assert.doesNotMatch(modelPicker, /Selected model: \$\{selected\.label\} from/u);
   assert.doesNotMatch(modelPicker, /\$\{selected\.label\} · \$\{selected\.providerLabel\}/u);
 });
@@ -102,6 +111,15 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(palette, /onPointerDown=\{\(event\) => event\.preventDefault\(\)\}/u);
   assert.match(palette, /motion-reduce:animate-none/u);
   assert.match(palette, /max-\[520px\]:hidden/u);
+  assert.match(palette, /flex min-h-10/u);
+  assert.match(palette, /selected && available && "bg-control"/u);
+  assert.match(palette, /result\.command\.title/u);
+  assert.doesNotMatch(palette, /`\/\$\{result\.command\.name\}`/u);
+  assert.doesNotMatch(palette, /`\/\$\{alias\}`/u);
+  assert.match(palette, /const detail = unavailableReason \?\? description/u);
+  assert.match(palette, /rounded-dialog border border-separator/u);
+  assert.doesNotMatch(palette, /block truncate text-small text-secondary/u);
+  assert.doesNotMatch(palette, /selected && available && "bg-list-selection"/u);
   assert.doesNotMatch(palette, /Commands and skills/u);
   assert.doesNotMatch(palette, /composer-slash-shortcuts/u);
   assert.doesNotMatch(palette, /rounded-md bg-control\/65 text-secondary/u);

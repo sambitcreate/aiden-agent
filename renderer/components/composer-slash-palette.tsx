@@ -178,12 +178,11 @@ export function ComposerSlashPalette({
   const row = (result: SlashResult, available: boolean, unavailableReason?: string) => {
     const selected = result.id === activeId;
     const Icon = result.kind === "command" ? ICONS[result.command.icon] : AidenIcon;
-    const title = result.kind === "command" ? `/${result.command.name}` : `$${result.skill.name}`;
+    const title = result.kind === "command" ? result.command.title : `$${result.skill.name}`;
     const description =
       result.kind === "command" ? result.command.description : result.skill.description;
-    const detail =
-      unavailableReason ??
-      (result.kind === "skill" ? sourceLabel(result.skill.source) : result.command.title);
+    const metadata = result.kind === "skill" ? sourceLabel(result.skill.source) : "";
+    const detail = unavailableReason ?? description;
     const reasonId = unavailableReason ? `${result.id}-unavailable-reason` : undefined;
     return (
       <div
@@ -201,29 +200,29 @@ export function ComposerSlashPalette({
           else if (unavailableReason) setAnnouncement(unavailableReason);
         }}
         className={cn(
-          "flex min-h-12 cursor-default items-center gap-2.5 rounded-lg px-2.5 py-2 outline-none transition-colors duration-100",
-          selected && available && "bg-list-selection",
+          "flex min-h-10 cursor-default items-center gap-2 rounded-[10px] px-2.5 py-1.5 outline-none transition-colors duration-100",
+          selected && available && "bg-control",
           !selected && available && "hover:bg-list-hover",
-          !available && "opacity-50",
+          !available && "opacity-45",
         )}
       >
-        <span className="grid size-7 shrink-0 place-items-center text-secondary">
-          <Icon aria-hidden="true" className="size-4" />
+        <span
+          className={cn(
+            "grid size-7 shrink-0 place-items-center text-secondary transition-colors duration-100",
+            selected && available && "text-primary",
+          )}
+        >
+          <Icon aria-hidden="true" className="size-[18px]" />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-baseline gap-2">
-            <span className="truncate text-regular-strong text-primary">{title}</span>
-            {result.kind === "command" && result.command.aliases.length > 0 ? (
-              <span className="truncate text-mini text-tertiary">
-                {result.command.aliases.map((alias) => `/${alias}`).join(" · ")}
-              </span>
-            ) : null}
-          </span>
-          <span className="block truncate text-small text-secondary">{description}</span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="truncate text-regular-strong text-primary">{title}</span>
+          {metadata ? (
+            <span className="max-w-28 truncate text-small text-tertiary">{metadata}</span>
+          ) : null}
         </span>
         <span
           aria-hidden={unavailableReason ? "true" : undefined}
-          className="composer-slash-detail max-w-40 shrink-0 truncate text-right text-mini text-tertiary max-[520px]:hidden"
+          className="composer-slash-detail ml-auto min-w-0 max-w-[58%] truncate text-right text-small text-tertiary max-[520px]:hidden"
         >
           {detail}
         </span>
@@ -238,7 +237,7 @@ export function ComposerSlashPalette({
 
   return (
     <div
-      className="composer-slash-palette absolute inset-x-3 bottom-full z-40 mb-2 origin-bottom overflow-hidden rounded-popover border border-separator bg-popover/98 shadow-popover backdrop-blur-xl"
+      className="composer-slash-palette absolute inset-x-3 bottom-full z-40 mb-2 origin-bottom overflow-hidden rounded-dialog border border-separator bg-popover/98 shadow-popover backdrop-blur-xl"
       data-composer-slash-palette
       data-presence={presenceState}
       aria-hidden={presenceState === "exiting" ? "true" : undefined}
@@ -247,7 +246,7 @@ export function ComposerSlashPalette({
         id={COMPOSER_SLASH_PALETTE_ID}
         role="listbox"
         aria-label={mode === "command" ? "Slash commands" : "Skills"}
-        className="max-h-[min(22rem,48vh)] overflow-y-auto overscroll-contain p-1.5 [mask-image:linear-gradient(to_bottom,transparent_0,black_0.35rem,black_calc(100%_-_0.35rem),transparent_100%)]"
+        className="max-h-[min(24rem,52vh)] overflow-y-auto overscroll-contain p-2 [mask-image:linear-gradient(to_bottom,transparent_0,black_0.4rem,black_calc(100%_-_0.4rem),transparent_100%)]"
       >
         {mode === "command" ? (
           <div>
