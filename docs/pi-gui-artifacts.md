@@ -16,7 +16,7 @@ No raw local path, `file://` URL, SVG, or model-authored remote URL crosses into
 
 ## Extension points
 
-- Add future payloads to the closed `ChatArtifactV1` union in `renderer/shared/chat-artifacts.ts`; do not weaken an existing parser.
+- Add future payloads to the closed `ChatArtifactV1` union in `renderer/shared/chat-artifacts.ts`; do not weaken an existing parser. Interactive HTML widgets are specified in `docs/plans/generative-ui-artifacts-plan.md` and must use a new kind plus a sandboxed frame, not Markdown HTML.
 - Keep the live operation envelope versioned independently from artifact payload versions. Its reserved `reset` operation may be used only when the host can prove that the corresponding presentation effect was rolled back; an ordinary provider retry is not such a rollback.
 - Contribute GUI tools through a chat-scoped `PiAgentRuntimeExtension`, not `buildAgentTools` or the process-global extension registry.
 - Give each artifact kind a main-owned authority check, bounded transport, durable representation, renderer parser, accessible fallback, and live/reload/deduplication tests.
