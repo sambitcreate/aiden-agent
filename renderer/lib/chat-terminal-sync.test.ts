@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  detachedLifecycleChatProjection,
   fallbackDetachedLifecycleStream,
   isDetachedLifecycleChatDraining,
   parseChatReadResponse,
@@ -15,6 +16,7 @@ import {
   waitForDetachedLifecycleSettlement,
 } from "./chat-terminal-sync.js";
 import type { Chat } from "./types.js";
+import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs.js";
 
 function chat(id: string, content: string): Chat {
   return {
@@ -37,6 +39,87 @@ function chat(id: string, content: string): Chat {
 function detached(streamId: string, chatId = "chat-a", workspaceId = "workspace-1") {
   return { streamId, chatId, workspaceId };
 }
+
+function subagent(
+  streamId: string,
+  revision = 1,
+  state: SubagentRunSnapshotV1["state"] = "running",
+): SubagentRunSnapshotV1 {
+  return {
+    version: 1,
+    runId: "run-1",
+    groupId: `${streamId}:group-1`,
+    generationId: streamId,
+    childId: "child-1",
+    chatId: "chat-a",
+    workspaceId: "workspace-1",
+    revision,
+    role: "scout",
+    label: "Inspect renderer lifecycle",
+    taskPreview: "Check chat switching.",
+    state,
+    startedAt: 1_000,
+    updatedAt: 1_000 + revision,
+    ...(state === "running" ? {} : { finishedAt: 1_000 + revision }),
+    modelId: "model-1",
+    turns: revision,
+    tools: 0,
+    tokens: 0,
+    warnings: [],
+  };
+}
+
+test("a revisited chat retains and advances its detached answer and subagent projection", async () => {
+  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  let settleCache!: () => void;
+  const cacheSettlement = new Promise<void>((resolve) => {
+    settleCache = resolve;
+  });
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => {
+      const handlers = listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    () => cacheSettlement,
+  );
+  const owner = detached("stream-projection");
+  rememberDetachedLifecycleStream(owner, {
+    content: "Partial answer",
+    reasoning: "Initial reasoning",
+    timeline: null,
+    artifacts: [],
+    subagents: [subagent(owner.streamId)],
+  });
+
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.content, "Partial answer");
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.subagents[0]?.revision, 1);
+  for (const handler of listeners.get("chat:delta") ?? []) {
+    handler({ streamId: owner.streamId, delta: " continues" });
+  }
+  for (const handler of listeners.get("chat:subagents") ?? []) {
+    handler({ streamId: owner.streamId, snapshot: subagent(owner.streamId, 2, "completed") });
+  }
+  assert.equal(
+    detachedLifecycleChatProjection("chat-a", "workspace-1")?.content,
+    "Partial answer continues",
+  );
+  assert.equal(
+    detachedLifecycleChatProjection("chat-a", "workspace-1")?.subagents[0]?.state,
+    "completed",
+  );
+
+  for (const handler of listeners.get("chat:done") ?? []) {
+    handler({ streamId: owner.streamId, chat: chat("chat-a", "durable") });
+  }
+  assert.notEqual(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
+  settleCache();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
+  assert.equal(isDetachedLifecycleChatDraining("chat-a", "workspace-1"), false);
+  unsubscribe();
+});
 
 test("a late terminal handoff repairs a refetched chat after A to B to A navigation", () => {
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
@@ -200,6 +283,7 @@ test("the 65th detached stream stays draining until its fallback refetch settles
 
   assert.deepEqual(fallbacks, ["overflow-0"]);
   assert.equal(isDetachedLifecycleChatDraining("chat-overflow-0", "workspace-1"), true);
+  assert.equal(detachedLifecycleChatProjection("chat-overflow-0", "workspace-1"), null);
   assert.equal(isDetachedLifecycleChatDraining("chat-overflow-1", "workspace-1"), true);
   settleFallback?.();
   await new Promise<void>((resolve) => setImmediate(resolve));
