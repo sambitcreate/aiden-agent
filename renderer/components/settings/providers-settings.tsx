@@ -13,6 +13,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
   Separator,
   Select,
   SelectContent,
@@ -70,6 +73,36 @@ function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.
   }
 }
 
+function ProviderInfo({
+  label,
+  title,
+  children,
+}: React.PropsWithChildren<{ label: string; title: string }>) {
+  return (
+    <HoverCard openDelay={250} closeDelay={100}>
+      <HoverCardTrigger asChild>
+        <Button iconOnly size="small" variant="transparent" aria-label={label} className="size-7">
+          <span aria-hidden className="text-xs font-semibold leading-none">
+            i
+          </span>
+        </Button>
+      </HoverCardTrigger>
+      <HoverCardContent align="start" className="w-80">
+        <Text variant="small-strong">{title}</Text>
+        <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
+          {children}
+        </Text>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+const CHAT_TITLE_PROVIDER_LABELS: Record<ChatTitleProviderId, string> = {
+  automatic: "Automatic",
+  "apple-foundation-models": "On-device only",
+  "chat-model": "Selected chat model",
+};
+
 function BuiltinProviderRows({
   providers,
   onSetUp,
@@ -80,7 +113,7 @@ function BuiltinProviderRows({
   return providers.map((provider, index) => (
     <React.Fragment key={provider.id}>
       {index > 0 ? <Separator /> : null}
-      <div className="flex items-center gap-3 px-3.5 py-3">
+      <div className="flex items-center gap-3 px-4 py-3">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
           <ProviderIcon
             providerId={provider.id}
@@ -97,7 +130,8 @@ function BuiltinProviderRows({
             {statusBadge(provider)}
           </div>
           <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-            {provider.models.length} Pi model{provider.models.length === 1 ? "" : "s"}
+            {provider.models.length} available model
+            {provider.models.length === 1 ? "" : "s"}
           </Text>
         </div>
         <Button variant="filled" size="small" onClick={() => onSetUp(provider)}>
@@ -170,10 +204,12 @@ export function ProvidersSettings() {
           `${result.errors.length} provider catalog${result.errors.length === 1 ? "" : "s"} could not refresh; cached models were kept.`,
         );
       } else {
-        toast.success("Pi provider models refreshed.");
+        toast.success("Built-in provider models refreshed.");
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't refresh Pi provider models.");
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't refresh built-in provider models.",
+      );
     } finally {
       setRefreshingProviders(false);
     }
@@ -224,13 +260,18 @@ export function ProvidersSettings() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="providers-settings flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <Text variant="strong">Providers</Text>
+          <div className="flex items-center gap-1">
+            <Text variant="strong">Providers</Text>
+            <ProviderInfo label="About provider connections" title="Provider connections">
+              Aiden manages built-in provider endpoints and model catalogs. Use Add provider for a
+              local, private, or vendor-compatible endpoint.
+            </ProviderInfo>
+          </div>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Pi-native providers need only their credentials; Pi owns their endpoints, models, and
-            request transport. Add a custom connection for local or private servers.
+            Connect models to Aiden and manage the providers you already use.
           </Text>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -238,7 +279,7 @@ export function ProvidersSettings() {
             variant="transparent"
             size="small"
             iconOnly
-            aria-label="Refresh Pi provider models"
+            aria-label="Refresh built-in provider models"
             disabled={refreshingProviders}
             onClick={() => void refreshProviders()}
           >
@@ -255,49 +296,53 @@ export function ProvidersSettings() {
             <DropdownMenuContent align="end" className="w-72">
               <DropdownMenuLabel>Local model servers</DropdownMenuLabel>
               <DropdownMenuItem
+                className="group"
                 disabled={customProviders.some((provider) => provider.id === "custom:lmstudio")}
                 onSelect={() => addCustom("lmstudio")}
               >
                 <ProviderIcon
                   providerId="custom:lmstudio"
                   providerLabel="LM Studio"
-                  className="size-4 text-tertiary"
+                  className="size-4 text-tertiary group-data-[highlighted]:text-accent-foreground"
                 />
                 <span className="flex min-w-0 flex-col">
                   <span>LM Studio</span>
-                  <span className="text-small text-tertiary">OpenAI-compatible local server</span>
+                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+                    OpenAI-compatible local server
+                  </span>
                 </span>
               </DropdownMenuItem>
               <DropdownMenuItem
+                className="group"
                 disabled={customProviders.some((provider) => provider.id === "custom:ollama")}
                 onSelect={() => addCustom("ollama")}
               >
                 <ProviderIcon
                   providerId="custom:ollama"
                   providerLabel="Ollama"
-                  className="size-4 text-tertiary"
+                  className="size-4 text-tertiary group-data-[highlighted]:text-accent-foreground"
                 />
                 <span className="flex min-w-0 flex-col">
                   <span>Ollama</span>
-                  <span className="text-small text-tertiary">
+                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
                     Local server with Ollama-aware model discovery
                   </span>
                 </span>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Private or custom</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => addCustom("tailnet")}>
+              <DropdownMenuItem className="group" onSelect={() => addCustom("tailnet")}>
                 <span className="flex min-w-0 flex-col">
                   <span>Model server over Tailscale</span>
-                  <span className="text-small text-tertiary">
+                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
                     OpenAI-compatible, no authentication by default
                   </span>
                 </span>
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => addCustom("custom")}>
+              <DropdownMenuItem className="group" onSelect={() => addCustom("custom")}>
                 <span className="flex min-w-0 flex-col">
                   <span>Other custom endpoint</span>
-                  <span className="text-small text-tertiary">
+                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
                     Choose protocol and authentication
                   </span>
                 </span>
@@ -314,7 +359,7 @@ export function ProvidersSettings() {
           className="rounded-card border border-separator"
           aria-busy={refreshingFoundationModels}
         >
-          <div className="flex items-start gap-3 px-3.5 py-3">
+          <div className="flex items-start gap-3 px-4 py-3">
             <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
               <ProviderIcon
                 providerId="apple-foundation-models"
@@ -325,6 +370,13 @@ export function ProvidersSettings() {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Text variant="strong">Apple Foundation Models</Text>
+                <ProviderInfo
+                  label="About Apple Foundation Models in Aiden"
+                  title="Background title generation"
+                >
+                  This on-device connection is used only for background chat titles. It never
+                  appears in the chat model picker.
+                </ProviderInfo>
                 <Badge color="blue">On-device</Badge>
                 {foundationModelsBadge(foundationModels.data)}
               </div>
@@ -333,10 +385,6 @@ export function ProvidersSettings() {
                   {foundationModels.data.detail}
                 </Text>
               </div>
-              <Text variant="small" color="secondary" className="mt-1 block">
-                This native connection is used only for background chat titles and never appears in
-                the chat model picker.
-              </Text>
             </div>
             <Button
               variant="transparent"
@@ -349,44 +397,56 @@ export function ProvidersSettings() {
               <RefreshCw className={`size-4 ${refreshingFoundationModels ? "animate-spin" : ""}`} />
             </Button>
           </div>
-          <Separator />
-          <div className="flex flex-col gap-2 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <Text variant="small-strong" as="p">
-                Chat title provider
-              </Text>
-              <Text variant="small" color="tertiary" as="p" className="mt-0.5">
+          <details className="group border-t border-separator">
+            <summary className="flex min-h-12 cursor-default list-none items-center gap-3 px-4 py-2.5 outline-none hover:bg-list-hover focus-visible:bg-list-selection [&::-webkit-details-marker]:hidden">
+              <span className="min-w-0 flex-1">
+                <span className="block text-small-strong text-primary">Chat title generation</span>
+                <span className="mt-0.5 block text-small text-tertiary">
+                  {CHAT_TITLE_PROVIDER_LABELS[titleProviderId]}
+                </span>
+              </span>
+              <ChevronDown className="size-4 shrink-0 text-tertiary transition-transform duration-150 group-open:rotate-180" />
+            </summary>
+            <div className="flex flex-col gap-3 px-4 pb-4 pt-1 sm:flex-row sm:items-end sm:justify-between">
+              <Text variant="small" color="tertiary" as="p" className="max-w-md">
                 Automatic prefers this Mac, then uses the selected chat model only when Apple is
                 unavailable. On-device only never falls back to a network provider.
               </Text>
-            </div>
-            <Select
-              value={titleProviderId}
-              disabled={savingTitleProvider}
-              onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
-            >
-              <SelectTrigger
-                size="small"
-                className="w-full shrink-0 sm:w-48"
-                aria-label="Chat title provider"
+              <Select
+                value={titleProviderId}
+                disabled={savingTitleProvider}
+                onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="automatic">Automatic</SelectItem>
-                <SelectItem value="apple-foundation-models">On-device only</SelectItem>
-                <SelectItem value="chat-model">Selected chat model</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+                <SelectTrigger
+                  size="small"
+                  className="w-full shrink-0 sm:w-48"
+                  aria-label="Chat title provider"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="automatic">Automatic</SelectItem>
+                  <SelectItem value="apple-foundation-models">On-device only</SelectItem>
+                  <SelectItem value="chat-model">Selected chat model</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </details>
         </div>
       ) : null}
 
       <div className="grid gap-2">
         <div className="px-1">
-          <Text variant="small-strong">Built into Pi</Text>
+          <div className="flex items-center gap-1">
+            <Text variant="small-strong">Built into Aiden</Text>
+            <ProviderInfo label="About providers built into Aiden" title="Managed by Aiden">
+              Aiden maintains these providers’ endpoints, model catalogs, and connection transport.
+              You provide credentials when required; managed connection details stay locked to
+              prevent accidental misconfiguration.
+            </ProviderInfo>
+          </div>
           <Text variant="small" color="tertiary" className="mt-0.5 block">
-            These providers update with Pi. Their connection details are intentionally not editable.
+            Connect with credentials when required; Aiden keeps their model catalogs current.
           </Text>
         </div>
         <div className="rounded-card border border-separator">
@@ -394,7 +454,7 @@ export function ProvidersSettings() {
           {moreBuiltins.length > 0 ? (
             <>
               {featuredBuiltins.length > 0 ? <Separator /> : null}
-              <div className="px-3.5 py-2">
+              <div className="px-4 py-2">
                 <Button
                   variant="transparent"
                   size="small"
@@ -415,10 +475,10 @@ export function ProvidersSettings() {
         </div>
         {showMoreBuiltinProviders && moreBuiltins.length > 0 ? (
           <div id="more-pi-providers" className="rounded-card border border-separator">
-            <div className="px-3.5 py-3">
-              <Text variant="small-strong">More Pi providers</Text>
+            <div className="px-4 py-3">
+              <Text variant="small-strong">More built-in providers</Text>
               <Text variant="small" color="tertiary" className="mt-0.5 block">
-                These stay Pi-native and can be set up whenever you need them.
+                These are also managed by Aiden and can be set up whenever you need them.
               </Text>
             </div>
             <Separator />
@@ -427,23 +487,19 @@ export function ProvidersSettings() {
         ) : null}
       </div>
 
-      <div className="grid gap-2">
-        <div className="px-1">
-          <Text variant="small-strong">Custom connections</Text>
-          <Text variant="small" color="tertiary" className="mt-0.5 block">
-            Configure local, private, and vendor-compatible endpoints here.
-          </Text>
-        </div>
-        <div className="rounded-card border border-separator">
-          {customProviders.length === 0 ? (
-            <Text variant="small" color="tertiary" className="block px-3.5 py-3">
-              No custom connections yet.
+      {customProviders.length > 0 ? (
+        <div className="grid gap-2">
+          <div className="px-1">
+            <Text variant="small-strong">Custom connections</Text>
+            <Text variant="small" color="tertiary" className="mt-0.5 block">
+              Configure local, private, and vendor-compatible endpoints here.
             </Text>
-          ) : (
-            customProviders.map((p, i) => (
+          </div>
+          <div className="rounded-card border border-separator">
+            {customProviders.map((p, i) => (
               <React.Fragment key={p.id}>
                 {i > 0 ? <Separator /> : null}
-                <div className="flex items-center gap-3 px-3.5 py-3">
+                <div className="flex items-center gap-3 px-4 py-3">
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
                     <ProviderIcon
                       providerId={p.id}
@@ -484,10 +540,10 @@ export function ProvidersSettings() {
                   </Button>
                 </div>
               </React.Fragment>
-            ))
-          )}
+            ))}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {editing ? (
         <ProviderEditor
