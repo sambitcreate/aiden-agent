@@ -21,10 +21,10 @@ import {
   Plus,
   Server,
   Settings,
-  Sparkles,
   TerminalSquare,
   Wrench,
 } from "lucide-react";
+import { AidenIcon } from "./aiden-icon";
 import { cn } from "../lib/ui-utils";
 import {
   slashPalettePresenceState,
@@ -59,7 +59,7 @@ const ICONS: Record<SlashCommandIcon, React.ComponentType<{ className?: string }
   review: FileSearch,
   settings: Settings,
   sidebar: PanelLeft,
-  skills: Sparkles,
+  skills: AidenIcon,
   session: Info,
   terminal: TerminalSquare,
   worktree: FolderGit2,
@@ -177,7 +177,7 @@ export function ComposerSlashPalette({
 
   const row = (result: SlashResult, available: boolean, unavailableReason?: string) => {
     const selected = result.id === activeId;
-    const Icon = result.kind === "command" ? ICONS[result.command.icon] : Sparkles;
+    const Icon = result.kind === "command" ? ICONS[result.command.icon] : AidenIcon;
     const title = result.kind === "command" ? `/${result.command.name}` : `$${result.skill.name}`;
     const description =
       result.kind === "command" ? result.command.description : result.skill.description;
@@ -266,7 +266,7 @@ export function ComposerSlashPalette({
           <div>
             {skillsLoading ? (
               <div className="flex min-h-11 items-center gap-2.5 px-2.5 text-small text-secondary">
-                <Sparkles
+                <AidenIcon
                   aria-hidden="true"
                   className="size-4 animate-pulse motion-reduce:animate-none"
                 />
@@ -286,7 +286,7 @@ export function ComposerSlashPalette({
                   activeId === COMPOSER_SLASH_RETRY_ID && "bg-list-selection",
                 )}
               >
-                <Sparkles aria-hidden="true" className="size-4" />
+                <AidenIcon aria-hidden="true" className="size-4" />
                 Skills could not be loaded
                 <span className="ml-auto text-mini text-accent">Retry</span>
               </div>
@@ -302,7 +302,7 @@ export function ComposerSlashPalette({
               })
             ) : (
               <div className="flex min-h-11 items-center gap-2.5 px-2.5 text-small text-secondary">
-                <Sparkles aria-hidden="true" className="size-4" />
+                <AidenIcon aria-hidden="true" className="size-4" />
                 No skills match this query.
               </div>
             )}

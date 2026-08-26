@@ -1560,3 +1560,5 @@ export function ErrorBoundaryView({ error, reset }: { error?: unknown; reset?: (
     </div>
   );
 }
+
+export { AidenIcon, type AidenIconProps } from "./aiden-icon";
