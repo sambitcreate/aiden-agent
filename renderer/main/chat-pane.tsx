@@ -96,6 +96,7 @@ import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
+  detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
 } from "../lib/chat-terminal-sync";
@@ -143,6 +144,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
     () => false,
+  );
+  const detachedProjection = React.useSyncExternalStore(
+    subscribeDetachedLifecycleStreams,
+    () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
+    () => null,
   );
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
@@ -207,7 +213,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
         ? "Message save status is unknown. Reload Aiden before sending another message."
         : detachedGenerationDraining
-          ? "Finishing the previous response…"
+          ? "Response continues in the background…"
           : undefined;
   const botReadinessMessage = chat.data?.botId
     ? bot.isLoading
@@ -433,6 +439,26 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [chatId]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
+  const visibleDetachedProjection =
+    messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
+  const displayedStreamingText = streamingText ?? visibleDetachedProjection?.content ?? null;
+  const displayedStreamingReasoning =
+    streamingReasoning ??
+    (visibleDetachedProjection?.reasoning.trim() ? visibleDetachedProjection.reasoning : null);
+  const displayedStreamingArtifacts =
+    streamingArtifacts.length > 0
+      ? streamingArtifacts
+      : (visibleDetachedProjection?.artifacts ?? []);
+  const displayedGenerationTimeline =
+    generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
+  const displayedLiveSubagents = React.useMemo(
+    () =>
+      mergeSubagentSnapshots(liveSubagents, visibleDetachedProjection?.subagents ?? [], {
+        chatId,
+        workspaceId: effectiveWorkspaceId,
+      }),
+    [chatId, effectiveWorkspaceId, liveSubagents, visibleDetachedProjection?.subagents],
+  );
   const latestAssistantResponse = React.useMemo(
     () =>
       [...messages]
@@ -450,7 +476,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const imageArtifactRecoveryUnavailable =
     chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
-  const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
+  const isNewChat = !chat.isLoading && !hasMessages && displayedStreamingText === null;
 
   React.useEffect(() => {
     if (!isNewChat || settings.data === undefined) return;
@@ -574,20 +600,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   React.useLayoutEffect(() => {
     if (!environmentPanel.subagentsEnabled || !effectiveWorkspaceId) return;
-    environmentPanel.syncSubagents(chatId, effectiveWorkspaceId, subagentReferences, liveSubagents);
+    environmentPanel.syncSubagents(
+      chatId,
+      effectiveWorkspaceId,
+      subagentReferences,
+      displayedLiveSubagents,
+    );
   }, [
     chatId,
     effectiveWorkspaceId,
     environmentPanel.subagentsEnabled,
     environmentPanel.syncSubagents,
-    liveSubagents,
+    displayedLiveSubagents,
     subagentReferences,
   ]);
 
   React.useLayoutEffect(() => {
-    environmentPanel.setAgentBusy(isGenerating || isStartingGeneration);
+    environmentPanel.setAgentBusy(
+      isGenerating || isStartingGeneration || detachedGenerationDraining,
+    );
     return () => environmentPanel.setAgentBusy(false);
-  }, [environmentPanel.setAgentBusy, isGenerating, isStartingGeneration]);
+  }, [
+    detachedGenerationDraining,
+    environmentPanel.setAgentBusy,
+    isGenerating,
+    isStartingGeneration,
+  ]);
 
   const waitForStreamHandoff = React.useCallback(async (hasContent: boolean) => {
     const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
@@ -1448,7 +1486,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
-  const activeStep = latestActiveAgentStep(generationTimeline);
+  const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
         state: "running",
@@ -1460,12 +1498,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
     isStarting: isStartingGeneration,
     isStopping: isStoppingGeneration,
     isModelLoading,
-    streamingText: canStopGeneration || isStoppingGeneration ? streamingText : null,
+    streamingText:
+      canStopGeneration || isStoppingGeneration || detachedGenerationDraining
+        ? displayedStreamingText
+        : null,
     pendingApproval: Boolean(pending),
     toolActivity,
   });
   const visibleAgentActivity =
-    streamingReasoning &&
+    displayedStreamingReasoning &&
     (agentActivity?.phase === "thinking" || agentActivity?.phase === "loading")
       ? null
       : agentActivity;
@@ -1532,12 +1573,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       autoScrollToBottom
       autoScrollDeps={[
         messages.length,
-        streamingText,
-        streamingReasoning,
-        generationTimeline,
+        displayedStreamingText,
+        displayedStreamingReasoning,
+        displayedGenerationTimeline,
         agentActivity?.phase,
         approvals.length,
-        streamingArtifacts.length,
+        displayedStreamingArtifacts.length,
       ]}
       showScrollToBottomButton
       footer={
@@ -1813,7 +1854,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             Loading…
           </Text>
         </div>
-      ) : messages.length === 0 && streamingText === null ? (
+      ) : messages.length === 0 && displayedStreamingText === null ? (
         <div className="flex min-h-full items-center justify-center">
           <EmptyState
             title="What would you like to work on?"
@@ -1828,13 +1869,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         <MessageList
           key={chatId}
           messages={messages}
-          streamingText={streamingText}
-          streamingReasoning={streamingReasoning}
-          streamingArtifacts={streamingArtifacts}
-          streamComplete={streamComplete}
+          streamingText={displayedStreamingText}
+          streamingReasoning={displayedStreamingReasoning}
+          streamingArtifacts={displayedStreamingArtifacts}
+          streamComplete={streamComplete || visibleDetachedProjection !== null}
           onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-          timeline={generationTimeline}
-          liveSubagents={liveSubagents}
+          timeline={displayedGenerationTimeline}
+          liveSubagents={displayedLiveSubagents}
           subagentsEnabled={environmentPanel.subagentsEnabled}
           onOpenSubagent={environmentPanel.openSubagent}
           agentActivity={visibleAgentActivity}
