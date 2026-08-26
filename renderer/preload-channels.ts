@@ -6,7 +6,6 @@
 
 export const INVOKE_PREFIXES = [
   "app:",
-  "artificialAnalysis:",
   "assistant:",
   "attachments:",
   "bots:",
@@ -19,6 +18,7 @@ export const INVOKE_PREFIXES = [
   "git:",
   "localModels:",
   "localVoice:",
+  "modelInsights:",
   "mcp:",
   "models:",
   "providers:",

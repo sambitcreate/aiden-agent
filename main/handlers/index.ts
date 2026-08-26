@@ -17,7 +17,7 @@ import { registerTitleProviderHandlers } from "./title-providers.js";
 import { registerUsageHandlers } from "./usage.js";
 import { registerProfileHandlers } from "./profile.js";
 import { registerComputerUseHandlers } from "./computer-use.js";
-import { registerArtificialAnalysisHandlers } from "./artificial-analysis.js";
+import { registerModelInsightsHandlers } from "./model-insights.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
@@ -60,7 +60,7 @@ export function registerHandlers(): void {
   registerUsageHandlers();
   registerProfileHandlers();
   registerComputerUseHandlers();
-  registerArtificialAnalysisHandlers();
+  registerModelInsightsHandlers();
   registerDictationHandlers();
   registerScheduledTaskHandlers();
   registerAssistantHandlers();

@@ -15,7 +15,10 @@ interface ProviderModelInfoDependencies {
   codexModelInfo(modelId: string): ModelInfo | undefined;
 }
 
-function providerInfo(modelId: string, metadata: ProviderModelMetadata | undefined): ModelInfo | undefined {
+function providerInfo(
+  modelId: string,
+  metadata: ProviderModelMetadata | undefined,
+): ModelInfo | undefined {
   if (!metadata) return undefined;
   return {
     id: modelId,
@@ -65,11 +68,12 @@ export function mergeCodexModelInfo(
   catalog: ModelInfo,
 ): ModelInfo {
   if (!pinned) return unmatched(modelId);
-  if (!catalog.ranking) return pinned;
+  if (!catalog.ranking && !catalog.benchmark) return pinned;
   return {
     ...pinned,
-    ranking: catalog.ranking,
-    metadataSource: "artificial-analysis",
+    ...(catalog.ranking ? { ranking: catalog.ranking } : {}),
+    ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
+    metadataSource: catalog.ranking ? "artificial-analysis" : pinned.metadataSource,
     matched: true,
   };
 }

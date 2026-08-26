@@ -37,6 +37,8 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "speed",
       "pace",
       "artificial analysis",
+      "openrouter",
+      "benchmark insights",
     ],
   },
   { id: "skills", title: "Skills", group: "Agent", keywords: ["instructions", "tools"] },

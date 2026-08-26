@@ -1,6 +1,11 @@
-import type { ModelInfo, ModelRanking, Provider } from "./types";
+import type { ModelBenchmarkMetric, ModelInfo, ModelRanking, Provider } from "./types";
 import { resolveModelDisplay } from "./model-display";
-import type { ModelPadPlacement } from "./model-pad-layout";
+import {
+  modelPadGridPoints,
+  modelPadGridSize,
+  reflowVisibleModelPadPlacements,
+  type ModelPadPlacement,
+} from "./model-pad-layout";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import { isModelHidden, type HiddenModelsByProvider } from "../shared/model-visibility";
 import { isNonChatModel } from "../shared/model-eligibility";
@@ -8,7 +13,8 @@ import { isNonChatModel } from "../shared/model-eligibility";
 export type { ModelRanking } from "./types";
 
 export const PINNED_MODELS_KEY = "aiden-agent.pinnedModels";
-export const BASE_MODEL_GRID_SIZE = 11;
+export { BASE_MODEL_PAD_GRID_SIZE as BASE_MODEL_GRID_SIZE } from "./model-pad-layout";
+export { modelPadGridSize as modelGridSize } from "./model-pad-layout";
 
 const FORMAT_RE = /[\s._-](MLX|GGUF|GGML|FP16|BF16|F16|INT8|AWQ|GPTQ|Q\d(?:_[A-Z0-9]+)*)$/i;
 const FAST_VARIANT_RE =
@@ -29,6 +35,31 @@ export interface ModelEntry {
   isLocal: boolean;
   info?: ModelInfo;
   ranking?: ModelRanking;
+}
+
+/** Return benchmark-score percentiles with average ranks for ties. */
+export function modelBenchmarkPercentiles(
+  entries: readonly ModelEntry[],
+  metric: ModelBenchmarkMetric,
+): Map<string, number> {
+  const rows: Array<{ id: string; value: number }> = [];
+  for (const entry of entries) {
+    const value = entry.info?.benchmark?.[metric];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      rows.push({ id: entry.value, value });
+    }
+  }
+  rows.sort((left, right) => left.value - right.value || left.id.localeCompare(right.id));
+  const result = new Map<string, number>();
+  if (rows.length === 1) result.set(rows[0].id, 0.5);
+  for (let start = 0; rows.length > 1 && start < rows.length; ) {
+    let end = start;
+    while (end + 1 < rows.length && rows[end + 1].value === rows[start].value) end += 1;
+    const percentile = (start + end) / 2 / (rows.length - 1);
+    for (let index = start; index <= end; index += 1) result.set(rows[index].id, percentile);
+    start = end + 1;
+  }
+  return result;
 }
 
 export interface ChatModelProvider {
@@ -60,11 +91,6 @@ export interface ModelPoint {
 }
 
 export type ModelDirection = "left" | "right" | "up" | "down";
-
-/** Keep the reference's 11×11 lattice, expanding only when every model needs more cells. */
-export function modelGridSize(modelCount: number): number {
-  return Math.max(BASE_MODEL_GRID_SIZE, Math.ceil(Math.sqrt(Math.max(1, modelCount))));
-}
 
 export function encodeSelection(providerId: string, model: string): string {
   return `${providerId}::${model}`;
@@ -301,11 +327,8 @@ function estimatePosition(
 
 export function positionModels(entries: ModelEntry[]): PositionedModel[] {
   const models = entries.map((entry) => ({ ...entry, ...estimatePosition(entry) }));
-  const gridSize = modelGridSize(models.length);
-  const availableCells = Array.from({ length: gridSize * gridSize }, (_, index) => ({
-    x: (index % gridSize) / (gridSize - 1),
-    y: Math.floor(index / gridSize) / (gridSize - 1),
-  }));
+  const gridSize = modelPadGridSize(models.length);
+  const availableCells = modelPadGridPoints(gridSize);
   const confidenceOrder: Record<PositionConfidence, number> = {
     personal: 0,
     suggested: 1,
@@ -318,7 +341,7 @@ export function positionModels(entries: ModelEntry[]): PositionedModel[] {
   for (const model of [...models].sort(
     (a, b) =>
       confidenceOrder[a.confidence] - confidenceOrder[b.confidence] ||
-      a.value.localeCompare(b.value),
+      (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
   )) {
     let closestIndex = 0;
     let closestDistance = Number.POSITIVE_INFINITY;
@@ -345,8 +368,13 @@ export function positionSavedModels(
   entries: ModelEntry[],
   placements: Readonly<Record<string, ModelPadPlacement>>,
 ): PositionedModel[] {
+  const snappedPlacements = reflowVisibleModelPadPlacements(
+    placements,
+    entries.map((entry) => entry.value),
+    modelPadGridSize(entries.length),
+  );
   return entries.flatMap((entry) => {
-    const placement = placements[entry.value];
+    const placement = snappedPlacements[entry.value];
     if (!placement) return [];
     const x = Math.min(1, Math.max(0, placement.x));
     const y = Math.min(1, Math.max(0, placement.y));
@@ -355,9 +383,16 @@ export function positionSavedModels(
         ...entry,
         x,
         y,
-        confidence: placement.source === "user" ? ("personal" as const) : ("suggested" as const),
+        confidence:
+          placement.xSource === "user" && placement.ySource === "user"
+            ? ("personal" as const)
+            : ("suggested" as const),
         positionSource:
-          placement.source === "user" ? "Personal placement" : "Artificial Analysis suggestion",
+          placement.xSource === "user" && placement.ySource === "user"
+            ? "Personal placement"
+            : placement.xSource === "neutral" && placement.ySource === "benchmark"
+              ? "Benchmark capability · pace unmeasured"
+              : "Benchmark suggestion",
         ...labelsFor(x, y),
       },
     ];

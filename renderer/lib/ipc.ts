@@ -4,8 +4,6 @@ import type {
   AppSettings,
   AssistantConfig,
   AssistantConfigSnapshot,
-  ArtificialAnalysisActionResult,
-  ArtificialAnalysisStatus,
   ApprovalDecision,
   Attachment,
   Chat,
@@ -35,6 +33,8 @@ import type {
   McpPresetState,
   McpStatus,
   ModelInfo,
+  ModelInsightsActionResult,
+  ModelInsightsStatus,
   FoundationModelsConnectionStatus,
   Profile,
   Provider,
@@ -295,17 +295,13 @@ export const assistantApi = {
     invoke<AssistantConfigSnapshot>("assistant:set-config", patch),
 };
 
-export const artificialAnalysisApi = {
-  status: () => invoke<ArtificialAnalysisStatus>("artificialAnalysis:status"),
+export const modelInsightsApi = {
+  status: () => invoke<ModelInsightsStatus>("modelInsights:status"),
   connect: (apiKey: string) =>
-    invoke<ArtificialAnalysisActionResult>(
-      "artificialAnalysis:connect",
-      apiKey,
-    ),
-  refresh: () =>
-    invoke<ArtificialAnalysisActionResult>("artificialAnalysis:refresh"),
-  disconnect: () =>
-    invoke<ArtificialAnalysisActionResult>("artificialAnalysis:disconnect"),
+    invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
+  refresh: () => invoke<ModelInsightsActionResult>("modelInsights:refresh"),
+  clear: () => invoke<ModelInsightsActionResult>("modelInsights:clear"),
+  disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
 };
 
 export const computerUseApi = {

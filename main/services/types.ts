@@ -217,6 +217,22 @@ export interface ModelRanking {
   measuredAt?: string;
 }
 
+export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+
+/** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
+export interface ModelBenchmarkScores {
+  source: "openrouter";
+  datasetSource: "artificial-analysis";
+  sourceLabel: "Artificial Analysis via OpenRouter";
+  sourceUrl: string;
+  citation: string;
+  asOf: string;
+  license: "CC BY 4.0";
+  intelligence?: number;
+  coding?: number;
+  agentic?: number;
+}
+
 export type ModelMetadataSource =
   | "local"
   | "provider"
@@ -247,10 +263,34 @@ export interface ModelInfo {
   knowledge?: string;
   releaseDate?: string;
   ranking?: ModelRanking;
+  benchmark?: ModelBenchmarkScores;
   metadataSource: ModelMetadataSource;
   /** True when any trusted metadata source identified the model. */
   matched: boolean;
 }
+
+export interface ModelInsightsStatus {
+  hasKey: boolean;
+  ready: boolean;
+  cachedModelCount: number;
+  fetchedAt?: string;
+  asOf?: string;
+  citation?: string;
+  license?: "CC BY 4.0";
+}
+
+export type ModelInsightsActionErrorCode =
+  | "not_connected"
+  | "invalid_key"
+  | "rate_limited"
+  | "service_unavailable"
+  | "network_error"
+  | "invalid_response"
+  | "local_error";
+
+export type ModelInsightsActionResult =
+  | { ok: true; status: ModelInsightsStatus }
+  | { ok: false; code: ModelInsightsActionErrorCode; message: string };
 
 export interface ChatMeta {
   id: string;
