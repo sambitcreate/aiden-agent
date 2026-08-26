@@ -219,7 +219,7 @@ function RootContent() {
         onNotification,
         (chat) => {
           if (isChatCacheDeleted(chat.id)) return;
-          void (async () => {
+          return (async () => {
             if (isChatCacheDeleted(chat.id)) return;
             const chatKey = queryKeys.chat(chat.id);
             // A rapid A → B → A revisit can have a stale read in flight when the
