@@ -240,6 +240,7 @@ export function RemoteAccessSettings() {
   const [revokeDevice, setRevokeDevice] = React.useState<AidenRemoteDeviceView | null>(null);
   const [removeRootId, setRemoveRootId] = React.useState<string | null>(null);
   const [takeoverReview, setTakeoverReview] = React.useState<AidenRemoteTailscaleTakeoverReviewView | null>(null);
+  const [movePortReview, setMovePortReview] = React.useState(false);
   const [displayNameDraft, setDisplayNameDraft] = React.useState("");
 
   React.useEffect(() => aidenRemoteApi.onChanged(() => {
@@ -360,16 +361,18 @@ export function RemoteAccessSettings() {
     operation: string,
     action: () => Promise<AidenRemoteSettingsSnapshot>,
     errorMessage?: (error: unknown) => string,
-  ) => {
-    if (busy) return;
+  ): Promise<boolean> => {
+    if (busy) return false;
     setBusy(operation);
     try {
       commit(await action());
+      return true;
     } catch (error) {
       toast.error(errorMessage
         ? errorMessage(error)
         : error instanceof Error ? error.message : "Remote Access couldn't be updated.");
       await queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
+      return false;
     } finally {
       setBusy(null);
     }
@@ -700,9 +703,19 @@ export function RemoteAccessSettings() {
               </Text>
             ) : null}
             {status.errorCode === "remote_port_in_use" ? (
-              <Text as="p" variant="small" color="secondary">
-                Another local Aiden profile is using this saved endpoint. Stop that profile and try again; Aiden will not silently move a saved mobile connection to a new port.
-              </Text>
+              <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
+                <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1">
+                  Another local Aiden profile is using this saved endpoint. Stop that profile and try again, or explicitly move this profile; Aiden will never move a saved mobile connection silently.
+                </Text>
+                <Button
+                  size="small"
+                  variant="filled"
+                  disabled={busy !== null}
+                  onClick={() => setMovePortReview(true)}
+                >
+                  Use another port
+                </Button>
+              </div>
             ) : status.error ? (
               <Text as="p" variant="small" color="secondary">{status.error}</Text>
             ) : null}
@@ -891,6 +904,21 @@ export function RemoteAccessSettings() {
           </div>
         ) : null}
       </Dialog>
+
+      <AlertDialog
+        open={movePortReview}
+        onOpenChange={setMovePortReview}
+        title="Move this Remote Access endpoint?"
+        description="Aiden will choose an available private port and keep your device credentials. Previously paired devices may need to discover this Mac again on the local network. If this profile owns a Tailscale Serve route, disconnect that route first."
+        confirmLabel="Use Another Port"
+        busy={busy === "movePort"}
+        keepOpenOnConfirm
+        onConfirm={async () => {
+          if (await mutate("movePort", aidenRemoteApi.moveToAvailablePort)) {
+            setMovePortReview(false);
+          }
+        }}
+      />
 
       <AlertDialog
         open={takeoverReview !== null}

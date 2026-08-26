@@ -73,6 +73,11 @@ test("progress is versioned and completion is readiness-gated", () => {
     lastSatisfiedStep: "provider",
     selectedProviderId: "openai",
   });
+  assert.deepEqual(onboardingProgressState("deferred", ready), {
+    version: 2,
+    outcome: "deferred",
+    lastSatisfiedStep: "profile",
+  });
   assert.doesNotThrow(() => assertOnboardingCanComplete(ready));
   assert.throws(
     () => assertOnboardingCanComplete({ ...ready, providerReady: false }),

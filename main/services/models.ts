@@ -168,6 +168,15 @@ export function normalizeProviderBaseUrl(value: string): string {
 /** First-run Tailnet setup is intentionally narrower than arbitrary custom endpoints. */
 export function assertOnboardingTailnetBaseUrl(value: string): void {
   const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Tailscale model URLs must use HTTP or HTTPS.");
+  }
+  if (url.username || url.password) {
+    throw new Error("Put credentials in the API key field, not the URL.");
+  }
+  if (url.search || url.hash) {
+    throw new Error("Provider URL cannot include a query string or fragment.");
+  }
   const hostname = url.hostname.toLowerCase().replace(/\.$/u, "");
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(hostname);
   const cgnat =

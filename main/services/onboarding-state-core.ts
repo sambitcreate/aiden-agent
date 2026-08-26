@@ -40,6 +40,13 @@ export function onboardingProgressState(
   outcome: OnboardingOutcome,
   ready: OnboardingReadiness,
 ): OnboardingState {
+  if (outcome === "deferred") {
+    return {
+      version: ONBOARDING_STATE_VERSION,
+      outcome,
+      lastSatisfiedStep: ready.profileReady ? "profile" : "none",
+    };
+  }
   return {
     version: ONBOARDING_STATE_VERSION,
     outcome,

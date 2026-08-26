@@ -173,3 +173,10 @@ Every implementation phase uses the same mandatory gate:
 4. Resolve every correctness, security, privacy, lifecycle, concurrency, accessibility, and test-coverage finding.
 5. Re-run the phase gates and record the accepted result in this plan and `.memory/aiden-on-the-go.md`.
 6. Advance only after both reviews are clean or all actionable findings are fixed and re-reviewed.
+
+## Post-completion repair — 2026-08-26
+
+- A saved endpoint collision remains typed and fail-closed during ordinary startup; paired profiles are never relocated implicitly.
+- Settings now offers an explicit, confirmed **Use another port** recovery. It selects a complete available HTTPS/HTTP listener pair, persists it atomically, retains device credentials, and warns that LAN rediscovery may be required.
+- Recovery refuses to move while a Tailscale route mutation is pending or this profile still owns a Serve route, preventing an exact-path route from being orphaned.
+- The Tailscale companion target remains HTTP loopback behind Tailnet HTTPS. Separately, OpenAI-compatible model servers on private Tailnet addresses accept either HTTP or HTTPS and the setup UI now advertises HTTP directly.

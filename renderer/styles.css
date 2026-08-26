@@ -46,6 +46,7 @@
   --shadow-toast: var(--elevation-toast);
   --shadow-dialog: var(--elevation-dialog);
   --shadow-modal: var(--elevation-modal);
+  --shadow-onboarding: var(--elevation-onboarding);
   --shadow-composer: var(--elevation-composer);
   --font-sans: var(--font-ui-family);
   --font-mono: var(--font-code-family);
@@ -124,14 +125,15 @@
   --syntax-number: #235eb1;
   --syntax-title: #674aae;
   --syntax-variable: #af5216;
-  --elevation-control: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.08);
-  --elevation-control-hover: 0 0 0 0.5px rgb(0 0 0 / 0.11), 0 2px 4px -1px rgb(0 0 0 / 0.1);
-  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14), 0 0 0 0.5px rgb(0 0 0 / 0.08);
+  --elevation-control: 0 1px 2px -1px rgb(0 0 0 / 0.1), 0 4px 10px -8px rgb(0 0 0 / 0.16);
+  --elevation-control-hover: 0 2px 5px -2px rgb(0 0 0 / 0.16), 0 7px 14px -10px rgb(0 0 0 / 0.2);
+  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14);
   --elevation-popover:
     0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
   --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.1);
   --elevation-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
   --elevation-modal: 0 0 0 0.5px rgb(0 0 0 / 0.16), 0 20px 44px -10px rgb(0 0 0 / 0.38);
+  --elevation-onboarding: 0 20px 44px -10px rgb(0 0 0 / 0.38);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.12);
 }
 
@@ -187,15 +189,15 @@
   --syntax-number: #7eb5fd;
   --syntax-title: #c2a6fe;
   --syntax-variable: #ffb06b;
-  --elevation-control: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 1px 2px -1px rgb(0 0 0 / 0.5);
-  --elevation-control-hover: 0 0 0 0.5px rgb(255 255 255 / 0.15), 0 2px 4px -1px rgb(0 0 0 / 0.62);
-  --elevation-control-pressed:
-    inset 0 1px 2px rgb(0 0 0 / 0.65), 0 0 0 0.5px rgb(255 255 255 / 0.1);
+  --elevation-control: 0 1px 3px -1px rgb(0 0 0 / 0.58), 0 5px 12px -9px rgb(0 0 0 / 0.78);
+  --elevation-control-hover: 0 2px 6px -2px rgb(0 0 0 / 0.7), 0 8px 16px -11px rgb(0 0 0 / 0.88);
+  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.68);
   --elevation-popover:
     0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
   --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.54);
   --elevation-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
   --elevation-modal: 0 0 0 0.5px rgb(255 255 255 / 0.16), 0 22px 48px -10px rgb(0 0 0 / 0.78);
+  --elevation-onboarding: 0 22px 48px -10px rgb(0 0 0 / 0.78);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.45);
 }
 

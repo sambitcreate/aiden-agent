@@ -137,7 +137,7 @@ export async function setOnboardingProgress(
 }
 
 export async function setOnboardingOutcome(
-  outcome: Exclude<OnboardingOutcome, "deferred">,
+  outcome: OnboardingOutcome,
   selectedProviderId?: string,
   isCurrent: () => boolean = () => true,
 ): Promise<OnboardingSnapshot> {
@@ -148,6 +148,9 @@ export async function setOnboardingOutcome(
   }
 
   const ready = await readiness();
+  if (outcome === "deferred" && !ready.profileReady) {
+    throw new Error("Choose a profile name before skipping provider setup.");
+  }
   if (outcome === "completed") assertOnboardingCanComplete(ready);
   if (
     outcome === "completed" &&
@@ -166,10 +169,14 @@ export async function setOnboardingOutcome(
   const state = await persist(
     {
       ...onboardingProgressState(outcome, ready),
-      ...(selectedProviderId ? { selectedProviderId } : {}),
+      ...(outcome === "completed" && selectedProviderId ? { selectedProviderId } : {}),
       ...(outcome === "completed" ? { lastSatisfiedStep: "tour" as const } : {}),
     },
     isCurrent,
   );
-  return { ...state, profileReady: ready.profileReady, providerReady: ready.providerReady };
+  return {
+    ...state,
+    profileReady: ready.profileReady,
+    providerReady: outcome === "completed" ? ready.providerReady : false,
+  };
 }

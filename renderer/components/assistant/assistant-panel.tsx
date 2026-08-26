@@ -55,7 +55,7 @@ export function AssistantPanel({
   // Interactivity is owned by the dock wrapper, which withdraws it while the
   // panel animates out.
   return (
-    <div className="flex h-[min(34rem,calc(100vh-8rem))] w-[min(23rem,calc(100vw-3rem))] flex-col overflow-hidden rounded-2xl bg-popover shadow-composer outline outline-1 outline-field/80">
+    <div className="flex h-[min(34rem,calc(100vh-8rem))] w-[min(23rem,calc(100vw-3rem))] flex-col overflow-hidden rounded-2xl bg-popover shadow-composer">
       <header className="flex h-11 shrink-0 items-center justify-between border-b border-separator pl-3 pr-2">
         <span className="flex items-center gap-2">
           <span className="block size-5 overflow-hidden rounded-full">
@@ -68,7 +68,7 @@ export function AssistantPanel({
             type="button"
             aria-label="New conversation"
             disabled={!chat.canChangeThread}
-            className="rounded-md p-1 text-tertiary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary disabled:opacity-40"
+            className="rounded-full p-1 text-tertiary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary disabled:opacity-40"
             onClick={() => {
               chat.newThread();
               onDraftChange("");
@@ -79,7 +79,7 @@ export function AssistantPanel({
           <button
             type="button"
             aria-label="Minimize Aiden"
-            className="rounded-md p-1 text-tertiary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary"
+            className="rounded-full p-1 text-tertiary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary"
             onClick={onMinimize}
           >
             <Minus className="size-4" />
@@ -96,7 +96,7 @@ export function AssistantPanel({
                 key={prompt}
                 type="button"
                 disabled={!chat.ready}
-                className="rounded-lg px-2 py-1.5 text-left text-sm text-secondary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary disabled:opacity-50"
+                className="rounded-xl px-2 py-1.5 text-left text-sm text-secondary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary disabled:opacity-50"
                 onClick={() => chat.send(prompt)}
               >
                 {prompt}

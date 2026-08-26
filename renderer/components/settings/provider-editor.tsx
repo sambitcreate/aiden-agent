@@ -308,7 +308,11 @@ export function ProviderEditor({
 
         <Field
           label="Base URL"
-          description="Base address of an OpenAI- or Anthropic-compatible API."
+          description={
+            isTailnetEndpoint(baseUrl)
+              ? "Private Tailnet address. HTTP and HTTPS are supported; Tailscale encrypts traffic between devices."
+              : "Base address of an OpenAI- or Anthropic-compatible API."
+          }
         >
           <Input
             value={baseUrl}
