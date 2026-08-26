@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -16,6 +10,7 @@ import {
   brandMacDevRuntime,
   macDevRuntimeCodeIdentity,
   macDevRuntimeLayout,
+  validateAmbientMusicDevHelper,
   validateMacDevRuntime,
 } from "./prepare-macos-dev-runtime.mjs";
 
@@ -55,18 +50,8 @@ async function fixtureElectronApp(root) {
   );
 
   for (const helper of macDevRuntimeLayout().helpers) {
-    const helperApp = path.join(
-      appPath,
-      "Contents",
-      "Frameworks",
-      `${helper.sourceName}.app`,
-    );
-    const executable = path.join(
-      helperApp,
-      "Contents",
-      "MacOS",
-      helper.sourceName,
-    );
+    const helperApp = path.join(appPath, "Contents", "Frameworks", `${helper.sourceName}.app`);
+    const executable = path.join(helperApp, "Contents", "MacOS", helper.sourceName);
     await mkdir(path.dirname(executable), { recursive: true });
     await writeFile(executable, `fixture-${helper.sourceName}`);
     await chmod(executable, 0o755);
@@ -103,14 +88,7 @@ async function plistRunner(command, args) {
 
 async function plistValue(plistPath, key) {
   return (
-    await plistRunner("/usr/bin/plutil", [
-      "-extract",
-      key,
-      "raw",
-      "-o",
-      "-",
-      plistPath,
-    ])
+    await plistRunner("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", plistPath])
   ).trim();
 }
 
@@ -142,6 +120,45 @@ test("brands the macOS development app and every Electron helper as Aiden Agent 
     ],
     productName: "Aiden Agent Dev",
   });
+});
+
+test("opt-in development validates the exact Ambient Music helper boundary", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-dev-ambient-helper-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const helperApp = path.join(root, "build", "native", "Aiden Ambient Music Helper.app");
+  const contents = path.join(helperApp, "Contents");
+  const executable = path.join(contents, "MacOS", "aiden-ambient-music-helper");
+  await mkdir(path.dirname(executable), { recursive: true });
+  await writeFile(executable, "fixture-helper");
+  await chmod(executable, 0o755);
+  await writeFile(path.join(contents, "MacOS", "mlx.metallib"), "fixture-metal");
+  await writeFile(path.join(contents, "Info.plist"), "fixture-plist");
+  const values = {
+    CFBundleExecutable: "aiden-ambient-music-helper",
+    CFBundleIdentifier: "com.sambitcreate.aiden-agent.ambient-music",
+    LSMinimumSystemVersion: "14.0",
+  };
+  const run = async (command, args) => {
+    if (command === "/usr/bin/codesign") return "";
+    if (command === "/usr/bin/plutil") return `${values[args[1]]}\n`;
+    throw new Error(`Unexpected command: ${command}`);
+  };
+  await assert.doesNotReject(
+    validateAmbientMusicDevHelper(root, {
+      enabled: true,
+      inspectArchitectures: async () => ["arm64"],
+      run,
+    }),
+  );
+  await assert.rejects(
+    validateAmbientMusicDevHelper(root, {
+      enabled: true,
+      inspectArchitectures: async () => ["arm64", "x86_64"],
+      run,
+    }),
+    /exactly arm64/u,
+  );
+  assert.equal(await validateAmbientMusicDevHelper(root, { enabled: false }), null);
 });
 
 test("branding mutates and validates the complete cached app layout", async (t) => {
@@ -185,10 +202,7 @@ test("branding mutates and validates the complete cached app layout", async (t) 
   }
 
   assert.equal(
-    await plistValue(
-      path.join(appPath, "Contents", "Info.plist"),
-      "NSMicrophoneUsageDescription",
-    ),
+    await plistValue(path.join(appPath, "Contents", "Info.plist"), "NSMicrophoneUsageDescription"),
     "Aiden Agent uses the microphone only when you choose voice input or dictation.",
   );
 

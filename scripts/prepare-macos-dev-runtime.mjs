@@ -22,6 +22,8 @@ const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
 const BRANDING_SCHEMA_VERSION = 5;
 const MICROPHONE_USAGE_DESCRIPTION =
   "Aiden Agent uses the microphone only when you choose voice input or dictation.";
+const AMBIENT_MUSIC_HELPER_APP = "Aiden Ambient Music Helper.app";
+const AMBIENT_MUSIC_EXECUTABLE = "aiden-ambient-music-helper";
 
 function helperName(productName, suffix) {
   return `${productName} Helper${suffix}`;
@@ -84,15 +86,15 @@ async function setPlistString(plistPath, key, value, run = runCommand) {
 }
 
 async function readPlistString(plistPath, key, run = runCommand) {
-  return (
-    await run("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", plistPath])
-  ).trim();
+  return (await run("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", plistPath])).trim();
 }
 
 async function assertExecutable(executablePath) {
   const info = await stat(executablePath);
   if (!info.isFile() || (info.mode & 0o111) === 0) {
-    throw new Error(`Development runtime executable is missing or not executable: ${executablePath}`);
+    throw new Error(
+      `Development runtime executable is missing or not executable: ${executablePath}`,
+    );
   }
 }
 
@@ -113,6 +115,48 @@ async function executableArchitectures(executablePath, run = runCommand) {
     .split(/\s+/u)
     .filter(Boolean)
     .sort();
+}
+
+export async function validateAmbientMusicDevHelper(
+  root = repositoryRoot,
+  {
+    enabled = process.env.AIDEN_BUILD_AMBIENT_MUSIC === "1",
+    inspectArchitectures = executableArchitectures,
+    run = runCommand,
+  } = {},
+) {
+  if (!enabled) return null;
+  const helperApp = path.join(root, "build", "native", AMBIENT_MUSIC_HELPER_APP);
+  const contents = path.join(helperApp, "Contents");
+  const executable = path.join(contents, "MacOS", AMBIENT_MUSIC_EXECUTABLE);
+  const metallib = path.join(contents, "MacOS", "mlx.metallib");
+  const executableInfo = await lstat(executable);
+  const metallibInfo = await lstat(metallib);
+  if (
+    !executableInfo.isFile() ||
+    executableInfo.isSymbolicLink() ||
+    (executableInfo.mode & 0o777) !== 0o755
+  ) {
+    throw new Error("Ambient Music development helper must be a regular 0755 executable.");
+  }
+  if (!metallibInfo.isFile() || metallibInfo.isSymbolicLink() || metallibInfo.size <= 0) {
+    throw new Error("Ambient Music development helper requires a regular non-empty mlx.metallib.");
+  }
+  const architectures = await inspectArchitectures(executable, run);
+  if (architectures.length !== 1 || architectures[0] !== "arm64") {
+    throw new Error("Ambient Music development helper must contain exactly arm64.");
+  }
+  await assertPlistValues(
+    path.join(contents, "Info.plist"),
+    {
+      CFBundleExecutable: AMBIENT_MUSIC_EXECUTABLE,
+      CFBundleIdentifier: "com.sambitcreate.aiden-agent.ambient-music",
+      LSMinimumSystemVersion: "14.0",
+    },
+    run,
+  );
+  await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", helperApp]);
+  return { helperApp, executable, metallib };
 }
 
 export async function macDevRuntimeCodeIdentity(appPath) {
@@ -171,12 +215,7 @@ export async function validateMacDevRuntime(
   const frameworks = path.join(appPath, "Contents", "Frameworks");
   for (const helper of layout.helpers) {
     const helperApp = path.join(frameworks, `${helper.destinationName}.app`);
-    const helperExecutable = path.join(
-      helperApp,
-      "Contents",
-      "MacOS",
-      helper.destinationName,
-    );
+    const helperExecutable = path.join(helperApp, "Contents", "MacOS", helper.destinationName);
     await assertExecutable(helperExecutable);
     const helperArchitectures = await inspectArchitectures(helperExecutable, run);
     if (
@@ -205,13 +244,7 @@ export async function validateMacDevRuntime(
 
 export async function brandMacDevRuntime(
   appPath,
-  {
-    appId,
-    iconPath,
-    productName,
-    version,
-    run = runCommand,
-  },
+  { appId, iconPath, productName, version, run = runCommand },
 ) {
   const layout = macDevRuntimeLayout({ appId, productName });
   const frameworks = path.join(appPath, "Contents", "Frameworks");
@@ -221,12 +254,7 @@ export async function brandMacDevRuntime(
     const destinationApp = path.join(frameworks, `${helper.destinationName}.app`);
     const plist = path.join(sourceApp, "Contents", "Info.plist");
     const sourceExecutable = path.join(sourceApp, "Contents", "MacOS", helper.sourceName);
-    const destinationExecutable = path.join(
-      sourceApp,
-      "Contents",
-      "MacOS",
-      helper.destinationName,
-    );
+    const destinationExecutable = path.join(sourceApp, "Contents", "MacOS", helper.destinationName);
 
     await rename(sourceExecutable, destinationExecutable);
     await setPlistString(plist, "CFBundleDisplayName", helper.destinationName, run);
@@ -259,14 +287,7 @@ export async function brandMacDevRuntime(
   await setPlistString(mainPlist, "CFBundleShortVersionString", version, run);
   await setPlistString(mainPlist, "CFBundleVersion", version, run);
 
-  await run("/usr/bin/codesign", [
-    "--force",
-    "--deep",
-    "--sign",
-    "-",
-    "--timestamp=none",
-    appPath,
-  ]);
+  await run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", appPath]);
   await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath]);
 
   return { appPath, executablePath: brandedExecutable, layout };
@@ -291,6 +312,7 @@ export async function prepareMacDevRuntime(root = repositoryRoot) {
   if (process.platform !== "darwin") {
     throw new Error("Aiden's branded development runtime is available only on macOS.");
   }
+  await validateAmbientMusicDevHelper(root);
 
   const packageJsonPath = path.join(root, "package.json");
   const electronPackagePath = path.join(root, "node_modules", "electron", "package.json");
@@ -381,9 +403,13 @@ export async function prepareMacDevRuntime(root = repositoryRoot) {
       sourceArchitectures: electronArchitectures,
       sourceHelperArchitectures: electronHelperArchitectures,
     });
-    await writeFile(path.join(stagingRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(
+      path.join(stagingRoot, "manifest.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      {
+        mode: 0o600,
+      },
+    );
     await rm(outputRoot, { force: true, recursive: true });
     await rename(stagingRoot, outputRoot);
     return {

@@ -5,6 +5,7 @@
 // these at runtime; main/handlers/ipc-contract.test.ts enforces them statically.
 
 export const INVOKE_PREFIXES = [
+  "ambientMusic:",
   "app:",
   "artificialAnalysis:",
   "assistant:",
@@ -45,6 +46,7 @@ export const NATIVE_INVOKE_CHANNELS = {
 } as const;
 
 export const NOTIFICATION_CHANNEL_VALUES = [
+  "ambientMusic:changed",
   "app:config-externally-changed",
   "app:command",
   "app:navigate",

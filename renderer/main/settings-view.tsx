@@ -19,6 +19,7 @@ import {
   Info,
   Clock3,
   Sparkles,
+  Music2,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -32,7 +33,9 @@ import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
+import { AmbientMusicSettings } from "../components/settings/ambient-music-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 type NavGroup = "Agent" | "App";
 
@@ -54,6 +57,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   assistant: <Sparkles className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
   voice: <Mic className="size-5" />,
+  ambientMusic: <Music2 className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
   about: <Info className="size-5" />,
@@ -77,6 +81,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   scheduledTasks: ScheduledTasksSettings,
   assistant: AssistantSettings,
   voice: VoiceSettings,
+  ambientMusic: AmbientMusicSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
   about: AboutSettings,
@@ -85,13 +90,17 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
   const router = useRouter();
   const navigate = useNavigate();
-  const section = initialSection ?? "providers";
+  const { ambientMusic } = useAppCapabilities();
+  const section = initialSection === "ambientMusic" && !ambientMusic
+    ? "providers"
+    : (initialSection ?? "providers");
   const [search, setSearch] = React.useState("");
 
+  const availableNav = ambientMusic ? NAV : NAV.filter((item) => item.id !== "ambientMusic");
   const query = search.trim().toLocaleLowerCase();
   const filteredNav = query
-    ? NAV.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
-    : NAV;
+    ? availableNav.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
+    : availableNav;
   const ActiveSection = CONTENT[section];
 
   return (

@@ -29,8 +29,10 @@
   "scripts": {
     "build": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && vite build && npm run build:electron",
     "computer-use:vendor": "node scripts/vendor-cua-driver.mjs",
-    "build:native": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --required",
-    "build:native:optional": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --optional",
+    "build:native": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --required && npm run build:ambient-music",
+    "build:native:optional": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --optional && npm run build:ambient-music:optional",
+    "build:ambient-music": "node scripts/build-ambient-music-helper.mjs --required",
+    "build:ambient-music:optional": "node scripts/build-ambient-music-helper.mjs --optional",
     "build:subagent-file-mutator": "node scripts/build-subagent-file-mutator.mjs",
     "build:subagent-shell-runner": "node scripts/build-subagent-shell-runner.mjs",
     "build:subagent-run-store": "node scripts/build-subagent-run-store.mjs",
@@ -41,8 +43,8 @@
     "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && node scripts/prepare-macos-dev-runtime.mjs --run",
     "dev:brand": "node scripts/prepare-macos-dev-runtime.mjs",
     "lint": "eslint .",
-    "pretest": "npm run build:worktree-remover && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:compaction && npm run test:subagents",
-    "pretest:coverage": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run test:preflight && npm run test:scheduled && npm run test:google-provider && npm run test:config-recovery && npm run test:command-system && npm run test:slash-commands && npm run test:compaction && npm run test:subagents",
+    "pretest": "npm run build:worktree-remover && npm run test:ambient-music && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:compaction && npm run test:subagents",
+    "pretest:coverage": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run test:ambient-music:coverage && npm run test:preflight && npm run test:scheduled && npm run test:google-provider && npm run test:config-recovery && npm run test:command-system && npm run test:slash-commands && npm run test:compaction && npm run test:subagents",
     "test:preflight": "npm run test:artificial-analysis && npm run test:model-pad && tsx --test main/services/appearance-preview-core.test.ts main/services/generation-timeline.test.ts main/services/local-runtime-status.test.ts main/services/mcp-tool-result.test.ts renderer/components/activity-feed.test.tsx renderer/components/chat-sidebar.test.tsx renderer/components/composer.test.tsx renderer/main/chat-transition.test.tsx renderer/components/thinking-control.test.tsx renderer/lib/agent-steps.test.ts renderer/lib/dialog-motion-contract.test.ts renderer/lib/pill-appearance.test.ts renderer/lib/streaming-motion-contract.test.ts renderer/lib/streaming-reveal.test.ts renderer/lib/voice-recorder-core.test.ts renderer/pill-preload-channels.test.ts renderer/shared/anthropic-thinking.test.ts renderer/shared/app-update.test.ts renderer/shared/claim-check.test.ts renderer/shared/codex-thinking.test.ts renderer/shared/google-thinking.test.ts renderer/shared/provider-deployment.test.ts",
     "test:branding": "tsx --test main/runtime-mode.test.ts main/runtime-profile-core.test.ts main/runtime-profile-bootstrap.test.ts main/services/app-updater-core.test.ts && node --test scripts/prepare-ci-release.test.mjs scripts/prepare-macos-dev-runtime.test.mjs scripts/check-release-consumers.test.mjs",
     "test:scheduled": "tsx --test main/handlers/scheduled-tasks-parse.test.ts main/services/assistant/mcp-tool.test.ts main/services/assistant/tool-loop-guard.test.ts main/services/mcp-selection.test.ts main/services/scheduled-settings-core.test.ts main/services/schedule-guard.test.ts main/services/schedule-notification.test.ts main/services/schedule-service-core.test.ts main/services/schedule-store.test.ts main/services/schedule-script.test.ts main/services/schedule-tool.test.ts renderer/lib/scheduled-task-view.test.ts",
@@ -77,6 +79,12 @@
     "test:worktree-remover:native": "node scripts/build-worktree-remover.mjs && node scripts/build-worktree-remover.mjs --test && node --test scripts/worktree-remover.test.mjs",
     "test:subagent-file-mutator:native": "node scripts/build-subagent-file-mutator.mjs && node scripts/build-subagent-file-mutator.mjs --test && node --test scripts/subagent-file-mutator.test.mjs",
     "test:native": "CLANG_MODULE_CACHE_PATH=build/native-test-module-cache SWIFT_MODULECACHE_PATH=build/native-test-module-cache node scripts/run-with-apple-developer-tools.mjs swift test --disable-sandbox --package-path native/apple-foundation-models --scratch-path build/native-swift-tests",
+    "test:ambient-music": "tsx --test main/services/ambient-music-configuration.test.ts main/services/ambient-music-core.test.ts main/services/ambient-music-degradation.test.ts main/services/ambient-music-download-core.test.ts main/services/ambient-music-download.test.ts main/services/ambient-music-feature-flag.test.ts main/services/ambient-music-rollout-contract.test.ts main/services/ambient-music-manager.test.ts main/services/ambient-music-protocol.test.ts main/services/ambient-music-service.test.ts renderer/components/range.test.tsx renderer/components/settings/ambient-music-settings.test.tsx renderer/components/settings/ambient-music-visualizer.test.tsx renderer/lib/ambient-music-control.test.ts renderer/lib/settings-section.test.ts renderer/shared/ambient-music.test.ts && npm run test:ambient-music:native && npm run test:ambient-music:soak && npm run test:ambient-music:package",
+    "test:ambient-music:coverage": "tsx --test --experimental-test-coverage --test-coverage-include=main/services/ambient-music*.ts --test-coverage-include=renderer/components/settings/ambient-music-settings.tsx --test-coverage-include=renderer/components/settings/ambient-music-visualizer.tsx --test-coverage-include=renderer/lib/ambient-music-control.ts --test-coverage-include=renderer/lib/settings-section.ts --test-coverage-include=renderer/shared/ambient-music.ts --test-coverage-include=renderer/shared/settings-section.ts main/services/ambient-music-configuration.test.ts main/services/ambient-music-core.test.ts main/services/ambient-music-degradation.test.ts main/services/ambient-music-download-core.test.ts main/services/ambient-music-download.test.ts main/services/ambient-music-feature-flag.test.ts main/services/ambient-music-rollout-contract.test.ts main/services/ambient-music-manager.test.ts main/services/ambient-music-protocol.test.ts main/services/ambient-music-service.test.ts renderer/components/range.test.tsx renderer/components/settings/ambient-music-settings.test.tsx renderer/components/settings/ambient-music-visualizer.test.tsx renderer/lib/ambient-music-control.test.ts renderer/lib/settings-section.test.ts renderer/shared/ambient-music.test.ts",
+    "test:ambient-music:native": "node scripts/test-ambient-music-native.mjs",
+    "test:ambient-music:soak": "node --test scripts/ambient-music-soak.test.mjs",
+    "test:ambient-music:package": "node --test scripts/prepare-macos-dev-runtime.test.mjs scripts/run-macos-distribution.test.mjs scripts/sign-macos.test.mjs scripts/verify-macos-package.test.mjs",
+    "ambient-music:soak": "node scripts/ambient-music-soak.mjs",
     "type-check": "tsc --noEmit",
     "format": "oxfmt .",
     "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run build:native && npm run build && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
@@ -208,6 +216,17 @@
       {
         "from": "resources/computer-use/LICENSE.cua-driver.md",
         "to": "computer-use/LICENSE.cua-driver.md"
+      },
+      {
+        "from": "build/native/Aiden Ambient Music Helper.app/Contents/Resources",
+        "to": "ambient-music",
+        "filter": [
+          "LICENSE.*.txt",
+          "MODEL_TERMS.md",
+          "NOTICE.md",
+          "asset-manifest.json",
+          "source-provenance.json"
+        ]
       }
     ],
     "mac": {
@@ -220,6 +239,8 @@
       "entitlementsInherit": "resources/entitlements.mac.inherit.plist",
       "signIgnore": "\\/Contents\\/Helpers\\/CuaDriver\\.app\\/Contents\\/MacOS\\/cua-driver$",
       "binaries": [
+        "Contents/Helpers/Aiden Ambient Music Helper.app/Contents/MacOS/mlx.metallib",
+        "Contents/Helpers/Aiden Ambient Music Helper.app",
         "Contents/Helpers/Aiden Foundation Models Helper.app",
         "Contents/Helpers/aiden-subagent-run-store",
         "Contents/Helpers/aiden-subagent-file-mutator",
@@ -227,6 +248,10 @@
         "Contents/Helpers/aiden-worktree-remover"
       ],
       "extraFiles": [
+        {
+          "from": "build/native/Aiden Ambient Music Helper.app",
+          "to": "Helpers/Aiden Ambient Music Helper.app"
+        },
         {
           "from": "build/native/Aiden Foundation Models Helper.app",
           "to": "Helpers/Aiden Foundation Models Helper.app"

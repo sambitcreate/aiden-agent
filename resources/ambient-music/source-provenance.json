@@ -1,0 +1,472 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-11",
+  "nativeBuildInputs": [
+    {
+      "path": "native/ambient-music/CMakeLists.txt",
+      "sha256": "72b598adca1fd7ede772d522d62f1fce3e539fa74925a78191b47ec5c4538300"
+    },
+    {
+      "path": "native/ambient-music/src/main.mm",
+      "sha256": "0fc4e33b3964941f8bd1bc785e219f0afe8884fca005b4ecc0ecbfe0e5468dd7"
+    },
+    {
+      "path": "native/ambient-music/Info.plist",
+      "sha256": "071c13e137962dd31d8d1399666a16afc73783ac3979bcb225b953c77e554d8b"
+    },
+    {
+      "path": "native/ambient-music/patches/mlx-header-paths.patch",
+      "sha256": "f9f0143230143b499c3e56fadc7603cd8ed7251fda9d2d67d75d0169dbd4779a"
+    },
+    {
+      "path": "native/ambient-music/patches/tflite-flatbuffers-pin.patch",
+      "sha256": "075e3485673d10f80288d6bcb92d320a12295fd5c78dcdef21494f16eb84e544"
+    },
+    {
+      "path": "resources/app-icon.png",
+      "sha256": "95925426f07933b39bb674143f8bcb351222dda79c8b95dff48ef87395f54f3a"
+    }
+  ],
+  "configuredHelperLinkSha256": "74a5589d86feff1b6b791bfb7235d5b94816dbd4231a0945a9f938b26053657a",
+  "configuredSourceMutations": [
+    {
+      "dependency": "MLX",
+      "path": "mlx/backend/metal/make_compiled_preamble.sh",
+      "status": "modified",
+      "sha256": "be4198e784eeaff05073edc93b927221f9e01521959b4ada94d78fa088c884c8"
+    },
+    {
+      "dependency": "TensorFlow Lite",
+      "path": "tensorflow/lite/tools/cmake/modules/flatbuffers.cmake",
+      "status": "modified",
+      "sha256": "673bf5eb719d2be39b42045f77f3224ca7ea00bad50b24fd717747512c241022"
+    },
+    {
+      "dependency": "Eigen",
+      "path": "bench/spbench/CMakeLists.txt",
+      "status": "modified",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "dependency": "Eigen",
+      "path": "doc/CMakeLists.txt",
+      "status": "modified",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "dependency": "Eigen",
+      "path": "unsupported/doc/CMakeLists.txt",
+      "status": "modified",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "dependency": "Eigen",
+      "path": "cmake/language_support.cmake",
+      "status": "untracked",
+      "sha256": "33bb340c70712503b1d4e6584844130903ea891aa44bdbdef99af568456f7bd0"
+    }
+  ],
+  "fetchedSubmodules": [
+    {
+      "dependency": "Magenta RealTime",
+      "path": "magenta_rt/_vendor/sequence-layers",
+      "revision": "c85a637a1afae8f4f2d4edb458f2111b5f44ae52",
+      "repository": "https://github.com/magenta/sequence-layers.git"
+    },
+    {
+      "dependency": "ml_dtypes",
+      "path": "third_party/eigen",
+      "revision": "7bf2968fed5f246c0589e1111004cb420fcd7c71",
+      "repository": "https://gitlab.com/libeigen/eigen.git"
+    },
+    {
+      "dependency": "Protocol Buffers",
+      "path": "third_party/benchmark",
+      "revision": "5b7683f49e1e9223cf9927b24f6fd3d6bd82e3f8",
+      "repository": "https://github.com/google/benchmark.git"
+    },
+    {
+      "dependency": "Protocol Buffers",
+      "path": "third_party/googletest",
+      "revision": "5ec7f0c4a113e2f18ac2c6cc7df51ad6afc24081",
+      "repository": "https://github.com/google/googletest.git"
+    },
+    {
+      "dependency": "Ruy",
+      "path": "third_party/cpuinfo",
+      "revision": "082deffc80ce517f81dc2f3aebe6ba671fcd09c9",
+      "repository": "https://github.com/pytorch/cpuinfo"
+    },
+    {
+      "dependency": "Ruy",
+      "path": "third_party/googletest",
+      "revision": "6c58c11d5497b6ee1df3cb400ce30deb72fc28c0",
+      "repository": "https://github.com/google/googletest"
+    }
+  ],
+  "nativeSources": [
+    {
+      "name": "Magenta RealTime",
+      "repository": "https://github.com/magenta/magenta-realtime.git",
+      "tag": "v2.0.3",
+      "revision": "694a545e4ba0b88bf1150137b129582166d3e07f",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.magenta-realtime.txt"]
+    },
+    {
+      "name": "MLX",
+      "repository": "https://github.com/ml-explore/mlx.git",
+      "tag": "v0.31.1",
+      "revision": "ce45c52505c8158ea48d2a54e8caae05efd86bfe",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE.mlx.txt", "LICENSE.mlx-acknowledgments.txt"]
+    },
+    {
+      "name": "TensorFlow Lite",
+      "repository": "https://github.com/tensorflow/tensorflow.git",
+      "tag": "v2.21.0",
+      "revision": "a481b10260dfdf833a1b16007eead49c1d7febf3",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.tensorflow-lite.txt"]
+    },
+    {
+      "name": "SentencePiece",
+      "repository": "https://github.com/google/sentencepiece.git",
+      "tag": "v0.2.0",
+      "revision": "17d7580d6407802f85855d2cc9190634e2c95624",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.sentencepiece.txt"]
+    }
+  ],
+  "compiledDependencies": [
+    {
+      "name": "MLX vendored PocketFFT",
+      "repository": "https://gitlab.mpcdf.mpg.de/mtr/pocketfft.git",
+      "revision": "ce45c52505c8158ea48d2a54e8caae05efd86bfe",
+      "revisionScope": "MLX vendored tree",
+      "vendoredPath": "mlx/3rdparty/pocketfft.h",
+      "license": "BSD-3-Clause",
+      "licenseFiles": ["LICENSE.mlx-acknowledgments.txt"]
+    },
+    {
+      "name": "Abseil",
+      "repository": "https://github.com/abseil/abseil-cpp.git",
+      "revision": "d38452e1ee03523a208362186fd42248ff2609f6",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.abseil.txt"]
+    },
+    {
+      "name": "SentencePiece vendored Abseil flags",
+      "repository": "https://github.com/google/sentencepiece.git",
+      "revision": "17d7580d6407802f85855d2cc9190634e2c95624",
+      "revisionScope": "SentencePiece vendored tree",
+      "vendoredPath": "third_party/absl/flags/flag.cc",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.sentencepiece-abseil.txt"]
+    },
+    {
+      "name": "SentencePiece vendored Darts-clone",
+      "repository": "https://github.com/s-yata/darts-clone.git",
+      "revision": "17d7580d6407802f85855d2cc9190634e2c95624",
+      "revisionScope": "SentencePiece vendored tree",
+      "vendoredPath": "third_party/darts_clone/darts.h",
+      "license": "BSD-3-Clause",
+      "licenseFiles": ["LICENSE.sentencepiece-darts-clone.txt"]
+    },
+    {
+      "name": "SentencePiece vendored Protocol Buffers Lite",
+      "repository": "https://github.com/google/sentencepiece.git",
+      "revision": "17d7580d6407802f85855d2cc9190634e2c95624",
+      "revisionScope": "SentencePiece vendored tree",
+      "vendoredPath": "third_party/protobuf-lite",
+      "license": "BSD-3-Clause",
+      "licenseFiles": ["LICENSE.sentencepiece-protobuf-lite.txt"]
+    },
+    {
+      "name": "cpuinfo and CLOG",
+      "repository": "https://github.com/pytorch/cpuinfo.git",
+      "revision": "8a9210069b5a37dd89ed118a783945502a30a4ae",
+      "license": "BSD-2-Clause",
+      "licenseFiles": ["LICENSE.cpuinfo.txt", "LICENSE.clog.txt"]
+    },
+    {
+      "name": "FarmHash",
+      "repository": "https://github.com/google/farmhash.git",
+      "revision": "0d859a811870d10f53a594927d0d0b97573ad06d",
+      "license": "MIT-style",
+      "licenseFiles": ["LICENSE.farmhash.txt"]
+    },
+    {
+      "name": "Ooura FFT2D",
+      "repository": "https://www.kurims.kyoto-u.ac.jp/~ooura/fft.html",
+      "version": "1.0",
+      "archiveSha256": "5f4dabc2ae21e1f537425d58a49cdca1c49ea11db0d6271e2a4b27e9697548eb",
+      "extractedTreeSha256": "65718f526353aab07a1530138a9866995bbd79f7333963c72ed033c1343ef410",
+      "license": "Takuya-Ooura-permissive",
+      "licenseFiles": ["LICENSE.fft2d.txt"]
+    },
+    {
+      "name": "FlatBuffers",
+      "repository": "https://github.com/google/flatbuffers.git",
+      "tag": "v25.9.23",
+      "revision": "187240970746d00bbd26b0f5873ed54d2477f9f3",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.flatbuffers.txt"]
+    },
+    {
+      "name": "gemmlowp",
+      "repository": "https://github.com/google/gemmlowp.git",
+      "revision": "16e8662c34917be0065110bfcd9cc27d30f52fdf",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.gemmlowp.txt"]
+    },
+    {
+      "name": "Ruy",
+      "repository": "https://github.com/google/ruy.git",
+      "revision": "3286a34cc8de6149ac6844107dfdffac91531e72",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.ruy.txt"]
+    }
+  ],
+  "headerDependencies": [
+    {
+      "name": "Eigen",
+      "repository": "https://gitlab.com/libeigen/eigen.git",
+      "revision": "dcbaf2d608f306450f1e74949eb87e9a22a7ef4b",
+      "license": "MPL-2.0 and supplemental notices",
+      "licenseFiles": [
+        "LICENSE.eigen-summary.txt",
+        "LICENSE.eigen-mpl2.txt",
+        "LICENSE.eigen-apache.txt",
+        "LICENSE.eigen-bsd.txt",
+        "LICENSE.eigen-minpack.txt",
+        "LICENSE.eigen-readme.txt"
+      ]
+    },
+    {
+      "name": "ml_dtypes",
+      "repository": "https://github.com/jax-ml/ml_dtypes.git",
+      "revision": "00d98cd92ade342fef589c0470379abb27baebe9",
+      "license": "Apache-2.0 and Eigen notices",
+      "licenseFiles": ["LICENSE.ml-dtypes.txt", "LICENSE.ml-dtypes-eigen.txt"]
+    },
+    {
+      "name": "fmt",
+      "repository": "https://github.com/fmtlib/fmt.git",
+      "tag": "12.1.0",
+      "revision": "407c905e45ad75fc29bf0f9bb7c5c2fd3475976f",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE.fmt.txt"]
+    },
+    {
+      "name": "nlohmann/json",
+      "repository": "https://github.com/nlohmann/json.git",
+      "tag": "v3.11.3",
+      "archiveSha256": "d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d",
+      "extractedTreeSha256": "f748e9bdb9028966dbdd19bc56f6e95f110b9c5251c1dcd231061ea98efa9db3",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE.nlohmann-json.txt"]
+    },
+    {
+      "name": "Apple metal-cpp",
+      "repository": "https://developer.apple.com/metal/cpp/",
+      "version": "26",
+      "archiveSha256": "4df3c078b9aadcb516212e9cb03004cbc5ce9a3e9c068fa3144d021db585a3a4",
+      "extractedTreeSha256": "d211abd2040981f2821310850abe2a3243a5c11f894d78be79fb131269c91b2e",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.metal-cpp.txt"]
+    }
+  ],
+  "buildOnlyDependencies": [
+    {
+      "name": "Protocol Buffers",
+      "repository": "https://github.com/protocolbuffers/protobuf.git",
+      "tag": "v3.21.9",
+      "revision": "90b73ac3f0b10320315c2ca0d03a5a9b095d2f66",
+      "license": "BSD-3-Clause",
+      "licenseFiles": ["LICENSE.protobuf.txt"]
+    }
+  ],
+  "packagedLicenseFiles": [
+    {
+      "packageFile": "LICENSE.magenta-realtime.txt",
+      "sourceRoot": "repository",
+      "sourcePath": "resources/ambient-music/LICENSE.magenta-realtime.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "packageFile": "LICENSE.mlx.txt",
+      "sourceRoot": "repository",
+      "sourcePath": "resources/ambient-music/LICENSE.mlx.txt",
+      "sha256": "ccfab7ccb2ea306f71531c8ca77bb55507606cd90768b1e32b8b52ab5b48cf01"
+    },
+    {
+      "packageFile": "LICENSE.mlx-acknowledgments.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "_deps/mlx-src/ACKNOWLEDGMENTS.md",
+      "sha256": "754321096cf44f1382ba2bb8309f9b445cffa9ea14ac44b9f21fc34619520b99"
+    },
+    {
+      "packageFile": "LICENSE.tensorflow-lite.txt",
+      "sourceRoot": "repository",
+      "sourcePath": "resources/ambient-music/LICENSE.tensorflow-lite.txt",
+      "sha256": "71c6915d04265772a0339bed47276942c678b45cc01534210ebe6984fd1aec65"
+    },
+    {
+      "packageFile": "LICENSE.sentencepiece.txt",
+      "sourceRoot": "repository",
+      "sourcePath": "resources/ambient-music/LICENSE.sentencepiece.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "packageFile": "LICENSE.abseil.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "abseil-cpp/LICENSE",
+      "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747"
+    },
+    {
+      "packageFile": "LICENSE.sentencepiece-abseil.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "_deps/sentencepiece-src/third_party/absl/LICENSE",
+      "sha256": "d3e2f59e1d71176dfdb555ece6a41f7a5aa0f52ff21211010ace314f57695f6b"
+    },
+    {
+      "packageFile": "LICENSE.sentencepiece-darts-clone.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "_deps/sentencepiece-src/third_party/darts_clone/LICENSE",
+      "sha256": "155f59997298ee336602c49f9c1110f268ac394ca2197eb02647a3555935ad52"
+    },
+    {
+      "packageFile": "LICENSE.sentencepiece-protobuf-lite.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "_deps/sentencepiece-src/third_party/protobuf-lite/LICENSE",
+      "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
+    },
+    {
+      "packageFile": "LICENSE.cpuinfo.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "cpuinfo/LICENSE",
+      "sha256": "8e7e60636c3aa0cb03571a1a841ce5697f9551ff92b3c426c2561613d15ade70"
+    },
+    {
+      "packageFile": "LICENSE.clog.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "cpuinfo/deps/clog/LICENSE",
+      "sha256": "68a14c3e79add023eecd83d611e73f05b8bf1d16852efeb7eb4033a96736da9e"
+    },
+    {
+      "packageFile": "LICENSE.eigen-summary.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "eigen/LICENSE",
+      "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+    },
+    {
+      "packageFile": "LICENSE.eigen-apache.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "eigen/COPYING.APACHE",
+      "sha256": "03379001a7b12a2ec997a25554247d985270b353c10d5bafee9ac8d6519820b7"
+    },
+    {
+      "packageFile": "LICENSE.eigen-bsd.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "eigen/COPYING.BSD",
+      "sha256": "51928dce36213c5333ba3172e847d735d4c6e9b7ff2722a326c49067155b82eb"
+    },
+    {
+      "packageFile": "LICENSE.eigen-minpack.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "eigen/COPYING.MINPACK",
+      "sha256": "c87b7f8ee88f6195e91743820c00354833583aef091b72e2d4a49c8e28e798a0"
+    },
+    {
+      "packageFile": "LICENSE.eigen-mpl2.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "eigen/COPYING.MPL2",
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+    },
+    {
+      "packageFile": "LICENSE.eigen-readme.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "eigen/COPYING.README",
+      "sha256": "db640ff2bd90c6abd6a4d3fbb351e0ee4d555417cf840492054d1cbb2ea85644"
+    },
+    {
+      "packageFile": "LICENSE.farmhash.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "farmhash/COPYING",
+      "sha256": "4162dd091caae234f72d3b57e138174f733e736b2430a4c51b098b17d866fcb6"
+    },
+    {
+      "packageFile": "LICENSE.fft2d.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "fft2d/readme.txt",
+      "sha256": "5b5e610da10394132a42d82ed6501fe1b83a1d19e1bb160c8ace10ed61708765"
+    },
+    {
+      "packageFile": "LICENSE.flatbuffers.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "flatbuffers/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "packageFile": "LICENSE.gemmlowp.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "gemmlowp/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "packageFile": "LICENSE.ml-dtypes.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "ml_dtypes/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "packageFile": "LICENSE.ml-dtypes-eigen.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "ml_dtypes/LICENSE.eigen",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    },
+    {
+      "packageFile": "LICENSE.protobuf.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "protobuf/LICENSE",
+      "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
+    },
+    {
+      "packageFile": "LICENSE.ruy.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "ruy/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "packageFile": "LICENSE.fmt.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "_deps/fmt-src/LICENSE",
+      "sha256": "07580f2a3b35709ce703d523f447b242f6dfec7582a8c0df102c7fa2849375f8"
+    },
+    {
+      "packageFile": "LICENSE.nlohmann-json.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "_deps/json-src/LICENSE.MIT",
+      "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+    },
+    {
+      "packageFile": "LICENSE.metal-cpp.txt",
+      "sourceRoot": "nativeBuild",
+      "sourcePath": "_deps/metal_cpp-src/LICENSE.txt",
+      "sha256": "f4e92c7fe2aa066e294c0da9d08683dc9fb741ee6e6debbfad99a0c96e07c1f2"
+    }
+  ],
+  "modelSource": {
+    "repository": "google/magenta-realtime-2",
+    "revision": "010aa0dcb0dfd27b24f0ad07b4dad63e8f9521cc",
+    "license": "CC-BY-4.0",
+    "bundled": false,
+    "downloadPolicy": "Explicit user action only",
+    "assetManifest": "asset-manifest.json",
+    "fileCount": 14,
+    "sharedBytes": 1375741343,
+    "smallTotalBytes": 1840072891,
+    "baseTotalBytes": 4164096058
+  }
+}

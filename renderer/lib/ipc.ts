@@ -99,6 +99,13 @@ import type {
   AppearanceConfig,
   AppearancePreviewSnapshot,
 } from "../shared/appearance";
+import type {
+  AmbientMusicBaseBenchmarkResult,
+  AmbientMusicApplyResult,
+  AmbientMusicConfigV1,
+  AmbientMusicFeatureSnapshot,
+  AmbientMusicModelId,
+} from "../shared/ambient-music";
 import {
   parseSkillCatalog,
   type SkillCatalogEntry,
@@ -150,6 +157,40 @@ export const appUpdatesApi = {
     onNotification<unknown>("app:update-state", (payload) =>
       handler(parseAppUpdateSnapshot(payload)),
     ),
+};
+
+export const ambientMusicApi = {
+  get: () => invoke<AmbientMusicFeatureSnapshot>("ambientMusic:get"),
+  download: (model: AmbientMusicModelId, options: { termsAccepted: true; repair?: boolean }) =>
+    invoke<AmbientMusicFeatureSnapshot>("ambientMusic:download", { model, ...options }),
+  cancelDownload: () => invoke<AmbientMusicFeatureSnapshot>("ambientMusic:cancelDownload"),
+  unload: () => invoke<AmbientMusicFeatureSnapshot>("ambientMusic:unload"),
+  load: (model: AmbientMusicModelId) =>
+    invoke<AmbientMusicFeatureSnapshot>("ambientMusic:load", { model }),
+  applyConfiguration: (config: AmbientMusicConfigV1, playAfter = false) =>
+    invoke<AmbientMusicApplyResult>("ambientMusic:applyConfiguration", { config, playAfter }),
+  setWeights: (weights: number[]) =>
+    invoke<AmbientMusicFeatureSnapshot>("ambientMusic:setWeights", { weights }),
+  setVolume: (decibels: number) =>
+    invoke<AmbientMusicFeatureSnapshot>("ambientMusic:setVolume", { decibels }),
+  setDrumless: (enabled: boolean) =>
+    invoke<AmbientMusicFeatureSnapshot>("ambientMusic:setDrumless", { enabled }),
+  setVariation: (variation: number) =>
+    invoke<AmbientMusicFeatureSnapshot>("ambientMusic:setVariation", { variation }),
+  play: () => invoke<AmbientMusicFeatureSnapshot>("ambientMusic:play"),
+  pause: () => invoke<AmbientMusicFeatureSnapshot>("ambientMusic:pause"),
+  stop: () => invoke<AmbientMusicFeatureSnapshot>("ambientMusic:stop"),
+  restart: () => invoke<AmbientMusicFeatureSnapshot>("ambientMusic:restart"),
+  removeModel: (model: AmbientMusicModelId, expectedRevision: number) =>
+    invoke<AmbientMusicFeatureSnapshot>("ambientMusic:removeModel", {
+      model,
+      expectedRevision,
+      confirmed: true,
+    }),
+  benchmarkBase: (expectedRevision: number) =>
+    invoke<AmbientMusicBaseBenchmarkResult>("ambientMusic:benchmarkBase", { expectedRevision }),
+  onChanged: (handler: (snapshot: AmbientMusicFeatureSnapshot) => void) =>
+    onNotification<AmbientMusicFeatureSnapshot>("ambientMusic:changed", handler),
 };
 
 // ── Providers & settings ──────────────────────────────────────────────

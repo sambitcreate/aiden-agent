@@ -349,6 +349,30 @@ export const FieldContent = ({ className, ...props }: React.HTMLAttributes<HTMLD
 );
 export const FieldLabel = Label;
 
+export const Range = React.forwardRef<
+  HTMLInputElement,
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, "type">
+>(function Range({ className, min = 0, max = 100, value, style, ...props }, ref) {
+  const minimum = Number(min);
+  const maximum = Number(max);
+  const current = typeof value === "number" ? value : Number(value ?? minimum);
+  const progress = maximum > minimum
+    ? Math.min(100, Math.max(0, ((current - minimum) / (maximum - minimum)) * 100))
+    : 0;
+  return (
+    <input
+      ref={ref}
+      type="range"
+      min={min}
+      max={max}
+      value={value}
+      style={{ ...style, "--range-progress": `${progress}%` } as React.CSSProperties}
+      className={cn("aiden-range h-7 w-full min-w-24", className)}
+      {...props}
+    />
+  );
+});
+
 const SplitContext = React.createContext<{
   collapsed: boolean;
   toggle: () => void;

@@ -31,11 +31,41 @@ const MINIMAL_ENTITLEMENT_HELPERS = Object.freeze([
   "aiden-subagent-run-store",
   "aiden-worktree-remover",
 ]);
+const AMBIENT_MUSIC_HELPER_APP = "Aiden Ambient Music Helper.app";
 
 function minimalEntitlementHelperPaths(app) {
   return new Set(
     MINIMAL_ENTITLEMENT_HELPERS.map((name) => path.resolve(app, "Contents", "Helpers", name)),
   );
+}
+
+function ambientMusicMetallibPath(app) {
+  return path.resolve(
+    app,
+    "Contents",
+    "Helpers",
+    AMBIENT_MUSIC_HELPER_APP,
+    "Contents",
+    "MacOS",
+    "mlx.metallib",
+  );
+}
+
+export function ambientMusicMetallibSignArguments(options) {
+  if (typeof options.identity !== "string" || options.identity.trim().length === 0) {
+    throw new Error("Ambient Music metallib signing requires the selected code-signing identity.");
+  }
+  const args = ["--sign", options.identity, "--force"];
+  if (options.keychain) args.push("--keychain", options.keychain);
+  args.push(
+    "--timestamp",
+    "--options",
+    "runtime",
+    "--entitlements",
+    COMPUTER_USE_ENTITLEMENTS,
+    ambientMusicMetallibPath(options.app),
+  );
+  return args;
 }
 
 async function sha256(file) {
@@ -88,10 +118,18 @@ function ignoredBy(originalIgnore, file) {
 export function createAidenMacSignOptions(options) {
   const paths = packagedComputerUsePaths(options.app);
   const minimalHelpers = minimalEntitlementHelperPaths(options.app);
+  const ambientMusicHelper = path.resolve(
+    options.app,
+    "Contents",
+    "Helpers",
+    AMBIENT_MUSIC_HELPER_APP,
+  );
+  const ambientMusicMetallib = ambientMusicMetallibPath(options.app);
   const originalIgnore = options.ignore;
   const originalOptionsForFile = options.optionsForFile;
   return {
     ...options,
+    binaries: [...new Set([...(options.binaries ?? []), ambientMusicMetallib])],
     ignore(file) {
       if (path.resolve(file) === paths.driver) return true;
       return ignoredBy(originalIgnore, file);
@@ -102,6 +140,8 @@ export function createAidenMacSignOptions(options) {
       if (
         resolved === paths.helperApp ||
         resolved.startsWith(`${paths.helperApp}${path.sep}`) ||
+        resolved === ambientMusicHelper ||
+        resolved.startsWith(`${ambientMusicHelper}${path.sep}`) ||
         minimalHelpers.has(resolved)
       ) {
         return {
@@ -120,7 +160,22 @@ export async function sign(options) {
     throw new Error("The Aiden macOS signing hook can only run on macOS.");
   }
   const { driver } = packagedComputerUsePaths(options.app);
+  const ambientMusicMetallib = ambientMusicMetallibPath(options.app);
   await verifyPinnedDriver(driver);
+  const metallibInfo = await lstat(ambientMusicMetallib);
+  if (
+    !metallibInfo.isFile() ||
+    metallibInfo.isSymbolicLink() ||
+    (await realpath(ambientMusicMetallib)) !== ambientMusicMetallib
+  ) {
+    throw new Error(
+      `The Ambient Music metallib is not a regular, non-symlinked file: ${ambientMusicMetallib}`,
+    );
+  }
+  await executeFile("/usr/bin/codesign", ambientMusicMetallibSignArguments(options), {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
   await signAsync(createAidenMacSignOptions(options));
   await verifyPinnedDriver(driver);
 }

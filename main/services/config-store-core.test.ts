@@ -2002,6 +2002,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   const googleThinkingByModel = { "future-google": "ultra" };
   const codexThinkingByModel = { "future-codex": "ultra" };
   const anthropicThinkingByModel = { "future-anthropic": "ultra" };
+  const ambientMusic = { version: 2, futureGenerator: "stereo" };
   await fs.writeFile(
     h.settingsFile,
     JSON.stringify({
@@ -2016,6 +2017,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
         googleThinkingByModel,
         codexThinkingByModel,
         anthropicThinkingByModel,
+        ambientMusic,
       },
     }),
     "utf-8",
@@ -2030,6 +2032,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   assert.deepEqual(saved.googleThinkingByModel, googleThinkingByModel);
   assert.deepEqual(saved.codexThinkingByModel, codexThinkingByModel);
   assert.deepEqual(saved.anthropicThinkingByModel, anthropicThinkingByModel);
+  assert.deepEqual(saved.ambientMusic, ambientMusic);
   assert.equal(saved.voiceProvider, "future-voice");
   assert.equal(saved.chatTitleProviderId, "future-title-policy");
   assert.equal(saved.scheduledDefaultMode, "future-mode");
@@ -2041,6 +2044,7 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   assert.equal(runtime.googleThinkingByModel, undefined);
   assert.equal(runtime.codexThinkingByModel, undefined);
   assert.equal(runtime.anthropicThinkingByModel, undefined);
+  assert.equal(runtime.ambientMusic, undefined);
   assert.equal(runtime.voiceProvider, undefined);
   assert.equal(runtime.chatTitleProviderId, undefined);
   assert.equal(runtime.scheduledDefaultMode, undefined);
@@ -2063,6 +2067,76 @@ test("future nested settings versions survive unrelated writes", async (t) => {
   assert.equal(editedRuntime.googleThinkingByModel?.["known-google"], "high");
   assert.equal(editedRuntime.codexThinkingByModel?.["known-codex"], "xhigh");
   assert.equal(editedRuntime.anthropicThinkingByModel?.["known-anthropic"], "max");
+});
+
+test("known Ambient Music writes preserve unknown current-version fields", async (t) => {
+  const h = await harness(t, {
+    workspaces: [],
+    seeded: true,
+    aidenDirMigratedAt: Date.now(),
+  });
+  await fs.writeFile(h.settingsFile, JSON.stringify({
+    settings: {
+      ambientMusic: {
+        version: 1,
+        selectedModel: "mrt2_small",
+        prompts: [{ id: "pads", text: "warm pads", weight: 1 }],
+        volumeDb: -18,
+        variation: 0,
+        drumless: false,
+        futureMixerMode: "spatial",
+      },
+    },
+  }), "utf-8");
+
+  const runtime = await h.store.setSettings({
+    ambientMusic: {
+      version: 1,
+      selectedModel: "mrt2_base",
+      prompts: [{ id: "piano", text: "soft piano", weight: 1 }],
+      volumeDb: -24,
+      variation: 0.25,
+      drumless: true,
+    },
+  });
+  assert.equal(runtime.ambientMusic?.selectedModel, "mrt2_base");
+  const saved = (await readJson<{ settings: Record<string, unknown> }>(h.settingsFile)).settings;
+  assert.equal(
+    (saved.ambientMusic as Record<string, unknown>).futureMixerMode,
+    "spatial",
+  );
+});
+
+test("Ambient Music writes refuse to overwrite a future settings version", async (t) => {
+  const h = await harness(t, {
+    workspaces: [],
+    seeded: true,
+    aidenDirMigratedAt: Date.now(),
+  });
+  const futureAmbientMusic = {
+    version: 2,
+    selectedModel: "mrt2_small",
+    futureGenerator: "stereo",
+  };
+  await fs.writeFile(h.settingsFile, JSON.stringify({
+    settings: { ambientMusic: futureAmbientMusic },
+  }), "utf-8");
+
+  await assert.rejects(
+    h.store.setSettings({
+      ambientMusic: {
+        version: 1,
+        selectedModel: "mrt2_base",
+        prompts: [{ id: "piano", text: "soft piano", weight: 1 }],
+        volumeDb: -24,
+        variation: 0.25,
+        drumless: true,
+      },
+    }),
+    /newer Aiden version/,
+  );
+  const saved = (await readJson<{ settings: Record<string, unknown> }>(h.settingsFile)).settings;
+  assert.deepEqual(saved.ambientMusic, futureAmbientMusic);
 });
 
 test("editing MCP servers and skills preserves unknown future fields", async (t) => {

@@ -648,6 +648,16 @@ export function createConfigStore(
       // not "fix" this by folding settings back into the portable file.
       const providerIdAliases = (await readPortable()).providerIdAliases;
       const saved = await mutateSettings((config) => {
+        const storedAmbientMusic = config.settings.ambientMusic as unknown;
+        if (
+          patch.ambientMusic &&
+          storedAmbientMusic !== undefined &&
+          (!isRecord(storedAmbientMusic) || storedAmbientMusic.version !== 1)
+        ) {
+          throw new Error(
+            "Ambient Music settings were written by a newer Aiden version and cannot be changed here.",
+          );
+        }
         const lastProviderId =
           typeof patch.lastProviderId === "string"
             ? (resolveProviderAlias(providerIdAliases, patch.lastProviderId) ??
@@ -658,6 +668,9 @@ export function createConfigStore(
           ...patch,
           ...(patch.assistant
             ? { assistant: { ...config.settings.assistant, ...patch.assistant } }
+            : {}),
+          ...(patch.ambientMusic
+            ? { ambientMusic: { ...config.settings.ambientMusic, ...patch.ambientMusic } }
             : {}),
           ...(lastProviderId !== undefined ? { lastProviderId } : {}),
         };

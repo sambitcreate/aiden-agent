@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "source": "google/magenta-realtime-2",
+  "revision": "010aa0dcb0dfd27b24f0ad07b4dad63e8f9521cc",
+  "license": "CC-BY-4.0",
+  "termsUrl": "https://huggingface.co/google/magenta-realtime-2",
+  "bundled": false,
+  "files": [
+    {
+      "role": "mrt2_base",
+      "relativePath": "models/mrt2_base/mrt2_base.mlxfn",
+      "size": 2771414746,
+      "sha256": "ee2f19f2782182095fcd05c0fc1978f7f3e020b1cc0993e9d8e643e2f7de0bfb"
+    },
+    {
+      "role": "mrt2_base",
+      "relativePath": "models/mrt2_base/mrt2_base_state.safetensors",
+      "size": 16939969,
+      "sha256": "88b302502aa5b467b74b0591adefd7769cb620211bf18606b7656a9ea57eef5f"
+    },
+    {
+      "role": "mrt2_small",
+      "relativePath": "models/mrt2_small/mrt2_small.mlxfn",
+      "size": 455654550,
+      "sha256": "1a70b0de30b3e6ad054fe6a61a7765408f01127628e6362c1abc328809a3c422"
+    },
+    {
+      "role": "mrt2_small",
+      "relativePath": "models/mrt2_small/mrt2_small_state.safetensors",
+      "size": 8676998,
+      "sha256": "23f1e05a6beea306fe39970bd61193f2d3e5fbd8f08af93570bda4ca9ec33255"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/musiccoca/audio_preprocessor.tflite",
+      "size": 8729640,
+      "sha256": "656ca4c358451c2b85932e66efcfd2ba62492f4435953d775bfc1d3c08329a30"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/musiccoca/mapper.tflite",
+      "size": 86166664,
+      "sha256": "2f9743cc8f121a588b69c7f4d79a2a4111ce81864cbde8830054cd5e97f3d717"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/musiccoca/music_encoder.tflite",
+      "size": 370935584,
+      "sha256": "0d4501af799834e383d904c34ee826c61eb53c69682bf15a981a46c1bb32793a"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/musiccoca/pretrained_vector_quantizer.tflite",
+      "size": 72422108,
+      "sha256": "7a8a19e2119ad405818eae84a331a970f1a582b3389d4bfd27814f75b455a444"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/musiccoca/spm.model",
+      "size": 517448,
+      "sha256": "ff325a99b61ba5726cf6437cde6eefbb633dbaa363a684f7a97ed99b55202cca"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/musiccoca/text_encoder.tflite",
+      "size": 418674324,
+      "sha256": "e1222e3418cbe8cc2623939571bae8e9ab6f0d511404b0d83da69f4e6e11b272"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/spectrostream/decoder.safetensors",
+      "size": 209853216,
+      "sha256": "0ac6f100a24945fb434783fde6acd7902ceaa8bca492ca317edfc75dd51c42dd"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/spectrostream/encoder.safetensors",
+      "size": 37013392,
+      "sha256": "f20c197ddcbb9cd43e1a97f9bee0d07d211f79966cd3862d9830a32885090f72"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/spectrostream/quantizer.safetensors",
+      "size": 67108984,
+      "sha256": "0ba89dcb85344bb14f4f34b8f597c0d6adaa560002d4fd88879a2944c98a20f0"
+    },
+    {
+      "role": "shared",
+      "relativePath": "resources/spectrostream/spectrostream_encoder.mlxfn",
+      "size": 104319983,
+      "sha256": "887c25b21aa1714d19907fc96963c6440d5911f11571054cd5acf7306c260905"
+    }
+  ]
+}

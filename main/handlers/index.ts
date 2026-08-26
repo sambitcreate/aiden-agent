@@ -23,6 +23,8 @@ import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
 import { registerShortcutHandlers } from "./shortcuts.js";
 import { registerSubagentHandlers } from "./subagents.js";
+import { registerAmbientMusicHandlers } from "./ambient-music.js";
+import { ambientMusicEnabled } from "../services/ambient-music-feature-flag.js";
 
 import { ipcMain, logger } from "../platform.js";
 import { writeDevLog } from "../services/dev-log.js";
@@ -63,6 +65,7 @@ export function registerHandlers(): void {
   registerAssistantHandlers();
   registerShortcutHandlers();
   registerSubagentHandlers();
+  if (ambientMusicEnabled()) registerAmbientMusicHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

@@ -13,6 +13,7 @@ import {
   promoteMacDistribution,
 } from "./prepare-macos-package-output.mjs";
 import {
+  assertNoAmbientMusicModelAssetsOutsideDirectory,
   assertSamePackagedArtifactIdentity,
   discoverPackagedApp,
   packagedArtifactIdentity,
@@ -149,7 +150,9 @@ export async function verifyDmgContainsStagingApp(dmg, expectedIdentity) {
       dmg,
     ]);
     mounted = true;
-    await verifyEmbeddedApp(await exactArchiveApp(mount, "DMG"), expectedIdentity, "DMG");
+    const appPath = await exactArchiveApp(mount, "DMG");
+    await verifyEmbeddedApp(appPath, expectedIdentity, "DMG");
+    await assertNoAmbientMusicModelAssetsOutsideDirectory(mount, appPath);
   } catch (error) {
     failure = error;
   } finally {
@@ -198,7 +201,9 @@ export async function verifyZipContainsStagingApp(zip, expectedIdentity) {
   try {
     await mkdir(extracted);
     await runCommand("/usr/bin/ditto", ["-x", "-k", zip, extracted]);
-    await verifyEmbeddedApp(await exactArchiveApp(extracted, "ZIP"), expectedIdentity, "ZIP");
+    const appPath = await exactArchiveApp(extracted, "ZIP");
+    await verifyEmbeddedApp(appPath, expectedIdentity, "ZIP");
+    await assertNoAmbientMusicModelAssetsOutsideDirectory(extracted, appPath);
   } finally {
     await rm(canonicalTemporary, { recursive: true, force: true });
   }

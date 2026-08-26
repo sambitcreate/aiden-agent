@@ -1,6 +1,7 @@
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
+import type { AmbientMusicConfigV1 } from "../../renderer/shared/ambient-music.js";
 import type { AnthropicThinkingLevel } from "../../renderer/shared/anthropic-thinking.js";
 import type { CodexThinkingLevel } from "../../renderer/shared/codex-thinking.js";
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
@@ -490,6 +491,8 @@ export interface AppSettings {
   assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
+  /** Versioned, device-local Ambient Music style and playback preferences. */
+  ambientMusic?: AmbientMusicConfigV1;
 }
 
 export type ComputerUseStatusState =

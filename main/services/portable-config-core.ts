@@ -24,6 +24,7 @@ import { assistantConfigFrom } from "../handlers/assistant-parse.js";
 import { parseGoogleThinkingPreferences } from "../../renderer/shared/google-thinking.js";
 import { parseCodexThinkingPreferences } from "../../renderer/shared/codex-thinking.js";
 import { parseAnthropicThinkingPreferences } from "../../renderer/shared/anthropic-thinking.js";
+import { parseAmbientMusicConfig } from "../../renderer/shared/ambient-music.js";
 import type {
   AppSettings,
   McpServer,
@@ -506,6 +507,10 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     if (isRecord(settings.assistant)) normalized.assistant = structuredClone(settings.assistant);
     else delete normalized.assistant;
   }
+  if (settings.ambientMusic !== undefined) {
+    if (isRecord(settings.ambientMusic)) normalized.ambientMusic = structuredClone(settings.ambientMusic);
+    else delete normalized.ambientMusic;
+  }
   for (const key of [
     "googleThinkingByModel",
     "codexThinkingByModel",
@@ -534,6 +539,11 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   retainKnownValue("scheduledDefaultPermission", ["read-only", "full"]);
   if (settings.assistant !== undefined) {
     runtime.assistant = runtimeAssistantSettings(settings);
+  }
+  if (settings.ambientMusic !== undefined) {
+    const ambientMusic = parseAmbientMusicConfig(settings.ambientMusic);
+    if (ambientMusic) runtime.ambientMusic = ambientMusic;
+    else delete runtime.ambientMusic;
   }
   const projectThinkingMap = (
     key: "googleThinkingByModel" | "codexThinkingByModel" | "anthropicThinkingByModel",

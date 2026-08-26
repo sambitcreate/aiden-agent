@@ -48,6 +48,7 @@ import {
   normalizeAppearanceConfig,
   parseAppearanceConfig,
 } from "../../renderer/shared/appearance.js";
+import { parseAmbientMusicConfig } from "../../renderer/shared/ambient-music.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -379,6 +380,11 @@ export function registerProviderHandlers(): void {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
+    if (p.ambientMusic !== undefined) {
+      const ambientMusic = parseAmbientMusicConfig(p.ambientMusic);
+      if (!ambientMusic) throw new Error("Invalid Ambient Music settings.");
+      next.ambientMusic = ambientMusic;
+    }
     const saved = await configStore.setSettings(next);
     if (next.appearance) {
       const appearance = appearancePreview.persisted(normalizeAppearanceConfig(saved.appearance));

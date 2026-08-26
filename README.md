@@ -29,6 +29,7 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 - **Terminal, Git, and review** - keep a terminal drawer beside the conversation, inspect files and diffs in Environment, edit with dirty-file protection, compare branches, commit or push checked snapshots, and open the workspace in a discovered external editor.
 - **macOS integration and appearance** - native menus, **Keychain**, **Parakeet**, the dictation pill, Apple **Foundation Models**, the signed **Rust** Computer Use broker, semantic themes, high contrast, reduced motion, and consistent light/dark rendering.
 - **Extensibility and background work** - use skills, **MCP**, **Exa** search, scheduled tasks, voice, and attachments through typed, allowlisted boundaries.
+- **Ambient Music** - explicitly download a verified Magenta RealTime 2 model to generate live instrumental focus music on supported Apple-silicon Macs. Mix text styles in Settings; the local player includes native Now Playing/media-control integration, with physical-device acceptance still required for distribution release. See the [Ambient Music guide](docs/ambient-music.md).
 - **Updates and release safety** - signed builds use the verified GitHub release feed. Once an update is downloaded, Aiden shows the version above Profile with **Later** and **Restart now**, then follows the normal save and shutdown guards before relaunching.
 
 ## Upcoming
@@ -48,6 +49,8 @@ Aiden stores chats, settings, workspace metadata, and downloaded speech models l
 
 Network access happens only when the selected feature needs it: hosted models receive the conversation content sent to them, cloud transcription receives selected audio, Exa receives search queries, remote MCP servers receive tool requests, and model downloads contact their upstream host. A fully local session can use a local model, on-device voice, no remote MCP servers, and web search disabled.
 
+Ambient Music model weights are never bundled. Its first network request occurs only after the user accepts the displayed terms and chooses Download; main downloads a pinned, hashed Hugging Face revision. Prompts and generated audio stay on the Mac, and installed playback remains offline. Models live under Aiden's local Application Support directory and can be removed from Settings. Continuous generation uses sustained power and unified memory; requirements, sizes, storage, and recovery steps are documented in the [Ambient Music guide](docs/ambient-music.md).
+
 Computer Use is an opt-in beta with a global switch, a separate per-chat switch, macOS permission checks, exact target binding, and one-use approval for every mutation. See the [Computer Use security design](docs/computer-use-integration.md) for the complete boundary.
 
 ## Architecture
@@ -64,7 +67,7 @@ Electron main process
     ├── workspace-scoped tools, Git, review, and terminal
     ├── encrypted credentials and local JSON stores
     ├── MCP, attachments, search, and voice
-    └── signed native helpers for Apple models and Computer Use
+    └── signed native helpers for Apple models, Ambient Music, and Computer Use
 ```
 
 Core technologies include Electron 43, React 19, TypeScript, Vite, Tailwind CSS, TanStack Router and Query, Radix UI, the Pi agent runtime, Swift, and Rust.
@@ -89,6 +92,8 @@ npm run dev
 The development launcher prepares a cached, ad-hoc-signed **Aiden Agent Dev** runtime that can run beside the installed **Aiden Agent** app. Development uses separate Application Support, Chromium session, log, crash, and `~/.aiden-dev` roots; it does not copy production data, register global shortcuts, or check the production update feed by default. Set `AIDEN_DEV_GLOBAL_SHORTCUTS=1` only when a development run intentionally needs the global bindings.
 
 Native builds discover the newest compatible full Xcode without changing the machine-wide `xcode-select` setting; `DEVELOPER_DIR` remains available as a per-command override.
+
+The Ambient Music helper is optional during ordinary development. Set `AIDEN_BUILD_AMBIENT_MUSIC=1` before `npm run dev` to build and validate the pinned Magenta/MLX stack on an Apple-silicon Mac. Packaging always requires the helper but never downloads model weights.
 
 ### Verify changes
 

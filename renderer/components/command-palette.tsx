@@ -45,12 +45,10 @@ import {
 import { useChats, useProviders, useSettings, queryKeys } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { providersApi, settingsApi } from "../lib/ipc";
-import {
-  readModelSelectionRevision,
-  useModelSelection,
-} from "../lib/use-model-selection";
+import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
 import { createModelEntries, isUsable } from "../lib/model-picker-data";
-import { SETTINGS_DESTINATIONS } from "../lib/settings-section";
+import { settingsDestinationsForCapabilities } from "../lib/settings-section";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   createDefaultAppearanceConfig,
   normalizeAppearanceConfig,
@@ -112,6 +110,7 @@ export function AppCommandPalette({
   const chats = useChats(activeId);
   const providers = useProviders();
   const settings = useSettings();
+  const { ambientMusic } = useAppCapabilities();
   const selection = useModelSelection(providers.data);
   const { binding, canExecute, execute, palette } = useCommandSystem();
   const [query, setQuery] = React.useState("");
@@ -126,10 +125,7 @@ export function AppCommandPalette({
       return [];
     }
   });
-  const models = React.useMemo(
-    () => createModelEntries(providers.data ?? []),
-    [providers.data],
-  );
+  const models = React.useMemo(() => createModelEntries(providers.data ?? []), [providers.data]);
   const unavailableModelProviders = React.useMemo(
     () => (providers.data ?? []).filter((provider) => !isUsable(provider)),
     [providers.data],
@@ -145,6 +141,10 @@ export function AppCommandPalette({
   const appearanceMode = normalizeAppearanceConfig(
     settings.data?.appearance ?? createDefaultAppearanceConfig(),
   ).mode;
+  const settingsDestinations = React.useMemo(
+    () => settingsDestinationsForCapabilities({ ambientMusic }),
+    [ambientMusic],
+  );
 
   useCommandHandler("chat.search", () => palette.openMode("chats"));
   useCommandHandler("model.change", () => palette.openMode("models"));
@@ -256,9 +256,7 @@ export function AppCommandPalette({
           const currentSettings = await settingsApi.get();
           if (!isCurrent()) return;
           previousAppearance = normalizeAppearanceConfig(
-            readCachedAppearance() ??
-              currentSettings.appearance ??
-              createDefaultAppearanceConfig(),
+            readCachedAppearance() ?? currentSettings.appearance ?? createDefaultAppearanceConfig(),
           );
           const appearance = {
             ...previousAppearance,
@@ -464,7 +462,12 @@ export function AppCommandPalette({
                   </CommandItem>
                   <CommandSeparator />
                   {chats.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading chats" className="min-h-11 px-3">
+                    <CommandItem
+                      forceMount
+                      disabled
+                      value="Loading chats"
+                      className="min-h-11 px-3"
+                    >
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading chats…</span>
                     </CommandItem>
@@ -498,77 +501,77 @@ export function AppCommandPalette({
                 </>
               ) : null}
 
-              {palette.mode === "models"
-                ? providers.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading models" className="min-h-11 px-3">
-                      <RefreshCw className="size-4 animate-spin text-secondary" />
-                      <span>Loading models…</span>
-                    </CommandItem>
-                  ) : providers.isError ? (
-                    <CommandItem
-                      forceMount
-                      value="Retry loading models"
-                      onSelect={() => void providers.refetch()}
-                      className="min-h-11 px-3"
-                    >
-                      <RefreshCw className="size-4 text-secondary" />
-                      <span>Models could not be loaded</span>
-                      <ItemDetail>Retry</ItemDetail>
-                    </CommandItem>
-                  ) : models.map((entry) => {
-                    const selected =
-                      selection.providerId === entry.providerId && selection.model === entry.model;
-                    return (
-                      <CommandItem
-                        key={entry.value}
-                        value={`${entry.label} ${entry.model} ${entry.providerLabel}`}
-                        onSelect={() => void selectModel(entry.providerId, entry.model)}
-                        disabled={busy}
-                        aria-current={selected ? "true" : undefined}
-                        className="min-h-11 px-3"
-                      >
-                        <Bot className="size-4 shrink-0 text-secondary" />
-                        <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                        <ItemDetail>{entry.providerLabel}</ItemDetail>
-                        {selected ? (
-                          <>
-                            <span className="sr-only">Current</span>
-                            <Check
-                              aria-hidden="true"
-                              className="size-4 shrink-0 text-accent"
-                            />
-                          </>
-                        ) : null}
-                      </CommandItem>
-                    );
-                  }).concat(
-                    unavailableModelProviders.map((provider) => (
-                      <CommandItem
-                        key={`unavailable-${provider.id}`}
-                        value={`${provider.label} ${provider.models.join(" ")} unavailable setup provider`}
-                        onSelect={() => {
-                          if (!allowNavigation()) return;
-                          rememberCommand("model.change");
-                          close();
-                          void navigate({
-                            to: "/settings",
-                            search: { section: "providers" },
-                          });
-                        }}
-                        className="min-h-11 px-3"
-                      >
-                        <Server className="size-4 shrink-0 text-secondary" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {provider.label} models
-                        </span>
-                        <ItemDetail>
-                          {provider.models.length > 0 ? "Setup needed" : "No models available"}
-                        </ItemDetail>
-                        <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                      </CommandItem>
-                    )),
-                  )
-                : null}
+              {palette.mode === "models" ? (
+                providers.isLoading ? (
+                  <CommandItem forceMount disabled value="Loading models" className="min-h-11 px-3">
+                    <RefreshCw className="size-4 animate-spin text-secondary" />
+                    <span>Loading models…</span>
+                  </CommandItem>
+                ) : providers.isError ? (
+                  <CommandItem
+                    forceMount
+                    value="Retry loading models"
+                    onSelect={() => void providers.refetch()}
+                    className="min-h-11 px-3"
+                  >
+                    <RefreshCw className="size-4 text-secondary" />
+                    <span>Models could not be loaded</span>
+                    <ItemDetail>Retry</ItemDetail>
+                  </CommandItem>
+                ) : (
+                  models
+                    .map((entry) => {
+                      const selected =
+                        selection.providerId === entry.providerId &&
+                        selection.model === entry.model;
+                      return (
+                        <CommandItem
+                          key={entry.value}
+                          value={`${entry.label} ${entry.model} ${entry.providerLabel}`}
+                          onSelect={() => void selectModel(entry.providerId, entry.model)}
+                          disabled={busy}
+                          aria-current={selected ? "true" : undefined}
+                          className="min-h-11 px-3"
+                        >
+                          <Bot className="size-4 shrink-0 text-secondary" />
+                          <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                          <ItemDetail>{entry.providerLabel}</ItemDetail>
+                          {selected ? (
+                            <>
+                              <span className="sr-only">Current</span>
+                              <Check aria-hidden="true" className="size-4 shrink-0 text-accent" />
+                            </>
+                          ) : null}
+                        </CommandItem>
+                      );
+                    })
+                    .concat(
+                      unavailableModelProviders.map((provider) => (
+                        <CommandItem
+                          key={`unavailable-${provider.id}`}
+                          value={`${provider.label} ${provider.models.join(" ")} unavailable setup provider`}
+                          onSelect={() => {
+                            if (!allowNavigation()) return;
+                            rememberCommand("model.change");
+                            close();
+                            void navigate({
+                              to: "/settings",
+                              search: { section: "providers" },
+                            });
+                          }}
+                          className="min-h-11 px-3"
+                        >
+                          <Server className="size-4 shrink-0 text-secondary" />
+                          <span className="min-w-0 flex-1 truncate">{provider.label} models</span>
+                          <ItemDetail>
+                            {provider.models.length > 0 ? "Setup needed" : "No models available"}
+                          </ItemDetail>
+                          <ChevronRight className="size-4 shrink-0 text-tertiary" />
+                        </CommandItem>
+                      )),
+                    )
+                )
+              ) : null}
 
               {palette.mode === "providers" ? (
                 <>
@@ -583,7 +586,12 @@ export function AppCommandPalette({
                   </CommandItem>
                   <CommandSeparator />
                   {providers.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading providers" className="min-h-11 px-3">
+                    <CommandItem
+                      forceMount
+                      disabled
+                      value="Loading providers"
+                      className="min-h-11 px-3"
+                    >
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading providers…</span>
                     </CommandItem>
@@ -645,16 +653,13 @@ export function AppCommandPalette({
                       {appearanceMode === item.mode ? (
                         <>
                           <span className="sr-only">Current</span>
-                          <Check
-                            aria-hidden="true"
-                            className="ml-auto size-4 text-accent"
-                          />
+                          <Check aria-hidden="true" className="ml-auto size-4 text-accent" />
                         </>
                       ) : null}
                     </CommandItem>
                   ))}
                   <CommandSeparator />
-                  {SETTINGS_DESTINATIONS.map((destination) => (
+                  {settingsDestinations.map((destination) => (
                     <CommandItem
                       key={destination.id}
                       value={`${destination.title} ${destination.keywords.join(" ")}`}

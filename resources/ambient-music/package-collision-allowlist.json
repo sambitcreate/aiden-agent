@@ -1,0 +1,674 @@
+{
+  "schemaVersion": 1,
+  "maxWrapperBytes": 1048576,
+  "packageIdentity": {
+    "bundleIdentifier": "com.sambitcreate.aiden-agent",
+    "bundleVersion": "0.28.0",
+    "shortVersion": "0.28.0",
+    "cdHash": "b593b7ae808a134d048a87bc8312e95f5c6380fe",
+    "appAsarSha256": "f595925daf3254c56fbde705d2f7f642a4d2eedb58a80d6a94f07ec53c70be50",
+    "codeResourcesSha256": "a8a5f9d7c88f2c3488145b989d69347536d35ebbe65c4a5352b298722ee86aae"
+  },
+  "records": [
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Helpers/chrome_crashpad_handler",
+      "size": 1222928,
+      "sha256": "738969952cdecc3fa3bddaddd3eb932ad4b2860e5ffbd1915439930547928ddb",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/af.lproj/locale.pak",
+      "size": 610346,
+      "sha256": "0f0ee2cf4e4ef9cbe35c559e5702590d8011534552f1bbead18a09c98a13e4f6",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/am.lproj/locale.pak",
+      "size": 990779,
+      "sha256": "97b14b95ddc6214570e424601693d843ebe1b83b4d7109478137394d7943e734",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ar.lproj/locale.pak",
+      "size": 1091505,
+      "sha256": "5ce35c6fdbdc770b696083d71b8365863356eb8b857058777414f51d96050a12",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/bg.lproj/locale.pak",
+      "size": 1131767,
+      "sha256": "f88bccd8b5b03119ac5f3c9f5e464523c1861710cd3dce522659eec7a0cdd341",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/bn.lproj/locale.pak",
+      "size": 1452871,
+      "sha256": "23e54cafbf2eab5b949ca4519b0f0568e5f6bf346462e01a8a6aba79fc015a39",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ca.lproj/locale.pak",
+      "size": 688268,
+      "sha256": "4739385308c8e9479a252b352298d86c7aa72dc02c42be69199974bc5daa9774",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/chrome_100_percent.pak",
+      "size": 119843,
+      "sha256": "a2bf32eceeab45214f2f46e3d1c1f619d55061fa09a22d860e0a9adf01cc722d",
+      "reasons": ["embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/chrome_200_percent.pak",
+      "size": 196935,
+      "sha256": "b42323e72254a54862bdceb906ac009fc88d2472540251aaa22a7da4ca6b712d",
+      "reasons": ["embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/cs.lproj/locale.pak",
+      "size": 714999,
+      "sha256": "102841f78e7f9bbd30ff93c7752dff3325898481ddb16b8e1109de930829fe2e",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/da.lproj/locale.pak",
+      "size": 640881,
+      "sha256": "16529be184d535eee20ca66e01da4864a0ef858427313fda6360193ecccbd0cf",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/de.lproj/locale.pak",
+      "size": 688928,
+      "sha256": "1b5eb67c1721f0af80934904a38eafcb6d309e07e5784c13d4d82252c9d29313",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/el.lproj/locale.pak",
+      "size": 1243288,
+      "sha256": "30e536807047b080caafad1c2c413082c3415b69a5ba330d3436ba2259df6f87",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/en_GB.lproj/locale.pak",
+      "size": 557061,
+      "sha256": "f53ec305ede7f831b41c415aad2ff1a6c2d50ad71def411f79ffffa12a51b60d",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/en.lproj/locale.pak",
+      "size": 564093,
+      "sha256": "35ed493b53c7d3fb9d621f06f1ffc2fce6b5348c6d761a16c6dd29ffb5a5c6f8",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/es_419.lproj/locale.pak",
+      "size": 679394,
+      "sha256": "88ea1c9a6715b664fbc0e9ff6eaa444f796323cf5949060939250b72428ac371",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/es.lproj/locale.pak",
+      "size": 675839,
+      "sha256": "3a4703d24f58638ce866580bfd17190ad81440b186f27cecd61f7e62b44b7306",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/et.lproj/locale.pak",
+      "size": 617366,
+      "sha256": "e017407498efa3ba6a2fe5e577b040cb12e92023113cdc097a45df91e24c2e31",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/fa.lproj/locale.pak",
+      "size": 1021653,
+      "sha256": "01bc8b11f6ee7aa63e519d0a1e28907a53ffce93cc18893627d6de3c48df2b5f",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/fi.lproj/locale.pak",
+      "size": 629290,
+      "sha256": "a7782dada546a1cbf24caf20b3215e4d7b6268c06e0c379f74126201c1f5ec43",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/fil.lproj/locale.pak",
+      "size": 713186,
+      "sha256": "cda8c8e7cb7158f99d9f389dbe8b1c67282b1fe878d57851fd1ef415bd8b3c6c",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/fr.lproj/locale.pak",
+      "size": 734087,
+      "sha256": "68105444bcd797017d605d3578b14d5f0e1645332a2227fce5a15f38fd0f2359",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/gu.lproj/locale.pak",
+      "size": 1434255,
+      "sha256": "fb88f5f61f56d92775efd71d9976f5d22197d4e4817c9ea3a6a71e51193fce5a",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/he.lproj/locale.pak",
+      "size": 893768,
+      "sha256": "7705fd0676f404570b8c1e2a1930235c8c82c1d4ce97c155e5d6b68fdb2927ad",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/hi.lproj/locale.pak",
+      "size": 1519062,
+      "sha256": "d2cf2f32aaf5d92af9e0f7974de8c0221f35558b35154f46c5b8136b4503e09d",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/hr.lproj/locale.pak",
+      "size": 687337,
+      "sha256": "89c0577923975bbecc6935a277a0b6f43529bf3cdf59d2387a7aef7f55bf7f9c",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/hu.lproj/locale.pak",
+      "size": 734324,
+      "sha256": "f7eff6dff4af6f5f767e7397027c0a14066bc13be7b104722a0469cf9d828de1",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/id.lproj/locale.pak",
+      "size": 610770,
+      "sha256": "08feada28f4cd2b7aff7af8260ec2dee76e09ed8fff43937d143c3707d0f505d",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/it.lproj/locale.pak",
+      "size": 665079,
+      "sha256": "21b3151c0f152d6932cd82987ff7c7898c8e098914008378d24eca3ad99287aa",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ja.lproj/locale.pak",
+      "size": 809668,
+      "sha256": "c6a31e477f95e7ad51dd4c561b8023a2a3ad40c6b76545307aa0a7cbb2e022a9",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ko.lproj/locale.pak",
+      "size": 688823,
+      "sha256": "52b44707f8e847db97dec0c9bc6c9697f1ef4cd0b3d3539b4a512441910cd902",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/lt.lproj/locale.pak",
+      "size": 748786,
+      "sha256": "e91aad8ad16487f607673ab4fb96ccce24d4ce61b5060730038bc65006beeb6b",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/lv.lproj/locale.pak",
+      "size": 745498,
+      "sha256": "7e52ce870d784bac4816ac225e7eb8d97aa5210edd63fe62220e5b4733882f73",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/mr.lproj/locale.pak",
+      "size": 1406023,
+      "sha256": "52dea5b07bf00c62b80a28b806f875fd42d197f28ac310f7d1f7fd9330eb78e0",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ms.lproj/locale.pak",
+      "size": 642541,
+      "sha256": "7d18307f16cff590f08a10172e97eabfcb30ce792c81488318ec66bb28eb8594",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/nb.lproj/locale.pak",
+      "size": 612119,
+      "sha256": "42025a5ce424769b44414fef6cea2ce17d53d0e67c01c5faf6454a91449ced1e",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/nl.lproj/locale.pak",
+      "size": 638314,
+      "sha256": "4fa5b29f1142a9d337732fce85c86304226ff9ee9bcca779cd49d4aedfda7b4d",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/pl.lproj/locale.pak",
+      "size": 714134,
+      "sha256": "d88156d3c3597086cae8d80fdc3b89bbbd26ad1e3abc2b25f8b21e63275d62ac",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/pt_BR.lproj/locale.pak",
+      "size": 669646,
+      "sha256": "b8db278fef9458741f4c409f4402c0c3181ab7cb5d8b9cbcceb78f8f30286f48",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/pt_PT.lproj/locale.pak",
+      "size": 673351,
+      "sha256": "4d5f7636418deace4be33d11d9707dbdc4fc68137de98ca95070ab2cb7c8ed00",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/resources.pak",
+      "size": 7143003,
+      "sha256": "a186e9d5610d745789bec9a1f2e81e5140bb066a425b7b290c38db03f9880b83",
+      "reasons": ["embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ro.lproj/locale.pak",
+      "size": 698814,
+      "sha256": "1c1ec16b004d731d396252dcbb8632bc3bb35f5cbb8287ac8762c87732b9138a",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ru.lproj/locale.pak",
+      "size": 1157403,
+      "sha256": "4fbb1903e82d2d47811ca82beb8b9660c01a81a761a91fb4bb94435ba4c75513",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/sk.lproj/locale.pak",
+      "size": 726670,
+      "sha256": "8ebfed877dcfcde71eefaf402793030db813fa0a77a63a1e725053ce24f78372",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/sl.lproj/locale.pak",
+      "size": 695640,
+      "sha256": "6944022e0fb57935792c378df31d96eabe68015ed569b0cf279563a34d558e01",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/sr.lproj/locale.pak",
+      "size": 1069680,
+      "sha256": "5cae45933a6c04da2e43d1dedee59b5d77cbea17642e3a5070eee91f56e229cf",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/sv.lproj/locale.pak",
+      "size": 620240,
+      "sha256": "7e5d4bb93710f9c8427656302639da20c8f1d85927fbb5aafcf24dd543c34a31",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/sw.lproj/locale.pak",
+      "size": 659361,
+      "sha256": "feb2cc57ac78f719b5eeb479b8d0b65384749b52596564c78cc7b9c1436409e9",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/te.lproj/locale.pak",
+      "size": 1563777,
+      "sha256": "69b1faa600bdbf4db855a434fbcd08bb8da9f2874e8b08c6d1d3b644ba677a75",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/th.lproj/locale.pak",
+      "size": 1312143,
+      "sha256": "612ef1b43ac19e3db7cf89337409a56ddb08f7331f8c5a8a98d388d3aa2599fc",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/tr.lproj/locale.pak",
+      "size": 670104,
+      "sha256": "0bd269b6bb8dac68083770f5de1f1705d155cbe026215c6398e1d279f5c0c523",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/uk.lproj/locale.pak",
+      "size": 1167277,
+      "sha256": "8f9ab5d57a06692aed19ab21737ed8890706e0c56459ce72af053f9c224e2b06",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ur.lproj/locale.pak",
+      "size": 1003673,
+      "sha256": "de95b0082c5cf0d1b7233ae0c287b8959519cd29021c5b10bc7129940f6103fb",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/v8_context_snapshot.arm64.bin",
+      "size": 740048,
+      "sha256": "5de52db3fbe341e68ccb7ea44c3a0677bd1e3a4d34c201dd0392466a9c2b0675",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/vi.lproj/locale.pak",
+      "size": 795405,
+      "sha256": "65579ee6ac5012cb934b84d71912f3a719fd5459efad3a940dcdda5c76db3c5d",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/zh_CN.lproj/locale.pak",
+      "size": 568987,
+      "sha256": "594fae2903f8d830cc2948304ded1363c983489910e92c0acf7579c35218efa9",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/zh_TW.lproj/locale.pak",
+      "size": 561326,
+      "sha256": "698fafc1ec744597ff83a74cc3133b30fff82a0c72093f6edd1c5995ed8b590c",
+      "reasons": ["model-size-collision", "embedded-container"]
+    },
+    {
+      "path": "Contents/Helpers/CuaDriver.app/Contents/MacOS/aiden-cua-broker",
+      "size": 571648,
+      "sha256": "f57ffeba2ddaec7d68bd9990572f4f21637f3aebb569e0320c63d554ebf7f09d",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/aiden-assistant-CruLfhZU.png",
+      "size": 747873,
+      "sha256": "1a500796bb8ae5447e0ed2d3e00eda15fc38e23d542986c5934053a8a763f804",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/aiden-workspace-DHKjy2c8.png",
+      "size": 701012,
+      "sha256": "41b6cc1d1d6a17668cec7e811a4931ba6534cd43b7ad11c9a6fad70039c5bd42",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/ambient-music-DAp86F3u.png",
+      "size": 730641,
+      "sha256": "bbb333553d8c883b93ba39aa48b04e965c0a4238e63d76660e86df0e07889f3c",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/attachments-vision-CQNPvdBw.png",
+      "size": 956864,
+      "sha256": "272709cc264fa5b31ba95bdf81fe142ab6309e8bf24aefcab98b229a838e7e7e",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/command-palette-CsfE5Yb3.png",
+      "size": 754901,
+      "sha256": "c906b01eab4c051a86dd892299f581937f921d8e26d3056a1e6713134af46cd5",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/computer-use-DmyKiGng.png",
+      "size": 694925,
+      "sha256": "d29676fe4fb292dfc037f42ff6dba7749284ab879c34dd80904e94df49dc2ebd",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/files-editor-Cp5PB_va.png",
+      "size": 980132,
+      "sha256": "437f2b11ebc3276bbfb8d245159e0235e43571e53ac6c0cbd5fe1064bba00cc1",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/mcp-connectors-DVdqdgom.png",
+      "size": 682618,
+      "sha256": "d6f302ac117c0940c77260013e2ff39cec1f1fd24b8c7d945ae9a24279886232",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/model-freedom-BV9NkcWY.png",
+      "size": 1106618,
+      "sha256": "208fd13a819f23fb9c07edd775708f7aae57ffca982c30d5d93b3da7d105c499",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/model-pad-D67Axat8.png",
+      "size": 999257,
+      "sha256": "58ea4f88469633d8f502d699096d56b8d93bc82f174a05e37383d0980bd89dd0",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/native-subagents-BOUppnqT.png",
+      "size": 777180,
+      "sha256": "bf87b5aa70675da43ef165c3755808a80654c52afc9054c664152db617986f43",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/permissions-MsFT-zTk.png",
+      "size": 761140,
+      "sha256": "0cafdb24181563f52239f2566d4883b4610edf3bafcbaef37d8f90f641746578",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/review-diffs-Ccaz8Hi-.png",
+      "size": 963990,
+      "sha256": "c6d4a2096ff64df2a3c0d475b864add89927550ff92d6788147d8ee4ad1451e4",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/scheduled-automations-CB34q7Jl.png",
+      "size": 897880,
+      "sha256": "48b7237108ee38be7e5ae9aa7f1ffbf3ca621c3b133cb70a56b732e2c7935fe9",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/skills-GkmSBLnJ.png",
+      "size": 740497,
+      "sha256": "68ee503fb7bc25c9e4e0121f64f2d50d32efdbbc154a388516d0073bdd124fb5",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/terminal-BQSpvcwz.png",
+      "size": 815934,
+      "sha256": "3d7fd31a4b95d7df8dcdd6f613266d2300a0caf6656365296eb42f3c1b38a058",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/themes-accessibility-NqHnCHQS.png",
+      "size": 881792,
+      "sha256": "020c91a9c6ae2ddd58d7f8b2071c109c7794a33cd2e88210ac27597a961c9dda",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/thinking-controls-_CFgaAFD.png",
+      "size": 984540,
+      "sha256": "1e642cf4cee4aa51451d90e888e9df30d1e3af305c9b8a5c8431b7803e0e8003",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/usage-profile-BgX-mrso.png",
+      "size": 953039,
+      "sha256": "2bbfae421fb2865e7677b8bee280dc320cbe3f3f53ab9251ba4b2bb5ca911945",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/voice-dictation-DCJu1FQQ.png",
+      "size": 796369,
+      "sha256": "44891e7c351154281c4e0cb3c002bcced8f0c8a9b685ed9dfd7e3daaa56282ae",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/web-search-B1e9lbZo.png",
+      "size": 929797,
+      "sha256": "ed50f3390acfe69e5830ec7096e2109fdbbb292eb8c939e29fa1cf1758769678",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:build/renderer/assets/workspaces-worktrees-C_Bu-QMg.png",
+      "size": 654157,
+      "sha256": "bc74913efc843d09dcb0d856fa1d3ef445e8de0c52c3d70063765ef120c40d44",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@google/genai/dist/index.cjs",
+      "size": 837851,
+      "sha256": "07ed41982020b56f41702ebf27684b2ad44b793cc2e988feb3064fb6cabfc484",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@google/genai/dist/index.mjs",
+      "size": 834451,
+      "sha256": "db332aee7aafdf076e5ff8ddcfd45875b7c8cf5147375cbe5b607a4aa489bd8a",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@google/genai/dist/node/index.cjs",
+      "size": 860035,
+      "sha256": "aad6f4d3e1069cfb98fc34929af78ffd93c8a26c7215e029fa05b6cf70d510fd",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@google/genai/dist/node/index.mjs",
+      "size": 855986,
+      "sha256": "748f86443c1c2c80e4ecf568d0c033ad9f1e9f34926c810e35c77e965a951c33",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@google/genai/dist/tokenizer/node.mjs.map",
+      "size": 686570,
+      "sha256": "3dd5b62128add84bb003b60d9e734cc81173cc0134f7b18576979bb8ef4bcf9a",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@google/genai/dist/vertex_internal/index.cjs.map",
+      "size": 533981,
+      "sha256": "3f2d2dd09a37c7d6642537117eeb6b9cd9f5ea5981780813beffdae3a394bf3c",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@google/genai/dist/vertex_internal/index.js.map",
+      "size": 533846,
+      "sha256": "2c169e1d7e009bd9c6873186ca1893a7246057523917e1f1c1728b2d7da6e1a7",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@google/genai/dist/web/index.mjs",
+      "size": 836453,
+      "sha256": "c4c9a694cc979f4bb9bb1efdd1d7f995acbd4e2cf62f0322677a0b0672e334d4",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@opentelemetry/semantic-conventions/build/esm/experimental_attributes.js",
+      "size": 664616,
+      "sha256": "f54ca8e6872115818943ec484ab92e5ce9fb2c5c7ea9b093c4123f940583e4be",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@opentelemetry/semantic-conventions/build/esm/experimental_attributes.js.map",
+      "size": 805732,
+      "sha256": "7e244e42803c57a45b4528620b5b824c903a630d40b8ac8ae61d4d3f59082723",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@opentelemetry/semantic-conventions/build/esnext/experimental_attributes.js",
+      "size": 664616,
+      "sha256": "f54ca8e6872115818943ec484ab92e5ce9fb2c5c7ea9b093c4123f940583e4be",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@opentelemetry/semantic-conventions/build/esnext/experimental_attributes.js.map",
+      "size": 805732,
+      "sha256": "7e244e42803c57a45b4528620b5b824c903a630d40b8ac8ae61d4d3f59082723",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@opentelemetry/semantic-conventions/build/src/experimental_attributes.js",
+      "size": 731016,
+      "sha256": "18e9b78725c08761537a4b0161236e69eb68e68c1037587c5a83fce411b0238c",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/@opentelemetry/semantic-conventions/build/src/experimental_attributes.js.map",
+      "size": 789284,
+      "sha256": "18565d3ec7aa1f0bfa3afd124ada690dee4e00a462ddf664c3850ab93ed824ec",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/isbot/browser.global.js",
+      "size": 3203,
+      "sha256": "683c66bed0d6de20efd04d5fe88329b3fad0d4c4f3f3f7bc462023db8b7bcec2",
+      "reasons": ["embedded-container"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/isbot/browser.global.js.map",
+      "size": 9015,
+      "sha256": "bc95fd67ba87e1d32246baa09f46e06ec9c94f4e48afd73315ec84b4c03f1815",
+      "reasons": ["embedded-container"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/isbot/index.js",
+      "size": 9508,
+      "sha256": "85e86ca2eb6baff2b5c246af3e30b2ae2d77f1490f64511e38b0ebbb01964e1f",
+      "reasons": ["embedded-container"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/isbot/index.mjs",
+      "size": 7899,
+      "sha256": "64acdffb22c20174bd2f031842a563249da936af6e0d56b401bb6179be857b11",
+      "reasons": ["embedded-container"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/katex/dist/katex.js",
+      "size": 618563,
+      "sha256": "b6d127a59e590859c5a12e92f7eb5a4a21be58f3ffc1dff7616b0584c4d5f631",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/katex/dist/katex.mjs",
+      "size": 601155,
+      "sha256": "09a78a9812d1e7d3ace85033512e6a450127b9554ef281b4b6567408694c6e36",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/lucide-react/dist/cjs/lucide-react.js",
+      "size": 878601,
+      "sha256": "d2bc88c7fd20da6eaeeecafe91808de81442cc513350a34f33fc8b38c43811c5",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/lucide-react/dist/umd/lucide-react.js",
+      "size": 924993,
+      "sha256": "8d006ab0af52e00b67434c3712b448df915b74836f66152519dade24198a3f4a",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/lucide-react/dist/umd/lucide-react.min.js",
+      "size": 559021,
+      "sha256": "d9bc8f04cbf3f9f06c54a782fbceac8a30690009ea7ebdde12ac62ab3468ad09",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/mime-db/db.json",
+      "size": 203840,
+      "sha256": "96b8a5746867c832ab56743c05e46e73c9facb04879677df0b356f20496cb6cd",
+      "reasons": ["embedded-container"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/re2-wasm/build/wasm/re2.wasm",
+      "size": 858542,
+      "sha256": "79e025a30d20157807add5e7d01acefe700f06721f4a56669b0bad5d00995e72",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/react-dom/cjs/react-dom-client.development.js",
+      "size": 1065698,
+      "sha256": "638fcb800207eaf4c5b2427f13fb82362b8e06df51e65d92fa350fbfeaa8fd89",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/react-dom/cjs/react-dom-client.production.js",
+      "size": 536016,
+      "sha256": "9d2de2ee4a588c5d0b8580ff3467f796b8d9bbc45bdc35b257f7d1380e686c56",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/react-dom/cjs/react-dom-profiling.development.js",
+      "size": 1082082,
+      "sha256": "89077895320761aed66ef6d6833e57249a47570191dec9dfdff3bcd018e496ae",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar:node_modules/react-dom/cjs/react-dom-profiling.profiling.js",
+      "size": 607634,
+      "sha256": "24dc481445f340b4e57f74c2c76b9839dea1b702f515fff2444700b74a221c47",
+      "reasons": ["model-size-collision"]
+    },
+    {
+      "path": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/sherpa-onnx.node",
+      "size": 639728,
+      "sha256": "6a68e422e88416e04335ca7ccbee1152f40678e5fca6d4695406e87f8bef77a9",
+      "reasons": ["model-size-collision"]
+    }
+  ]
+}

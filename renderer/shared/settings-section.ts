@@ -8,6 +8,7 @@ export const SETTINGS_SECTIONS = [
   "scheduledTasks",
   "assistant",
   "voice",
+  "ambientMusic",
   "shortcut",
   "appearance",
   "about",
@@ -74,6 +75,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["microphone", "audio", "transcription", "dictation"],
   },
   {
+    id: "ambientMusic",
+    title: "Ambient Music",
+    group: "App",
+    keywords: ["music", "audio", "focus", "sound", "mixer", "magenta", "media controls"],
+  },
+  {
     id: "shortcut",
     title: "Keyboard shortcuts",
     group: "App",
@@ -92,6 +99,24 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["version", "build", "github", "repository", "app information"],
   },
 ];
+
+export interface SettingsCapabilities {
+  ambientMusic: boolean;
+}
+
+export function settingsSectionsForCapabilities({
+  ambientMusic,
+}: SettingsCapabilities): SettingsSection[] {
+  return SETTINGS_SECTIONS.filter((section) => ambientMusic || section !== "ambientMusic");
+}
+
+export function settingsDestinationsForCapabilities({
+  ambientMusic,
+}: SettingsCapabilities): typeof SETTINGS_DESTINATIONS {
+  return SETTINGS_DESTINATIONS.filter(
+    (destination) => ambientMusic || destination.id !== "ambientMusic",
+  );
+}
 
 export function parseSettingsSection(value: unknown): SettingsSection | undefined {
   return typeof value === "string" && SETTINGS_SECTIONS.some((section) => section === value)

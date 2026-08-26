@@ -271,6 +271,190 @@ textarea {
   font: inherit;
 }
 
+.aiden-range {
+  appearance: none;
+  background: transparent;
+}
+
+.aiden-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--range-progress),
+    var(--surface-control-active) var(--range-progress) 100%
+  );
+}
+
+.aiden-range::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
+  border-radius: 9999px;
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-control-hover);
+  transition: transform 120ms ease-out, box-shadow 120ms ease-out;
+}
+
+.aiden-range:active::-webkit-slider-thumb {
+  box-shadow: var(--elevation-control-pressed);
+}
+
+.aiden-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 24%, transparent), var(--elevation-control-hover);
+}
+
+.aiden-range:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.ambient-terms-checkbox:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 28%, transparent);
+}
+
+.ambient-music-visualizer {
+  position: relative;
+  height: 82px;
+  overflow: hidden;
+  border: 1px solid var(--border-separator);
+  border-radius: var(--radius-card);
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--surface-popover) 78%, transparent),
+      color-mix(in srgb, var(--surface-input) 72%, transparent)
+    );
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--surface-popover) 72%, transparent);
+  contain: layout paint;
+}
+
+.ambient-music-visualizer::after {
+  position: absolute;
+  right: 4%;
+  bottom: -24px;
+  left: 4%;
+  height: 32px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  filter: blur(16px);
+  content: "";
+  opacity: 0;
+  transition: opacity 260ms ease-out;
+  pointer-events: none;
+}
+
+.ambient-music-visualizer[data-playing="true"]::after {
+  opacity: 1;
+}
+
+.ambient-music-visualizer-grid {
+  position: absolute;
+  z-index: 1;
+  inset: 9px 11px;
+  display: grid;
+  grid-template-columns: repeat(18, minmax(3px, 1fr));
+  align-items: end;
+  gap: 3px;
+}
+
+.ambient-music-visualizer-band {
+  --ambient-spectrum-color: var(--accent);
+  position: relative;
+  display: block;
+  height: 100%;
+  min-width: 0;
+}
+
+.ambient-music-visualizer-band::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    to top,
+    var(--ambient-spectrum-color) 0 5px,
+    transparent 5px 8px
+  );
+  content: "";
+}
+
+.ambient-music-visualizer-band::after {
+  clip-path: inset(var(--ambient-spectrum-inset) 0 0 0 round 2px);
+  filter: saturate(0.92);
+  opacity: 0.9;
+  transition:
+    clip-path 260ms cubic-bezier(0.2, 0.75, 0.25, 1),
+    opacity 150ms ease-out;
+  will-change: clip-path;
+}
+
+.ambient-music-visualizer[data-playing="false"] .ambient-music-visualizer-band::after {
+  opacity: 0.28;
+}
+
+.ambient-music-visualizer-band:nth-child(-n + 2) {
+  --ambient-spectrum-color: var(--syntax-title);
+}
+
+.ambient-music-visualizer-band:nth-child(n + 3):nth-child(-n + 4) {
+  --ambient-spectrum-color: var(--syntax-keyword);
+}
+
+.ambient-music-visualizer-band:nth-child(n + 5):nth-child(-n + 6) {
+  --ambient-spectrum-color: var(--support-red);
+}
+
+.ambient-music-visualizer-band:nth-child(n + 7):nth-child(-n + 8) {
+  --ambient-spectrum-color: var(--syntax-variable);
+}
+
+.ambient-music-visualizer-band:nth-child(n + 9):nth-child(-n + 10) {
+  --ambient-spectrum-color: var(--support-warning);
+}
+
+.ambient-music-visualizer-band:nth-child(n + 11):nth-child(-n + 12) {
+  --ambient-spectrum-color: var(--support-green);
+}
+
+.ambient-music-visualizer-band:nth-child(n + 13):nth-child(-n + 14) {
+  --ambient-spectrum-color: var(--syntax-string);
+}
+
+.ambient-music-visualizer-band:nth-child(n + 15):nth-child(-n + 16) {
+  --ambient-spectrum-color: var(--accent);
+}
+
+.ambient-music-visualizer-band:nth-child(n + 17) {
+  --ambient-spectrum-color: var(--syntax-number);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiden-range::-webkit-slider-thumb {
+    transition: none;
+  }
+
+  .ambient-music-visualizer::after,
+  .ambient-music-visualizer-band::after {
+    transition: none;
+  }
+}
+
+@media (max-width: 540px) {
+  .ambient-music-visualizer {
+    height: 68px;
+  }
+
+  .ambient-music-visualizer-grid {
+    inset: 8px;
+    gap: 2px;
+  }
+}
+
 /* Aiden uses fill, border, caret, and native state changes instead of focus outlines. */
 :root :where(*):focus,
 :root :where(*):focus-visible {

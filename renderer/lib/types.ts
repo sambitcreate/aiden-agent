@@ -2,6 +2,7 @@
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { AmbientMusicConfigV1 } from "../shared/ambient-music";
 import type { KeybindingOverridesV1 } from "../shared/keybindings";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -719,6 +720,7 @@ export interface AppSettings {
   scheduledDefaultTimezone?: string;
   assistant?: AssistantConfig;
   profileName?: string;
+  ambientMusic?: AmbientMusicConfigV1;
 }
 
 export type ComputerUseStatusState =

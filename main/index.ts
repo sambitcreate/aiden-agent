@@ -43,6 +43,11 @@ import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 import { llmClient } from "./services/llm-client.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
+import {
+  existingAmbientMusicManager,
+  getAmbientMusicManager,
+} from "./services/ambient-music.js";
+import { ambientMusicEnabled } from "./services/ambient-music-feature-flag.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
 import { disposeDictation, toggleDictation } from "./services/dictation.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
@@ -252,6 +257,10 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       return;
     }
   }
+  // Fade and stop native audio as soon as quit is accepted. Parent and
+  // subagent drains can consume their full budgets, so music teardown must not
+  // wait for the final service barrier.
+  const ambientMusicShutdown = existingAmbientMusicManager()?.dispose() ?? Promise.resolve();
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
   // record any cleanup miss before a packaged-soak receipt is written.
@@ -318,6 +327,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   try {
     await Promise.all([
       shutdownProviderAuthFlow(),
+      ambientMusicShutdown,
       computerUseStatus.shutdown(),
       scheduleService.stopAndSettle(),
       (async () => {
@@ -1314,6 +1324,14 @@ if (!ownsSingleInstanceLock) {
         );
       }
       void foundationModelsConnection.status();
+      const ambientMusicManager = ambientMusicEnabled() ? getAmbientMusicManager() : undefined;
+      if (ambientMusicManager) {
+        try {
+          await ambientMusicManager.initialize();
+        } catch (error) {
+          logger.warn("ambient-music", "Could not initialize offline model status", error);
+        }
+      }
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
 
@@ -1321,7 +1339,11 @@ if (!ownsSingleInstanceLock) {
       // hand-edits up without a restart. Registered after whenReady because
       // powerMonitor is only usable once the app is ready.
       app.on("browser-window-focus", () => void portableConfigWatcher.refresh());
-      powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
+      powerMonitor.on("suspend", () => ambientMusicManager?.handleSystemSuspend());
+      powerMonitor.on("resume", () => {
+        ambientMusicManager?.handleSystemResume();
+        void portableConfigWatcher.refresh();
+      });
 
       await createMainWindow();
       if (packagedSubagentSoak) {

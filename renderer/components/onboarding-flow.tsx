@@ -1,4 +1,5 @@
 import {
+  AudioLines,
   Bot,
   Blocks,
   BrainCircuit,
@@ -31,6 +32,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { ProviderIcon } from "./provider-icon";
@@ -81,6 +83,7 @@ const FEATURE_ILLUSTRATIONS = {
   schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
     .href,
   voice: new URL("../assets/onboarding/features/voice-dictation.png", import.meta.url).href,
+  ambientMusic: new URL("../assets/onboarding/features/ambient-music.png", import.meta.url).href,
   commands: new URL("../assets/onboarding/features/command-palette.png", import.meta.url).href,
   usage: new URL("../assets/onboarding/features/usage-profile.png", import.meta.url).href,
   permissions: new URL("../assets/onboarding/features/permissions.png", import.meta.url).href,
@@ -317,6 +320,16 @@ const featureBentos: FeatureBento[] = [
     size: "standard",
   },
   {
+    id: "ambientMusic",
+    group: "control",
+    title: "Ambient Music",
+    description:
+      "Generate live focus music on this Mac after you choose to download an on-device model.",
+    icon: AudioLines,
+    imageUrl: FEATURE_ILLUSTRATIONS.ambientMusic,
+    size: "standard",
+  },
+  {
     id: "commands",
     group: "control",
     title: "Command Palette",
@@ -475,6 +488,7 @@ function canChooseBuiltinProvider(provider: Provider): boolean {
 
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
+  const { ambientMusic } = useAppCapabilities();
   const providers = useProviders();
   const [open, setOpen] = React.useState(() => shouldShowOnboarding());
   const [index, setIndex] = React.useState(0);
@@ -504,6 +518,9 @@ export function OnboardingFlow() {
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
   const canContinue =
     step === "profile" ? name.trim().length > 0 : step === "provider" ? hasProviderChoice : true;
+  const visibleFeatureBentos = ambientMusic
+    ? featureBentos
+    : featureBentos.filter((feature) => feature.id !== "ambientMusic");
 
   const next = async () => {
     if (!canContinue || savingRef.current) return;
@@ -906,18 +923,18 @@ export function OnboardingFlow() {
                       Everything Aiden brings together
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
-                      Explore all {featureBentos.length} shipped features. Scroll, then hover or
+                      Explore all {visibleFeatureBentos.length} shipped features. Scroll, then hover or
                       focus a tile to learn more.
                     </Text>
                   </div>
                 </div>
                 <div
                   data-onboarding-bento
-                  data-onboarding-feature-count={featureBentos.length}
+                  data-onboarding-feature-count={visibleFeatureBentos.length}
                   className="mt-5 space-y-7 pb-1"
                 >
                   {featureGroups.map((group) => {
-                    const features = featureBentos.filter((feature) => feature.group === group.id);
+                    const features = visibleFeatureBentos.filter((feature) => feature.group === group.id);
                     const headingId = `onboarding-feature-group-${group.id}`;
                     return (
                       <section key={group.id} aria-labelledby={headingId}>

@@ -1,0 +1,13 @@
+diff --git a/mlx/backend/metal/make_compiled_preamble.sh b/mlx/backend/metal/make_compiled_preamble.sh
+index bb55ed3a3..0dd0c573f 100644
+--- a/mlx/backend/metal/make_compiled_preamble.sh
++++ b/mlx/backend/metal/make_compiled_preamble.sh
+@@ -38,7 +38,7 @@ HDRS=$( $CCC -I"$SRC_DIR" -I"$JIT_INCLUDES" -DMLX_METAL_JIT -E -P -CC -C -H "$IN
+ HDRS=$(echo "$HDRS" | grep -v "Xcode")
+ 
+ # Use the header depth to sort the files in order of inclusion
+-declare -a HDRS_LIST=($HDRS)
++declare -a HDRS_LIST=(); while read -r dots path; do [ -n "$dots" ] && HDRS_LIST+=("$dots" "$path"); done <<< "$HDRS"
+ declare -a HDRS_STACK=()
+ declare -a HDRS_SORTED=()
+ 
