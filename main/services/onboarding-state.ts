@@ -60,7 +60,8 @@ export async function getOnboardingSnapshot(
   let state = parseOnboardingState(settings.onboarding);
   if (!state) {
     // Preserve existing installs without trusting the legacy renderer marker as
-    // proof of readiness. An unusable legacy setup becomes deferred, not complete.
+    // proof of readiness. Only an explicit provider skip may create a deferred
+    // outcome, so an unproven legacy setup reopens onboarding as incomplete.
     const migratedReady = {
       ...ready,
       profileReady:

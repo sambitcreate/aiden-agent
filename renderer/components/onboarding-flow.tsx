@@ -56,7 +56,11 @@ import { getOnboardingMoreProviders } from "../lib/pi-provider-display";
 import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
-import { onboardingStepIndex, type OnboardingSnapshot } from "../shared/onboarding";
+import {
+  onboardingStepIndex,
+  shouldOpenOnboarding,
+  type OnboardingSnapshot,
+} from "../shared/onboarding";
 
 type Step = "profile" | "provider" | "tour";
 const steps: Step[] = ["profile", "provider", "tour"];
@@ -504,7 +508,7 @@ export function OnboardingFlow() {
       readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
       setProviderSkipped(false);
       setIndex(onboardingStepIndex(snapshot));
-      setOpen(snapshot.outcome === "incomplete");
+      setOpen(shouldOpenOnboarding(snapshot.outcome));
       if (snapshot.profileReady && !profileInitializedRef.current) {
         const current = await profileApi.get();
         profileInitializedRef.current = true;

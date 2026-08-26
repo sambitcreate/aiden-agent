@@ -17,6 +17,10 @@ export interface OnboardingSnapshot extends OnboardingState {
   providerReady: boolean;
 }
 
+export function shouldOpenOnboarding(outcome: OnboardingOutcome): boolean {
+  return outcome === "incomplete";
+}
+
 const outcomes = new Set<OnboardingOutcome>(["incomplete", "deferred", "completed"]);
 const steps = new Set<OnboardingSatisfiedStep>(["none", "profile", "provider", "tour"]);
 

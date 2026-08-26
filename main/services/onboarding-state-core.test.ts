@@ -9,6 +9,7 @@ import {
   reconcileOnboardingOutcome,
 } from "./onboarding-state-core.js";
 import type { Provider } from "./types.js";
+import { shouldOpenOnboarding } from "../../renderer/shared/onboarding.js";
 
 function provider(overrides: Partial<Provider> = {}): Provider {
   return {
@@ -55,10 +56,11 @@ test("an ambient or stored credential cannot skip validation after relaunch", ()
   );
 });
 
-test("legacy completion becomes deferred instead of lying about an unusable setup", () => {
+test("legacy completion reopens onboarding until current setup readiness is proven", () => {
   assert.equal(legacyOnboardingOutcome(false, false), "incomplete");
-  assert.equal(legacyOnboardingOutcome(true, false), "deferred");
+  assert.equal(legacyOnboardingOutcome(true, false), "incomplete");
   assert.equal(legacyOnboardingOutcome(true, true), "completed");
+  assert.equal(shouldOpenOnboarding(legacyOnboardingOutcome(true, false)), true);
 });
 
 test("progress is versioned and completion is readiness-gated", () => {

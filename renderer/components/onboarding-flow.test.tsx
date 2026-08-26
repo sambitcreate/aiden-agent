@@ -230,7 +230,7 @@ test("onboarding is an application modal with an explicit provider deferral", ()
   assert.match(source, /providerSkipped \|\| !selectedProviderId \? "deferred" : "completed"/u);
   assert.match(source, /Provider setup skipped/u);
   assert.doesNotMatch(source, />\s*Set up later\s*</u);
-  assert.match(source, /setOpen\(snapshot\.outcome === "incomplete"\)/u);
+  assert.match(source, /setOpen\(shouldOpenOnboarding\(snapshot\.outcome\)\)/u);
   assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
 });
 

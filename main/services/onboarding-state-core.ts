@@ -32,8 +32,7 @@ export function legacyOnboardingOutcome(
   legacyComplete: boolean,
   setupReady: boolean,
 ): OnboardingOutcome {
-  if (!legacyComplete) return "incomplete";
-  return setupReady ? "completed" : "deferred";
+  return legacyComplete && setupReady ? "completed" : "incomplete";
 }
 
 export function onboardingProgressState(
