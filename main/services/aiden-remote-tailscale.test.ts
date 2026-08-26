@@ -105,20 +105,65 @@ test("combined route inspection uses one coherent node and Serve snapshot", asyn
   ]);
 });
 
-test("combined route inspection fails closed from one command pair", async () => {
+test("combined route inspection retries a transient CLI read and recovers", async () => {
   const calls: string[][] = [];
+  let nodeAttempts = 0;
+  const controller = new AidenRemoteTailscaleController({
+    run: async (args) => {
+      calls.push([...args]);
+      if (args[0] === "status" && ++nodeAttempts === 1) {
+        throw new Error("transient node status failure");
+      }
+      if (args[0] === "status") {
+        return JSON.stringify({
+          Self: { DNSName: "aiden.tailnet.ts.net." },
+          CertDomains: ["aiden.tailnet.ts.net"],
+        });
+      }
+      return "{}";
+    },
+  });
+  const inspection = await controller.inspectRoute(target);
+  assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(inspection.assessment.state, "available");
+  assert.deepEqual(calls, [
+    ["status", "--json", "--peers=false"],
+    ["status", "--json", "--peers=false"],
+    ["serve", "status", "--json"],
+  ]);
+});
+
+test("combined route inspection fails closed after bounded CLI retries", async () => {
+  const calls: string[][] = [];
+  const diagnostics: Array<{ phase: "node" | "serve"; attempt: number; final: boolean }> = [];
   const controller = new AidenRemoteTailscaleController({
     run: async (args) => {
       calls.push([...args]);
       if (args[0] === "status") throw new Error("transient node status failure");
       return "{}";
     },
-  });
+  }, { onStatusReadFailure: (input) => diagnostics.push(input) });
   assert.deepEqual(await controller.inspectRoute(target), {
     connectionStatus: { installed: true, errorCode: "status_unavailable" },
     assessment: { state: "unavailable", errorCode: "status_unavailable" },
   });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(diagnostics, [
+    { phase: "node", attempt: 1, final: false },
+    { phase: "node", attempt: 2, final: false },
+    { phase: "node", attempt: 3, final: true },
+  ]);
+});
+
+test("concurrent settings reads share one node and Serve snapshot", async () => {
+  const app = fixture();
+  const [status, inspection] = await Promise.all([
+    app.controller.status(),
+    app.controller.inspectRoute(target),
+  ]);
+  assert.equal(status.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(app.calls.length, 2);
 });
 
 test("Tailscale controller creates the first HTTPS listener only after exact certificate-domain proof", async () => {

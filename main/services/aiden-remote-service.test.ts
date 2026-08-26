@@ -1187,6 +1187,66 @@ test("Tailscale connect removes only a persisted origin-only route before canoni
   }
 });
 
+test("Tailscale connect repoints an exactly owned pre-migration development route", async () => {
+  const [legacyPort, migratedPort] = await availablePortPairs(2);
+  const legacyTarget = `http://127.0.0.1:${legacyPort + 1}/api/aiden/v1`;
+  const migratedTarget = `http://127.0.0.1:${migratedPort + 1}/api/aiden/v1`;
+  const app = await fixture({
+    mode: "both",
+    lanPort: migratedPort,
+    initial: (state) => {
+      state.lanPortCommitted = true;
+      state.tailscaleOwnership = { path: "/api/aiden/v1", target: legacyTarget };
+    },
+    tailscaleServeStatus: {
+      TCP: { "443": { HTTPS: true } },
+      Web: {
+        "aiden.tailnet.ts.net:443": {
+          Handlers: { "/api/aiden/v1": { Proxy: legacyTarget } },
+        },
+      },
+    },
+  });
+  try {
+    await app.service.setEnabled(true);
+    await app.service.connectTailscale();
+    assert.deepEqual(app.tailscale.disconnectTargets, [legacyTarget]);
+    assert.deepEqual(app.tailscale.targets, [migratedTarget]);
+    assert.equal(app.persisted().tailscaleOwnership?.target, migratedTarget);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Tailscale disconnect clears an exactly owned pre-migration development route", async () => {
+  const [legacyPort, migratedPort] = await availablePortPairs(2);
+  const legacyTarget = `http://127.0.0.1:${legacyPort + 1}/api/aiden/v1`;
+  const app = await fixture({
+    mode: "both",
+    lanPort: migratedPort,
+    initial: (state) => {
+      state.lanPortCommitted = true;
+      state.tailscaleOwnership = { path: "/api/aiden/v1", target: legacyTarget };
+    },
+    tailscaleServeStatus: {
+      TCP: { "443": { HTTPS: true } },
+      Web: {
+        "aiden.tailnet.ts.net:443": {
+          Handlers: { "/api/aiden/v1": { Proxy: legacyTarget } },
+        },
+      },
+    },
+  });
+  try {
+    await app.service.setEnabled(true);
+    await app.service.disconnectTailscale();
+    assert.deepEqual(app.tailscale.disconnectTargets, [legacyTarget]);
+    assert.equal(app.persisted().tailscaleOwnership, undefined);
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("Tailscale takeover review stays main-owned and persists only after confirmed takeover", async () => {
   const app = await fixture({ mode: "both", enableTailscaleTakeover: true });
   try {

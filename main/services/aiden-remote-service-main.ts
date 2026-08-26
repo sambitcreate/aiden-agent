@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { app, ipcMain, logger } from "../platform.js";
+import { currentRuntimeProfile } from "../runtime-profile.js";
 import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
 import { DataStore } from "./data-store.js";
 import {
@@ -14,9 +15,15 @@ import {
   AidenRemoteStateRegistry,
   createDefaultAidenRemoteState,
   defaultAidenRemoteDisplayName,
+  normalizeAidenRemoteStateForRuntimeProfile,
   parseAidenRemoteStateDocument,
   type AidenRemoteStateDocument,
 } from "./aiden-remote-state.js";
+import {
+  aidenRemoteDefaultLanPort,
+  aidenRemotePortCandidatesForProfile,
+  isAidenRemoteReservedLanPort,
+} from "./aiden-remote-ports.js";
 import {
   AidenRemoteTailscaleController,
   createSystemTailscaleCommandRunner,
@@ -184,17 +191,25 @@ export interface AidenRemoteRuntime {
 let runtimePromise: Promise<AidenRemoteRuntime> | null = null;
 
 async function createRuntime(): Promise<AidenRemoteRuntime> {
+  const runtimeProfile = currentRuntimeProfile();
   const userData = app.getPath("userData");
   const hostname = os.hostname();
   const defaultDisplayName = defaultAidenRemoteDisplayName(await macComputerName());
   const store = new DataStore<AidenRemoteStateDocument>(
     STATE_FILE,
-    createDefaultAidenRemoteState(undefined, defaultDisplayName),
+    createDefaultAidenRemoteState(
+      undefined,
+      defaultDisplayName,
+      aidenRemoteDefaultLanPort(runtimeProfile.id),
+    ),
     () => userData,
     {
       maxBytes: MAX_STATE_BYTES,
       fileMode: 0o600,
-      normalize: (value) => parseAidenRemoteStateDocument(value, defaultDisplayName),
+      normalize: (value) => normalizeAidenRemoteStateForRuntimeProfile(
+        parseAidenRemoteStateDocument(value, defaultDisplayName),
+        runtimeProfile.id,
+      ),
       isSafe: (value) => {
         try {
           parseAidenRemoteStateDocument(value, defaultDisplayName);
@@ -215,7 +230,14 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       try {
         const raw = JSON.parse(contents.toString("utf8")) as unknown;
         return !raw || typeof raw !== "object" || Array.isArray(raw)
-          || !("displayName" in raw) || !("lanPortCommitted" in raw);
+          || !("displayName" in raw) || !("lanPortCommitted" in raw)
+          || (
+            runtimeProfile.id === "development"
+            && "lanPort" in raw
+            && typeof raw.lanPort === "number"
+            && isAidenRemoteReservedLanPort(raw.lanPort, "production")
+            && !("tailscalePendingOutcome" in raw)
+          );
       } catch {
         return false;
       }
@@ -261,6 +283,14 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   const tailscale = new AidenRemoteTailscaleController(
     await createSystemTailscaleCommandRunner(),
     {
+      onStatusReadFailure: ({ phase, attempt, final }) => {
+        if (!final) return;
+        writeRemoteLog({
+          level: "warn",
+          event: "tailscale_status_read_unavailable",
+          details: { phase, attempts: attempt },
+        });
+      },
       outcomeStore: {
         begin: (outcome) => state.beginTailscalePendingOutcome(outcome),
         snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
@@ -299,6 +329,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     appVersion: app.getVersion(),
     hostname,
     tailscale,
+    portCandidates: (preferredPort) => aidenRemotePortCandidatesForProfile(
+      runtimeProfile.id,
+      preferredPort,
+    ),
     bonjour: new DnsSdAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
     workspaceApi: async (instanceId) => {
