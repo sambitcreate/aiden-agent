@@ -4,6 +4,7 @@ import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 import {
   GENERATIVE_UI_GUEST_CSP,
+  GENERATIVE_UI_ESCAPE_MESSAGE,
   GENERATIVE_UI_IFRAME_SANDBOX,
   GENERATIVE_UI_PARENT_FRAME_SRC,
 } from "../../renderer/shared/generative-ui";
@@ -238,27 +239,64 @@ test("standalone export stays interactive without allowing guest navigation", as
   }
 });
 
-test("restyling one sandboxed iframe preserves its interactive browsing context", async ({
+test("a top-layer artifact escapes transcript stacking and preserves its browsing context", async ({
   page,
 }) => {
-  await page.setContent(`<!DOCTYPE html><html><body>
-    <div id="host"><iframe id="artifact" sandbox="allow-scripts" srcdoc="<button id='counter' type='button'>0</button><script>document.getElementById('counter').onclick = (event) => event.currentTarget.textContent = String(Number(event.currentTarget.textContent) + 1)</script>"></iframe></div>
+  await page.setViewportSize({ width: 640, height: 500 });
+  await page.setContent(`<!DOCTYPE html><html><head><style>
+    #scroll { isolation: isolate; position: relative; z-index: 0; mask-image: linear-gradient(black, transparent); }
+    #host { width: 320px; height: 180px; border: 0; padding: 0; }
+    #host:not(:popover-open) { display: block !important; position: static; inset: auto; margin: 0; }
+    #host:popover-open { inset: 12px; width: auto; height: auto; margin: 0; }
+    #artifact { width: 100%; height: 100%; border: 0; }
+    #cover { display: none; position: fixed; inset: 0; z-index: 9999; background: white; }
+    body[data-expanded] #cover { display: block; }
+  </style></head><body>
+    <button id="opener" type="button">Expand</button>
+    <div id="scroll"><section id="host" popover="auto"><iframe id="artifact" sandbox="allow-scripts" srcdoc="<button id='counter' type='button'>0</button><script>document.getElementById('counter').onclick = (event) => event.currentTarget.textContent = String(Number(event.currentTarget.textContent) + 1); document.addEventListener('keydown', (event) => { if (event.key === 'Escape') parent.postMessage('${GENERATIVE_UI_ESCAPE_MESSAGE}', '*'); }, true)</script>"></iframe></section></div>
+    <div id="cover"></div>
+    <script>
+      const host = document.querySelector('#host');
+      const opener = document.querySelector('#opener');
+      const artifact = document.querySelector('#artifact');
+      opener.onclick = () => { document.body.dataset.expanded = 'true'; host.showPopover(); };
+      window.addEventListener('message', (event) => {
+        if (event.source === artifact.contentWindow && event.data === ${JSON.stringify(GENERATIVE_UI_ESCAPE_MESSAGE)}) host.hidePopover();
+      });
+      host.addEventListener('toggle', () => {
+        if (!host.matches(':popover-open')) {
+          delete document.body.dataset.expanded;
+          opener.focus();
+        }
+      });
+    </script>
   </body></html>`);
   const counter = page.frameLocator("#artifact").locator("#counter");
+  await expect(page.locator("#host")).toHaveCSS("position", "static");
+  await counter.evaluate((button: HTMLButtonElement) => button.click());
+  await expect(counter).toHaveText("1");
+
+  await page.locator("#opener").click();
+  await expect(page.locator("#host")).toHaveCSS("position", "fixed");
+  await expect(page.locator("iframe")).toHaveCount(1);
+  await expect(counter).toHaveText("1");
+  await expect(counter).toBeVisible();
   await counter.click();
-  await expect(counter).toHaveText("1");
+  await expect(counter).toHaveText("2");
+  expect(
+    await page.evaluate(() => document.elementFromPoint(320, 250)?.id),
+  ).toBe("artifact");
+  const bounds = await page.locator("#host").boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds?.x).toBeGreaterThanOrEqual(0);
+  expect(bounds?.y).toBeGreaterThanOrEqual(0);
+  expect((bounds?.x ?? 0) + (bounds?.width ?? 0)).toBeLessThanOrEqual(640);
+  expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBeLessThanOrEqual(500);
 
-  await page.evaluate(() => {
-    const host = document.querySelector("#host");
-    host?.setAttribute("style", "position: fixed; inset: 20px; z-index: 60");
-  });
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.locator("#host").evaluate((host) => host.matches(":popover-open"))).toBe(false);
   await expect(page.locator("iframe")).toHaveCount(1);
-  await expect(counter).toHaveText("1");
-
-  await page.evaluate(() => {
-    const host = document.querySelector("#host");
-    host?.removeAttribute("style");
-  });
-  await expect(page.locator("iframe")).toHaveCount(1);
-  await expect(counter).toHaveText("1");
+  await expect(counter).toHaveText("2");
+  await expect(page.locator("#host")).toHaveCSS("position", "static");
+  await expect(page.locator("#opener")).toBeFocused();
 });

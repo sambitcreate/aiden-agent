@@ -390,6 +390,26 @@ test("an in-flight render_artifact call shows the Visualizing shimmer", () => {
   assert.match(markup, />Visualizing</u);
   assert.doesNotMatch(markup, /Visualizing…/u);
   assert.match(markup, /agent-thinking-shimmer/u);
+  assert.equal(markup.match(/reasoning-surface/gu)?.length, 1);
+
+  const reasoningMarkup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[]}
+      streamingText=""
+      streamingReasoning="Earlier reasoning"
+      streamingArtifacts={[]}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(reasoningMarkup, />Visualizing</u);
+  assert.match(reasoningMarkup, /Earlier reasoning/u);
+  assert.equal(reasoningMarkup.match(/reasoning-surface/gu)?.length, 1);
   // Once the turn settles the shimmer is gone.
   const settledMarkup = renderToStaticMarkup(
     <MessageList

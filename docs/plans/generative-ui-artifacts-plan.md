@@ -137,7 +137,7 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and the specimen HTML before build
 - Compact **artifact frame** in the assistant column (same max width as images, ~`max-w-[42rem]`, capped height, `bg-control` / well, separator border).
 - Chrome: title, expand, export. No floating decorative badges.
 - Activity feed line via `safeToolDescriptor("render_artifact")` (e.g. “Render artifact” + title).
-- Expand: existing Dialog pattern (image lightbox analog) with a larger sandboxed frame. Keyboard focus, Escape, reduced motion.
+- Expand: promote the existing frame host into Chromium's top layer as one modal surface. Preserve iframe state, contain keyboard focus, support Escape from inside the sandbox, and restore focus.
 - Fallback: if iframe blocked or HTML rejected, show an accessible file card (title + export still available when bytes exist).
 
 **Not MVP:**
@@ -208,7 +208,7 @@ Prove in tests:
 
 ### Phase 2 — Inline frame + expand + export
 
-Renderer frame component, Dialog expand, save-dialog export of standalone HTML with inlined host libs. Tokenized chrome. Tests for parser, fallback, export bounds, keyboard, and “pending stage blocks copy/export”.
+Renderer frame component, top-layer modal expand, save-dialog export of standalone HTML with inlined host libs. Tokenized chrome. Tests for parser, fallback, export bounds, keyboard, and “pending stage blocks copy/export”.
 
 ### Phase 3 — Host viz libraries + prompt quality
 
@@ -231,10 +231,16 @@ Rendering must not flicker and the creation window must stay narrated:
 
 - Authoritative HTML storage fails closed on unreadable or unsupported data without quarantining the only committed bytes; chat-copy preparation is recovered or rolled back across either crash boundary.
 - Workspace HTML reads traverse from pinned directory descriptors through the native `openat` helper, closing intermediate-component symlink swaps.
-- Preview and export use a strict outer host plus one sandboxed guest; export navigation is denied before network, and expanded presentation repositions the existing iframe instead of mounting a second browsing context.
+- Preview and export use a strict outer host plus one sandboxed guest; export navigation is denied before network, and expanded presentation promotes the existing iframe host into Chromium's top layer instead of mounting or reparenting a second browsing context.
 - Preview/export errors stay visible alongside the last good frame, `/visualize` retains rejected drafts and is unavailable with No Access, and copied-artifact selection is linear in transcript length.
 - macOS development and release packaging explicitly vendors the fixed host libraries, while package verification rejects missing, empty, or symlinked copies.
 - Detached stream projections retain the last prose-delta timestamp so revisiting an active chat restores **Responding…** for only the remaining idle window.
+
+### Phase 7 — Optimistic composer and expansion repair (shipped)
+
+- Regular and `/visualize` sends clear text, attachments, and selected skill before awaiting persistence/generation startup. A synchronous admission ref blocks same-tick duplicates; definite rejection restores and merges the submitted payload without overwriting a newer draft, while an unknown durable append outcome stays fenced from retry.
+- The sole artifact iframe is promoted into the browser top layer on expand, escaping transcript `isolate` and `mask-image` stacking contexts. Background interaction is inert, viewport sizing is inset-based, Close/Escape restore focus, and sandboxed Escape is relayed only from the exact iframe window.
+- One reasoning surface owns Thinking, Visualizing, and settled reasoning. Fast artifact renders retain the genuine Visualizing shimmer for 700 ms so it remains perceptible without adding a duplicate card.
 
 ## Explicit non-goals
 

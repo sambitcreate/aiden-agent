@@ -1,14 +1,55 @@
 import * as React from "react";
-import { Download, Maximize2 } from "lucide-react";
+import { Download, Maximize2, X } from "lucide-react";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
-import { GENERATIVE_UI_IFRAME_SANDBOX } from "../shared/generative-ui";
+import {
+  GENERATIVE_UI_ESCAPE_MESSAGE,
+  GENERATIVE_UI_IFRAME_SANDBOX,
+} from "../shared/generative-ui";
 import { chatsApi } from "../lib/ipc";
-import { Button, Dialog, Text } from "./ui";
+import { Button, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 
 interface HtmlArtifactFrameError {
   kind: "preview" | "export";
   message: string;
+}
+
+interface OutsideInteractionState {
+  element: HTMLElement;
+  inert: boolean;
+  ariaHidden: string | null;
+}
+
+/** Keep pointer, keyboard, and accessibility navigation inside an expanded artifact. */
+function isolateExpandedArtifact(section: HTMLElement): () => void {
+  const outside: OutsideInteractionState[] = [];
+  let branch: HTMLElement = section;
+  let parent = branch.parentElement;
+  while (parent) {
+    for (const sibling of Array.from(parent.children)) {
+      if (!(sibling instanceof HTMLElement) || sibling === branch) continue;
+      outside.push({
+        element: sibling,
+        inert: sibling.inert,
+        ariaHidden: sibling.getAttribute("aria-hidden"),
+      });
+      sibling.inert = true;
+      sibling.setAttribute("aria-hidden", "true");
+    }
+    branch = parent;
+    parent = parent.parentElement;
+  }
+
+  const previousOverflow = document.documentElement.style.overflow;
+  document.documentElement.style.overflow = "hidden";
+  return () => {
+    document.documentElement.style.overflow = previousOverflow;
+    for (const state of outside) {
+      state.element.inert = state.inert;
+      if (state.ariaHidden === null) state.element.removeAttribute("aria-hidden");
+      else state.element.setAttribute("aria-hidden", state.ariaHidden);
+    }
+  };
 }
 
 function themeTokensFromDocument(): {
@@ -37,13 +78,30 @@ function HtmlArtifactIframe({
   src,
   title,
   className,
+  onEscape,
 }: {
   src: string;
   title: string;
   className?: string;
+  onEscape?: () => void;
 }) {
+  const frameRef = React.useRef<HTMLIFrameElement | null>(null);
+  React.useEffect(() => {
+    if (!onEscape) return;
+    const receiveMessage = (event: MessageEvent) => {
+      if (
+        event.source === frameRef.current?.contentWindow &&
+        event.data === GENERATIVE_UI_ESCAPE_MESSAGE
+      ) {
+        onEscape();
+      }
+    };
+    window.addEventListener("message", receiveMessage);
+    return () => window.removeEventListener("message", receiveMessage);
+  }, [onEscape]);
   return (
     <iframe
+      ref={frameRef}
       title={title}
       sandbox={GENERATIVE_UI_IFRAME_SANDBOX}
       src={src}
@@ -66,7 +124,13 @@ function HtmlArtifactFrameImpl({
   const [exporting, setExporting] = React.useState(false);
   const sectionRef = React.useRef<HTMLElement | null>(null);
   const expandTriggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const expandedFrameTargetRef = React.useRef<HTMLDivElement | null>(null);
+  const expandedCloseRef = React.useRef<HTMLButtonElement | null>(null);
+  const returnFocusRequestedRef = React.useRef(false);
+  const expandedTitleId = React.useId();
+  const closeExpanded = React.useCallback(() => {
+    returnFocusRequestedRef.current = true;
+    setExpanded(false);
+  }, []);
 
   // A same-title replace keeps the mediaId and only changes the content hash,
   // so the fetch resolves into an in-place iframe navigation. The previous
@@ -98,29 +162,41 @@ function HtmlArtifactFrameImpl({
   }, [artifact.id, artifact.mediaId, chatId]);
 
   React.useLayoutEffect(() => {
-    if (!expanded) return;
     const section = sectionRef.current;
-    const target = expandedFrameTargetRef.current;
-    if (!section || !target) return;
-    const positionOverTarget = () => {
-      const bounds = target.getBoundingClientRect();
-      section.style.left = `${bounds.left}px`;
-      section.style.top = `${bounds.top}px`;
-      section.style.width = `${bounds.width}px`;
-      section.style.height = `${bounds.height}px`;
+    if (!section || !expanded) return;
+    const onToggle = () => {
+      if (!section.matches(":popover-open")) closeExpanded();
     };
-    positionOverTarget();
-    const observer = new ResizeObserver(positionOverTarget);
-    observer.observe(target);
-    window.addEventListener("resize", positionOverTarget);
+    section.addEventListener("toggle", onToggle);
+    let releaseOutside: () => void = () => undefined;
+    let focusFrame: number | undefined;
+    try {
+      section.showPopover();
+      releaseOutside = isolateExpandedArtifact(section);
+      focusFrame = requestAnimationFrame(() => expandedCloseRef.current?.focus());
+    } catch (cause) {
+      closeExpanded();
+      setError({
+        kind: "preview",
+        message: cause instanceof Error ? cause.message : "Could not expand this visualization.",
+      });
+    }
     return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", positionOverTarget);
-      section.style.removeProperty("left");
-      section.style.removeProperty("top");
-      section.style.removeProperty("width");
-      section.style.removeProperty("height");
+      if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
+      section.removeEventListener("toggle", onToggle);
+      releaseOutside();
+      if (section.matches(":popover-open")) section.hidePopover();
     };
+  }, [closeExpanded, expanded]);
+
+  React.useLayoutEffect(() => {
+    if (expanded || !returnFocusRequestedRef.current) return;
+    returnFocusRequestedRef.current = false;
+    const frame = requestAnimationFrame(() => {
+      const trigger = expandTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [expanded]);
 
   const exportArtifact = React.useCallback(async () => {
@@ -142,43 +218,74 @@ function HtmlArtifactFrameImpl({
   return (
     <section
       ref={sectionRef}
+      popover="auto"
+      role={expanded ? "dialog" : undefined}
+      aria-modal={expanded || undefined}
+      aria-labelledby={expanded ? expandedTitleId : undefined}
       className={cn(
-        "max-w-[42rem] overflow-hidden rounded-xl border border-separator bg-control",
-        expanded && "fixed z-[60] max-w-none rounded-lg",
+        "aiden-html-artifact-popover max-w-[42rem] overflow-hidden rounded-xl border border-separator bg-control p-0 text-primary",
+        expanded && "flex max-w-none flex-col rounded-dialog bg-popover shadow-modal",
       )}
       data-html-artifact={artifact.mediaId}
+      data-html-artifact-expanded={expanded || undefined}
     >
-      <header
-        className={cn(
-          "flex items-center gap-2 border-b border-separator px-3 py-2",
-          expanded && "hidden",
-        )}
-      >
-        <Text variant="small-strong" className="min-w-0 flex-1 truncate">
-          {artifact.title}
-        </Text>
-        <Button
-          ref={expandTriggerRef}
-          iconOnly
-          size="small"
-          variant="transparent"
-          aria-label={`Expand ${artifact.title}`}
-          onClick={() => setExpanded(true)}
-        >
-          <Maximize2 aria-hidden="true" />
-        </Button>
-        <Button
-          iconOnly
-          size="small"
-          variant="transparent"
-          aria-label={`Export ${artifact.title}`}
-          disabled={exporting}
-          onClick={() => void exportArtifact()}
-        >
-          <Download aria-hidden="true" />
-        </Button>
-      </header>
-      {error && src && !expanded ? (
+      {expanded ? (
+        <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-separator px-5 py-3">
+          <h2
+            id={expandedTitleId}
+            className="min-w-0 flex-1 truncate text-heading2 font-semibold"
+          >
+            {artifact.title}
+          </h2>
+          <Button
+            iconOnly
+            size="small"
+            variant="transparent"
+            aria-label={`Export ${artifact.title}`}
+            disabled={exporting}
+            onClick={() => void exportArtifact()}
+          >
+            <Download aria-hidden="true" />
+          </Button>
+          <Button
+            ref={expandedCloseRef}
+            iconOnly
+            size="small"
+            variant="transparent"
+            aria-label={`Close ${artifact.title}`}
+            onClick={closeExpanded}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        </header>
+      ) : (
+        <header className="flex items-center gap-2 border-b border-separator px-3 py-2">
+          <Text variant="small-strong" className="min-w-0 flex-1 truncate">
+            {artifact.title}
+          </Text>
+          <Button
+            ref={expandTriggerRef}
+            iconOnly
+            size="small"
+            variant="transparent"
+            aria-label={`Expand ${artifact.title}`}
+            onClick={() => setExpanded(true)}
+          >
+            <Maximize2 aria-hidden="true" />
+          </Button>
+          <Button
+            iconOnly
+            size="small"
+            variant="transparent"
+            aria-label={`Export ${artifact.title}`}
+            disabled={exporting}
+            onClick={() => void exportArtifact()}
+          >
+            <Download aria-hidden="true" />
+          </Button>
+        </header>
+      )}
+      {error && src ? (
         <div
           role="alert"
           className="border-b border-separator bg-control-hover px-3 py-2"
@@ -191,9 +298,13 @@ function HtmlArtifactFrameImpl({
           </Text>
         </div>
       ) : null}
-      <div className={cn(expanded ? "h-full min-h-0" : "h-[22rem] min-h-[12rem]")}>
+      <div className={cn(expanded ? "min-h-0 flex-1" : "h-[22rem] min-h-[12rem]")}>
         {src ? (
-          <HtmlArtifactIframe src={src} title={artifact.title} />
+          <HtmlArtifactIframe
+            src={src}
+            title={artifact.title}
+            onEscape={expanded ? closeExpanded : undefined}
+          />
         ) : (
           <div className="flex h-full items-center justify-center px-4 text-center">
             <Text variant="small" color="secondary">
@@ -202,25 +313,6 @@ function HtmlArtifactFrameImpl({
           </div>
         )}
       </div>
-      <Dialog
-        open={expanded}
-        onOpenChange={setExpanded}
-        title={artifact.title}
-        confirmHidden
-        size="large"
-        returnFocus={() => expandTriggerRef.current}
-      >
-        <div
-          ref={expandedFrameTargetRef}
-          className="h-[min(70vh,36rem)] overflow-hidden rounded-lg border border-separator"
-        >
-          {!src ? (
-            <Text variant="small" color="secondary">
-              {error?.message ?? "Loading visualization…"}
-            </Text>
-          ) : null}
-        </div>
-      </Dialog>
     </section>
   );
 }

@@ -40,6 +40,23 @@ import {
 } from "../lib/html-artifact-transcript";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
+const MINIMUM_VISUALIZING_MS = 700;
+
+function useMinimumPresence(present: boolean, minimumMs: number): boolean {
+  const [visible, setVisible] = React.useState(present);
+  const shownAtRef = React.useRef(present ? performance.now() : 0);
+  React.useEffect(() => {
+    if (present) {
+      shownAtRef.current = performance.now();
+      setVisible(true);
+      return;
+    }
+    const remaining = Math.max(0, minimumMs - (performance.now() - shownAtRef.current));
+    const timer = window.setTimeout(() => setVisible(false), remaining);
+    return () => window.clearTimeout(timer);
+  }, [minimumMs, present]);
+  return visible;
+}
 
 interface MessageListProps {
   chatId: string;
@@ -88,11 +105,14 @@ function AssistantResponse({
   // Other live phases continue in the activity row below the transcript.
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
-  const reasoningLabel = reasoningActivityLabel(timeline, active);
-  // The Visualization shimmer occupies the spot the artifact card is about to
-  // take, so it rides directly above the live artifact list.
-  const visualizing =
+  const visualizingLive =
     streaming && !streamComplete && hasActiveToolStep(timeline ?? null, RENDER_ARTIFACT_TOOL_NAME);
+  // Fast local renders may finish in one or two frames. Keep the real phase
+  // visible long enough to be perceived, while retaining a single reasoning
+  // surface when the turn already contains thought text.
+  const visualizing = useMinimumPresence(visualizingLive, MINIMUM_VISUALIZING_MS);
+  const reasoningLabel = visualizing ? "Visualizing" : reasoningActivityLabel(timeline, active);
+  const showReasoning = Boolean(reasoning) || visualizing;
   if (!rows || !timeline) {
     const activityTimeline = timeline
       ? activityTimelineFragment(timeline, timeline.steps.filter(isToolStep))
@@ -101,11 +121,11 @@ function AssistantResponse({
       <>
         <ActivityFeed timeline={activityTimeline} animate={streaming} />
         {subagentChips}
-        {reasoning ? (
+        {showReasoning ? (
           <ReasoningBlock
-            content={reasoning}
+            content={reasoning ?? ""}
             streaming={streaming && !streamComplete}
-            active={active}
+            active={active || visualizing}
             label={reasoningLabel}
           />
         ) : null}
@@ -121,7 +141,6 @@ function AssistantResponse({
         {attachments?.length ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
-        {visualizing ? <ReasoningBlock content="" active label="Visualizing" /> : null}
       </>
     );
   }
@@ -138,11 +157,11 @@ function AssistantResponse({
 
   return (
     <>
-      {reasoning ? (
+      {showReasoning ? (
         <ReasoningBlock
-          content={reasoning}
+          content={reasoning ?? ""}
           streaming={streaming && !streamComplete}
-          active={active}
+          active={active || visualizing}
           label={reasoningLabel}
         />
       ) : null}
@@ -176,7 +195,6 @@ function AssistantResponse({
       {attachments?.length ? (
         <MessageAttachments attachments={attachments} role="assistant" />
       ) : null}
-      {visualizing ? <ReasoningBlock content="" active label="Visualizing" /> : null}
     </>
   );
 }

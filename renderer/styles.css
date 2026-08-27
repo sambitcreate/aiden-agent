@@ -340,6 +340,30 @@ textarea {
   mask-image: linear-gradient(to bottom, black calc(100% - var(--scroll-fade-size)), transparent);
 }
 
+/* Promote the same live artifact iframe into Chromium's top layer. Keeping the
+   node mounted preserves interactive state while escaping transcript masks. */
+.aiden-html-artifact-popover:not(:popover-open) {
+  display: block !important;
+  position: static;
+  inset: auto;
+  width: auto;
+  height: auto;
+  margin: 0;
+}
+
+.aiden-html-artifact-popover:popover-open {
+  inset: clamp(0.75rem, 3vw, 2.5rem);
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+}
+
+.aiden-html-artifact-popover::backdrop {
+  background: transparent;
+}
+
 .reasoning-surface {
   --scroll-fade-size: 20px;
 }

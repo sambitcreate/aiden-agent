@@ -150,31 +150,40 @@ document.getElementById("n").addEventListener("click", (event) => {
   assert.doesNotMatch(document, /https?:\/\//u);
 });
 
-test("artifact chrome uses Dialog expand with return focus and export", async () => {
+test("artifact chrome promotes one interactive iframe into the modal top layer", async () => {
   const frame = await fs.readFile(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/html-artifact-frame.tsx"),
     "utf8",
   );
   assert.match(frame, /max-w-\[42rem\]/u);
-  assert.match(frame, /<Dialog/u);
-  assert.match(frame, /target\.getBoundingClientRect\(\)/u);
-  assert.match(frame, /expanded && "fixed z-\[60\]/u);
-  assert.equal(frame.match(/<HtmlArtifactIframe /gu)?.length, 1);
-  assert.match(frame, /returnFocus=\{\(\) => expandTriggerRef\.current\}/u);
+  assert.match(frame, /popover="auto"/u);
+  assert.match(frame, /section\.showPopover\(\)/u);
+  assert.match(frame, /section\.hidePopover\(\)/u);
+  assert.match(frame, /isolateExpandedArtifact\(section\)/u);
+  assert.equal(frame.match(/<HtmlArtifactIframe\b/gu)?.length, 1);
+  assert.match(frame, /trigger\.focus\(\{ preventScroll: true \}\)/u);
+  assert.match(frame, /role=\{expanded \? "dialog" : undefined\}/u);
+  assert.match(frame, /aria-modal=\{expanded \|\| undefined\}/u);
   assert.match(frame, /aria-label=\{`Expand \$\{artifact\.title\}`\}/u);
   assert.match(frame, /aria-label=\{`Export \$\{artifact\.title\}`\}/u);
-  assert.match(frame, /confirmHidden/u);
-  assert.match(frame, /onOpenChange=\{setExpanded\}/u);
+  assert.match(frame, /aria-label=\{`Close \$\{artifact\.title\}`\}/u);
   assert.match(frame, /error && src/u);
   assert.match(frame, /data-html-artifact-error=\{error\.kind\}/u);
   assert.match(frame, /Showing the previous version/u);
   assert.match(frame, /Could not export this visualization/u);
-  const dialog = await fs.readFile(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/ui.tsx"),
+  assert.doesNotMatch(frame, /expandedFrameTargetRef/u);
+  assert.doesNotMatch(frame, /getBoundingClientRect/u);
+  const styles = await fs.readFile(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/styles.css"),
     "utf8",
   );
-  assert.match(dialog, /onEscapeKeyDown=\{\(event\) => dismissBlocked && event\.preventDefault\(\)\}/u);
-  assert.match(dialog, /onCloseAutoFocus/u);
+  assert.match(styles, /\.aiden-html-artifact-popover:popover-open/u);
+  const messageList = await fs.readFile(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/message-list.tsx"),
+    "utf8",
+  );
+  assert.match(messageList, /MINIMUM_VISUALIZING_MS = 700/u);
+  assert.match(messageList, /active=\{active \|\| visualizing\}/u);
 });
 
 test("export refuses to silently drop missing host libraries", () => {

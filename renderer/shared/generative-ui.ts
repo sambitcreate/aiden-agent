@@ -9,6 +9,7 @@ export const HTML_ARTIFACT_MIME_TYPE = "text/html" as const;
 
 /** The agent tool that renders an inline HTML visualization. */
 export const RENDER_ARTIFACT_TOOL_NAME = "render_artifact" as const;
+export const GENERATIVE_UI_ESCAPE_MESSAGE = "aiden:generative-ui:escape" as const;
 
 /** Unique-origin guest: scripts allowed, no parent origin, no forms/popups/downloads. */
 export const GENERATIVE_UI_IFRAME_SANDBOX = "allow-scripts" as const;

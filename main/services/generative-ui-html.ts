@@ -1,6 +1,7 @@
 import {
   GENERATIVE_UI_EXPORT_CSP,
   GENERATIVE_UI_EXPORT_HOST_CSP,
+  GENERATIVE_UI_ESCAPE_MESSAGE,
   GENERATIVE_UI_GUEST_CSP,
   GENERATIVE_UI_HOST_LIBS,
   GENERATIVE_UI_IFRAME_SANDBOX,
@@ -185,6 +186,11 @@ button, input, select, textarea {
 </style>
 </head>
 <body>
+<script>
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") window.parent.postMessage(${JSON.stringify(GENERATIVE_UI_ESCAPE_MESSAGE)}, "*");
+}, true);
+</script>
 ${fragment}
 </body>
 </html>
