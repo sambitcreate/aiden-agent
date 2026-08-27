@@ -116,6 +116,40 @@ test("iframe preview uses aiden-genui protocol src, not inherited srcdoc", async
   assert.doesNotMatch(html, /script-src [^;]*aiden-genui/u);
 });
 
+test("golden interactive control fixture is admitted without a network hint", () => {
+  const fixture = `<button type="button" id="n">0</button>
+<script>
+document.getElementById("n").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  button.textContent = String(Number(button.textContent) + 1);
+});
+</script>`;
+  assert.ok(validateGenerativeUiHtml(fixture).byteLength > 0);
+  const document = wrapGenerativeUiHtml(fixture, "Counter");
+  assert.match(document, /addEventListener\("click"/u);
+  assert.doesNotMatch(document, /https?:\/\//u);
+});
+
+test("artifact chrome uses Dialog expand with return focus and export", async () => {
+  const frame = await fs.readFile(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/html-artifact-frame.tsx"),
+    "utf8",
+  );
+  assert.match(frame, /max-w-\[42rem\]/u);
+  assert.match(frame, /<Dialog/u);
+  assert.match(frame, /returnFocus=\{\(\) => expandTriggerRef\.current\}/u);
+  assert.match(frame, /aria-label=\{`Expand \$\{artifact\.title\}`\}/u);
+  assert.match(frame, /aria-label=\{`Export \$\{artifact\.title\}`\}/u);
+  assert.match(frame, /confirmHidden/u);
+  assert.match(frame, /onOpenChange=\{setExpanded\}/u);
+  const dialog = await fs.readFile(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/ui.tsx"),
+    "utf8",
+  );
+  assert.match(dialog, /onEscapeKeyDown=\{\(event\) => dismissBlocked && event\.preventDefault\(\)\}/u);
+  assert.match(dialog, /onCloseAutoFocus/u);
+});
+
 test("export refuses to silently drop missing host libraries", () => {
   assert.throws(
     () => generativeUiExportDocument("<p>n</p>", TITLE, { "chart.js": "window.Chart = 1;" }),
