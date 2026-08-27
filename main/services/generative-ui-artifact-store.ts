@@ -432,7 +432,7 @@ export class GenerativeUiArtifactStore {
       }
       for (const record of source) {
         const mediaId = remappedHtmlArtifactMediaId(targetChatId, record.artifact.mediaId);
-        const artifact: ChatHtmlArtifactV1 = { ...record.artifact, id: mediaId, mediaId };
+        const artifact: ChatHtmlArtifactV1 = { ...record.artifact, mediaId };
         database.records.push({
           ...record,
           chatId: targetChatId,

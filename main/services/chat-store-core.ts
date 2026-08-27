@@ -789,7 +789,7 @@ export function createChatStore(
               message.role === "assistant"
                 ? (message.htmlArtifacts ?? []).map((artifact) => {
                     const mediaId = remappedHtmlArtifactMediaId(newChatId, artifact.mediaId);
-                    return { ...artifact, id: mediaId, mediaId };
+                    return { ...artifact, mediaId };
                   })
                 : undefined,
             skill:
