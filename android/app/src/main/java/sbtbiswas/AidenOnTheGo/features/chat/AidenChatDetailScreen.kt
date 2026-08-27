@@ -758,6 +758,27 @@ private fun AssistantMessageRow(
                 }
             }
         }
+        message.htmlArtifacts.orEmpty().forEach { artifact ->
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = palette.raised,
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Text(
+                        text = artifact.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = palette.foreground,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Can't view on this device. View in Aiden Agent.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary,
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -443,6 +443,7 @@ data class AidenChatMessage(
     val role: AidenChatRole,
     val text: String,
     val attachments: List<AidenMessageAttachment>? = null,
+    val htmlArtifacts: List<AidenHtmlArtifact>? = null,
     val outcome: AidenMessageOutcome? = null,
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
@@ -453,8 +454,22 @@ data class AidenChatMessage(
                 text.codePointCount(0, text.length) <= AidenRemoteProtocol.MAX_TEXT_LENGTH &&
                 (attachments?.size ?: 0) <= 20 &&
                 (attachments?.all { it.isWireSafe } ?: true) &&
+                (htmlArtifacts?.size ?: 0) <= 40 &&
+                (htmlArtifacts?.all { it.isWireSafe } ?: true) &&
                 (outcome?.isWireSafe ?: true) &&
                 (timeline?.isRendererSafe(text.length) ?: true)
+}
+
+@Serializable
+data class AidenHtmlArtifact(
+    val id: String,
+    val title: String
+) {
+    val isWireSafe: Boolean
+        get() = id.isNotEmpty() &&
+                id.length <= 256 &&
+                title.isNotEmpty() &&
+                title.length <= 120
 }
 
 @Serializable

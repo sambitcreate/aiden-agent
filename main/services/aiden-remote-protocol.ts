@@ -1528,6 +1528,29 @@ export function parseAidenRemoteBotChatCreateRequest(
     : {};
 }
 
+function parseChatHtmlArtifactsProjection(
+  value: unknown,
+  label: string,
+): NonNullable<AidenRemoteChatProjection["messages"][number]["htmlArtifacts"]> {
+  if (!Array.isArray(value) || value.length > 40) {
+    throw new Error(`${label} htmlArtifacts must contain at most 40 items.`);
+  }
+  const ids = new Set<string>();
+  return value.map((entry, index) => {
+    if (!isRecord(entry)) throw new Error(`${label} html artifact ${index} must be an object.`);
+    const id = boundedText(entry.id, `${label} html artifact ${index} id`, 256);
+    if (!/^[A-Za-z0-9._:-]{1,256}$/u.test(id) || ids.has(id)) {
+      throw new Error(`${label} html artifact ${index} id is invalid.`);
+    }
+    ids.add(id);
+    const title = boundedText(entry.title, `${label} html artifact ${index} title`, 120);
+    if (title.trim() !== title) {
+      throw new Error(`${label} html artifact ${index} title is invalid.`);
+    }
+    return { id, title };
+  });
+}
+
 function parseChatMessageAttachments(
   value: unknown,
   label: string,
@@ -1676,6 +1699,14 @@ export function parseAidenRemoteChatProjection(
           ? {
               attachments: parseChatMessageAttachments(
                 entry.attachments,
+                `${label} message ${index}`,
+              ),
+            }
+          : {}),
+        ...(hasOwn(entry, "htmlArtifacts")
+          ? {
+              htmlArtifacts: parseChatHtmlArtifactsProjection(
+                entry.htmlArtifacts,
                 `${label} message ${index}`,
               ),
             }

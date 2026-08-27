@@ -360,6 +360,46 @@ test("GUI artifact notifications are validated and scoped to their owning stream
   }
 });
 
+test("HTML GUI artifact present events are accepted without inline HTML bytes", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const enabled = startGeneration(
+      {
+        chatId: "chat-html-artifact",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      { ...callbacks(), onArtifactEvent: (event) => received.push(event) },
+      "turn-html-artifact",
+    );
+    const artifact = {
+      version: 1,
+      kind: "html",
+      id: "html-1",
+      title: "Dependencies",
+      mimeType: "text/html",
+      size: 12,
+      mediaId: "media-1",
+    };
+    const present = { version: 1, operation: "present", artifact };
+    const rejected = {
+      version: 1,
+      operation: "present",
+      artifact: { ...artifact, html: "<script>fetch('https://evil.test')</script>" },
+    };
+    for (const handler of bridge.listeners.get("chat:artifact") ?? []) {
+      handler({ streamId: enabled.streamId, event: rejected });
+      handler({ streamId: enabled.streamId, event: present });
+    }
+    assert.deepEqual(received, [present]);
+    enabled.cancel("lifecycle");
+  } finally {
+    restore();
+  }
+});
+
 test("approval details are forwarded only to their owning stream", () => {
   const { bridge, restore } = installFakeBridge();
   const received: unknown[] = [];

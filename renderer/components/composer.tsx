@@ -115,6 +115,7 @@ interface ComposerProps {
     text: string,
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
+    options?: { visualize?: boolean },
   ) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
@@ -747,6 +748,16 @@ export function Composer({
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
+        submitComposerInstruction: (instruction, prompt) => {
+          if (instruction !== "visualize") return false;
+          const nextPrompt =
+            prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          if (!nextPrompt) {
+            toast.info("Add what to visualize after /visualize, then send.");
+            return true;
+          }
+          return onSend(nextPrompt, attachments, selectedSkill, { visualize: true });
+        },
       });
       const asyncAction = attempted.kind === "async";
       if (asyncAction) slashActionPendingRef.current = true;
@@ -764,12 +775,15 @@ export function Composer({
         toast.info("That app action is unavailable right now.");
         return;
       }
+      const usesDraftOnlyCommit =
+        (result.command.action.kind === "session" &&
+          (result.command.action.action === "clone" ||
+            result.command.action.action === "export" ||
+            result.command.action.action === "worktree")) ||
+        result.command.action.kind === "composer-instruction";
       if (
         asyncAction &&
-        !(result.command.action.kind === "session" &&
-        (result.command.action.action === "clone" ||
-          result.command.action.action === "export" ||
-          result.command.action.action === "worktree")
+        !(usesDraftOnlyCommit
           ? slashActionDraftCommitIsCurrent(expectedCommit, {
               draft: draftRef.current.text,
               epoch: draftRef.current.slashTracker.epoch,
@@ -805,6 +819,9 @@ export function Composer({
       exportChat,
       onOpenReview,
       onOpenSettings,
+      onSend,
+      attachments,
+      selectedSkill,
       requestRename,
       slashResultSelectable,
       slashSession,

@@ -2768,6 +2768,23 @@ private struct AidenMessageView: View {
                     .accessibilityElement(children: .combine)
                 }
             }
+            if message.role == .assistant, let artifacts = message.htmlArtifacts, !artifacts.isEmpty {
+                ForEach(artifacts, id: \.id) { artifact in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(artifact.title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text("Can't view on this device. View in Aiden Agent.")
+                            .font(.caption)
+                            .foregroundStyle(palette.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(artifact.title). Can't view on this device. View in Aiden Agent.")
+                }
+            }
             if message.role == .assistant, let outcome = message.outcome {
                 AidenMessageOutcomeView(outcome: outcome)
             }

@@ -46,6 +46,10 @@ export interface SlashCommandActionHandlers {
   openSessionDetails?: () => void;
   openLogout?: () => void;
   openWorktree?: (branchName?: string) => void | Promise<void>;
+  submitComposerInstruction?: (
+    instruction: "visualize",
+    prompt: string,
+  ) => void | Promise<void>;
 }
 
 const unavailable = (reason: string): SlashCommandAvailabilityResult => ({
@@ -110,6 +114,13 @@ export function slashCommandAvailability(
     case "workspace-worktree":
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");
       break;
+    case "idle-workspace":
+      if (!context.hasWorkspace) return unavailable("Open a workspace first.");
+      if (!context.hasChat) return unavailable("Open a chat first.");
+      if (!context.idle) {
+        return unavailable(context.idleBlockedReason ?? "Finish the current response first.");
+      }
+      break;
     case "always":
       break;
   }
@@ -158,6 +169,15 @@ export function validateSlashCommandArgument(
   if (command.argument === "none") return { valid: true };
   const value = argument.trim();
   if (!value) return { valid: true };
+  if (command.argument === "optional-prompt") {
+    if (value.length > 4000 || /[\p{Cc}\p{Cf}]/u.test(value)) {
+      return {
+        valid: false,
+        reason: "Enter a short visualization prompt on one line.",
+      };
+    }
+    return { valid: true, value };
+  }
   if (command.argument === "optional-title") {
     if (!/[\p{Cc}\p{Cf}]/u.test(value) && Array.from(value).length <= 120) {
       return { valid: true, value };
@@ -247,6 +267,12 @@ export function executeSlashCommandAction(
           return result instanceof Promise ? result.then(() => true) : true;
         }
       }
+      return false;
+    case "composer-instruction": {
+      if (!handlers.submitComposerInstruction) return false;
+      const result = handlers.submitComposerInstruction(command.action.instruction, argument.trim());
+      return result instanceof Promise ? result.then(() => true) : true;
+    }
   }
 }
 

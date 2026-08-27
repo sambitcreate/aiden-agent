@@ -343,6 +343,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
+  const visualizeTurnRef = React.useRef(false);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -508,12 +509,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
-          "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
+          "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
         );
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
-          "A previous image response could not be recovered. Delete this chat to discard it before copying.",
+          "A previous visual artifact could not be recovered. Delete this chat to discard it before copying.",
         );
       }
       if (isGenerating || isStartingGeneration || approvals.length > 0) {
@@ -686,12 +687,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
         });
       };
+      const visualize = visualizeTurnRef.current === true;
+      visualizeTurnRef.current = false;
       const handle = startGeneration(
         {
           chatId,
           workspaceId: effectiveWorkspaceId,
           providerId,
           model,
+          ...(visualize ? { visualize: true as const } : {}),
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
@@ -733,9 +737,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             const { artifact } = event;
             setIsModelLoading(false);
+            if (artifact.kind === "html") {
+              const index = streamingArtifactsRef.current.findIndex(
+                (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
+              );
+              if (index >= 0) {
+                streamingArtifactsRef.current = streamingArtifactsRef.current.map((candidate, i) =>
+                  i === index ? artifact : candidate,
+                );
+              } else {
+                streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+              }
+              setStreamingArtifacts(streamingArtifactsRef.current);
+              return;
+            }
             if (
               streamingArtifactsRef.current.some(
-                (candidate) => candidate.attachment.id === artifact.attachment.id,
+                (candidate) =>
+                  candidate.kind === "image" && candidate.attachment.id === artifact.attachment.id,
               )
             ) {
               return;
@@ -930,15 +949,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleSend = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+    async (
+      text: string,
+      attachments: Attachment[],
+      skillInvocation?: SkillInvocationV1,
+      options?: { visualize?: boolean },
+    ) => {
+      visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
-          "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
+          "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
         );
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
-          "A previous image response could not be recovered. Delete this chat to discard it before sending another message.",
+          "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
         );
       }
       if (computerUseSaving) {
@@ -1709,9 +1734,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             readinessMessage={
               imageArtifactRecoveryUnavailable
-                ? "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
+                ? "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
                 : imageArtifactRecoveryPending
-                ? "An image response could not be recovered. Delete this chat to discard it before sending another message."
+                ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
                 : readinessMessage
             }
             hasMessages={hasMessages}
@@ -1768,7 +1793,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 : imageArtifactRecoveryUnavailable
                   ? "Open Aiden's developer log to locate the image staging file that needs repair."
                 : imageArtifactRecoveryPending
-                  ? "Delete this chat to discard the unrecovered image response before copying."
+                  ? "Delete this chat to discard the unrecovered visual artifact before copying."
                   : undefined
             }
             slashPaletteBlocked={Boolean(pending)}
@@ -1868,6 +1893,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ) : (
         <MessageList
           key={chatId}
+          chatId={chatId}
           messages={messages}
           streamingText={displayedStreamingText}
           streamingReasoning={displayedStreamingReasoning}
@@ -1882,9 +1908,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           error={
             error ??
             (imageArtifactRecoveryUnavailable
-              ? "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
+              ? "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
               : imageArtifactRecoveryPending
-                ? "An image response could not be recovered. Delete this chat to discard it before continuing."
+                ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
                 : null)
           }
         />

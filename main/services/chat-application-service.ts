@@ -5,6 +5,7 @@ import type { ParsedPublicChatCreate } from "../handlers/chat-create-params.js";
 import type { chatStore } from "./chat-store.js";
 import type { configStore } from "./config-store.js";
 import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
+import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
 import type { Chat } from "./types.js";
@@ -55,6 +56,10 @@ export interface ChatApplicationDependencies {
     typeof displayImageArtifactStore,
     "availability" | "hasPending" | "deleteChat"
   >;
+  generativeUiArtifactStore: Pick<
+    typeof generativeUiArtifactStore,
+    "availability" | "hasPending" | "deleteChat"
+  >;
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "admit">;
   workspaceOperationRegistry: typeof workspaceOperationRegistry;
   subagentRunStore: Pick<
@@ -90,17 +95,27 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         reconciliationRequired = !(await deps.llmClient.waitForChatIdle(chatId));
       }
       const imageArtifactAvailability = deps.displayImageArtifactStore.availability();
-      const imageArtifactRecoveryUnavailable = !imageArtifactAvailability.available;
-      const [chat, stagedImageArtifact] = await Promise.all([
+      const htmlArtifactAvailability = deps.generativeUiArtifactStore.availability();
+      const imageArtifactRecoveryUnavailable =
+        !imageArtifactAvailability.available || !htmlArtifactAvailability.available;
+      const [chat, stagedImageArtifact, stagedHtmlArtifact] = await Promise.all([
         deps.chatStore.get(chatId),
-        imageArtifactRecoveryUnavailable
+        !imageArtifactAvailability.available
           ? Promise.resolve(false)
           : deps.displayImageArtifactStore.hasPending(chatId),
+        !htmlArtifactAvailability.available
+          ? Promise.resolve(false)
+          : deps.generativeUiArtifactStore.hasPending(chatId),
       ]);
       reconciliationRequired ||= deps.llmClient.isChatOwnedByInactiveRenderer(chatId);
       const imageArtifactRecoveryPending =
-        stagedImageArtifact && !deps.llmClient.isChatBusy(chatId)
-          ? (await deps.displayImageArtifactStore.hasPending(chatId)) &&
+        (stagedImageArtifact || stagedHtmlArtifact) && !deps.llmClient.isChatBusy(chatId)
+          ? ((stagedImageArtifact
+              ? await deps.displayImageArtifactStore.hasPending(chatId)
+              : false) ||
+              (stagedHtmlArtifact
+                ? await deps.generativeUiArtifactStore.hasPending(chatId)
+                : false)) &&
             !deps.llmClient.isChatBusy(chatId)
           : false;
       return {
@@ -246,6 +261,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         } catch (error) {
           deps.logError("pi", "Could not delete staged image artifacts.", error);
           throw new Error("Aiden could not delete this chat's staged image artifacts.");
+        }
+        try {
+          await deps.generativeUiArtifactStore.deleteChat(chatId);
+        } catch (error) {
+          deps.logError("pi", "Could not delete staged HTML artifacts.", error);
+          throw new Error("Aiden could not delete this chat's staged HTML artifacts.");
         }
         try {
           await deps.piRuntimeEffectStore.deleteChat(chatId);

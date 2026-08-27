@@ -78,6 +78,11 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
       hasPending: async () => false,
       deleteChat: async () => undefined,
     },
+    generativeUiArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => false,
+      deleteChat: async () => undefined,
+    },
     workspaceMutationGate: {
       admit: () => ({ signal: new AbortController().signal, release: () => undefined }),
     },
@@ -184,6 +189,11 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
       hasPending: async () => false,
       deleteChat: async () => { events.push("artifacts"); },
     },
+    generativeUiArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => false,
+      deleteChat: async () => { events.push("html-artifacts"); },
+    },
     piRuntimeEffectStore: { deleteChat: async () => { events.push("effects"); } },
     piCompactionSessionStore: { deleteChat: async () => { events.push("compaction"); } },
     chatStore: {
@@ -197,7 +207,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
     },
   });
   await application.service.remove("chat-1");
-  assert.deepEqual(events, ["tombstone", "artifacts", "effects", "compaction", "chat", "complete"]);
+  assert.deepEqual(events, ["tombstone", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {

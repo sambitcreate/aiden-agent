@@ -1,6 +1,6 @@
 # Generative UI Artifacts Plan
 
-Status: Planned  
+Status: Active  
 Date: 2026-08-26  
 Sources: Google Antigravity blog [Visualizing with the help of Antigravity](https://antigravity.google/blog/visualizing-with-the-help-of-antigravity) (2026-08-26), [Antigravity changelog 2.11.0](https://antigravity.google/changelog), [Artifacts overview](https://antigravity.google/docs/artifacts), Aiden `docs/pi-gui-artifacts.md`, `display_image` extension, Designer Mode plan, ChatGPT work-surface notes.
 
@@ -14,13 +14,15 @@ This is **not** Antigravity Planning Mode (implementation plans, HITL approve/re
 
 **Copy Aiden’s existing GUI-artifact path, not Antigravity’s undocumented internals and not Pi coding-agent plugins.**
 
-| Option | Verdict |
-| --- | --- |
-| Official Pi extension loader (`@earendil-works/pi-coding-agent`, `discoverAndLoadExtensions`) | **Reject.** Aiden deliberately does not depend on that package. Executable user plugins in Electron main are a trust decision we already refused. |
-| Ordinary `buildAgentTools` tool | **Reject for this feature.** GUI presentation is chat-scoped, non-replayable, and must not leak HTML into Pi history. `docs/pi-gui-artifacts.md` requires a chat-scoped `PiAgentRuntimeExtension`. |
-| New Electron `<webview>` | **Reject for MVP.** Disabled today; Designer Mode already prefers iframe; Electron discourages webview. |
-| Designer Mode Vite/Onlook preview | **Do not wait on, do not merge.** Designer is source-mapped preview of the user’s running app with write-back. GenUI is a **self-contained generated document** with no project toolchain. |
-| **Chat-scoped `PiAgentRuntimeExtension` + `chat:artifact` + sandboxed `iframe`** | **Adopt.** Same shape as `aiden.gui.display-image`. |
+
+| Option                                                                                        | Verdict                                                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Official Pi extension loader (`@earendil-works/pi-coding-agent`, `discoverAndLoadExtensions`) | **Reject.** Aiden deliberately does not depend on that package. Executable user plugins in Electron main are a trust decision we already refused.                                                  |
+| Ordinary `buildAgentTools` tool                                                               | **Reject for this feature.** GUI presentation is chat-scoped, non-replayable, and must not leak HTML into Pi history. `docs/pi-gui-artifacts.md` requires a chat-scoped `PiAgentRuntimeExtension`. |
+| New Electron `<webview>`                                                                      | **Reject for MVP.** Disabled today; Designer Mode already prefers iframe; Electron discourages webview.                                                                                            |
+| Designer Mode Vite/Onlook preview                                                             | **Do not wait on, do not merge.** Designer is source-mapped preview of the user’s running app with write-back. GenUI is a **self-contained generated document** with no project toolchain.         |
+| **Chat-scoped** `PiAgentRuntimeExtension` **+** `chat:artifact` **+ sandboxed** `iframe`      | **Adopt.** Same shape as `aiden.gui.display-image`.                                                                                                                                                |
+
 
 Antigravity 2.11.0 is the product reference for *what users see* (inline HTML in chat, Chart.js / Plotly / KaTeX, export standalone HTML, inspect, `/generative_ui`). Official docs for GenUI are thin: `docs/artifacts` still describes planning files, not widget sandbox, MIME, or a render tool schema. Aiden should **invent a tight contract** rather than guess Antigravity’s IPC.
 
@@ -32,7 +34,7 @@ Documented or changelog-backed:
 - **Zero-dependency / offline**: no extra npm install; export and reopen later.
 - **Inline HTML in chat** (2.11.0).
 - Host support for **KaTeX, Chart.js, Plotly** in widgets and previews.
-- Slash **`/generative_ui`** plus natural language.
+- Slash `/generative_ui` plus natural language.
 - Theme-aware widget form controls and scrollbars (2.11.0 fix).
 - File-backed artifact panel (nested-dir listing bugfix implies **real files** in Antigravity’s app data, not only chat blobs).
 
@@ -42,6 +44,8 @@ Do **not** copy as GenUI:
 - Artifact Review Policy, CLI `/artifact` file picker.
 - Nano Banana **raster** mockups (images already have `display_image`).
 - Browser-agent JS execution policy (different surface).
+
+
 
 ## Architecture
 
@@ -60,6 +64,8 @@ renderer
   → persist opaque media id + metadata on the assistant message
 ```
 
+
+
 ### 1. Inbuilt Pi extension (Aiden adapter, not Pi loader)
 
 New module modeled on `main/services/display-image-extension.ts`:
@@ -72,13 +78,15 @@ New module modeled on `main/services/display-image-extension.ts`:
 
 Parameters (TypeBox, fail closed):
 
-| Field | Rules |
-| --- | --- |
-| `title` | 1–120 chars, no control characters |
-| `html` | Optional. UTF-8 HTML document or fragment. Hard cap (see limits). Mutually exclusive with `path`. |
-| `path` | Optional. Workspace-relative `.html` / `.htm` file. Same path pinning as `display_image` (realpath, lexical containment, regular file). Read into the stage; **do not** leave the renderer pointing at the workspace path. |
 
-Prefer **`html` for generation**. `path` exists so the agent can refine a file it already wrote for the user; the presented bytes are still copied into the app-owned store so reopen/export do not depend on the file remaining.
+| Field   | Rules                                                                                                                                                                                                                      |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title` | 1–120 chars, no control characters                                                                                                                                                                                         |
+| `html`  | Optional. UTF-8 HTML document or fragment. Hard cap (see limits). Mutually exclusive with `path`.                                                                                                                          |
+| `path`  | Optional. Workspace-relative `.html` / `.htm` file. Same path pinning as `display_image` (realpath, lexical containment, regular file). Read into the stage; **do not** leave the renderer pointing at the workspace path. |
+
+
+Prefer `html` **for generation**. `path` exists so the agent can refine a file it already wrote for the user; the presented bytes are still copied into the app-owned store so reopen/export do not depend on the file remaining.
 
 Replace/update: a later call in the **same generation** with the same title may replace the previous staged artifact (iteration). Across messages, each successful call is a new artifact unless we later add an explicit `replaceId` (post-MVP).
 
@@ -88,7 +96,7 @@ Extend the closed union in `renderer/shared/chat-artifacts.ts` **without weakeni
 
 New kind `"html"` (name TBD in implementation; do not reuse `"image"` keys):
 
-- `id`, `title`, `mimeType: "text/html"`, `size`, **opaque `mediaId`** (not a filesystem path).
+- `id`, `title`, `mimeType: "text/html"`, `size`, **opaque** `mediaId` (not a filesystem path).
 - Live IPC must **not** ship multi-megabyte HTML through the existing image-style base64 attachment if that blows chat JSON. Follow `docs/pi-gui-artifacts.md`: kinds that outgrow the inline envelope use an **app-owned media ID** and a narrow protocol (`chat:artifact-media` or reuse a host-owned fetch with stream/chat/generation/media authorization).
 - Renderer parser: exact keys, version, kind, size bounds, id/title length. Unknown kinds still drop.
 
@@ -147,32 +155,42 @@ Aiden’s `/` catalog is **app actions**, not Pi prompt templates (`docs/plans/c
 - **v1:** no new slash row. Natural language + extension `systemPrompt` is enough.
 - **v2 (optional):** a new slash `kind: "turn-instruction"` (or skill-like host instruction) named `/visualize` / `/generative-ui` that sends the remaining argument as a user turn **plus** a host-owned instruction to prefer `render_artifact`. Requires registry, availability (`workspace-required` + idle chat), tests, and must not invent a Pi extension command channel.
 
+
+
 ### 7. Surfaces that stay dark
 
-| Surface | Behavior |
-| --- | --- |
-| Telegram / scheduled / Assistant / Bots / subagents | Tool not contributed (same as `display_image`). |
-| iOS / Android | No HTML iframe in v1. Optional later: “artifact on Mac” metadata or raster snapshot — separate plan. |
-| Compaction / Pi history | Text acknowledgement only. |
+
+| Surface                                             | Behavior                                                                                                                                                                                |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram / scheduled / Assistant / Bots / subagents | Tool not contributed (same as `display_image`).                                                                                                                                         |
+| iOS / Android                                       | No HTML iframe in v1. Optional later: “artifact on Mac” metadata or raster snapshot — separate plan. When viewing on ios and android say Cant view on this device. View in Aiden Agent. |
+| Compaction / Pi history                             | Text acknowledgement only.                                                                                                                                                              |
+
+
+
 
 ### 8. Onboarding
 
-When the desktop capability **ships**, add a feature-tour bento tile with its own 1024×1024 transparent PNG under `renderer/assets/onboarding/` and extend the onboarding test. Do not advertise it before the sandbox + export path is real.
+No need to add anything on onbaording.
 
 ## Limits (starting numbers; tune with tests)
 
-| Bound | Starting value |
-| --- | --- |
-| HTML bytes per artifact | 512 KiB UTF-8 |
-| Artifacts per response | 4 |
-| Artifacts per chat | 40 |
-| Staged HTML bytes per chat | 8 MiB |
-| Title | 120 chars |
-| Tool wall time | match other GUI tools; abort on `signal` |
+
+| Bound                      | Starting value                           |
+| -------------------------- | ---------------------------------------- |
+| HTML bytes per artifact    | 512 KiB UTF-8                            |
+| Artifacts per response     | 4                                        |
+| Artifacts per chat         | 40                                       |
+| Staged HTML bytes per chat | 8 MiB                                    |
+| Title                      | 120 chars                                |
+| Tool wall time             | match other GUI tools; abort on `signal` |
+
 
 Refuse oversize, non-UTF-8, and path escapes with a **specific** tool error the model can recover from.
 
 ## Phases
+
+
 
 ### Phase 0 — Contract spike (no product UI)
 
@@ -198,7 +216,7 @@ Bundle Chart.js, Plotly, KaTeX; document allowed globals in the tool description
 
 ### Phase 4 — Productization
 
-Onboarding tile; optional `/visualize` instruction slash; consider expanded work-surface tab. Inspector only if Phase 0–3 stay tight.
+Add `/visualize` instruction slash; consider expanded work-surface tab. Inspector only if Phase 0–3 stay tight.
 
 ## Explicit non-goals
 
@@ -209,6 +227,8 @@ Onboarding tile; optional `/visualize` instruction slash; consider expanded work
 - Shipping HTML artifacts to Telegram or Aiden On The Go in this plan.
 - Storing generated HTML in the user’s repository unless they export or the agent used `path` for a file they asked to keep.
 
+
+
 ## Tests (minimum)
 
 - Extension: enablement matrix, path escape, oversize, cancel-before-present, replay never, HTML not in `AgentToolResult`.
@@ -218,14 +238,19 @@ Onboarding tile; optional `/visualize` instruction slash; consider expanded work
 - UI: live present, reload dedupe, expand/export, reduced-motion, empty/error fallback.
 - Onboarding asset contract when the tile is added.
 
+
+
 ## Open questions (decide in Phase 0, do not block the plan)
 
 1. `srcdoc` vs blob URL vs `WebContentsView` after the containment spike.
 2. Whether live IPC uses `mediaId` only (preferred) or a small HTML preview inline.
 3. Whether same-generation retitle replaces or appends.
 
+
+
 ## Implementation notes
 
 - Do not register this on `piAgentRuntimeExtensions` global registry.
 - Keep Designer and GenUI iframe helpers separate until both exist; then extract a shared **containment** module only.
 - Papercuts: log iframe/CSP friction in `.papercuts/troubleshooting.md` as it occurs.
+

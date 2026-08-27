@@ -14,7 +14,9 @@ import {
   assistantPresentationRows,
 } from "../lib/assistant-message-presentation";
 import type { Attachment, ChatMessage } from "../lib/types";
-import type { ChatArtifactV1 } from "../shared/chat-artifacts";
+import type { ChatArtifactV1, ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
+import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
+import { HtmlArtifactList } from "./html-artifact-frame";
 import type { AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -29,6 +31,7 @@ import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/p
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 
 interface MessageListProps {
+  chatId: string;
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
@@ -52,6 +55,8 @@ interface AssistantResponseProps {
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
   attachments?: readonly Attachment[];
+  htmlArtifacts?: readonly ChatHtmlArtifactV1[];
+  chatId?: string;
   subagentChips?: React.ReactNode;
   streaming?: boolean;
   streamComplete?: boolean;
@@ -63,6 +68,8 @@ function AssistantResponse({
   timeline,
   reasoning,
   attachments,
+  htmlArtifacts,
+  chatId,
   subagentChips,
   streaming = false,
   streamComplete,
@@ -92,6 +99,9 @@ function AssistantResponse({
         ) : null}
         {attachments?.length ? (
           <MessageAttachments attachments={attachments} role="assistant" />
+        ) : null}
+        {chatId && htmlArtifacts?.length ? (
+          <HtmlArtifactList chatId={chatId} artifacts={htmlArtifacts} />
         ) : null}
       </>
     );
@@ -146,6 +156,9 @@ function AssistantResponse({
       {attachments?.length ? (
         <MessageAttachments attachments={attachments} role="assistant" />
       ) : null}
+      {chatId && htmlArtifacts?.length ? (
+        <HtmlArtifactList chatId={chatId} artifacts={htmlArtifacts} />
+      ) : null}
     </>
   );
 }
@@ -165,6 +178,7 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
 }
 
 export function MessageList({
+  chatId,
   messages,
   streamingText,
   streamingReasoning,
@@ -187,15 +201,31 @@ export function MessageList({
     }
     return ids;
   }, [messages]);
+  const persistedHtmlIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    for (const message of messages) {
+      for (const artifact of message.htmlArtifacts ?? []) ids.add(artifact.mediaId);
+    }
+    return ids;
+  }, [messages]);
   const liveAttachments = React.useMemo(() => {
     const attachments: Attachment[] = [];
     for (const artifact of streamingArtifacts) {
+      if (!isChatImageArtifact(artifact)) continue;
       if (!persistedAttachmentIds.has(artifact.attachment.id)) {
         attachments.push(artifact.attachment);
       }
     }
     return attachments;
   }, [persistedAttachmentIds, streamingArtifacts]);
+  const liveHtmlArtifacts = React.useMemo(() => {
+    const artifacts: ChatHtmlArtifactV1[] = [];
+    for (const artifact of streamingArtifacts) {
+      if (!isChatHtmlArtifact(artifact)) continue;
+      if (!persistedHtmlIds.has(artifact.mediaId)) artifacts.push(artifact);
+    }
+    return artifacts;
+  }, [persistedHtmlIds, streamingArtifacts]);
 
   React.useEffect(() => {
     const captureFocusedChip = (target: EventTarget | null) => {
@@ -266,6 +296,8 @@ export function MessageList({
                   timeline={m.timeline}
                   reasoning={m.reasoning}
                   attachments={m.attachments}
+                  htmlArtifacts={m.htmlArtifacts}
+                  chatId={chatId}
                   subagentChips={
                     subagentsEnabled && m.subagents ? (
                       <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
@@ -289,13 +321,16 @@ export function MessageList({
         liveSubagents.length > 0 ||
         streamingReasoning ||
         streamingText ||
-        liveAttachments.length > 0 ? (
+        liveAttachments.length > 0 ||
+        liveHtmlArtifacts.length > 0 ? (
           <div className="flex min-w-0 flex-col gap-3">
             <AssistantResponse
               content={streamingText ?? ""}
               timeline={timeline}
               reasoning={streamingReasoning}
               attachments={liveAttachments}
+              htmlArtifacts={liveHtmlArtifacts}
+              chatId={chatId}
               subagentChips={
                 subagentsEnabled && liveSubagents.length > 0 ? (
                   <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />

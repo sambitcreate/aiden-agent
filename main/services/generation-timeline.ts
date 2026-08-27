@@ -134,6 +134,11 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Edit file", target: path };
     case "display_image":
       return { label: "Display image", target: path };
+    case "render_artifact":
+      return {
+        label: "Render artifact",
+        detail: safeDetail(values.title),
+      };
     case "run_command":
       return { label: "Run command", detail: safeDetail(values.description) };
     case "share_image":

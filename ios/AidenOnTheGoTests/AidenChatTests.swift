@@ -209,6 +209,21 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenMessageMediaEdge.forRole(chat.messages.first?.role ?? .user), .leading)
     }
 
+    func testRemoteChatDecodesHtmlArtifactsWithoutRenderingThem() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Viz","messages":[{"id":"message-1","role":"assistant","text":"Chart.","createdAt":"2026-08-20T12:00:00Z","htmlArtifacts":[{"id":"html-1","title":"Dependencies"}]}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.id, "html-1")
+        XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.title, "Dependencies")
+        XCTAssertTrue(chat.messages.first?.htmlArtifacts?.first?.isWireSafe ?? false)
+    }
+
     func testRemoteChatDecodesDurableMacActivityAndUsesMacPresentationLanguage() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

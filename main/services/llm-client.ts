@@ -249,8 +249,18 @@ import {
   DISPLAY_IMAGE_TOOL_NAME,
   shouldEnableDisplayImageExtension,
 } from "./display-image-extension.js";
-import { CHAT_ARTIFACT_EVENT_VERSION } from "../../renderer/shared/chat-artifacts.js";
+import { CHAT_ARTIFACT_EVENT_VERSION, type ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import {
+  MAX_HTML_ARTIFACTS_PER_RESPONSE,
+} from "../../renderer/shared/generative-ui.js";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
+import {
+  createGenerativeUiExtensionRuntime,
+  displayedAssistantHtmlUsage,
+  GENERATIVE_UI_TOOL_NAME,
+  shouldEnableGenerativeUiExtension,
+} from "./generative-ui-extension.js";
+import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
@@ -574,6 +584,8 @@ async function prepareGeneration(
   const sharedImages: Attachment[] = [];
   const displayedImages: Attachment[] = [];
   const displayedImageIds = new Set<string>();
+  const displayedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
+  const displayedHtmlIds = new Set<string>();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const shareImage = (attachment: Attachment) => {
@@ -1100,6 +1112,68 @@ async function prepareGeneration(
     });
     generationExtensions.push(displayImageRuntime.extension);
   }
+  if (
+    !botContext &&
+    shouldEnableGenerativeUiExtension({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      workspaceRoot: folderPath,
+      permission,
+      excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
+    })
+  ) {
+    const htmlStoreAvailability = generativeUiArtifactStore.availability();
+    if (!htmlStoreAvailability.available) {
+      throw new Error(
+        `${htmlStoreAvailability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+      );
+    }
+    const existingHtmlUsage = displayedAssistantHtmlUsage(chat.messages);
+    const pendingHtmlUsage = await generativeUiArtifactStore.usageByChat(params.chatId);
+    if (pendingHtmlUsage.count > 0) {
+      throw new Error(
+        "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.",
+      );
+    }
+    const visualize = params.visualize === true;
+    const generativeUiRuntime = createGenerativeUiExtensionRuntime({
+      workspaceRoot: folderPath!,
+      artifactNamespace: `${streamId}:html`,
+      existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlUsage.bytes,
+      existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlUsage.count,
+      preferArtifactThisTurn: visualize,
+      onArtifact: async (artifact, html) => {
+        await generativeUiArtifactStore.stage({
+          chatId: params.chatId,
+          generationId: streamId,
+          model: params.model,
+          artifact,
+          html,
+        });
+        const index = displayedHtmlArtifacts.findIndex((item) => item.mediaId === artifact.mediaId);
+        if (index >= 0) {
+          displayedHtmlArtifacts[index] = artifact;
+        } else {
+          if (displayedHtmlArtifacts.length >= MAX_HTML_ARTIFACTS_PER_RESPONSE) {
+            throw new Error("This response already contains the maximum number of HTML artifacts.");
+          }
+          displayedHtmlIds.add(artifact.mediaId);
+          displayedHtmlArtifacts.push(artifact);
+        }
+        sendGeneration(streamId, "chat:artifact", {
+          streamId,
+          event: {
+            version: CHAT_ARTIFACT_EVENT_VERSION,
+            operation: "present",
+            artifact,
+          },
+        });
+        return true;
+      },
+    });
+    generationExtensions.push(generativeUiRuntime.extension);
+  }
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
@@ -1130,6 +1204,7 @@ async function prepareGeneration(
     tools,
     generationExtensions,
     displayedImages,
+    displayedHtmlArtifacts,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -1420,6 +1495,7 @@ export const llmClient = {
       tools,
       generationExtensions,
       displayedImages,
+      displayedHtmlArtifacts,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -1498,7 +1574,8 @@ export const llmClient = {
         finalTimeline.status !== "cancelled" &&
         !subagents &&
         !providerFailure &&
-        assistantAttachments.length === 0
+        assistantAttachments.length === 0 &&
+        displayedHtmlArtifacts.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -1521,6 +1598,8 @@ export const llmClient = {
                 : undefined,
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
+            htmlArtifacts:
+              displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
           },
           {
             providerId: params.providerId,
@@ -1538,11 +1617,23 @@ export const llmClient = {
               displayedImages.map((attachment) => attachment.id),
             );
           } catch (error) {
-            // ChatStore is already durable. Startup recovery deduplicates this
-            // staging residue by attachment id before removing it.
             logger.warn(
               "pi",
               `Could not clear committed image artifacts for stream ${streamId}.`,
+              error,
+            );
+          }
+        }
+        if (displayedHtmlArtifacts.length > 0) {
+          try {
+            await generativeUiArtifactStore.commit(
+              params.chatId,
+              displayedHtmlArtifacts.map((artifact) => artifact.mediaId),
+            );
+          } catch (error) {
+            logger.warn(
+              "pi",
+              `Could not commit HTML artifacts for stream ${streamId}.`,
               error,
             );
           }
@@ -2551,7 +2642,8 @@ export const llmClient = {
         } else if (
           !generationHasVisibleOutput(
             full,
-            uniqueResponseImages(sharedImages, displayedImages).length,
+            uniqueResponseImages(sharedImages, displayedImages).length +
+              displayedHtmlArtifacts.length,
           ) &&
           !wasCancelled
         ) {

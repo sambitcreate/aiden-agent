@@ -47,6 +47,7 @@ test("legacy messages render unchanged without provenance", () => {
 test("persisted assistant images render inline with an accessible preview action", () => {
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[
         {
           id: "assistant-image",
@@ -76,6 +77,7 @@ test("image-only live Pi artifacts render before assistant prose exists", () => 
   const attachment = imageAttachment("live-image");
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[]}
       streamingText=""
       streamingReasoning={null}
@@ -90,6 +92,47 @@ test("image-only live Pi artifacts render before assistant prose exists", () => 
   );
   assert.match(markup, /data-message-attachments="assistant"/u);
   assert.match(markup, /preview\.png/u);
+});
+
+test("HTML artifacts render a sandboxed frame chrome before srcdoc loads", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[
+        {
+          id: "assistant-html",
+          role: "assistant",
+          content: "",
+          createdAt: 1,
+          htmlArtifacts: [
+            {
+              version: 1,
+              kind: "html",
+              id: "html-1",
+              title: "Dependencies",
+              mimeType: "text/html",
+              size: 12,
+              mediaId: "media-1",
+            },
+          ],
+        },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(markup, /data-html-artifact="media-1"/u);
+  assert.match(markup, /Dependencies/u);
+  assert.match(markup, /Loading visualization/u);
+  assert.doesNotMatch(markup, /<iframe/u);
+  assert.doesNotMatch(markup, /allow-same-origin/u);
+  assert.doesNotMatch(markup, /<p>hello/u);
 });
 
 test("legacy active image MIME is rendered as a file card instead of inline content", () => {
@@ -172,6 +215,7 @@ test("assistant prose and activity render in chronological order with one copy a
   };
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[
         {
           id: "assistant-1",
@@ -231,6 +275,7 @@ test("assistant images follow chronological prose and display activity", () => {
   };
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[
         {
           id: "assistant-image-order",
@@ -262,6 +307,7 @@ test("assistant images follow chronological prose and display activity", () => {
 test("persisted assistant failure renders once with fixed private-safe copy", () => {
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[
         {
           id: "assistant-failed",

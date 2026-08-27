@@ -11,3 +11,27 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Chart.js
+
+Chart.js is vendored into `resources/generative-ui` for sandboxed Generative UI artifacts.
+
+Copyright (c) 2014-2026 Chart.js Contributors
+
+MIT License. See https://github.com/chartjs/Chart.js/blob/master/LICENSE.md
+
+## Plotly.js
+
+`plotly.js-dist-min` is vendored into `resources/generative-ui` for sandboxed Generative UI artifacts.
+
+Copyright (c) 2016-2026 Plotly, Inc.
+
+MIT License. See https://github.com/plotly/plotly.js/blob/master/LICENSE
+
+## KaTeX
+
+KaTeX (JavaScript, CSS, and fonts) is used in Aiden Markdown and a separate copy is vendored into `resources/generative-ui` for sandboxed Generative UI artifacts.
+
+Copyright (c) 2013-2026 Khan Academy and other contributors
+
+MIT License. See https://github.com/KaTeX/KaTeX/blob/main/LICENSE.txt

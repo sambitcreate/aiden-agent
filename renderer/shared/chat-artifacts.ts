@@ -1,4 +1,10 @@
 import { isCanonicalRasterImageMimeType, MAX_INLINE_IMAGE_BYTES } from "./attachment-contract.js";
+import {
+  HTML_ARTIFACT_MIME_TYPE,
+  MAX_HTML_ARTIFACT_BYTES,
+  isHtmlArtifactMediaId,
+  isHtmlArtifactTitle,
+} from "./generative-ui.js";
 
 export const CHAT_ARTIFACT_VERSION = 1 as const;
 export const CHAT_ARTIFACT_EVENT_VERSION = 1 as const;
@@ -17,8 +23,19 @@ export interface ChatImageArtifactV1 {
   };
 }
 
+export interface ChatHtmlArtifactV1 {
+  version: typeof CHAT_ARTIFACT_VERSION;
+  kind: "html";
+  id: string;
+  title: string;
+  mimeType: typeof HTML_ARTIFACT_MIME_TYPE;
+  size: number;
+  /** Opaque app-owned media identity. Never a filesystem path. */
+  mediaId: string;
+}
+
 /** Versioned union so future Pi extensions can add GUI artifact kinds safely. */
-export type ChatArtifactV1 = ChatImageArtifactV1;
+export type ChatArtifactV1 = ChatImageArtifactV1 | ChatHtmlArtifactV1;
 
 export type ChatArtifactEventV1 =
   | {
@@ -31,7 +48,8 @@ export type ChatArtifactEventV1 =
       operation: "reset";
     };
 
-const ARTIFACT_KEYS = new Set(["version", "kind", "attachment"]);
+const IMAGE_ARTIFACT_KEYS = new Set(["version", "kind", "attachment"]);
+const HTML_ARTIFACT_KEYS = new Set(["version", "kind", "id", "title", "mimeType", "size", "mediaId"]);
 const IMAGE_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "data"]);
 const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
@@ -73,12 +91,9 @@ function base64Value(code: number): number | undefined {
   return undefined;
 }
 
-/** Fail closed before a main-process notification reaches React state. */
-export function parseChatArtifactV1(value: unknown): ChatArtifactV1 | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const artifact = value as Record<string, unknown>;
+function parseChatImageArtifactV1(artifact: Record<string, unknown>): ChatImageArtifactV1 | undefined {
   if (
-    !hasExactKeys(artifact, ARTIFACT_KEYS) ||
+    !hasExactKeys(artifact, IMAGE_ARTIFACT_KEYS) ||
     artifact.version !== CHAT_ARTIFACT_VERSION ||
     artifact.kind !== "image" ||
     !artifact.attachment ||
@@ -118,6 +133,66 @@ export function parseChatArtifactV1(value: unknown): ChatArtifactV1 | undefined 
       data: attachment.data,
     },
   };
+}
+
+export function parseChatHtmlArtifactV1(value: unknown): ChatHtmlArtifactV1 | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const artifact = value as Record<string, unknown>;
+  if (
+    !hasExactKeys(artifact, HTML_ARTIFACT_KEYS) ||
+    artifact.version !== CHAT_ARTIFACT_VERSION ||
+    artifact.kind !== "html" ||
+    typeof artifact.id !== "string" ||
+    artifact.id.length === 0 ||
+    artifact.id.length > MAX_ID_CHARS ||
+    !isHtmlArtifactTitle(artifact.title) ||
+    artifact.mimeType !== HTML_ARTIFACT_MIME_TYPE ||
+    !Number.isSafeInteger(artifact.size) ||
+    (artifact.size as number) < 1 ||
+    (artifact.size as number) > MAX_HTML_ARTIFACT_BYTES ||
+    !isHtmlArtifactMediaId(artifact.mediaId)
+  ) {
+    return undefined;
+  }
+  return {
+    version: CHAT_ARTIFACT_VERSION,
+    kind: "html",
+    id: artifact.id,
+    title: artifact.title as string,
+    mimeType: HTML_ARTIFACT_MIME_TYPE,
+    size: artifact.size as number,
+    mediaId: artifact.mediaId,
+  };
+}
+
+/** Fail closed before a main-process notification reaches React state. */
+export function parseChatArtifactV1(value: unknown): ChatArtifactV1 | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const artifact = value as Record<string, unknown>;
+  if (artifact.kind === "html") return parseChatHtmlArtifactV1(artifact);
+  return parseChatImageArtifactV1(artifact);
+}
+
+export function isChatImageArtifact(value: ChatArtifactV1): value is ChatImageArtifactV1 {
+  return value.kind === "image";
+}
+
+export function isChatHtmlArtifact(value: ChatArtifactV1): value is ChatHtmlArtifactV1 {
+  return value.kind === "html";
+}
+
+export function parseChatHtmlArtifacts(value: unknown): ChatHtmlArtifactV1[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 40) return undefined;
+  const parsed: ChatHtmlArtifactV1[] = [];
+  const ids = new Set<string>();
+  for (const entry of value) {
+    const artifact = parseChatHtmlArtifactV1(entry);
+    if (!artifact || ids.has(artifact.mediaId)) return undefined;
+    ids.add(artifact.mediaId);
+    parsed.push(artifact);
+  }
+  return parsed;
 }
 
 /** Parse the live event envelope independently from any future artifact payload versions. */

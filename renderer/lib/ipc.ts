@@ -767,6 +767,27 @@ export const chatsApi = {
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) =>
     invoke<boolean>("chats:abandonTurn", id, turnId),
+  htmlArtifactSrcdoc: (
+    chatId: string,
+    mediaId: string,
+    theme?: {
+      colorScheme?: "light" | "dark";
+      canvas?: string;
+      foreground?: string;
+      secondary?: string;
+      accent?: string;
+    },
+  ) =>
+    invoke<{ title: string; srcdoc: string } | undefined>("chats:htmlArtifactSrcdoc", {
+      chatId,
+      mediaId,
+      theme,
+    }),
+  exportHtmlArtifact: (chatId: string, mediaId: string) =>
+    invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
+      chatId,
+      mediaId,
+    }),
   appendMessage: (
     id: string,
     message: {

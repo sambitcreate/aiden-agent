@@ -20,6 +20,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     let role: AidenChatRole
     let text: String
     let attachments: [AidenMessageAttachment]?
+    let htmlArtifacts: [AidenHtmlArtifact]?
     let outcome: AidenMessageOutcome?
     let timeline: AidenGenerationTimeline?
     let createdAt: Date
@@ -29,6 +30,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         role: AidenChatRole,
         text: String,
         attachments: [AidenMessageAttachment]? = nil,
+        htmlArtifacts: [AidenHtmlArtifact]? = nil,
         outcome: AidenMessageOutcome? = nil,
         timeline: AidenGenerationTimeline? = nil,
         createdAt: Date
@@ -37,6 +39,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.role = role
         self.text = text
         self.attachments = attachments
+        self.htmlArtifacts = htmlArtifacts
         self.outcome = outcome
         self.timeline = timeline
         self.createdAt = createdAt
@@ -51,6 +54,11 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             [AidenMessageAttachment].self,
             from: values,
             forKey: .attachments
+        )
+        htmlArtifacts = try aidenDecodeOptionalNonNull(
+            [AidenHtmlArtifact].self,
+            from: values,
+            forKey: .htmlArtifacts
         )
         outcome = try aidenDecodeOptionalNonNull(
             AidenMessageOutcome.self,
@@ -71,6 +79,8 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             && text.unicodeScalars.count <= AidenRemoteProtocol.maxTextLength
             && (attachments?.count ?? 0) <= 20
             && (attachments?.allSatisfy(\.isWireSafe) ?? true)
+            && (htmlArtifacts?.count ?? 0) <= 40
+            && (htmlArtifacts?.allSatisfy(\.isWireSafe) ?? true)
             && (outcome?.isWireSafe ?? true)
             // Generation timelines originate in JavaScript, where String.length
             // measures UTF-16 code units. Keep that wire offset convention while
@@ -79,7 +89,19 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, attachments, outcome, timeline, createdAt
+        case id, role, text, attachments, htmlArtifacts, outcome, timeline, createdAt
+    }
+}
+
+struct AidenHtmlArtifact: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+
+    var isWireSafe: Bool {
+        !id.isEmpty
+            && id.unicodeScalars.count <= 256
+            && !title.isEmpty
+            && title.unicodeScalars.count <= 120
     }
 }
 

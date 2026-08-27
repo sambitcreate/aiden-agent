@@ -272,3 +272,39 @@ test("failed async actions return a controlled failure before the composer commi
     });
   }
 });
+
+test("visualize is idle-workspace and submits a composer instruction", () => {
+  const visualize = command("visualize");
+  assert.equal(visualize.availability, "idle-workspace");
+  assert.equal(visualize.argument, "optional-prompt");
+  assert.deepEqual(visualize.action, { kind: "composer-instruction", instruction: "visualize" });
+  assert.deepEqual(slashCommandAvailability(visualize, context), { available: true });
+  assert.match(
+    slashCommandAvailability(visualize, { ...context, hasWorkspace: false }).reason ?? "",
+    /workspace first/iu,
+  );
+  assert.match(
+    slashCommandAvailability(visualize, { ...context, idle: false }).reason ?? "",
+    /current response/iu,
+  );
+  assert.deepEqual(validateSlashCommandArgument(visualize, "draw a DAG"), {
+    valid: true,
+    value: "draw a DAG",
+  });
+  assert.equal(validateSlashCommandArgument(visualize, "bad\nprompt").valid, false);
+
+  const submitted: unknown[] = [];
+  const handlers: SlashCommandActionHandlers = {
+    executeCommand: () => true,
+    openSettings: () => undefined,
+    requestRename: () => undefined,
+    copyLatestResponse: () => undefined,
+    openReview: () => undefined,
+    openAccess: () => undefined,
+    submitComposerInstruction: (instruction, prompt) => {
+      submitted.push([instruction, prompt]);
+    },
+  };
+  assert.equal(executeSlashCommandAction(visualize, "  chart sales  ", handlers), true);
+  assert.deepEqual(submitted, [["visualize", "chart sales"]]);
+});
