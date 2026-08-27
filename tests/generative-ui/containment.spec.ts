@@ -237,3 +237,28 @@ test("standalone export stays interactive without allowing guest navigation", as
     await site.close();
   }
 });
+
+test("restyling one sandboxed iframe preserves its interactive browsing context", async ({
+  page,
+}) => {
+  await page.setContent(`<!DOCTYPE html><html><body>
+    <div id="host"><iframe id="artifact" sandbox="allow-scripts" srcdoc="<button id='counter' type='button'>0</button><script>document.getElementById('counter').onclick = (event) => event.currentTarget.textContent = String(Number(event.currentTarget.textContent) + 1)</script>"></iframe></div>
+  </body></html>`);
+  const counter = page.frameLocator("#artifact").locator("#counter");
+  await counter.click();
+  await expect(counter).toHaveText("1");
+
+  await page.evaluate(() => {
+    const host = document.querySelector("#host");
+    host?.setAttribute("style", "position: fixed; inset: 20px; z-index: 60");
+  });
+  await expect(page.locator("iframe")).toHaveCount(1);
+  await expect(counter).toHaveText("1");
+
+  await page.evaluate(() => {
+    const host = document.querySelector("#host");
+    host?.removeAttribute("style");
+  });
+  await expect(page.locator("iframe")).toHaveCount(1);
+  await expect(counter).toHaveText("1");
+});

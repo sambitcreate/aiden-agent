@@ -64,7 +64,9 @@ function HtmlArtifactFrameImpl({
   const [error, setError] = React.useState<HtmlArtifactFrameError | null>(null);
   const [expanded, setExpanded] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
+  const sectionRef = React.useRef<HTMLElement | null>(null);
   const expandTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const expandedFrameTargetRef = React.useRef<HTMLDivElement | null>(null);
 
   // A same-title replace keeps the mediaId and only changes the content hash,
   // so the fetch resolves into an in-place iframe navigation. The previous
@@ -95,6 +97,32 @@ function HtmlArtifactFrameImpl({
     };
   }, [artifact.id, artifact.mediaId, chatId]);
 
+  React.useLayoutEffect(() => {
+    if (!expanded) return;
+    const section = sectionRef.current;
+    const target = expandedFrameTargetRef.current;
+    if (!section || !target) return;
+    const positionOverTarget = () => {
+      const bounds = target.getBoundingClientRect();
+      section.style.left = `${bounds.left}px`;
+      section.style.top = `${bounds.top}px`;
+      section.style.width = `${bounds.width}px`;
+      section.style.height = `${bounds.height}px`;
+    };
+    positionOverTarget();
+    const observer = new ResizeObserver(positionOverTarget);
+    observer.observe(target);
+    window.addEventListener("resize", positionOverTarget);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", positionOverTarget);
+      section.style.removeProperty("left");
+      section.style.removeProperty("top");
+      section.style.removeProperty("width");
+      section.style.removeProperty("height");
+    };
+  }, [expanded]);
+
   const exportArtifact = React.useCallback(async () => {
     if (exporting) return;
     setError((current) => (current?.kind === "export" ? null : current));
@@ -113,10 +141,19 @@ function HtmlArtifactFrameImpl({
 
   return (
     <section
-      className="max-w-[42rem] overflow-hidden rounded-xl border border-separator bg-control"
+      ref={sectionRef}
+      className={cn(
+        "max-w-[42rem] overflow-hidden rounded-xl border border-separator bg-control",
+        expanded && "fixed z-[60] max-w-none rounded-lg",
+      )}
       data-html-artifact={artifact.mediaId}
     >
-      <header className="flex items-center gap-2 border-b border-separator px-3 py-2">
+      <header
+        className={cn(
+          "flex items-center gap-2 border-b border-separator px-3 py-2",
+          expanded && "hidden",
+        )}
+      >
         <Text variant="small-strong" className="min-w-0 flex-1 truncate">
           {artifact.title}
         </Text>
@@ -141,7 +178,7 @@ function HtmlArtifactFrameImpl({
           <Download aria-hidden="true" />
         </Button>
       </header>
-      {error && src ? (
+      {error && src && !expanded ? (
         <div
           role="alert"
           className="border-b border-separator bg-control-hover px-3 py-2"
@@ -154,7 +191,7 @@ function HtmlArtifactFrameImpl({
           </Text>
         </div>
       ) : null}
-      <div className="h-[22rem] min-h-[12rem]">
+      <div className={cn(expanded ? "h-full min-h-0" : "h-[22rem] min-h-[12rem]")}>
         {src ? (
           <HtmlArtifactIframe src={src} title={artifact.title} />
         ) : (
@@ -173,14 +210,15 @@ function HtmlArtifactFrameImpl({
         size="large"
         returnFocus={() => expandTriggerRef.current}
       >
-        <div className="h-[min(70vh,36rem)] overflow-hidden rounded-lg border border-separator">
-          {src ? (
-            <HtmlArtifactIframe src={src} title={artifact.title} />
-          ) : (
+        <div
+          ref={expandedFrameTargetRef}
+          className="h-[min(70vh,36rem)] overflow-hidden rounded-lg border border-separator"
+        >
+          {!src ? (
             <Text variant="small" color="secondary">
               {error?.message ?? "Loading visualization…"}
             </Text>
-          )}
+          ) : null}
         </div>
       </Dialog>
     </section>

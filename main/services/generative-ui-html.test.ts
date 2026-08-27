@@ -157,6 +157,9 @@ test("artifact chrome uses Dialog expand with return focus and export", async ()
   );
   assert.match(frame, /max-w-\[42rem\]/u);
   assert.match(frame, /<Dialog/u);
+  assert.match(frame, /target\.getBoundingClientRect\(\)/u);
+  assert.match(frame, /expanded && "fixed z-\[60\]/u);
+  assert.equal(frame.match(/<HtmlArtifactIframe /gu)?.length, 1);
   assert.match(frame, /returnFocus=\{\(\) => expandTriggerRef\.current\}/u);
   assert.match(frame, /aria-label=\{`Expand \$\{artifact\.title\}`\}/u);
   assert.match(frame, /aria-label=\{`Export \$\{artifact\.title\}`\}/u);
