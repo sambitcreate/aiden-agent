@@ -37,7 +37,7 @@ import {
   useModelPadLayout,
 } from "../lib/model-pad-layout";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, ChevronsUpDown, Pin, SlidersHorizontal } from "lucide-react";
+import { Check, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
 
@@ -522,7 +522,6 @@ export function ModelPicker({
                   ? "Select model"
                   : "No models"}
           </span>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-tertiary" />
         </Button>
       </PopoverTrigger>
 

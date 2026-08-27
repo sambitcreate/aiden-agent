@@ -17,18 +17,9 @@ import {
   Server,
   Settings,
   Sun,
-  TerminalSquare,
   Wrench,
 } from "lucide-react";
-import {
-  Command,
-  CommandEmpty,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-  toast,
-} from "./ui";
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
 import {
   COMMANDS,
@@ -45,10 +36,7 @@ import {
 import { useChats, useProviders, useSettings, queryKeys } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { providersApi, settingsApi } from "../lib/ipc";
-import {
-  readModelSelectionRevision,
-  useModelSelection,
-} from "../lib/use-model-selection";
+import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
 import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
 import { SETTINGS_DESTINATIONS } from "../lib/settings-section";
 import {
@@ -91,7 +79,7 @@ function Shortcut({ commandId }: { commandId: CommandId }) {
   const value = binding(commandId);
   if (!value) return null;
   return (
-    <kbd className="ml-auto shrink-0 rounded-md border border-separator bg-control/55 px-1.5 py-0.5 font-sans text-mini text-secondary">
+    <kbd className="ml-auto shrink-0 rounded-md bg-control/55 px-1.5 py-0.5 font-sans text-mini text-secondary">
       {prettyAccelerator(value)}
     </kbd>
   );
@@ -132,10 +120,12 @@ export function AppCommandPalette({
   });
   const models = React.useMemo(
     () =>
-      settings.data ? visibleModelEntries(
-        createModelEntries(providers.data ?? []),
-        settings.data?.hiddenModelsByProvider,
-      ) : [],
+      settings.data
+        ? visibleModelEntries(
+            createModelEntries(providers.data ?? []),
+            settings.data?.hiddenModelsByProvider,
+          )
+        : [],
     [providers.data, settings.data?.hiddenModelsByProvider],
   );
   const unavailableModelProviders = React.useMemo(
@@ -270,9 +260,7 @@ export function AppCommandPalette({
           const currentSettings = await settingsApi.get();
           if (!isCurrent()) return;
           previousAppearance = normalizeAppearanceConfig(
-            readCachedAppearance() ??
-              currentSettings.appearance ??
-              createDefaultAppearanceConfig(),
+            readCachedAppearance() ?? currentSettings.appearance ?? createDefaultAppearanceConfig(),
           );
           const appearance = {
             ...previousAppearance,
@@ -360,7 +348,7 @@ export function AppCommandPalette({
           data-slot="dialog-content"
           data-command-palette-content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[16vh] z-50 w-[min(92vw,640px)] -translate-x-1/2 overflow-hidden rounded-dialog bg-popover shadow-modal outline-none"
+          className="fixed left-1/2 top-[16vh] z-50 w-[min(92vw,640px)] -translate-x-1/2 overflow-hidden rounded-[22px] bg-popover shadow-modal outline-none"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             requestAnimationFrame(() =>
@@ -376,8 +364,8 @@ export function AppCommandPalette({
           <DialogPrimitive.Title className="sr-only">
             {MODE_LABELS[palette.mode]}
           </DialogPrimitive.Title>
-          <Command className="min-h-[420px]">
-            <div className="flex h-10 items-center border-b border-separator px-3">
+          <Command className="min-h-[420px] [&_[cmdk-item][data-selected=true]]:bg-control">
+            <div className="flex h-10 items-center px-3">
               {palette.mode === "root" ? (
                 <span className="mr-2 flex size-6 items-center justify-center rounded-md bg-control text-secondary">
                   <Keyboard className="size-3.5" />
@@ -403,6 +391,8 @@ export function AppCommandPalette({
             </div>
             <CommandInput
               data-command-palette-input
+              containerClassName="px-4"
+              showSeparator={false}
               value={query}
               onValueChange={setQuery}
               placeholder={
@@ -466,7 +456,7 @@ export function AppCommandPalette({
                     onSelect={() => runCommand("chat.new")}
                     disabled={!canExecute("chat.new")}
                     aria-keyshortcuts={ariaKeyShortcut(binding("chat.new"))}
-                    className="min-h-11 px-3"
+                    className="mb-1 min-h-11 px-3"
                   >
                     <MessageSquare className="size-4 text-secondary" />
                     <span>New chat</span>
@@ -476,9 +466,13 @@ export function AppCommandPalette({
                       <ItemDetail>Open a workspace first</ItemDetail>
                     )}
                   </CommandItem>
-                  <CommandSeparator />
                   {chats.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading chats" className="min-h-11 px-3">
+                    <CommandItem
+                      forceMount
+                      disabled
+                      value="Loading chats"
+                      className="min-h-11 px-3"
+                    >
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading chats…</span>
                     </CommandItem>
@@ -512,77 +506,77 @@ export function AppCommandPalette({
                 </>
               ) : null}
 
-              {palette.mode === "models"
-                ? providers.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading models" className="min-h-11 px-3">
-                      <RefreshCw className="size-4 animate-spin text-secondary" />
-                      <span>Loading models…</span>
-                    </CommandItem>
-                  ) : providers.isError ? (
-                    <CommandItem
-                      forceMount
-                      value="Retry loading models"
-                      onSelect={() => void providers.refetch()}
-                      className="min-h-11 px-3"
-                    >
-                      <RefreshCw className="size-4 text-secondary" />
-                      <span>Models could not be loaded</span>
-                      <ItemDetail>Retry</ItemDetail>
-                    </CommandItem>
-                  ) : models.map((entry) => {
-                    const selected =
-                      selection.providerId === entry.providerId && selection.model === entry.model;
-                    return (
-                      <CommandItem
-                        key={entry.value}
-                        value={`${entry.label} ${entry.model} ${entry.providerLabel}`}
-                        onSelect={() => void selectModel(entry.providerId, entry.model)}
-                        disabled={busy}
-                        aria-current={selected ? "true" : undefined}
-                        className="min-h-11 px-3"
-                      >
-                        <Bot className="size-4 shrink-0 text-secondary" />
-                        <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                        <ItemDetail>{entry.providerLabel}</ItemDetail>
-                        {selected ? (
-                          <>
-                            <span className="sr-only">Current</span>
-                            <Check
-                              aria-hidden="true"
-                              className="size-4 shrink-0 text-accent"
-                            />
-                          </>
-                        ) : null}
-                      </CommandItem>
-                    );
-                  }).concat(
-                    unavailableModelProviders.map((provider) => (
-                      <CommandItem
-                        key={`unavailable-${provider.id}`}
-                        value={`${provider.label} ${provider.models.join(" ")} unavailable setup provider`}
-                        onSelect={() => {
-                          if (!allowNavigation()) return;
-                          rememberCommand("model.change");
-                          close();
-                          void navigate({
-                            to: "/settings",
-                            search: { section: "providers" },
-                          });
-                        }}
-                        className="min-h-11 px-3"
-                      >
-                        <Server className="size-4 shrink-0 text-secondary" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {provider.label} models
-                        </span>
-                        <ItemDetail>
-                          {provider.models.length > 0 ? "Setup needed" : "No models available"}
-                        </ItemDetail>
-                        <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                      </CommandItem>
-                    )),
-                  )
-                : null}
+              {palette.mode === "models" ? (
+                providers.isLoading ? (
+                  <CommandItem forceMount disabled value="Loading models" className="min-h-11 px-3">
+                    <RefreshCw className="size-4 animate-spin text-secondary" />
+                    <span>Loading models…</span>
+                  </CommandItem>
+                ) : providers.isError ? (
+                  <CommandItem
+                    forceMount
+                    value="Retry loading models"
+                    onSelect={() => void providers.refetch()}
+                    className="min-h-11 px-3"
+                  >
+                    <RefreshCw className="size-4 text-secondary" />
+                    <span>Models could not be loaded</span>
+                    <ItemDetail>Retry</ItemDetail>
+                  </CommandItem>
+                ) : (
+                  models
+                    .map((entry) => {
+                      const selected =
+                        selection.providerId === entry.providerId &&
+                        selection.model === entry.model;
+                      return (
+                        <CommandItem
+                          key={entry.value}
+                          value={`${entry.label} ${entry.model} ${entry.providerLabel}`}
+                          onSelect={() => void selectModel(entry.providerId, entry.model)}
+                          disabled={busy}
+                          aria-current={selected ? "true" : undefined}
+                          className="min-h-11 px-3"
+                        >
+                          <Bot className="size-4 shrink-0 text-secondary" />
+                          <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                          <ItemDetail>{entry.providerLabel}</ItemDetail>
+                          {selected ? (
+                            <>
+                              <span className="sr-only">Current</span>
+                              <Check aria-hidden="true" className="size-4 shrink-0 text-accent" />
+                            </>
+                          ) : null}
+                        </CommandItem>
+                      );
+                    })
+                    .concat(
+                      unavailableModelProviders.map((provider) => (
+                        <CommandItem
+                          key={`unavailable-${provider.id}`}
+                          value={`${provider.label} ${provider.models.join(" ")} unavailable setup provider`}
+                          onSelect={() => {
+                            if (!allowNavigation()) return;
+                            rememberCommand("model.change");
+                            close();
+                            void navigate({
+                              to: "/settings",
+                              search: { section: "providers" },
+                            });
+                          }}
+                          className="min-h-11 px-3"
+                        >
+                          <Server className="size-4 shrink-0 text-secondary" />
+                          <span className="min-w-0 flex-1 truncate">{provider.label} models</span>
+                          <ItemDetail>
+                            {provider.models.length > 0 ? "Setup needed" : "No models available"}
+                          </ItemDetail>
+                          <ChevronRight className="size-4 shrink-0 text-tertiary" />
+                        </CommandItem>
+                      )),
+                    )
+                )
+              ) : null}
 
               {palette.mode === "providers" ? (
                 <>
@@ -590,14 +584,18 @@ export function AppCommandPalette({
                     value="Refresh provider model catalogs update"
                     onSelect={() => void refreshProviders()}
                     disabled={busy}
-                    className="min-h-11 px-3"
+                    className="mb-1 min-h-11 px-3"
                   >
                     <RefreshCw className={cn("size-4 text-secondary", busy && "animate-spin")} />
                     <span>{busy ? "Refreshing providers…" : "Refresh provider catalogs"}</span>
                   </CommandItem>
-                  <CommandSeparator />
                   {providers.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading providers" className="min-h-11 px-3">
+                    <CommandItem
+                      forceMount
+                      disabled
+                      value="Loading providers"
+                      className="min-h-11 px-3"
+                    >
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading providers…</span>
                     </CommandItem>
@@ -645,29 +643,25 @@ export function AppCommandPalette({
                     { mode: "system" as const, title: "Follow macOS appearance", icon: Palette },
                     { mode: "light" as const, title: "Use light appearance", icon: Sun },
                     { mode: "dark" as const, title: "Use dark appearance", icon: Moon },
-                  ].map((item) => (
+                  ].map((item, index) => (
                     <CommandItem
                       key={item.mode}
                       value={`${item.title} theme appearance`}
                       onSelect={() => void setAppearance(item.mode)}
                       disabled={busy}
                       aria-current={appearanceMode === item.mode ? "true" : undefined}
-                      className="min-h-11 px-3"
+                      className={cn("min-h-11 px-3", index === 2 && "mb-1")}
                     >
                       <item.icon className="size-4 text-secondary" />
                       <span>{item.title}</span>
                       {appearanceMode === item.mode ? (
                         <>
                           <span className="sr-only">Current</span>
-                          <Check
-                            aria-hidden="true"
-                            className="ml-auto size-4 text-accent"
-                          />
+                          <Check aria-hidden="true" className="ml-auto size-4 text-accent" />
                         </>
                       ) : null}
                     </CommandItem>
                   ))}
-                  <CommandSeparator />
                   {SETTINGS_DESTINATIONS.map((destination) => (
                     <CommandItem
                       key={destination.id}
@@ -691,14 +685,6 @@ export function AppCommandPalette({
                 </>
               ) : null}
             </CommandList>
-            <div className="flex h-9 items-center gap-3 border-t border-separator px-3 text-mini text-tertiary">
-              <span>↑↓ Navigate</span>
-              <span>↩ Run</span>
-              <span className="ml-auto flex items-center gap-1">
-                <TerminalSquare className="size-3.5" />
-                Local app actions
-              </span>
-            </div>
           </Command>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
