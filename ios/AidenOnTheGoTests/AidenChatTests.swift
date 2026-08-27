@@ -242,6 +242,103 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, ran 1 command")
     }
 
+    func testReasoningActivityUsesOneDisclosureAndSurfacesVisualizationPhase() throws {
+        let activeThinking = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-thinking",
+            status: .running,
+            startedAt: 1_000,
+            finishedAt: nil,
+            steps: [
+                AidenAgentStep(
+                    id: "think-1",
+                    order: 0,
+                    kind: .thinking,
+                    toolName: nil,
+                    label: nil,
+                    status: nil,
+                    startedAt: 1_000,
+                    updatedAt: 1_500,
+                    finishedAt: nil,
+                    contentOffset: 0,
+                    durationMs: nil,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                )
+            ]
+        )
+        XCTAssertTrue(AidenAgentActivityPresentation.hasActiveThinkingStep(activeThinking))
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.reasoningLabel(activeThinking, active: true),
+            "Thinking"
+        )
+
+        let visualizing = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-visualizing",
+            status: .running,
+            startedAt: 1_000,
+            finishedAt: nil,
+            steps: [
+                AidenAgentStep(
+                    id: "think-1",
+                    order: 0,
+                    kind: .thinking,
+                    toolName: nil,
+                    label: nil,
+                    status: nil,
+                    startedAt: 1_000,
+                    updatedAt: 2_000,
+                    finishedAt: 2_000,
+                    contentOffset: 0,
+                    durationMs: 1_000,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                ),
+                AidenAgentStep(
+                    id: "tool-1",
+                    order: 1,
+                    kind: .tool,
+                    toolCallId: "call-1",
+                    toolName: AidenAgentActivityPresentation.renderArtifactToolName,
+                    label: "Render artifact",
+                    status: .running,
+                    startedAt: 2_000,
+                    updatedAt: 2_500,
+                    finishedAt: nil,
+                    contentOffset: 0,
+                    durationMs: nil,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                )
+            ]
+        )
+        XCTAssertFalse(AidenAgentActivityPresentation.hasActiveThinkingStep(visualizing))
+        XCTAssertTrue(
+            AidenAgentActivityPresentation.hasActiveToolStep(
+                visualizing,
+                named: AidenAgentActivityPresentation.renderArtifactToolName
+            )
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.visualizingLabel(visualizing), "Visualizing")
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.reasoningLabel(visualizing, active: false),
+            "Thought briefly"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.activitySteps(visualizing, reasoningVisible: true).map(\.kind),
+            [.tool]
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.activitySteps(visualizing, reasoningVisible: false).map(\.kind),
+            [.thinking, .tool]
+        )
+        XCTAssertNil(AidenAgentActivityPresentation.visualizingLabel(activeThinking))
+    }
+
     func testActivityTimelineRejectsAbsoluteTargetsBeforePresentation() throws {
         let timeline = try JSONDecoder().decode(
             AidenGenerationTimeline.self,

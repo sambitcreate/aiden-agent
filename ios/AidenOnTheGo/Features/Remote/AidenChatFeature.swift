@@ -2827,9 +2827,11 @@ private struct AidenActivityFeed: View {
     let active: Bool
     let progressText: String?
     let showsRunningRowsWhenCollapsed: Bool
+    var steps: [AidenAgentStep]? = nil
     @State private var isExpanded = false
 
-    private var rows: [AidenAgentStep] { Array(timeline.steps.suffix(3)) }
+    private var visibleSteps: [AidenAgentStep] { steps ?? timeline.steps }
+    private var rows: [AidenAgentStep] { Array(visibleSteps.suffix(3)) }
     private var isRunning: Bool { active && timeline.status == .running }
 
     var body: some View {
@@ -2884,7 +2886,7 @@ private struct AidenActivityFeed: View {
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(timeline.steps) { step in
+                    ForEach(visibleSteps) { step in
                         AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
                     }
                     if let progressText, !progressText.isEmpty {
@@ -3845,6 +3847,27 @@ private struct AidenLiveResponseView: View {
         botReply?.finalText ?? model.liveText
     }
 
+    private var reasoningActive: Bool {
+        guard model.isStreaming else { return false }
+        if AidenAgentActivityPresentation.hasActiveThinkingStep(model.activityTimeline) {
+            return true
+        }
+        return model.activityTimeline == nil && model.liveText.isEmpty
+    }
+
+    private var visibleActivitySteps: [AidenAgentStep] {
+        guard let timeline = model.activityTimeline else { return [] }
+        return AidenAgentActivityPresentation.activitySteps(
+            timeline,
+            reasoningVisible: !model.reasoning.isEmpty
+        )
+    }
+
+    private var visualizingLabel: String? {
+        guard model.isStreaming else { return nil }
+        return AidenAgentActivityPresentation.visualizingLabel(model.activityTimeline)
+    }
+
     private var activity: (label: String, orb: OrbState) {
         if model.streamState == .waitingForApproval {
             return ("Waiting for approval", .listening)
@@ -3861,7 +3884,7 @@ private struct AidenLiveResponseView: View {
         if model.streamState == .queued {
             return ("Preparing…", .shaping)
         }
-        return ("Thinking…", .solving)
+        return ("Thinking", .solving)
     }
 
     var body: some View {
@@ -3878,20 +3901,33 @@ private struct AidenLiveResponseView: View {
             }
 
             if !model.reasoning.isEmpty {
-                AidenReasoningCard(text: model.reasoning, active: model.isStreaming)
+                AidenReasoningCard(
+                    text: model.reasoning,
+                    label: AidenAgentActivityPresentation.reasoningLabel(
+                        model.activityTimeline,
+                        active: reasoningActive
+                    ),
+                    active: reasoningActive
+                )
                     .transition(.opacity)
             }
 
-            if let timeline = model.activityTimeline, !timeline.steps.isEmpty {
+            if let timeline = model.activityTimeline, !visibleActivitySteps.isEmpty {
                 AidenActivityFeed(
                     timeline: timeline,
                     active: model.isStreaming,
                     progressText: botReply?.progressText,
-                    showsRunningRowsWhenCollapsed: presentationStyle != .botMessages
+                    showsRunningRowsWhenCollapsed: presentationStyle != .botMessages,
+                    steps: visibleActivitySteps
                 )
                     .transition(.opacity)
             } else if !model.tools.isEmpty {
                 AidenToolActivityCard(tools: model.tools)
+            }
+
+            if let visualizingLabel {
+                AidenActivityPhaseCard(label: visualizingLabel)
+                    .transition(.opacity)
             }
 
             if let approval = model.pendingApproval {
@@ -4085,6 +4121,7 @@ private struct AidenReasoningCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let text: String
+    let label: String
     let active: Bool
     @State private var isExpanded = true
     @State private var userControlled = false
@@ -4098,7 +4135,7 @@ private struct AidenReasoningCard: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Text(active ? "Thinking…" : "Thinking")
+                    Text(label)
                         .font(.caption.weight(.semibold))
                         .aidenActivityShimmer(active)
                     Spacer(minLength: 6)
@@ -4139,6 +4176,22 @@ private struct AidenReasoningCard: View {
                 isExpanded = false
             }
         }
+    }
+}
+
+private struct AidenActivityPhaseCard: View {
+    @Environment(\.aidenPalette) private var palette
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(palette.secondary)
+            .aidenActivityShimmer(true)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            .padding(.horizontal, 12)
+            .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityLabel(label)
     }
 }
 

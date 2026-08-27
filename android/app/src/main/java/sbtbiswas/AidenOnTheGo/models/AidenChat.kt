@@ -342,6 +342,8 @@ data class AidenGenerationTimeline(
 }
 
 object AidenAgentActivityPresentation {
+    const val RENDER_ARTIFACT_TOOL_NAME = "render_artifact"
+
     private val verbs = mapOf(
         "read_file" to Pair("Reading", "Read"),
         "list_dir" to Pair("Listing", "Listed"),
@@ -364,6 +366,36 @@ object AidenAgentActivityPresentation {
         val minutes = seconds / 60
         val remainder = seconds % 60
         return if (remainder == 0) "for ${minutes}m" else "for ${minutes}m ${remainder}s"
+    }
+
+    fun hasActiveThinkingStep(timeline: AidenGenerationTimeline?): Boolean {
+        if (timeline == null || timeline.status != AidenGenerationTimelineStatus.RUNNING) return false
+        for (step in timeline.steps.asReversed()) {
+            if (step.kind == AidenAgentStep.Kind.TOOL) return false
+            return step.finishedAt == null
+        }
+        return false
+    }
+
+    fun hasActiveToolStep(timeline: AidenGenerationTimeline?, toolName: String): Boolean {
+        if (timeline == null || timeline.status != AidenGenerationTimelineStatus.RUNNING) return false
+        return timeline.steps.any { step ->
+            step.kind == AidenAgentStep.Kind.TOOL && step.toolName == toolName && step.status?.isActive == true
+        }
+    }
+
+    fun reasoningLabel(timeline: AidenGenerationTimeline?, active: Boolean): String {
+        if (active) return "Thinking"
+        val durationMs = timeline?.steps
+            ?.filter { it.kind == AidenAgentStep.Kind.THINKING }
+            ?.mapNotNull { it.durationMs }
+            ?.sum()
+            ?.takeIf { it > 0.0 }
+        return "Thought ${duration(durationMs)}"
+    }
+
+    fun visualizingLabel(timeline: AidenGenerationTimeline?): String? {
+        return if (hasActiveToolStep(timeline, RENDER_ARTIFACT_TOOL_NAME)) "Visualizing" else null
     }
 
     fun line(step: AidenAgentStep): String {

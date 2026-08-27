@@ -428,6 +428,8 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
 }
 
 enum AidenAgentActivityPresentation {
+    static let renderArtifactToolName = "render_artifact"
+
     private static let verbs: [String: (active: String, complete: String)] = [
         "read_file": ("Reading", "Read"),
         "list_dir": ("Listing", "Listed"),
@@ -450,6 +452,44 @@ enum AidenAgentActivityPresentation {
         let minutes = seconds / 60
         let remainder = seconds % 60
         return remainder == 0 ? "for \(minutes)m" : "for \(minutes)m \(remainder)s"
+    }
+
+    static func hasActiveThinkingStep(_ timeline: AidenGenerationTimeline?) -> Bool {
+        guard let timeline, timeline.status == .running else { return false }
+        for step in timeline.steps.reversed() {
+            if step.kind == .tool { return false }
+            return step.finishedAt == nil
+        }
+        return false
+    }
+
+    static func hasActiveToolStep(
+        _ timeline: AidenGenerationTimeline?,
+        named toolName: String
+    ) -> Bool {
+        guard let timeline, timeline.status == .running else { return false }
+        return timeline.steps.contains { step in
+            step.kind == .tool && step.toolName == toolName && step.status?.isActive == true
+        }
+    }
+
+    static func reasoningLabel(_ timeline: AidenGenerationTimeline?, active: Bool) -> String {
+        if active { return "Thinking" }
+        let durationMs = timeline?.steps.reduce(0.0) { total, step in
+            step.kind == .thinking ? total + (step.durationMs ?? 0) : total
+        } ?? 0
+        return "Thought \(duration(durationMs > 0 ? durationMs : nil))"
+    }
+
+    static func visualizingLabel(_ timeline: AidenGenerationTimeline?) -> String? {
+        hasActiveToolStep(timeline, named: renderArtifactToolName) ? "Visualizing" : nil
+    }
+
+    static func activitySteps(
+        _ timeline: AidenGenerationTimeline,
+        reasoningVisible: Bool
+    ) -> [AidenAgentStep] {
+        reasoningVisible ? timeline.steps.filter { $0.kind == .tool } : timeline.steps
     }
 
     static func line(for step: AidenAgentStep) -> String {

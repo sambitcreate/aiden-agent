@@ -816,8 +816,14 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /ForEach\(model\.visibleProviders\)[\s\S]*?ForEach\(provider\.models\)/u);
   assert.match(
     chat,
-    /AidenReasoningCard[\s\S]*?Text\(active \? "Thinking…" : "Thinking"\)[\s\S]*?aidenActivityShimmer\(active\)/u,
+    /AidenReasoningCard[\s\S]*?Text\(label\)[\s\S]*?aidenActivityShimmer\(active\)/u,
   );
+  assert.match(
+    chat,
+    /AidenReasoningCard\([\s\S]*?reasoningLabel\([\s\S]*?active: reasoningActive[\s\S]*?steps: visibleActivitySteps/u,
+  );
+  assert.match(chat, /AidenActivityPhaseCard\(label: visualizingLabel\)/u);
+  assert.doesNotMatch(chat, /Thinking…|Thinking\.\.\./u);
   const reasoningCard = chat.match(
     /private struct AidenReasoningCard[\s\S]*?private struct AidenToolActivityCard/u,
   )?.[0];
