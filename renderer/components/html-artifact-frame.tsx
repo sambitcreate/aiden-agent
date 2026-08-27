@@ -82,7 +82,7 @@ export function HtmlArtifactFrame({
     return () => {
       cancelled = true;
     };
-  }, [artifact.mediaId, artifact.size, chatId]);
+  }, [artifact.id, artifact.mediaId, artifact.size, chatId]);
 
   const exportArtifact = React.useCallback(async () => {
     if (exporting) return;
@@ -171,7 +171,7 @@ export function HtmlArtifactList({
     <div className="flex min-w-0 flex-col gap-3">
       {artifacts.map((artifact) => (
         <HtmlArtifactFrame
-          key={`${artifact.mediaId}:${artifact.size}`}
+          key={`${artifact.mediaId}:${artifact.id}`}
           chatId={chatId}
           artifact={artifact}
         />

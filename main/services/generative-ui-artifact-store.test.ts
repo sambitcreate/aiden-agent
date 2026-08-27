@@ -85,3 +85,56 @@ test("chat HTML quotas refuse extra staged artifacts", async () => {
     /artifact limit/iu,
   );
 });
+
+test("recovery isolates a failing chat without blocking others", async () => {
+  const root = await storageRoot();
+  const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
+  await store.initialize();
+  await store.stage({
+    chatId: "chat-fail",
+    generationId: "gen-1",
+    artifact: artifact("fail-1"),
+    html: HTML,
+  });
+  await store.stage({
+    chatId: "chat-ok",
+    generationId: "gen-1",
+    artifact: artifact("ok-1"),
+    html: HTML,
+  });
+  const recovered: string[] = [];
+  await assert.rejects(
+    store.recover(
+      [
+        { id: "chat-fail", messages: [] },
+        { id: "chat-ok", messages: [] },
+      ],
+      async (message) => {
+        if (message.chatId === "chat-fail") throw new Error("append failed");
+        recovered.push(message.chatId);
+      },
+    ),
+    /append failed/u,
+  );
+  assert.deepEqual(recovered, ["chat-ok"]);
+  assert.equal(await store.hasPending("chat-ok"), false);
+  assert.equal(await store.hasPending("chat-fail"), true);
+});
+
+test("reconcilePersisted commits staged rows already on the chat", async () => {
+  const root = await storageRoot();
+  const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
+  await store.initialize();
+  const item = artifact("media-1");
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "gen-1",
+    artifact: item,
+    html: HTML,
+  });
+  await store.reconcilePersisted({
+    id: "chat-1",
+    messages: [{ role: "assistant", htmlArtifacts: [item] }],
+  });
+  assert.equal(await store.hasPending("chat-1"), false);
+});

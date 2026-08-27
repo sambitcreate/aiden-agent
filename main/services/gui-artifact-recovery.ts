@@ -19,6 +19,11 @@ export async function unresolvedGuiArtifactMessage(chatId: string): Promise<stri
   if (!html.available) {
     return `${html.reason} Open Aiden's developer log to locate the staging file that needs repair.`;
   }
+  const { chatStore } = await import("./chat-store.js");
+  const chat = await chatStore.get(chatId);
+  if (chat) {
+    await generativeUiArtifactStore.reconcilePersisted(chat);
+  }
   if (
     (await displayImageArtifactStore.hasPending(chatId)) ||
     (await generativeUiArtifactStore.hasPending(chatId))

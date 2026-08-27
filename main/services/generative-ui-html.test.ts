@@ -106,7 +106,7 @@ test("iframe preview uses aiden-genui protocol src, not inherited srcdoc", async
   assert.doesNotMatch(frame, /srcDoc=/u);
   assert.doesNotMatch(frame, /srcdoc=\{/u);
   assert.match(frame, /htmlArtifactSrcdoc/u);
-  assert.match(frame, /artifact\.size/u);
+  assert.match(frame, /artifact\.id/u);
   const html = await fs.readFile(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../main-window.html"),
     "utf8",

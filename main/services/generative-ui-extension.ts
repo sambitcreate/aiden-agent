@@ -114,6 +114,25 @@ function sameIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+async function assertNoSymlinkComponents(root: string, relative: string): Promise<void> {
+  let current = root;
+  const parts = relative.split(path.sep).filter(Boolean);
+  for (let index = 0; index < parts.length; index += 1) {
+    current = path.join(current, parts[index]!);
+    const stat = await fs.lstat(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Path "${relative}" is not a regular workspace HTML file.`);
+    }
+    const last = index === parts.length - 1;
+    if (!last && !stat.isDirectory()) {
+      throw new Error(`Path "${relative}" is not a regular workspace HTML file.`);
+    }
+    if (last && !stat.isFile()) {
+      throw new Error(`Path "${relative}" is not a regular workspace HTML file.`);
+    }
+  }
+}
+
 export function createGenerativeUiExtensionRuntime(
   options: GenerativeUiExtensionOptions,
 ): { extension: PiAgentRuntimeExtension } {
@@ -135,7 +154,7 @@ export function createGenerativeUiExtensionRuntime(
   let displayedCount = 0;
   let displayedBytes = 0;
   let serial = Promise.resolve();
-  const titlesInGeneration = new Map<string, { id: string; size: number }>();
+  const titlesInGeneration = new Map<string, { mediaId: string; size: number }>();
 
   const assertWorkspaceRoot = async (): Promise<void> => {
     const [currentCanonical, currentIdentity] = await Promise.all([
@@ -199,6 +218,7 @@ export function createGenerativeUiExtensionRuntime(
           if (hasPath) {
             const resolved = resolveWorkspaceHtml(canonicalRoot, input.path as string);
             await assertWorkspaceRoot();
+            await assertNoSymlinkComponents(canonicalRoot, resolved.relative);
             const noFollow =
               typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
             const handle = await fs.open(resolved.absolute, fsConstants.O_RDONLY | noFollow);
@@ -248,13 +268,14 @@ export function createGenerativeUiExtensionRuntime(
           }
           await options.beforeArtifact?.();
           if (signal?.aborted) throw new Error("Artifact rendering was cancelled.");
-          const id =
-            replacing?.id ??
+          const mediaId =
+            replacing?.mediaId ??
             createHash("sha256")
               .update(artifactNamespace)
               .update("\0")
               .update(toolCallId)
               .digest("hex");
+          const id = createHash("sha256").update(html).digest("hex");
           const artifact: ChatHtmlArtifactV1 = {
             version: CHAT_ARTIFACT_VERSION,
             kind: "html",
@@ -262,16 +283,16 @@ export function createGenerativeUiExtensionRuntime(
             title,
             mimeType: HTML_ARTIFACT_MIME_TYPE,
             size,
-            mediaId: id,
+            mediaId,
           };
           const presented = (await options.onArtifact(artifact, html)) !== false;
           if (presented && !replacing) {
             displayedCount += 1;
             displayedBytes = nextBytes;
-            titlesInGeneration.set(title, { id, size });
+            titlesInGeneration.set(title, { mediaId, size });
           } else if (presented && replacing) {
             displayedBytes = nextBytes;
-            titlesInGeneration.set(title, { id: replacing.id, size });
+            titlesInGeneration.set(title, { mediaId: replacing.mediaId, size });
           }
           return {
             content: [

@@ -125,8 +125,28 @@ test("same-generation title replaces the previous staged artifact", async () => 
   });
   const tool = extension.tools?.[0];
   assert.ok(tool);
-  await tool.execute("call-a", { title: "Chart", html: "<p>one</p>" });
-  await tool.execute("call-b", { title: "Chart", html: "<p>two</p>" });
+  await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
+  await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" });
   assert.equal(artifacts.length, 2);
   assert.equal(artifacts[0]?.mediaId, artifacts[1]?.mediaId);
+  assert.equal(artifacts[0]?.size, artifacts[1]?.size);
+  assert.notEqual(artifacts[0]?.id, artifacts[1]?.id);
+});
+
+test("render_artifact refuses intermediate directory symlinks", async () => {
+  const root = await workspace();
+  const outside = await workspace();
+  await fs.writeFile(path.join(outside, "secret.html"), "<p>secret</p>");
+  await fs.mkdir(path.join(root, "plots"));
+  await fs.symlink(outside, path.join(root, "plots", "leak"));
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    onArtifact: () => undefined,
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  await assert.rejects(
+    tool.execute("symlink", { title: "Leak", path: path.join("plots", "leak", "secret.html") }),
+    /regular workspace HTML file/iu,
+  );
 });

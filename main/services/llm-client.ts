@@ -1132,6 +1132,13 @@ async function prepareGeneration(
     const existingHtmlUsage = displayedAssistantHtmlUsage(chat.messages);
     const pendingHtmlUsage = await generativeUiArtifactStore.usageByChat(params.chatId);
     if (pendingHtmlUsage.count > 0) {
+      await generativeUiArtifactStore.reconcilePersisted({
+        id: params.chatId,
+        messages: chat.messages,
+      });
+    }
+    const pendingHtmlAfterReconcile = await generativeUiArtifactStore.usageByChat(params.chatId);
+    if (pendingHtmlAfterReconcile.count > 0) {
       throw new Error(
         "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.",
       );
@@ -1140,8 +1147,8 @@ async function prepareGeneration(
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
       workspaceRoot: folderPath!,
       artifactNamespace: `${streamId}:html`,
-      existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlUsage.bytes,
-      existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlUsage.count,
+      existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
+      existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
       onArtifact: async (artifact, html) => {
         await generativeUiArtifactStore.stage({

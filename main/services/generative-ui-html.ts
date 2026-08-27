@@ -133,7 +133,7 @@ function hostLibraryTags(): string {
   }).join("\n");
 }
 
-/** Build the main-owned srcdoc. Renderer must not concatenate guest HTML. */
+/** Build the main-owned preview document. Renderer must not concatenate guest HTML. */
 export function wrapGenerativeUiHtml(
   html: string,
   title: string,

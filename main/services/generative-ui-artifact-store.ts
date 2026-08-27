@@ -454,6 +454,28 @@ export class GenerativeUiArtifactStore {
     return this.duplicateSelected(sourceChatId, targetChatId, sourceIds);
   }
 
+  async reconcilePersisted(chat: GenerativeUiArtifactRecoveryChat): Promise<void> {
+    this.requireAvailable();
+    if (!boundedIdentity(chat.id)) return;
+    const persistedIds = new Set(
+      chat.messages.flatMap((message) =>
+        (message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId),
+      ),
+    );
+    if (persistedIds.size === 0) return;
+    const pending = (await this.data.load()).records.filter(
+      (record) =>
+        record.chatId === chat.id &&
+        !record.committed &&
+        persistedIds.has(record.artifact.mediaId),
+    );
+    if (pending.length === 0) return;
+    await this.commit(
+      chat.id,
+      pending.map((record) => record.artifact.mediaId),
+    );
+  }
+
   async recover(
     chats: readonly GenerativeUiArtifactRecoveryChat[],
     append: (message: RecoveredHtmlMessage) => Promise<void>,
@@ -467,54 +489,50 @@ export class GenerativeUiArtifactStore {
       group.push(record);
       recordsByChat.set(record.chatId, group);
     }
-    for (const [chatId, group] of recordsByChat) {
-      const chat = chatById.get(chatId);
-      if (!chat) continue;
-      const persistedIds = new Set(
-        chat.messages.flatMap((message) =>
-          (message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId),
-        ),
-      );
-      const alreadyPersisted = group.filter((record) => persistedIds.has(record.artifact.mediaId));
-      if (alreadyPersisted.length > 0) {
-        await this.commit(
-          chatId,
-          alreadyPersisted.map((record) => record.artifact.mediaId),
+    let firstError: Error | undefined;
+    for (const [chatId] of recordsByChat) {
+      try {
+        const chat = chatById.get(chatId);
+        if (!chat) continue;
+        await this.reconcilePersisted(chat);
+        const remaining = (await this.pending()).filter((record) => record.chatId === chatId);
+        if (remaining.length === 0) continue;
+        const persistedUsage = displayedAssistantHtmlUsage(chat.messages);
+        const recoveryBytes = remaining.reduce((total, record) => total + record.artifact.size, 0);
+        if (
+          persistedUsage.bytes + recoveryBytes > MAX_HTML_ARTIFACT_BYTES_PER_CHAT ||
+          persistedUsage.count + remaining.length > MAX_HTML_ARTIFACTS_PER_CHAT
+        ) {
+          throw new Error(`Recovered HTML artifacts would exceed chat ${chatId}'s limits.`);
+        }
+        const byGeneration = new Map<string, StagedHtmlArtifact[]>();
+        for (const record of remaining) {
+          const generation = byGeneration.get(record.generationId) ?? [];
+          generation.push(record);
+          byGeneration.set(record.generationId, generation);
+        }
+        const generations = [...byGeneration.values()].sort(
+          (left, right) =>
+            Math.min(...left.map((record) => record.stagedAt)) -
+            Math.min(...right.map((record) => record.stagedAt)),
         );
-      }
-      const pending = group.filter((record) => !persistedIds.has(record.artifact.mediaId));
-      const persistedUsage = displayedAssistantHtmlUsage(chat.messages);
-      const recoveryBytes = pending.reduce((total, record) => total + record.artifact.size, 0);
-      if (
-        persistedUsage.bytes + recoveryBytes > MAX_HTML_ARTIFACT_BYTES_PER_CHAT ||
-        persistedUsage.count + pending.length > MAX_HTML_ARTIFACTS_PER_CHAT
-      ) {
-        throw new Error(`Recovered HTML artifacts would exceed chat ${chatId}'s limits.`);
-      }
-      const byGeneration = new Map<string, StagedHtmlArtifact[]>();
-      for (const record of pending) {
-        const generation = byGeneration.get(record.generationId) ?? [];
-        generation.push(record);
-        byGeneration.set(record.generationId, generation);
-      }
-      const generations = [...byGeneration.values()].sort(
-        (left, right) =>
-          Math.min(...left.map((record) => record.stagedAt)) -
-          Math.min(...right.map((record) => record.stagedAt)),
-      );
-      for (const generation of generations) {
-        await append({
-          chatId,
-          htmlArtifacts: generation.map((record) => record.artifact),
-          createdAt: Math.min(...generation.map((record) => record.stagedAt)),
-          ...(generation[0]?.model ? { model: generation[0].model } : {}),
-        });
-        await this.commit(
-          chatId,
-          generation.map((record) => record.artifact.mediaId),
-        );
+        for (const generation of generations) {
+          await append({
+            chatId,
+            htmlArtifacts: generation.map((record) => record.artifact),
+            createdAt: Math.min(...generation.map((record) => record.stagedAt)),
+            ...(generation[0]?.model ? { model: generation[0].model } : {}),
+          });
+          await this.commit(
+            chatId,
+            generation.map((record) => record.artifact.mediaId),
+          );
+        }
+      } catch (error) {
+        firstError ??= error instanceof Error ? error : new Error(String(error));
       }
     }
+    if (firstError) throw firstError;
   }
 }
 
