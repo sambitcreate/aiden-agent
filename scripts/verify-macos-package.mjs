@@ -57,6 +57,12 @@ const REQUIRED_NODE_PTY_HELPER_ENTRIES = Object.freeze([
   "node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
   "node_modules/node-pty/prebuilds/darwin-x64/spawn-helper",
 ]);
+export const REQUIRED_GENERATIVE_UI_LIBRARY_FILES = Object.freeze([
+  "chart.umd.min.js",
+  "plotly.min.js",
+  "katex.min.js",
+  "katex.min.css",
+]);
 const EXPECTED_COMPUTER_USE_HELPER_TREE = Object.freeze(
   [
     ["Contents", "directory"],
@@ -101,6 +107,17 @@ export async function assertRegularFile(file) {
     throw new Error(`Expected a regular non-symlinked package file: ${file}`);
   }
   return info;
+}
+
+export async function verifyPackagedGenerativeUiLibraries(appPath) {
+  const directory = path.join(appPath, "Contents", "Resources", "generative-ui");
+  for (const filename of REQUIRED_GENERATIVE_UI_LIBRARY_FILES) {
+    const file = path.join(directory, filename);
+    const info = await assertRegularFile(file);
+    if (info.size === 0) {
+      throw new Error(`Packaged Generative UI library is empty: ${file}`);
+    }
+  }
 }
 
 export function assertPackagedModelCatalogEntries(entries) {
@@ -645,6 +662,7 @@ export async function verifyMacPackage(appPath) {
   await verifyPackagedSubagentInferenceWorker(appAsar);
   await verifyPackagedParakeetWorker(appAsar);
   await verifyPackagedNodePtyResources(appAsar);
+  await verifyPackagedGenerativeUiLibraries(paths.app);
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);

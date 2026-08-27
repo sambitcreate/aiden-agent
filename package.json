@@ -104,7 +104,7 @@
     "type-check": "tsc --noEmit",
     "type-check:e2e": "tsc --noEmit --project tests/e2e/tsconfig.json",
     "format": "oxfmt .",
-    "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run build:native && npm run build && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
+    "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run generative-ui:vendor && npm run build:native && npm run build && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
     "package:verify": "node scripts/verify-macos-package.mjs --development",
     "release:preflight": "node scripts/check-macos-release.mjs",
     "release:check-consumers": "node scripts/check-release-consumers.mjs",
