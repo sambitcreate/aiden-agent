@@ -227,6 +227,15 @@ Rendering must not flicker and the creation window must stay narrated:
 - **Visualizing shimmer:** a `ReasoningBlock` reuse (`label="Visualizing"`) rides above the artifact list whenever a `render_artifact` step is pending/awaiting/running, and the bottom activity row shows a shimmering **Visualizing…** phase.
 - **Provider-neutral live activity:** `llm-client` consumes `toolcall_start` to open a pending timeline step while the model is still writing tool-call arguments (the longest phase of a GenUI turn); execution events upgrade it with the full descriptor. The activity row keys **Responding…** off recent text deltas (`TEXT_STREAMING_IDLE_MS`), so stale prose can no longer strand a silent, static row — the Thinking shimmer survives for providers that emit no reasoning summaries (Codex).
 
+### Phase 6 — PR review hardening (shipped)
+
+- Authoritative HTML storage fails closed on unreadable or unsupported data without quarantining the only committed bytes; chat-copy preparation is recovered or rolled back across either crash boundary.
+- Workspace HTML reads traverse from pinned directory descriptors through the native `openat` helper, closing intermediate-component symlink swaps.
+- Preview and export use a strict outer host plus one sandboxed guest; export navigation is denied before network, and expanded presentation repositions the existing iframe instead of mounting a second browsing context.
+- Preview/export errors stay visible alongside the last good frame, `/visualize` retains rejected drafts and is unavailable with No Access, and copied-artifact selection is linear in transcript length.
+- macOS development and release packaging explicitly vendors the fixed host libraries, while package verification rejects missing, empty, or symlinked copies.
+- Detached stream projections retain the last prose-delta timestamp so revisiting an active chat restores **Responding…** for only the remaining idle window.
+
 ## Explicit non-goals
 
 - Pi coding-agent extension marketplace or loading `.pi` plugins.
@@ -262,4 +271,3 @@ Rendering must not flicker and the creation window must stay narrated:
 - Do not register this on `piAgentRuntimeExtensions` global registry.
 - Keep Designer and GenUI iframe helpers separate until both exist; then extract a shared **containment** module only.
 - Papercuts: log iframe/CSP friction in `.papercuts/troubleshooting.md` as it occurs.
-
