@@ -140,6 +140,32 @@ test("bulk copies use collision-resistant identities even when Math.random repea
   }
 });
 
+test("dependent copy preparation fails before the target chat is installed", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-prepare-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const source = await store.create({ title: "Prepared copy", workspaceId: "workspace-copy" });
+  await store.appendMessage(source.id, { role: "user", content: "Copy me" });
+  const targetChatId = "prepared-target";
+  let preparedChatId: string | undefined;
+
+  await assert.rejects(
+    store.copyVisibleHistory({
+      sourceChatId: source.id,
+      targetChatId,
+      beforeInstall: (copy) => {
+        preparedChatId = copy.id;
+        throw new Error("artifact preparation failed");
+      },
+    }),
+    /artifact preparation failed/iu,
+  );
+
+  assert.equal(preparedChatId, targetChatId);
+  assert.equal(await store.get(targetChatId), null);
+  assert.equal((await store.list()).some((chat) => chat.id === targetChatId), false);
+});
+
 test("copy rejects malformed visible fields and unbounded retained metadata", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-invalid-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

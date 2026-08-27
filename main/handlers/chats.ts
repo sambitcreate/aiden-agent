@@ -1,6 +1,7 @@
 // Chat history CRUD IPC handlers.
 
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
+import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -223,12 +224,6 @@ export function registerChatHistoryHandlers(): void {
           if (!(await configStore.getWorkspace(workspaceId))) {
             throw new Error("The chat workspace is no longer available.");
           }
-          const copied = await chatStore.copyVisibleHistory({
-            sourceChatId: parsed.chatId,
-            expectedWorkspaceId: workspaceId,
-            throughAssistantMessageId: parsed.throughMessageId,
-            assertCurrent,
-          });
           const htmlMediaIds = source.messages.flatMap((message, index) => {
             if (
               parsed.throughMessageId &&
@@ -241,11 +236,39 @@ export function registerChatHistoryHandlers(): void {
             }
             return (message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId);
           });
-          if (htmlMediaIds.length > 0) {
-            await generativeUiArtifactStore.duplicateSelected(
-              source.id,
+          const targetChatId = randomUUID();
+          let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
+          const copied = await (async () => {
+            try {
+              return await chatStore.copyVisibleHistory({
+                sourceChatId: parsed.chatId,
+                targetChatId,
+                expectedWorkspaceId: workspaceId,
+                throughAssistantMessageId: parsed.throughMessageId,
+                assertCurrent,
+                beforeInstall: async () => {
+                  if (htmlMediaIds.length === 0) return;
+                  preparedHtmlArtifacts = await generativeUiArtifactStore.prepareSelectedCopy(
+                    source.id,
+                    targetChatId,
+                    htmlMediaIds,
+                  );
+                },
+              });
+            } catch (error) {
+              if (
+                preparedHtmlArtifacts.length > 0 &&
+                !isChatCreateReconciliationRequiredError(error)
+              ) {
+                await generativeUiArtifactStore.deleteChat(targetChatId).catch(() => undefined);
+              }
+              throw error;
+            }
+          })();
+          if (preparedHtmlArtifacts.length > 0) {
+            await generativeUiArtifactStore.commit(
               copied.id,
-              htmlMediaIds,
+              preparedHtmlArtifacts.map((artifact) => artifact.mediaId),
             );
           }
           ipcMain.broadcast("chats:metadata-updated", {

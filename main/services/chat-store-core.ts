@@ -686,6 +686,8 @@ export function createChatStore(
       expectedWorkspaceId?: string;
       throughAssistantMessageId?: string;
       assertCurrent?: () => void;
+      /** Prepare dependent durable records before this chat becomes visible. */
+      beforeInstall?: (chat: Chat) => void | Promise<void>;
     }): Promise<Chat> {
       return serialized(async () => {
         input.assertCurrent?.();
@@ -803,21 +805,20 @@ export function createChatStore(
           });
         }
         const now = Date.now();
-        return installNewChat(
-          {
-            id: newChatId,
-            title,
-            workspaceId:
-              input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
-            botId: source.botId,
-            providerId: metadata.providerId,
-            model: metadata.model,
-            createdAt: now,
-            updatedAt: now,
-            messages: copiedMessages,
-          },
-          input.assertCurrent,
-        );
+        const copied: Chat = {
+          id: newChatId,
+          title,
+          workspaceId:
+            input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          botId: source.botId,
+          providerId: metadata.providerId,
+          model: metadata.model,
+          createdAt: now,
+          updatedAt: now,
+          messages: copiedMessages,
+        };
+        await input.beforeInstall?.(copied);
+        return installNewChat(copied, input.assertCurrent);
       });
     },
 

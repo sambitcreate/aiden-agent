@@ -139,6 +139,86 @@ test("reconcilePersisted commits staged rows already on the chat", async () => {
   assert.equal(await store.hasPending("chat-1"), false);
 });
 
+test("prepared chat copies recover to committed artifacts after chat installation", async () => {
+  const root = await storageRoot();
+  const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
+  await store.initialize();
+  const item = artifact("media-1");
+  await store.stage({
+    chatId: "source-chat",
+    generationId: "generation-1",
+    artifact: item,
+    html: HTML,
+  });
+  await store.commit("source-chat", [item.mediaId]);
+
+  const [copy] = await store.prepareSelectedCopy(
+    "source-chat",
+    "target-chat",
+    [item.mediaId],
+  );
+  assert.ok(copy);
+  assert.equal(await store.hasPending("target-chat"), true);
+
+  const restarted = new GenerativeUiArtifactStore({ root: () => root });
+  await restarted.initialize();
+  await restarted.recover(
+    [{ id: "target-chat", messages: [{ role: "assistant", htmlArtifacts: [copy] }] }],
+    async () => assert.fail("A prepared copy already referenced by chat must not append a message."),
+  );
+
+  assert.equal(await restarted.hasPending("target-chat"), false);
+  assert.equal(await restarted.htmlFor("target-chat", copy.mediaId), HTML);
+});
+
+test("prepared chat copies are discarded when chat installation never happened", async () => {
+  const root = await storageRoot();
+  const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
+  await store.initialize();
+  const item = artifact("media-1");
+  await store.stage({
+    chatId: "source-chat",
+    generationId: "generation-1",
+    artifact: item,
+    html: HTML,
+  });
+  await store.commit("source-chat", [item.mediaId]);
+  const [copy] = await store.prepareSelectedCopy(
+    "source-chat",
+    "target-chat",
+    [item.mediaId],
+  );
+  assert.ok(copy);
+
+  const restarted = new GenerativeUiArtifactStore({ root: () => root });
+  await restarted.initialize();
+  await restarted.recover([], async () => assert.fail("An orphaned copy must not be recovered."));
+
+  assert.equal(await restarted.hasPending("target-chat"), false);
+  assert.equal(await restarted.htmlFor("target-chat", copy.mediaId), undefined);
+  assert.equal(await restarted.htmlFor("source-chat", item.mediaId), HTML);
+});
+
+test("preparing a copy fails atomically when any source artifact is missing", async () => {
+  const root = await storageRoot();
+  const store = new GenerativeUiArtifactStore({ root: () => root });
+  await store.initialize();
+  const item = artifact("media-1");
+  await store.stage({
+    chatId: "source-chat",
+    generationId: "generation-1",
+    artifact: item,
+    html: HTML,
+  });
+  await store.commit("source-chat", [item.mediaId]);
+
+  await assert.rejects(
+    store.prepareSelectedCopy("source-chat", "target-chat", [item.mediaId, "missing"]),
+    /could not be copied/iu,
+  );
+  assert.equal(await store.hasPending("target-chat"), false);
+});
+
 test("unreadable durable HTML storage remains in place and blocks mutations", async () => {
   const root = await storageRoot();
   const file = path.join(root, "generative-ui-artifacts.json");

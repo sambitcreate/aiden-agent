@@ -17,6 +17,7 @@ const STORE_FILE = "generative-ui-artifacts.json";
 const MAX_STORE_BYTES = 48 * 1024 * 1024;
 const MAX_STORE_RECORDS = 2_000;
 const MAX_UNCOMMITTED_ARTIFACTS = 200;
+const COPY_GENERATION_PREFIX = "chat-copy:";
 const REQUIRED_RECORD_KEYS = new Set([
   "version",
   "chatId",
@@ -100,6 +101,10 @@ function boundedIdentity(value: unknown): value is string {
     if (code <= 0x1f || code === 0x7f) return false;
   }
   return true;
+}
+
+function copyGenerationId(sourceChatId: string): string {
+  return `${COPY_GENERATION_PREFIX}${createHash("sha256").update(sourceChatId).digest("hex")}`;
 }
 
 function parseRecord(value: unknown): StagedHtmlArtifact | undefined {
@@ -371,6 +376,28 @@ export class GenerativeUiArtifactStore {
     targetChatId: string,
     mediaIds: readonly string[],
   ): Promise<ChatHtmlArtifactV1[]> {
+    return this.copySelected(sourceChatId, targetChatId, mediaIds, true);
+  }
+
+  /**
+   * Durably stage copy bytes before the copied chat is published. Startup
+   * recovery commits these rows if the chat exists and discards them if the
+   * chat installation never happened.
+   */
+  async prepareSelectedCopy(
+    sourceChatId: string,
+    targetChatId: string,
+    mediaIds: readonly string[],
+  ): Promise<ChatHtmlArtifactV1[]> {
+    return this.copySelected(sourceChatId, targetChatId, mediaIds, false);
+  }
+
+  private async copySelected(
+    sourceChatId: string,
+    targetChatId: string,
+    mediaIds: readonly string[],
+    committed: boolean,
+  ): Promise<ChatHtmlArtifactV1[]> {
     this.requireAvailable();
     if (!boundedIdentity(sourceChatId) || !boundedIdentity(targetChatId)) {
       throw new Error("Invalid generative-ui artifact copy identity.");
@@ -385,6 +412,16 @@ export class GenerativeUiArtifactStore {
           record.committed &&
           wanted.has(record.artifact.mediaId),
       );
+      if (source.length !== wanted.size) {
+        throw new Error("Some HTML artifacts could not be copied.");
+      }
+      if (
+        !committed &&
+        database.records.filter((record) => !record.committed).length + source.length >
+          MAX_UNCOMMITTED_ARTIFACTS
+      ) {
+        throw new Error("Too many HTML artifacts are awaiting recovery.");
+      }
       if (database.records.length + source.length > MAX_STORE_RECORDS) {
         throw new Error("Generative UI artifact storage is at capacity.");
       }
@@ -403,7 +440,11 @@ export class GenerativeUiArtifactStore {
         database.records.push({
           ...record,
           chatId: targetChatId,
+          generationId: committed
+            ? record.generationId
+            : copyGenerationId(sourceChatId),
           artifact,
+          committed,
           stagedAt: this.now(),
         });
         copies.push(artifact);
@@ -460,7 +501,16 @@ export class GenerativeUiArtifactStore {
     for (const [chatId] of recordsByChat) {
       try {
         const chat = chatById.get(chatId);
-        if (!chat) continue;
+        if (!chat) {
+          if (
+            recordsByChat
+              .get(chatId)
+              ?.every((record) => record.generationId.startsWith(COPY_GENERATION_PREFIX))
+          ) {
+            await this.deleteChat(chatId);
+          }
+          continue;
+        }
         await this.reconcilePersisted(chat);
         const remaining = (await this.pending()).filter((record) => record.chatId === chatId);
         if (remaining.length === 0) continue;
