@@ -470,6 +470,7 @@ export function Composer({
       hasLatestAssistantResponse: Boolean(latestAssistantResponse),
       hasAuthenticatedProvider: authenticatedProviders.length > 0,
       hasWorkspace: Boolean(workspace),
+      hasWorkspaceArtifactAccess: workspace?.permission !== "none",
       hasManagedWorktreeFlow: Boolean(
         workspace?.folderPath && gitBranch && onCreateGitWorktree && !gitUnborn,
       ),
@@ -751,16 +752,16 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          if (instruction !== "visualize") return;
+          if (instruction !== "visualize") return false;
           const nextPrompt =
             prompt.trim() || consumeSlashToken(text, slashSession).trim();
           if (!nextPrompt) {
             toast.info("Add what to visualize after /visualize, then send.");
-            return;
+            return false;
           }
           if (selectedSkillState && selectedSkillState.state !== "valid") {
             toast.info(selectedSkillState.reason);
-            return;
+            return false;
           }
           const submittedAttachments = attachments;
           const submittedAttachmentRevision = attachmentRevisionRef.current;
@@ -782,6 +783,7 @@ export function Composer({
               type: "send-succeeded",
               submittedRevision: submittedSkillRevision,
             });
+            return true;
           } finally {
             setSending(false);
           }

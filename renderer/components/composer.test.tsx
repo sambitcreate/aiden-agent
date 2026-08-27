@@ -202,6 +202,17 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(branchPicker, /programmaticOriginRef\.current = false/u);
 });
 
+test("visualize preserves the slash draft when validation rejects the send", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /if \(!nextPrompt\) \{[\s\S]{0,180}return false;/u);
+  assert.match(
+    composer,
+    /selectedSkillState && selectedSkillState\.state !== "valid"[\s\S]{0,180}return false;/u,
+  );
+  assert.match(composer, /await onSend\([\s\S]{0,900}return true;/u);
+  assert.match(composer, /hasWorkspaceArtifactAccess: workspace\?\.permission !== "none"/u);
+});
+
 test("workspace picker closes and exposes a persistent reason when workspace changes are blocked", () => {
   const composer = source("./composer.tsx");
   const picker = source("./workspace-picker.tsx");

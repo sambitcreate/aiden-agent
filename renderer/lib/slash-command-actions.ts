@@ -9,6 +9,7 @@ export interface SlashCommandActionContext {
   hasLatestAssistantResponse: boolean;
   hasAuthenticatedProvider?: boolean;
   hasWorkspace: boolean;
+  hasWorkspaceArtifactAccess?: boolean;
   hasManagedWorktreeFlow?: boolean;
   idle: boolean;
   idleBlockedReason?: string;
@@ -49,7 +50,7 @@ export interface SlashCommandActionHandlers {
   submitComposerInstruction?: (
     instruction: "visualize",
     prompt: string,
-  ) => void | Promise<void>;
+  ) => boolean | Promise<boolean>;
 }
 
 const unavailable = (reason: string): SlashCommandAvailabilityResult => ({
@@ -127,6 +128,13 @@ export function slashCommandAvailability(
 
   if (command.action.kind === "composer-control" && context.composerControlBlockedReason) {
     return unavailable(context.composerControlBlockedReason);
+  }
+  if (
+    command.action.kind === "composer-instruction" &&
+    command.action.instruction === "visualize" &&
+    context.hasWorkspaceArtifactAccess === false
+  ) {
+    return unavailable("Allow workspace access before creating an interactive artifact.");
   }
   if (
     (command.action.kind === "environment" ||
@@ -270,8 +278,7 @@ export function executeSlashCommandAction(
       return false;
     case "composer-instruction": {
       if (!handlers.submitComposerInstruction) return false;
-      const result = handlers.submitComposerInstruction(command.action.instruction, argument.trim());
-      return result instanceof Promise ? result.then(() => true) : true;
+      return handlers.submitComposerInstruction(command.action.instruction, argument.trim());
     }
   }
 }
