@@ -12,6 +12,7 @@ export default [
       "node_modules/**",
       ".memory/**",
       ".papercuts/**",
+      "resources/generative-ui/**",
     ],
   },
   js.configs.recommended,
@@ -20,6 +21,7 @@ export default [
       "scripts/aiden-remote-*.mjs",
       "scripts/ios-asc-monitor*.mjs",
       "scripts/ios-live-activity-process-proof*.mjs",
+      "scripts/vendor-generative-ui-libs.mjs",
     ],
     languageOptions: {
       globals: { ...globals.node },
