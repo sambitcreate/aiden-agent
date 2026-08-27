@@ -4,6 +4,40 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { createChatStore } from "./chat-store-core.js";
+import { selectedHtmlArtifactMediaIds } from "./chat-copy-artifacts.js";
+import type { ChatMessage } from "./types.js";
+
+test("artifact selection stops at a fork boundary in one pass", () => {
+  const messageCount = 20_000;
+  const messages = Array.from({ length: messageCount }, (_, index): ChatMessage => ({
+    id: `message-${index}`,
+    role: "assistant",
+    content: "",
+    createdAt: index,
+    htmlArtifacts: [{
+      version: 1,
+      kind: "html",
+      id: `artifact-${index}`,
+      title: `Artifact ${index}`,
+      mimeType: "text/html",
+      size: 1,
+      mediaId: `html_${String(index).padStart(43, "0")}`,
+    }],
+  }));
+  Object.defineProperty(messages, "findIndex", {
+    value: () => {
+      throw new Error("artifact selection must not rescan the message list");
+    },
+  });
+
+  const selected = selectedHtmlArtifactMediaIds(messages, `message-${messageCount - 1}`);
+  assert.equal(selected.length, messageCount);
+  assert.equal(selected[selected.length - 1], `html_${String(messageCount - 1).padStart(43, "0")}`);
+  assert.throws(
+    () => selectedHtmlArtifactMediaIds(messages, "missing-boundary"),
+    /completed assistant turn/iu,
+  );
+});
 
 test("clone and fork copy visible linear history with fresh identities", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-"));

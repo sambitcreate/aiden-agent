@@ -17,6 +17,7 @@ import {
   wrapStoredHtmlArtifact,
 } from "../services/gui-artifact-recovery.js";
 import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
+import { selectedHtmlArtifactMediaIds } from "../services/chat-copy-artifacts.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import {
   commitSkillInvocationForAppend,
@@ -224,18 +225,10 @@ export function registerChatHistoryHandlers(): void {
           if (!(await configStore.getWorkspace(workspaceId))) {
             throw new Error("The chat workspace is no longer available.");
           }
-          const htmlMediaIds = source.messages.flatMap((message, index) => {
-            if (
-              parsed.throughMessageId &&
-              source.messages.findIndex(
-                (entry) =>
-                  entry.id === parsed.throughMessageId && entry.role === "assistant",
-              ) < index
-            ) {
-              return [];
-            }
-            return (message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId);
-          });
+          const htmlMediaIds = selectedHtmlArtifactMediaIds(
+            source.messages,
+            parsed.throughMessageId,
+          );
           const targetChatId = randomUUID();
           let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
           const copied = await (async () => {
