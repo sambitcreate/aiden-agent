@@ -3,6 +3,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageBubble } from "./message-bubble.js";
 import { MessageList } from "./message-list.js";
+import { htmlArtifactTranscriptPlan } from "../lib/html-artifact-transcript.js";
 import {
   partitionMessageAttachments,
   resolveAttachmentPreviewTrigger,
@@ -172,6 +173,30 @@ test("the handoff window keeps exactly one live HTML artifact card", () => {
     />,
   );
   assert.equal(markup.match(/data-html-artifact="media-1"/gu)?.length, 1);
+});
+
+test("HTML artifact reconciliation keeps one stable transcript key across handoff", () => {
+  const live = htmlArtifact("media-1", "html-live");
+  const persistedMessage = {
+    id: "assistant-html",
+    role: "assistant" as const,
+    content: "Done.",
+    createdAt: 1,
+    htmlArtifacts: [htmlArtifact("media-1", "html-persisted")],
+  };
+  const liveOnly = htmlArtifactTranscriptPlan([], [live], true);
+  const duringHandoff = htmlArtifactTranscriptPlan([persistedMessage], [live], true);
+  const persistedOnly = htmlArtifactTranscriptPlan([persistedMessage], [], false);
+
+  assert.deepEqual(
+    [liveOnly[0]?.key, duringHandoff[0]?.key, persistedOnly[0]?.key],
+    ["html:media-1", "html:media-1", "html:media-1"],
+  );
+  assert.equal(duringHandoff.length, 1);
+  assert.equal(duringHandoff[0]?.source, "live");
+  assert.equal(duringHandoff[0]?.artifact.id, "html-live");
+  assert.equal(liveOnly[0]?.anchor, "streaming");
+  assert.equal(persistedOnly[0]?.anchor, "message:assistant-html");
 });
 
 test("a same-title replace keeps one card and the persisted copy returns after handoff", () => {
