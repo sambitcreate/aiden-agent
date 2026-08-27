@@ -136,6 +136,7 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import {
+  chatArtifactIdentity,
   parseChatArtifactEventV1,
   type ChatArtifactEventV1,
   type ChatArtifactV1,
@@ -778,7 +779,7 @@ export const chatsApi = {
       accent?: string;
     },
   ) =>
-    invoke<{ title: string; srcdoc: string } | undefined>("chats:htmlArtifactSrcdoc", {
+    invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {
       chatId,
       mediaId,
       theme,
@@ -1105,12 +1106,15 @@ export function startGeneration(
         if (!event) return;
         if (event.operation === "reset") {
           projectedArtifacts = [];
-        } else if (
-          !projectedArtifacts.some(
-            (candidate) => candidate.attachment.id === event.artifact.attachment.id,
-          )
-        ) {
-          projectedArtifacts = [...projectedArtifacts, event.artifact];
+        } else {
+          const identity = chatArtifactIdentity(event.artifact);
+          const index = projectedArtifacts.findIndex(
+            (candidate) => chatArtifactIdentity(candidate) === identity,
+          );
+          projectedArtifacts =
+            index >= 0
+              ? projectedArtifacts.map((candidate, i) => (i === index ? event.artifact : candidate))
+              : [...projectedArtifacts, event.artifact];
         }
         callbacks.onArtifactEvent?.(event);
       }),

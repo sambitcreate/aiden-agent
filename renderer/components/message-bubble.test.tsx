@@ -94,7 +94,7 @@ test("image-only live Pi artifacts render before assistant prose exists", () => 
   assert.match(markup, /preview\.png/u);
 });
 
-test("HTML artifacts render a sandboxed frame chrome before srcdoc loads", () => {
+test("HTML artifacts render a sandboxed frame chrome before preview loads", () => {
   const markup = renderToStaticMarkup(
     <MessageList
       chatId="chat-html"

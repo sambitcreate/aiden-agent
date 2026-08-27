@@ -577,7 +577,11 @@ export function registerChatHistoryHandlers(): void {
 
   ipcMain.handle(
     "chats:htmlArtifactSrcdoc",
-    async (_event, input: unknown) => {
+    async (event, input: unknown) => {
+      rendererDocumentOwner(
+        event,
+        () => new Error("HTML artifact preview requires the active application document."),
+      );
       if (!input || typeof input !== "object" || Array.isArray(input)) {
         throw new Error("Invalid HTML artifact request.");
       }
@@ -590,15 +594,33 @@ export function registerChatHistoryHandlers(): void {
 
   ipcMain.handle(
     "chats:exportHtmlArtifact",
-    async (_event, input: unknown) => {
+    async (event, input: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("HTML artifact export requires the active application document."),
+      );
       if (!input || typeof input !== "object" || Array.isArray(input)) {
         throw new Error("Invalid HTML artifact export request.");
       }
       const record = input as Record<string, unknown>;
-      return exportStoredHtmlArtifact({
-        chatId: asString(record.chatId, "chatId"),
-        mediaId: asString(record.mediaId, "mediaId"),
-      });
+      const chatId = asString(record.chatId, "chatId");
+      const mediaId = asString(record.mediaId, "mediaId");
+      const unresolved = await unresolvedGuiArtifactMessage(chatId);
+      if (unresolved) {
+        throw new Error(
+          unresolved.includes("could not be recovered")
+            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
+            : unresolved,
+        );
+      }
+      if (owner.isDestroyed()) {
+        throw new Error("The renderer document is no longer active.");
+      }
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      if (!parent || parent.isDestroyed()) {
+        throw new Error("The export window is unavailable.");
+      }
+      return exportStoredHtmlArtifact({ chatId, mediaId, parent });
     },
   );
 

@@ -13,7 +13,7 @@ import {
   MAX_DISPLAY_IMAGE_PIXELS,
   MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT,
 } from "./display-image-extension.js";
-import type { ChatArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
@@ -35,7 +35,7 @@ async function storageRoot(): Promise<string> {
   return directory;
 }
 
-function artifact(id: string, bytes = ONE_PIXEL_PNG): ChatArtifactV1 {
+function artifact(id: string, bytes = ONE_PIXEL_PNG): ChatImageArtifactV1 {
   return {
     version: 1,
     kind: "image",

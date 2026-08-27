@@ -6,7 +6,7 @@ import {
   type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
 import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
-import { parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 
 const MAX_DETACHED_STREAMS = 64;
@@ -529,12 +529,17 @@ export function subscribeDetachedTerminalChats(
     if (!event) return;
     updateDetachedProjection(parsed.streamId, (current) => {
       if (event.operation === "reset") return { ...current, artifacts: [] };
-      if (
-        current.artifacts.some(
-          (candidate) => candidate.attachment.id === event.artifact.attachment.id,
-        )
-      ) {
-        return current;
+      const identity = chatArtifactIdentity(event.artifact);
+      const index = current.artifacts.findIndex(
+        (candidate) => chatArtifactIdentity(candidate) === identity,
+      );
+      if (index >= 0) {
+        return {
+          ...current,
+          artifacts: current.artifacts.map((candidate, i) =>
+            i === index ? event.artifact : candidate,
+          ),
+        };
       }
       if (current.artifacts.length >= MAX_DETACHED_ARTIFACTS) return current;
       return { ...current, artifacts: [...current.artifacts, event.artifact] };

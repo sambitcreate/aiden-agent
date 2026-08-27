@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   GENERATIVE_UI_UNSUPPORTED_DEVICE_COPY,
   generativeUiHostLibraryNameFromUrl,
+  generativeUiPreviewTokenFromUrl,
   isHtmlArtifactMediaId,
   isHtmlArtifactTitle,
 } from "./generative-ui.js";
@@ -34,4 +35,32 @@ test("mobile fallback copy is fixed host-owned text", () => {
 test("aiden-genui URLs only resolve exact host library names", () => {
   assert.equal(generativeUiHostLibraryNameFromUrl("aiden-genui://chart.js"), "chart.js");
   assert.equal(generativeUiHostLibraryNameFromUrl("aiden-genui://../chart.js"), undefined);
+  assert.equal(generativeUiHostLibraryNameFromUrl("aiden-genui://chart.js/extra"), undefined);
+  assert.equal(generativeUiHostLibraryNameFromUrl("aiden-genui://chart.js?x=1"), undefined);
+});
+
+test("preview documents require an exact 64-hex token path", () => {
+  const token = "a".repeat(64);
+  assert.equal(
+    generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}`),
+    token,
+  );
+  assert.equal(
+    generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token.toUpperCase()}`),
+    token,
+  );
+  assert.equal(
+    generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}/extra`),
+    undefined,
+  );
+  assert.equal(
+    generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}?steal=1`),
+    undefined,
+  );
+  assert.equal(
+    generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}#frag`),
+    undefined,
+  );
+  assert.equal(generativeUiPreviewTokenFromUrl("aiden-genui://preview/not-hex"), undefined);
+  assert.equal(generativeUiPreviewTokenFromUrl("aiden-genui://chart.js"), undefined);
 });

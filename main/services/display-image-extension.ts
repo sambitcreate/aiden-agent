@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
-import type { ChatArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { CHAT_ARTIFACT_VERSION } from "../../renderer/shared/chat-artifacts.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
 import { isImageAttachmentPath, readPickedAttachments } from "./attachments.js";
@@ -38,7 +38,7 @@ export interface DisplayImageExtensionOptions {
   existingChatImageCount?: number;
   existingChatImagePixels?: number;
   onArtifact: (
-    artifact: ChatArtifactV1,
+    artifact: ChatImageArtifactV1,
     presentation: Readonly<ImageDimensions>,
   ) => boolean | void | Promise<boolean | void>;
   /** Test seam for deterministic cancellation immediately before presentation. */
@@ -528,7 +528,7 @@ export function createDisplayImageExtensionRuntime(
           }
           await options.beforeArtifact?.();
           if (signal?.aborted) throw new Error("Image display was cancelled.");
-          const artifact: ChatArtifactV1 = {
+          const artifact: ChatImageArtifactV1 = {
             version: CHAT_ARTIFACT_VERSION,
             kind: "image",
             attachment: {

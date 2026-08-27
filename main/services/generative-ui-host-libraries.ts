@@ -32,11 +32,18 @@ export function generativeUiLibraryPath(name: (typeof GENERATIVE_UI_HOST_LIBS)[n
 export async function loadGenerativeUiHostLibraries(): Promise<Record<string, string>> {
   const libraries: Record<string, string> = {};
   for (const name of GENERATIVE_UI_HOST_LIBS) {
+    let source: string;
     try {
-      libraries[name] = await fs.readFile(generativeUiLibraryPath(name), "utf8");
+      source = await fs.readFile(generativeUiLibraryPath(name), "utf8");
     } catch {
-      libraries[name] = "";
+      throw new Error(
+        `Host visualization library ${name} is missing. Reinstall Aiden or run npm run generative-ui:vendor.`,
+      );
     }
+    if (source.length === 0) {
+      throw new Error(`Host visualization library ${name} is empty.`);
+    }
+    libraries[name] = source;
   }
   return libraries;
 }

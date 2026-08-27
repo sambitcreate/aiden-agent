@@ -16,7 +16,8 @@ import { validateGenerativeUiHtml } from "./generative-ui-html.js";
 const STORE_VERSION = 1 as const;
 const STORE_FILE = "generative-ui-artifacts.json";
 const MAX_STORE_BYTES = 48 * 1024 * 1024;
-const MAX_STAGED_ARTIFACTS = 200;
+const MAX_STORE_RECORDS = 2_000;
+const MAX_UNCOMMITTED_ARTIFACTS = 200;
 const REQUIRED_RECORD_KEYS = new Set([
   "version",
   "chatId",
@@ -122,12 +123,10 @@ function parseRecord(value: unknown): StagedHtmlArtifact | undefined {
   }
   const artifact = parseChatHtmlArtifactV1(record.artifact);
   if (!artifact) return undefined;
-  try {
-    const bytes = validateGenerativeUiHtml(record.html);
-    if (bytes.byteLength !== artifact.size) return undefined;
-  } catch {
+  if (record.html.includes("\0") || Buffer.byteLength(record.html, "utf8") !== artifact.size) {
     return undefined;
   }
+  if (Buffer.byteLength(record.html, "utf8") > MAX_HTML_ARTIFACT_BYTES) return undefined;
   return {
     version: STORE_VERSION,
     chatId: record.chatId,
@@ -149,7 +148,7 @@ function parseDatabase(value: unknown): GenerativeUiArtifactDatabase | undefined
     !Number.isSafeInteger(database.revision) ||
     (database.revision as number) < 0 ||
     !Array.isArray(database.records) ||
-    database.records.length > MAX_STAGED_ARTIFACTS
+    database.records.length > MAX_STORE_RECORDS
   ) {
     return undefined;
   }
@@ -271,6 +270,7 @@ export class GenerativeUiArtifactStore {
       stagedAt: this.now(),
     });
     if (!parsed) throw new Error("Invalid generative-ui artifact staging payload.");
+    validateGenerativeUiHtml(parsed.html);
     return this.data.update((database) => {
       const id = parsed.artifact.mediaId;
       const existingIndex = database.records.findIndex((record) => record.artifact.mediaId === id);
@@ -297,8 +297,11 @@ export class GenerativeUiArtifactStore {
         throw new Error("Generative UI artifact identity was reused.");
       }
       const uncommitted = database.records.filter((record) => !record.committed);
-      if (uncommitted.length >= MAX_STAGED_ARTIFACTS) {
+      if (uncommitted.length >= MAX_UNCOMMITTED_ARTIFACTS) {
         throw new Error("Generative UI artifact staging is at capacity.");
+      }
+      if (database.records.length >= MAX_STORE_RECORDS) {
+        throw new Error("Generative UI artifact storage is at capacity.");
       }
       const chatRecords = database.records.filter((record) => record.chatId === parsed.chatId);
       if (chatRecords.length >= MAX_HTML_ARTIFACTS_PER_CHAT) {
@@ -415,6 +418,18 @@ export class GenerativeUiArtifactStore {
           record.committed &&
           wanted.has(record.artifact.mediaId),
       );
+      if (database.records.length + source.length > MAX_STORE_RECORDS) {
+        throw new Error("Generative UI artifact storage is at capacity.");
+      }
+      const targetRecords = database.records.filter((record) => record.chatId === targetChatId);
+      if (targetRecords.length + source.length > MAX_HTML_ARTIFACTS_PER_CHAT) {
+        throw new Error("This chat has reached its HTML artifact limit.");
+      }
+      const targetBytes = targetRecords.reduce((total, record) => total + record.artifact.size, 0);
+      const copyBytes = source.reduce((total, record) => total + record.artifact.size, 0);
+      if (targetBytes + copyBytes > MAX_HTML_ARTIFACT_BYTES_PER_CHAT) {
+        throw new Error("Generative UI artifact staging reached this chat's storage limit.");
+      }
       for (const record of source) {
         const mediaId = remappedHtmlArtifactMediaId(targetChatId, record.artifact.mediaId);
         const artifact: ChatHtmlArtifactV1 = { ...record.artifact, id: mediaId, mediaId };
@@ -460,6 +475,13 @@ export class GenerativeUiArtifactStore {
           (message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId),
         ),
       );
+      const alreadyPersisted = group.filter((record) => persistedIds.has(record.artifact.mediaId));
+      if (alreadyPersisted.length > 0) {
+        await this.commit(
+          chatId,
+          alreadyPersisted.map((record) => record.artifact.mediaId),
+        );
+      }
       const pending = group.filter((record) => !persistedIds.has(record.artifact.mediaId));
       const persistedUsage = displayedAssistantHtmlUsage(chat.messages);
       const recoveryBytes = pending.reduce((total, record) => total + record.artifact.size, 0);

@@ -748,15 +748,41 @@ export function Composer({
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
-        submitComposerInstruction: (instruction, prompt) => {
-          if (instruction !== "visualize") return false;
+        submitComposerInstruction: async (instruction, prompt) => {
+          if (instruction !== "visualize") return;
           const nextPrompt =
             prompt.trim() || consumeSlashToken(text, slashSession).trim();
           if (!nextPrompt) {
             toast.info("Add what to visualize after /visualize, then send.");
-            return true;
+            return;
           }
-          return onSend(nextPrompt, attachments, selectedSkill, { visualize: true });
+          if (selectedSkillState && selectedSkillState.state !== "valid") {
+            toast.info(selectedSkillState.reason);
+            return;
+          }
+          const submittedAttachments = attachments;
+          const submittedAttachmentRevision = attachmentRevisionRef.current;
+          const submittedSkillRevision = skillSelection.revision;
+          const submittedSkill = selectedSkill?.invocation;
+          setSending(true);
+          try {
+            await onSend(nextPrompt, submittedAttachments, submittedSkill, {
+              visualize: true,
+            });
+            setAttachments((current) =>
+              successfulSendAttachmentRemainder(
+                current,
+                submittedAttachments,
+                attachmentRevisionRef.current === submittedAttachmentRevision,
+              ),
+            );
+            dispatchSkillSelection({
+              type: "send-succeeded",
+              submittedRevision: submittedSkillRevision,
+            });
+          } finally {
+            setSending(false);
+          }
         },
       });
       const asyncAction = attempted.kind === "async";
@@ -822,6 +848,8 @@ export function Composer({
       onSend,
       attachments,
       selectedSkill,
+      selectedSkillState,
+      skillSelection.revision,
       requestRename,
       slashResultSelectable,
       slashSession,

@@ -1,10 +1,7 @@
 import * as React from "react";
 import { Download, Maximize2 } from "lucide-react";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
-import {
-  GENERATIVE_UI_IFRAME_SANDBOX,
-  GENERATIVE_UI_UNSUPPORTED_DEVICE_COPY,
-} from "../shared/generative-ui";
+import { GENERATIVE_UI_IFRAME_SANDBOX } from "../shared/generative-ui";
 import { chatsApi } from "../lib/ipc";
 import { Button, Dialog, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
@@ -32,11 +29,11 @@ function themeTokensFromDocument(): {
 }
 
 function HtmlArtifactIframe({
-  srcdoc,
+  src,
   title,
   className,
 }: {
-  srcdoc: string;
+  src: string;
   title: string;
   className?: string;
 }) {
@@ -44,7 +41,7 @@ function HtmlArtifactIframe({
     <iframe
       title={title}
       sandbox={GENERATIVE_UI_IFRAME_SANDBOX}
-      srcDoc={srcdoc}
+      src={src}
       referrerPolicy="no-referrer"
       className={cn("block h-full w-full border-0 bg-control", className)}
     />
@@ -58,7 +55,7 @@ export function HtmlArtifactFrame({
   chatId: string;
   artifact: ChatHtmlArtifactV1;
 }) {
-  const [srcdoc, setSrcdoc] = React.useState<string | null>(null);
+  const [src, setSrc] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
@@ -66,17 +63,17 @@ export function HtmlArtifactFrame({
 
   React.useEffect(() => {
     let cancelled = false;
-    setSrcdoc(null);
+    setSrc(null);
     setError(null);
     void chatsApi
       .htmlArtifactSrcdoc(chatId, artifact.mediaId, themeTokensFromDocument())
       .then((result) => {
         if (cancelled) return;
-        if (!result?.srcdoc) {
+        if (!result?.src) {
           setError("This visualization is no longer available.");
           return;
         }
-        setSrcdoc(result.srcdoc);
+        setSrc(result.src);
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
@@ -85,7 +82,7 @@ export function HtmlArtifactFrame({
     return () => {
       cancelled = true;
     };
-  }, [artifact.mediaId, chatId]);
+  }, [artifact.mediaId, artifact.size, chatId]);
 
   const exportArtifact = React.useCallback(async () => {
     if (exporting) return;
@@ -130,8 +127,8 @@ export function HtmlArtifactFrame({
         </Button>
       </header>
       <div className="h-[22rem] min-h-[12rem]">
-        {srcdoc ? (
-          <HtmlArtifactIframe srcdoc={srcdoc} title={artifact.title} />
+        {src ? (
+          <HtmlArtifactIframe src={src} title={artifact.title} />
         ) : (
           <div className="flex h-full items-center justify-center px-4 text-center">
             <Text variant="small" color="secondary">
@@ -149,11 +146,11 @@ export function HtmlArtifactFrame({
         returnFocus={() => expandTriggerRef.current}
       >
         <div className="h-[min(70vh,36rem)] overflow-hidden rounded-lg border border-separator">
-          {srcdoc ? (
-            <HtmlArtifactIframe srcdoc={srcdoc} title={artifact.title} />
+          {src ? (
+            <HtmlArtifactIframe src={src} title={artifact.title} />
           ) : (
             <Text variant="small" color="secondary">
-              {error ?? GENERATIVE_UI_UNSUPPORTED_DEVICE_COPY}
+              {error ?? "Loading visualization…"}
             </Text>
           )}
         </div>
@@ -173,7 +170,11 @@ export function HtmlArtifactList({
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {artifacts.map((artifact) => (
-        <HtmlArtifactFrame key={artifact.mediaId} chatId={chatId} artifact={artifact} />
+        <HtmlArtifactFrame
+          key={`${artifact.mediaId}:${artifact.size}`}
+          chatId={chatId}
+          artifact={artifact}
+        />
       ))}
     </div>
   );

@@ -9,11 +9,13 @@ import {
 } from "../../renderer/shared/generative-ui.js";
 
 const FORBIDDEN_OPEN_TAG =
-  /<\s*(iframe|object|embed|applet|frame|frameset|meta|base|link)\b/iu;
+  /<\s*(iframe|object|embed|applet|frame|frameset|base)\b/iu;
+const META_HTTP_EQUIV = /<\s*meta\b[^>]*\bhttp-equiv\s*=/iu;
 const SCRIPT_WITH_SRC = /<\s*script\b[^>]*\bsrc\s*=/iu;
 const JAVASCRIPT_URL = /javascript\s*:/iu;
 const HTML_DATA_URL = /data\s*:\s*text\/html/iu;
-const HTTP_RESOURCE = /(?:src|href)\s*=\s*["']?\s*https?:\/\//iu;
+const LINK_TAG = /<\s*link\b/iu;
+const HTTP_SRC = /\bsrc\s*=\s*["']?\s*https?:\/\//iu;
 
 export interface GenerativeUiThemeTokens {
   colorScheme: "light" | "dark";
@@ -66,12 +68,12 @@ export function validateGenerativeUiHtml(html: string): Buffer {
   if (bytes.toString("utf8") !== html) {
     throw new Error("Artifact HTML is not valid UTF-8.");
   }
-  if (FORBIDDEN_OPEN_TAG.test(html) || SCRIPT_WITH_SRC.test(html)) {
+  if (FORBIDDEN_OPEN_TAG.test(html) || SCRIPT_WITH_SRC.test(html) || META_HTTP_EQUIV.test(html) || LINK_TAG.test(html)) {
     throw new Error(
       "Artifact HTML cannot include iframes, remote documents, or external scripts. Use inline JavaScript; Chart.js, Plotly, and KaTeX are provided by Aiden.",
     );
   }
-  if (JAVASCRIPT_URL.test(html) || HTML_DATA_URL.test(html) || HTTP_RESOURCE.test(html)) {
+  if (JAVASCRIPT_URL.test(html) || HTML_DATA_URL.test(html) || HTTP_SRC.test(html)) {
     throw new Error(
       "Artifact HTML cannot load remote URLs or javascript: / data:text/html resources.",
     );
@@ -86,27 +88,39 @@ export function requireGenerativeUiTitle(value: unknown): string {
   return value;
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+function extractHeadInline(html: string): string {
+  const head = /<head\b[^>]*>([\s\S]*?)<\/head>/iu.exec(html);
+  if (!head?.[1]) return "";
+  const allowed = head[1].match(
+    /<(style|script)\b(?![^>]*\bsrc\s*=)[^>]*>[\s\S]*?<\/\1>/giu,
+  );
+  return allowed ? allowed.join("\n") : "";
 }
 
 function extractFragment(html: string): string {
   const trimmed = html.trim();
   const body = /<body\b[^>]*>([\s\S]*?)<\/body>/iu.exec(trimmed);
-  if (body?.[1] !== undefined) return body[1];
+  const headInline = extractHeadInline(trimmed);
+  if (body?.[1] !== undefined) {
+    return [headInline, body[1]].filter(Boolean).join("\n");
+  }
   if (/^\s*<(!doctype|html)\b/iu.test(trimmed)) {
     const stripped = trimmed
       .replace(/^\s*<!doctype[^>]*>/iu, "")
       .replace(/<\/?html\b[^>]*>/giu, "")
       .replace(/<head\b[^>]*>[\s\S]*?<\/head>/iu, "")
       .replace(/<\/?body\b[^>]*>/giu, "");
-    return stripped.trim().length > 0 ? stripped : trimmed;
+    return [headInline, stripped.trim() || trimmed].filter(Boolean).join("\n");
   }
   return html;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;");
 }
 
 function hostLibraryTags(): string {
@@ -180,13 +194,7 @@ export function generativeUiExportDocument(
     const href = `${GENERATIVE_UI_PROTOCOL_SCHEME}://${name}`;
     const source = libraries[name];
     if (!source) {
-      document = document.replaceAll(
-        name.endsWith(".css")
-          ? `<link rel="stylesheet" href="${href}">`
-          : `<script src="${href}"></script>`,
-        "",
-      );
-      continue;
+      throw new Error(`Export is missing host library ${name}.`);
     }
     if (name.endsWith(".css")) {
       document = document.replace(

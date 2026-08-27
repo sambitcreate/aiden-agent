@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
+import { constants as fsConstants, realpathSync, statSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -135,7 +135,7 @@ export function createGenerativeUiExtensionRuntime(
   let displayedCount = 0;
   let displayedBytes = 0;
   let serial = Promise.resolve();
-  const titlesInGeneration = new Map<string, string>();
+  const titlesInGeneration = new Map<string, { id: string; size: number }>();
 
   const assertWorkspaceRoot = async (): Promise<void> => {
     const [currentCanonical, currentIdentity] = await Promise.all([
@@ -199,15 +199,27 @@ export function createGenerativeUiExtensionRuntime(
           if (hasPath) {
             const resolved = resolveWorkspaceHtml(canonicalRoot, input.path as string);
             await assertWorkspaceRoot();
-            const stat = await fs.stat(resolved.absolute);
-            if (!stat.isFile() || stat.size < 1 || stat.size > MAX_HTML_ARTIFACT_BYTES) {
-              throw new Error(
-                `${resolved.relative} is missing or larger than ${MAX_HTML_ARTIFACT_BYTES.toLocaleString("en-US")} bytes.`,
-              );
+            const noFollow =
+              typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+            const handle = await fs.open(resolved.absolute, fsConstants.O_RDONLY | noFollow);
+            try {
+              const stat = await handle.stat();
+              if (!stat.isFile() || stat.size < 1 || stat.size > MAX_HTML_ARTIFACT_BYTES) {
+                throw new Error(
+                  `${resolved.relative} is missing or larger than ${MAX_HTML_ARTIFACT_BYTES.toLocaleString("en-US")} bytes.`,
+                );
+              }
+              const bytes = Buffer.alloc(stat.size);
+              const read = await handle.read(bytes, 0, stat.size, 0);
+              const payload = bytes.subarray(0, read.bytesRead);
+              html = payload.toString("utf8");
+              if (!payload.equals(Buffer.from(html, "utf8"))) {
+                throw new Error("Artifact HTML is not valid UTF-8.");
+              }
+            } finally {
+              await handle.close();
             }
-            const bytes = await fs.readFile(resolved.absolute);
             await assertWorkspaceRoot();
-            html = bytes.toString("utf8");
             sourceLabel = resolved.relative;
           } else {
             html = input.html as string;
@@ -215,6 +227,7 @@ export function createGenerativeUiExtensionRuntime(
           validateGenerativeUiHtml(html);
           const size = htmlArtifactByteLength(html);
           const replacing = titlesInGeneration.get(title);
+          const nextBytes = displayedBytes - (replacing?.size ?? 0) + size;
           if (!replacing) {
             if (displayedCount >= MAX_HTML_ARTIFACTS_PER_RESPONSE) {
               throw new Error(
@@ -226,17 +239,17 @@ export function createGenerativeUiExtensionRuntime(
                 `This chat has reached its ${MAX_HTML_ARTIFACTS_PER_CHAT}-artifact limit.`,
               );
             }
-            if (
-              displayedBytes + size > MAX_HTML_ARTIFACTS_PER_RESPONSE * MAX_HTML_ARTIFACT_BYTES ||
-              existingChatHtmlBytes + displayedBytes + size > MAX_HTML_ARTIFACT_BYTES_PER_CHAT
-            ) {
-              throw new Error("HTML artifacts reached this response or chat's storage limit.");
-            }
+          }
+          if (
+            nextBytes > MAX_HTML_ARTIFACTS_PER_RESPONSE * MAX_HTML_ARTIFACT_BYTES ||
+            existingChatHtmlBytes + nextBytes > MAX_HTML_ARTIFACT_BYTES_PER_CHAT
+          ) {
+            throw new Error("HTML artifacts reached this response or chat's storage limit.");
           }
           await options.beforeArtifact?.();
           if (signal?.aborted) throw new Error("Artifact rendering was cancelled.");
           const id =
-            replacing ??
+            replacing?.id ??
             createHash("sha256")
               .update(artifactNamespace)
               .update("\0")
@@ -254,10 +267,11 @@ export function createGenerativeUiExtensionRuntime(
           const presented = (await options.onArtifact(artifact, html)) !== false;
           if (presented && !replacing) {
             displayedCount += 1;
-            displayedBytes += size;
-            titlesInGeneration.set(title, id);
+            displayedBytes = nextBytes;
+            titlesInGeneration.set(title, { id, size });
           } else if (presented && replacing) {
-            titlesInGeneration.set(title, replacing);
+            displayedBytes = nextBytes;
+            titlesInGeneration.set(title, { id: replacing.id, size });
           }
           return {
             content: [

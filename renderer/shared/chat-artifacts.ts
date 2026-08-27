@@ -181,6 +181,10 @@ export function isChatHtmlArtifact(value: ChatArtifactV1): value is ChatHtmlArti
   return value.kind === "html";
 }
 
+export function chatArtifactIdentity(artifact: ChatArtifactV1): string {
+  return artifact.kind === "html" ? artifact.mediaId : artifact.attachment.id;
+}
+
 export function parseChatHtmlArtifacts(value: unknown): ChatHtmlArtifactV1[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length > 40) return undefined;

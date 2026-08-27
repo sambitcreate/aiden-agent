@@ -15,17 +15,18 @@ export const GENERATIVE_UI_IFRAME_SANDBOX = "allow-scripts" as const;
  * load only from the `aiden-genui:` protocol registered by main.
  */
 export const GENERATIVE_UI_GUEST_CSP =
-  "default-src 'none'; script-src 'unsafe-inline' aiden-genui:; style-src 'unsafe-inline' aiden-genui:; img-src data: blob:; font-src data: aiden-genui:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:";
+  "default-src 'none'; script-src 'unsafe-inline' aiden-genui://chart.js aiden-genui://plotly.js aiden-genui://katex.js; style-src 'unsafe-inline' aiden-genui://katex.css; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
 
 /** Offline export has inlined libraries, so the custom protocol is not needed. */
 export const GENERATIVE_UI_EXPORT_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:";
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
 
-
-/** Narrow parent frame policy: srcdoc iframes only, no arbitrary https frames. */
-export const GENERATIVE_UI_PARENT_FRAME_SRC = "'self'" as const;
+/** Parent may embed aiden-genui preview documents, not arbitrary https frames. */
+export const GENERATIVE_UI_PARENT_FRAME_SRC = "'self' aiden-genui:" as const;
 
 export const GENERATIVE_UI_PROTOCOL_SCHEME = "aiden-genui" as const;
+export const GENERATIVE_UI_PREVIEW_HOST = "preview" as const;
+
 
 export const GENERATIVE_UI_HOST_LIBS = ["chart.js", "plotly.js", "katex.js", "katex.css"] as const;
 
@@ -57,6 +58,8 @@ export function generativeUiHostLibraryNameFromUrl(urlString: string): (typeof G
     return undefined;
   }
   if (url.protocol !== `${GENERATIVE_UI_PROTOCOL_SCHEME}:`) return undefined;
+  if (url.pathname !== "" && url.pathname !== "/") return undefined;
+  if (url.search !== "" || url.hash !== "") return undefined;
   let name: string;
   try {
     name = decodeURIComponent(url.hostname || url.pathname.replace(/^\//u, ""));
@@ -64,4 +67,21 @@ export function generativeUiHostLibraryNameFromUrl(urlString: string): (typeof G
     return undefined;
   }
   return GENERATIVE_UI_HOST_LIBS.find((item) => item === name);
+}
+
+const PREVIEW_TOKEN = /^[A-Fa-f0-9]{64}$/u;
+
+export function generativeUiPreviewTokenFromUrl(urlString: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(urlString);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== `${GENERATIVE_UI_PROTOCOL_SCHEME}:`) return undefined;
+  if (url.hostname !== GENERATIVE_UI_PREVIEW_HOST) return undefined;
+  if (url.search !== "" || url.hash !== "") return undefined;
+  const token = url.pathname.replace(/^\//u, "");
+  if (token.includes("/")) return undefined;
+  return PREVIEW_TOKEN.test(token) ? token.toLowerCase() : undefined;
 }
