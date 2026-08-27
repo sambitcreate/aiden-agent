@@ -162,6 +162,10 @@ test("artifact chrome uses Dialog expand with return focus and export", async ()
   assert.match(frame, /aria-label=\{`Export \$\{artifact\.title\}`\}/u);
   assert.match(frame, /confirmHidden/u);
   assert.match(frame, /onOpenChange=\{setExpanded\}/u);
+  assert.match(frame, /error && src/u);
+  assert.match(frame, /data-html-artifact-error=\{error\.kind\}/u);
+  assert.match(frame, /Showing the previous version/u);
+  assert.match(frame, /Could not export this visualization/u);
   const dialog = await fs.readFile(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/ui.tsx"),
     "utf8",

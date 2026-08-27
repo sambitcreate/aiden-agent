@@ -6,6 +6,11 @@ import { chatsApi } from "../lib/ipc";
 import { Button, Dialog, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 
+interface HtmlArtifactFrameError {
+  kind: "preview" | "export";
+  message: string;
+}
+
 function themeTokensFromDocument(): {
   colorScheme: "light" | "dark";
   canvas: string;
@@ -56,7 +61,7 @@ function HtmlArtifactFrameImpl({
   artifact: ChatHtmlArtifactV1;
 }) {
   const [src, setSrc] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<HtmlArtifactFrameError | null>(null);
   const [expanded, setExpanded] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
   const expandTriggerRef = React.useRef<HTMLButtonElement | null>(null);
@@ -72,7 +77,7 @@ function HtmlArtifactFrameImpl({
       .then((result) => {
         if (cancelled) return;
         if (!result?.src) {
-          setError("This visualization is no longer available.");
+          setError({ kind: "preview", message: "This visualization is no longer available." });
           return;
         }
         setError(null);
@@ -80,7 +85,10 @@ function HtmlArtifactFrameImpl({
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
-        setError(cause instanceof Error ? cause.message : "Could not load this visualization.");
+        setError({
+          kind: "preview",
+          message: cause instanceof Error ? cause.message : "Could not load this visualization.",
+        });
       });
     return () => {
       cancelled = true;
@@ -89,11 +97,15 @@ function HtmlArtifactFrameImpl({
 
   const exportArtifact = React.useCallback(async () => {
     if (exporting) return;
+    setError((current) => (current?.kind === "export" ? null : current));
     setExporting(true);
     try {
       await chatsApi.exportHtmlArtifact(chatId, artifact.mediaId);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Export failed.");
+      setError({
+        kind: "export",
+        message: cause instanceof Error ? cause.message : "Export failed.",
+      });
     } finally {
       setExporting(false);
     }
@@ -129,13 +141,26 @@ function HtmlArtifactFrameImpl({
           <Download aria-hidden="true" />
         </Button>
       </header>
+      {error && src ? (
+        <div
+          role="alert"
+          className="border-b border-separator bg-control-hover px-3 py-2"
+          data-html-artifact-error={error.kind}
+        >
+          <Text variant="small" color="red">
+            {error.kind === "preview"
+              ? `Could not refresh this visualization. Showing the previous version. ${error.message}`
+              : `Could not export this visualization. ${error.message}`}
+          </Text>
+        </div>
+      ) : null}
       <div className="h-[22rem] min-h-[12rem]">
         {src ? (
           <HtmlArtifactIframe src={src} title={artifact.title} />
         ) : (
           <div className="flex h-full items-center justify-center px-4 text-center">
             <Text variant="small" color="secondary">
-              {error ?? "Loading visualization…"}
+              {error?.message ?? "Loading visualization…"}
             </Text>
           </div>
         )}
@@ -153,7 +178,7 @@ function HtmlArtifactFrameImpl({
             <HtmlArtifactIframe src={src} title={artifact.title} />
           ) : (
             <Text variant="small" color="secondary">
-              {error ?? "Loading visualization…"}
+              {error?.message ?? "Loading visualization…"}
             </Text>
           )}
         </div>
