@@ -20,8 +20,16 @@ export const GENERATIVE_UI_IFRAME_SANDBOX = "allow-scripts" as const;
 export const GENERATIVE_UI_GUEST_CSP =
   "default-src 'none'; script-src 'unsafe-inline' aiden-genui://chart.js aiden-genui://plotly.js aiden-genui://katex.js; style-src 'unsafe-inline' aiden-genui://katex.css; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
 
-/** Offline export has inlined libraries, so the custom protocol is not needed. */
+/** The sandboxed export guest has inlined libraries, so the custom protocol is not needed. */
 export const GENERATIVE_UI_EXPORT_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
+
+/**
+ * The export host permits only its inline styles and its own srcdoc child. The
+ * child inherits these network restrictions while its iframe sandbox blocks
+ * top-level navigation, popups, forms, downloads, and same-origin access.
+ */
+export const GENERATIVE_UI_EXPORT_HOST_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
 
 /** Parent may embed aiden-genui preview documents, not arbitrary https frames. */

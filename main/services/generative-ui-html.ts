@@ -1,7 +1,9 @@
 import {
   GENERATIVE_UI_EXPORT_CSP,
+  GENERATIVE_UI_EXPORT_HOST_CSP,
   GENERATIVE_UI_GUEST_CSP,
   GENERATIVE_UI_HOST_LIBS,
+  GENERATIVE_UI_IFRAME_SANDBOX,
   GENERATIVE_UI_PROTOCOL_SCHEME,
   HTML_ARTIFACT_MIME_TYPE,
   MAX_HTML_ARTIFACT_BYTES,
@@ -123,6 +125,15 @@ function escapeHtml(value: string): string {
     .replace(/"/gu, "&quot;");
 }
 
+/** Preserve the guest source as one safely quoted outer-document attribute. */
+function escapeSrcdoc(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;");
+}
+
 function hostLibraryTags(): string {
   return GENERATIVE_UI_HOST_LIBS.map((name) => {
     const href = `${GENERATIVE_UI_PROTOCOL_SCHEME}://${name}`;
@@ -186,7 +197,7 @@ export function generativeUiExportDocument(
   libraries: Readonly<Record<string, string>>,
   theme?: GenerativeUiThemeTokens,
 ): string {
-  let document = wrapGenerativeUiHtml(html, title, theme).replace(
+  let guestDocument = wrapGenerativeUiHtml(html, title, theme).replace(
     GENERATIVE_UI_GUEST_CSP,
     GENERATIVE_UI_EXPORT_CSP,
   );
@@ -197,18 +208,35 @@ export function generativeUiExportDocument(
       throw new Error(`Export is missing host library ${name}.`);
     }
     if (name.endsWith(".css")) {
-      document = document.replace(
+      guestDocument = guestDocument.replace(
         `<link rel="stylesheet" href="${href}">`,
         `<style>\n${source}\n</style>`,
       );
     } else {
-      document = document.replace(
+      guestDocument = guestDocument.replace(
         `<script src="${href}"></script>`,
         `<script>\n${source}\n</script>`,
       );
     }
   }
-  return document;
+  const safeTitle = escapeHtml(title);
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${GENERATIVE_UI_EXPORT_HOST_CSP}">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${safeTitle}</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+iframe { display: block; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<iframe title="${safeTitle}" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" referrerpolicy="no-referrer" srcdoc="${escapeSrcdoc(guestDocument)}"></iframe>
+</body>
+</html>
+`;
 }
 
 export function htmlArtifactByteLength(html: string): number {

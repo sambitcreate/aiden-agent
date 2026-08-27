@@ -7,6 +7,7 @@ import {
   GENERATIVE_UI_IFRAME_SANDBOX,
   GENERATIVE_UI_PARENT_FRAME_SRC,
 } from "../../renderer/shared/generative-ui";
+import { generativeUiExportDocument } from "../../main/services/generative-ui-html";
 
 // Playwright's config loader resolves this ESM repo through the CommonJS
 // condition. Named exports are unavailable; the default object carries them.
@@ -185,5 +186,54 @@ document.addEventListener("securitypolicyviolation", (event) => {
       .toBe(true);
   } finally {
     await parent.close();
+  }
+});
+
+test("standalone export stays interactive without allowing guest navigation", async ({
+  page,
+}) => {
+  let navigationRequests = 0;
+  const site = await listen((request, response) => {
+    if (request.url?.startsWith("/escaped") === true) {
+      navigationRequests += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (request.url !== "/export") {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    const target = `http://${request.headers.host}/escaped?artifact=secret`;
+    const exported = generativeUiExportDocument(
+      `<button id="counter" type="button">0</button><script>
+        document.getElementById("counter").addEventListener("click", (event) => {
+          event.currentTarget.textContent = String(Number(event.currentTarget.textContent) + 1);
+          window.location.href = ${JSON.stringify(target)};
+        });
+        try { window.top.location.href = ${JSON.stringify(target)}; } catch {}
+      </script>`,
+      "Contained export",
+      {
+        "chart.js": "window.Chart = {};",
+        "plotly.js": "window.Plotly = {};",
+        "katex.js": "window.katex = {};",
+        "katex.css": "body { min-height: 100%; }",
+      },
+    );
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(exported);
+  });
+
+  try {
+    await page.goto(`${site.origin}/export`, { waitUntil: "domcontentloaded" });
+    const counter = page.frameLocator("iframe").locator("#counter");
+    await expect(counter).toHaveText("0");
+    await counter.click();
+    await expect.poll(() => page.url()).toBe(`${site.origin}/export`);
+    await expect.poll(() => navigationRequests).toBe(0);
+  } finally {
+    await site.close();
   }
 });

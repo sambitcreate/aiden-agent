@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   GENERATIVE_UI_GUEST_CSP,
   GENERATIVE_UI_IFRAME_SANDBOX,
+  GENERATIVE_UI_EXPORT_HOST_CSP,
   GENERATIVE_UI_PARENT_FRAME_SRC,
   GENERATIVE_UI_PROTOCOL_SCHEME,
 } from "../../renderer/shared/generative-ui.js";
@@ -70,6 +71,25 @@ test("export inlines host libraries and removes the custom protocol", () => {
   assert.doesNotMatch(exported, /aiden-genui:\/\//u);
   assert.match(exported, /script-src 'unsafe-inline'/u);
   assert.doesNotMatch(exported, /script-src 'unsafe-inline' aiden-genui:/u);
+  assert.match(exported, /sandbox="allow-scripts"/u);
+  assert.match(exported, /srcdoc="/u);
+  assert.match(exported, new RegExp(GENERATIVE_UI_EXPORT_HOST_CSP.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+  assert.doesNotMatch(GENERATIVE_UI_EXPORT_HOST_CSP, /frame-src [^;]*https/u);
+});
+
+test("export srcdoc preserves HTML entities for the guest parser", () => {
+  const exported = generativeUiExportDocument(
+    '<p data-label="&quot;">&amp;</p>',
+    TITLE,
+    {
+      "chart.js": "window.Chart = '&quot;';",
+      "plotly.js": "window.Plotly = {};",
+      "katex.js": "window.katex = {};",
+      "katex.css": "body::before { content: '&quot;'; }",
+    },
+  );
+  assert.match(exported, /&amp;quot;/u);
+  assert.match(exported, /&amp;amp;/u);
 });
 
 test("golden chart fixture is admitted and wrapped without a network hint", () => {
