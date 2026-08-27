@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { OrderedPcmSendQueue, Pcm16ChunkEncoder } from "./live-pcm-capture.js";
+import { voiceApi } from "./ipc.js";
+import { GeminiLiveCapture, OrderedPcmSendQueue, Pcm16ChunkEncoder } from "./live-pcm-capture.js";
 
 function decode(bytes: Uint8Array): number[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -54,6 +55,60 @@ test("audio queue fails closed when renderer-to-main backpressure is exceeded", 
   queue.enqueue(Uint8Array.from([1, 0]));
   queue.enqueue(Uint8Array.from([2, 0]));
   await assert.rejects(queue.drain(), /could not keep up/u);
+});
+
+test("cancel still reaches main after live finalization has started", async () => {
+  const originalWindow = globalThis.window;
+  const originalOnStreamText = voiceApi.onStreamText;
+  const originalStreamPush = voiceApi.streamPush;
+  const originalStreamFinish = voiceApi.streamFinish;
+  const originalStreamCancel = voiceApi.streamCancel;
+  let cancelCalls = 0;
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: globalThis,
+  });
+  voiceApi.onStreamText = () => () => {};
+  voiceApi.streamPush = async () => {};
+  voiceApi.streamFinish = () => new Promise<string>(() => {});
+  voiceApi.streamCancel = async () => {
+    cancelCalls += 1;
+  };
+  try {
+    const Capture = GeminiLiveCapture as unknown as new (
+      sessionId: string,
+      context: AudioContext,
+      source: MediaStreamAudioSourceNode,
+      worklet: AudioWorkletNode,
+      silentGain: GainNode,
+      onTranscript: () => void,
+    ) => GeminiLiveCapture;
+    const capture = new Capture(
+      "session-1",
+      { sampleRate: 16_000, close: async () => {} } as unknown as AudioContext,
+      { disconnect: () => {} } as unknown as MediaStreamAudioSourceNode,
+      {
+        port: { onmessage: null, onmessageerror: null, postMessage: () => {} },
+        disconnect: () => {},
+      } as unknown as AudioWorkletNode,
+      { disconnect: () => {} } as unknown as GainNode,
+      () => {},
+    );
+    const finishing = capture.finish();
+    await Promise.resolve();
+    await capture.cancel();
+    await assert.rejects(finishing, /cancelled/u);
+    assert.equal(cancelCalls, 1);
+  } finally {
+    voiceApi.onStreamText = originalOnStreamText;
+    voiceApi.streamPush = originalStreamPush;
+    voiceApi.streamFinish = originalStreamFinish;
+    voiceApi.streamCancel = originalStreamCancel;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: originalWindow,
+    });
+  }
 });
 
 test("audio worklet flushes trailing frames before acknowledging the drain", async () => {

@@ -16,6 +16,10 @@ export interface TranscribeOptions {
   localModel?: string;
   /** Selected cloud transcription model. */
   model?: string;
+  /** Renderer-generated identity used to cancel/fence a cloud request. */
+  operationId?: string;
+  /** Invalidates expensive conversion before an IPC request begins. */
+  signal?: AbortSignal;
 }
 
 export const MICROPHONE_PERMISSION_OFF_MESSAGE =
@@ -104,18 +108,32 @@ export async function ensureMicrophoneAccess(): Promise<boolean> {
  * Resolves the trimmed transcript ("" when no speech was detected).
  */
 export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Promise<string> {
+  const operationId = options.operationId;
+  if (!operationId) throw new Error("Voice transcription operation identity is missing.");
+  options.signal?.throwIfAborted();
   if (options.provider === "local") {
     if (!options.localModel) {
       throw new Error("Download and select an on-device model in Settings → Voice.");
     }
     const pcm = float32ToBase64(await blobToMono16k(blob));
-    return (await voiceApi.transcribeLocal(pcm, options.localModel)).trim();
+    options.signal?.throwIfAborted();
+    return (await voiceApi.transcribeLocal(pcm, options.localModel, operationId)).trim();
   }
   if (options.provider === "gemini") {
     const samples = await blobToMono16k(blob);
+    options.signal?.throwIfAborted();
     const wav = bytesToBase64(encodeMonoPcm16Wav(samples, 16_000));
-    return (await voiceApi.transcribe(wav, "audio/wav", GEMINI_TRANSCRIPTION_MODEL)).trim();
+    return (
+      await voiceApi.transcribe(wav, "audio/wav", GEMINI_TRANSCRIPTION_MODEL, operationId)
+    ).trim();
   }
   const base64 = await blobToBase64(blob);
-  return (await voiceApi.transcribe(base64, blob.type, options.model)).trim();
+  options.signal?.throwIfAborted();
+  return (await voiceApi.transcribe(base64, blob.type, options.model, operationId)).trim();
+}
+
+export function cancelTranscription(provider: VoiceProvider, operationId: string): Promise<void> {
+  return provider === "local"
+    ? voiceApi.cancelLocalTranscription(operationId)
+    : voiceApi.cancelTranscription(operationId);
 }

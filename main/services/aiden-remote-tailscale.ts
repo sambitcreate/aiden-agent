@@ -32,6 +32,8 @@ const ROUTE_LOCK_RETRY_MS = 50;
 const ROUTE_LOCK_PORT = 49_191;
 const POST_MUTATION_STATUS_ATTEMPTS = 3;
 const POST_MUTATION_STATUS_RETRY_MS = 50;
+const STATUS_READ_ATTEMPTS = 3;
+const STATUS_READ_RETRY_MS = 75;
 
 export interface AidenTailscaleCommandRunner {
   run(args: readonly string[]): Promise<string>;
@@ -101,6 +103,11 @@ export interface AidenRemoteTailscaleControllerOptions {
   randomToken?: () => string;
   withRouteLock?: <T>(action: () => Promise<T>) => Promise<T>;
   outcomeStore?: AidenTailscaleOutcomeStore;
+  onStatusReadFailure?: (input: {
+    phase: "node" | "serve";
+    attempt: number;
+    final: boolean;
+  }) => void;
 }
 
 export interface AidenTailscaleRouteLockOptions {
@@ -336,7 +343,9 @@ export class AidenRemoteTailscaleController {
   private readonly randomToken: () => string;
   private readonly withRouteLock: <T>(action: () => Promise<T>) => Promise<T>;
   private readonly outcomeStore?: AidenTailscaleOutcomeStore;
+  private readonly onStatusReadFailure?: AidenRemoteTailscaleControllerOptions["onStatusReadFailure"];
   private readonly takeoverReviews = new Map<string, AidenTailscaleTakeoverRecord>();
+  private connectionStatusRead: Promise<AidenTailscaleConnectionStatus> | null = null;
 
   constructor(
     private readonly runner: AidenTailscaleCommandRunner | null,
@@ -349,6 +358,7 @@ export class AidenRemoteTailscaleController {
     this.withRouteLock = options.withRouteLock
       ?? ((action) => withAidenTailscaleRouteLock(action));
     this.outcomeStore = options.outcomeStore;
+    this.onStatusReadFailure = options.onStatusReadFailure;
   }
 
   private async serveStatus(): Promise<AidenTailscaleStatus> {
@@ -363,11 +373,10 @@ export class AidenRemoteTailscaleController {
     return parseNodeStatus(await this.runner.run(["status", "--json", "--peers=false"]));
   }
 
-  private async readConnectionStatus(): Promise<AidenTailscaleConnectionStatus> {
-    const [nodeStatus, serveStatus] = await Promise.all([
-      this.nodeStatus(),
-      this.serveStatus(),
-    ]);
+  private connectionStatus(
+    nodeStatus: AidenTailscaleNodeStatus,
+    serveStatus: AidenTailscaleStatus,
+  ): AidenTailscaleConnectionStatus {
     const errorCode = !nodeStatus.dnsName
       ? "not_connected" as const
       : !nodeStatus.httpsAvailable
@@ -380,6 +389,43 @@ export class AidenRemoteTailscaleController {
       ...(errorCode ? { errorCode } : {}),
       serveStatus,
     };
+  }
+
+  private async readConnectionStatusWithRetry(): Promise<AidenTailscaleConnectionStatus> {
+    for (let attempt = 1; attempt <= STATUS_READ_ATTEMPTS; attempt += 1) {
+      let phase: "node" | "serve" = "node";
+      try {
+        const nodeStatus = await this.nodeStatus();
+        phase = "serve";
+        const serveStatus = await this.serveStatus();
+        return this.connectionStatus(nodeStatus, serveStatus);
+      } catch {
+        try {
+          this.onStatusReadFailure?.({
+            phase,
+            attempt,
+            final: attempt === STATUS_READ_ATTEMPTS,
+          });
+        } catch {
+          // Diagnostics must never change the fail-closed inspection result.
+        }
+        if (attempt < STATUS_READ_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, STATUS_READ_RETRY_MS));
+        }
+      }
+    }
+    throw new Error("tailscale_status_unavailable");
+  }
+
+  private async readConnectionStatus(): Promise<AidenTailscaleConnectionStatus> {
+    if (this.connectionStatusRead) return this.connectionStatusRead;
+    const read = this.readConnectionStatusWithRetry();
+    this.connectionStatusRead = read;
+    try {
+      return await read;
+    } finally {
+      if (this.connectionStatusRead === read) this.connectionStatusRead = null;
+    }
   }
 
   async status(): Promise<AidenTailscaleConnectionStatus> {
@@ -396,10 +442,8 @@ export class AidenRemoteTailscaleController {
     serveStatus: AidenTailscaleStatus;
   }> {
     if (!this.runner) throw new Error("tailscale_not_installed");
-    const [nodeStatus, serveStatus] = await Promise.all([
-      this.nodeStatus(),
-      this.serveStatus(),
-    ]);
+    const nodeStatus = await this.nodeStatus();
+    const serveStatus = await this.serveStatus();
     if (!nodeStatus.dnsName) throw new Error("tailscale_not_connected");
     if (!nodeStatus.httpsAvailable) throw new Error("tailscale_https_unavailable");
     return { nodeStatus, serveStatus };
@@ -427,16 +471,11 @@ export class AidenRemoteTailscaleController {
   ): Promise<AidenTailscaleRouteAssessment> {
     if (!this.runner) return { state: "unavailable", errorCode: "not_installed" };
     try {
-      const [nodeStatus, serveStatus] = await Promise.all([
-        this.nodeStatus(),
-        this.serveStatus(),
-      ]);
+      const connectionStatus = await this.readConnectionStatus();
+      const serveStatus = connectionStatus.serveStatus;
+      if (!serveStatus) throw new Error("tailscale_status_invalid");
       const classification = classifyAidenTailscaleRoute(serveStatus, target, ownership);
-      const errorCode = !nodeStatus.dnsName
-        ? "not_connected" as const
-        : !nodeStatus.httpsAvailable
-          ? "https_unavailable" as const
-          : undefined;
+      const errorCode = connectionStatus.errorCode;
       if (classification.kind === "owned") {
         return { state: "owned", ...(errorCode ? { errorCode } : {}) };
       }

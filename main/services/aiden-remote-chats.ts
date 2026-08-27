@@ -853,9 +853,16 @@ export class AidenRemoteChatService {
         parsed,
         async () => {
           const authoritative = await this.chat(chatId);
+          const requestedProviderId = parsed.providerId ?? authoritative.providerId;
+          const requestedModelId = parsed.modelId ?? authoritative.model;
+          const preservesPinnedGemini =
+            authoritative.providerId === "google" &&
+            requestedProviderId === authoritative.providerId &&
+            requestedModelId === authoritative.model;
           const selection = await this.options.models.resolve(
-            parsed.providerId ?? authoritative.providerId,
-            parsed.modelId ?? authoritative.model,
+            requestedProviderId,
+            requestedModelId,
+            { allowExistingPinnedGemini: preservesPinnedGemini },
           );
           if (authoritative.botId && (
             !authoritative.providerId ||

@@ -38,14 +38,17 @@ const featureAssetPaths = [
   "features/web-search.png",
   "features/workspaces-worktrees.png",
 ] as const;
-const providerPresentation = source.slice(
-  source.indexOf("const providerChoices"),
-  source.indexOf("function builtinProviderSetupLabel"),
-);
-const featurePresentation = source.slice(
-  source.indexOf("const featureBentos"),
-  source.indexOf("function builtinProviderSetupLabel"),
-);
+
+function sourceSection(startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0, `Missing source section start: ${startMarker}`);
+  assert.ok(end > start, `Missing source section end: ${endMarker}`);
+  return source.slice(start, end);
+}
+
+const providerPresentation = sourceSection("const providerChoices", "type FeatureGroupId");
+const featurePresentation = sourceSection("const featureBentos", "const FEATURE_LAYOUTS");
 
 test("onboarding uses the Aiden mark and the existing provider icon system", () => {
   assert.match(source, /resources\/app-icon\.png/u);
@@ -186,7 +189,7 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
   );
 });
 
-test("provider setup progressively reveals Pi and uses the dedicated Codex surface", () => {
+test("provider setup progressively reveals configurable Pi providers and uses the dedicated Codex surface", () => {
   assert.match(source, />\s*Choose from more\s*</u);
   assert.match(source, /aria-controls="onboarding-more-providers"/u);
   assert.match(source, /aria-expanded=\{showMoreProviders\}/u);
@@ -196,10 +199,11 @@ test("provider setup progressively reveals Pi and uses the dedicated Codex surfa
   assert.match(source, /providers\.isError/u);
   assert.match(source, /providers\.refetch\(\)/u);
   assert.match(source, /disabled=\{!canChoose \|\| saving\}/u);
-  assert.match(source, /generic API-key login proves only that a credential was entered/u);
+  assert.match(source, /canConfigureOnboardingBuiltinProvider\(provider\)/u);
+  assert.match(source, /onboardingBuiltinProviderSetupLabel\(provider\)/u);
   assert.match(
     source,
-    /function canChooseBuiltinProvider\(_provider: Provider\): boolean \{[\s\S]*?return false;/u,
+    /if \(!isOnboardingBuiltinProviderReady\(provider\)\)[\s\S]*?setSettingUpProvider\(provider\)/u,
   );
   assert.match(source, /<BuiltinProviderEditor[\s\S]*?layer="onboarding"/u);
   assert.match(source, /<CodexProviderSettings/u);
@@ -332,6 +336,8 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
   assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
   assert.match(featurePresentation, /benchmark-only OpenRouter key never imports its model catalog/u);
+  assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
+  assert.match(featurePresentation, /explicitly connect cloud transcription/u);
   assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 25);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });

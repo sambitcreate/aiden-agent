@@ -49,11 +49,13 @@ import type {
   BotNoticeAcknowledgement,
   BotNoticeStatus,
 } from "../../renderer/shared/bot-capabilities.js";
+import {
+  AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  aidenRemotePortCandidatesForRange,
+} from "./aiden-remote-ports.js";
 
 const MAX_CONNECTIONS = 64;
 const REQUEST_TIMEOUT_MS = 30_000;
-const PORT_PAIR_CANDIDATE_COUNT = 64;
-const FIRST_DYNAMIC_LAN_PORT = 49_220;
 
 export class AidenRemotePortInUseError extends Error {
   readonly code = "remote_port_in_use" as const;
@@ -74,23 +76,10 @@ class AidenRemoteRelocationPreflightError extends Error {
 }
 
 export function aidenRemotePortCandidates(preferredPort: number): number[] {
-  const values: number[] = [];
-  const add = (port: number) => {
-    if (
-      Number.isInteger(port)
-      && port > 0
-      && port < 65_535
-      && port % 2 === 0
-      && !values.includes(port)
-    ) {
-      values.push(port);
-    }
-  };
-  add(preferredPort);
-  for (let index = 0; index < PORT_PAIR_CANDIDATE_COUNT; index += 1) {
-    add(FIRST_DYNAMIC_LAN_PORT + index * 2);
-  }
-  return values.slice(0, PORT_PAIR_CANDIDATE_COUNT);
+  return aidenRemotePortCandidatesForRange(
+    preferredPort,
+    AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  );
 }
 
 export interface AidenRemoteBonjourPublisher {

@@ -52,7 +52,12 @@ import {
   makeOnboardingProvider,
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider";
-import { getOnboardingMoreProviders } from "../lib/pi-provider-display";
+import {
+  canConfigureOnboardingBuiltinProvider,
+  getOnboardingMoreProviders,
+  isOnboardingBuiltinProviderReady,
+  onboardingBuiltinProviderSetupLabel,
+} from "../lib/pi-provider-display";
 import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
@@ -341,7 +346,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Voice & Dictation",
     description:
-      "Speak into the composer or dictate system-wide with live Gemini, cloud, or on-device voice.",
+      "Speak in the composer or dictate system-wide. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     imageUrl: FEATURE_ILLUSTRATIONS.voice,
     size: "standard",
@@ -450,19 +455,6 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
   );
-}
-
-function builtinProviderSetupLabel(provider: Provider): string {
-  return provider.hasKey
-    ? "Configured; verify in Settings after onboarding"
-    : "Available in Settings after onboarding";
-}
-
-function canChooseBuiltinProvider(_provider: Provider): boolean {
-  // Pi's generic API-key login proves only that a credential was entered; it
-  // does not contact the provider. Until a provider-specific non-generation
-  // validator exists, it cannot satisfy required first-run setup.
-  return false;
 }
 
 export function OnboardingFlow() {
@@ -653,7 +645,7 @@ export function OnboardingFlow() {
     }
     if (step === "provider") {
       if (selectedBuiltinProvider) {
-        if (selectedBuiltinProvider.hasKey && selectedBuiltinProvider.models.length > 0) {
+        if (isOnboardingBuiltinProviderReady(selectedBuiltinProvider)) {
           const model = selectedBuiltinProvider.defaultModel ?? selectedBuiltinProvider.models[0];
           persistModelSelection(selectedBuiltinProvider.id, model);
           await completeProviderStep(selectedBuiltinProvider.id);
@@ -1049,7 +1041,7 @@ export function OnboardingFlow() {
                     ) : (
                       <div className="grid grid-cols-2 gap-1.5 max-[560px]:grid-cols-1">
                         {moreProviders.map((provider) => {
-                          const canChoose = canChooseBuiltinProvider(provider);
+                          const canChoose = canConfigureOnboardingBuiltinProvider(provider);
                           const isSelected = builtinChoiceId === provider.id;
                           return (
                             <button
@@ -1062,6 +1054,9 @@ export function OnboardingFlow() {
                                 selectProviderChoice(null);
                                 setBuiltinChoiceId(provider.id);
                                 setProviderSkipped(false);
+                                if (!isOnboardingBuiltinProviderReady(provider)) {
+                                  setSettingUpProvider(provider);
+                                }
                               }}
                             >
                               <span className="grid size-8 shrink-0 place-items-center rounded-control bg-popover text-primary shadow-control">
@@ -1081,7 +1076,7 @@ export function OnboardingFlow() {
                                   truncate
                                   className="mt-0.5 block"
                                 >
-                                  {builtinProviderSetupLabel(provider)}
+                                  {onboardingBuiltinProviderSetupLabel(provider)}
                                 </Text>
                               </span>
                               <Check
@@ -1275,8 +1270,7 @@ export function OnboardingFlow() {
               const ready = refreshed.find(
                 (provider) =>
                   provider.id === settingUpProvider.id &&
-                  provider.hasKey === true &&
-                  provider.models.length > 0,
+                  isOnboardingBuiltinProviderReady(provider),
               );
               if (!ready) {
                 setProviderError(

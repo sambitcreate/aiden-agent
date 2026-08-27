@@ -1459,10 +1459,19 @@ export const Command = React.forwardRef<
 });
 export const CommandInput = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Input>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
->(function CommandInput({ className, ...props }, ref) {
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input> & {
+    containerClassName?: string;
+    showSeparator?: boolean;
+  }
+>(function CommandInput({ className, containerClassName, showSeparator = true, ...props }, ref) {
   return (
-    <div className="flex h-9 items-center gap-2 border-b border-separator px-3">
+    <div
+      className={cn(
+        "flex h-9 items-center gap-2 px-3",
+        showSeparator && "border-b border-separator",
+        containerClassName,
+      )}
+    >
       <Search className="size-4 shrink-0 text-tertiary" />
       <CommandPrimitive.Input
         ref={ref}

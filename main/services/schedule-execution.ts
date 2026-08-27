@@ -21,6 +21,7 @@ import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import { createScheduledChatClaim } from "./scheduled-chat-creation.js";
 import { firstVisibleModelForProvider } from "../../renderer/shared/model-visibility.js";
+import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -227,6 +228,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       (await providerRegistry.selectionProvider(providerId)) ??
       (await configStore.getProvider(providerId));
     if (!provider) throw new Error("The task provider no longer exists.");
+    if (!canUseGeminiChatModel(settings.geminiUsageScope, providerId)) {
+      throw new Error(
+        "Google chat models are off while Gemini is configured for transcription only.",
+      );
+    }
     const model =
       task.model ??
       firstVisibleModelForProvider(settings.hiddenModelsByProvider, providerId, provider.models, [
