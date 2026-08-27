@@ -13,7 +13,7 @@ interface ReasoningBlockProps {
   streaming?: boolean;
   /** The model is actively thinking before its first answer token. */
   active?: boolean;
-  /** Header verb; "…" is appended while active. */
+  /** Header text; active state is communicated by the shimmer. */
   label?: string;
 }
 
@@ -79,9 +79,7 @@ export function ReasoningBlock({
         onClick={() => dispatchDisclosure({ type: "toggle" })}
         className="flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:outline-none"
       >
-        <span className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>
-          {active ? `${label}…` : label}
-        </span>
+        <span className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>{label}</span>
         <ChevronRight
           aria-hidden="true"
           className={cn(

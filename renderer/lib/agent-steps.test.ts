@@ -16,6 +16,7 @@ import {
   activityTrailNeedsAttention,
   formatThinkingDuration,
   isActiveStep,
+  reasoningActivityLabel,
   summarizeActivity,
 } from "./agent-steps.js";
 import {
@@ -129,6 +130,20 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
       ["text", "After."],
     ],
   );
+});
+
+test("reasoning milestones stay in the dedicated disclosure instead of activity rows", () => {
+  const thought = { ...thinking("think-1", 0, 1_000), contentOffset: 7 };
+  const rows = assistantPresentationRows("Before.After.", timeline("completed", [thought]));
+  assert.deepEqual(
+    rows?.map((row) => (row.kind === "text" ? [row.kind, row.content] : [row.kind])),
+    [["text", "Before.After."]],
+  );
+  assert.equal(
+    reasoningActivityLabel(timeline("running", [thinking("think-2", 0)]), true),
+    "Thinking",
+  );
+  assert.equal(reasoningActivityLabel(timeline("completed", [thought]), false), "Thought briefly");
 });
 
 test("assistant presentation fails closed for legacy or invalid offsets", () => {

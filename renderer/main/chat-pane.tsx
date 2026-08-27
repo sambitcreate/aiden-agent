@@ -63,11 +63,14 @@ import {
   type WorkspacePermission,
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
-import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
+import {
+  resolveAgentActivity,
+  resolveVisibleAgentActivity,
+  type ToolActivity,
+} from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import {
-  hasActiveThinkingStep,
   hasActiveToolStep,
   latestActiveAgentStep,
   type GenerationTimeline,
@@ -1616,23 +1619,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     pendingApproval: Boolean(pending),
     toolActivity,
   });
-  // The ReasoningBlock covers the live reasoning window and the Visualizing
-  // block covers render_artifact; only suppress the activity row while those
-  // blocks are actually shimmering, never on stale transcript content. A
-  // detached projection forces streamComplete, hiding the Visualizing block,
-  // so the activity row must keep narrating there.
-  const reasoningActiveTimeline = hasActiveThinkingStep(displayedGenerationTimeline);
+  // The reasoning disclosure owns exposed reasoning for the whole turn, even
+  // after its timeline step settles. Visualizing owns only the live artifact
+  // render window; detached projections hide that block and keep narration.
   const visualizingBlockVisible =
     hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
     !streamComplete &&
     !visibleDetachedProjection;
-  const visibleAgentActivity =
-    (Boolean(displayedStreamingReasoning) &&
-      reasoningActiveTimeline &&
-      (agentActivity?.phase === "thinking" || agentActivity?.phase === "loading")) ||
-    (visualizingBlockVisible && agentActivity?.phase === "visualizing")
-      ? null
-      : agentActivity;
+  const visibleAgentActivity = resolveVisibleAgentActivity(agentActivity, {
+    reasoningVisible: Boolean(displayedStreamingReasoning),
+    visualizingVisible: visualizingBlockVisible,
+  });
 
   React.useEffect(() => {
     if (!pending) return;

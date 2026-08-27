@@ -24,6 +24,11 @@ export interface AgentActivity {
   orbState: OrbState;
 }
 
+interface AgentActivityVisibility {
+  reasoningVisible: boolean;
+  visualizingVisible: boolean;
+}
+
 interface AgentActivityInput {
   isStarting: boolean;
   isStopping: boolean;
@@ -69,7 +74,7 @@ export function resolveAgentActivity({
 
   if (toolActivity?.state === "running") {
     if (toolActivity.toolName === RENDER_ARTIFACT_TOOL_NAME) {
-      return { phase: "visualizing", label: "Visualizing…", orbState: "working" };
+      return { phase: "visualizing", label: "Visualizing", orbState: "working" };
     }
     return isSearchTool(toolActivity.toolName)
       ? { phase: "searching", label: toolActivity.label, orbState: "searching" }
@@ -88,5 +93,16 @@ export function resolveAgentActivity({
 
   return textStreaming && streamingText.length > 0
     ? { phase: "responding", label: "Responding…", orbState: "composing" }
-    : { phase: "thinking", label: "Thinking…", orbState: "solving" };
+    : { phase: "thinking", label: "Thinking", orbState: "solving" };
+}
+
+/** Let transcript-owned phase cards replace the generic orb row exactly once. */
+export function resolveVisibleAgentActivity(
+  activity: AgentActivity | null,
+  { reasoningVisible, visualizingVisible }: AgentActivityVisibility,
+): AgentActivity | null {
+  if (!activity) return null;
+  if (reasoningVisible && activity.phase === "thinking") return null;
+  if (visualizingVisible && activity.phase === "visualizing") return null;
+  return activity;
 }

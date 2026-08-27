@@ -308,7 +308,49 @@ test("the reasoning shimmer returns for a later open thinking step after prose",
   // The block header shimmers again for the reopened stretch even though the
   // turn already has prose.
   assert.match(markup, /agent-thinking-shimmer/u);
-  assert.match(markup, /Thinking…/u);
+  assert.match(markup, />Thinking</u);
+  assert.doesNotMatch(markup, /Thinking…/u);
+});
+
+test("settled reasoning uses one duration-labelled disclosure without an activity duplicate", () => {
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-1",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 2,
+    steps: [
+      {
+        id: "think-1",
+        order: 0,
+        kind: "thinking",
+        startedAt: 1,
+        updatedAt: 2,
+        finishedAt: 2,
+        durationMs: 1_000,
+        contentOffset: 0,
+      },
+    ],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[]}
+      streamingText="Answer"
+      streamingReasoning="Stored thought"
+      streamingArtifacts={[]}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(markup, />Thought briefly</u);
+  assert.equal(markup.match(/reasoning-surface/gu)?.length, 1);
+  assert.doesNotMatch(markup, /activity-feed/u);
+  assert.doesNotMatch(markup, /agent-thinking-shimmer/u);
 });
 
 test("an in-flight render_artifact call shows the Visualizing shimmer", () => {
@@ -345,7 +387,8 @@ test("an in-flight render_artifact call shows the Visualizing shimmer", () => {
       error={null}
     />,
   );
-  assert.match(markup, /Visualizing…/u);
+  assert.match(markup, />Visualizing</u);
+  assert.doesNotMatch(markup, /Visualizing…/u);
   assert.match(markup, /agent-thinking-shimmer/u);
   // Once the turn settles the shimmer is gone.
   const settledMarkup = renderToStaticMarkup(

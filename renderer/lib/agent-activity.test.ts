@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveAgentActivity, type ToolActivity } from "./agent-activity";
+import {
+  resolveAgentActivity,
+  resolveVisibleAgentActivity,
+  type ToolActivity,
+} from "./agent-activity";
 
 const idle = {
   isStarting: false,
@@ -19,7 +23,7 @@ test("maps each active generation phase to a purposeful orb", () => {
   });
   assert.deepEqual(resolveAgentActivity({ ...idle, streamingText: "" }), {
     phase: "thinking",
-    label: "Thinking…",
+    label: "Thinking",
     orbState: "solving",
   });
   assert.deepEqual(
@@ -37,7 +41,7 @@ test("stale prose does not pin the row while the model works elsewhere", () => {
     resolveAgentActivity({ ...idle, streamingText: "Hello", textStreaming: false }),
     {
       phase: "thinking",
-      label: "Thinking…",
+      label: "Thinking",
       orbState: "solving",
     },
   );
@@ -111,7 +115,7 @@ test("render_artifact surfaces a Visualizing phase", () => {
     }),
     {
       phase: "visualizing",
-      label: "Visualizing…",
+      label: "Visualizing",
       orbState: "working",
     },
   );
@@ -122,6 +126,40 @@ test("render_artifact surfaces a Visualizing phase", () => {
       toolActivity: rendering,
     })?.phase,
     "visualizing",
+  );
+});
+
+test("transcript-owned reasoning and visualization replace the generic activity row", () => {
+  const thinking = resolveAgentActivity({ ...idle, streamingText: "" });
+  assert.equal(
+    resolveVisibleAgentActivity(thinking, {
+      reasoningVisible: true,
+      visualizingVisible: false,
+    }),
+    null,
+  );
+
+  const visualizing = resolveAgentActivity({
+    ...idle,
+    toolActivity: {
+      state: "running",
+      label: "Render artifact",
+      toolName: "render_artifact",
+    },
+  });
+  assert.equal(
+    resolveVisibleAgentActivity(visualizing, {
+      reasoningVisible: true,
+      visualizingVisible: true,
+    }),
+    null,
+  );
+  assert.equal(
+    resolveVisibleAgentActivity(visualizing, {
+      reasoningVisible: true,
+      visualizingVisible: false,
+    }),
+    visualizing,
   );
 });
 

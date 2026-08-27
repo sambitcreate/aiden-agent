@@ -52,7 +52,7 @@ test("streaming and persisted messages reserve the same action and timeline shel
 
   const transientShell = between(
     list,
-    "{timeline ||",
+    "const streamingRowVisible",
     "<AgentActivityTransition",
   );
   assert.match(transientShell, /<AssistantResponse[\s\S]*timeline=\{timeline\}/u);
@@ -77,7 +77,8 @@ test("main and subagent activity share Aiden's orb wrapper", () => {
 test("reasoning keeps its status and disclosure without a brain glyph", () => {
   const reasoning = source("../components/reasoning-block.tsx");
   assert.doesNotMatch(reasoning, /\bBrainCircuit\b/u);
-  assert.match(reasoning, /active \? "Thinking…" : "Thinking"/u);
+  assert.match(reasoning, /active && "agent-thinking-shimmer"/u);
+  assert.doesNotMatch(reasoning, /`\$\{label\}…`/u);
   assert.match(reasoning, /<ChevronRight/u);
   assert.match(reasoning, /aria-expanded=\{expanded\}/u);
 });

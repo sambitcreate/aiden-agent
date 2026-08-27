@@ -55,6 +55,19 @@ export function formatThinkingDuration(durationMs: number | undefined): string {
   return remainder ? `for ${minutes}m ${remainder}s` : `for ${minutes}m`;
 }
 
+/** Label for the one reasoning disclosure that owns both live and settled thought state. */
+export function reasoningActivityLabel(
+  timeline: GenerationTimeline | null | undefined,
+  active: boolean,
+): string {
+  if (active) return "Thinking";
+  const durationMs = timeline?.steps.reduce(
+    (total, step) => (isToolStep(step) ? total : total + (step.durationMs ?? 0)),
+    0,
+  );
+  return `Thought ${formatThinkingDuration(durationMs || undefined)}`;
+}
+
 /** The object a tool acted on: a pattern, a query, or a workspace-relative path. */
 function stepObject(step: AgentToolStep): string | undefined {
   if (step.toolName === "grep" && step.detail && step.target) {

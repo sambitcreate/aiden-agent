@@ -13,6 +13,7 @@ import {
   activityTimelineFragment,
   assistantPresentationRows,
 } from "../lib/assistant-message-presentation";
+import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
@@ -83,25 +84,29 @@ function AssistantResponse({
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline);
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
-  // With a timeline the block shimmers only while reasoning is actually being
-  // produced; the bottom activity row carries the cue for every other live
-  // phase, so the two never both say "Thinking…" at once.
+  // The one reasoning disclosure owns both the live and settled thought state.
+  // Other live phases continue in the activity row below the transcript.
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
+  const reasoningLabel = reasoningActivityLabel(timeline, active);
   // The Visualization shimmer occupies the spot the artifact card is about to
   // take, so it rides directly above the live artifact list.
   const visualizing =
     streaming && !streamComplete && hasActiveToolStep(timeline ?? null, RENDER_ARTIFACT_TOOL_NAME);
   if (!rows || !timeline) {
+    const activityTimeline = timeline
+      ? activityTimelineFragment(timeline, timeline.steps.filter(isToolStep))
+      : null;
     return (
       <>
-        <ActivityFeed timeline={timeline ?? null} animate={streaming} />
+        <ActivityFeed timeline={activityTimeline} animate={streaming} />
         {subagentChips}
         {reasoning ? (
           <ReasoningBlock
             content={reasoning}
             streaming={streaming && !streamComplete}
             active={active}
+            label={reasoningLabel}
           />
         ) : null}
         {content ? (
@@ -138,6 +143,7 @@ function AssistantResponse({
           content={reasoning}
           streaming={streaming && !streamComplete}
           active={active}
+          label={reasoningLabel}
         />
       ) : null}
       {subagentChips && !subagentActivityKey ? subagentChips : null}
