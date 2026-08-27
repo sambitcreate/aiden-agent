@@ -102,6 +102,7 @@ import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
+  detachedTextStreamingRemaining,
   detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
@@ -487,6 +488,38 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
   const visibleDetachedProjection =
     messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
+  const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
+  const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
+  React.useEffect(() => {
+    if (!visibleDetachedStreamId) return;
+    const remaining = detachedTextStreamingRemaining(
+      detachedLastTextDeltaAt,
+      Date.now(),
+      TEXT_STREAMING_IDLE_MS,
+    );
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+      textStreamingTimerRef.current = null;
+    }
+    if (remaining === 0) {
+      setTextStreaming(false);
+      return;
+    }
+    setTextStreaming(true);
+    const timer = window.setTimeout(() => {
+      if (textStreamingTimerRef.current === timer) {
+        textStreamingTimerRef.current = null;
+        setTextStreaming(false);
+      }
+    }, remaining);
+    textStreamingTimerRef.current = timer;
+    return () => {
+      if (textStreamingTimerRef.current === timer) {
+        window.clearTimeout(timer);
+        textStreamingTimerRef.current = null;
+      }
+    };
+  }, [detachedLastTextDeltaAt, visibleDetachedStreamId]);
   const displayedStreamingText = streamingText ?? visibleDetachedProjection?.content ?? null;
   const displayedStreamingReasoning =
     streamingReasoning ??

@@ -104,6 +104,10 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
       detachedLifecycleChatProjection("chat-1", "workspace-1")?.content,
       "Visible before navigation",
     );
+    assert.equal(
+      typeof detachedLifecycleChatProjection("chat-1", "workspace-1")?.lastTextDeltaAt,
+      "number",
+    );
     await Promise.resolve();
     assert.equal(
       bridge.invokes.filter(

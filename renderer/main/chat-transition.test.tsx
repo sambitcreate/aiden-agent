@@ -301,3 +301,13 @@ test("sidebar prefetches a chat before the click so the pane does not blank", ()
   assert.match(sidebar, /onPointerEnter=\{\(\) => prefetchChat\(chat\.id\)\}/u);
   assert.match(sidebar, /onFocus=\{\(\) => prefetchChat\(chat\.id\)\}/u);
 });
+
+test("a revisited detached stream restores the responding window from its last text delta", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /detachedTextStreamingRemaining\(\s*detachedLastTextDeltaAt/u);
+  assert.match(pane, /setTextStreaming\(true\)[\s\S]{0,240}setTextStreaming\(false\)/u);
+  assert.match(
+    pane,
+    /streamingText:[\s\S]{0,180}detachedGenerationDraining[\s\S]{0,120}displayedStreamingText/u,
+  );
+});

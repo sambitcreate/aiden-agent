@@ -1051,6 +1051,7 @@ export function startGeneration(
 ): GenerationHandle {
   const streamId = messageTurnId;
   let projectedContent = "";
+  let projectedLastTextDeltaAt: number | null = null;
   let projectedReasoning = "";
   let projectedTimeline: GenerationTimeline | null = null;
   let projectedArtifacts: ChatArtifactV1[] = [];
@@ -1066,10 +1067,12 @@ export function startGeneration(
       if (p.streamId !== streamId) return;
       if (p.reset) {
         projectedContent = "";
+        projectedLastTextDeltaAt = null;
         projectedReasoning = "";
         callbacks.onReset?.();
       } else {
         projectedContent += p.delta;
+        if (p.delta) projectedLastTextDeltaAt = Date.now();
         callbacks.onDelta(p.delta);
       }
     }),
@@ -1223,6 +1226,7 @@ export function startGeneration(
           },
           {
             content: projectedContent,
+            lastTextDeltaAt: projectedLastTextDeltaAt,
             reasoning: projectedReasoning,
             timeline: projectedTimeline,
             artifacts: projectedArtifacts,
