@@ -1622,13 +1622,6 @@ if (!ownsSingleInstanceLock) {
           `Invalid image artifact staging was preserved at ${quarantinedImageArtifactPath}; Aiden opened a clean staging store.`,
         );
       }
-      const quarantinedHtmlArtifactPath = generativeUiArtifactStore.quarantinedPath();
-      if (quarantinedHtmlArtifactPath) {
-        logger.warn(
-          "pi",
-          `Invalid generative-ui artifact staging was preserved at ${quarantinedHtmlArtifactPath}; Aiden opened a clean staging store.`,
-        );
-      }
       const displayImageArtifactAvailability = displayImageArtifactStore.availability();
       if (!displayImageArtifactAvailability.available) {
         logger.warn(

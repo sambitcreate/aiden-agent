@@ -138,3 +138,46 @@ test("reconcilePersisted commits staged rows already on the chat", async () => {
   });
   assert.equal(await store.hasPending("chat-1"), false);
 });
+
+test("unreadable durable HTML storage remains in place and blocks mutations", async () => {
+  const root = await storageRoot();
+  const file = path.join(root, "generative-ui-artifacts.json");
+  await fs.writeFile(file, "{", "utf8");
+  const store = new GenerativeUiArtifactStore({ root: () => root });
+
+  await store.initialize();
+
+  assert.deepEqual(store.availability(), {
+    available: false,
+    reason: "Generative UI artifact staging is unreadable.",
+  });
+  assert.equal(await fs.readFile(file, "utf8"), "{");
+  assert.equal(await store.hasPending("chat-1"), true);
+  await assert.rejects(
+    store.stage({
+      chatId: "chat-1",
+      generationId: "generation-1",
+      artifact: artifact("media-1"),
+      html: HTML,
+    }),
+    /unreadable/iu,
+  );
+  assert.equal(await fs.readFile(file, "utf8"), "{");
+});
+
+test("unsupported durable HTML storage is never replaced with an empty database", async () => {
+  const root = await storageRoot();
+  const file = path.join(root, "generative-ui-artifacts.json");
+  const unsupported = JSON.stringify({ version: 99, revision: 0, records: [] });
+  await fs.writeFile(file, unsupported, "utf8");
+  const store = new GenerativeUiArtifactStore({ root: () => root });
+
+  await store.initialize();
+
+  assert.deepEqual(store.availability(), {
+    available: false,
+    reason: "Generative UI artifact staging has an unsupported shape.",
+  });
+  assert.equal(await fs.readFile(file, "utf8"), unsupported);
+  await assert.rejects(store.htmlFor("chat-1", "media-1"), /unsupported shape/iu);
+});

@@ -1,5 +1,4 @@
-import * as fs from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { DataStore } from "./data-store.js";
 import {
   parseChatHtmlArtifactV1,
@@ -181,42 +180,13 @@ function createDataStore(
 
 export class GenerativeUiArtifactStore {
   private data: DataStore<GenerativeUiArtifactDatabase>;
-  private readonly options: GenerativeUiArtifactStoreOptions;
-  private readonly ownsDataStore: boolean;
   private readonly now: () => number;
   private initialized = false;
   private unavailableReason: string | null = null;
-  private quarantinedStorePath: string | null = null;
 
   constructor(options: GenerativeUiArtifactStoreOptions = {}) {
-    this.options = options;
-    this.ownsDataStore = options.dataStore === undefined;
     this.data = options.dataStore ?? createDataStore(options);
     this.now = options.now ?? Date.now;
-  }
-
-  private async quarantineInvalidStore(reason: string): Promise<boolean> {
-    if (!this.ownsDataStore) return false;
-    const source = await this.data.path();
-    const stamp = new Date(this.now()).toISOString().replace(/[:.]/gu, "-");
-    const preserved = `${source}.invalid-${stamp}-${randomUUID()}`;
-    try {
-      await fs.rename(source, preserved);
-      const replacement = createDataStore(this.options);
-      await replacement.load();
-      if (
-        (await replacement.loadedFromCorruptFile()) ||
-        (await replacement.loadedFromUnsafeFile())
-      ) {
-        throw new Error("The replacement generative-ui artifact store is unavailable.");
-      }
-      this.data = replacement;
-      this.quarantinedStorePath = preserved;
-      return true;
-    } catch (error) {
-      this.unavailableReason = `${reason} Aiden could not move ${source} to ${preserved}: ${error instanceof Error ? error.message : String(error)}`;
-      return false;
-    }
   }
 
   async initialize(): Promise<void> {
@@ -228,9 +198,11 @@ export class GenerativeUiArtifactStore {
     } else if (await this.data.loadedFromUnsafeFile()) {
       unavailableReason = "Generative UI artifact staging has an unsupported shape.";
     }
-    if (unavailableReason && !(await this.quarantineInvalidStore(unavailableReason))) {
-      this.unavailableReason ??= unavailableReason;
-    }
+    // This store owns the only durable bytes for committed HTML artifacts.
+    // Unlike the image staging store, replacing an unreadable database with an
+    // empty one would silently strand every mediaId already persisted in chat.
+    // Keep the original file in place and fail closed until it can be repaired.
+    this.unavailableReason = unavailableReason;
     this.initialized = true;
   }
 
@@ -243,11 +215,6 @@ export class GenerativeUiArtifactStore {
     return this.unavailableReason
       ? { available: false, reason: this.unavailableReason }
       : { available: true };
-  }
-
-  quarantinedPath(): string | null {
-    this.requireInitialized();
-    return this.quarantinedStorePath;
   }
 
   private requireAvailable(): void {
