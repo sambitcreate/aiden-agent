@@ -134,6 +134,7 @@ test("same-generation title replaces the previous staged artifact", async () => 
 });
 
 test("render_artifact refuses intermediate directory symlinks", async () => {
+  if (process.platform !== "darwin") return;
   const root = await workspace();
   const outside = await workspace();
   await fs.writeFile(path.join(outside, "secret.html"), "<p>secret</p>");
@@ -147,6 +148,31 @@ test("render_artifact refuses intermediate directory symlinks", async () => {
   assert.ok(tool);
   await assert.rejects(
     tool.execute("symlink", { title: "Leak", path: path.join("plots", "leak", "secret.html") }),
-    /regular workspace HTML file/iu,
+    /could not be read safely/iu,
   );
+});
+
+test("render_artifact reads nested HTML through a canonicalized root alias", async () => {
+  if (process.platform !== "darwin") return;
+  const root = await workspace();
+  const aliasParent = await workspace();
+  const alias = path.join(aliasParent, "workspace-link");
+  await fs.mkdir(path.join(root, "plots"));
+  await fs.writeFile(path.join(root, "plots", "chart.html"), "<p>workspace chart</p>");
+  await fs.symlink(root, alias);
+  const htmlBodies: string[] = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: alias,
+    onArtifact: (_artifact, html) => {
+      htmlBodies.push(html);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+
+  await tool.execute("root-alias", {
+    title: "Chart",
+    path: path.join("plots", "chart.html"),
+  });
+  assert.deepEqual(htmlBodies, ["<p>workspace chart</p>"]);
 });

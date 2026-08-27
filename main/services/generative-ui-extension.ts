@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, realpathSync, statSync } from "node:fs";
-import * as fs from "node:fs/promises";
+import { realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
@@ -21,6 +20,10 @@ import {
   requireGenerativeUiTitle,
   validateGenerativeUiHtml,
 } from "./generative-ui-html.js";
+import {
+  createSubagentFileMutatorClient,
+  SubagentFileMutatorError,
+} from "./subagents/subagent-file-mutator-io.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 import { RENDER_ARTIFACT_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
@@ -82,11 +85,12 @@ export interface GenerativeUiExtensionOptions {
 function resolveWorkspaceHtml(
   root: string,
   suppliedPath: string,
-): { absolute: string; relative: string } {
+): { relative: string } {
   if (
     suppliedPath.length === 0 ||
     suppliedPath.length > 4096 ||
     suppliedPath.includes("\0") ||
+    suppliedPath.includes("\\") ||
     path.isAbsolute(suppliedPath) ||
     WINDOWS_ABSOLUTE_PATH.test(suppliedPath)
   ) {
@@ -106,33 +110,7 @@ function resolveWorkspaceHtml(
   if (!HTML_EXTENSIONS.has(extension)) {
     throw new Error(`${suppliedPath} is not an .html or .htm file.`);
   }
-  return { absolute, relative };
-}
-
-function sameIdentity(
-  left: { dev: number; ino: number },
-  right: { dev: number; ino: number },
-): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-async function assertNoSymlinkComponents(root: string, relative: string): Promise<void> {
-  let current = root;
-  const parts = relative.split(path.sep).filter(Boolean);
-  for (let index = 0; index < parts.length; index += 1) {
-    current = path.join(current, parts[index]!);
-    const stat = await fs.lstat(current);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Path "${relative}" is not a regular workspace HTML file.`);
-    }
-    const last = index === parts.length - 1;
-    if (!last && !stat.isDirectory()) {
-      throw new Error(`Path "${relative}" is not a regular workspace HTML file.`);
-    }
-    if (last && !stat.isFile()) {
-      throw new Error(`Path "${relative}" is not a regular workspace HTML file.`);
-    }
-  }
+  return { relative };
 }
 
 export function createGenerativeUiExtensionRuntime(
@@ -140,8 +118,13 @@ export function createGenerativeUiExtensionRuntime(
 ): { extension: PiAgentRuntimeExtension } {
   const lexicalRoot = path.resolve(options.workspaceRoot);
   const canonicalRoot = realpathSync(lexicalRoot);
-  const rootIdentity = statSync(canonicalRoot);
+  const rootIdentity = statSync(canonicalRoot, { bigint: true });
   if (!rootIdentity.isDirectory()) throw new Error("The workspace root is not a directory.");
+  const workspaceRootIdentity = Object.freeze({
+    canonicalPath: canonicalRoot,
+    device: rootIdentity.dev.toString(10),
+    inode: rootIdentity.ino.toString(10),
+  });
   const existingChatHtmlBytes = options.existingChatHtmlBytes ?? 0;
   const existingChatHtmlCount = options.existingChatHtmlCount ?? 0;
   if (
@@ -157,20 +140,6 @@ export function createGenerativeUiExtensionRuntime(
   let displayedBytes = 0;
   let serial = Promise.resolve();
   const titlesInGeneration = new Map<string, { mediaId: string; size: number }>();
-
-  const assertWorkspaceRoot = async (): Promise<void> => {
-    const [currentCanonical, currentIdentity] = await Promise.all([
-      fs.realpath(lexicalRoot),
-      fs.stat(lexicalRoot),
-    ]);
-    if (
-      currentCanonical !== canonicalRoot ||
-      !currentIdentity.isDirectory() ||
-      !sameIdentity(currentIdentity, rootIdentity)
-    ) {
-      throw new Error("The authorized workspace root changed during this generation.");
-    }
-  };
 
   const tool: AgentTool = declarePiRuntimeReplay(
     {
@@ -219,29 +188,20 @@ export function createGenerativeUiExtensionRuntime(
           let sourceLabel = "inline HTML";
           if (hasPath) {
             const resolved = resolveWorkspaceHtml(canonicalRoot, input.path as string);
-            await assertWorkspaceRoot();
-            await assertNoSymlinkComponents(canonicalRoot, resolved.relative);
-            const noFollow =
-              typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
-            const handle = await fs.open(resolved.absolute, fsConstants.O_RDONLY | noFollow);
+            const relative = resolved.relative.split(path.sep).join("/");
+            const reader = createSubagentFileMutatorClient({
+              workspaceRoot: workspaceRootIdentity,
+            });
             try {
-              const stat = await handle.stat();
-              if (!stat.isFile() || stat.size < 1 || stat.size > MAX_HTML_ARTIFACT_BYTES) {
-                throw new Error(
-                  `${resolved.relative} is missing or larger than ${MAX_HTML_ARTIFACT_BYTES.toLocaleString("en-US")} bytes.`,
-                );
+              html = await reader.readHtml(randomUUID(), relative, signal);
+            } catch (error) {
+              if (error instanceof SubagentFileMutatorError && error.failure === "cancelled") {
+                throw new Error("Artifact rendering was cancelled.");
               }
-              const bytes = Buffer.alloc(stat.size);
-              const read = await handle.read(bytes, 0, stat.size, 0);
-              const payload = bytes.subarray(0, read.bytesRead);
-              html = payload.toString("utf8");
-              if (!payload.equals(Buffer.from(html, "utf8"))) {
-                throw new Error("Artifact HTML is not valid UTF-8.");
-              }
+              throw new Error(`Path "${resolved.relative}" could not be read safely.`);
             } finally {
-              await handle.close();
+              await reader.close();
             }
-            await assertWorkspaceRoot();
             sourceLabel = resolved.relative;
           } else {
             html = input.html as string;

@@ -44,6 +44,7 @@
     "lint": "eslint .",
     "postinstall": "node scripts/patch-pi-oauth-branding.mjs && node scripts/vendor-generative-ui-libs.mjs",
     "generative-ui:vendor": "node scripts/vendor-generative-ui-libs.mjs",
+    "pretest:generative-ui": "npm run build:subagent-file-mutator",
     "test:aiden-remote-speech": "tsx --test main/services/aiden-remote-speech.test.ts",
     "pretest": "npm run build:worktree-remover && npm run test:aiden-remote-speech && npm run test:aiden-remote && npm run test:aiden-service-boundary && npm run test:ios-release && npm run test:terminal:coverage && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:display-image && npm run test:generative-ui && npm run test:provider-failure && npm run test:compaction && npm run test:subagents && tsx --test main/services/pi-remote-catalog.test.ts main/services/provider-model-info-core.test.ts main/services/aiden-remote-models.test.ts renderer/shared/provider-thinking.test.ts && npm run test:bots && npm run test:voice",
     "pretest:coverage": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run test:preflight && npm run test:scheduled && npm run test:google-provider && npm run test:config-recovery && npm run test:command-system && npm run test:slash-commands && npm run test:display-image && npm run test:generative-ui && npm run test:compaction && npm run test:subagents && npm run test:bots:coverage",
