@@ -1,4 +1,5 @@
 import type { OrbState } from "thinking-orbs";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 
 export interface ToolActivity {
   state: "running" | "finished" | "failed" | "blocked";
@@ -13,6 +14,7 @@ export type AgentActivityPhase =
   | "responding"
   | "searching"
   | "working"
+  | "visualizing"
   | "waiting"
   | "stopping";
 
@@ -28,6 +30,12 @@ interface AgentActivityInput {
   /** True while a local model is still loading into memory. */
   isModelLoading?: boolean;
   streamingText: string | null;
+  /**
+   * True only while text deltas are still arriving. Prose from an earlier turn
+   * of this generation must not pin the row to a static "Responding…" while
+   * the model is actually reasoning or writing tool arguments.
+   */
+  textStreaming?: boolean;
   pendingApproval: boolean;
   toolActivity: ToolActivity | null;
 }
@@ -47,6 +55,7 @@ export function resolveAgentActivity({
   isStopping,
   isModelLoading = false,
   streamingText,
+  textStreaming = false,
   pendingApproval,
   toolActivity,
 }: AgentActivityInput): AgentActivity | null {
@@ -59,6 +68,9 @@ export function resolveAgentActivity({
   }
 
   if (toolActivity?.state === "running") {
+    if (toolActivity.toolName === RENDER_ARTIFACT_TOOL_NAME) {
+      return { phase: "visualizing", label: "Visualizing…", orbState: "working" };
+    }
     return isSearchTool(toolActivity.toolName)
       ? { phase: "searching", label: toolActivity.label, orbState: "searching" }
       : { phase: "working", label: toolActivity.label, orbState: "working" };
@@ -74,7 +86,7 @@ export function resolveAgentActivity({
 
   if (streamingText === null) return null;
 
-  return streamingText.length > 0
+  return textStreaming && streamingText.length > 0
     ? { phase: "responding", label: "Responding…", orbState: "composing" }
     : { phase: "thinking", label: "Thinking…", orbState: "solving" };
 }

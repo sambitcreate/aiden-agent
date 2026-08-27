@@ -23,7 +23,9 @@ import {
 } from "./generative-ui-html.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
-export const GENERATIVE_UI_TOOL_NAME = "render_artifact";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
+
+export const GENERATIVE_UI_TOOL_NAME = RENDER_ARTIFACT_TOOL_NAME;
 
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 const HTML_EXTENSIONS = new Set([".html", ".htm"]);

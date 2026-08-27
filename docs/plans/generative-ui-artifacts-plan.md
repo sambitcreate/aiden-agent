@@ -218,6 +218,15 @@ Bundle Chart.js, Plotly, KaTeX; document allowed globals in the tool description
 
 Add `/visualize` instruction slash; consider expanded work-surface tab. Inspector only if Phase 0–3 stay tight.
 
+### Phase 5 — Presentation hardening (shipped)
+
+Rendering must not flicker and the creation window must stay narrated:
+
+- **In-place replaces:** artifact cards are keyed by `mediaId` (stable across same-title replaces); the preview effect swaps the iframe `src` only when the new URL resolves instead of tearing it down to a placeholder first. Frame/list are memoized against transcript re-render storms.
+- **Atomic handoff:** while the streaming row is mounted its live cards win; persisted copies stay hidden until the row unmounts, so the streaming→persisted transition is one swap (no double mount, no double scroll).
+- **Visualizing shimmer:** a `ReasoningBlock` reuse (`label="Visualizing"`) rides above the artifact list whenever a `render_artifact` step is pending/awaiting/running, and the bottom activity row shows a shimmering **Visualizing…** phase.
+- **Provider-neutral live activity:** `llm-client` consumes `toolcall_start` to open a pending timeline step while the model is still writing tool-call arguments (the longest phase of a GenUI turn); execution events upgrade it with the full descriptor. The activity row keys **Responding…** off recent text deltas (`TEXT_STREAMING_IDLE_MS`), so stale prose can no longer strand a silent, static row — the Thinking shimmer survives for providers that emit no reasoning summaries (Codex).
+
 ## Explicit non-goals
 
 - Pi coding-agent extension marketplace or loading `.pi` plugins.

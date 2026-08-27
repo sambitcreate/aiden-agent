@@ -66,7 +66,13 @@ import { computerUseReadinessReady } from "../lib/computer-use-control";
 import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
-import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
+import {
+  hasActiveThinkingStep,
+  hasActiveToolStep,
+  latestActiveAgentStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
 import {
   CODEX_THINKING_LEVELS,
@@ -111,6 +117,14 @@ import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
+
+/**
+ * How long after the last text delta the activity row may keep saying
+ * "Responding…". Beyond this the model is reasoning or writing tool-call
+ * arguments, and the row should shimmer instead of going static; wide enough
+ * that bursty providers do not flap the label mid-prose.
+ */
+const TEXT_STREAMING_IDLE_MS = 2_000;
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -361,6 +375,36 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const deltaFrameRef = React.useRef<number | null>(null);
   const streamHandoffRef = React.useRef<(() => void) | null>(null);
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
+  // Prose from an earlier turn must not pin the activity row to a static
+  // "Responding…" while the model reasons or writes tool arguments, so the
+  // row keys "responding" off deltas that are still arriving.
+  const [textStreaming, setTextStreaming] = React.useState(false);
+  const textStreamingTimerRef = React.useRef<number | null>(null);
+  const markTextStreaming = React.useCallback(() => {
+    setTextStreaming(true);
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+    }
+    textStreamingTimerRef.current = window.setTimeout(() => {
+      textStreamingTimerRef.current = null;
+      setTextStreaming(false);
+    }, TEXT_STREAMING_IDLE_MS);
+  }, []);
+  const clearTextStreaming = React.useCallback(() => {
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+      textStreamingTimerRef.current = null;
+    }
+    setTextStreaming(false);
+  }, []);
+  React.useEffect(
+    () => () => {
+      if (textStreamingTimerRef.current !== null) {
+        window.clearTimeout(textStreamingTimerRef.current);
+      }
+    },
+    [],
+  );
 
   chatIdRef.current = chatId;
 
@@ -422,6 +466,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useLayoutEffect(() => {
     setStreamingText(null);
     setStreamingReasoning(null);
+    clearTextStreaming();
     setStreamingArtifacts([]);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
@@ -655,6 +700,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setHasUnpersistedResponse(false);
       setStreamingText("");
       setStreamingReasoning(null);
+      clearTextStreaming();
       setStreamingArtifacts([]);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
@@ -680,6 +726,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           if (pendingDelta) {
             streamedTextRef.current += pendingDelta;
             setStreamingText(streamedTextRef.current);
+            markTextStreaming();
           }
           if (pendingReasoningDelta) {
             streamedReasoningRef.current += pendingReasoningDelta;
@@ -726,6 +773,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = "";
             setStreamingText("");
             setStreamingReasoning(null);
+            clearTextStreaming();
             setStreamComplete(false);
           },
           onArtifactEvent: (event) => {
@@ -819,6 +867,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = finalReasoning ?? "";
             setStreamingText(full);
             setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
+            clearTextStreaming();
             setStreamComplete(true);
             if (finalTimeline) {
               generationTimelineRef.current = finalTimeline;
@@ -866,6 +915,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedTextRef.current = resolvedPartialContent;
               streamedReasoningRef.current = resolvedReasoning;
               setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
+              clearTextStreaming();
               setStreamComplete(true);
               if (finalTimeline) {
                 generationTimelineRef.current = finalTimeline;
@@ -933,12 +983,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
       chatId,
       anthropicThinkingLevel,
       anthropicThinkingSupported,
+      clearTextStreaming,
       codexThinkingLevel,
       codexThinkingSupported,
       effectiveWorkspaceId,
       environmentPanel.subagentsEnabled,
       googleThinkingLevel,
       googleThinkingSupported,
+      markTextStreaming,
       providerId,
       providerThinkingLevel,
       providerThinkingSupported,
@@ -1527,12 +1579,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       canStopGeneration || isStoppingGeneration || detachedGenerationDraining
         ? displayedStreamingText
         : null,
+    textStreaming,
     pendingApproval: Boolean(pending),
     toolActivity,
   });
+  // The ReasoningBlock covers the live reasoning window and the Visualizing
+  // block covers render_artifact; only suppress the activity row while those
+  // blocks are actually shimmering, never on stale transcript content. A
+  // detached projection forces streamComplete, hiding the Visualizing block,
+  // so the activity row must keep narrating there.
+  const reasoningActiveTimeline = hasActiveThinkingStep(displayedGenerationTimeline);
+  const visualizingBlockVisible =
+    hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
+    !streamComplete &&
+    !visibleDetachedProjection;
   const visibleAgentActivity =
-    displayedStreamingReasoning &&
-    (agentActivity?.phase === "thinking" || agentActivity?.phase === "loading")
+    (Boolean(displayedStreamingReasoning) &&
+      reasoningActiveTimeline &&
+      (agentActivity?.phase === "thinking" || agentActivity?.phase === "loading")) ||
+    (visualizingBlockVisible && agentActivity?.phase === "visualizing")
       ? null
       : agentActivity;
 

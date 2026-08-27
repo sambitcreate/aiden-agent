@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   GENERATIVE_UI_UNSUPPORTED_DEVICE_COPY,
+  RENDER_ARTIFACT_TOOL_NAME,
   generativeUiHostLibraryNameFromUrl,
   generativeUiPreviewTokenFromUrl,
   isHtmlArtifactMediaId,
@@ -23,6 +24,10 @@ test("HTML artifact media ids are opaque identities, not paths", () => {
   assert.equal(isHtmlArtifactMediaId("../etc/passwd"), false);
   assert.equal(isHtmlArtifactMediaId("media id"), false);
   assert.equal(isHtmlArtifactMediaId(""), false);
+});
+
+test("render_artifact tool name is the host-owned constant", () => {
+  assert.equal(RENDER_ARTIFACT_TOOL_NAME, "render_artifact");
 });
 
 test("mobile fallback copy is fixed host-owned text", () => {

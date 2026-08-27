@@ -24,7 +24,13 @@ import {
   retainSubagentChipFocusAfterPointerDown,
   type SubagentChipFocusCapture,
 } from "../lib/subagent-panel-state";
-import { isToolStep, type GenerationTimeline } from "../shared/generation-timeline";
+import {
+  hasActiveThinkingStep,
+  hasActiveToolStep,
+  isToolStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/provider-failure";
 
@@ -56,6 +62,8 @@ interface AssistantResponseProps {
   reasoning?: string | null;
   attachments?: readonly Attachment[];
   htmlArtifacts?: readonly ChatHtmlArtifactV1[];
+  /** Live artifacts still mounted in the streaming row; persisted copies wait. */
+  hiddenHtmlMediaIds?: ReadonlySet<string>;
   chatId?: string;
   subagentChips?: React.ReactNode;
   streaming?: boolean;
@@ -69,6 +77,7 @@ function AssistantResponse({
   reasoning,
   attachments,
   htmlArtifacts,
+  hiddenHtmlMediaIds,
   chatId,
   subagentChips,
   streaming = false,
@@ -76,6 +85,22 @@ function AssistantResponse({
   onStreamHandoffComplete,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline);
+  const visibleHtmlArtifacts = React.useMemo(() => {
+    if (!htmlArtifacts?.length) return undefined;
+    if (!hiddenHtmlMediaIds?.size) return htmlArtifacts;
+    const visible = htmlArtifacts.filter((artifact) => !hiddenHtmlMediaIds.has(artifact.mediaId));
+    return visible.length ? visible : undefined;
+  }, [hiddenHtmlMediaIds, htmlArtifacts]);
+  const reasoningActive = hasActiveThinkingStep(timeline ?? null);
+  // With a timeline the block shimmers only while reasoning is actually being
+  // produced; the bottom activity row carries the cue for every other live
+  // phase, so the two never both say "Thinking…" at once.
+  const active =
+    streaming && !streamComplete && (reasoningActive || (!timeline && !content));
+  // The Visualization shimmer occupies the spot the artifact card is about to
+  // take, so it rides directly above the live artifact list.
+  const visualizing =
+    streaming && !streamComplete && hasActiveToolStep(timeline ?? null, RENDER_ARTIFACT_TOOL_NAME);
   if (!rows || !timeline) {
     return (
       <>
@@ -85,7 +110,7 @@ function AssistantResponse({
           <ReasoningBlock
             content={reasoning}
             streaming={streaming && !streamComplete}
-            active={streaming && !streamComplete && !content}
+            active={active}
           />
         ) : null}
         {content ? (
@@ -100,8 +125,9 @@ function AssistantResponse({
         {attachments?.length ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
-        {chatId && htmlArtifacts?.length ? (
-          <HtmlArtifactList chatId={chatId} artifacts={htmlArtifacts} />
+        {visualizing ? <ReasoningBlock content="" active label="Visualizing" /> : null}
+        {chatId && visibleHtmlArtifacts?.length ? (
+          <HtmlArtifactList chatId={chatId} artifacts={visibleHtmlArtifacts} />
         ) : null}
       </>
     );
@@ -123,7 +149,7 @@ function AssistantResponse({
         <ReasoningBlock
           content={reasoning}
           streaming={streaming && !streamComplete}
-          active={streaming && !streamComplete && !content}
+          active={active}
         />
       ) : null}
       {subagentChips && !subagentActivityKey ? subagentChips : null}
@@ -156,8 +182,9 @@ function AssistantResponse({
       {attachments?.length ? (
         <MessageAttachments attachments={attachments} role="assistant" />
       ) : null}
-      {chatId && htmlArtifacts?.length ? (
-        <HtmlArtifactList chatId={chatId} artifacts={htmlArtifacts} />
+      {visualizing ? <ReasoningBlock content="" active label="Visualizing" /> : null}
+      {chatId && visibleHtmlArtifacts?.length ? (
+        <HtmlArtifactList chatId={chatId} artifacts={visibleHtmlArtifacts} />
       ) : null}
     </>
   );
@@ -201,13 +228,6 @@ export function MessageList({
     }
     return ids;
   }, [messages]);
-  const persistedHtmlIds = React.useMemo(() => {
-    const ids = new Set<string>();
-    for (const message of messages) {
-      for (const artifact of message.htmlArtifacts ?? []) ids.add(artifact.mediaId);
-    }
-    return ids;
-  }, [messages]);
   const liveAttachments = React.useMemo(() => {
     const attachments: Attachment[] = [];
     for (const artifact of streamingArtifacts) {
@@ -218,14 +238,17 @@ export function MessageList({
     }
     return attachments;
   }, [persistedAttachmentIds, streamingArtifacts]);
-  const liveHtmlArtifacts = React.useMemo(() => {
-    const artifacts: ChatHtmlArtifactV1[] = [];
-    for (const artifact of streamingArtifacts) {
-      if (!isChatHtmlArtifact(artifact)) continue;
-      if (!persistedHtmlIds.has(artifact.mediaId)) artifacts.push(artifact);
-    }
-    return artifacts;
-  }, [persistedHtmlIds, streamingArtifacts]);
+  // While the streaming row is still mounted its live HTML cards stay exactly
+  // where they appeared; the persisted copies wait hidden so the handoff is a
+  // single atomic swap instead of an unmount/remount flash in two frames.
+  const liveHtmlArtifacts = React.useMemo(
+    () => streamingArtifacts.filter(isChatHtmlArtifact),
+    [streamingArtifacts],
+  );
+  const liveHtmlMediaIds = React.useMemo(
+    () => new Set(liveHtmlArtifacts.map((artifact) => artifact.mediaId)),
+    [liveHtmlArtifacts],
+  );
 
   React.useEffect(() => {
     const captureFocusedChip = (target: EventTarget | null) => {
@@ -297,6 +320,7 @@ export function MessageList({
                   reasoning={m.reasoning}
                   attachments={m.attachments}
                   htmlArtifacts={m.htmlArtifacts}
+                  hiddenHtmlMediaIds={liveHtmlMediaIds}
                   chatId={chatId}
                   subagentChips={
                     subagentsEnabled && m.subagents ? (
@@ -417,7 +441,9 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
         variant="small"
         color="secondary"
         className={
-          value.phase === "thinking" || value.phase === "loading"
+          value.phase === "thinking" ||
+          value.phase === "loading" ||
+          value.phase === "visualizing"
             ? "agent-thinking-shimmer min-w-0 break-words"
             : "min-w-0 break-words"
         }

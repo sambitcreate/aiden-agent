@@ -62,7 +62,11 @@ function StepLine({ step }: { step: AgentStep }) {
 
 /** A single fixed-height ticker row. Height must stay in step with the CSS shift. */
 function TickerRow({ step }: { step: AgentStep }) {
-  const active = !isToolStep(step) ? step.finishedAt === undefined : step.status === "running";
+  // A pending tool step is the model still writing the call's arguments, so
+  // it shimmers like any other work in progress. Approval waits do not.
+  const active = !isToolStep(step)
+    ? step.finishedAt === undefined
+    : step.status === "pending" || step.status === "running";
   return (
     <div className="activity-feed-row flex h-6 min-w-0 items-center">
       <span

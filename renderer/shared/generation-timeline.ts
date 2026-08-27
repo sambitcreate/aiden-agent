@@ -381,3 +381,28 @@ export function latestActiveAgentStep(timeline: GenerationTimeline | null): Agen
   }
   return null;
 }
+
+/** True while the model is inside a reasoning block, per the host timeline. */
+export function hasActiveThinkingStep(timeline: GenerationTimeline | null): boolean {
+  if (!timeline || timeline.status !== "running") return false;
+  for (let index = timeline.steps.length - 1; index >= 0; index -= 1) {
+    const step = timeline.steps[index];
+    if (!step) continue;
+    if (isToolStep(step)) return false;
+    return step.finishedAt === undefined;
+  }
+  return false;
+}
+
+/** True while any call of the named tool is pending approval or executing. */
+export function hasActiveToolStep(timeline: GenerationTimeline | null, toolName: string): boolean {
+  if (!timeline || timeline.status !== "running") return false;
+  return timeline.steps.some(
+    (step) =>
+      isToolStep(step) &&
+      step.toolName === toolName &&
+      (step.status === "pending" ||
+        step.status === "awaiting_approval" ||
+        step.status === "running"),
+  );
+}

@@ -2165,6 +2165,23 @@ export const llmClient = {
               timeline.thinkingStarted();
               noteModelBecameReady();
             } else if (e.type === "thinking_end") timeline.thinkingEnded();
+            if (e.type === "toolcall_start") {
+              // Tool-call arguments can stream for a long while (a full HTML
+              // artifact for render_artifact) before execution begins. Open the
+              // pending step now so the transcript shows live activity through
+              // that window for every provider; execution events upgrade it.
+              // Some OpenAI-compatible backends stream an empty id first and
+              // backfill it later, so wait for a usable one.
+              const block = e.partial.content[e.contentIndex];
+              if (
+                block?.type === "toolCall" &&
+                typeof block.id === "string" &&
+                block.id &&
+                typeof block.name === "string"
+              ) {
+                timeline.toolStarted(block.id, block.name, {});
+              }
+            }
             if (e.type === "text_delta") {
               const separator = !currentAssistantTurnHadVisibleText
                 ? assistantTurnTextSeparator(full, e.delta)

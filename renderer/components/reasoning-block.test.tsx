@@ -20,3 +20,14 @@ test("persisted reasoning stays inspectable but starts collapsed", () => {
   assert.doesNotMatch(markup, /Stored model thought/u);
   assert.match(markup, />Thinking</u);
 });
+
+test("a custom label carries the Visualizing shimmer state", () => {
+  const markup = renderToStaticMarkup(<ReasoningBlock content="" active label="Visualizing" />);
+  assert.match(markup, /Visualizing…/u);
+  assert.match(markup, /agent-thinking-shimmer/u);
+  assert.doesNotMatch(markup, /Thinking/u);
+  const settled = renderToStaticMarkup(
+    <ReasoningBlock content="" label="Visualizing" />,
+  );
+  assert.match(settled, />Visualizing</u);
+});

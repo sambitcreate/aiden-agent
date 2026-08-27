@@ -13,6 +13,8 @@ interface ReasoningBlockProps {
   streaming?: boolean;
   /** The model is actively thinking before its first answer token. */
   active?: boolean;
+  /** Header verb; "…" is appended while active. */
+  label?: string;
 }
 
 /** A quiet, bounded view of reasoning deliberately exposed by a supported provider. */
@@ -20,6 +22,7 @@ export function ReasoningBlock({
   content,
   streaming = false,
   active = false,
+  label = "Thinking",
 }: ReasoningBlockProps) {
   const contentId = React.useId();
   const viewportRef = React.useRef<HTMLDivElement>(null);
@@ -77,7 +80,7 @@ export function ReasoningBlock({
         className="flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:outline-none"
       >
         <span className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>
-          {active ? "Thinking…" : "Thinking"}
+          {active ? `${label}…` : label}
         </span>
         <ChevronRight
           aria-hidden="true"
@@ -95,7 +98,7 @@ export function ReasoningBlock({
           data-scroll-top={atTop}
           data-scroll-bottom={atBottom}
           role="region"
-          aria-label="Model reasoning"
+          aria-label={label === "Thinking" ? "Model reasoning" : label}
           tabIndex={0}
           onScroll={(event) => {
             const element = event.currentTarget;

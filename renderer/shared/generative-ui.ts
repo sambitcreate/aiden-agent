@@ -7,6 +7,9 @@ export const MAX_HTML_ARTIFACTS_PER_CHAT = 40;
 export const MAX_HTML_ARTIFACT_BYTES_PER_CHAT = 8 * 1024 * 1024;
 export const HTML_ARTIFACT_MIME_TYPE = "text/html" as const;
 
+/** The agent tool that renders an inline HTML visualization. */
+export const RENDER_ARTIFACT_TOOL_NAME = "render_artifact" as const;
+
 /** Unique-origin guest: scripts allowed, no parent origin, no forms/popups/downloads. */
 export const GENERATIVE_UI_IFRAME_SANDBOX = "allow-scripts" as const;
 

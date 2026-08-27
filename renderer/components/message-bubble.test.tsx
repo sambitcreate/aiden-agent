@@ -135,6 +135,212 @@ test("HTML artifacts render a sandboxed frame chrome before preview loads", () =
   assert.doesNotMatch(markup, /<p>hello/u);
 });
 
+const htmlArtifact = (mediaId: string, id: string) => ({
+  version: 1 as const,
+  kind: "html" as const,
+  id,
+  title: "Dependencies",
+  mimeType: "text/html" as const,
+  size: 12,
+  mediaId,
+});
+
+test("the handoff window keeps exactly one live HTML artifact card", () => {
+  // During the reveal handoff the persisted message and the still-mounted
+  // streaming row coexist; the live card must win until the row unmounts.
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[
+        {
+          id: "assistant-html",
+          role: "assistant",
+          content: "Done.",
+          createdAt: 1,
+          htmlArtifacts: [htmlArtifact("media-1", "html-1")],
+        },
+      ]}
+      streamingText="Done."
+      streamingReasoning={null}
+      streamingArtifacts={[htmlArtifact("media-1", "html-1")]}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.equal(markup.match(/data-html-artifact="media-1"/gu)?.length, 1);
+});
+
+test("a same-title replace keeps one card and the persisted copy returns after handoff", () => {
+  // The live replace carries the same mediaId with new content, so exactly one
+  // card renders; once the streaming row unmounts the persisted card returns.
+  const duringReplace = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[
+        {
+          id: "assistant-html",
+          role: "assistant",
+          content: "Done.",
+          createdAt: 1,
+          htmlArtifacts: [htmlArtifact("media-1", "html-1")],
+        },
+      ]}
+      streamingText="Done."
+      streamingReasoning={null}
+      streamingArtifacts={[htmlArtifact("media-1", "html-2")]}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.equal(duringReplace.match(/data-html-artifact="media-1"/gu)?.length, 1);
+
+  const afterHandoff = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[
+        {
+          id: "assistant-html",
+          role: "assistant",
+          content: "Done.",
+          createdAt: 1,
+          htmlArtifacts: [htmlArtifact("media-1", "html-2")],
+        },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      streamingArtifacts={[]}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.equal(afterHandoff.match(/data-html-artifact="media-1"/gu)?.length, 1);
+});
+
+test("the reasoning shimmer returns for a later open thinking step after prose", () => {
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps: [
+      {
+        id: "think-1",
+        order: 0,
+        kind: "thinking",
+        startedAt: 1,
+        updatedAt: 2,
+        finishedAt: 2,
+        durationMs: 1_000,
+      },
+      {
+        id: "tool-1",
+        order: 1,
+        kind: "tool",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        label: "Read file",
+        status: "completed",
+        startedAt: 2,
+        updatedAt: 3,
+        finishedAt: 3,
+      },
+      {
+        id: "think-2",
+        order: 2,
+        kind: "thinking",
+        startedAt: 3,
+        updatedAt: 3,
+      },
+    ],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[]}
+      streamingText="Here is what I found."
+      streamingReasoning="First thought"
+      streamingArtifacts={[]}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  // The block header shimmers again for the reopened stretch even though the
+  // turn already has prose.
+  assert.match(markup, /agent-thinking-shimmer/u);
+  assert.match(markup, /Thinking…/u);
+});
+
+test("an in-flight render_artifact call shows the Visualizing shimmer", () => {
+  const renderStep: AgentToolStep = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool",
+    toolCallId: "call-1",
+    toolName: "render_artifact",
+    label: "Render artifact",
+    status: "pending",
+    startedAt: 1,
+    updatedAt: 1,
+  };
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps: [renderStep],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[]}
+      streamingText=""
+      streamingReasoning={null}
+      streamingArtifacts={[]}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(markup, /Visualizing…/u);
+  assert.match(markup, /agent-thinking-shimmer/u);
+  // Once the turn settles the shimmer is gone.
+  const settledMarkup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[]}
+      streamingText=""
+      streamingReasoning={null}
+      streamingArtifacts={[]}
+      timeline={{ ...timeline, status: "completed", finishedAt: 2 }}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.doesNotMatch(settledMarkup, /Visualizing/u);
+});
+
 test("legacy active image MIME is rendered as a file card instead of inline content", () => {
   const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
   const markup = renderToStaticMarkup(

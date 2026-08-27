@@ -48,7 +48,7 @@ function HtmlArtifactIframe({
   );
 }
 
-export function HtmlArtifactFrame({
+function HtmlArtifactFrameImpl({
   chatId,
   artifact,
 }: {
@@ -61,10 +61,12 @@ export function HtmlArtifactFrame({
   const [exporting, setExporting] = React.useState(false);
   const expandTriggerRef = React.useRef<HTMLButtonElement | null>(null);
 
+  // A same-title replace keeps the mediaId and only changes the content hash,
+  // so the fetch resolves into an in-place iframe navigation. The previous
+  // preview stays mounted and interactive until the replacement arrives —
+  // clearing src here would flash the placeholder on every replace.
   React.useEffect(() => {
     let cancelled = false;
-    setSrc(null);
-    setError(null);
     void chatsApi
       .htmlArtifactSrcdoc(chatId, artifact.mediaId, themeTokensFromDocument())
       .then((result) => {
@@ -73,6 +75,7 @@ export function HtmlArtifactFrame({
           setError("This visualization is no longer available.");
           return;
         }
+        setError(null);
         setSrc(result.src);
       })
       .catch((cause: unknown) => {
@@ -82,7 +85,7 @@ export function HtmlArtifactFrame({
     return () => {
       cancelled = true;
     };
-  }, [artifact.id, artifact.mediaId, artifact.size, chatId]);
+  }, [artifact.id, artifact.mediaId, chatId]);
 
   const exportArtifact = React.useCallback(async () => {
     if (exporting) return;
@@ -159,7 +162,9 @@ export function HtmlArtifactFrame({
   );
 }
 
-export function HtmlArtifactList({
+export const HtmlArtifactFrame = React.memo(HtmlArtifactFrameImpl);
+
+function HtmlArtifactListImpl({
   chatId,
   artifacts,
 }: {
@@ -170,12 +175,10 @@ export function HtmlArtifactList({
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {artifacts.map((artifact) => (
-        <HtmlArtifactFrame
-          key={`${artifact.mediaId}:${artifact.id}`}
-          chatId={chatId}
-          artifact={artifact}
-        />
+        <HtmlArtifactFrame key={artifact.mediaId} chatId={chatId} artifact={artifact} />
       ))}
     </div>
   );
 }
+
+export const HtmlArtifactList = React.memo(HtmlArtifactListImpl);

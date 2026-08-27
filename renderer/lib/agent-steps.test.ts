@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  AgentStep,
-  AgentThinkingStep,
-  AgentToolStep,
-  GenerationTimeline,
+import {
+  isToolStep,
+  hasActiveThinkingStep,
+  hasActiveToolStep,
+  type AgentStep,
+  type AgentThinkingStep,
+  type AgentToolStep,
+  type GenerationTimeline,
 } from "../shared/generation-timeline.js";
 import {
   activityIssueCount,
@@ -298,4 +301,18 @@ test("issues surface for review without reopening a healthy trail", () => {
   ]);
   assert.equal(activityIssueCount(failed), 2);
   assert.equal(activityTrailNeedsAttention(failed), true);
+});
+
+test("active thinking and named tool helpers match live timeline steps", () => {
+  const liveThink = timeline("running", [thinking("think-1", 0)]);
+  const doneThink = timeline("completed", [thinking("think-1", 0, 3_000)]);
+  const rendering = timeline("running", [
+    step("render", 0, "render_artifact", "running"),
+  ]);
+  assert.equal(hasActiveThinkingStep(liveThink), true);
+  assert.equal(hasActiveThinkingStep(doneThink), false);
+  assert.equal(hasActiveThinkingStep(null), false);
+  assert.equal(hasActiveToolStep(rendering, "render_artifact"), true);
+  assert.equal(hasActiveToolStep(rendering, "read_file"), false);
+  assert.equal(isToolStep(rendering.steps[0]!), true);
 });
