@@ -5,6 +5,8 @@ import {
   consumeSlashToken,
   deriveSlashSession,
   dismissSlashSession,
+  failedSendAttachments,
+  failedSendDraft,
   moveSlashSelection,
   pageSlashSelection,
   rankSlashResults,
@@ -97,6 +99,62 @@ test("selected skill interactions replace, remove, and clear only the accepted s
     }).selected,
     undefined,
     "an accepted send consumes its exact selected skill",
+  );
+});
+
+test("optimistic skill clearing restores only the rejected send it still owns", () => {
+  const selected = {
+    workspaceId: "workspace-a",
+    invocation: {
+      version: 1 as const,
+      invocationId: invocationId(1),
+      displayName: "Review",
+      source: "workspace" as const,
+    },
+  };
+  const replacement = {
+    ...selected,
+    invocation: { ...selected.invocation, invocationId: invocationId(2), displayName: "Test" },
+  };
+  let state = selectedSkillComposerReducer({ selected, revision: 4 }, {
+    type: "send-started",
+    submittedRevision: 4,
+  });
+  assert.deepEqual(state, { selected: undefined, revision: 5 });
+  assert.deepEqual(
+    selectedSkillComposerReducer(state, {
+      type: "send-failed",
+      optimisticRevision: 5,
+      submitted: selected,
+    }),
+    { selected, revision: 6 },
+  );
+
+  state = selectedSkillComposerReducer(state, { type: "select", selected: replacement });
+  assert.equal(
+    selectedSkillComposerReducer(state, {
+      type: "send-failed",
+      optimisticRevision: 5,
+      submitted: selected,
+    }).selected,
+    replacement,
+    "a rejected send cannot overwrite a newer skill choice",
+  );
+});
+
+test("rejected send reconciliation retains submitted and newer composer payloads", () => {
+  assert.equal(failedSendDraft("First message", ""), "First message");
+  assert.equal(failedSendDraft("First message", "First message"), "First message");
+  assert.equal(
+    failedSendDraft("First message", "Next message"),
+    "First message\n\nNext message",
+  );
+  assert.deepEqual(
+    failedSendAttachments(
+      [{ id: "sent" }, { id: "shared" }],
+      [{ id: "shared" }, { id: "new" }],
+    ),
+    [{ id: "sent" }, { id: "shared" }, { id: "new" }],
   );
 });
 

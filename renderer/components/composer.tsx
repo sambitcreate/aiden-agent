@@ -57,6 +57,8 @@ import { useCommandSystem } from "../lib/command-system";
 import {
   consumeSlashToken,
   deriveSlashSession,
+  failedSendAttachments,
+  failedSendDraft,
   moveSlashSelectionId,
   pageSlashSelectionId,
   rankSlashResults,
@@ -64,17 +66,18 @@ import {
   slashActionDraftCommitIsCurrent,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
+  type SelectedSkillInvocation,
   type SlashResult,
   type SlashSessionTracker,
   selectedSkillComposerReducer,
   selectedSkillStatus,
-  successfulSendAttachmentRemainder,
 } from "../lib/slash-command-core";
 import {
   attemptSlashCommandAction,
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
+import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import {
   COMPOSER_SLASH_PALETTE_ID,
   COMPOSER_SLASH_RETRY_ID,
@@ -298,15 +301,27 @@ export function Composer({
     slashInteractionRevisionRef.current += 1;
   }, []);
   const setText = React.useCallback((value: React.SetStateAction<string>) => {
+    const current = draftRef.current;
+    const text = typeof value === "function" ? value(current.text) : value;
+    draftRef.current = {
+      text,
+      slashTracker: updateSlashSessionTracker(current.slashTracker, text),
+    };
     slashInteractionRevisionRef.current += 1;
     textRevisionRef.current += 1;
-    dispatchDraft({ type: "update", value });
+    dispatchDraft({ type: "update", value: text });
   }, []);
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
   }, []);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const attachmentsRef = React.useRef<Attachment[]>([]);
+  const updateAttachments = React.useCallback((value: React.SetStateAction<Attachment[]>) => {
+    const next = typeof value === "function" ? value(attachmentsRef.current) : value;
+    attachmentsRef.current = next;
+    setAttachments(next);
+  }, []);
   const [skillSelection, dispatchSkillSelection] = React.useReducer(selectedSkillComposerReducer, {
     selected: undefined,
     revision: 0,
@@ -317,6 +332,7 @@ export function Composer({
   const attachmentOperationRef = React.useRef(false);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
+  const sendPendingRef = React.useRef(false);
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
@@ -395,6 +411,7 @@ export function Composer({
   const canSend =
     (text.trim().length > 0 || attachments.length > 0) &&
     submissionAllowed &&
+    !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
   const voice = useVoiceRecorder(
     (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
@@ -674,6 +691,81 @@ export function Composer({
     }
   }, [logoutProvider, onLogoutProvider, sessionCommandBusy]);
 
+  const sendComposerPayload = React.useCallback(
+    async (payload: {
+      draftText: string;
+      sendText: string;
+      attachments: Attachment[];
+      selectedSkill?: SelectedSkillInvocation;
+      skillRevision: number;
+      visualize?: boolean;
+    }): Promise<boolean> => {
+      // React state does not close the same-tick Enter + click window. Claim
+      // the send synchronously before making any optimistic UI changes.
+      if (sendPendingRef.current) return false;
+      sendPendingRef.current = true;
+      setSending(true);
+
+      setText("");
+      const optimisticTextRevision = textRevisionRef.current;
+      attachmentRevisionRef.current += 1;
+      const optimisticAttachmentRevision = attachmentRevisionRef.current;
+      updateAttachments([]);
+      const optimisticSkillRevision = payload.skillRevision + 1;
+      dispatchSkillSelection({
+        type: "send-started",
+        submittedRevision: payload.skillRevision,
+      });
+
+      try {
+        await onSend(
+          payload.sendText,
+          payload.attachments,
+          payload.selectedSkill?.invocation,
+          payload.visualize ? { visualize: true } : undefined,
+        );
+        return true;
+      } catch (error) {
+        // An unknown append result may already be durable. ChatPane blocks
+        // another send until reload, so restoring it here would invite a
+        // duplicate message with a new turn identity.
+        if (!isAppendReconciliationRequired(error)) {
+          const currentDraft = draftRef.current.text;
+          const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
+          if (
+            textRevisionRef.current === optimisticTextRevision ||
+            restoredDraft !== currentDraft
+          ) {
+            setText(restoredDraft);
+          }
+
+          const currentAttachments = attachmentsRef.current;
+          const restoredAttachments = failedSendAttachments(
+            payload.attachments,
+            currentAttachments,
+          );
+          if (
+            attachmentRevisionRef.current === optimisticAttachmentRevision ||
+            restoredAttachments.length !== currentAttachments.length
+          ) {
+            attachmentRevisionRef.current += 1;
+            updateAttachments(restoredAttachments);
+          }
+          dispatchSkillSelection({
+            type: "send-failed",
+            optimisticRevision: optimisticSkillRevision,
+            submitted: payload.selectedSkill,
+          });
+        }
+        throw error;
+      } finally {
+        sendPendingRef.current = false;
+        setSending(false);
+      }
+    },
+    [onSend, setText, updateAttachments],
+  );
+
   const selectSlashResult = React.useCallback(
     async (result: SlashResult) => {
       if (
@@ -764,29 +856,15 @@ export function Composer({
             return false;
           }
           const submittedAttachments = attachments;
-          const submittedAttachmentRevision = attachmentRevisionRef.current;
           const submittedSkillRevision = skillSelection.revision;
-          const submittedSkill = selectedSkill?.invocation;
-          setSending(true);
-          try {
-            await onSend(nextPrompt, submittedAttachments, submittedSkill, {
-              visualize: true,
-            });
-            setAttachments((current) =>
-              successfulSendAttachmentRemainder(
-                current,
-                submittedAttachments,
-                attachmentRevisionRef.current === submittedAttachmentRevision,
-              ),
-            );
-            dispatchSkillSelection({
-              type: "send-succeeded",
-              submittedRevision: submittedSkillRevision,
-            });
-            return true;
-          } finally {
-            setSending(false);
-          }
+          return sendComposerPayload({
+            draftText: text,
+            sendText: nextPrompt,
+            attachments: submittedAttachments,
+            selectedSkill,
+            skillRevision: submittedSkillRevision,
+            visualize: true,
+          });
         },
       });
       const asyncAction = attempted.kind === "async";
@@ -805,12 +883,14 @@ export function Composer({
         toast.info("That app action is unavailable right now.");
         return;
       }
+      // Composer instructions own their optimistic clear and guarded rollback.
+      // A generic late slash-token commit would overwrite the next-turn draft.
+      if (result.command.action.kind === "composer-instruction") return;
       const usesDraftOnlyCommit =
         (result.command.action.kind === "session" &&
           (result.command.action.action === "clone" ||
             result.command.action.action === "export" ||
-            result.command.action.action === "worktree")) ||
-        result.command.action.kind === "composer-instruction";
+            result.command.action.action === "worktree"));
       if (
         asyncAction &&
         !(usesDraftOnlyCommit
@@ -849,7 +929,7 @@ export function Composer({
       exportChat,
       onOpenReview,
       onOpenSettings,
-      onSend,
+      sendComposerPayload,
       attachments,
       selectedSkill,
       selectedSkillState,
@@ -908,7 +988,7 @@ export function Composer({
       return 0;
     }
     attachmentRevisionRef.current += 1;
-    setAttachments((current) => [...current, ...added]);
+    updateAttachments((current) => [...current, ...added]);
     setAttachmentStatus(
       `${added.length} ${added.length === 1 ? "attachment is" : "attachments are"} ready.`,
     );
@@ -1070,10 +1150,11 @@ export function Composer({
 
   const removeAttachment = (id: string) => {
     attachmentRevisionRef.current += 1;
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
   const submit = async () => {
+    if (sendPendingRef.current || composing) return;
     if (attachmentOperationRef.current || attaching) {
       toast.info("Wait for the selected attachments to finish loading before sending.");
       return;
@@ -1099,29 +1180,16 @@ export function Composer({
       toast.info("Switch to a vision-capable model before sending these images.");
       return;
     }
-    const submittedTextRevision = textRevisionRef.current;
-    const submittedAttachmentRevision = attachmentRevisionRef.current;
-    const submittedSkillRevision = skillSelection.revision;
-    const submittedSkill = selectedSkill?.invocation;
-    setSending(true);
     try {
-      await onSend(trimmed, attachments, submittedSkill);
-      if (textRevisionRef.current === submittedTextRevision) setText("");
-      setAttachments((current) =>
-        successfulSendAttachmentRemainder(
-          current,
-          attachments,
-          attachmentRevisionRef.current === submittedAttachmentRevision,
-        ),
-      );
-      dispatchSkillSelection({
-        type: "send-succeeded",
-        submittedRevision: submittedSkillRevision,
+      await sendComposerPayload({
+        draftText: text,
+        sendText: trimmed,
+        attachments,
+        selectedSkill,
+        skillRevision: skillSelection.revision,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
-    } finally {
-      setSending(false);
     }
   };
 

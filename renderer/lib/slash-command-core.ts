@@ -20,6 +20,12 @@ export interface SelectedSkillComposerState {
 export type SelectedSkillComposerAction =
   | { type: "select"; selected: SelectedSkillInvocation }
   | { type: "remove" }
+  | { type: "send-started"; submittedRevision: number }
+  | {
+      type: "send-failed";
+      optimisticRevision: number;
+      submitted?: SelectedSkillInvocation;
+    }
   | { type: "send-succeeded"; submittedRevision: number };
 
 /** Keeps a skill attached to exactly one accepted message, without erasing a replacement. */
@@ -32,6 +38,14 @@ export function selectedSkillComposerReducer(
   }
   if (action.type === "remove") {
     return { selected: undefined, revision: state.revision + 1 };
+  }
+  if (action.type === "send-started") {
+    if (action.submittedRevision !== state.revision) return state;
+    return { selected: undefined, revision: state.revision + 1 };
+  }
+  if (action.type === "send-failed") {
+    if (action.optimisticRevision !== state.revision) return state;
+    return { selected: action.submitted, revision: state.revision + 1 };
   }
   if (action.submittedRevision !== state.revision) return state;
   return { selected: undefined, revision: state.revision + 1 };
@@ -76,6 +90,26 @@ export function successfulSendAttachmentRemainder<T extends { id: string }>(
   if (unchanged) return [];
   const submittedIds = new Set(submitted.map((attachment) => attachment.id));
   return current.filter((attachment) => !submittedIds.has(attachment.id));
+}
+
+/** Restores a rejected send without overwriting a draft written for the next turn. */
+export function failedSendDraft(submitted: string, current: string): string {
+  if (!current) return submitted;
+  if (!submitted || current === submitted) return current;
+  return `${submitted}\n\n${current}`;
+}
+
+/** Restores rejected attachments ahead of newer selections, deduplicated by durable ID. */
+export function failedSendAttachments<T extends { id: string }>(
+  submitted: readonly T[],
+  current: readonly T[],
+): T[] {
+  const seen = new Set<string>();
+  return [...submitted, ...current].filter((attachment) => {
+    if (seen.has(attachment.id)) return false;
+    seen.add(attachment.id);
+    return true;
+  });
 }
 
 export interface SlashSessionTracker {
