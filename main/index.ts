@@ -56,6 +56,10 @@ import type {
   AppUpdateRestartResult,
 } from "../renderer/shared/app-update.js";
 import { devLogPath } from "./services/dev-log.js";
+import { flushDiagnosticJournal, writeDiagnosticEvent } from "./services/diagnostic-journal.js";
+import { projectDiagnosticError } from "./services/diagnostics-contract.js";
+import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
+import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
@@ -116,6 +120,7 @@ import {
   setOnboardingProgress,
 } from "./services/onboarding-state.js";
 import { rendererDocumentOwner } from "./services/renderer-document-owner.js";
+import { decideRendererRecovery } from "./services/renderer-crash-recovery.js";
 import {
   initializeAidenRemoteService,
   stopAidenRemoteServiceAndSettle,
@@ -365,7 +370,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     );
     // Do not let later asynchronous cleanup give a timed-out receipt writer
     // time to publish evidence after its lifecycle has already failed closed.
-    await flushSubagentRuntimeDiagnostics();
+    await flushSubagentRuntimeDiagnostics(1_000);
     app.exit(1);
     return;
   }
@@ -394,7 +399,9 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       error,
     );
   }
-  await flushSubagentRuntimeDiagnostics();
+  await flushSubagentRuntimeDiagnostics(1_000);
+  await flushDiagnosticJournal(1_000);
+  await flushDiagnosticHealth(1_000);
   forceAppQuit = true;
   if (installUpdateOnQuit) {
     installUpdateOnQuit = false;
@@ -985,6 +992,7 @@ function openExternalUrl(value: string): void {
 }
 
 async function createMainWindow(): Promise<void> {
+  let rendererCrashTimes: number[] = [];
   // macOS activate, a second-instance event, or a newly registered global
   // shortcut can all arrive while whenReady is still initializing. Never let
   // those alternate paths expose a renderer to a partial shortcut snapshot.
@@ -1038,6 +1046,12 @@ async function createMainWindow(): Promise<void> {
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  writeDiagnosticEvent({
+    level: "info",
+    area: "renderer",
+    event: "main-window-created",
+    outcome: "completed",
+  });
   const createdWebContentsId = createdWindow.webContents.id;
   const mainWindowUrl = getWindowUrl("main-window.html");
   createdWindow.webContents.on("did-start-loading", () => {
@@ -1045,6 +1059,15 @@ async function createMainWindow(): Promise<void> {
     terminalService.closeForWebContents(createdWebContentsId);
   });
   createdWindow.webContents.on("render-process-gone", (_event, details) => {
+    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
+    writeDiagnosticEvent({
+      level: "error",
+      area: "renderer",
+      event: "renderer-process-gone",
+      outcome: "failed",
+      code: "renderer-crashed",
+      fields: { reason: details.reason, exitCode: details.exitCode },
+    });
     logger.error("renderer-lifecycle", "Main renderer process exited", {
       webContentsId: createdWebContentsId,
       reason: details.reason,
@@ -1061,11 +1084,69 @@ async function createMainWindow(): Promise<void> {
       mainWindow !== createdWindow
     )
       return;
+    const recoveryDecision = decideRendererRecovery(rendererCrashTimes, Date.now());
+    rendererCrashTimes = recoveryDecision.recentCrashTimes;
+    if (!recoveryDecision.retry) {
+      writeDiagnosticEvent({
+        level: "fatal",
+        area: "renderer",
+        event: "renderer-crash-loop",
+        outcome: "failed",
+        code: "crash-loop",
+        fields: { crashCount: recoveryDecision.attempt },
+      });
+      createdWindow.destroy();
+      return;
+    }
     const recovery = mainWindowLoads.replace(
-      createdWindow.loadURL(mainWindowUrl),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, recoveryDecision.backoffMs);
+      }).then(async () => {
+        if (
+          cleanupStarted ||
+          shutdownStarted ||
+          createdWindow.isDestroyed() ||
+          mainWindow !== createdWindow
+        ) return;
+        await createdWindow.loadURL(mainWindowUrl);
+      }),
     );
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "renderer",
+      event: "renderer-recovery",
+      outcome: "started",
+      fields: {
+        attempt: recoveryDecision.attempt,
+        backoffMs: recoveryDecision.backoffMs,
+      },
+    });
+    void recovery.promise.then(() => {
+      if (!mainWindowLoads.isCurrent(recovery)) return;
+      if (
+        cleanupStarted ||
+        shutdownStarted ||
+        createdWindow.isDestroyed() ||
+        mainWindow !== createdWindow
+      ) return;
+      writeDiagnosticEvent({
+        level: "info",
+        area: "renderer",
+        event: "renderer-recovery",
+        outcome: "recovered",
+      });
+    });
     void recovery.promise.catch((error: unknown) => {
       if (!mainWindowLoads.isCurrent(recovery)) return;
+      const projected = projectDiagnosticError(error);
+      writeDiagnosticEvent({
+        level: "error",
+        area: "renderer",
+        event: "renderer-recovery",
+        outcome: "failed",
+        code: projected.code,
+        fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+      });
       logger.error(
         "main",
         "Could not recover the main renderer after it exited.",
@@ -1075,12 +1156,25 @@ async function createMainWindow(): Promise<void> {
     });
   });
   createdWindow.webContents.on("unresponsive", () => {
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "renderer",
+      event: "renderer-unresponsive",
+      outcome: "degraded",
+      code: "unresponsive",
+    });
     logger.warn("renderer-lifecycle", "Main renderer became unresponsive", {
       webContentsId: createdWebContentsId,
       url: createdWindow.webContents.getURL(),
     });
   });
   createdWindow.webContents.on("responsive", () => {
+    writeDiagnosticEvent({
+      level: "info",
+      area: "renderer",
+      event: "renderer-responsive",
+      outcome: "recovered",
+    });
     logger.info("renderer-lifecycle", "Main renderer became responsive", {
       webContentsId: createdWebContentsId,
     });
@@ -1088,6 +1182,14 @@ async function createMainWindow(): Promise<void> {
   createdWindow.webContents.on(
     "did-fail-load",
     (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      writeDiagnosticEvent({
+        level: "error",
+        area: "renderer",
+        event: "renderer-load-failed",
+        outcome: "failed",
+        code: "launch-failed",
+        fields: { loadErrorCode: errorCode, isMainFrame },
+      });
       logger.error("renderer-lifecycle", "Renderer load failed", {
         webContentsId: createdWebContentsId,
         errorCode,
@@ -1100,6 +1202,15 @@ async function createMainWindow(): Promise<void> {
   createdWindow.webContents.on(
     "preload-error",
     (_event, preloadPath, error) => {
+      const projected = projectDiagnosticError(error);
+      writeDiagnosticEvent({
+        level: "error",
+        area: "renderer",
+        event: "renderer-preload-failed",
+        outcome: "failed",
+        code: projected.code,
+        fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+      });
       logger.error(
         "renderer-lifecycle",
         "Renderer preload failed",
@@ -1109,6 +1220,12 @@ async function createMainWindow(): Promise<void> {
     },
   );
   createdWindow.once("ready-to-show", () => {
+    writeDiagnosticEvent({
+      level: "info",
+      area: "renderer",
+      event: "renderer-ready",
+      outcome: "completed",
+    });
     if (restoredWindowState.maximized) createdWindow.maximize();
     if (restoredWindowState.fullScreen) createdWindow.setFullScreen(true);
     createdWindow.show();
@@ -1476,6 +1593,15 @@ if (!ownsSingleInstanceLock) {
   registerHandlers();
 
   app.on("child-process-gone", (_event, details) => {
+    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
+    writeDiagnosticEvent({
+      level: "error",
+      area: "electron",
+      event: "child-process-gone",
+      outcome: "failed",
+      code: "internal-error",
+      fields: { processType: details.type, reason: details.reason, exitCode: details.exitCode },
+    });
     logger.error(
       "electron-lifecycle",
       "Electron child process exited unexpectedly",
@@ -1569,6 +1695,17 @@ if (!ownsSingleInstanceLock) {
     .whenReady()
     .then(async () => {
       const runtimeProfile = currentRuntimeProfile();
+      writeDiagnosticEvent({
+        level: "info",
+        area: "app",
+        event: "electron-ready",
+        outcome: "completed",
+        fields: {
+          runtimeProfile: runtimeProfile.id,
+          appVersion: app.getVersion(),
+          electronVersion: process.versions.electron,
+        },
+      });
       if (
         runtimeProfile.id === "development" &&
         process.platform === "darwin"
