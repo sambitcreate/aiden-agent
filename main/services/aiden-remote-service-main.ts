@@ -327,12 +327,18 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   const tailscale = new AidenRemoteTailscaleController(
     await createSystemTailscaleCommandRunner(),
     {
-      onStatusReadFailure: ({ phase, attempt, final }) => {
+      onStatusReadFailure: ({ phase, attempt, final, category }) => {
         if (!final) return;
-        writeRemoteLog({
+        writeDiagnosticEvent({
           level: "warn",
-          event: "tailscale_status_read_unavailable",
-          details: { phase, attempts: attempt },
+          area: "remote",
+          event: "tailscale-status-read-unavailable",
+          outcome: "unavailable",
+          fields: {
+            tailscalePhase: phase,
+            failureCategory: category,
+            attempts: attempt,
+          },
         });
       },
       outcomeStore: {

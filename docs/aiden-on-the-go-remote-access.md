@@ -22,7 +22,7 @@ Tailscale supplies reachability and network encryption, but Aiden still requires
 4. Review the exact command-equivalent route preview, then choose **Connect**.
 5. Pair with **Pair over Tailscale** after the stable `https://…ts.net/api/aiden/v1` address appears.
 
-Aiden owns only `/api/aiden/v1`, proxies it to the loopback-only HTTP listener's matching `/api/aiden/v1` base, and verifies the resulting route. The matching target base is required because Tailscale strips the public `--set-path` prefix before proxying. First-time connection works from an empty Serve configuration only after the node's exact Tailscale certificate domain proves HTTPS was already authorized. Aiden never enables Tailscale Funnel, never runs `tailscale serve reset`, never completes Tailscale authorization for you, and never changes unrelated Serve handlers. **Disconnect** removes only the exact route and target recorded by Aiden. A conflict is reported instead of being overwritten.
+Aiden owns only `/api/aiden/v1`, proxies it to the loopback-only HTTP listener's matching `/api/aiden/v1` base, and verifies the resulting route. The matching target base is required because Tailscale strips the public `--set-path` prefix before proxying. On macOS, Aiden invokes Tailscale's shared app executable in its documented explicit CLI mode, so Finder and Dock launches do not depend on terminal environment variables. First-time connection works from an empty Serve configuration only after the node's exact Tailscale certificate domain proves HTTPS was already authorized. Aiden never enables Tailscale Funnel, never runs `tailscale serve reset`, never completes Tailscale authorization for you, and never changes unrelated Serve handlers. **Disconnect** removes only the exact route and target recorded by Aiden. A conflict is reported instead of being overwritten.
 
 ## Devices, credentials, and revocation
 
@@ -52,6 +52,7 @@ If the selected local speech model is not installed, the mobile settings can ask
 - **Local device cannot find Aiden:** confirm both devices are on the same network, Local Network mode is selected, and local-network permission is enabled for Aiden On The Go.
 - **Certificate or pin changed:** do not bypass the warning. Verify the Mac, revoke the old device record, and pair again.
 - **Tailscale not found or disconnected:** open Tailscale on the Mac and confirm it reports a stable MagicDNS name.
+- **Local service ready, Tailscale unavailable:** the listener is running, but Aiden could not verify a safe Serve route. Retry after confirming Tailscale is signed in; Aiden will not mutate a route it cannot inspect.
 - **Tailnet HTTPS unavailable:** complete Tailscale's HTTPS authorization flow, then retry Connect in Aiden. Aiden will not authorize it on your behalf.
 - **Serve conflict:** inspect the route shown in the error. Remove or relocate the conflicting handler yourself; Aiden will not take it over.
 - **A folder is missing:** add it from the Mac. The phone cannot submit an arbitrary path or approve a new browser root.
@@ -61,4 +62,4 @@ If the selected local speech model is not installed, the mobile settings can ask
 - **Speech service is busy:** wait for the active transcription to finish and retry. The Mac permits one active transcription and one waiting request.
 - **Port already in use:** stop the other local service or repair the saved Remote Access configuration before enabling it again.
 
-Remote Access diagnostics keep only closed route categories, outcome/status classes, bounded latency, and stable Aiden-owned error codes. Successful production traffic is reduced to daily aggregate counts; durable records never contain request IDs, device or instance suffixes, bearer credentials, pairing secrets, provider keys, request/response bodies, URLs, or filesystem paths.
+Remote Access diagnostics keep only closed route categories, outcome/status classes, bounded latency, stable Aiden-owned error codes, and categorical Tailscale inspection phase/reason/attempt counts. Successful production traffic is reduced to daily aggregate counts; durable records never contain Tailscale command output, request IDs, device or instance suffixes, bearer credentials, pairing secrets, provider keys, request/response bodies, URLs, or filesystem paths.

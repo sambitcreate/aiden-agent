@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createSocket } from "node:dgram";
 import * as fs from "node:fs/promises";
@@ -37,6 +37,23 @@ const STATUS_READ_RETRY_MS = 75;
 
 export interface AidenTailscaleCommandRunner {
   run(args: readonly string[]): Promise<string>;
+}
+
+export type AidenTailscaleStatusReadFailureCategory =
+  | "command-failed"
+  | "invalid-response"
+  | "timed-out";
+
+export type AidenTailscaleCommandExecutor = (
+  binary: string,
+  args: readonly string[],
+  options: ExecFileOptionsWithStringEncoding,
+) => Promise<{ stdout: string }>;
+
+export interface AidenTailscaleSystemRunnerOptions {
+  environment?: NodeJS.ProcessEnv;
+  execute?: AidenTailscaleCommandExecutor;
+  resolveBinary?: () => Promise<string | null>;
 }
 
 export interface AidenTailscaleConnectionStatus {
@@ -107,6 +124,7 @@ export interface AidenRemoteTailscaleControllerOptions {
     phase: "node" | "serve";
     attempt: number;
     final: boolean;
+    category: AidenTailscaleStatusReadFailureCategory;
   }) => void;
 }
 
@@ -129,9 +147,13 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function parseBoundedJson(serialized: string, label: string): unknown {
   if (Buffer.byteLength(serialized, "utf8") > MAX_STATUS_BYTES) {
-    throw new Error(`${label}_too_large`);
+    throw new Error("tailscale_status_invalid_response");
   }
-  return parseAidenRemoteJson(serialized, label);
+  try {
+    return parseAidenRemoteJson(serialized, label);
+  } catch {
+    throw new Error("tailscale_status_invalid_response");
+  }
 }
 
 function normalizeDnsName(value: unknown): string | undefined {
@@ -160,7 +182,7 @@ function parseNodeStatus(serialized: string): AidenTailscaleNodeStatus {
 
 function parseServeStatus(serialized: string): AidenTailscaleStatus {
   const value = parseBoundedJson(serialized, "Tailscale Serve status");
-  if (!record(value)) throw new Error("tailscale_status_invalid");
+  if (!record(value)) throw new Error("tailscale_status_invalid_response");
   return value as AidenTailscaleStatus;
 }
 
@@ -320,13 +342,27 @@ export async function resolveTailscaleBinary(): Promise<string | null> {
   return null;
 }
 
-export async function createSystemTailscaleCommandRunner(): Promise<AidenTailscaleCommandRunner | null> {
-  const binary = await resolveTailscaleBinary();
+export async function createSystemTailscaleCommandRunner(
+  options: AidenTailscaleSystemRunnerOptions = {},
+): Promise<AidenTailscaleCommandRunner | null> {
+  const binary = await (options.resolveBinary ?? resolveTailscaleBinary)();
   if (!binary) return null;
+  const execute = options.execute ?? (async (command, args, execOptions) => {
+    const { stdout } = await execFileAsync(command, [...args], execOptions);
+    return { stdout };
+  });
+  const environment = options.environment ?? process.env;
   return {
     run: async (args) => {
-      const { stdout } = await execFileAsync(binary, [...args], {
+      const { stdout } = await execute(binary, args, {
         encoding: "utf8",
+        env: {
+          ...environment,
+          // Tailscale's macOS app and CLI share one executable. Finder-launched
+          // apps do not inherit TERM/SHLVL, so force the documented CLI mode
+          // instead of relying on Tailscale's terminal-environment heuristic.
+          TAILSCALE_BE_CLI: "1",
+        },
         maxBuffer: MAX_STATUS_BYTES,
         timeout: 15_000,
         windowsHide: true,
@@ -334,6 +370,17 @@ export async function createSystemTailscaleCommandRunner(): Promise<AidenTailsca
       return stdout;
     },
   };
+}
+
+function statusReadFailureCategory(error: unknown): AidenTailscaleStatusReadFailureCategory {
+  if (error instanceof Error && error.message === "tailscale_status_invalid_response") {
+    return "invalid-response";
+  }
+  const details = error !== null && typeof error === "object"
+    ? error as { code?: unknown; killed?: unknown }
+    : undefined;
+  if (details?.code === "ETIMEDOUT" || details?.killed === true) return "timed-out";
+  return "command-failed";
 }
 
 export class AidenRemoteTailscaleController {
@@ -399,12 +446,13 @@ export class AidenRemoteTailscaleController {
         phase = "serve";
         const serveStatus = await this.serveStatus();
         return this.connectionStatus(nodeStatus, serveStatus);
-      } catch {
+      } catch (error) {
         try {
           this.onStatusReadFailure?.({
             phase,
             attempt,
             final: attempt === STATUS_READ_ATTEMPTS,
+            category: statusReadFailureCategory(error),
           });
         } catch {
           // Diagnostics must never change the fail-closed inspection result.

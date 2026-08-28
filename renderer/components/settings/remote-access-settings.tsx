@@ -504,6 +504,15 @@ export function RemoteAccessSettings() {
     error: status.error,
     activeDeviceCount: groups.active.length,
   });
+  const localServiceOnly = status.running
+    && transportAllowsTailscale
+    && !status.tailscaleConnected;
+  const connectionSummary = localServiceOnly
+    ? `Local ready · ${tailscalePresentation.badge}`
+    : status.running ? "Ready" : summary;
+  const technicalStatus = localServiceOnly
+    ? "Local service ready"
+    : status.running ? "Ready" : summary;
 
   return (
     <>
@@ -658,7 +667,7 @@ export function RemoteAccessSettings() {
 
       <Disclosure
         title="Connection"
-        summary={`${connectionModeLabel(status.connectionMode)} · ${status.running ? "Ready" : summary}`}
+        summary={`${connectionModeLabel(status.connectionMode)} · ${connectionSummary}`}
       >
         <Field
           label="Connection method"
@@ -690,7 +699,7 @@ export function RemoteAccessSettings() {
               ) : (
                 <Network className="size-4 text-tertiary" />
               )}
-              <Text variant="small-strong">{status.running ? "Ready" : summary}</Text>
+              <Text variant="small-strong">{technicalStatus}</Text>
             </div>
             {status.lanEndpoint ? (
               <Text as="p" variant="small" color="secondary" className="mt-1 break-all">

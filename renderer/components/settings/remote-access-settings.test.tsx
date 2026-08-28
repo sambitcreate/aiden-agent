@@ -62,6 +62,9 @@ test("Tailscale setup failures retain typed actionable remediation", () => {
   assert.match(source, /Open Tailscale and sign in/u);
   assert.match(source, /Enable HTTPS for this Tailscale device name/u);
   assert.match(source, /<Badge color=\{status\.tailscaleConnected \? "green"/u);
+  assert.match(source, /transportAllowsTailscale[\s\S]*!status\.tailscaleConnected/u);
+  assert.match(source, /Local ready · \$\{tailscalePresentation\.badge\}/u);
+  assert.match(source, /Local service ready/u);
 });
 
 test("uncertain Tailscale mutations require an explicit verification action", () => {
