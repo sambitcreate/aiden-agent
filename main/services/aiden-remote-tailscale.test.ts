@@ -223,6 +223,35 @@ test("combined route inspection categorizes zero-exit non-JSON CLI output withou
   assert.doesNotMatch(JSON.stringify(diagnostics), /private details/u);
 });
 
+test("combined route inspection categorizes both Node CLI timeout shapes", async () => {
+  const timeoutErrors = [
+    Object.assign(new Error("deadline exceeded"), { code: "ETIMEDOUT" }),
+    Object.assign(new Error("process terminated"), { killed: true }),
+  ];
+
+  for (const timeoutError of timeoutErrors) {
+    const diagnostics: Array<{
+      phase: "node" | "serve";
+      attempt: number;
+      final: boolean;
+      category: AidenTailscaleStatusReadFailureCategory;
+    }> = [];
+    const controller = new AidenRemoteTailscaleController({
+      run: async () => {
+        throw timeoutError;
+      },
+    }, { onStatusReadFailure: (input) => diagnostics.push(input) });
+
+    assert.equal((await controller.inspectRoute(target)).assessment.errorCode, "status_unavailable");
+    assert.deepEqual(diagnostics, [
+      { phase: "node", attempt: 1, final: false, category: "timed-out" },
+      { phase: "node", attempt: 2, final: false, category: "timed-out" },
+      { phase: "node", attempt: 3, final: true, category: "timed-out" },
+    ]);
+    assert.doesNotMatch(JSON.stringify(diagnostics), /deadline exceeded|process terminated/u);
+  }
+});
+
 test("concurrent settings reads share one node and Serve snapshot", async () => {
   const app = fixture();
   const [status, inspection] = await Promise.all([
