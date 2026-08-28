@@ -1055,7 +1055,7 @@ async function prepareGeneration(
     const artifactStoreAvailability = displayImageArtifactStore.availability();
     if (!artifactStoreAvailability.available) {
       throw new Error(
-        `${artifactStoreAvailability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+        `${artifactStoreAvailability.reason} Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.`,
       );
     }
     const existingUsage = displayedAssistantImageUsage(chat.messages);
