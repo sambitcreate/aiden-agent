@@ -157,12 +157,19 @@ actor AidenChatCache {
             chatId: chatId,
             attachmentId: attachment.id
         )
-        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return nil }
+        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else {
+            if fileManager.fileExists(atPath: url.path) {
+                AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .corruptData)
+                try? fileManager.removeItem(at: url)
+            }
+            return nil
+        }
         guard let validated = AidenAttachmentImageValidation.validatedData(
             data,
             mimeType: attachment.mimeType,
             declaredSize: attachment.size
         ) else {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .corruptData)
             try? fileManager.removeItem(at: url)
             return nil
         }
@@ -278,11 +285,26 @@ actor AidenChatCache {
     }
 
     private func load<Value: Decodable>(_ type: Value.Type, from url: URL) -> Value? {
-        guard let data = try? Data(contentsOf: url),
-              data.count <= maxCacheFileBytes else { return nil }
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
+            return nil
+        }
+        guard data.count <= maxCacheFileBytes else {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
+            return nil
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(type, from: data)
+        do {
+            return try decoder.decode(type, from: data)
+        } catch {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
+            return nil
+        }
     }
 
     private func purgeNamespace(_ cacheRoot: URL, instanceId: String) {
