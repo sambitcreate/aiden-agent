@@ -26,6 +26,11 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputMode
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticArea
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticCode
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticEvent
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticOutcome
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnostics
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import java.io.ByteArrayOutputStream
 import java.util.Locale
@@ -112,6 +117,7 @@ class ComposerVoiceInputController(private val context: Context) {
     }
 
     fun reportPermissionDenied() {
+        AidenDiagnostics.record(AidenDiagnosticArea.SPEECH, AidenDiagnosticEvent.SPEECH_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.UNAUTHORIZED)
         errorMessage = "Microphone access is disabled. Enable it in Settings to use voice input."
     }
 
@@ -144,7 +150,7 @@ class ComposerVoiceInputController(private val context: Context) {
 
     private fun startNative(session: Long) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
-            fail("On-device speech recognition is not installed. Open Voice input in Settings to install language support.", session)
+            fail("On-device speech recognition is not installed. Open Voice input in Settings to install language support.", session, AidenDiagnosticCode.UNAVAILABLE)
             return
         }
         try {
@@ -154,7 +160,7 @@ class ComposerVoiceInputController(private val context: Context) {
                 it.startListening(recognitionIntent())
             }
         } catch (_: Exception) {
-            fail("On-device speech recognition could not start.", session)
+            fail("On-device speech recognition could not start.", session, AidenDiagnosticCode.UNAVAILABLE)
         }
     }
 
@@ -186,13 +192,13 @@ class ComposerVoiceInputController(private val context: Context) {
             if (!isCurrent(session) || state == ComposerVoiceInputState.IDLE) return
             destroyNativeRecognizer()
             if (nativeStopRequestedSession == session || error == SpeechRecognizer.ERROR_CLIENT) clearSession(session)
-            else fail(nativeErrorMessage(error), session)
+            else fail(nativeErrorMessage(error), session, nativeDiagnosticCode(error))
         }
     }
 
     private fun startMac(client: AidenRemoteClient?, session: Long) {
         if (client == null) {
-            fail("Connect to your paired Mac before using Mac transcription.", session)
+            fail("Connect to your paired Mac before using Mac transcription.", session, AidenDiagnosticCode.NETWORK)
             return
         }
         state = ComposerVoiceInputState.PREPARING
@@ -213,7 +219,7 @@ class ComposerVoiceInputController(private val context: Context) {
                 activeModelId = selected.id
                 beginMacRecording(session)
             } catch (error: Exception) {
-                if (isCurrent(session)) fail(error.message ?: "Mac transcription is unavailable.", session)
+                if (isCurrent(session)) fail(error.message ?: "Mac transcription is unavailable.", session, AidenDiagnosticCode.NETWORK)
             } finally {
                 if (isCurrent(session)) preparationJob = null
             }
@@ -225,7 +231,7 @@ class ComposerVoiceInputController(private val context: Context) {
         if (!isCurrent(session)) return
         val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minimum <= 0) {
-            fail("The microphone input format is unavailable.", session)
+            fail("The microphone input format is unavailable.", session, AidenDiagnosticCode.UNAVAILABLE)
             return
         }
         val recorder = AudioRecord(
@@ -237,7 +243,7 @@ class ComposerVoiceInputController(private val context: Context) {
         )
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             recorder.release()
-            fail("The microphone could not start.", session)
+            fail("The microphone could not start.", session, AidenDiagnosticCode.UNAVAILABLE)
             return
         }
         audioRecord = recorder
@@ -288,7 +294,7 @@ class ComposerVoiceInputController(private val context: Context) {
         val client = activeClient
         val modelId = activeModelId
         if (client == null || modelId == null) {
-            fail("Mac transcription stopped because the connection changed.", session)
+            fail("Mac transcription stopped because the connection changed.", session, AidenDiagnosticCode.NETWORK)
             return
         }
         state = ComposerVoiceInputState.TRANSCRIBING
@@ -301,7 +307,7 @@ class ComposerVoiceInputController(private val context: Context) {
                 updateTranscript(result.text, session)
                 clearSession(session)
             } catch (error: Exception) {
-                if (isCurrent(session)) fail(error.message ?: "The Mac could not transcribe this recording.", session)
+                if (isCurrent(session)) fail(error.message ?: "The Mac could not transcribe this recording.", session, AidenDiagnosticCode.NETWORK)
             } finally {
                 if (isCurrent(session)) transcriptionJob = null
             }
@@ -321,8 +327,9 @@ class ComposerVoiceInputController(private val context: Context) {
         recognizer = null
     }
 
-    private fun fail(message: String, session: Long) {
+    private fun fail(message: String, session: Long, code: AidenDiagnosticCode = AidenDiagnosticCode.UNKNOWN) {
         if (!isCurrent(session)) return
+        AidenDiagnostics.record(AidenDiagnosticArea.SPEECH, AidenDiagnosticEvent.SPEECH_FAILED, AidenDiagnosticOutcome.FAILED, code)
         destroyNativeRecognizer()
         stopMacRecording(transcribe = false, session = session)
         errorMessage = message
@@ -349,6 +356,14 @@ class ComposerVoiceInputController(private val context: Context) {
         SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
         SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "On-device speech recognition is not installed for this language."
         else -> "On-device speech recognition stopped unexpectedly."
+    }
+
+    private fun nativeDiagnosticCode(error: Int): AidenDiagnosticCode = when (error) {
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> AidenDiagnosticCode.UNAUTHORIZED
+        SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
+        SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> AidenDiagnosticCode.UNAVAILABLE
+        else -> AidenDiagnosticCode.UNKNOWN
     }
 
     private companion object {
