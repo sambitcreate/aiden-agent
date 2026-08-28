@@ -14,10 +14,10 @@ export async function unresolvedGuiArtifactMessage(chatId: string): Promise<stri
   const image = displayImageArtifactStore.availability();
   const html = generativeUiArtifactStore.availability();
   if (!image.available) {
-    return `${image.reason} Open Aiden's developer log to locate the staging file that needs repair.`;
+    return `${image.reason} Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.`;
   }
   if (!html.available) {
-    return `${html.reason} Open Aiden's developer log to locate the staging file that needs repair.`;
+    return `${html.reason} Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.`;
   }
   const { chatStore } = await import("./chat-store.js");
   const chat = await chatStore.get(chatId);

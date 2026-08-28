@@ -32,7 +32,6 @@ function loadSherpa(): SherpaModule {
     return sherpa;
   } catch (error) {
     sherpaError = `On-device engine failed to load: ${error instanceof Error ? error.message : String(error)}`;
-    console.error("[parakeet]", sherpaError);
     throw new Error(sherpaError);
   }
 }

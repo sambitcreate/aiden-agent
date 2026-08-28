@@ -4,6 +4,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { app, ipcMain, logger } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { recordRemoteRequestHealth } from "./diagnostic-health.js";
 import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
 import { DataStore } from "./data-store.js";
 import {
@@ -157,8 +159,50 @@ function safeIdempotency(value: unknown): boolean {
   }
 }
 
+function remoteRouteCategory(value: unknown): string {
+  if (typeof value !== "string") return "unknown";
+  if (value === "health") return "health";
+  if (value.startsWith("pairing")) return "pairing";
+  if (value.startsWith("bot")) return value === "botFiles" ? "files" : "bots";
+  if (value.toLowerCase().includes("workspace")) return "workspaces";
+  if (value.toLowerCase().includes("file") || value.toLowerCase().includes("attachment")) return "files";
+  if (value.toLowerCase().includes("git")) return "git";
+  if (value.toLowerCase().includes("schedule")) return "schedules";
+  if (value.toLowerCase().includes("usage")) return "usage";
+  if (value.toLowerCase().includes("speech")) return "speech";
+  if (/chat|turn|stream|approval|model/iu.test(value)) return "chats";
+  return "unknown";
+}
+
 function writeRemoteLog(entry: AidenRemoteServiceLogEntry): void {
   const details = entry.details ?? {};
+  if (entry.event === "request") {
+    const status = typeof details.status === "number" ? details.status : 0;
+    const latencyMs = typeof details.latencyMs === "number" ? Math.max(0, details.latencyMs) : 0;
+    recordRemoteRequestHealth(status, latencyMs);
+    const profile = currentRuntimeProfile();
+    if (profile.id === "production") {
+      if (status >= 400 || latencyMs >= 2_000) {
+        writeDiagnosticEvent({
+          level: status >= 500 ? "error" : status >= 400 ? "warn" : "info",
+          area: "remote",
+          event: status >= 400 ? "remote-request-failed" : "remote-request-slow",
+          outcome: status >= 500 ? "failed" : "degraded",
+          ...(status >= 500 ? { code: "internal-error" as const } : {}),
+          fields: {
+            routeCategory: remoteRouteCategory(details.route),
+            statusClass: status >= 500 ? "5xx" : status >= 400 ? "4xx" : "2xx",
+            latencyBucket: latencyMs >= 10_000 ? "10s-plus" : latencyMs >= 5_000 ? "5s-plus" : "2s-plus",
+            remoteCode: typeof details.errorCode === "string" ? details.errorCode : null,
+          },
+        });
+      }
+      return;
+    }
+    const { deviceIdSuffix: _deviceIdSuffix, ...developmentDetails } = details;
+    logger.info("aiden-remote", entry.event, developmentDetails);
+    return;
+  }
   if (entry.level === "error") logger.error("aiden-remote", entry.event, details);
   else if (entry.level === "warn") logger.warn("aiden-remote", entry.event, details);
   else logger.info("aiden-remote", entry.event, details);

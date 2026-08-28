@@ -18,7 +18,11 @@ import {
   type OpenDialogOptions,
 } from "electron";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
-import { writeDevLog } from "./services/dev-log.js";
+import {
+  diagnosticJournalProfile,
+  formatDiagnosticConsole,
+  writeLegacyDiagnostic,
+} from "./services/diagnostic-journal.js";
 
 type LogValue = unknown;
 
@@ -35,9 +39,15 @@ function writeLog(
         : level === "warn"
           ? console.warn
           : console.error;
-  method(`[${scope}]`, ...values);
-  // Mirrored to the dev log file when initialized (dev runs only).
-  writeDevLog(level, scope, values);
+  const event = writeLegacyDiagnostic(level, scope, values);
+  if (diagnosticJournalProfile() === "production" && (level === "debug" || level === "info")) {
+    return;
+  }
+  try {
+    method(formatDiagnosticConsole(event));
+  } catch {
+    // Diagnostic sinks must never become an application failure source.
+  }
 }
 
 export const logger = {

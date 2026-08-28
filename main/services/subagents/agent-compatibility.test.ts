@@ -1166,11 +1166,11 @@ test("main-process shutdown continues to application quit after the subagent dea
   const appQuitStart = source.indexOf("app.quit();", forceQuitStart);
   const failureExitStart = source.indexOf("app.exit(1);", receiptFinalizationStart);
   const failureDiagnosticFlush = source.lastIndexOf(
-    "await flushSubagentRuntimeDiagnostics();",
+    "await flushSubagentRuntimeDiagnostics(1_000);",
     failureExitStart,
   );
   const normalDiagnosticFlush = source.lastIndexOf(
-    "await flushSubagentRuntimeDiagnostics();",
+    "await flushSubagentRuntimeDiagnostics(1_000);",
     forceQuitStart,
   );
 

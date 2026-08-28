@@ -10,6 +10,11 @@ import androidx.core.app.NotificationManagerCompat
 import sbtbiswas.AidenOnTheGo.AidenOnTheGoApp
 import sbtbiswas.AidenOnTheGo.MainActivity
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticArea
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticCode
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticEvent
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticOutcome
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnostics
 
 class AidenRemoteLiveNotificationManager(private val context: Context) {
     private val notificationManager =
@@ -62,6 +67,7 @@ class AidenRemoteLiveNotificationManager(private val context: Context) {
             notificationManager.notify(sessionId.hashCode(), notification)
         } catch (_: SecurityException) {
             // Android 13+ can revoke notification permission while a stream is active.
+            AidenDiagnostics.record(AidenDiagnosticArea.NOTIFICATION, AidenDiagnosticEvent.NOTIFICATION_FAILED, AidenDiagnosticOutcome.DEGRADED, AidenDiagnosticCode.UNAVAILABLE)
         }
     }
 

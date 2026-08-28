@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import {
   flushSubagentRuntimeDiagnostics,
   initSubagentRuntimeDiagnostics,
   MAX_SUBAGENT_RUNTIME_LOG_BYTES,
+  MAX_SUBAGENT_RUNTIME_LOG_AGE_MS,
   sanitizeSubagentDiagnosticText,
   writeSubagentRuntimeFailure,
 } from "./subagent-runtime-diagnostics.js";
@@ -110,6 +111,57 @@ test("runtime diagnostics are owner-only structured records without raw evidence
     assert.equal(record.attempts, 4);
     assert.doesNotMatch(raw, /alice|provider\.invalid|hidden-token/u);
     assert.equal((await stat(target)).mode & 0o777, 0o600);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("subagent diagnostics rotate by age and reject a symlinked root", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-subagent-age-root-"));
+  const originalNow = Date.now;
+  let current = Date.parse("2026-08-01T00:00:00.000Z");
+  Date.now = () => current;
+  try {
+    const target = path.join(root, "subagent-runtime.log");
+    initSubagentRuntimeDiagnostics(target);
+    const record = (diagnosticId: string) => ({
+      diagnosticId,
+      providerId: "custom:test",
+      modelId: "test-model",
+      failure: "provider" as const,
+      attempts: 1,
+      diagnostics: [{ stage: "provider" as const, code: "provider_failure" as const }],
+    });
+    writeSubagentRuntimeFailure(record("SA-old"));
+    await flushSubagentRuntimeDiagnostics();
+    current += MAX_SUBAGENT_RUNTIME_LOG_AGE_MS + 1_000;
+    writeSubagentRuntimeFailure(record("SA-new"));
+    await flushSubagentRuntimeDiagnostics();
+    assert.doesNotMatch(await readFile(target, "utf8"), /SA-old/u);
+    await assert.rejects(stat(path.join(root, "subagent-runtime.prev.log")), { code: "ENOENT" });
+
+    const outside = path.join(root, "outside");
+    const linked = path.join(root, "linked");
+    await mkdir(outside);
+    await symlink(outside, linked);
+    initSubagentRuntimeDiagnostics(path.join(linked, "subagent-runtime.log"));
+    writeSubagentRuntimeFailure(record("SA-escape"));
+    await flushSubagentRuntimeDiagnostics();
+    await assert.rejects(stat(path.join(outside, "subagent-runtime.log")), { code: "ENOENT" });
+  } finally {
+    Date.now = originalNow;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("oversized retained subagent rotation is removed at startup", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-subagent-retained-size-"));
+  const target = path.join(root, "subagent-runtime.log");
+  const previous = path.join(root, "subagent-runtime.prev.log");
+  try {
+    await writeFile(previous, "x".repeat(MAX_SUBAGENT_RUNTIME_LOG_BYTES + 1), { mode: 0o600 });
+    initSubagentRuntimeDiagnostics(target);
+    await assert.rejects(stat(previous), { code: "ENOENT" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

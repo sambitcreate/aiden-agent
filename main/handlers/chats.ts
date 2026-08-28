@@ -60,6 +60,14 @@ function asString(value: unknown, name: string): string {
   return value;
 }
 
+function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): string {
+  if (unresolved.includes("could not be recovered")) return recoveredMessage;
+  return unresolved.replace(
+    "Open Aiden's developer log to locate",
+    "Open Settings → About → Diagnostics and choose Reveal to locate",
+  );
+}
+
 export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
@@ -167,9 +175,10 @@ export function registerChatHistoryHandlers(): void {
       const unresolved = await unresolvedGuiArtifactMessage(parsed.chatId);
       if (unresolved) {
         throw new Error(
-          unresolved.includes("could not be recovered")
-            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before copying."
-            : unresolved,
+          artifactRecoveryMessage(
+            unresolved,
+            "A previous visual artifact could not be recovered. Delete this chat to discard it before copying.",
+          ),
         );
       }
       const runCopy = async () => {
@@ -315,9 +324,10 @@ export function registerChatHistoryHandlers(): void {
       const unresolvedExport = await unresolvedGuiArtifactMessage(chatId);
       if (unresolvedExport) {
         throw new Error(
-          unresolvedExport.includes("could not be recovered")
-            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
-            : unresolvedExport,
+          artifactRecoveryMessage(
+            unresolvedExport,
+            "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting.",
+          ),
         );
       }
       if (owner.isDestroyed()) {
@@ -343,9 +353,10 @@ export function registerChatHistoryHandlers(): void {
       const unresolvedExportAfterDialog = await unresolvedGuiArtifactMessage(chatId);
       if (unresolvedExportAfterDialog) {
         throw new Error(
-          unresolvedExportAfterDialog.includes("could not be recovered")
-            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
-            : unresolvedExportAfterDialog,
+          artifactRecoveryMessage(
+            unresolvedExportAfterDialog,
+            "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting.",
+          ),
         );
       }
       if (owner.isDestroyed()) {
@@ -477,9 +488,10 @@ export function registerChatHistoryHandlers(): void {
           const unresolvedSend = await unresolvedGuiArtifactMessage(chatId);
           if (unresolvedSend) {
             throw new Error(
-              unresolvedSend.includes("could not be recovered")
-                ? "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message."
-                : unresolvedSend,
+              artifactRecoveryMessage(
+                unresolvedSend,
+                "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
+              ),
             );
           }
           const authoritativeChat = skillReference

@@ -63,6 +63,11 @@ import type {
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import type {
+  DiagnosticSupportStatusView,
+  RendererDiagnosticPolicy,
+  RendererDiagnosticReport,
+} from "../shared/diagnostics";
+import type {
   BotAvatarSuggestion,
   BotAvatarSuggestionInput,
   BotCreateInput,
@@ -386,10 +391,18 @@ export const mcpApi = {
   reconnect: () => invoke<void>("mcp:reconnect"),
 };
 
-// ── Dev log (renderer error forwarding, dev builds only) ─────────────
-export const devlogApi = {
-  write: (level: "info" | "warn" | "error", message: string) =>
-    invoke<void>("devlog:write", level, message),
+// ── Local diagnostics (main-owned policy and support actions) ─────────
+export const diagnosticsApi = {
+  policy: () => invoke<RendererDiagnosticPolicy>("diagnostics:policy"),
+  reportRendererEvent: (report: RendererDiagnosticReport) =>
+    invoke<{ accepted: boolean; referenceId: string }>("diagnostics:renderer-event", report),
+  status: () => invoke<DiagnosticSupportStatusView>("diagnostics:status"),
+  reveal: () => invoke<boolean>("diagnostics:reveal"),
+  export: (includeCrashDumps: boolean) =>
+    invoke<{ exported: boolean; manifest?: unknown }>("diagnostics:export", includeCrashDumps),
+  delete: () => invoke<boolean>("diagnostics:delete"),
+  enableMode: () =>
+    invoke<{ enabled: boolean; expiresAt: null; disablesOnRestart: true }>("diagnostics:mode-enable"),
 };
 
 // ── Exa web search ────────────────────────────────────────────────────

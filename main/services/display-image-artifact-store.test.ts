@@ -362,7 +362,7 @@ test("main blocks new sends and copies until staged artifacts are recovered", as
   assert.match(applicationService, /deps\.generativeUiArtifactStore\.hasPending\(chatId\)/u);
   assert.match(handlers, /unresolvedGuiArtifactMessage\(parsed\.chatId\)/u);
   assert.match(recovery, /Delete this chat to discard it/iu);
-  assert.match(recovery, /developer log to locate the staging file that needs repair/iu);
+  assert.match(recovery, /Settings → About → Diagnostics and choose Reveal/iu);
   const exportHandler = handlers.slice(handlers.indexOf('ipcMain.handle("chats:export"'));
   assert.match(exportHandler, /unresolvedGuiArtifactMessage\(chatId\)/u);
   assert.ok(

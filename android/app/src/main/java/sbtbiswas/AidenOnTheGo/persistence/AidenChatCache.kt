@@ -9,6 +9,11 @@ import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentImageValidation
 import sbtbiswas.AidenOnTheGo.models.AidenChat
 import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticArea
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticCode
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticEvent
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticOutcome
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnostics
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.AtomicMoveNotSupportedException
@@ -176,16 +181,22 @@ class AidenChatCache(
         val file = attachmentImageFile(instanceId, deviceId, chatId, attachment.id)
         if (!file.exists()) return null
         if (file.length() !in 1..AidenAttachmentImageValidation.MAXIMUM_BYTES.toLong()) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CACHE, AidenDiagnosticEvent.CACHE_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.CORRUPT_DATA)
             file.delete()
             return null
         }
-        val data = try { file.readBytes() } catch (_: Exception) { return null }
+        val data = try { file.readBytes() } catch (_: Exception) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CACHE, AidenDiagnosticEvent.CACHE_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.CORRUPT_DATA)
+            file.delete()
+            return null
+        }
         val validated = AidenAttachmentImageValidation.validatedData(
             data,
             attachment.mimeType,
             attachment.size
         )
         if (validated == null) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CACHE, AidenDiagnosticEvent.CACHE_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.CORRUPT_DATA)
             file.delete()
             return null
         }
@@ -317,6 +328,7 @@ class AidenChatCache(
             val content = file.readText(Charsets.UTF_8)
             json.decodeFromString<T>(content)
         } catch (_: Exception) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CACHE, AidenDiagnosticEvent.CACHE_FAILED, AidenDiagnosticOutcome.DEGRADED, AidenDiagnosticCode.CORRUPT_DATA)
             null
         }
     }

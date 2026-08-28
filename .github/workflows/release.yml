@@ -63,6 +63,9 @@ jobs:
       - name: Verify lint
         run: npm run lint
 
+      - name: Verify diagnostics privacy and storage contracts
+        run: npm run test:diagnostics
+
       - name: Verify branding, updater, and release policy
         run: npm run test:branding
 
@@ -77,16 +80,21 @@ jobs:
       - name: Run deterministic Electron E2E gate
         run: npm run test:e2e
 
-      - name: Upload Playwright failure artifacts
+      - name: Verify production-profile diagnostics support workflow
+        run: npm run test:e2e:diagnostics:production
+
+      - name: Build sanitized E2E failure receipt
+        if: ${{ failure() }}
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+
+      - name: Upload sanitized E2E failure receipt
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: playwright-e2e-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            test-results/e2e
-            playwright-report/e2e
-          if-no-files-found: warn
-          retention-days: 14
+          path: test-results/e2e-safe-receipt.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Prepare App Store Connect key
         shell: bash
@@ -110,6 +118,9 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
         run: npm run dist
+
+      - name: Verify diagnostics in the signed packaged app
+        run: npm run test:e2e:diagnostics:packaged
 
       - name: Publish verified release assets
         shell: bash

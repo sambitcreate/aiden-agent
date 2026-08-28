@@ -162,7 +162,7 @@ test("an unpersisted image response blocks sends, copies, and the composer until
   );
   assert.match(pane, /Delete this chat to discard it/iu);
   assert.match(pane, /imageArtifactRecoveryUnavailable/u);
-  assert.match(pane, /developer log to locate the staging file that needs repair/iu);
+  assert.match(pane, /Settings → About → Diagnostics and choose Reveal/iu);
 });
 
 test("terminal chat snapshots reach cache before visual stream handoff awaits", () => {

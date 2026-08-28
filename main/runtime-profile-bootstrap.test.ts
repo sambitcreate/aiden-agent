@@ -21,15 +21,13 @@ test("the Electron build enters through the profile bootstrap", () => {
   assert.match(buildScript, /entryPoints: \["main\/bootstrap\.ts"\]/u);
 });
 
-test("the hermetic Electron E2E launch can disable the development crash helper", () => {
+test("crash capture is off at bootstrap and only the explicit diagnostics handler can enable it", () => {
   const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
+  const diagnostics = readFileSync(new URL("./handlers/diagnostics.ts", import.meta.url), "utf8");
   const fixture = readFileSync(new URL("../tests/e2e/fixtures.ts", import.meta.url), "utf8");
-  assert.match(
-    bootstrap,
-    /process\.env\.AIDEN_E2E_DISABLE_CRASH_REPORTER\s*===\s*"1"/u,
-  );
-  assert.match(bootstrap, /if \(!crashReporterDisabledForE2e\) \{[\s\S]*?crashReporter\.start/u);
-  assert.match(fixture, /AIDEN_E2E_DISABLE_CRASH_REPORTER:\s*"1"/u);
+  assert.doesNotMatch(bootstrap, /crashReporter\.start/u);
+  assert.match(diagnostics, /"diagnostics:mode-enable"[\s\S]*?crashReporter\.start/u);
+  assert.match(diagnostics, /uploadToServer:\s*false/u);
   assert.match(fixture, /"--disable-gpu"/u);
   assert.match(fixture, /"--force-prefers-reduced-motion=reduce"/u);
   assert.match(fixture, /testInfo\.attach\("aiden-dev-log"/u);

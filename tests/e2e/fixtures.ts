@@ -332,7 +332,7 @@ async function seedWorkspace(userDataDir: string, workspaceDir: string): Promise
 
 /** Wait for the one main window without assuming its initial route or title. */
 export async function firstAidenWindow(app: ElectronApplication): Promise<Page> {
-  const page = await app.firstWindow();
+  const page = app.windows()[0] ?? await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
   await expect(page.locator("body")).toBeVisible();
   return page;
@@ -348,6 +348,7 @@ async function assertRuntimeIsolation(
     xdgConfigDir: string;
     xdgDataDir: string;
     environment: Record<string, string>;
+    runtimeProfile: "development" | "production";
   },
 ): Promise<void> {
   const runtime = await app.evaluate(({ app: electronApp }) => ({
@@ -400,8 +401,8 @@ async function assertRuntimeIsolation(
   ) {
     throw new Error("The E2E app ignored one or more isolated XDG roots.");
   }
-  if (userDataDir === configDir || runtime.runtimeProfile !== "development") {
-    throw new Error("The E2E launch did not establish distinct development profile roots.");
+  if (userDataDir === configDir || runtime.runtimeProfile !== expected.runtimeProfile) {
+    throw new Error(`The E2E launch did not establish distinct ${expected.runtimeProfile} profile roots.`);
   }
   const expectedEnvironmentKeys = Object.keys(expected.environment).sort();
   const runtimeEnvironmentKeys = runtime.environmentKeys
@@ -632,6 +633,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       }
 
       const launch = async (): Promise<Page> => {
+        const runtimeProfile = process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "production" : "development";
         const launchEnvironment: Record<string, string> = {
           ...isolatedAppEnvironment(),
           AIDEN_CONFIG_DIR: testConfigDir,
@@ -639,7 +641,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           // retain Playwright's worker transport after Electron main exits.
           // E2E still verifies the owned main PID directly during teardown.
           AIDEN_E2E_DISABLE_CRASH_REPORTER: "1",
-          AIDEN_RUNTIME_PROFILE: "development",
+          AIDEN_RUNTIME_PROFILE: runtimeProfile,
           HOME: testRootDir,
           XDG_CACHE_HOME: testXdgCacheDir,
           XDG_CONFIG_HOME: testXdgConfigDir,
@@ -673,6 +675,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           xdgConfigDir: testXdgConfigDir,
           xdgDataDir: testXdgDataDir,
           environment: launchEnvironment,
+          runtimeProfile,
         });
         const page = await firstAidenWindow(launchedApp);
         if (state) {
@@ -726,7 +729,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       }
       try {
         await testInfo.attach("aiden-dev-log", {
-          body: await readFile(path.join(rootDir, "user-data", "logs", "aiden-dev.log")),
+          body: await readFile(path.join(rootDir, "user-data", "logs", process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "aiden.log" : "aiden-dev.log")),
           contentType: "text/plain",
         });
       } catch (error) {
