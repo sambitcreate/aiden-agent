@@ -69,6 +69,13 @@ test("release runs signed packaged diagnostics acceptance before publication", (
   assert.ok(dist >= 0 && packaged > dist && publish > packaged);
 });
 
+test("release installs Chromium before JavaScript containment tests", () => {
+  const release = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
+  const install = release.indexOf("run: npx playwright install chromium");
+  const testSuite = release.indexOf("run: npm test");
+  assert.ok(install >= 0 && testSuite > install);
+});
+
 test("CI uploads only the fixed sanitized receipt with short retention", () => {
   for (const workflow of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
     const source = fs.readFileSync(path.join(root, workflow), "utf8");
