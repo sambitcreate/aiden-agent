@@ -41,4 +41,17 @@ export default [
       "no-undef": "off"
     },
   },
+  {
+    files: ["main/**/*.{ts,tsx}"],
+    ignores: ["main/**/*.test.{ts,tsx}", "main/platform.ts"],
+    rules: {
+      "no-console": "error",
+    },
+  },
+  {
+    files: ["main/platform.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
 ];

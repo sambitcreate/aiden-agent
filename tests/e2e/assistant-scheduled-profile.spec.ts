@@ -88,6 +88,16 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await page.getByRole("button", { name: "About", exact: true }).click();
   await expect(page.getByRole("heading", { name: "About", exact: true })).toBeVisible();
   await expect(page.getByText(/^Version .+ Beta/u)).toBeVisible();
+  await expect(page.getByText("Diagnostics", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Nothing is uploaded automatically/u)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reveal", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export…", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Enable…", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("never uploaded automatically");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Delete…", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("does not delete chats");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await page.getByRole("button", { name: "Back to app", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
