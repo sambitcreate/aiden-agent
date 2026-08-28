@@ -1,4 +1,5 @@
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 
 export interface RendererDocumentOwner {
   id: number;
@@ -17,9 +18,13 @@ const rendererDocumentStates = new WeakMap<Electron.WebContents, RendererDocumen
 
 function reportInvalidationFailure(): void {
   try {
-    console.error(
-      "[renderer-document-owner] A renderer invalidation callback failed; remaining callbacks will continue.",
-    );
+    writeDiagnosticEvent({
+      level: "error",
+      area: "renderer",
+      event: "renderer-invalidation-listener-failed",
+      outcome: "failed",
+      code: "internal-error",
+    });
   } catch {
     // Revocation must not depend on diagnostics being available.
   }
