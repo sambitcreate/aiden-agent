@@ -1,6 +1,7 @@
 // Chat history CRUD IPC handlers.
 
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
+import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -10,7 +11,13 @@ import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
-import { displayImageArtifactStore } from "../services/display-image-artifact-store.js";
+import {
+  exportStoredHtmlArtifact,
+  unresolvedGuiArtifactMessage,
+  wrapStoredHtmlArtifact,
+} from "../services/gui-artifact-recovery.js";
+import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
+import { selectedHtmlArtifactMediaIds } from "../services/chat-copy-artifacts.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import {
   commitSkillInvocationForAppend,
@@ -157,12 +164,12 @@ export function registerChatHistoryHandlers(): void {
       }
       const source = await chatStore.get(parsed.chatId);
       if (!source) throw new Error("The chat is no longer available.");
-      if (await displayImageArtifactStore.hasPending(parsed.chatId)) {
-        const availability = displayImageArtifactStore.availability();
+      const unresolved = await unresolvedGuiArtifactMessage(parsed.chatId);
+      if (unresolved) {
         throw new Error(
-          availability.available
-            ? "A previous image response could not be recovered. Delete this chat to discard it before copying."
-            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+          unresolved.includes("could not be recovered")
+            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before copying."
+            : unresolved,
         );
       }
       const runCopy = async () => {
@@ -218,12 +225,45 @@ export function registerChatHistoryHandlers(): void {
           if (!(await configStore.getWorkspace(workspaceId))) {
             throw new Error("The chat workspace is no longer available.");
           }
-          const copied = await chatStore.copyVisibleHistory({
-            sourceChatId: parsed.chatId,
-            expectedWorkspaceId: workspaceId,
-            throughAssistantMessageId: parsed.throughMessageId,
-            assertCurrent,
-          });
+          const htmlMediaIds = selectedHtmlArtifactMediaIds(
+            source.messages,
+            parsed.throughMessageId,
+          );
+          const targetChatId = randomUUID();
+          let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
+          const copied = await (async () => {
+            try {
+              return await chatStore.copyVisibleHistory({
+                sourceChatId: parsed.chatId,
+                targetChatId,
+                expectedWorkspaceId: workspaceId,
+                throughAssistantMessageId: parsed.throughMessageId,
+                assertCurrent,
+                beforeInstall: async () => {
+                  if (htmlMediaIds.length === 0) return;
+                  preparedHtmlArtifacts = await generativeUiArtifactStore.prepareSelectedCopy(
+                    source.id,
+                    targetChatId,
+                    htmlMediaIds,
+                  );
+                },
+              });
+            } catch (error) {
+              if (
+                preparedHtmlArtifacts.length > 0 &&
+                !isChatCreateReconciliationRequiredError(error)
+              ) {
+                await generativeUiArtifactStore.deleteChat(targetChatId).catch(() => undefined);
+              }
+              throw error;
+            }
+          })();
+          if (preparedHtmlArtifacts.length > 0) {
+            await generativeUiArtifactStore.commit(
+              copied.id,
+              preparedHtmlArtifacts.map((artifact) => artifact.mediaId),
+            );
+          }
           ipcMain.broadcast("chats:metadata-updated", {
             chatId: copied.id,
             title: copied.title,
@@ -272,12 +312,12 @@ export function registerChatHistoryHandlers(): void {
       }
       const chat = await chatStore.get(chatId);
       if (!chat) throw new Error("The chat is no longer available.");
-      if (await displayImageArtifactStore.hasPending(chatId)) {
-        const availability = displayImageArtifactStore.availability();
+      const unresolvedExport = await unresolvedGuiArtifactMessage(chatId);
+      if (unresolvedExport) {
         throw new Error(
-          availability.available
-            ? "A previous image response could not be recovered. Delete this chat to discard it before exporting."
-            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+          unresolvedExport.includes("could not be recovered")
+            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
+            : unresolvedExport,
         );
       }
       if (owner.isDestroyed()) {
@@ -300,12 +340,12 @@ export function registerChatHistoryHandlers(): void {
       }
       const latestChat = await chatStore.get(chatId);
       if (!latestChat) throw new Error("The chat is no longer available.");
-      if (await displayImageArtifactStore.hasPending(chatId)) {
-        const availability = displayImageArtifactStore.availability();
+      const unresolvedExportAfterDialog = await unresolvedGuiArtifactMessage(chatId);
+      if (unresolvedExportAfterDialog) {
         throw new Error(
-          availability.available
-            ? "A previous image response could not be recovered. Delete this chat to discard it before exporting."
-            : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+          unresolvedExportAfterDialog.includes("could not be recovered")
+            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
+            : unresolvedExportAfterDialog,
         );
       }
       if (owner.isDestroyed()) {
@@ -434,12 +474,12 @@ export function registerChatHistoryHandlers(): void {
       return (async () => {
         let appended = false;
         try {
-          if (await displayImageArtifactStore.hasPending(chatId)) {
-            const availability = displayImageArtifactStore.availability();
+          const unresolvedSend = await unresolvedGuiArtifactMessage(chatId);
+          if (unresolvedSend) {
             throw new Error(
-              availability.available
-                ? "A previous image response could not be recovered. Delete this chat to discard it before sending another message."
-                : `${availability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+              unresolvedSend.includes("could not be recovered")
+                ? "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message."
+                : unresolvedSend,
             );
           }
           const authoritativeChat = skillReference
@@ -548,6 +588,55 @@ export function registerChatHistoryHandlers(): void {
           turn.settleAsyncWork();
         }
       })();
+    },
+  );
+
+  ipcMain.handle(
+    "chats:htmlArtifactSrcdoc",
+    async (event, input: unknown) => {
+      rendererDocumentOwner(
+        event,
+        () => new Error("HTML artifact preview requires the active application document."),
+      );
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("Invalid HTML artifact request.");
+      }
+      const record = input as Record<string, unknown>;
+      const chatId = asString(record.chatId, "chatId");
+      const mediaId = asString(record.mediaId, "mediaId");
+      return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
+    },
+  );
+
+  ipcMain.handle(
+    "chats:exportHtmlArtifact",
+    async (event, input: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("HTML artifact export requires the active application document."),
+      );
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("Invalid HTML artifact export request.");
+      }
+      const record = input as Record<string, unknown>;
+      const chatId = asString(record.chatId, "chatId");
+      const mediaId = asString(record.mediaId, "mediaId");
+      const unresolved = await unresolvedGuiArtifactMessage(chatId);
+      if (unresolved) {
+        throw new Error(
+          unresolved.includes("could not be recovered")
+            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
+            : unresolved,
+        );
+      }
+      if (owner.isDestroyed()) {
+        throw new Error("The renderer document is no longer active.");
+      }
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      if (!parent || parent.isDestroyed()) {
+        throw new Error("The export window is unavailable.");
+      }
+      return exportStoredHtmlArtifact({ chatId, mediaId, parent });
     },
   );
 

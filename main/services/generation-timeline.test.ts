@@ -137,6 +137,10 @@ test("projects display_image as a safe relative GUI artifact action", () => {
     label: "Display image",
     target: "previews/page.png",
   });
+  assert.deepEqual(safeToolDescriptor("render_artifact", { title: "Dependencies" }), {
+    label: "Render artifact",
+    detail: "Dependencies",
+  });
   assert.deepEqual(safeToolDescriptor("display_image", { path: "/private/page.png" }), {
     label: "Display image",
     target: undefined,
@@ -279,6 +283,77 @@ test("consecutive reasoning blocks merge into one timed stretch", () => {
   // finish() settles reasoning that was still open when the turn ended.
   assert.equal(trailing?.kind === "thinking" && trailing.durationMs, 500);
   assert.equal(typeof trailing?.finishedAt, "number");
+});
+
+test("a reopened merged thinking step reads open again on the live timeline", () => {
+  let now = 1_000;
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    (timeline) => snapshots.push(timeline),
+    () => (now += 500),
+  );
+
+  projector.thinkingStarted();
+  projector.thinkingEnded();
+  const settled = snapshots[snapshots.length - 1];
+  const settledStep = settled?.steps[0];
+  assert.equal(settledStep?.kind === "thinking" && settledStep.finishedAt, 2_500);
+  assert.equal(settledStep?.kind === "thinking" && settledStep.durationMs, 500);
+
+  projector.thinkingStarted();
+  const reopened = snapshots[snapshots.length - 1];
+  assert.equal(reopened?.steps.length, 1);
+  assert.equal(reopened?.steps[0]?.finishedAt, undefined);
+
+  projector.thinkingEnded();
+  const final = projector.finish("completed");
+  const finalStep = final.steps[0];
+  assert.equal(finalStep?.kind === "thinking" && finalStep.finishedAt, 3_500);
+  assert.equal(finalStep?.kind === "thinking" && finalStep.durationMs, 1_000);
+});
+
+test("an early toolcall_start step upgrades instead of duplicating", () => {
+  let now = 100;
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    () => {},
+    () => ++now,
+  );
+
+  // toolcall_start fires before arguments resolve, so args are empty.
+  projector.toolStarted("call-a", "render_artifact", {});
+  const early = projector.snapshot();
+  assert.equal(early.steps.length, 1);
+  assert.equal(toolSteps(early)[0]?.status, "pending");
+  assert.equal(toolSteps(early)[0]?.detail, undefined);
+
+  // beforeToolCall / tool_execution_start repeat the id with real args.
+  projector.toolStarted("call-a", "render_artifact", { title: "Coverage", html: "<p>x</p>" });
+  projector.toolRunning("call-a");
+  projector.toolFinished("call-a", "completed");
+
+  const final = projector.finish("completed");
+  const steps = toolSteps(final);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0]?.status, "completed");
+  assert.equal(steps[0]?.label, "Render artifact");
+  assert.equal(steps[0]?.detail, "Coverage");
+  // The raw HTML argument never crosses the timeline boundary.
+  assert.equal(JSON.stringify(final).includes("<p>x</p>"), false);
+});
+
+test("terminal tool steps ignore late repeated toolStarted calls", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("call-a", "read_file", { path: "README.md" });
+  projector.toolFinished("call-a", "failed");
+  projector.toolStarted("call-a", "read_file", { path: "secret-path" });
+
+  const final = projector.finish("completed");
+  const steps = toolSteps(final);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0]?.status, "failed");
+  assert.equal(steps[0]?.target, "README.md");
 });
 
 test("reasoning steps replay only from the current version", () => {

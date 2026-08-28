@@ -63,10 +63,19 @@ import {
   type WorkspacePermission,
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
-import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
+import {
+  resolveAgentActivity,
+  resolveVisibleAgentActivity,
+  type ToolActivity,
+} from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
-import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
+import {
+  hasActiveToolStep,
+  latestActiveAgentStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
 import {
   CODEX_THINKING_LEVELS,
@@ -96,6 +105,7 @@ import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
+  detachedTextStreamingRemaining,
   detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
@@ -111,6 +121,14 @@ import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
+
+/**
+ * How long after the last text delta the activity row may keep saying
+ * "Responding…". Beyond this the model is reasoning or writing tool-call
+ * arguments, and the row should shimmer instead of going static; wide enough
+ * that bursty providers do not flap the label mid-prose.
+ */
+const TEXT_STREAMING_IDLE_MS = 2_000;
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -343,6 +361,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
+  const visualizeTurnRef = React.useRef(false);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -360,6 +379,36 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const deltaFrameRef = React.useRef<number | null>(null);
   const streamHandoffRef = React.useRef<(() => void) | null>(null);
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
+  // Prose from an earlier turn must not pin the activity row to a static
+  // "Responding…" while the model reasons or writes tool arguments, so the
+  // row keys "responding" off deltas that are still arriving.
+  const [textStreaming, setTextStreaming] = React.useState(false);
+  const textStreamingTimerRef = React.useRef<number | null>(null);
+  const markTextStreaming = React.useCallback(() => {
+    setTextStreaming(true);
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+    }
+    textStreamingTimerRef.current = window.setTimeout(() => {
+      textStreamingTimerRef.current = null;
+      setTextStreaming(false);
+    }, TEXT_STREAMING_IDLE_MS);
+  }, []);
+  const clearTextStreaming = React.useCallback(() => {
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+      textStreamingTimerRef.current = null;
+    }
+    setTextStreaming(false);
+  }, []);
+  React.useEffect(
+    () => () => {
+      if (textStreamingTimerRef.current !== null) {
+        window.clearTimeout(textStreamingTimerRef.current);
+      }
+    },
+    [],
+  );
 
   chatIdRef.current = chatId;
 
@@ -421,6 +470,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useLayoutEffect(() => {
     setStreamingText(null);
     setStreamingReasoning(null);
+    clearTextStreaming();
     setStreamingArtifacts([]);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
@@ -441,6 +491,38 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
   const visibleDetachedProjection =
     messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
+  const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
+  const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
+  React.useEffect(() => {
+    if (!visibleDetachedStreamId) return;
+    const remaining = detachedTextStreamingRemaining(
+      detachedLastTextDeltaAt,
+      Date.now(),
+      TEXT_STREAMING_IDLE_MS,
+    );
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+      textStreamingTimerRef.current = null;
+    }
+    if (remaining === 0) {
+      setTextStreaming(false);
+      return;
+    }
+    setTextStreaming(true);
+    const timer = window.setTimeout(() => {
+      if (textStreamingTimerRef.current === timer) {
+        textStreamingTimerRef.current = null;
+        setTextStreaming(false);
+      }
+    }, remaining);
+    textStreamingTimerRef.current = timer;
+    return () => {
+      if (textStreamingTimerRef.current === timer) {
+        window.clearTimeout(timer);
+        textStreamingTimerRef.current = null;
+      }
+    };
+  }, [detachedLastTextDeltaAt, visibleDetachedStreamId]);
   const displayedStreamingText = streamingText ?? visibleDetachedProjection?.content ?? null;
   const displayedStreamingReasoning =
     streamingReasoning ??
@@ -508,12 +590,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
-          "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
+          "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
         );
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
-          "A previous image response could not be recovered. Delete this chat to discard it before copying.",
+          "A previous visual artifact could not be recovered. Delete this chat to discard it before copying.",
         );
       }
       if (isGenerating || isStartingGeneration || approvals.length > 0) {
@@ -654,6 +736,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setHasUnpersistedResponse(false);
       setStreamingText("");
       setStreamingReasoning(null);
+      clearTextStreaming();
       setStreamingArtifacts([]);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
@@ -679,6 +762,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           if (pendingDelta) {
             streamedTextRef.current += pendingDelta;
             setStreamingText(streamedTextRef.current);
+            markTextStreaming();
           }
           if (pendingReasoningDelta) {
             streamedReasoningRef.current += pendingReasoningDelta;
@@ -686,12 +770,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
         });
       };
+      const visualize = visualizeTurnRef.current === true;
+      visualizeTurnRef.current = false;
       const handle = startGeneration(
         {
           chatId,
           workspaceId: effectiveWorkspaceId,
           providerId,
           model,
+          ...(visualize ? { visualize: true as const } : {}),
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
@@ -722,6 +809,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = "";
             setStreamingText("");
             setStreamingReasoning(null);
+            clearTextStreaming();
             setStreamComplete(false);
           },
           onArtifactEvent: (event) => {
@@ -733,9 +821,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             const { artifact } = event;
             setIsModelLoading(false);
+            if (artifact.kind === "html") {
+              const index = streamingArtifactsRef.current.findIndex(
+                (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
+              );
+              if (index >= 0) {
+                streamingArtifactsRef.current = streamingArtifactsRef.current.map((candidate, i) =>
+                  i === index ? artifact : candidate,
+                );
+              } else {
+                streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+              }
+              setStreamingArtifacts(streamingArtifactsRef.current);
+              return;
+            }
             if (
               streamingArtifactsRef.current.some(
-                (candidate) => candidate.attachment.id === artifact.attachment.id,
+                (candidate) =>
+                  candidate.kind === "image" && candidate.attachment.id === artifact.attachment.id,
               )
             ) {
               return;
@@ -800,6 +903,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = finalReasoning ?? "";
             setStreamingText(full);
             setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
+            clearTextStreaming();
             setStreamComplete(true);
             if (finalTimeline) {
               generationTimelineRef.current = finalTimeline;
@@ -847,6 +951,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedTextRef.current = resolvedPartialContent;
               streamedReasoningRef.current = resolvedReasoning;
               setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
+              clearTextStreaming();
               setStreamComplete(true);
               if (finalTimeline) {
                 generationTimelineRef.current = finalTimeline;
@@ -914,12 +1019,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
       chatId,
       anthropicThinkingLevel,
       anthropicThinkingSupported,
+      clearTextStreaming,
       codexThinkingLevel,
       codexThinkingSupported,
       effectiveWorkspaceId,
       environmentPanel.subagentsEnabled,
       googleThinkingLevel,
       googleThinkingSupported,
+      markTextStreaming,
       providerId,
       providerThinkingLevel,
       providerThinkingSupported,
@@ -930,15 +1037,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleSend = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+    async (
+      text: string,
+      attachments: Attachment[],
+      skillInvocation?: SkillInvocationV1,
+      options?: { visualize?: boolean },
+    ) => {
+      visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
-          "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
+          "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
         );
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
-          "A previous image response could not be recovered. Delete this chat to discard it before sending another message.",
+          "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
         );
       }
       if (computerUseSaving) {
@@ -1502,14 +1615,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
       canStopGeneration || isStoppingGeneration || detachedGenerationDraining
         ? displayedStreamingText
         : null,
+    textStreaming,
     pendingApproval: Boolean(pending),
     toolActivity,
   });
-  const visibleAgentActivity =
-    displayedStreamingReasoning &&
-    (agentActivity?.phase === "thinking" || agentActivity?.phase === "loading")
-      ? null
-      : agentActivity;
+  // The reasoning disclosure owns exposed reasoning for the whole turn, even
+  // after its timeline step settles. Visualizing owns only the live artifact
+  // render window; detached projections hide that block and keep narration.
+  const visualizingBlockVisible =
+    hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
+    !streamComplete &&
+    !visibleDetachedProjection;
+  const visibleAgentActivity = resolveVisibleAgentActivity(agentActivity, {
+    reasoningVisible: Boolean(displayedStreamingReasoning),
+    visualizingVisible: visualizingBlockVisible,
+  });
 
   React.useEffect(() => {
     if (!pending) return;
@@ -1709,9 +1829,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             readinessMessage={
               imageArtifactRecoveryUnavailable
-                ? "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
+                ? "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
                 : imageArtifactRecoveryPending
-                ? "An image response could not be recovered. Delete this chat to discard it before sending another message."
+                ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
                 : readinessMessage
             }
             hasMessages={hasMessages}
@@ -1768,7 +1888,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 : imageArtifactRecoveryUnavailable
                   ? "Open Aiden's developer log to locate the image staging file that needs repair."
                 : imageArtifactRecoveryPending
-                  ? "Delete this chat to discard the unrecovered image response before copying."
+                  ? "Delete this chat to discard the unrecovered visual artifact before copying."
                   : undefined
             }
             slashPaletteBlocked={Boolean(pending)}
@@ -1868,6 +1988,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ) : (
         <MessageList
           key={chatId}
+          chatId={chatId}
           messages={messages}
           streamingText={displayedStreamingText}
           streamingReasoning={displayedStreamingReasoning}
@@ -1882,9 +2003,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           error={
             error ??
             (imageArtifactRecoveryUnavailable
-              ? "Image response staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
+              ? "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
               : imageArtifactRecoveryPending
-                ? "An image response could not be recovered. Delete this chat to discard it before continuing."
+                ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
                 : null)
           }
         />

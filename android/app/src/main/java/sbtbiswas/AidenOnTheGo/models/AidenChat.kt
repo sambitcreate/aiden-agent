@@ -342,6 +342,8 @@ data class AidenGenerationTimeline(
 }
 
 object AidenAgentActivityPresentation {
+    const val RENDER_ARTIFACT_TOOL_NAME = "render_artifact"
+
     private val verbs = mapOf(
         "read_file" to Pair("Reading", "Read"),
         "list_dir" to Pair("Listing", "Listed"),
@@ -364,6 +366,36 @@ object AidenAgentActivityPresentation {
         val minutes = seconds / 60
         val remainder = seconds % 60
         return if (remainder == 0) "for ${minutes}m" else "for ${minutes}m ${remainder}s"
+    }
+
+    fun hasActiveThinkingStep(timeline: AidenGenerationTimeline?): Boolean {
+        if (timeline == null || timeline.status != AidenGenerationTimelineStatus.RUNNING) return false
+        for (step in timeline.steps.asReversed()) {
+            if (step.kind == AidenAgentStep.Kind.TOOL) return false
+            return step.finishedAt == null
+        }
+        return false
+    }
+
+    fun hasActiveToolStep(timeline: AidenGenerationTimeline?, toolName: String): Boolean {
+        if (timeline == null || timeline.status != AidenGenerationTimelineStatus.RUNNING) return false
+        return timeline.steps.any { step ->
+            step.kind == AidenAgentStep.Kind.TOOL && step.toolName == toolName && step.status?.isActive == true
+        }
+    }
+
+    fun reasoningLabel(timeline: AidenGenerationTimeline?, active: Boolean): String {
+        if (active) return "Thinking"
+        val durationMs = timeline?.steps
+            ?.filter { it.kind == AidenAgentStep.Kind.THINKING }
+            ?.mapNotNull { it.durationMs }
+            ?.sum()
+            ?.takeIf { it > 0.0 }
+        return "Thought ${duration(durationMs)}"
+    }
+
+    fun visualizingLabel(timeline: AidenGenerationTimeline?): String? {
+        return if (hasActiveToolStep(timeline, RENDER_ARTIFACT_TOOL_NAME)) "Visualizing" else null
     }
 
     fun line(step: AidenAgentStep): String {
@@ -443,6 +475,7 @@ data class AidenChatMessage(
     val role: AidenChatRole,
     val text: String,
     val attachments: List<AidenMessageAttachment>? = null,
+    val htmlArtifacts: List<AidenHtmlArtifact>? = null,
     val outcome: AidenMessageOutcome? = null,
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
@@ -453,8 +486,22 @@ data class AidenChatMessage(
                 text.codePointCount(0, text.length) <= AidenRemoteProtocol.MAX_TEXT_LENGTH &&
                 (attachments?.size ?: 0) <= 20 &&
                 (attachments?.all { it.isWireSafe } ?: true) &&
+                (htmlArtifacts?.size ?: 0) <= 40 &&
+                (htmlArtifacts?.all { it.isWireSafe } ?: true) &&
                 (outcome?.isWireSafe ?: true) &&
                 (timeline?.isRendererSafe(text.length) ?: true)
+}
+
+@Serializable
+data class AidenHtmlArtifact(
+    val id: String,
+    val title: String
+) {
+    val isWireSafe: Boolean
+        get() = id.isNotEmpty() &&
+                id.length <= 256 &&
+                title.isNotEmpty() &&
+                title.length <= 120
 }
 
 @Serializable

@@ -16,7 +16,7 @@ const source = fs.readFileSync(new URL("./slash-commands.ts", import.meta.url), 
 const invocationId = (character = "a") => `sk1_${character.repeat(43)}`;
 
 test("curated slash catalog freezes unique command names, aliases, and required adapters", () => {
-  assert.equal(SLASH_COMMANDS.length, 25);
+  assert.equal(SLASH_COMMANDS.length, 26);
   const tokens = SLASH_COMMANDS.flatMap((command) => [command.name, ...command.aliases]);
   assert.equal(new Set(tokens).size, tokens.length);
   assert.deepEqual(
@@ -47,6 +47,7 @@ test("curated slash catalog freezes unique command names, aliases, and required 
       "mcp",
       "skills",
       "theme",
+      "visualize",
     ],
   );
   assert.ok(SLASH_COMMANDS.every((command) => command.behavior && command.availability));
@@ -78,6 +79,15 @@ test("curated slash catalog freezes unique command names, aliases, and required 
   for (const name of ["fork", "clone", "export", "session", "logout", "worktree"]) {
     assert.equal(SLASH_COMMANDS.find((entry) => entry.name === name)?.action.kind, "session");
   }
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "visualize")?.action, {
+    kind: "composer-instruction",
+    instruction: "visualize",
+  });
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "visualize")?.aliases, [
+    "generative-ui",
+    "generative_ui",
+  ]);
+
   assert.equal(SLASH_LIMITS.queryCharacters, 256);
   assert.equal(SLASH_LIMITS.catalogEntries, 500);
   assert.equal(SLASH_LIMITS.visibleResults, 100);

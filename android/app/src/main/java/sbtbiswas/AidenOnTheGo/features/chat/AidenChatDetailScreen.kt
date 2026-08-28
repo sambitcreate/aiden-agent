@@ -37,8 +37,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -49,6 +51,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -758,6 +761,27 @@ private fun AssistantMessageRow(
                 }
             }
         }
+        message.htmlArtifacts.orEmpty().forEach { artifact ->
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = palette.raised,
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Text(
+                        text = artifact.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = palette.foreground,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Can't view on this device. View in Aiden Agent.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -770,6 +794,12 @@ private fun ActiveStreamingCard(
     isBotChat: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
+    val reasoningActive = reasoning.isNotEmpty() && (
+        AidenAgentActivityPresentation.hasActiveThinkingStep(activityTimeline) ||
+            (activityTimeline == null && liveText.isEmpty())
+        )
+    val visualizingLabel = AidenAgentActivityPresentation.visualizingLabel(activityTimeline)
+
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(16.dp),
@@ -779,11 +809,15 @@ private fun ActiveStreamingCard(
         Column(modifier = Modifier.padding(14.dp)) {
             // Reasoning
             if (reasoning.isNotEmpty()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ThinkingOrb(state = OrbState.THINKING, size = OrbSize.PX20)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Thinking...", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.secondary)
-                }
+                AidenActivityShimmerLabel(
+                    label = AidenAgentActivityPresentation.reasoningLabel(
+                        activityTimeline,
+                        active = reasoningActive
+                    ),
+                    active = reasoningActive,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = palette.secondary
+                )
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
                     color = palette.canvas.copy(alpha = 0.7f),
@@ -820,6 +854,23 @@ private fun ActiveStreamingCard(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
+            if (visualizingLabel != null) {
+                Surface(
+                    color = palette.raised,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    AidenActivityShimmerLabel(
+                        label = visualizingLabel,
+                        active = true,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = palette.secondary,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             // Live streaming text with blinking cursor
             if (liveText.isNotEmpty()) {
                 val projection = if (isBotChat) {
@@ -837,7 +888,7 @@ private fun ActiveStreamingCard(
                     )
                     AidenStreamingCursor(palette = palette)
                 }
-            } else if (reasoning.isEmpty() && tools.isEmpty()) {
+            } else if (reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX24)
                     Spacer(modifier = Modifier.width(10.dp))
@@ -850,6 +901,41 @@ private fun ActiveStreamingCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AidenActivityShimmerLabel(
+    label: String,
+    active: Boolean,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    if (active && !AidenTheme.config.reduceMotion) {
+        val transition = rememberInfiniteTransition(label = "ActivityLabelShimmer")
+        val offset by transition.animateFloat(
+            initialValue = -220f,
+            targetValue = 620f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_800, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "ActivityLabelShimmerOffset"
+        )
+        Text(
+            text = label,
+            style = style.copy(
+                brush = Brush.linearGradient(
+                    colors = listOf(color, color.copy(alpha = 0.35f), color),
+                    start = Offset(offset, 0f),
+                    end = Offset(offset + 180f, 0f)
+                )
+            ),
+            modifier = modifier
+        )
+    } else {
+        Text(text = label, style = style, color = color, modifier = modifier)
     }
 }
 

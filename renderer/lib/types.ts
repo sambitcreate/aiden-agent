@@ -498,6 +498,7 @@ export interface ChatMessage {
   reasoning?: string;
   providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
+  htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
   subagents?: SubagentMessageReferenceV1;
@@ -923,6 +924,8 @@ export interface ChatStartParams {
   /** Renderers may only request the attended Aiden mode. */
   mode?: "assistant";
   thinkingLevel?: GenerationThinkingLevel;
+  /** Host-owned /visualize instruction for this turn. */
+  visualize?: boolean;
 }
 
 export interface ApprovalRequest {

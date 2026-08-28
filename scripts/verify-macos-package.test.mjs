@@ -33,6 +33,7 @@ import {
   verifyPackagedSubagentInferenceWorker,
   verifyPackagedParakeetWorker,
   verifyPackagedNodePtyResources,
+  verifyPackagedGenerativeUiLibraries,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
 
@@ -80,6 +81,32 @@ test("package verifier rejects symlinked Computer Use resources", async () => {
     await symlink(reviewed, substituted);
     await assert.doesNotReject(assertRegularFile(reviewed));
     await assert.rejects(assertRegularFile(substituted), /regular non-symlinked package file/);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires regular non-empty Generative UI host libraries", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-generative-ui-package-"));
+  const root = await realpath(temporaryRoot);
+  const app = path.join(root, "Aiden Agent.app");
+  const directory = path.join(app, "Contents", "Resources", "generative-ui");
+  const filenames = ["chart.umd.min.js", "plotly.min.js", "katex.min.js", "katex.min.css"];
+  try {
+    await mkdir(directory, { recursive: true });
+    await Promise.all(filenames.map((filename) => writeFile(path.join(directory, filename), filename)));
+    await assert.doesNotReject(verifyPackagedGenerativeUiLibraries(app));
+
+    await writeFile(path.join(directory, "plotly.min.js"), "");
+    await assert.rejects(verifyPackagedGenerativeUiLibraries(app), /library is empty/iu);
+    await writeFile(path.join(directory, "plotly.min.js"), "plotly");
+
+    await unlink(path.join(directory, "katex.min.js"));
+    await symlink(path.join(directory, "plotly.min.js"), path.join(directory, "katex.min.js"));
+    await assert.rejects(
+      verifyPackagedGenerativeUiLibraries(app),
+      /regular non-symlinked package file/iu,
+    );
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

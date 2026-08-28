@@ -209,6 +209,21 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenMessageMediaEdge.forRole(chat.messages.first?.role ?? .user), .leading)
     }
 
+    func testRemoteChatDecodesHtmlArtifactsWithoutRenderingThem() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Viz","messages":[{"id":"message-1","role":"assistant","text":"Chart.","createdAt":"2026-08-20T12:00:00Z","htmlArtifacts":[{"id":"html-1","title":"Dependencies"}]}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.id, "html-1")
+        XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.title, "Dependencies")
+        XCTAssertTrue(chat.messages.first?.htmlArtifacts?.first?.isWireSafe ?? false)
+    }
+
     func testRemoteChatDecodesDurableMacActivityAndUsesMacPresentationLanguage() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -225,6 +240,103 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Thought briefly")
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[2]), "Ran Run tests")
         XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, ran 1 command")
+    }
+
+    func testReasoningActivityUsesOneDisclosureAndSurfacesVisualizationPhase() throws {
+        let activeThinking = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-thinking",
+            status: .running,
+            startedAt: 1_000,
+            finishedAt: nil,
+            steps: [
+                AidenAgentStep(
+                    id: "think-1",
+                    order: 0,
+                    kind: .thinking,
+                    toolName: nil,
+                    label: nil,
+                    status: nil,
+                    startedAt: 1_000,
+                    updatedAt: 1_500,
+                    finishedAt: nil,
+                    contentOffset: 0,
+                    durationMs: nil,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                )
+            ]
+        )
+        XCTAssertTrue(AidenAgentActivityPresentation.hasActiveThinkingStep(activeThinking))
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.reasoningLabel(activeThinking, active: true),
+            "Thinking"
+        )
+
+        let visualizing = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-visualizing",
+            status: .running,
+            startedAt: 1_000,
+            finishedAt: nil,
+            steps: [
+                AidenAgentStep(
+                    id: "think-1",
+                    order: 0,
+                    kind: .thinking,
+                    toolName: nil,
+                    label: nil,
+                    status: nil,
+                    startedAt: 1_000,
+                    updatedAt: 2_000,
+                    finishedAt: 2_000,
+                    contentOffset: 0,
+                    durationMs: 1_000,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                ),
+                AidenAgentStep(
+                    id: "tool-1",
+                    order: 1,
+                    kind: .tool,
+                    toolCallId: "call-1",
+                    toolName: AidenAgentActivityPresentation.renderArtifactToolName,
+                    label: "Render artifact",
+                    status: .running,
+                    startedAt: 2_000,
+                    updatedAt: 2_500,
+                    finishedAt: nil,
+                    contentOffset: 0,
+                    durationMs: nil,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                )
+            ]
+        )
+        XCTAssertFalse(AidenAgentActivityPresentation.hasActiveThinkingStep(visualizing))
+        XCTAssertTrue(
+            AidenAgentActivityPresentation.hasActiveToolStep(
+                visualizing,
+                named: AidenAgentActivityPresentation.renderArtifactToolName
+            )
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.visualizingLabel(visualizing), "Visualizing")
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.reasoningLabel(visualizing, active: false),
+            "Thought briefly"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.activitySteps(visualizing, reasoningVisible: true).map(\.kind),
+            [.tool]
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.activitySteps(visualizing, reasoningVisible: false).map(\.kind),
+            [.thinking, .tool]
+        )
+        XCTAssertNil(AidenAgentActivityPresentation.visualizingLabel(activeThinking))
     }
 
     func testActivityTimelineRejectsAbsoluteTargetsBeforePresentation() throws {

@@ -17,6 +17,8 @@ import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
+import { parseChatHtmlArtifacts } from "../../renderer/shared/chat-artifacts.js";
+import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import {
   projectVisibleChatMessage,
@@ -431,6 +433,9 @@ export function createChatStore(
         createdAt: message.createdAt,
         model: message.model,
         attachments: safeStoredAttachments(message.attachments),
+        htmlArtifacts: assistant
+          ? parseChatHtmlArtifacts(message.htmlArtifacts)
+          : undefined,
         reasoning:
           assistant &&
           typeof message.reasoning === "string" &&
@@ -681,6 +686,8 @@ export function createChatStore(
       expectedWorkspaceId?: string;
       throughAssistantMessageId?: string;
       assertCurrent?: () => void;
+      /** Prepare dependent durable records before this chat becomes visible. */
+      beforeInstall?: (chat: Chat) => void | Promise<void>;
     }): Promise<Chat> {
       return serialized(async () => {
         input.assertCurrent?.();
@@ -719,6 +726,7 @@ export function createChatStore(
         }
 
         const copiedMessages: ChatMessage[] = [];
+        const newChatId = input.targetChatId ?? randomUUID();
         let chargedBytes = 0;
         const charge = (value: string | undefined) => {
           if (value === undefined) return;
@@ -764,6 +772,11 @@ export function createChatStore(
               attachment.kind === "image" ? attachment.data : attachment.text,
             );
           }
+          for (const artifact of message.htmlArtifacts ?? []) {
+            chargedBytes += 128;
+            charge(artifact.title);
+            charge(artifact.mediaId);
+          }
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new Error("This chat is too large to copy safely.");
           }
@@ -774,6 +787,13 @@ export function createChatStore(
             createdAt: message.createdAt,
             model: message.model,
             attachments: safeStoredAttachments(message.attachments),
+            htmlArtifacts:
+              message.role === "assistant"
+                ? (message.htmlArtifacts ?? []).map((artifact) => {
+                    const mediaId = remappedHtmlArtifactMediaId(newChatId, artifact.mediaId);
+                    return { ...artifact, mediaId };
+                  })
+                : undefined,
             skill:
               message.role === "user"
                 ? parseSkillProvenanceV1(message.skill)
@@ -785,21 +805,20 @@ export function createChatStore(
           });
         }
         const now = Date.now();
-        return installNewChat(
-          {
-            id: input.targetChatId ?? randomUUID(),
-            title,
-            workspaceId:
-              input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
-            botId: source.botId,
-            providerId: metadata.providerId,
-            model: metadata.model,
-            createdAt: now,
-            updatedAt: now,
-            messages: copiedMessages,
-          },
-          input.assertCurrent,
-        );
+        const copied: Chat = {
+          id: newChatId,
+          title,
+          workspaceId:
+            input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          botId: source.botId,
+          providerId: metadata.providerId,
+          model: metadata.model,
+          createdAt: now,
+          updatedAt: now,
+          messages: copiedMessages,
+        };
+        await input.beforeInstall?.(copied);
+        return installNewChat(copied, input.assertCurrent);
       });
     },
 
@@ -976,6 +995,10 @@ export function createChatStore(
               ? parseProviderFailureV1(message.providerFailure)
               : undefined,
           attachments: safeStoredAttachments(message.attachments),
+          htmlArtifacts:
+            message.role === "assistant"
+              ? parseChatHtmlArtifacts(message.htmlArtifacts)
+              : undefined,
           skill:
             message.role === "user"
               ? parseSkillProvenanceV1(message.skill)

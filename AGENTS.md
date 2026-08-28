@@ -28,6 +28,8 @@ For complex workflows, record concise implementation friction in `.papercuts/tro
 
 When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.
 
+Changes to shared server contracts or transcript/activity UI must also be checked against both native clients. Inspect iOS and Android consumers, update their implementations and focused tests when behavior is shared, and run the applicable mobile suites even when the originating change is on desktop or server.
+
 ## Onboarding
 
 Aiden's onboarding flow is the first-run place to introduce setup-critical features. When adding a user-facing feature that changes first-run setup, provider/model configuration, profile data, permissions, privacy expectations, or core workspace capabilities, update the onboarding flow so new users learn or configure it at the right moment. Keep onboarding concise, use Aiden theme primitives, preserve macOS-style motion and focus behavior, and do not add network calls beyond the explicit provider/auth actions the user chooses.

@@ -85,6 +85,26 @@ class AidenChatTest {
     }
 
     @Test
+    fun testHtmlArtifactsDecodeWithoutInlineHtml() {
+        val wire = """
+            {
+              "id":"message-html",
+              "role":"assistant",
+              "text":"Chart.",
+              "createdAt":"2026-08-25T18:00:00.000Z",
+              "htmlArtifacts":[{"id":"html-1","title":"Dependencies"}]
+            }
+        """.trimIndent()
+        val decoded = json.decodeFromString<AidenChatMessage>(wire)
+        assertEquals("html-1", decoded.htmlArtifacts?.first()?.id)
+        assertEquals("Dependencies", decoded.htmlArtifacts?.first()?.title)
+        assertTrue(decoded.htmlArtifacts?.first()?.isWireSafe == true)
+        assertTrue(decoded.isWireSafe)
+        val encoded = json.parseToJsonElement(json.encodeToString(decoded)).jsonObject
+        assertFalse(encoded.toString().contains("<script"))
+    }
+
+    @Test
     fun testPolymorphicAttachmentUploads() {
         val imageUpload: AidenAttachmentUpload = AidenAttachmentUpload.Image(
             name = "photo.png",
@@ -364,6 +384,55 @@ class AidenChatTest {
             "1 web search, 1 Mac action, compacted context, 1 tool call",
             AidenAgentActivityPresentation.summary(multiTimeline)
         )
+
+        val activeThinking = AidenGenerationTimeline(
+            version = 3,
+            generationId = "gen_thinking",
+            status = AidenGenerationTimelineStatus.RUNNING,
+            startedAt = 1_000.0,
+            steps = listOf(
+                thinkStep.copy(
+                    order = 0,
+                    status = null,
+                    finishedAt = null,
+                    durationMs = null
+                )
+            )
+        )
+        assertTrue(AidenAgentActivityPresentation.hasActiveThinkingStep(activeThinking))
+        assertEquals("Thinking", AidenAgentActivityPresentation.reasoningLabel(activeThinking, active = true))
+
+        val visualizing = AidenGenerationTimeline(
+            version = 3,
+            generationId = "gen_visualizing",
+            status = AidenGenerationTimelineStatus.RUNNING,
+            startedAt = 1_000.0,
+            steps = listOf(
+                thinkStep.copy(order = 0),
+                AidenAgentStep(
+                    id = "tool-1",
+                    order = 1,
+                    kind = AidenAgentStep.Kind.TOOL,
+                    toolCallId = "call-1",
+                    toolName = AidenAgentActivityPresentation.RENDER_ARTIFACT_TOOL_NAME,
+                    label = "Render artifact",
+                    status = AidenAgentStepStatus.RUNNING,
+                    startedAt = 2_500.0,
+                    updatedAt = 3_000.0,
+                    contentOffset = 0
+                )
+            )
+        )
+        assertFalse(AidenAgentActivityPresentation.hasActiveThinkingStep(visualizing))
+        assertTrue(
+            AidenAgentActivityPresentation.hasActiveToolStep(
+                visualizing,
+                AidenAgentActivityPresentation.RENDER_ARTIFACT_TOOL_NAME
+            )
+        )
+        assertEquals("Visualizing", AidenAgentActivityPresentation.visualizingLabel(visualizing))
+        assertEquals("Thought briefly", AidenAgentActivityPresentation.reasoningLabel(visualizing, active = false))
+        assertNull(AidenAgentActivityPresentation.visualizingLabel(activeThinking))
     }
 
     @Test

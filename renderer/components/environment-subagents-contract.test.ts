@@ -306,7 +306,10 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && m\.subagents \? \(/u);
+  assert.match(
+    messages,
+    /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u,
+  );
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
@@ -535,8 +538,8 @@ test("persisted and live chips share one transcript integration path", () => {
   const messages = source("./message-list.tsx");
   const chips = source("./subagent-chips.tsx");
 
-  assert.match(messages, /m\.subagents \? \(/u);
-  assert.match(messages, /<SubagentChips reference=\{m\.subagents\}/u);
+  assert.match(messages, /message\.subagents \? \(/u);
+  assert.match(messages, /<SubagentChips reference=\{message\.subagents\}/u);
   assert.match(messages, /<SubagentChips runs=\{liveSubagents\}/u);
   assert.match(messages, /liveSubagents\.length > 0/u);
   assert.match(messages, /onOpen=\{onOpenSubagent\}/u);
@@ -604,7 +607,7 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(
     ipc,
-    /rememberDetachedLifecycleStream\(\s+\{\s+streamId,\s+chatId: params\.chatId,\s+workspaceId: params\.workspaceId \?\? "default",\s+\},\s+\{\s+content: projectedContent,\s+reasoning: projectedReasoning,\s+timeline: projectedTimeline,\s+artifacts: projectedArtifacts,\s+subagents: projectedSubagents,/u,
+    /rememberDetachedLifecycleStream\(\s+\{\s+streamId,\s+chatId: params\.chatId,\s+workspaceId: params\.workspaceId \?\? "default",\s+\},\s+\{\s+content: projectedContent,\s+lastTextDeltaAt: projectedLastTextDeltaAt,\s+reasoning: projectedReasoning,\s+timeline: projectedTimeline,\s+artifacts: projectedArtifacts,\s+subagents: projectedSubagents,/u,
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);

@@ -91,6 +91,25 @@ test("distribution promotion happens only after build and verification", async (
   assert.deepEqual(events, ["prepare", "build", "verify", "promote"]);
 });
 
+test("development and release packaging vendor Generative UI libraries before building", async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.match(
+    packageJson.scripts.package,
+    /computer-use:vendor.+generative-ui:vendor.+build:native.+npm run build/u,
+  );
+
+  const distributionSource = await readFile(
+    new URL("./run-macos-distribution.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    distributionSource,
+    /npm\("computer-use:vendor"\);[\s\S]{0,100}npm\("generative-ui:vendor"\);[\s\S]{0,100}npm\("build:native"\);/u,
+  );
+});
+
 test("distribution archive discovery requires exactly one current DMG and ZIP", async () => {
   const staging = await mkdtemp(path.join(os.tmpdir(), "aiden-distribution-artifacts-"));
   try {

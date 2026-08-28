@@ -6,7 +6,7 @@ import {
   type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
 import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
-import { parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 
 const MAX_DETACHED_STREAMS = 64;
@@ -36,6 +36,8 @@ export interface DetachedLifecycleStreamOwner {
 /** Renderer-safe state retained while a route-detached generation remains main-owned. */
 export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwner {
   content: string;
+  /** Wall-clock time of the most recent prose delta, retained across route handoff. */
+  lastTextDeltaAt: number | null;
   reasoning: string;
   timeline: GenerationTimeline | null;
   artifacts: readonly ChatArtifactV1[];
@@ -44,8 +46,8 @@ export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwne
 
 export type DetachedLifecycleProjectionSeed = Omit<
   DetachedLifecycleProjection,
-  keyof DetachedLifecycleStreamOwner
->;
+  keyof DetachedLifecycleStreamOwner | "lastTextDeltaAt"
+> & { lastTextDeltaAt?: number | null };
 
 interface TerminalChatNotification {
   streamId: string;
@@ -89,6 +91,23 @@ function deleteDetachedProjection(streamId: string): void {
 function appendBounded(current: string, delta: string, maximum: number): string {
   if (current.length >= maximum) return current;
   return (current + delta).slice(0, maximum);
+}
+
+export function detachedTextStreamingRemaining(
+  lastTextDeltaAt: number | null,
+  now: number,
+  idleMs: number,
+): number {
+  if (
+    lastTextDeltaAt === null ||
+    !Number.isFinite(lastTextDeltaAt) ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(idleMs) ||
+    idleMs <= 0
+  ) {
+    return 0;
+  }
+  return Math.max(0, idleMs - Math.max(0, now - lastTextDeltaAt));
 }
 
 function updateDetachedProjection(
@@ -266,6 +285,10 @@ export function rememberDetachedLifecycleStream(
   detachedLifecycleProjections.set(owner.streamId, {
     ...owner,
     content,
+    lastTextDeltaAt:
+      typeof seed?.lastTextDeltaAt === "number" && Number.isFinite(seed.lastTextDeltaAt)
+        ? seed.lastTextDeltaAt
+        : null,
     reasoning: (seed?.reasoning ?? "").slice(0, MAX_DETACHED_REASONING_CHARS),
     timeline: timeline?.generationId === owner.streamId ? timeline : null,
     artifacts: (seed?.artifacts ?? []).slice(0, MAX_DETACHED_ARTIFACTS),
@@ -501,6 +524,8 @@ export function subscribeDetachedTerminalChats(
       content: reset
         ? ""
         : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
+      lastTextDeltaAt:
+        reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
     }));
   });
   const unsubscribeReasoning = subscribe("chat:reasoning-delta", (payload) => {
@@ -529,12 +554,17 @@ export function subscribeDetachedTerminalChats(
     if (!event) return;
     updateDetachedProjection(parsed.streamId, (current) => {
       if (event.operation === "reset") return { ...current, artifacts: [] };
-      if (
-        current.artifacts.some(
-          (candidate) => candidate.attachment.id === event.artifact.attachment.id,
-        )
-      ) {
-        return current;
+      const identity = chatArtifactIdentity(event.artifact);
+      const index = current.artifacts.findIndex(
+        (candidate) => chatArtifactIdentity(candidate) === identity,
+      );
+      if (index >= 0) {
+        return {
+          ...current,
+          artifacts: current.artifacts.map((candidate, i) =>
+            i === index ? event.artifact : candidate,
+          ),
+        };
       }
       if (current.artifacts.length >= MAX_DETACHED_ARTIFACTS) return current;
       return { ...current, artifacts: [...current.artifacts, event.artifact] };

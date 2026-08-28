@@ -10,6 +10,7 @@ import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 
@@ -199,6 +200,8 @@ export interface ChatMessage {
   providerFailure?: ProviderFailureV1;
   /** Files presented with this user or assistant message. */
   attachments?: Attachment[];
+  /** Interactive HTML artifacts; bytes remain in the generative-ui store. */
+  htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
@@ -714,6 +717,8 @@ export interface ChatStartParams {
   mode?: "assistant" | "assistant-unattended" | "assistant-automation";
   /** Small main-validated enum; provider/model support is enforced at runtime. */
   thinkingLevel?: GenerationThinkingLevel;
+  /** Host-owned /visualize instruction for this attended turn. */
+  visualize?: boolean;
   messages: Array<{
     role: ChatRole;
     content: string;

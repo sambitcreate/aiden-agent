@@ -13,8 +13,11 @@ import {
   activityTimelineFragment,
   assistantPresentationRows,
 } from "../lib/assistant-message-presentation";
+import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
+import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
+import { HtmlArtifactFrame } from "./html-artifact-frame";
 import type { AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -22,13 +25,41 @@ import {
   retainSubagentChipFocusAfterPointerDown,
   type SubagentChipFocusCapture,
 } from "../lib/subagent-panel-state";
-import { isToolStep, type GenerationTimeline } from "../shared/generation-timeline";
+import {
+  hasActiveThinkingStep,
+  hasActiveToolStep,
+  isToolStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/provider-failure";
+import {
+  htmlArtifactTranscriptPlan,
+  type HtmlArtifactTranscriptEntry,
+} from "../lib/html-artifact-transcript";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
+const MINIMUM_VISUALIZING_MS = 700;
+
+function useMinimumPresence(present: boolean, minimumMs: number): boolean {
+  const [visible, setVisible] = React.useState(present);
+  const shownAtRef = React.useRef(present ? performance.now() : 0);
+  React.useEffect(() => {
+    if (present) {
+      shownAtRef.current = performance.now();
+      setVisible(true);
+      return;
+    }
+    const remaining = Math.max(0, minimumMs - (performance.now() - shownAtRef.current));
+    const timer = window.setTimeout(() => setVisible(false), remaining);
+    return () => window.clearTimeout(timer);
+  }, [minimumMs, present]);
+  return visible;
+}
 
 interface MessageListProps {
+  chatId: string;
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
@@ -69,16 +100,33 @@ function AssistantResponse({
   onStreamHandoffComplete,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline);
+  const reasoningActive = hasActiveThinkingStep(timeline ?? null);
+  // The one reasoning disclosure owns both the live and settled thought state.
+  // Other live phases continue in the activity row below the transcript.
+  const active =
+    streaming && !streamComplete && (reasoningActive || (!timeline && !content));
+  const visualizingLive =
+    streaming && !streamComplete && hasActiveToolStep(timeline ?? null, RENDER_ARTIFACT_TOOL_NAME);
+  // Fast local renders may finish in one or two frames. Keep the real phase
+  // visible long enough to be perceived, while retaining a single reasoning
+  // surface when the turn already contains thought text.
+  const visualizing = useMinimumPresence(visualizingLive, MINIMUM_VISUALIZING_MS);
+  const reasoningLabel = visualizing ? "Visualizing" : reasoningActivityLabel(timeline, active);
+  const showReasoning = Boolean(reasoning) || visualizing;
   if (!rows || !timeline) {
+    const activityTimeline = timeline
+      ? activityTimelineFragment(timeline, timeline.steps.filter(isToolStep))
+      : null;
     return (
       <>
-        <ActivityFeed timeline={timeline ?? null} animate={streaming} />
+        <ActivityFeed timeline={activityTimeline} animate={streaming} />
         {subagentChips}
-        {reasoning ? (
+        {showReasoning ? (
           <ReasoningBlock
-            content={reasoning}
+            content={reasoning ?? ""}
             streaming={streaming && !streamComplete}
-            active={streaming && !streamComplete && !content}
+            active={active || visualizing}
+            label={reasoningLabel}
           />
         ) : null}
         {content ? (
@@ -109,11 +157,12 @@ function AssistantResponse({
 
   return (
     <>
-      {reasoning ? (
+      {showReasoning ? (
         <ReasoningBlock
-          content={reasoning}
+          content={reasoning ?? ""}
           streaming={streaming && !streamComplete}
-          active={streaming && !streamComplete && !content}
+          active={active || visualizing}
+          label={reasoningLabel}
         />
       ) : null}
       {subagentChips && !subagentActivityKey ? subagentChips : null}
@@ -165,6 +214,7 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
 }
 
 export function MessageList({
+  chatId,
   messages,
   streamingText,
   streamingReasoning,
@@ -190,12 +240,41 @@ export function MessageList({
   const liveAttachments = React.useMemo(() => {
     const attachments: Attachment[] = [];
     for (const artifact of streamingArtifacts) {
+      if (!isChatImageArtifact(artifact)) continue;
       if (!persistedAttachmentIds.has(artifact.attachment.id)) {
         attachments.push(artifact.attachment);
       }
     }
     return attachments;
   }, [persistedAttachmentIds, streamingArtifacts]);
+  // While the streaming row is still mounted its live HTML cards stay exactly
+  // where they appeared; the persisted copies wait hidden so the handoff is a
+  // single atomic swap instead of an unmount/remount flash in two frames.
+  const liveHtmlArtifacts = React.useMemo(
+    () => streamingArtifacts.filter(isChatHtmlArtifact),
+    [streamingArtifacts],
+  );
+  const streamingRowVisible = Boolean(
+    timeline ||
+      liveSubagents.length > 0 ||
+      streamingReasoning ||
+      streamingText ||
+      liveAttachments.length > 0 ||
+      liveHtmlArtifacts.length > 0,
+  );
+  const htmlArtifactPlan = React.useMemo(
+    () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
+    [liveHtmlArtifacts, messages, streamingRowVisible],
+  );
+  const htmlArtifactsByAnchor = React.useMemo(() => {
+    const entries = new Map<string, HtmlArtifactTranscriptEntry[]>();
+    for (const entry of htmlArtifactPlan) {
+      const anchored = entries.get(entry.anchor) ?? [];
+      anchored.push(entry);
+      entries.set(entry.anchor, anchored);
+    }
+    return entries;
+  }, [htmlArtifactPlan]);
 
   React.useEffect(() => {
     const captureFocusedChip = (target: EventTarget | null) => {
@@ -250,6 +329,71 @@ export function MessageList({
     }
   });
 
+  const artifactFrames = (anchor: string) =>
+    (htmlArtifactsByAnchor.get(anchor) ?? []).map((entry) => (
+      <HtmlArtifactFrame
+        key={entry.key}
+        chatId={chatId}
+        artifact={entry.artifact}
+      />
+    ));
+
+  const transcriptRows: React.ReactNode[] = [];
+  for (const message of messages) {
+    transcriptRows.push(
+      <div key={`message:${message.id}`} className="flex min-w-0 flex-col gap-3">
+        {message.role === "assistant" ? (
+          <>
+            <AssistantResponse
+              content={message.content}
+              timeline={message.timeline}
+              reasoning={message.reasoning}
+              attachments={message.attachments}
+              subagentChips={
+                subagentsEnabled && message.subagents ? (
+                  <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
+                ) : undefined
+              }
+            />
+            {message.providerFailure ? (
+              <ProviderFailureCallout failure={message.providerFailure} />
+            ) : null}
+          </>
+        ) : (
+          <SafeMessageBubble
+            role={message.role}
+            content={message.content}
+            attachments={message.attachments}
+            skill={message.skill}
+          />
+        )}
+      </div>,
+    );
+    transcriptRows.push(...artifactFrames(`message:${message.id}`));
+  }
+
+  if (streamingRowVisible) {
+    transcriptRows.push(
+      <div key="streaming" className="flex min-w-0 flex-col gap-3">
+        <AssistantResponse
+          content={streamingText ?? ""}
+          timeline={timeline}
+          reasoning={streamingReasoning}
+          attachments={liveAttachments}
+          subagentChips={
+            subagentsEnabled && liveSubagents.length > 0 ? (
+              <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
+            ) : undefined
+          }
+          streaming
+          streamComplete={streamComplete}
+          onStreamHandoffComplete={onStreamHandoffComplete}
+        />
+      </div>,
+    );
+    transcriptRows.push(...artifactFrames("streaming"));
+  }
+
   return (
     <MessageAttachmentPreviewProvider>
       <div
@@ -257,56 +401,7 @@ export function MessageList({
         className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
         data-subagent-chip-focus-scope="true"
       >
-        {messages.map((m) => (
-          <div key={m.id} className="flex min-w-0 flex-col gap-3">
-            {m.role === "assistant" ? (
-              <>
-                <AssistantResponse
-                  content={m.content}
-                  timeline={m.timeline}
-                  reasoning={m.reasoning}
-                  attachments={m.attachments}
-                  subagentChips={
-                    subagentsEnabled && m.subagents ? (
-                      <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
-                    ) : undefined
-                  }
-                />
-                {m.providerFailure ? <ProviderFailureCallout failure={m.providerFailure} /> : null}
-              </>
-            ) : (
-              <SafeMessageBubble
-                role={m.role}
-                content={m.content}
-                attachments={m.attachments}
-                skill={m.skill}
-              />
-            )}
-          </div>
-        ))}
-
-        {timeline ||
-        liveSubagents.length > 0 ||
-        streamingReasoning ||
-        streamingText ||
-        liveAttachments.length > 0 ? (
-          <div className="flex min-w-0 flex-col gap-3">
-            <AssistantResponse
-              content={streamingText ?? ""}
-              timeline={timeline}
-              reasoning={streamingReasoning}
-              attachments={liveAttachments}
-              subagentChips={
-                subagentsEnabled && liveSubagents.length > 0 ? (
-                  <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
-                ) : undefined
-              }
-              streaming
-              streamComplete={streamComplete}
-              onStreamHandoffComplete={onStreamHandoffComplete}
-            />
-          </div>
-        ) : null}
+        {transcriptRows}
 
         <AgentActivityTransition activity={agentActivity} />
 
@@ -382,7 +477,9 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
         variant="small"
         color="secondary"
         className={
-          value.phase === "thinking" || value.phase === "loading"
+          value.phase === "thinking" ||
+          value.phase === "loading" ||
+          value.phase === "visualizing"
             ? "agent-thinking-shimmer min-w-0 break-words"
             : "min-w-0 break-words"
         }

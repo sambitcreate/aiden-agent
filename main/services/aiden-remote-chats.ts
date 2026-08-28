@@ -62,8 +62,14 @@ export interface AidenRemoteMessageProjection {
   text: string;
   createdAt: string;
   attachments?: AidenRemoteMessageAttachmentProjection[];
+  htmlArtifacts?: AidenRemoteHtmlArtifactProjection[];
   outcome?: AidenRemoteMessageOutcomeProjection;
   timeline?: GenerationTimeline;
+}
+
+export interface AidenRemoteHtmlArtifactProjection {
+  id: string;
+  title: string;
 }
 
 export interface AidenRemoteMessageAttachmentProjection {
@@ -243,6 +249,10 @@ function chatRevision(chat: Chat): string {
         content: message.content,
         createdAt: message.createdAt,
         attachments: projectMessageAttachments(message.attachments),
+        htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
+          id: artifact.mediaId,
+          title: artifact.title,
+        })),
         outcome: projectMessageOutcome(message) ?? null,
         timeline: projectMessageTimeline(message) ?? null,
       })),
@@ -291,6 +301,14 @@ export function projectAidenRemoteChat(
           text,
           createdAt: new Date(message.createdAt).toISOString(),
           ...(attachments.length > 0 ? { attachments } : {}),
+          ...(message.htmlArtifacts && message.htmlArtifacts.length > 0
+            ? {
+                htmlArtifacts: message.htmlArtifacts.map((artifact) => ({
+                  id: artifact.mediaId,
+                  title: artifact.title,
+                })),
+              }
+            : {}),
           ...(outcome ? { outcome } : {}),
           ...(timeline ? { timeline } : {}),
         };

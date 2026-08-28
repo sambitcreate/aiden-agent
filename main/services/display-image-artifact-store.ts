@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { DataStore } from "./data-store.js";
 import type { Attachment } from "./types.js";
-import { parseChatArtifactV1, type ChatArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatArtifactV1, type ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import {
   MAX_DISPLAY_IMAGE_BYTES_PER_CHAT,
   MAX_DISPLAY_IMAGE_PIXELS,
@@ -33,7 +33,7 @@ interface StagedDisplayImageArtifact {
   chatId: string;
   generationId: string;
   model?: string;
-  artifact: ChatArtifactV1;
+  artifact: ChatImageArtifactV1;
   pixels: number;
   stagedAt: number;
 }
@@ -123,7 +123,7 @@ function parseRecord(value: unknown): StagedDisplayImageArtifact | undefined {
     return undefined;
   }
   const artifact = parseChatArtifactV1(record.artifact);
-  if (!artifact) return undefined;
+  if (!artifact || artifact.kind !== "image") return undefined;
   try {
     const dimensions = validateDisplayImageDimensions(
       Buffer.from(artifact.attachment.data, "base64"),
@@ -280,7 +280,7 @@ export class DisplayImageArtifactStore {
     chatId: string;
     generationId: string;
     model?: string;
-    artifact: ChatArtifactV1;
+    artifact: ChatImageArtifactV1;
     pixels: number;
   }): Promise<"inserted" | "existing"> {
     this.requireAvailable();

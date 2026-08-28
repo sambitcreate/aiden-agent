@@ -83,6 +83,11 @@ import {
 import { subagentsEnabled } from "./services/subagents/feature-flag.js";
 import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
+import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
+import {
+  registerGenerativeUiProtocol,
+  registerGenerativeUiScheme,
+} from "./services/generative-ui-protocol.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
@@ -119,6 +124,8 @@ import { initializeBotApplicationService } from "./services/bot-application-serv
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
+
+registerGenerativeUiScheme();
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -1606,6 +1613,8 @@ if (!ownsSingleInstanceLock) {
       // before a renderer can read or append run history.
       await piRuntimeEffectStore.initialize();
       await displayImageArtifactStore.initialize();
+      await generativeUiArtifactStore.initialize();
+      registerGenerativeUiProtocol();
       const quarantinedImageArtifactPath = displayImageArtifactStore.quarantinedPath();
       if (quarantinedImageArtifactPath) {
         logger.warn(
@@ -1621,10 +1630,21 @@ if (!ownsSingleInstanceLock) {
           new Error(displayImageArtifactAvailability.reason),
         );
       }
+      const generativeUiArtifactAvailability = generativeUiArtifactStore.availability();
+      if (!generativeUiArtifactAvailability.available) {
+        logger.warn(
+          "pi",
+          "Generative UI artifact recovery is unavailable; chat mutations will remain blocked.",
+          new Error(generativeUiArtifactAvailability.reason),
+        );
+      }
       await subagentRunStore.initialize();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
         if (displayImageArtifactAvailability.available) {
           await displayImageArtifactStore.deleteChat(chatId);
+        }
+        if (generativeUiArtifactAvailability.available) {
+          await generativeUiArtifactStore.deleteChat(chatId);
         }
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
@@ -1661,6 +1681,41 @@ if (!ownsSingleInstanceLock) {
           logger.warn(
             "pi",
             "Could not recover staged image artifacts; affected chats remain blocked.",
+            error,
+          );
+        }
+      }
+      if (generativeUiArtifactAvailability.available) {
+        try {
+          const startupHtmlChats = (
+            await Promise.all(
+              (await generativeUiArtifactStore.pendingChatIds()).map((chatId) =>
+                chatStore.get(chatId),
+              ),
+            )
+          ).filter((chat): chat is Chat => chat !== null);
+          await generativeUiArtifactStore.recover(
+            startupHtmlChats,
+            async ({ chatId, htmlArtifacts, createdAt, model }) => {
+              await chatStore.appendMessage(chatId, {
+                role: "assistant",
+                content: "",
+                htmlArtifacts,
+                createdAt,
+                model,
+                providerFailure: {
+                  version: 1,
+                  category: "interrupted",
+                  attempts: 1,
+                  retryExhausted: false,
+                },
+              });
+            },
+          );
+        } catch (error) {
+          logger.warn(
+            "pi",
+            "Could not recover staged HTML artifacts; affected chats remain blocked.",
             error,
           );
         }

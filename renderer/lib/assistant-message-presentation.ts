@@ -1,8 +1,9 @@
 import { isActiveStep } from "./agent-steps";
-import type {
-  AgentStep,
-  GenerationClaimCheck,
-  GenerationTimeline,
+import {
+  isToolStep,
+  type AgentStep,
+  type GenerationClaimCheck,
+  type GenerationTimeline,
 } from "../shared/generation-timeline";
 
 export type AssistantPresentationRow =
@@ -61,17 +62,22 @@ export function assistantPresentationRows(
     return null;
   }
 
+  // Exposed reasoning has one dedicated disclosure. Thinking milestones still
+  // anchor and time the host timeline, but rendering them here would repeat the
+  // same phase as a second "Thinking" / "Thought" activity row.
+  const visibleSteps = timeline.steps.filter(isToolStep);
+
   const rows: AssistantPresentationRow[] = [];
   let cursor = 0;
   let stepIndex = 0;
-  while (stepIndex < timeline.steps.length) {
-    const offset = offsets[stepIndex] as number;
+  while (stepIndex < visibleSteps.length) {
+    const offset = visibleSteps[stepIndex]?.contentOffset as number;
     const narrative = textRow(content, cursor, offset);
     if (narrative) rows.push(narrative);
 
     const steps: AgentStep[] = [];
-    while (stepIndex < timeline.steps.length && offsets[stepIndex] === offset) {
-      const step = timeline.steps[stepIndex];
+    while (stepIndex < visibleSteps.length && visibleSteps[stepIndex]?.contentOffset === offset) {
+      const step = visibleSteps[stepIndex];
       if (step) steps.push(step);
       stepIndex += 1;
     }

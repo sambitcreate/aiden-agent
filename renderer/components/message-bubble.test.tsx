@@ -3,6 +3,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageBubble } from "./message-bubble.js";
 import { MessageList } from "./message-list.js";
+import { htmlArtifactTranscriptPlan } from "../lib/html-artifact-transcript.js";
 import {
   partitionMessageAttachments,
   resolveAttachmentPreviewTrigger,
@@ -47,6 +48,7 @@ test("legacy messages render unchanged without provenance", () => {
 test("persisted assistant images render inline with an accessible preview action", () => {
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[
         {
           id: "assistant-image",
@@ -76,6 +78,7 @@ test("image-only live Pi artifacts render before assistant prose exists", () => 
   const attachment = imageAttachment("live-image");
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[]}
       streamingText=""
       streamingReasoning={null}
@@ -90,6 +93,340 @@ test("image-only live Pi artifacts render before assistant prose exists", () => 
   );
   assert.match(markup, /data-message-attachments="assistant"/u);
   assert.match(markup, /preview\.png/u);
+});
+
+test("HTML artifacts render a sandboxed frame chrome before preview loads", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[
+        {
+          id: "assistant-html",
+          role: "assistant",
+          content: "",
+          createdAt: 1,
+          htmlArtifacts: [
+            {
+              version: 1,
+              kind: "html",
+              id: "html-1",
+              title: "Dependencies",
+              mimeType: "text/html",
+              size: 12,
+              mediaId: "media-1",
+            },
+          ],
+        },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(markup, /data-html-artifact="media-1"/u);
+  assert.match(markup, /Dependencies/u);
+  assert.match(markup, /Loading visualization/u);
+  assert.doesNotMatch(markup, /<iframe/u);
+  assert.doesNotMatch(markup, /allow-same-origin/u);
+  assert.doesNotMatch(markup, /<p>hello/u);
+});
+
+const htmlArtifact = (mediaId: string, id: string) => ({
+  version: 1 as const,
+  kind: "html" as const,
+  id,
+  title: "Dependencies",
+  mimeType: "text/html" as const,
+  size: 12,
+  mediaId,
+});
+
+test("the handoff window keeps exactly one live HTML artifact card", () => {
+  // During the reveal handoff the persisted message and the still-mounted
+  // streaming row coexist; the live card must win until the row unmounts.
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[
+        {
+          id: "assistant-html",
+          role: "assistant",
+          content: "Done.",
+          createdAt: 1,
+          htmlArtifacts: [htmlArtifact("media-1", "html-1")],
+        },
+      ]}
+      streamingText="Done."
+      streamingReasoning={null}
+      streamingArtifacts={[htmlArtifact("media-1", "html-1")]}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.equal(markup.match(/data-html-artifact="media-1"/gu)?.length, 1);
+});
+
+test("HTML artifact reconciliation keeps one stable transcript key across handoff", () => {
+  const live = htmlArtifact("media-1", "html-live");
+  const persistedMessage = {
+    id: "assistant-html",
+    role: "assistant" as const,
+    content: "Done.",
+    createdAt: 1,
+    htmlArtifacts: [htmlArtifact("media-1", "html-persisted")],
+  };
+  const liveOnly = htmlArtifactTranscriptPlan([], [live], true);
+  const duringHandoff = htmlArtifactTranscriptPlan([persistedMessage], [live], true);
+  const persistedOnly = htmlArtifactTranscriptPlan([persistedMessage], [], false);
+
+  assert.deepEqual(
+    [liveOnly[0]?.key, duringHandoff[0]?.key, persistedOnly[0]?.key],
+    ["html:media-1", "html:media-1", "html:media-1"],
+  );
+  assert.equal(duringHandoff.length, 1);
+  assert.equal(duringHandoff[0]?.source, "live");
+  assert.equal(duringHandoff[0]?.artifact.id, "html-live");
+  assert.equal(liveOnly[0]?.anchor, "streaming");
+  assert.equal(persistedOnly[0]?.anchor, "message:assistant-html");
+});
+
+test("a same-title replace keeps one card and the persisted copy returns after handoff", () => {
+  // The live replace carries the same mediaId with new content, so exactly one
+  // card renders; once the streaming row unmounts the persisted card returns.
+  const duringReplace = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[
+        {
+          id: "assistant-html",
+          role: "assistant",
+          content: "Done.",
+          createdAt: 1,
+          htmlArtifacts: [htmlArtifact("media-1", "html-1")],
+        },
+      ]}
+      streamingText="Done."
+      streamingReasoning={null}
+      streamingArtifacts={[htmlArtifact("media-1", "html-2")]}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.equal(duringReplace.match(/data-html-artifact="media-1"/gu)?.length, 1);
+
+  const afterHandoff = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[
+        {
+          id: "assistant-html",
+          role: "assistant",
+          content: "Done.",
+          createdAt: 1,
+          htmlArtifacts: [htmlArtifact("media-1", "html-2")],
+        },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      streamingArtifacts={[]}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.equal(afterHandoff.match(/data-html-artifact="media-1"/gu)?.length, 1);
+});
+
+test("the reasoning shimmer returns for a later open thinking step after prose", () => {
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps: [
+      {
+        id: "think-1",
+        order: 0,
+        kind: "thinking",
+        startedAt: 1,
+        updatedAt: 2,
+        finishedAt: 2,
+        durationMs: 1_000,
+      },
+      {
+        id: "tool-1",
+        order: 1,
+        kind: "tool",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        label: "Read file",
+        status: "completed",
+        startedAt: 2,
+        updatedAt: 3,
+        finishedAt: 3,
+      },
+      {
+        id: "think-2",
+        order: 2,
+        kind: "thinking",
+        startedAt: 3,
+        updatedAt: 3,
+      },
+    ],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[]}
+      streamingText="Here is what I found."
+      streamingReasoning="First thought"
+      streamingArtifacts={[]}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  // The block header shimmers again for the reopened stretch even though the
+  // turn already has prose.
+  assert.match(markup, /agent-thinking-shimmer/u);
+  assert.match(markup, />Thinking</u);
+  assert.doesNotMatch(markup, /Thinking…/u);
+});
+
+test("settled reasoning uses one duration-labelled disclosure without an activity duplicate", () => {
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-1",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 2,
+    steps: [
+      {
+        id: "think-1",
+        order: 0,
+        kind: "thinking",
+        startedAt: 1,
+        updatedAt: 2,
+        finishedAt: 2,
+        durationMs: 1_000,
+        contentOffset: 0,
+      },
+    ],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[]}
+      streamingText="Answer"
+      streamingReasoning="Stored thought"
+      streamingArtifacts={[]}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(markup, />Thought briefly</u);
+  assert.equal(markup.match(/reasoning-surface/gu)?.length, 1);
+  assert.doesNotMatch(markup, /activity-feed/u);
+  assert.doesNotMatch(markup, /agent-thinking-shimmer/u);
+});
+
+test("an in-flight render_artifact call shows the Visualizing shimmer", () => {
+  const renderStep: AgentToolStep = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool",
+    toolCallId: "call-1",
+    toolName: "render_artifact",
+    label: "Render artifact",
+    status: "pending",
+    startedAt: 1,
+    updatedAt: 1,
+  };
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps: [renderStep],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[]}
+      streamingText=""
+      streamingReasoning={null}
+      streamingArtifacts={[]}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(markup, />Visualizing</u);
+  assert.doesNotMatch(markup, /Visualizing…/u);
+  assert.match(markup, /agent-thinking-shimmer/u);
+  assert.equal(markup.match(/reasoning-surface/gu)?.length, 1);
+
+  const reasoningMarkup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[]}
+      streamingText=""
+      streamingReasoning="Earlier reasoning"
+      streamingArtifacts={[]}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(reasoningMarkup, />Visualizing</u);
+  assert.match(reasoningMarkup, /Earlier reasoning/u);
+  assert.equal(reasoningMarkup.match(/reasoning-surface/gu)?.length, 1);
+  // Once the turn settles the shimmer is gone.
+  const settledMarkup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-html"
+      messages={[]}
+      streamingText=""
+      streamingReasoning={null}
+      streamingArtifacts={[]}
+      timeline={{ ...timeline, status: "completed", finishedAt: 2 }}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.doesNotMatch(settledMarkup, /Visualizing/u);
 });
 
 test("legacy active image MIME is rendered as a file card instead of inline content", () => {
@@ -172,6 +509,7 @@ test("assistant prose and activity render in chronological order with one copy a
   };
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[
         {
           id: "assistant-1",
@@ -231,6 +569,7 @@ test("assistant images follow chronological prose and display activity", () => {
   };
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[
         {
           id: "assistant-image-order",
@@ -262,6 +601,7 @@ test("assistant images follow chronological prose and display activity", () => {
 test("persisted assistant failure renders once with fixed private-safe copy", () => {
   const markup = renderToStaticMarkup(
     <MessageList
+      chatId="chat-1"
       messages={[
         {
           id: "assistant-failed",

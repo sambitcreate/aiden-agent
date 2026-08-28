@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveAgentActivity, type ToolActivity } from "./agent-activity";
+import {
+  resolveAgentActivity,
+  resolveVisibleAgentActivity,
+  type ToolActivity,
+} from "./agent-activity";
 
 const idle = {
   isStarting: false,
@@ -19,14 +23,32 @@ test("maps each active generation phase to a purposeful orb", () => {
   });
   assert.deepEqual(resolveAgentActivity({ ...idle, streamingText: "" }), {
     phase: "thinking",
-    label: "Thinking…",
+    label: "Thinking",
     orbState: "solving",
   });
-  assert.deepEqual(resolveAgentActivity({ ...idle, streamingText: "Hello" }), {
-    phase: "responding",
-    label: "Responding…",
-    orbState: "composing",
-  });
+  assert.deepEqual(
+    resolveAgentActivity({ ...idle, streamingText: "Hello", textStreaming: true }),
+    {
+      phase: "responding",
+      label: "Responding…",
+      orbState: "composing",
+    },
+  );
+});
+
+test("stale prose does not pin the row while the model works elsewhere", () => {
+  assert.deepEqual(
+    resolveAgentActivity({ ...idle, streamingText: "Hello", textStreaming: false }),
+    {
+      phase: "thinking",
+      label: "Thinking",
+      orbState: "solving",
+    },
+  );
+  assert.deepEqual(
+    resolveAgentActivity({ ...idle, streamingText: "Hello", textStreaming: false }),
+    resolveAgentActivity({ ...idle, streamingText: "", textStreaming: false }),
+  );
 });
 
 test("shows model loading ahead of empty-stream thinking", () => {
@@ -77,6 +99,70 @@ test("distinguishes discovery tools from other agent work", () => {
   });
 });
 
+test("render_artifact surfaces a Visualizing phase", () => {
+  const rendering: ToolActivity = {
+    state: "running",
+    label: "Render artifact",
+    toolName: "render_artifact",
+  };
+
+  assert.deepEqual(
+    resolveAgentActivity({
+      ...idle,
+      streamingText: "Here is the chart.",
+      textStreaming: true,
+      toolActivity: rendering,
+    }),
+    {
+      phase: "visualizing",
+      label: "Visualizing",
+      orbState: "working",
+    },
+  );
+  assert.equal(
+    resolveAgentActivity({
+      ...idle,
+      isModelLoading: true,
+      toolActivity: rendering,
+    })?.phase,
+    "visualizing",
+  );
+});
+
+test("transcript-owned reasoning and visualization replace the generic activity row", () => {
+  const thinking = resolveAgentActivity({ ...idle, streamingText: "" });
+  assert.equal(
+    resolveVisibleAgentActivity(thinking, {
+      reasoningVisible: true,
+      visualizingVisible: false,
+    }),
+    null,
+  );
+
+  const visualizing = resolveAgentActivity({
+    ...idle,
+    toolActivity: {
+      state: "running",
+      label: "Render artifact",
+      toolName: "render_artifact",
+    },
+  });
+  assert.equal(
+    resolveVisibleAgentActivity(visualizing, {
+      reasoningVisible: true,
+      visualizingVisible: true,
+    }),
+    null,
+  );
+  assert.equal(
+    resolveVisibleAgentActivity(visualizing, {
+      reasoningVisible: true,
+      visualizingVisible: false,
+    }),
+    visualizing,
+  );
+});
+
 test("stopping and approval take precedence over other live signals", () => {
   const running: ToolActivity = {
     state: "running",
@@ -88,6 +174,7 @@ test("stopping and approval take precedence over other live signals", () => {
     resolveAgentActivity({
       ...idle,
       streamingText: "Partial answer",
+      textStreaming: true,
       pendingApproval: true,
       toolActivity: running,
     })?.phase,

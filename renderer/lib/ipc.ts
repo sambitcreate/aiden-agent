@@ -136,6 +136,7 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import {
+  chatArtifactIdentity,
   parseChatArtifactEventV1,
   type ChatArtifactEventV1,
   type ChatArtifactV1,
@@ -785,6 +786,27 @@ export const chatsApi = {
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) =>
     invoke<boolean>("chats:abandonTurn", id, turnId),
+  htmlArtifactSrcdoc: (
+    chatId: string,
+    mediaId: string,
+    theme?: {
+      colorScheme?: "light" | "dark";
+      canvas?: string;
+      foreground?: string;
+      secondary?: string;
+      accent?: string;
+    },
+  ) =>
+    invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {
+      chatId,
+      mediaId,
+      theme,
+    }),
+  exportHtmlArtifact: (chatId: string, mediaId: string) =>
+    invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
+      chatId,
+      mediaId,
+    }),
   appendMessage: (
     id: string,
     message: {
@@ -1029,6 +1051,7 @@ export function startGeneration(
 ): GenerationHandle {
   const streamId = messageTurnId;
   let projectedContent = "";
+  let projectedLastTextDeltaAt: number | null = null;
   let projectedReasoning = "";
   let projectedTimeline: GenerationTimeline | null = null;
   let projectedArtifacts: ChatArtifactV1[] = [];
@@ -1044,10 +1067,12 @@ export function startGeneration(
       if (p.streamId !== streamId) return;
       if (p.reset) {
         projectedContent = "";
+        projectedLastTextDeltaAt = null;
         projectedReasoning = "";
         callbacks.onReset?.();
       } else {
         projectedContent += p.delta;
+        if (p.delta) projectedLastTextDeltaAt = Date.now();
         callbacks.onDelta(p.delta);
       }
     }),
@@ -1102,12 +1127,15 @@ export function startGeneration(
         if (!event) return;
         if (event.operation === "reset") {
           projectedArtifacts = [];
-        } else if (
-          !projectedArtifacts.some(
-            (candidate) => candidate.attachment.id === event.artifact.attachment.id,
-          )
-        ) {
-          projectedArtifacts = [...projectedArtifacts, event.artifact];
+        } else {
+          const identity = chatArtifactIdentity(event.artifact);
+          const index = projectedArtifacts.findIndex(
+            (candidate) => chatArtifactIdentity(candidate) === identity,
+          );
+          projectedArtifacts =
+            index >= 0
+              ? projectedArtifacts.map((candidate, i) => (i === index ? event.artifact : candidate))
+              : [...projectedArtifacts, event.artifact];
         }
         callbacks.onArtifactEvent?.(event);
       }),
@@ -1198,6 +1226,7 @@ export function startGeneration(
           },
           {
             content: projectedContent,
+            lastTextDeltaAt: projectedLastTextDeltaAt,
             reasoning: projectedReasoning,
             timeline: projectedTimeline,
             artifacts: projectedArtifacts,

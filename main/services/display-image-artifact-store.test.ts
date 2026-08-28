@@ -13,7 +13,7 @@ import {
   MAX_DISPLAY_IMAGE_PIXELS,
   MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT,
 } from "./display-image-extension.js";
-import type { ChatArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
@@ -35,7 +35,7 @@ async function storageRoot(): Promise<string> {
   return directory;
 }
 
-function artifact(id: string, bytes = ONE_PIXEL_PNG): ChatArtifactV1 {
+function artifact(id: string, bytes = ONE_PIXEL_PNG): ChatImageArtifactV1 {
   return {
     version: 1,
     kind: "image",
@@ -344,7 +344,7 @@ test("generation stages an artifact before announcing or retaining it in memory"
 });
 
 test("main blocks new sends and copies until staged artifacts are recovered", async () => {
-  const [handlers, applicationService] = await Promise.all([
+  const [handlers, applicationService, recovery] = await Promise.all([
     fs.readFile(
       path.join(path.dirname(fileURLToPath(import.meta.url)), "../handlers/chats.ts"),
       "utf8",
@@ -353,13 +353,18 @@ test("main blocks new sends and copies until staged artifacts are recovered", as
       path.join(path.dirname(fileURLToPath(import.meta.url)), "chat-application-service.ts"),
       "utf8",
     ),
+    fs.readFile(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "gui-artifact-recovery.ts"),
+      "utf8",
+    ),
   ]);
   assert.match(applicationService, /deps\.displayImageArtifactStore\.hasPending\(chatId\)/u);
-  assert.match(handlers, /displayImageArtifactStore\.hasPending\(parsed\.chatId\)/u);
-  assert.match(handlers, /Delete this chat to discard it/iu);
-  assert.match(handlers, /developer log to locate the staging file that needs repair/iu);
+  assert.match(applicationService, /deps\.generativeUiArtifactStore\.hasPending\(chatId\)/u);
+  assert.match(handlers, /unresolvedGuiArtifactMessage\(parsed\.chatId\)/u);
+  assert.match(recovery, /Delete this chat to discard it/iu);
+  assert.match(recovery, /developer log to locate the staging file that needs repair/iu);
   const exportHandler = handlers.slice(handlers.indexOf('ipcMain.handle("chats:export"'));
-  assert.match(exportHandler, /displayImageArtifactStore\.hasPending\(chatId\)/u);
+  assert.match(exportHandler, /unresolvedGuiArtifactMessage\(chatId\)/u);
   assert.ok(
     applicationService.indexOf("deps.displayImageArtifactStore.hasPending(chatId)") <
       applicationService.indexOf("deps.llmClient.isChatBusy(chatId)"),

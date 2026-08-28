@@ -18,7 +18,7 @@ import {
 } from "./display-image-extension.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
-import type { ChatArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
@@ -119,7 +119,7 @@ test("the first-party Pi extension emits a bounded structured image artifact", a
   const root = await workspace();
   await fs.mkdir(path.join(root, "previews"));
   await fs.writeFile(path.join(root, "previews", "page.png"), ONE_PIXEL_PNG);
-  const artifacts: ChatArtifactV1[] = [];
+  const artifacts: ChatImageArtifactV1[] = [];
   const extension = createDisplayImageExtension({
     workspaceRoot: root,
     onArtifact: (artifact) => {

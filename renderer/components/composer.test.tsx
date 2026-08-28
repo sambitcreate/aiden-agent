@@ -159,10 +159,18 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /slashTabAcceptsSelection\([\s\S]*slashActionPendingRef\.current/u);
   assert.match(composer, /skillSelectionEnabled/u);
   assert.match(composer, /Remove \$\{selectedSkill\.invocation\.displayName\} skill from message/u);
-  assert.match(composer, /textRevisionRef\.current === submittedTextRevision/u);
-  assert.match(composer, /attachmentRevisionRef\.current === submittedAttachmentRevision/u);
-  assert.match(composer, /type: "send-succeeded",\s*submittedRevision: submittedSkillRevision/u);
-  assert.match(composer, /await onSend\(trimmed, attachments, submittedSkill\)/u);
+  const optimisticClear = composer.indexOf('setText("");');
+  const sendAwait = composer.indexOf("await onSend(");
+  assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
+  assert.match(composer, /if \(sendPendingRef\.current\) return false;/u);
+  assert.match(composer, /type: "send-started"/u);
+  assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
+  assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
+  assert.match(composer, /!isAppendReconciliationRequired\(error\)/u);
+  assert.match(
+    composer,
+    /if \(result\.command\.action\.kind === "composer-instruction"\) return;/u,
+  );
 });
 
 test("selected session slash commands dispatch through explicit Aiden-owned workflows", () => {
@@ -200,6 +208,20 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(branchPicker, /openWorktreeOnMount[\s\S]{0,500}programmaticReturnFocusRef/u);
   assert.match(branchPicker, /programmaticOriginRef = React\.useRef\(openManagedWorktree\)/u);
   assert.match(branchPicker, /programmaticOriginRef\.current = false/u);
+});
+
+test("visualize preserves the slash draft when validation rejects the send", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /if \(!nextPrompt\) \{[\s\S]{0,180}return false;/u);
+  assert.match(
+    composer,
+    /selectedSkillState && selectedSkillState\.state !== "valid"[\s\S]{0,180}return false;/u,
+  );
+  assert.match(
+    composer,
+    /return sendComposerPayload\(\{[\s\S]{0,260}draftText: text,[\s\S]{0,260}visualize: true/u,
+  );
+  assert.match(composer, /hasWorkspaceArtifactAccess: workspace\?\.permission !== "none"/u);
 });
 
 test("workspace picker closes and exposes a persistent reason when workspace changes are blocked", () => {

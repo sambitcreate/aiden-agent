@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   detachedLifecycleChatProjection,
+  detachedTextStreamingRemaining,
   fallbackDetachedLifecycleStream,
   isDetachedLifecycleChatDraining,
   parseChatReadResponse,
@@ -95,6 +96,7 @@ test("a revisited chat retains and advances its detached answer and subagent pro
 
   assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.content, "Partial answer");
   assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.subagents[0]?.revision, 1);
+  const beforeDelta = Date.now();
   for (const handler of listeners.get("chat:delta") ?? []) {
     handler({ streamId: owner.streamId, delta: " continues" });
   }
@@ -104,6 +106,9 @@ test("a revisited chat retains and advances its detached answer and subagent pro
   assert.equal(
     detachedLifecycleChatProjection("chat-a", "workspace-1")?.content,
     "Partial answer continues",
+  );
+  assert.ok(
+    (detachedLifecycleChatProjection("chat-a", "workspace-1")?.lastTextDeltaAt ?? 0) >= beforeDelta,
   );
   assert.equal(
     detachedLifecycleChatProjection("chat-a", "workspace-1")?.subagents[0]?.state,
@@ -119,6 +124,13 @@ test("a revisited chat retains and advances its detached answer and subagent pro
   assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
   assert.equal(isDetachedLifecycleChatDraining("chat-a", "workspace-1"), false);
   unsubscribe();
+});
+
+test("detached text streaming expires relative to the last prose delta", () => {
+  assert.equal(detachedTextStreamingRemaining(null, 5_000, 2_000), 0);
+  assert.equal(detachedTextStreamingRemaining(4_250, 5_000, 2_000), 1_250);
+  assert.equal(detachedTextStreamingRemaining(2_000, 5_000, 2_000), 0);
+  assert.equal(detachedTextStreamingRemaining(6_000, 5_000, 2_000), 2_000);
 });
 
 test("a late terminal handoff repairs a refetched chat after A to B to A navigation", () => {

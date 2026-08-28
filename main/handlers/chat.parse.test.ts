@@ -185,4 +185,6 @@ test("parseParams keeps bounded generation selectors and creates empty authorita
       messages: [],
     },
   );
+  assert.deepEqual(parseParams({ ...base, visualize: true }).visualize, true);
+  assert.throws(() => parseParams({ ...base, visualize: false }), /Invalid generation fields/);
 });
