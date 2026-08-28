@@ -4,11 +4,54 @@ import { createServer } from "node:net";
 import test from "node:test";
 import {
   AidenRemoteTailscaleController,
+  createSystemTailscaleCommandRunner,
   withAidenTailscaleRouteLock,
   type AidenTailscaleCommandRunner,
+  type AidenTailscaleStatusReadFailureCategory,
 } from "./aiden-remote-tailscale.js";
 
 const target = "http://127.0.0.1:43177/api/aiden/v1";
+
+test("system Tailscale runner forces CLI mode for Finder-style production launches", async () => {
+  const executions: Array<{
+    binary: string;
+    args: readonly string[];
+    environment: NodeJS.ProcessEnv | undefined;
+  }> = [];
+  const runner = await createSystemTailscaleCommandRunner({
+    environment: {
+      HOME: "/test-home",
+      TAILSCALE_BE_CLI: "0",
+    },
+    resolveBinary: async () => "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    execute: async (binary, args, options) => {
+      executions.push({ binary, args: [...args], environment: options.env });
+      if (options.env?.TAILSCALE_BE_CLI !== "1") {
+        return { stdout: "The Tailscale GUI failed to start." };
+      }
+      return {
+        stdout: args[0] === "status"
+          ? JSON.stringify({
+            Self: { DNSName: "aiden.tailnet.ts.net." },
+            CertDomains: ["aiden.tailnet.ts.net"],
+          })
+          : "{}",
+      };
+    },
+  });
+  assert.ok(runner);
+
+  const inspection = await new AidenRemoteTailscaleController(runner).inspectRoute(target);
+  assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(inspection.assessment.state, "available");
+  assert.equal(executions.length, 2);
+  for (const execution of executions) {
+    assert.equal(execution.binary, "/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+    assert.equal(execution.environment?.HOME, "/test-home");
+    assert.equal(execution.environment?.TERM, undefined);
+    assert.equal(execution.environment?.TAILSCALE_BE_CLI, "1");
+  }
+});
 
 async function availableLoopbackPort(): Promise<number> {
   const socket = createSocket({ type: "udp4", reuseAddr: false });
@@ -135,7 +178,12 @@ test("combined route inspection retries a transient CLI read and recovers", asyn
 
 test("combined route inspection fails closed after bounded CLI retries", async () => {
   const calls: string[][] = [];
-  const diagnostics: Array<{ phase: "node" | "serve"; attempt: number; final: boolean }> = [];
+  const diagnostics: Array<{
+    phase: "node" | "serve";
+    attempt: number;
+    final: boolean;
+    category: AidenTailscaleStatusReadFailureCategory;
+  }> = [];
   const controller = new AidenRemoteTailscaleController({
     run: async (args) => {
       calls.push([...args]);
@@ -149,10 +197,30 @@ test("combined route inspection fails closed after bounded CLI retries", async (
   });
   assert.equal(calls.length, 3);
   assert.deepEqual(diagnostics, [
-    { phase: "node", attempt: 1, final: false },
-    { phase: "node", attempt: 2, final: false },
-    { phase: "node", attempt: 3, final: true },
+    { phase: "node", attempt: 1, final: false, category: "command-failed" },
+    { phase: "node", attempt: 2, final: false, category: "command-failed" },
+    { phase: "node", attempt: 3, final: true, category: "command-failed" },
   ]);
+});
+
+test("combined route inspection categorizes zero-exit non-JSON CLI output without retaining it", async () => {
+  const diagnostics: Array<{
+    phase: "node" | "serve";
+    attempt: number;
+    final: boolean;
+    category: AidenTailscaleStatusReadFailureCategory;
+  }> = [];
+  const controller = new AidenRemoteTailscaleController({
+    run: async () => "The Tailscale GUI failed to start with private details.",
+  }, { onStatusReadFailure: (input) => diagnostics.push(input) });
+
+  assert.equal((await controller.inspectRoute(target)).assessment.errorCode, "status_unavailable");
+  assert.deepEqual(diagnostics, [
+    { phase: "node", attempt: 1, final: false, category: "invalid-response" },
+    { phase: "node", attempt: 2, final: false, category: "invalid-response" },
+    { phase: "node", attempt: 3, final: true, category: "invalid-response" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /private details/u);
 });
 
 test("concurrent settings reads share one node and Serve snapshot", async () => {

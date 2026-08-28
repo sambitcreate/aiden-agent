@@ -180,3 +180,10 @@ Every implementation phase uses the same mandatory gate:
 - Settings now offers an explicit, confirmed **Use another port** recovery. It selects a complete available HTTPS/HTTP listener pair, persists it atomically, retains device credentials, and warns that LAN rediscovery may be required.
 - Recovery refuses to move while a Tailscale route mutation is pending or this profile still owns a Serve route, preventing an exact-path route from being orphaned.
 - The Tailscale companion target remains HTTP loopback behind Tailnet HTTPS. Separately, OpenAI-compatible model servers on private Tailnet addresses accept either HTTP or HTTPS and the setup UI now advertises HTTP directly.
+
+## Post-completion repair — 2026-08-28
+
+- Packaged macOS launches force Tailscale's documented `TAILSCALE_BE_CLI=1` mode instead of relying on terminal-only `TERM` or `SHLVL` heuristics. Fixed executable resolution, route ownership, and the HTTPS/HTTP listener-port pair remain unchanged.
+- Regression coverage reproduces Finder-style process environments and the previous zero-exit, non-JSON GUI response. Route inspection now classifies that response as unavailable rather than retaining its text.
+- Production diagnostics retain only the inspection phase, closed failure category, and bounded attempt count. Tailscale output, device names, tailnet names, and paths are excluded.
+- Remote Access distinguishes a ready local listener from verified Tailscale Serve readiness, so a failed inspection no longer presents the entire connection as ready.

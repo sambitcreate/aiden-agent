@@ -69,6 +69,7 @@ export const DIAGNOSTIC_BASE_EVENT_NAMES = [
   "electron-ready",
   "remote-request-failed",
   "remote-request-slow",
+  "tailscale-status-read-unavailable",
   "process-monitor-installed",
   "uncaught-exception",
   "node-warning",
@@ -193,6 +194,7 @@ const BOOLEAN_FIELDS = new Set(["isMainFrame", "retryable", "snapshotFailed", "t
 const EXPORT_OMITTED_FIELDS = new Set(["legacyScope", "message"]);
 const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   arch: new Set(["arm64", "ia32", "universal", "unknown", "x64"]),
+  failureCategory: new Set(["command-failed", "invalid-response", "timed-out"]),
   origin: new Set(["uncaughtException", "unhandledRejection", "unknown"]),
   platform: new Set(["aix", "android", "darwin", "freebsd", "haiku", "linux", "openbsd", "sunos", "unknown", "win32"]),
   processType: new Set(["Browser", "GPU", "Pepper Plugin", "Renderer", "Utility", "Zygote", "unknown"]),
@@ -243,6 +245,7 @@ const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   signal: new Set(["SIGHUP", "SIGINT", "SIGTERM"]),
   statusClass: new Set(["2xx", "4xx", "5xx"]),
   storeClass: new Set(["cache", "chat", "config", "health", "journal", "settings", "subagent", "unknown", "usage"]),
+  tailscalePhase: new Set(["node", "serve"]),
 };
 
 function normalizedStringField(key: string, value: string): string | undefined {

@@ -100,6 +100,31 @@ test("categorical fields reject grammar-valid but unregistered strings", () => {
   }), { platform: "darwin", arch: "arm64" });
 });
 
+test("Tailscale status diagnostics retain only closed failure categories", () => {
+  const event = createDiagnosticEvent(
+    {
+      level: "warn",
+      area: "remote",
+      event: "tailscale-status-read-unavailable",
+      outcome: "unavailable",
+      fields: {
+        tailscalePhase: "serve",
+        failureCategory: "invalid-response",
+        attempts: 3,
+        commandOutput: "The Tailscale GUI failed at /Users/private/tailnet.ts.net",
+      },
+    },
+    sessionId,
+  );
+
+  assert.deepEqual(event.fields, {
+    tailscalePhase: "serve",
+    failureCategory: "invalid-response",
+    attempts: 3,
+  });
+  assert.doesNotMatch(JSON.stringify(event), /Users|tailnet\.ts\.net/u);
+});
+
 test("the closed field vocabulary keeps hostile oversized inputs below the envelope cap", () => {
   const fields = Object.fromEntries(
     Array.from({ length: 16 }, (_, index) => [`field${index}`, "x".repeat(240)]),
