@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo
 
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
@@ -15,11 +16,13 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.diagnostics.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
@@ -474,6 +477,9 @@ class AidenRemoteClientTest {
 
     @Test
     fun testAttachmentContentRejectsUnsupportedMimeAndOversizedBodies() = runBlocking {
+        val diagnostics = mutableListOf<AidenDiagnosticRecord>()
+        AidenDiagnostics.testSink = { diagnostics += it }
+        try {
         server.enqueue(
             MockResponse().setResponseCode(200).setHeader("Content-Type", "image/gif").setBody("GIF89a")
         )
@@ -491,6 +497,81 @@ class AidenRemoteClientTest {
         assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
             runBlocking { client.attachmentContent("chat-1", "large-1") }
         }
+        assertEquals(2, diagnostics.count { it.event == AidenDiagnosticEvent.CONTRACT_REJECTED })
+        } finally {
+            AidenDiagnostics.testSink = null
+        }
         Unit
+    }
+
+    @Test
+    fun testRequestCancellationIsRecordedExactlyOnceAndNeverAsFailure() = runBlocking {
+        val diagnostics = mutableListOf<AidenDiagnosticRecord>()
+        AidenDiagnostics.testSink = { diagnostics += it }
+        try {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            val request = launch(Dispatchers.IO) { client.server() }
+            assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+            request.cancelAndJoin()
+            assertEquals(diagnostics.map { it.message() }.joinToString(), 1, diagnostics.count {
+                it.event == AidenDiagnosticEvent.REQUEST_FAILED &&
+                    it.outcome == AidenDiagnosticOutcome.CANCELLED
+            })
+            assertEquals(0, diagnostics.count {
+                it.event == AidenDiagnosticEvent.REQUEST_FAILED &&
+                    it.outcome == AidenDiagnosticOutcome.FAILED
+            })
+        } finally {
+            AidenDiagnostics.testSink = null
+        }
+    }
+
+    @Test
+    fun testHeaderTransportFailureIsRecordedExactlyOnce() = runBlocking {
+        val diagnostics = mutableListOf<AidenDiagnosticRecord>()
+        AidenDiagnostics.testSink = { diagnostics += it }
+        try {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+            assertThrows(Exception::class.java) { runBlocking { client.server() } }
+            assertEquals(1, diagnostics.count {
+                it.event == AidenDiagnosticEvent.REQUEST_FAILED &&
+                    it.outcome == AidenDiagnosticOutcome.FAILED
+            })
+            assertEquals(0, diagnostics.count {
+                it.event == AidenDiagnosticEvent.REQUEST_FAILED &&
+                    it.outcome == AidenDiagnosticOutcome.CANCELLED
+            })
+        } finally {
+            AidenDiagnostics.testSink = null
+        }
+    }
+
+    @Test
+    fun testAttachmentBodyDisconnectIsRecordedExactlyOnceAsConnectionFailure() = runBlocking {
+        val diagnostics = mutableListOf<AidenDiagnosticRecord>()
+        AidenDiagnostics.testSink = { diagnostics += it }
+        try {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "image/png")
+                    .setBody("x".repeat(64 * 1024))
+                    .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
+            )
+            assertThrows(Exception::class.java) {
+                runBlocking { client.attachmentContent("chat-1", "disconnected-1") }
+            }
+            assertEquals(1, diagnostics.count {
+                it.area == AidenDiagnosticArea.CONNECTION &&
+                    it.event == AidenDiagnosticEvent.REQUEST_FAILED &&
+                    it.outcome == AidenDiagnosticOutcome.FAILED &&
+                    it.code == AidenDiagnosticCode.NETWORK
+            })
+            assertEquals(0, diagnostics.count {
+                it.event == AidenDiagnosticEvent.CONTRACT_REJECTED
+            })
+        } finally {
+            AidenDiagnostics.testSink = null
+        }
     }
 }
