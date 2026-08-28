@@ -4,6 +4,7 @@ import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
+import { DiagnosticsSettings } from "./diagnostics-settings";
 
 const APP_ICON_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 const REPOSITORY_URL = "https://github.com/sambitcreate/aiden-agent";
@@ -272,6 +273,8 @@ export function AboutSettings() {
           </div>
         </Field>
       </FieldSet>
+
+      <DiagnosticsSettings />
 
       <AlertDialog
         open={confirmReset}

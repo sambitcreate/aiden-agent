@@ -18,6 +18,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
 import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
+import { reportRendererDiagnostic } from "../lib/dev-log";
 import { cn } from "../lib/ui-utils";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import {
@@ -1553,18 +1554,26 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       ? null
       : { failed: false, resetKey: props.resetKey };
   }
+  componentDidCatch(error: unknown) {
+    reportRendererDiagnostic("react-caught", error, "subtree");
+  }
   render() {
     return this.state.failed ? this.props.fallback : this.props.children;
   }
 }
 
 export function ErrorBoundaryView({ error, reset }: { error?: unknown; reset?: () => void }) {
+  const [referenceId, setReferenceId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setReferenceId(reportRendererDiagnostic("route-error", error, "router"));
+  }, [error]);
   return (
     <div className="flex h-screen flex-col items-center justify-center gap-3 p-8 text-center">
       <Text variant="heading1">Something went wrong</Text>
       <Text color="secondary">
-        {error instanceof Error ? error.message : "Aiden Agent could not render this screen."}
+        Aiden Agent could not render this screen. Try again or open Diagnostics in Settings.
       </Text>
+      {referenceId ? <Text color="secondary">Reference {referenceId}</Text> : null}
       {reset ? <Button onClick={reset}>Try again</Button> : null}
     </div>
   );
