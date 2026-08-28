@@ -116,12 +116,12 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
   );
   const failureExit = shutdown.indexOf("app.exit(1);", quitReceiptFinalization);
   const failureDiagnosticFlush = shutdown.lastIndexOf(
-    "await flushSubagentRuntimeDiagnostics();",
+    "await flushSubagentRuntimeDiagnostics(1_000);",
     failureExit,
   );
   const forcedQuit = shutdown.indexOf("forceAppQuit = true;", cleanup);
   const normalDiagnosticFlush = shutdown.lastIndexOf(
-    "await flushSubagentRuntimeDiagnostics();",
+    "await flushSubagentRuntimeDiagnostics(1_000);",
     forcedQuit,
   );
   const quitAction = soak.indexOf('case "normal_quit"');
