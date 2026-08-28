@@ -61,4 +61,4 @@ If the selected local speech model is not installed, the mobile settings can ask
 - **Speech service is busy:** wait for the active transcription to finish and retry. The Mac permits one active transcription and one waiting request.
 - **Port already in use:** stop the other local service or repair the saved Remote Access configuration before enabling it again.
 
-Remote Access diagnostics contain request IDs, route names, status codes, latency, and at most a device-ID suffix. They exclude bearer credentials, pairing secrets, provider keys, prompt bodies, and filesystem paths.
+Remote Access diagnostics keep only closed route categories, outcome/status classes, bounded latency, and stable Aiden-owned error codes. Successful production traffic is reduced to daily aggregate counts; durable records never contain request IDs, device or instance suffixes, bearer credentials, pairing secrets, provider keys, request/response bodies, URLs, or filesystem paths.
