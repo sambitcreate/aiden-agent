@@ -1,7 +1,6 @@
 import AVFoundation
 import Foundation
 import Observation
-import OSLog
 import Speech
 import UIKit
 
@@ -37,7 +36,6 @@ final class ComposerVoiceInputController {
     private var macTranscriptionTask: Task<Void, Never>?
     private var nativeFinalizationTask: Task<Void, Never>?
     private var sessionFence = ComposerVoiceSessionFence()
-    private let logger = Logger.aidenVoiceInput
 
     @ObservationIgnored var locale = Locale.current
 
@@ -394,7 +392,12 @@ final class ComposerVoiceInputController {
     }
 
     private func fail(_ message: String, logCategory: VoiceInputFailureLogCategory) {
-        logger.error("Voice input failed category=\(logCategory.rawValue, privacy: .public)")
+        AidenDiagnostics.record(
+            .speech,
+            event: .speechFailed,
+            outcome: .failed,
+            code: logCategory.diagnosticCode
+        )
         suppressNextRecognitionError = false
         stopAcceptingDraftUpdates()
         stopAudio(cancelTask: true)
@@ -550,6 +553,18 @@ enum VoiceInputFailureLogCategory: String {
     case noAudioInput, invalidInputFormat, audioEngineAlreadyRunning, audioStartup
 }
 
+private extension VoiceInputFailureLogCategory {
+    var diagnosticCode: AidenDiagnosticCode {
+        switch self {
+        case .microphonePermission: .microphonePermission
+        case .speechAuthorization: .speechAuthorization
+        case .speechUnavailable: .unavailable
+        case .audioStartup, .noAudioInput, .invalidInputFormat, .audioEngineAlreadyRunning: .audioStartup
+        case .appNotActive: .unavailable
+        }
+    }
+}
+
 enum ComposerVoiceInputStartPolicy {
     static func canStart(appIsActive: Bool) -> Bool { appIsActive }
 
@@ -610,13 +625,6 @@ struct ComposerVoiceDraftUpdateSession {
         guard acceptsUpdates else { return nil }
         return ComposerVoiceDraftComposer.composedDraft(baseDraft: baseDraft, transcript: transcript)
     }
-}
-
-private extension Logger {
-    static let aidenVoiceInput = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "AidenOnTheGo",
-        category: "VoiceInput"
-    )
 }
 
 @MainActor
