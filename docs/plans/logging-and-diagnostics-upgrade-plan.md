@@ -1,6 +1,6 @@
 # Logging and Diagnostics Upgrade
 
-Status: Implementation complete; signed-release and physical-device acceptance remain release-environment gates
+Status: Implementation and signed-release acceptance complete; physical-device acceptance remains a release-environment gate
 Date: 2026-08-27
 Audit snapshot: clean feature worktree based on `origin/main` at `13748505984aeb9a8f99017a1e7eef5a6452526f`
 Scope: Electron main/preload/renderer, Aiden Remote, native helpers, iOS, Android, test/build diagnostics, device-local support export, privacy, retention, and release acceptance
@@ -38,18 +38,20 @@ runner checks owner-only storage, invokes explicit crash mode through the
 packaged renderer/preload/main path, and confirms the real native warning by its
 accessibility label before asserting that capture started.
 
+The `v0.35.0` release workflow built, signed, notarized, and verified the
+distribution, then ran packaged diagnostics acceptance against that exact app
+before publishing the release assets.
+
 Release-owned evidence still outstanding:
 
-- run the artifact acceptance against the exact signed and notarized release
-  app produced by the release job;
 - collect fresh-device iOS MetricKit crash/hang delivery and Android
   `ApplicationExitInfo` termination receipts.
 
-Automated implementation evidence is complete. The release environment still owns
-two non-code acceptance actions: run the post-`dist` smoke against the actual
-signed/notarized artifact, and exercise MetricKit/ApplicationExitInfo behavior on
-physical iOS/Android devices. This plan stays outside the completed archive until
-those release receipts exist; the gaps do not represent unfinished runtime code.
+Automated implementation and signed-artifact evidence are complete. The release
+environment still owns one non-code acceptance action: exercise
+MetricKit/ApplicationExitInfo behavior on physical iOS/Android devices. This plan
+stays outside the completed archive until those device receipts exist; the gap
+does not represent unfinished runtime code.
 
 ## Executive decision
 
