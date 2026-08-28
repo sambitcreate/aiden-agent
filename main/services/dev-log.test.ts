@@ -29,7 +29,7 @@ test("writeDevLog is a no-op before initDevLog", async () => {
   await flushDevLog();
 });
 
-test("initDevLog creates the file with a session header and writes formatted lines", async () => {
+test("initDevLog creates a versioned JSONL journal and writes structured legacy events", async () => {
   await withTempDir(async (dir) => {
     const target = path.join(dir, "nested", "aiden-dev.log");
     initDevLog(target);
@@ -39,11 +39,16 @@ test("initDevLog creates the file with a session header and writes formatted lin
     writeDevLog("warn", "main", [{ a: 1 }]);
     await flushDevLog();
 
-    const text = await fs.readFile(target, "utf8");
-    assert.match(text, /── session .+ ──/);
-    assert.match(text, /INFO {2}\[main\] hello 42\n/);
-    assert.match(text, /ERROR \[renderer\] Error: boom/);
-    assert.match(text, /WARN {2}\[main\] \{"a":1\}\n/);
+    const records = (await fs.readFile(target, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(records[0]?.event, "session-started");
+    assert.ok(records.every((record) => record.version === 1));
+    assert.ok(records.some((record) => record.level === "info" && record.area === "app"));
+    assert.ok(records.some((record) => record.level === "error" && record.area === "renderer"));
+    assert.ok(records.some((record) => record.level === "warn" && record.area === "app"));
+    assert.doesNotMatch(JSON.stringify(records), /boom/u);
   });
 });
 
@@ -66,8 +71,15 @@ test("fatal diagnostics are appended synchronously", async () => {
     initDevLog(target);
     writeDevLogSync("error", "process", ["fatal", new Error("boom")]);
 
-    const text = await fs.readFile(target, "utf8");
-    assert.match(text, /ERROR \[process\] fatal Error: boom/u);
+    const record = JSON.parse((await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8")).trim()) as {
+      level: string;
+      fields: Record<string, unknown>;
+    };
+    assert.equal(record.level, "error");
+    assert.equal(record.fields.legacyScope, "process");
+    assert.equal(record.fields.errorType, "Error");
+    assert.match(String(record.fields.fingerprint), /^[0-9a-f]{16}$/u);
+    assert.doesNotMatch(JSON.stringify(record), /boom/u);
   });
 });
 
@@ -83,19 +95,19 @@ test("credentials are redacted before they reach disk", () => {
   ]) {
     assert.equal(redacted.includes(credential), false);
   }
-  assert.match(redacted, /Bearer \[REDACTED\]/);
+  assert.match(redacted, /REDACTED/u);
 });
 
-test("an oversized existing log is rotated aside on init", async () => {
+test("an oversized existing log is discarded before a bounded session starts", async () => {
   await withTempDir(async (dir) => {
     const target = path.join(dir, "aiden-dev.log");
-    await fs.writeFile(target, "y".repeat(3 * 1024 * 1024), "utf8");
+    const legacyStructured = `${JSON.stringify({ version: 1, at: "2026-08-27T12:00:00.000Z" })}\n`;
+    await fs.writeFile(target, legacyStructured.repeat(Math.ceil((3 * 1024 * 1024) / legacyStructured.length)), "utf8");
     initDevLog(target);
     writeDevLog("info", "main", ["fresh"]);
     await flushDevLog();
 
-    const prev = await fs.readFile(path.join(dir, "aiden-dev.prev.log"), "utf8");
-    assert.equal(prev.length, 3 * 1024 * 1024);
+    await assert.rejects(fs.stat(path.join(dir, "aiden-dev.log.1")), { code: "ENOENT" });
     const current = await fs.readFile(target, "utf8");
     assert.match(current, /fresh/);
     assert.ok(current.length < 1024);
