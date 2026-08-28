@@ -588,9 +588,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before copying this chat.");
       }
-      if (imageArtifactRecoveryUnavailable) {
-        throw new Error(
-          "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
+        if (imageArtifactRecoveryUnavailable) {
+          throw new Error(
+            "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
         );
       }
       if (imageArtifactRecoveryPending) {
@@ -1046,7 +1046,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
-          "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair.",
+          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
         );
       }
       if (imageArtifactRecoveryPending) {
@@ -1827,9 +1827,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             ready={
               ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable
             }
-            readinessMessage={
-              imageArtifactRecoveryUnavailable
-                ? "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
+              readinessMessage={
+                imageArtifactRecoveryUnavailable
+                ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
                 : imageArtifactRecoveryPending
                 ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
                 : readinessMessage
@@ -1886,7 +1886,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               documentAppendReconciliationRequired
                 ? "Reload Aiden before copying this chat."
                 : imageArtifactRecoveryUnavailable
-                  ? "Open Aiden's developer log to locate the image staging file that needs repair."
+                  ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
                 : imageArtifactRecoveryPending
                   ? "Delete this chat to discard the unrecovered visual artifact before copying."
                   : undefined
@@ -2000,10 +2000,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
           subagentsEnabled={environmentPanel.subagentsEnabled}
           onOpenSubagent={environmentPanel.openSubagent}
           agentActivity={visibleAgentActivity}
-          error={
-            error ??
-            (imageArtifactRecoveryUnavailable
-              ? "Visual artifact staging is unavailable. Open Aiden's developer log to locate the staging file that needs repair."
+            error={
+              error ??
+              (imageArtifactRecoveryUnavailable
+              ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
               : imageArtifactRecoveryPending
                 ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
                 : null)
