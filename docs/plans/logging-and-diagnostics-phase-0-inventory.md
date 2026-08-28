@@ -1,8 +1,8 @@
 # Logging and Diagnostics Phase 0 Inventory
 
-Status: Complete; inventory frozen and enforced by the implemented contract/policy tests  
-Baseline: `origin/main` at `13748505984aeb9a8f99017a1e7eef5a6452526f`  
-Date: 2026-08-27  
+Status: Complete; inventory frozen and enforced by the implemented contract/policy tests
+Baseline: `origin/main` at `13748505984aeb9a8f99017a1e7eef5a6452526f`
+Date: 2026-08-27
 Parent plan: [`logging-and-diagnostics-upgrade-plan.md`](logging-and-diagnostics-upgrade-plan.md)
 
 ## Purpose

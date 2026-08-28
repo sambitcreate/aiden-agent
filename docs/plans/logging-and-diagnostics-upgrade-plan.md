@@ -1,8 +1,8 @@
 # Logging and Diagnostics Upgrade
 
-Status: Implementation complete; signed-release and physical-device acceptance remain release-environment gates  
-Date: 2026-08-27  
-Audit snapshot: clean feature worktree based on `origin/main` at `13748505984aeb9a8f99017a1e7eef5a6452526f`  
+Status: Implementation complete; signed-release and physical-device acceptance remain release-environment gates
+Date: 2026-08-27
+Audit snapshot: clean feature worktree based on `origin/main` at `13748505984aeb9a8f99017a1e7eef5a6452526f`
 Scope: Electron main/preload/renderer, Aiden Remote, native helpers, iOS, Android, test/build diagnostics, device-local support export, privacy, retention, and release acceptance
 
 ## Implementation outcome
