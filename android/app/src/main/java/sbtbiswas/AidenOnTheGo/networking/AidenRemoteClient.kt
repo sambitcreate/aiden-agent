@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.networking
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.Flow
@@ -21,6 +22,11 @@ import okhttp3.Response
 import okhttp3.ResponseBody
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.*
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticArea
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticCode
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticEvent
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticOutcome
+import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnostics
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.security.MessageDigest
@@ -349,7 +355,8 @@ class AidenRemoteClient(
         botScope: AidenBotPrivateResponseScope? = null,
         requestTimeoutSeconds: Long? = null,
         deserializer: (ByteArray) -> T
-    ): T = withContext(Dispatchers.IO) {
+    ): T = try {
+        withContext(Dispatchers.IO) {
         val url = if (path.startsWith("http")) path else "$endpoint$path"
         val requestBuilder = Request.Builder()
             .url(url)
@@ -358,6 +365,7 @@ class AidenRemoteClient(
 
         if (authenticated) {
             if (credential.isNullOrEmpty()) {
+                AidenDiagnostics.record(AidenDiagnosticArea.AUTHENTICATION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.UNAUTHORIZED)
                 throw AidenRemoteClientException.MissingCredential
             }
             requestBuilder.addHeader("Authorization", "Bearer $credential")
@@ -388,21 +396,50 @@ class AidenRemoteClient(
                 .callTimeout(it, TimeUnit.SECONDS)
                 .build()
         } ?: httpClient
-        val response = callClient.newCall(requestBuilder.build()).await()
-        val bytes = response.body?.bytes() ?: ByteArray(0)
+        val response = try {
+            callClient.newCall(requestBuilder.build()).await()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
+            throw error
+        }
+        val bytes = try {
+            response.body?.bytes() ?: ByteArray(0)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
+            throw error
+        }
 
         if (!acceptedStatus.contains(response.code)) {
             val errorBody = parseError(response.code, bytes)
+            AidenDiagnostics.record(
+                if (response.code == 401 || response.code == 403) AidenDiagnosticArea.AUTHENTICATION else AidenDiagnosticArea.CONNECTION,
+                AidenDiagnosticEvent.REQUEST_FAILED,
+                AidenDiagnosticOutcome.FAILED,
+                if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
+            )
             throw AidenRemoteClientException.Server(response.code, errorBody)
         }
 
-        if (bytes.isNotEmpty() && acceptHeader.contains("json")) {
-            AidenRawJsonDuplicateKeyScanner.validate(bytes)
-            if (botScope != null) {
-                AidenBotPrivateResponseValidator.validate(bytes, botScope)
+        try {
+            if (bytes.isNotEmpty() && acceptHeader.contains("json")) {
+                AidenRawJsonDuplicateKeyScanner.validate(bytes)
+                if (botScope != null) {
+                    AidenBotPrivateResponseValidator.validate(bytes, botScope)
+                }
             }
+            deserializer(bytes)
+        } catch (error: Exception) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+            throw error
         }
-        deserializer(bytes)
+        }
+    } catch (error: CancellationException) {
+        AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.CANCELLED, AidenDiagnosticCode.NETWORK)
+        throw error
     }
 
     // --- Server & Identity ---
@@ -587,8 +624,12 @@ class AidenRemoteClient(
             acceptedStatus = setOf(204)
         ) {}
 
-    suspend fun attachmentContent(chatId: String, attachmentId: String): AidenAttachmentContent = withContext(Dispatchers.IO) {
-        if (credential.isNullOrEmpty()) throw AidenRemoteClientException.MissingCredential
+    suspend fun attachmentContent(chatId: String, attachmentId: String): AidenAttachmentContent = try {
+        withContext(Dispatchers.IO) {
+        if (credential.isNullOrEmpty()) {
+            AidenDiagnostics.record(AidenDiagnosticArea.AUTHENTICATION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.UNAUTHORIZED)
+            throw AidenRemoteClientException.MissingCredential
+        }
         val url = "$endpoint/chats/$chatId/attachments/$attachmentId/content"
         val request = Request.Builder()
             .url(url)
@@ -598,22 +639,47 @@ class AidenRemoteClient(
             .get()
             .build()
 
-        httpClient.newCall(request).await().use { response ->
+        val attachmentResponse = try {
+            httpClient.newCall(request).await()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
+            throw error
+        }
+        attachmentResponse.use { response ->
             if (!response.isSuccessful) {
                 val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
+                AidenDiagnostics.record(
+                    if (response.code == 401 || response.code == 403) AidenDiagnosticArea.AUTHENTICATION else AidenDiagnosticArea.CONNECTION,
+                    AidenDiagnosticEvent.REQUEST_FAILED,
+                    AidenDiagnosticOutcome.FAILED,
+                    if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
+                )
                 throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "image/jpeg" && contentType != "image/png") {
+                AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
                 throw AidenRemoteClientException.InvalidResponse()
             }
             val bytes = try {
                 response.body.readBounded(AidenAttachmentImageValidation.MAXIMUM_BYTES)
-            } catch (_: IOException) {
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: ResponseBodyLimitExceededException) {
+                AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
                 throw AidenRemoteClientException.InvalidResponse()
+            } catch (error: IOException) {
+                AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
+                throw error
             }
             AidenAttachmentContent(data = bytes, mimeType = contentType)
         }
+        }
+    } catch (error: CancellationException) {
+        AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.CANCELLED, AidenDiagnosticCode.NETWORK)
+        throw error
     }
 
     suspend fun startTurn(
@@ -684,6 +750,11 @@ class AidenRemoteClient(
         id: String,
         after: Int = 0
     ): Flow<AidenRemoteStreamEvent> = callbackFlow {
+        if (credential.isNullOrEmpty()) {
+            AidenDiagnostics.record(AidenDiagnosticArea.AUTHENTICATION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.UNAUTHORIZED)
+            close(AidenRemoteClientException.MissingCredential)
+            return@callbackFlow
+        }
         val query = if (after > 0) "?after=$after" else ""
         val url = "$endpoint/streams/$id/events$query"
         val requestBuilder = Request.Builder()
@@ -714,7 +785,26 @@ class AidenRemoteClient(
                 }
                 close()
             } catch (error: Exception) {
-                if (isActive) close(error)
+                if (isActive) {
+                    val area: AidenDiagnosticArea
+                    val code: AidenDiagnosticCode
+                    when (error) {
+                        is AidenRemoteClientException.Server -> {
+                            area = if (error.statusCode == 401 || error.statusCode == 403) AidenDiagnosticArea.AUTHENTICATION else AidenDiagnosticArea.CONNECTION
+                            code = if (area == AidenDiagnosticArea.AUTHENTICATION) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
+                        }
+                        is IOException -> {
+                            area = AidenDiagnosticArea.CONNECTION
+                            code = AidenDiagnosticCode.NETWORK
+                        }
+                        else -> {
+                            area = AidenDiagnosticArea.STREAM
+                            code = AidenDiagnosticCode.INVALID_RESPONSE
+                        }
+                    }
+                    AidenDiagnostics.record(area, AidenDiagnosticEvent.STREAM_INTERRUPTED, AidenDiagnosticOutcome.FAILED, code)
+                    close(error)
+                }
             }
         }
         awaitClose {
@@ -1570,9 +1660,11 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
     })
 }
 
+private class ResponseBodyLimitExceededException : IOException("response body exceeds limit")
+
 private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
     val body = this ?: return ByteArray(0)
-    if (body.contentLength() > maximumBytes) throw IOException("response body exceeds limit")
+    if (body.contentLength() > maximumBytes) throw ResponseBodyLimitExceededException()
     val output = ByteArrayOutputStream(minOf(maximumBytes, 64 * 1024))
     body.byteStream().use { input ->
         val buffer = ByteArray(16 * 1024)
@@ -1581,7 +1673,7 @@ private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
             val read = input.read(buffer)
             if (read < 0) break
             total += read
-            if (total > maximumBytes) throw IOException("response body exceeds limit")
+            if (total > maximumBytes) throw ResponseBodyLimitExceededException()
             output.write(buffer, 0, read)
         }
     }
