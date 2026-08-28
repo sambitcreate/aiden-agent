@@ -790,7 +790,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased(),
               contentType == "image/jpeg" || contentType == "image/png"
-        else { throw AidenRemoteClientError.invalidResponse }
+        else { try rejectContractResponse() }
         return AidenAttachmentContent(data: data, mimeType: contentType)
     }
 
@@ -1128,7 +1128,7 @@ final class AidenRemoteClient: @unchecked Sendable {
               httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased() == "no-store",
               httpResponse.value(forHTTPHeaderField: "X-Content-Type-Options")?.lowercased() == "nosniff",
               Self.isCanonicalBotPNG(data) else {
-            throw AidenRemoteClientError.invalidResponse
+            try rejectContractResponse()
         }
         return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
     }
@@ -1589,7 +1589,25 @@ final class AidenRemoteClient: @unchecked Sendable {
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish()
+                } catch let clientError as AidenRemoteClientError {
+                    switch clientError {
+                    case .missingCredential, .server, .unexpectedStatus:
+                        // The request/HTTP boundary already emitted the single auth or network category.
+                        break
+                    case .invalidEndpoint, .missingTrustConfiguration, .installationChanged:
+                        AidenDiagnostics.record(.connection, event: .streamInterrupted, outcome: .failed, code: .network)
+                    case .invalidResponse:
+                        AidenDiagnostics.record(.stream, event: .streamInterrupted, outcome: .failed, code: .invalidResponse)
+                    }
+                    continuation.finish(throwing: clientError)
+                } catch let contractError as AidenRemoteContractError {
+                    AidenDiagnostics.record(.stream, event: .streamInterrupted, outcome: .failed, code: .invalidResponse)
+                    continuation.finish(throwing: contractError)
+                } catch let parserError as AidenSSEParserError {
+                    AidenDiagnostics.record(.stream, event: .streamInterrupted, outcome: .failed, code: .invalidResponse)
+                    continuation.finish(throwing: parserError)
                 } catch {
+                    AidenDiagnostics.record(.connection, event: .streamInterrupted, outcome: .failed, code: .network)
                     continuation.finish(throwing: error)
                 }
             }
@@ -1658,6 +1676,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         do {
             return try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
         } catch {
+            AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
             throw AidenRemoteClientError.invalidResponse
         }
     }
@@ -1691,6 +1710,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         do {
             return try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
         } catch {
+            AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
             throw AidenRemoteClientError.invalidResponse
         }
     }
@@ -1747,6 +1767,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         }
         if authenticated {
             guard let credential, !credential.isEmpty else {
+                AidenDiagnostics.record(.authentication, event: .requestFailed, outcome: .failed, code: .unauthorized)
                 throw AidenRemoteClientError.missingCredential
             }
             request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
@@ -1761,21 +1782,48 @@ final class AidenRemoteClient: @unchecked Sendable {
         for request: URLRequest,
         maximumBytes: Int
     ) async throws -> (Data, URLResponse) {
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: request)
+        } catch is CancellationError {
+            AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .cancelled, code: .network)
+            throw CancellationError()
+        } catch {
+            AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .failed, code: .network)
+            throw error
+        }
         if response.expectedContentLength > Int64(maximumBytes) {
+            AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
             throw AidenRemoteContractError.payloadTooLarge
         }
         var data = Data()
         if response.expectedContentLength > 0 {
             data.reserveCapacity(min(Int(response.expectedContentLength), maximumBytes))
         }
-        for try await byte in bytes {
-            guard data.count < maximumBytes else {
-                throw AidenRemoteContractError.payloadTooLarge
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
+                    throw AidenRemoteContractError.payloadTooLarge
+                }
+                data.append(byte)
             }
-            data.append(byte)
+        } catch is CancellationError {
+            AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .cancelled, code: .network)
+            throw CancellationError()
+        } catch let contractError as AidenRemoteContractError {
+            throw contractError
+        } catch {
+            AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .failed, code: .network)
+            throw error
         }
         return (data, response)
+    }
+
+    private func rejectContractResponse() throws -> Never {
+        AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
+        throw AidenRemoteClientError.invalidResponse
     }
 
     private func idempotencyHeaders(_ key: UUID) -> [String: String] {
@@ -1897,6 +1945,12 @@ final class AidenRemoteClient: @unchecked Sendable {
             throw AidenRemoteClientError.invalidResponse
         }
         guard acceptedStatus.contains(response.statusCode) else {
+            AidenDiagnostics.record(
+                response.statusCode == 401 || response.statusCode == 403 ? .authentication : .connection,
+                event: .requestFailed,
+                outcome: .failed,
+                code: response.statusCode == 401 || response.statusCode == 403 ? .unauthorized : .network
+            )
             if let envelope = try? AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: data) {
                 throw AidenRemoteClientError.server(statusCode: response.statusCode, body: envelope.error)
             }
