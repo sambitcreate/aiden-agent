@@ -26,10 +26,9 @@ import { registerTelegramHandlers } from "./telegram.js";
 import { registerSubagentHandlers } from "./subagents.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerBotHandlers } from "./bots.js";
+import { registerDiagnosticHandlers } from "./diagnostics.js";
 
 import { ipcMain, logger } from "../platform.js";
-import { writeDevLog } from "../services/dev-log.js";
-import { isPackagedRuntime } from "../runtime-mode.js";
 
 export function registerHandlers(): void {
   logger.info("handlers", "Registering IPC handlers...");
@@ -39,13 +38,7 @@ export function registerHandlers(): void {
     return await appHandlers.getInfo();
   });
 
-  // Renderer error forwarding for the dev log file (see services/dev-log.ts).
-  ipcMain.handle("devlog:write", async (_event, level: unknown, message: unknown) => {
-    if (isPackagedRuntime()) return;
-    const safeLevel = level === "warn" || level === "error" ? level : "info";
-    const text = (typeof message === "string" ? message : String(message)).slice(0, 16_384);
-    writeDevLog(safeLevel, "renderer", [text]);
-  });
+  registerDiagnosticHandlers();
 
   // AI chat client handlers
   registerProviderHandlers();
