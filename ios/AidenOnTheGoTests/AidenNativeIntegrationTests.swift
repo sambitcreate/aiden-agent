@@ -5,6 +5,77 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenNativeIntegrationTests: XCTestCase {
+    func testDiagnosticVocabularyIsClosedAndContentFree() {
+        XCTAssertEqual(
+            Set(AidenDiagnosticArea.allCases.map(\.rawValue)),
+            Set(["connection", "authentication", "contract", "cache", "stream", "speech", "notification", "liveActivity", "priorTermination", "app"])
+        )
+        XCTAssertTrue(AidenDiagnosticEvent.allCases.contains(.contractRejected))
+        XCTAssertTrue(AidenDiagnosticCode.allCases.contains(.metricDiagnostic))
+        let vocabulary = [
+            AidenDiagnosticArea.allCases.map(\.rawValue),
+            AidenDiagnosticEvent.allCases.map(\.rawValue),
+            AidenDiagnosticOutcome.allCases.map(\.rawValue),
+            AidenDiagnosticCode.allCases.map(\.rawValue),
+        ].flatMap { $0 }.joined(separator: " ").lowercased()
+        for forbidden in ["prompt", "credential", "endpoint", "path", "token", "message"] {
+            XCTAssertFalse(vocabulary.contains(forbidden))
+        }
+    }
+
+    func testBinaryContractRejectionsEmitExactlyOneDiagnosticEach() async throws {
+        var records: [(AidenDiagnosticArea, AidenDiagnosticEvent, AidenDiagnosticOutcome, AidenDiagnosticCode)] = []
+        AidenDiagnostics.testSink = { records.append(($0, $1, $2, $3)) }
+        defer {
+            AidenDiagnostics.testSink = nil
+            AidenNativeActivityURLProtocol.handler = nil
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AidenNativeActivityURLProtocol.self]
+        let client = AidenRemoteClient(
+            endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,
+            credential: "proof-credential",
+            session: URLSession(configuration: configuration)
+        )
+
+        AidenNativeActivityURLProtocol.handler = { request in
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "image/gif"]
+            ))
+            return (response, Data("GIF89a".utf8))
+        }
+        do {
+            _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
+            XCTFail("Expected the attachment MIME contract to be rejected.")
+        } catch AidenRemoteClientError.invalidResponse {}
+
+        AidenNativeActivityURLProtocol.handler = { request in
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "image/png",
+                    "Cache-Control": "public",
+                    "X-Content-Type-Options": "nosniff",
+                ]
+            ))
+            return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
+        }
+        do {
+            _ = try await client.botAvatar(botId: "bot-1", assetRevision: "revision-1")
+            XCTFail("Expected the avatar cache/security contract to be rejected.")
+        } catch AidenRemoteClientError.invalidResponse {}
+
+        XCTAssertEqual(records.count, 2)
+        XCTAssertTrue(records.allSatisfy {
+            $0.0 == .contract && $0.1 == .contractRejected && $0.2 == .failed && $0.3 == .invalidResponse
+        })
+    }
+
     @MainActor
     func testLiveActivityLookupScopesIdenticalStreamIDsToInstallation() {
         let attributes = AgentRunActivityAttributes(
