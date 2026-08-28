@@ -193,9 +193,13 @@ export async function writeBotInboundAttachment(input: {
       profile,
       leaf,
     );
-  } catch (cause) {
+  } catch {
     child.kill("SIGKILL");
     await closed.catch(() => undefined);
-    throw cause;
+    const diagnostic = (await stderr).trim();
+    if (diagnostic.length > 0) {
+      throw new Error(diagnostic);
+    }
+    throw new Error("This Bot's Telegram attachment could not be stored safely.");
   }
 }
