@@ -68,12 +68,19 @@ test("process diagnostics synchronously record fatal events and preserve signal 
     fake.emit("SIGTERM");
     await flushDevLog();
 
-    const contents = await fs.readFile(target, "utf8");
-    assert.match(contents, /Process diagnostics installed/u);
-    assert.match(contents, /Uncaught exception/u);
-    assert.match(contents, /fatal boom/u);
-    assert.match(contents, /Process signal received/u);
-    assert.match(contents, /"signal":"SIGTERM"/u);
+    const contents = `${await fs.readFile(target, "utf8")}\n${await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8")}`;
+    const records = contents
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> });
+    assert.ok(records.some((record) => record.event === "process-monitor-installed"));
+    const fatal = records.find((record) => record.event === "uncaught-exception");
+    assert.equal(fatal?.fields?.errorType, "Error");
+    assert.match(String(fatal?.fields?.fingerprint), /^[0-9a-f]{16}$/u);
+    assert.doesNotMatch(contents, /fatal boom|\/workspace/u);
+    const signal = records.find((record) => record.event === "process-signal");
+    assert.equal(signal?.fields?.signal, "SIGTERM");
     assert.deepEqual(fake.killed, [{ pid: 123, signal: "SIGTERM" }]);
   } finally {
     await fs.rm(dir, { force: true, recursive: true });
