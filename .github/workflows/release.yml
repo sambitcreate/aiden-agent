@@ -35,13 +35,7 @@ jobs:
           node-version: 22.22.3
           cache: npm
 
-      - name: Install locked dependencies
-        run: npm ci
-
-      - name: Install Playwright Chromium for Generative UI containment
-        run: npx playwright install chromium
-
-      - name: Assign the main-push version
+      - name: Resolve the declared release version
         id: version
         shell: bash
         run: |
@@ -52,46 +46,69 @@ jobs:
           if [[ -n "$base_tag_match" ]]; then
             base_tag_exists=true
           fi
-          release_version="$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER" "$base_tag_exists")"
-          npm version "$release_version" --no-git-tag-version --allow-same-version
+          selection="$(node scripts/prepare-ci-release.mjs "$base_tag_exists")"
+          release_version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$selection")"
+          release_tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag)' "$selection")"
+          should_publish="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).publish))' "$selection")"
           echo "version=$release_version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$release_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
+          if [[ "$should_publish" != true ]]; then
+            echo "$release_tag already exists; skipping release without changing its version."
+          fi
+
+      - name: Install locked dependencies
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm ci
+
+      - name: Install Playwright Chromium for Generative UI containment
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npx playwright install chromium
 
       - name: Verify Homebrew and website release consumers
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run release:check-consumers
 
       - name: Verify TypeScript
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run type-check
 
       - name: Verify lint
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run lint
 
       - name: Verify diagnostics privacy and storage contracts
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:diagnostics
 
       - name: Verify branding, updater, and release policy
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:branding
 
       - name: Run JavaScript, TypeScript, and Computer Use tests
+        if: ${{ steps.version.outputs.publish == 'true' }}
         env:
           AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"
         run: npm test
 
       - name: Run Apple Foundation Models tests
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:native
 
       - name: Run deterministic Electron E2E gate
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e
 
       - name: Verify production-profile diagnostics support workflow
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e:diagnostics:production
 
       - name: Build sanitized E2E failure receipt
-        if: ${{ failure() }}
+        if: ${{ failure() && steps.version.outputs.publish == 'true' }}
         run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
 
       - name: Upload sanitized E2E failure receipt
-        if: ${{ failure() }}
+        if: ${{ failure() && steps.version.outputs.publish == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: playwright-e2e-release-${{ github.run_id }}-${{ github.run_attempt }}
@@ -100,6 +117,7 @@ jobs:
           retention-days: 7
 
       - name: Prepare App Store Connect key
+        if: ${{ steps.version.outputs.publish == 'true' }}
         shell: bash
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -114,6 +132,7 @@ jobs:
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize, and verify distribution
+        if: ${{ steps.version.outputs.publish == 'true' }}
         env:
           AIDEN_ENABLE_AUTO_UPDATES: "1"
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -123,9 +142,11 @@ jobs:
         run: npm run dist
 
       - name: Verify diagnostics in the signed packaged app
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e:diagnostics:packaged
 
       - name: Publish verified release assets
+        if: ${{ steps.version.outputs.publish == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

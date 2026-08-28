@@ -201,9 +201,29 @@ test("release publication checks deployed consumers before building", async () =
   );
   const consumerCheck = workflow.indexOf("npm run release:check-consumers");
   const distributionBuild = workflow.indexOf("npm run dist");
+  const versionResolution = workflow.indexOf("Resolve the declared release version");
+  const dependencyInstall = workflow.indexOf("Install locked dependencies");
 
   assert.match(workflow, /git ls-remote --tags origin/u);
-  assert.match(workflow, /--allow-same-version/u);
+  assert.doesNotMatch(workflow, /GITHUB_RUN_NUMBER|--allow-same-version/u);
+  assert.match(workflow, /node scripts\/prepare-ci-release\.mjs "\$base_tag_exists"/u);
+  assert.match(workflow, /steps\.version\.outputs\.publish == 'true'/u);
+  assert.ok(versionResolution >= 0 && versionResolution < dependencyInstall);
+  for (const stepName of [
+    "Install locked dependencies",
+    "Build, sign, notarize, and verify distribution",
+    "Verify diagnostics in the signed packaged app",
+    "Publish verified release assets",
+  ]) {
+    assert.match(
+      workflow,
+      new RegExp(
+        `- name: ${stepName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\n` +
+          " {8}if: \\$\\{\\{ steps\\.version\\.outputs\\.publish == 'true' \\}\\}",
+        "u",
+      ),
+    );
+  }
   assert.ok(consumerCheck >= 0, "the release workflow must check Homebrew and the website");
   assert.ok(
     distributionBuild > consumerCheck,
