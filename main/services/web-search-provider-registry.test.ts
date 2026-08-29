@@ -23,8 +23,19 @@ const WAVE1_PROVIDER_IDS = [
 ] as const satisfies readonly WebSearchProviderId[];
 
 const SHIPPED_PROVIDER_IDS = new Set<WebSearchProviderId>([...WAVE1_PROVIDER_IDS, "exa"]);
+const WAVE2_PROVIDER_IDS = [
+  "parallel",
+  "tinyfish",
+  "search1api",
+  "jina",
+  "kagi",
+  "ollama",
+  "serper",
+] as const satisfies readonly WebSearchProviderId[];
 
-test("Wave 1 release state is exactly the six adapter-backed additions", () => {
+for (const providerId of WAVE2_PROVIDER_IDS) SHIPPED_PROVIDER_IDS.add(providerId);
+
+test("release state is exactly the reviewed adapter-backed providers", () => {
   const shipped = new Set(
     WEB_SEARCH_PROVIDER_REGISTRY.filter((definition) => definition.releaseState === "shipped").map(
       (definition) => definition.id,
@@ -39,7 +50,14 @@ test("Wave 1 release state is exactly the six adapter-backed additions", () => {
     assert.equal(definition.fixedOrigins.length, 1);
   }
   assert.equal(getWebSearchProviderDefinition("exa")?.releaseState, "shipped");
-  assert.equal(getWebSearchProviderDefinition("parallel")?.releaseState, "experimental");
+  for (const providerId of WAVE2_PROVIDER_IDS) {
+    const definition = getWebSearchProviderDefinition(providerId);
+    assert.ok(definition);
+    assert.equal(definition.releaseState, "shipped");
+    assert.equal(definition.adapterVersion, 1);
+    assert.equal(definition.explicitOnly, true);
+    assert.equal(definition.automaticByDefault, false);
+  }
   assert.equal(getWebSearchProviderDefinition("serpbase")?.releaseState, "blocked");
 });
 
@@ -58,7 +76,7 @@ test("the main registry exposes only shipped adapter factories and keeps experim
     assert.equal(adapter.providerId, providerId);
     assert.equal(adapter.adapterVersion, 1);
   }
-  for (const providerId of ["parallel", "tinyfish", "search1api", "serpbase", "xcrawl"]) {
+  for (const providerId of ["serpbase", "xcrawl", "searxng", "firecrawl"]) {
     assert.equal(webSearchAdapterFactory(providerId), undefined);
     assert.equal(webSearchAdapterAvailable(providerId), false);
   }

@@ -22,6 +22,9 @@ test("Web Search IPC has one fenced, registry-backed channel surface", async () 
 
   for (const channel of [
     "webSearch:get",
+    "webSearch:existingAuth:get",
+    "webSearch:existingAuth:consent",
+    "webSearch:existingAuth:revoke",
     "webSearch:setEnabled",
     "webSearch:setSelection",
     "webSearch:setAutomaticRoute",
@@ -50,6 +53,9 @@ test("preload and renderer IPC expose only the generic Web Search contract", asy
   assert.match(preloadChannels, /"webSearch:"/u);
   for (const channel of [
     "webSearch:get",
+    "webSearch:existingAuth:get",
+    "webSearch:existingAuth:consent",
+    "webSearch:existingAuth:revoke",
     "webSearch:setEnabled",
     "webSearch:setSelection",
     "webSearch:setAutomaticRoute",
@@ -60,6 +66,8 @@ test("preload and renderer IPC expose only the generic Web Search contract", asy
     assert.match(rendererIpc, new RegExp(`"${channel}"`, "u"));
   }
   assert.match(rendererIpc, /export const webSearchApi/u);
+  assert.match(rendererIpc, /consentExistingAuth/u);
+  assert.match(rendererIpc, /revokeExistingAuth/u);
   assert.match(rendererTypes, /WebSearchRendererSnapshot/u);
   assert.match(rendererTypes, /WebSearchSettingsV2/u);
   assert.doesNotMatch(rendererIpc, /getKey|secretId|keyPrefix|keySuffix/u);

@@ -72,6 +72,22 @@ test("provider setup keeps credentials write-only and explains side effects", ()
   assert.match(setup, /role="alert" aria-live="assertive"/u);
 });
 
+test("OpenAI saved-account reuse is an explicit, separate, redacted consent path", () => {
+  const setup = between("function ProviderSetupDialog", "function SettingsSkeleton");
+  assert.match(setup, /supportsExistingAuth/u);
+  assert.match(setup, /configuredCredentialModes\.includes\("api-key"\)/u);
+  assert.match(setup, /webSearchApi\.consentExistingAuth/u);
+  assert.match(setup, /webSearchApi\.revokeExistingAuth/u);
+  assert.match(setup, /OpenAI Web Search model/u);
+  assert.match(source, /OPENAI_EXISTING_AUTH_CONSENT_COPY/u);
+  assert.match(source, /quota and billing/u);
+  assert.match(setup, /Route selection is unchanged/u);
+  assert.match(setup, /does not send a request/u);
+  assert.match(setup, /No saved OpenAI API key is available/u);
+  assert.match(setup, /Revoke approval/u);
+  assert.doesNotMatch(setup, /codexAccessToken|chatgpt-account-id|credentialFingerprint/u);
+});
+
 test("settings honor reduced motion and retain authority boundaries", () => {
   assert.match(source, /motion-reduce:transition-none/u);
   assert.match(source, /motion-reduce:animate-none/u);

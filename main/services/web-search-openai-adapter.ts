@@ -1,4 +1,4 @@
-/** OpenAI Responses API web-search adapter (API-key mode only). */
+/** OpenAI Responses API web-search adapter (API-key or explicit bound-auth mode). */
 
 import {
   createWebSearchJsonAdapter,
@@ -12,6 +12,7 @@ import {
 } from "./web-search-json-adapter.js";
 import type { WebSearchAdapter, WebSearchAdapterRequest } from "./web-search-provider-registry.js";
 import { webSearchError } from "./web-search-core.js";
+import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
 
 export const OPENAI_WEB_SEARCH_ORIGIN = "https://api.openai.com";
 export const OPENAI_WEB_SEARCH_ENDPOINT = `${OPENAI_WEB_SEARCH_ORIGIN}/v1/responses`;
@@ -40,7 +41,10 @@ function credentialValue(value: unknown): string {
   throw webSearchError("auth", "openai");
 }
 
-function requestContract(body: string, apiKey: string): WebSearchJsonRequestContract {
+function requestContract(
+  body: string,
+  headers: Readonly<Record<string, string>>,
+): WebSearchJsonRequestContract {
   return Object.freeze({
     url: OPENAI_WEB_SEARCH_ENDPOINT,
     init: Object.freeze({
@@ -49,31 +53,95 @@ function requestContract(body: string, apiKey: string): WebSearchJsonRequestCont
       credentials: "omit" as const,
       cache: "no-store" as const,
       referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      }),
+      headers: Object.freeze({ ...headers }),
       body,
     }),
   });
+}
+
+function modelId(value: unknown): string {
+  if (typeof value !== "string") throw webSearchError("config", "openai");
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    /\p{Cc}/u.test(normalized) ||
+    Array.from(normalized).length > 256 ||
+    new TextEncoder().encode(normalized).byteLength > 1_024
+  ) {
+    throw webSearchError("config", "openai");
+  }
+  return normalized;
+}
+
+function verifiedExistingAuth(value: WebSearchResolvedExistingAuth | undefined): {
+  readonly modelId: string;
+  readonly apiKey: string;
+  readonly headers: Readonly<Record<string, string>>;
+} {
+  if (
+    !value ||
+    value.targetProviderId !== "openai" ||
+    value.sourceProviderId !== "openai" ||
+    value.modelApi !== "openai-responses" ||
+    value.endpoint !== OPENAI_WEB_SEARCH_ENDPOINT ||
+    !isRecord(value.headers)
+  ) {
+    throw webSearchError("config", "openai");
+  }
+  const apiKey = credentialValue(value.credential);
+  const headers = value.headers;
+  const keys = Object.keys(headers).sort();
+  if (
+    keys.length !== 3 ||
+    keys[0] !== "Accept" ||
+    keys[1] !== "Authorization" ||
+    keys[2] !== "Content-Type" ||
+    headers.Accept !== "application/json" ||
+    headers.Authorization !== `Bearer ${apiKey}` ||
+    headers["Content-Type"] !== "application/json"
+  ) {
+    throw webSearchError("config", "openai");
+  }
+  return {
+    modelId: modelId(value.modelId),
+    apiKey,
+    headers,
+  };
 }
 
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
   credential: unknown,
+  credentialMode: WebSearchAdapterRequest["credentialMode"] = "api-key",
+  existingAuth?: WebSearchResolvedExistingAuth,
 ): WebSearchJsonRequestContract {
   const { query } = normalizeWebSearchJsonInput("openai", queryValue, numResultsValue);
-  const apiKey = credentialValue(credential);
+  const bound =
+    credentialMode === "existing-provider-auth" ? verifiedExistingAuth(existingAuth) : undefined;
+  if (
+    credentialMode !== "existing-provider-auth" &&
+    (credentialMode !== "api-key" || existingAuth !== undefined)
+  ) {
+    throw webSearchError("config", "openai");
+  }
+  const apiKey = bound?.apiKey ?? credentialValue(credential);
+  const selectedModel = bound?.modelId ?? OPENAI_WEB_SEARCH_MODEL;
   const body = JSON.stringify({
-    model: OPENAI_WEB_SEARCH_MODEL,
+    model: selectedModel,
     tools: [{ type: "web_search" }],
     input: query,
     include: ["web_search_call.action.sources"],
     store: false,
   });
-  return requestContract(body, apiKey);
+  return requestContract(
+    body,
+    bound?.headers ?? {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+  );
 }
 
 /** Build the fixed-origin OpenAI request without performing I/O. */
@@ -215,7 +283,13 @@ const OPENAI_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({
   providerId: "openai",
   endpoint: OPENAI_WEB_SEARCH_ENDPOINT,
   buildRequest: (request: WebSearchAdapterRequest) =>
-    buildRequestValues(request.query, request.numResults, request.credential),
+    buildRequestValues(
+      request.query,
+      request.numResults,
+      request.credential,
+      request.credentialMode,
+      request.existingAuth,
+    ),
   parse: parseOpenAIWebSearchResponse,
 });
 

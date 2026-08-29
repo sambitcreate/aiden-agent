@@ -64,6 +64,8 @@ import type {
   WebSearchRendererSnapshot,
   WebSearchRouteEntry,
   WebSearchSelection,
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererSnapshot,
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
@@ -371,6 +373,11 @@ export const exaApi = {
 // ── Web Search provider registry ─────────────────────────────────────
 export const webSearchApi = {
   get: () => invoke<WebSearchRendererSnapshot>("webSearch:get"),
+  getExistingAuth: () =>
+    invoke<WebSearchExistingAuthRendererSnapshot>("webSearch:existingAuth:get"),
+  consentExistingAuth: (request: WebSearchExistingAuthConsentRequest) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:existingAuth:consent", request),
+  revokeExistingAuth: () => invoke<WebSearchRendererSnapshot>("webSearch:existingAuth:revoke"),
   setEnabled: (enabled: boolean) =>
     invoke<WebSearchRendererSnapshot>("webSearch:setEnabled", enabled),
   setSelection: (selection: WebSearchSelection) =>

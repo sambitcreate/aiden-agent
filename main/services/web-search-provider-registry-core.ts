@@ -7,6 +7,8 @@
  * without learning an endpoint, header, credential, or implementation name.
  */
 
+import type { WebSearchExistingAuthRendererSnapshot } from "./web-search-auth-reuse-core.js";
+
 /** The concrete provider ids shipped by Pi Web Access (in its registry order). */
 export const WEB_SEARCH_PROVIDER_IDS = [
   "openai",
@@ -125,12 +127,18 @@ export interface WebSearchProviderRendererMetadata {
   automaticByDefault: boolean;
   configurationStatus: WebSearchProviderConfigurationStatus;
   ready: boolean;
+  /** Redacted readiness by credential mode; never contains credential data. */
+  configuredCredentialModes: readonly WebSearchCredentialMode[];
 }
 
 /** Main-only status input used when projecting a durable snapshot. */
 export interface WebSearchProviderStatus {
   configurationStatus: WebSearchProviderConfigurationStatus;
   ready: boolean;
+  /** Main-owned API-key presence used only for route-mode readiness. */
+  hasCredential?: boolean;
+  /** Main-owned, explicitly consented existing-provider binding readiness. */
+  hasExistingProviderAuth?: boolean;
 }
 
 const provider = (
@@ -190,7 +198,7 @@ const DEFINITIONS: readonly WebSearchProviderDefinition[] = [
     privacyUrl: "https://parallel.ai/privacy",
     termsUrl: "https://parallel.ai/terms",
     adapterVersion: 1,
-    releaseState: "experimental",
+    releaseState: "shipped",
     explicitOnly: true,
     automaticByDefault: false,
   }),
@@ -220,7 +228,7 @@ const DEFINITIONS: readonly WebSearchProviderDefinition[] = [
     privacyUrl: "https://tinyfish.ai/privacy",
     termsUrl: "https://tinyfish.ai/terms",
     adapterVersion: 1,
-    releaseState: "experimental",
+    releaseState: "shipped",
     explicitOnly: true,
     automaticByDefault: false,
   }),
@@ -235,7 +243,7 @@ const DEFINITIONS: readonly WebSearchProviderDefinition[] = [
     privacyUrl: "https://search1api.com/privacy-policy",
     termsUrl: "https://search1api.com/terms-of-service",
     adapterVersion: 1,
-    releaseState: "experimental",
+    releaseState: "shipped",
     explicitOnly: true,
     automaticByDefault: false,
   }),
@@ -310,7 +318,7 @@ const DEFINITIONS: readonly WebSearchProviderDefinition[] = [
     privacyUrl: "https://jina.ai/legal/privacy-policy",
     termsUrl: "https://jina.ai/legal/terms-of-service",
     adapterVersion: 1,
-    releaseState: "experimental",
+    releaseState: "shipped",
     explicitOnly: true,
     automaticByDefault: false,
   }),
@@ -430,7 +438,7 @@ const DEFINITIONS: readonly WebSearchProviderDefinition[] = [
     privacyUrl: "https://kagi.com/privacy",
     termsUrl: "https://kagi.com/terms",
     adapterVersion: 1,
-    releaseState: "experimental",
+    releaseState: "shipped",
     explicitOnly: true,
     automaticByDefault: false,
   }),
@@ -445,7 +453,7 @@ const DEFINITIONS: readonly WebSearchProviderDefinition[] = [
     privacyUrl: "https://ollama.com/privacy",
     termsUrl: "https://ollama.com/terms",
     adapterVersion: 1,
-    releaseState: "experimental",
+    releaseState: "shipped",
     explicitOnly: true,
     automaticByDefault: false,
   }),
@@ -520,7 +528,7 @@ const DEFINITIONS: readonly WebSearchProviderDefinition[] = [
     privacyUrl: "https://serper.dev/privacy-policy",
     termsUrl: "https://serper.dev/terms-of-service",
     adapterVersion: 1,
-    releaseState: "experimental",
+    releaseState: "shipped",
     explicitOnly: true,
     automaticByDefault: false,
   }),
@@ -604,7 +612,12 @@ function validStatus(status: WebSearchProviderStatus | undefined): WebSearchProv
   )
     ? status.configurationStatus
     : "invalid";
-  return { configurationStatus, ready: status.ready === true };
+  return {
+    configurationStatus,
+    ready: status.ready === true,
+    ...(status.hasCredential === true ? { hasCredential: true } : {}),
+    ...(status.hasExistingProviderAuth === true ? { hasExistingProviderAuth: true } : {}),
+  };
 }
 
 /**
@@ -628,6 +641,11 @@ export function projectWebSearchProviderForRenderer(
     definition.releaseState === "blocked"
       ? { configurationStatus: "invalid", ready: false }
       : unsafeStatus;
+  const configuredCredentialModes: WebSearchCredentialMode[] = [];
+  if (safeStatus.hasCredential === true) configuredCredentialModes.push("api-key");
+  if (safeStatus.hasExistingProviderAuth === true) {
+    configuredCredentialModes.push("existing-provider-auth");
+  }
   return Object.freeze({
     id: definition.id,
     label: definition.label,
@@ -643,6 +661,7 @@ export function projectWebSearchProviderForRenderer(
     automaticByDefault: definition.automaticByDefault,
     configurationStatus: safeStatus.configurationStatus,
     ready: safeStatus.ready,
+    configuredCredentialModes: Object.freeze(configuredCredentialModes),
   });
 }
 
@@ -1129,6 +1148,8 @@ export interface WebSearchRendererSnapshot {
   /** Ordered route membership, duplicated from selection for simple card joins. */
   route: readonly WebSearchRouteEntry[];
   routeReadiness: readonly WebSearchRouteReadiness[];
+  /** Redacted discovery/status for the optional OpenAI account-binding path. */
+  existingAuth: WebSearchExistingAuthRendererSnapshot;
 }
 
 /** Pure readiness projection; no key metadata is accepted or returned. */

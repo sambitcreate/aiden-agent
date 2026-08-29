@@ -35,6 +35,7 @@ import type {
   WebSearchAdapterFactory,
   WebSearchFetch,
 } from "./web-search-provider-registry.js";
+import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
 
 const PRIVATE_KEY = "wave1-provider-key-4e3d9c";
 const PRIVATE_BODY = "WAVE1_PRIVATE_UPSTREAM_BODY_4e3d9c";
@@ -91,6 +92,97 @@ test("OpenAI builder follows the reviewed Responses web-search JSON contract", (
   });
   assert.equal(request.init.body?.includes(PRIVATE_KEY), false);
   assert.equal(request.url.includes(PRIVATE_KEY), false);
+});
+
+test("OpenAI existing-auth requests honor the exact bound model and secure fixed contract", async () => {
+  let requestUrl = "";
+  let requestInit: RequestInit | undefined;
+  const adapter = createOpenAIWebSearchAdapter({
+    fetch: async (input, init) => {
+      requestUrl = String(input);
+      requestInit = init;
+      return new Response(
+        JSON.stringify({
+          output: [
+            { type: "web_search_call", status: "completed" },
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: "Source",
+                  annotations: [{ type: "url_citation", url: "https://example.test/source" }],
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  const existingAuth: WebSearchResolvedExistingAuth = {
+    targetProviderId: "openai",
+    sourceProviderId: "openai",
+    modelId: "gpt-5.4-bound",
+    modelApi: "openai-responses",
+    endpoint: OPENAI_WEB_SEARCH_ENDPOINT,
+    credential: PRIVATE_KEY,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${PRIVATE_KEY}`,
+      "Content-Type": "application/json",
+    },
+  };
+  const result = await adapter.search({
+    ...adapterRequest("openai"),
+    credentialMode: "existing-provider-auth",
+    credential: undefined,
+    existingAuth,
+  });
+  assert.equal(result.providerId, "openai");
+  assert.equal(requestUrl, OPENAI_WEB_SEARCH_ENDPOINT);
+  assertSecureRequest(requestInit);
+  assert.deepEqual(requestInit?.headers, existingAuth.headers);
+  assert.equal(JSON.parse(requestInit?.body?.toString() ?? "{}").model, "gpt-5.4-bound");
+});
+
+test("OpenAI adapter rejects anonymous and mismatched credential modes before fetch", async () => {
+  let fetchCalls = 0;
+  const adapter = createOpenAIWebSearchAdapter({
+    fetch: async () => {
+      fetchCalls += 1;
+      return new Response("{}", { status: 200 });
+    },
+  });
+  await assert.rejects(
+    adapter.search({
+      ...adapterRequest("openai"),
+      credentialMode: "anonymous",
+    }),
+    (error: unknown) => error instanceof WebSearchError && error.kind === "config",
+  );
+  await assert.rejects(
+    adapter.search({
+      ...adapterRequest("openai"),
+      credentialMode: "api-key",
+      existingAuth: {
+        targetProviderId: "openai",
+        sourceProviderId: "openai",
+        modelId: "gpt-5.4-bound",
+        modelApi: "openai-responses",
+        endpoint: OPENAI_WEB_SEARCH_ENDPOINT,
+        credential: PRIVATE_KEY,
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${PRIVATE_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    }),
+    (error: unknown) => error instanceof WebSearchError && error.kind === "config",
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("Brave builder keeps query data in its reviewed URL and key in its auth header", () => {

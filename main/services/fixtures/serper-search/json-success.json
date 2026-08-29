@@ -1,0 +1,20 @@
+{
+  "searchParameters": { "q": "current provider documentation", "num": 2 },
+  "organic": [
+    {
+      "title": "Serper API",
+      "link": "https://serper.dev/",
+      "snippet": "Serper provides a hosted Google Search API."
+    },
+    {
+      "title": "Second Serper source",
+      "link": "https://example.test/serper-second",
+      "snippet": "A second untrusted Serper result."
+    },
+    {
+      "title": "Duplicate Serper source",
+      "link": "https://example.test/serper-second",
+      "snippet": "This duplicate is discarded."
+    }
+  ]
+}

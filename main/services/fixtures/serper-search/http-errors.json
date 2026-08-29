@@ -1,0 +1,5 @@
+{
+  "401": { "message": "SERPER_FIXTURE_PRIVATE_AUTH_BODY" },
+  "429": { "message": "SERPER_FIXTURE_PRIVATE_QUOTA_BODY" },
+  "500": { "message": "SERPER_FIXTURE_PRIVATE_UPSTREAM_BODY" }
+}

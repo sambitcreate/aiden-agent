@@ -35,6 +35,8 @@ import {
   type GeminiErrorCategory,
 } from "./web-search-gemini-core.js";
 import { WEB_SEARCH_WAVE1_ADAPTER_FACTORIES } from "./web-search-wave1-adapters.js";
+import { WEB_SEARCH_WAVE2_BATCH_A_ADAPTER_FACTORIES } from "./web-search-wave2-batch-a.js";
+import { WEB_SEARCH_WAVE2_BATCH_B_ADAPTER_FACTORIES } from "./web-search-wave2-batch-b.js";
 import {
   getWebSearchProviderDefinition,
   type WebSearchCredentialMode,
@@ -46,6 +48,7 @@ import {
   WebSearchError,
   type WebSearchResultSet,
 } from "./web-search-core.js";
+import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
 
 export type WebSearchFetch = (
   input: string | URL | Request,
@@ -58,6 +61,8 @@ export interface WebSearchAdapterRequest {
   readonly credentialMode: WebSearchCredentialMode;
   /** Main-owned API key. It is never included in a result or error. */
   readonly credential?: string;
+  /** Main-only, already reverified provider binding; never renderer input. */
+  readonly existingAuth?: WebSearchResolvedExistingAuth;
   readonly signal: AbortSignal;
   /** Distinguishes the service deadline from caller cancellation. */
   readonly timedOut?: () => boolean;
@@ -505,7 +510,7 @@ export function createGeminiWebSearchAdapter(
 
 export const geminiWebSearchAdapterFactory = createGeminiWebSearchAdapter;
 
-/** Main-only factories for all adapters whose Wave 1 contracts are shipped. */
+/** Main-only factories for every adapter whose reviewed contract is shipped. */
 export const WEB_SEARCH_ADAPTER_FACTORIES: Readonly<
   Partial<Record<WebSearchProviderId, WebSearchAdapterFactory>>
 > = Object.freeze({
@@ -516,6 +521,8 @@ export const WEB_SEARCH_ADAPTER_FACTORIES: Readonly<
   perplexity: perplexityWebSearchAdapterFactory,
   gemini: geminiWebSearchAdapterFactory,
   exa: createExaWebSearchAdapter,
+  ...WEB_SEARCH_WAVE2_BATCH_A_ADAPTER_FACTORIES,
+  ...WEB_SEARCH_WAVE2_BATCH_B_ADAPTER_FACTORIES,
 });
 
 export function webSearchAdapterFactory(providerId: unknown): WebSearchAdapterFactory | undefined {

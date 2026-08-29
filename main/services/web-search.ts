@@ -39,6 +39,8 @@ import {
   type WebSearchAdapterRequest,
   type WebSearchFetch,
 } from "./web-search-provider-registry.js";
+import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
+import type { WebSearchExistingAuthRendererStatus } from "./web-search-auth-reuse-core.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import type { AppSettings } from "./types.js";
 
@@ -49,6 +51,10 @@ export interface WebSearchServiceDependencies {
   getSettings: () => Promise<AppSettings>;
   /** Reads one main-owned credential; null means absent or unavailable. */
   getCredential?: (providerId: string) => Promise<string | null | undefined>;
+  /** Reads only the redacted status of the explicit existing-auth binding. */
+  getExistingAuthStatus?: () => Promise<WebSearchExistingAuthRendererStatus>;
+  /** Re-verifies and resolves the explicit binding immediately before I/O. */
+  resolveExistingAuth?: () => Promise<WebSearchResolvedExistingAuth>;
   /** Reads the install/onboarding marker before config seeding can mutate it. */
   getMigrationEvidence?: () => Promise<WebSearchFreshnessEvidence | undefined>;
   /** Persists a normalized v2 migration result when legacy settings are found. */
@@ -287,6 +293,38 @@ export class WebSearchService {
     }
   }
 
+  private async readExistingAuthStatus(): Promise<WebSearchExistingAuthRendererStatus | undefined> {
+    if (!this.dependencies.getExistingAuthStatus) return undefined;
+    try {
+      return await this.dependencies.getExistingAuthStatus();
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async existingAuthStillBound(
+    providerId: WebSearchProviderId,
+    resolved: WebSearchResolvedExistingAuth,
+  ): Promise<boolean> {
+    if (!this.dependencies.resolveExistingAuth) return false;
+    try {
+      const current = await this.dependencies.resolveExistingAuth();
+      return (
+        current.targetProviderId === providerId &&
+        current.sourceProviderId === resolved.sourceProviderId &&
+        current.modelId === resolved.modelId &&
+        current.modelApi === resolved.modelApi &&
+        current.endpoint === resolved.endpoint &&
+        // The redacted status intentionally cannot distinguish two keys for
+        // the same provider/model. Compare the exact main-only credential
+        // identity after I/O so re-consent or rotation fences old evidence.
+        current.credential === resolved.credential
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private async prepareGeneration(): Promise<PreparedGeneration> {
     // This callback is intentionally awaited before getSettings. The main
     // binding reads the pre-seeding local marker here, which distinguishes a
@@ -338,10 +376,20 @@ export class WebSearchService {
       route.route.map(async (entry): Promise<PreparedAttempt> => {
         const credential =
           entry.credentialMode === "api-key" ? credentials.get(entry.providerId) : undefined;
+        const existingAuthStatus =
+          entry.credentialMode === "existing-provider-auth"
+            ? await this.readExistingAuthStatus()
+            : undefined;
         const readiness: WebSearchProviderReadiness = {
           ...(entry.credentialMode === "api-key"
             ? { hasCredential: credential !== undefined }
-            : {}),
+            : entry.credentialMode === "existing-provider-auth"
+              ? {
+                  hasExistingProviderAuth:
+                    existingAuthStatus?.state === "ready" &&
+                    existingAuthStatus.targetProviderId === entry.providerId,
+                }
+              : {}),
         };
         const factory = adapterFactoryFor(this.adapterFactories, entry.providerId);
         let adapter: WebSearchAdapter | undefined;
@@ -410,14 +458,27 @@ export class WebSearchService {
     }, timeoutMs);
     try {
       if (callerSignal.aborted) throw webSearchError("cancelled", attempt.entry.providerId);
-      const adapterRequest: WebSearchAdapterRequest = {
-        query: request.query,
-        numResults: request.numResults,
-        credentialMode: attempt.entry.credentialMode,
-        ...(attempt.credential === undefined ? {} : { credential: attempt.credential }),
-        signal: controller.signal,
-        timedOut: () => timedOut,
-      };
+      let existingAuth: WebSearchResolvedExistingAuth | undefined;
+      if (attempt.entry.credentialMode === "existing-provider-auth") {
+        if (!this.dependencies.resolveExistingAuth) {
+          throw webSearchError("auth", attempt.entry.providerId);
+        }
+        try {
+          existingAuth = await this.dependencies.resolveExistingAuth();
+        } catch {
+          // Binding resolution re-reads the persisted provider credential and
+          // compares its identity immediately before the adapter can issue a
+          // request. Never turn a stale/revoked binding into a network call.
+          throw webSearchError("auth", attempt.entry.providerId);
+        }
+        if (!existingAuth || existingAuth.targetProviderId !== attempt.entry.providerId) {
+          throw webSearchError("auth", attempt.entry.providerId);
+        }
+      }
+      // Resolve local existing-auth state before charging a provider attempt;
+      // the hook is the final per-attempt fence immediately before adapter I/O.
+      // A failed binding must therefore consume neither a child budget nor a
+      // network attempt.
       if (options.beforeProviderAttempt) {
         await options.beforeProviderAttempt(attempt.entry.providerId);
       }
@@ -425,8 +486,25 @@ export class WebSearchService {
       if (controller.signal.aborted) {
         throw webSearchError(timedOut ? "timeout" : "cancelled", attempt.entry.providerId);
       }
+      const adapterRequest: WebSearchAdapterRequest = {
+        query: request.query,
+        numResults: request.numResults,
+        credentialMode: attempt.entry.credentialMode,
+        ...(attempt.credential === undefined ? {} : { credential: attempt.credential }),
+        ...(existingAuth === undefined ? {} : { existingAuth }),
+        signal: controller.signal,
+        timedOut: () => timedOut,
+      };
       const result = await attempt.adapter.search(adapterRequest);
       if (callerSignal.aborted) throw webSearchError("cancelled", attempt.entry.providerId);
+      if (
+        existingAuth !== undefined &&
+        !(await this.existingAuthStillBound(attempt.entry.providerId, existingAuth))
+      ) {
+        // Revoke or identity drift during an in-flight request invalidates the
+        // evidence before it can be published to the model or caller.
+        throw webSearchError("auth", attempt.entry.providerId);
+      }
       if (options.revalidateAfterAttempt) {
         const valid = await options.revalidateAfterAttempt(attempt.entry.providerId, result);
         if (valid === false) throw webSearchError("unavailable", attempt.entry.providerId);

@@ -575,6 +575,8 @@ gates pass; autonomous authority remains unchanged.
 
 ### Phase 3 — Foundational breadth and provider-auth reuse
 
+Status: Complete (2026-08-29)
+
 - Ship Wave 2 adapters in reviewed batches, with SearXNG waiting on its
   private-network/SSRF gate.
 - Add exact existing OpenAI/Codex auth reuse only after separate consent and
@@ -583,6 +585,17 @@ gates pass; autonomous authority remains unchanged.
 
 Exit: every shipped adapter passes the same bounds/error/attribution contract;
 credential save never changes route membership.
+
+Exit result: Parallel REST, TinyFish, Search1API, Jina, Kagi, Ollama Cloud, and
+Serper ship as explicit-only Wave 2 routes behind fixed origins, header-only
+credentials, bounded responses, closed errors, cancellation, and untrusted
+provider attribution. OpenAI API-key reuse is an explicit main-owned binding
+with fenced IPC, redacted Settings state, a fixed Responses contract, and exact
+credential revalidation before evidence publication. Consent and revoke do not
+select a route or contact OpenAI. ChatGPT/Codex reuse remains unavailable until
+its backend response contract is independently proven; SearXNG remains closed
+until its private-network/SSRF gate exists. Focused Web Search, authority, type,
+lint, format, build, and changed-scope React review gates pass.
 
 ### Phase 4 — Long-tail adapters and experimental sources
 

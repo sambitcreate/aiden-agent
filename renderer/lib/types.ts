@@ -21,6 +21,12 @@ import type {
   WebSearchSelection,
   WebSearchSettingsV2,
 } from "../../main/services/web-search-provider-registry-core";
+import type {
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererOption,
+  WebSearchExistingAuthRendererSnapshot,
+  WebSearchExistingAuthRendererStatus,
+} from "../../main/services/web-search-auth-reuse-core";
 export type {
   BoundedNonSecretProviderConfig,
   WebSearchProviderId,
@@ -29,6 +35,12 @@ export type {
   WebSearchRouteEntry,
   WebSearchSelection,
   WebSearchSettingsV2,
+};
+export type {
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererOption,
+  WebSearchExistingAuthRendererSnapshot,
+  WebSearchExistingAuthRendererStatus,
 };
 export type { BotDefinition } from "../shared/bots";
 

@@ -4,10 +4,16 @@ import test from "node:test";
 import { WebSearchService } from "./web-search.js";
 import {
   freshWebSearchSettings,
+  type WebSearchProviderId,
   type WebSearchSettingsV2,
 } from "./web-search-provider-registry-core.js";
 import { WebSearchError, webSearchError, type WebSearchResultSet } from "./web-search-core.js";
 import type { WebSearchAdapter, WebSearchAdapterFactory } from "./web-search-provider-registry.js";
+import {
+  OPENAI_WEB_SEARCH_RESPONSES_ENDPOINT,
+  type WebSearchExistingAuthRendererStatus,
+} from "./web-search-auth-reuse-core.js";
+import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
 import type { AppSettings } from "./types.js";
 
 const PRIVATE_KEY = "exa-key-private-7dbfe9";
@@ -45,6 +51,13 @@ function evidence(providerId: "exa" | "parallel-mcp" = "exa"): WebSearchResultSe
 
 function adapter(
   providerId: "exa" | "parallel-mcp",
+  search: WebSearchAdapter["search"],
+): WebSearchAdapterFactory {
+  return () => ({ providerId, adapterVersion: 1, search });
+}
+
+function anyAdapter(
+  providerId: WebSearchProviderId,
   search: WebSearchAdapter["search"],
 ): WebSearchAdapterFactory {
   return () => ({ providerId, adapterVersion: 1, search });
@@ -418,4 +431,193 @@ test("timeout and caller cancellation are closed before a result can escape", as
     service.search({ query: QUERY }, cancelled.signal),
     (error: unknown) => error instanceof WebSearchError && error.kind === "cancelled",
   );
+});
+
+function openAiExistingStatus(modelId = "gpt-5.6"): WebSearchExistingAuthRendererStatus {
+  return {
+    targetProviderId: "openai",
+    state: "ready",
+    configured: true,
+    sourceProviderId: "openai",
+    modelId,
+  };
+}
+
+function openAiExistingResolution(
+  credential: string,
+  modelId = "gpt-5.6",
+): WebSearchResolvedExistingAuth {
+  return {
+    targetProviderId: "openai",
+    sourceProviderId: "openai",
+    modelId,
+    modelApi: "openai-responses",
+    endpoint: OPENAI_WEB_SEARCH_RESPONSES_ENDPOINT,
+    credential,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${credential}`,
+      "Content-Type": "application/json",
+    },
+  };
+}
+
+test("existing-auth readiness is bound to the attempted provider identity", async () => {
+  let adapterCalls = 0;
+  const service = new WebSearchService({
+    getSettings: async () =>
+      baseSettings({
+        mode: "fixed",
+        providerId: "xai",
+        credentialMode: "existing-provider-auth",
+      }),
+    getExistingAuthStatus: async () => openAiExistingStatus(),
+    resolveExistingAuth: async () => openAiExistingResolution("bound-openai-key"),
+    adapterFactories: {
+      xai: anyAdapter("xai", async () => {
+        adapterCalls += 1;
+        return {
+          providerId: "xai",
+          untrusted: true,
+          results: [],
+        };
+      }),
+    },
+  });
+
+  const availability = await service.availability();
+  assert.deepEqual(availability.route, [
+    { providerId: "xai", ready: false, configurationStatus: "needs-setup" },
+  ]);
+  await assert.rejects(
+    service.search({ query: QUERY }),
+    (error: unknown) =>
+      error instanceof WebSearchError && error.kind === "config" && error.providerId === "xai",
+  );
+  assert.equal(adapterCalls, 0);
+});
+
+test("failed existing-auth resolution does not consume an attempt or issue a request", async () => {
+  let beforeAttemptCalls = 0;
+  let adapterCalls = 0;
+  const service = new WebSearchService({
+    getSettings: async () =>
+      baseSettings({
+        mode: "fixed",
+        providerId: "openai",
+        credentialMode: "existing-provider-auth",
+      }),
+    getExistingAuthStatus: async () => openAiExistingStatus(),
+    resolveExistingAuth: async () => {
+      throw new Error("binding revoked");
+    },
+    adapterFactories: {
+      openai: anyAdapter("openai", async () => {
+        adapterCalls += 1;
+        return { providerId: "openai", untrusted: true, results: [] };
+      }),
+    },
+  });
+
+  await assert.rejects(
+    service.search(
+      { query: QUERY },
+      { beforeProviderAttempt: () => void (beforeAttemptCalls += 1) },
+    ),
+    (error: unknown) =>
+      error instanceof WebSearchError && error.kind === "auth" && error.providerId === "openai",
+  );
+  assert.equal(beforeAttemptCalls, 0);
+  assert.equal(adapterCalls, 0);
+});
+
+test("same-model key re-consent during deferred I/O fences old evidence before publication", async () => {
+  const firstKey = "existing-key-before-reconsent";
+  const replacementKey = "existing-key-after-reconsent";
+  let currentKey = firstKey;
+  let adapterStartedResolve: (() => void) | undefined;
+  const adapterStarted = new Promise<void>((resolve) => {
+    adapterStartedResolve = resolve;
+  });
+  let releaseResponse: (() => void) | undefined;
+  const responseReady = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  let adapterCalls = 0;
+  const service = new WebSearchService({
+    getSettings: async () =>
+      baseSettings({
+        mode: "fixed",
+        providerId: "openai",
+        credentialMode: "existing-provider-auth",
+      }),
+    // The redacted projection remains ready with the same model, which is why
+    // post-I/O validation must use the exact main-only resolution below.
+    getExistingAuthStatus: async () => openAiExistingStatus(),
+    resolveExistingAuth: async () => openAiExistingResolution(currentKey),
+    adapterFactories: {
+      openai: anyAdapter("openai", async () => {
+        adapterCalls += 1;
+        adapterStartedResolve?.();
+        await responseReady;
+        return { providerId: "openai", untrusted: true, results: [] };
+      }),
+    },
+  });
+
+  const request = service.search({ query: QUERY });
+  await adapterStarted;
+  currentKey = replacementKey;
+  releaseResponse?.();
+  await assert.rejects(
+    request,
+    (error: unknown) =>
+      error instanceof WebSearchError && error.kind === "auth" && error.providerId === "openai",
+  );
+  assert.equal(adapterCalls, 1);
+});
+
+test("revocation during deferred existing-auth I/O fences evidence before publication", async () => {
+  let revoked = false;
+  let adapterStartedResolve: (() => void) | undefined;
+  const adapterStarted = new Promise<void>((resolve) => {
+    adapterStartedResolve = resolve;
+  });
+  let releaseResponse: (() => void) | undefined;
+  const responseReady = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  let adapterCalls = 0;
+  const service = new WebSearchService({
+    getSettings: async () =>
+      baseSettings({
+        mode: "fixed",
+        providerId: "openai",
+        credentialMode: "existing-provider-auth",
+      }),
+    getExistingAuthStatus: async () => openAiExistingStatus(),
+    resolveExistingAuth: async () => {
+      if (revoked) throw new Error("binding revoked");
+      return openAiExistingResolution("existing-key-before-revoke");
+    },
+    adapterFactories: {
+      openai: anyAdapter("openai", async () => {
+        adapterCalls += 1;
+        adapterStartedResolve?.();
+        await responseReady;
+        return { providerId: "openai", untrusted: true, results: [] };
+      }),
+    },
+  });
+
+  const request = service.search({ query: QUERY });
+  await adapterStarted;
+  revoked = true;
+  releaseResponse?.();
+  await assert.rejects(
+    request,
+    (error: unknown) =>
+      error instanceof WebSearchError && error.kind === "auth" && error.providerId === "openai",
+  );
+  assert.equal(adapterCalls, 1);
 });

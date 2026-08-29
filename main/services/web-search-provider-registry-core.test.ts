@@ -73,6 +73,36 @@ test("renderer projection is redacted and contains only categorical status", () 
   assert.equal(webSearchProviderRegistryForRenderer()[0]?.configurationStatus, "needs-setup");
 });
 
+test("renderer projection keeps API-key and existing-auth readiness distinct", () => {
+  const definition = getWebSearchProviderDefinition("openai");
+  assert.ok(definition);
+  const keyOnly = projectWebSearchProviderForRenderer(definition, {
+    configurationStatus: "configured",
+    ready: true,
+    hasCredential: true,
+    hasExistingProviderAuth: false,
+  });
+  const existingOnly = projectWebSearchProviderForRenderer(definition, {
+    configurationStatus: "configured",
+    ready: true,
+    hasCredential: false,
+    hasExistingProviderAuth: true,
+  });
+  const both = projectWebSearchProviderForRenderer(definition, {
+    configurationStatus: "configured",
+    ready: true,
+    hasCredential: true,
+    hasExistingProviderAuth: true,
+  });
+  assert.deepEqual(keyOnly.configuredCredentialModes, ["api-key"]);
+  assert.deepEqual(existingOnly.configuredCredentialModes, ["existing-provider-auth"]);
+  assert.deepEqual(both.configuredCredentialModes, ["api-key", "existing-provider-auth"]);
+  for (const projection of [keyOnly, existingOnly, both]) {
+    assert.equal("credential" in projection, false);
+    assert.equal("apiKey" in projection, false);
+  }
+});
+
 test("fresh settings are enabled with only anonymous Exa and an explicit fallback policy", () => {
   const settings = freshWebSearchSettings();
   assert.deepEqual(settings, {

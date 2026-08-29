@@ -108,6 +108,9 @@ const CREDENTIAL_MODE_LABELS: Record<CredentialMode, string> = {
   endpoint: "Configured endpoint",
 };
 
+const OPENAI_EXISTING_AUTH_CONSENT_COPY =
+  "Allow Web Search to use the saved OpenAI API key. Searches use your OpenAI API quota and billing; the key stays encrypted on this device and is never copied into Web Search settings.";
+
 const FALLBACK_LABELS: Record<AutomaticSelection["fallbackOn"][number], string> = {
   timeout: "Timeout",
   network: "Network error",
@@ -535,12 +538,51 @@ function ProviderSetupDialog({
   const [routeMode, setRouteMode] = React.useState<CredentialMode>(
     routeEntry?.credentialMode ?? defaultCredentialMode(provider),
   );
-  const [busy, setBusy] = React.useState<"credential" | "config" | "route" | null>(null);
+  const [busy, setBusy] = React.useState<
+    "credential" | "config" | "route" | "existing-auth" | null
+  >(null);
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   const hasCredential =
-    providerNeedsApiKey(provider) && provider.configurationStatus === "configured";
+    providerNeedsApiKey(provider) && provider.configuredCredentialModes.includes("api-key");
+  const supportsExistingAuth =
+    provider.id === "openai" && provider.capabilities.includes("existing-provider-auth");
+  const existingAuthOption = supportsExistingAuth
+    ? snapshot.existingAuth.options.find((option) => option.sourceProviderId === "openai")
+    : undefined;
+  const existingAuthStatus = snapshot.existingAuth.status;
+  const existingAuthReady =
+    supportsExistingAuth &&
+    existingAuthStatus.state === "ready" &&
+    existingAuthStatus.sourceProviderId === "openai";
+  const existingAuthAvailable =
+    existingAuthOption?.available === true && existingAuthOption.models.length > 0;
+  const [existingAuthModelId, setExistingAuthModelId] = React.useState(
+    () => existingAuthStatus.modelId ?? existingAuthOption?.models[0]?.id ?? "",
+  );
+  const existingAuthSync = React.useRef<{
+    option: typeof existingAuthOption;
+    modelId?: string;
+  }>({ option: undefined });
+  React.useEffect(() => {
+    const optionChanged = existingAuthSync.current.option !== existingAuthOption;
+    const statusChanged = existingAuthSync.current.modelId !== existingAuthStatus.modelId;
+    if (optionChanged || statusChanged) {
+      const statusModelIsAvailable = existingAuthStatus.modelId
+        ? existingAuthOption?.models.some((model) => model.id === existingAuthStatus.modelId)
+        : false;
+      setExistingAuthModelId(
+        statusModelIsAvailable
+          ? (existingAuthStatus.modelId ?? "")
+          : (existingAuthOption?.models[0]?.id ?? ""),
+      );
+    }
+    existingAuthSync.current = {
+      option: existingAuthOption,
+      modelId: existingAuthStatus.modelId,
+    };
+  }, [existingAuthOption, existingAuthStatus.modelId]);
   const hasConfigFields = providerNeedsEndpoint(provider) || providerNeedsZone(provider);
   const configValid =
     (!providerNeedsEndpoint(provider) || endpointDraft.trim().length > 0) &&
@@ -602,6 +644,47 @@ function ProviderSetupDialog({
     }
   };
 
+  const consentExistingAuth = async () => {
+    if (!supportsExistingAuth || !existingAuthAvailable || !existingAuthModelId || busy) {
+      return;
+    }
+    setBusy("existing-auth");
+    setMessage(null);
+    setError(null);
+    try {
+      const next = await webSearchApi.consentExistingAuth({
+        targetProviderId: "openai",
+        sourceProviderId: "openai",
+        modelId: existingAuthModelId,
+        consent: true,
+      });
+      onSnapshot(next);
+      setMessage("OpenAI account approved for Web Search. Route selection is unchanged.");
+    } catch (caught) {
+      setError(errorMessage(caught, "Couldn’t approve the saved OpenAI account."));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revokeExistingAuth = async () => {
+    if (!supportsExistingAuth || !existingAuthReady || busy) return;
+    setBusy("existing-auth");
+    setMessage(null);
+    setError(null);
+    try {
+      const next = await webSearchApi.revokeExistingAuth();
+      onSnapshot(next);
+      setMessage(
+        "OpenAI account approval revoked. The saved provider credential and route are unchanged.",
+      );
+    } catch (caught) {
+      setError(errorMessage(caught, "Couldn’t revoke the saved OpenAI account."));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const applyRouteMode = async () => {
     if (busy) return;
     setBusy("route");
@@ -620,7 +703,9 @@ function ProviderSetupDialog({
   const routeModeDescription =
     routeMode === "anonymous"
       ? "Uses the provider’s free or anonymous route when available."
-      : "Uses the saved credential for this provider. Saving a key alone never activates this mode.";
+      : routeMode === "existing-provider-auth"
+        ? "Uses the separately approved saved OpenAI account. Approval never changes this route selection."
+        : "Uses the saved credential for this provider. Saving a key alone never activates this mode.";
 
   return (
     <Dialog
@@ -689,7 +774,7 @@ function ProviderSetupDialog({
           </div>
         </section>
 
-        {provider.credentialKind === "optional-api-key" ? (
+        {provider.credentialKind === "optional-api-key" || supportsExistingAuth ? (
           <Field
             label="Route mode"
             description={`${routeModeDescription} Route membership is a separate choice from credential saving.`}
@@ -701,43 +786,69 @@ function ProviderSetupDialog({
               aria-label={`${provider.label} route mode`}
               className="grid gap-2"
             >
-              <label
-                htmlFor={`web-search-${provider.id}-anonymous`}
-                className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-2.5 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-              >
-                <RadioGroupItem
-                  id={`web-search-${provider.id}-anonymous`}
-                  value="anonymous"
-                  className="mt-0.5 shrink-0"
-                />
-                <span className="min-w-0">
-                  <Text as="span" variant="small-strong" className="block">
-                    Built-in free route
-                  </Text>
-                  <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                    Use anonymous access where this provider supports it; provider rate limits may
-                    apply.
-                  </Text>
-                </span>
-              </label>
-              <label
-                htmlFor={`web-search-${provider.id}-api-key`}
-                className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-2.5 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-              >
-                <RadioGroupItem
-                  id={`web-search-${provider.id}-api-key`}
-                  value="api-key"
-                  className="mt-0.5 shrink-0"
-                />
-                <span className="min-w-0">
-                  <Text as="span" variant="small-strong" className="block">
-                    Use my API key
-                  </Text>
-                  <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                    Use your saved key for this route; your key remains encrypted on this device.
-                  </Text>
-                </span>
-              </label>
+              {provider.credentialKind === "optional-api-key" ? (
+                <label
+                  htmlFor={`web-search-${provider.id}-anonymous`}
+                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-2.5 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+                >
+                  <RadioGroupItem
+                    id={`web-search-${provider.id}-anonymous`}
+                    value="anonymous"
+                    className="mt-0.5 shrink-0"
+                  />
+                  <span className="min-w-0">
+                    <Text as="span" variant="small-strong" className="block">
+                      Built-in free route
+                    </Text>
+                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+                      Use anonymous access where this provider supports it; provider rate limits may
+                      apply.
+                    </Text>
+                  </span>
+                </label>
+              ) : null}
+              {provider.credentialKind === "optional-api-key" || providerNeedsApiKey(provider) ? (
+                <label
+                  htmlFor={`web-search-${provider.id}-api-key`}
+                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-2.5 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+                >
+                  <RadioGroupItem
+                    id={`web-search-${provider.id}-api-key`}
+                    value="api-key"
+                    className="mt-0.5 shrink-0"
+                  />
+                  <span className="min-w-0">
+                    <Text as="span" variant="small-strong" className="block">
+                      Use my API key
+                    </Text>
+                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+                      Use your saved key for this route; your key remains encrypted on this device.
+                    </Text>
+                  </span>
+                </label>
+              ) : null}
+              {supportsExistingAuth ? (
+                <label
+                  htmlFor={`web-search-${provider.id}-existing-auth`}
+                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-2.5 transition-[background-color,border-color,opacity] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+                >
+                  <RadioGroupItem
+                    id={`web-search-${provider.id}-existing-auth`}
+                    value="existing-provider-auth"
+                    disabled={!existingAuthAvailable}
+                    className="mt-0.5 shrink-0"
+                  />
+                  <span className="min-w-0">
+                    <Text as="span" variant="small-strong" className="block">
+                      Use approved OpenAI account
+                    </Text>
+                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+                      Uses the saved account only after the separate approval below; OpenAI quota
+                      and billing apply.
+                    </Text>
+                  </span>
+                </label>
+              ) : null}
             </RadioGroup>
             <Button
               variant="transparent"
@@ -801,6 +912,87 @@ function ProviderSetupDialog({
                 Remove saved key
               </Button>
             </div>
+          </Field>
+        ) : null}
+
+        {supportsExistingAuth ? (
+          <Field
+            label="Saved OpenAI account"
+            description="Approval is provider-scoped and separate from route selection. It reads local encrypted state only; it does not send a request."
+            orientation="vertical"
+          >
+            <Callout>
+              <div className="flex items-start gap-2.5">
+                <LockKeyhole className="mt-0.5 size-4 shrink-0 text-tertiary" />
+                <div className="min-w-0">
+                  <Text variant="small-strong">
+                    {existingAuthReady ? "OpenAI account approved" : "Approve this saved account"}
+                  </Text>
+                  <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
+                    {OPENAI_EXISTING_AUTH_CONSENT_COPY}
+                  </Text>
+                </div>
+              </div>
+              {existingAuthAvailable ? (
+                <div className="mt-3 flex flex-col gap-2 min-[540px]:flex-row min-[540px]:items-center">
+                  <Select
+                    value={existingAuthModelId}
+                    onValueChange={setExistingAuthModelId}
+                    disabled={Boolean(busy)}
+                  >
+                    <SelectTrigger
+                      size="small"
+                      aria-label="OpenAI Web Search model"
+                      className="min-[540px]:max-w-sm"
+                    >
+                      <SelectValue placeholder="Choose a Web Search model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {existingAuthOption?.models.map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          {model.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="accent"
+                    size="small"
+                    disabled={!existingAuthModelId || Boolean(busy)}
+                    onClick={() => void consentExistingAuth()}
+                  >
+                    <ShieldCheck className="size-3.5" />
+                    {existingAuthReady ? "Approve again" : "Approve for Web Search"}
+                  </Button>
+                </div>
+              ) : (
+                <Text as="p" variant="small" color="tertiary" className="mt-2">
+                  No saved OpenAI API key is available to approve. Configure OpenAI in Provider
+                  Settings first; this panel will not contact OpenAI to check.
+                </Text>
+              )}
+              {existingAuthReady ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Badge color="green">Approved</Badge>
+                  <Text variant="small" color="secondary">
+                    Model: {existingAuthStatus.modelId}
+                  </Text>
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    disabled={Boolean(busy)}
+                    onClick={() => void revokeExistingAuth()}
+                  >
+                    Revoke approval
+                  </Button>
+                </div>
+              ) : existingAuthStatus.state !== "not-consented" ? (
+                <Text as="p" variant="small" color="red" className="mt-2" role="alert">
+                  This saved-account approval is unavailable ({existingAuthStatus.state}). Approve
+                  it again after checking the OpenAI credential above.
+                </Text>
+              ) : null}
+            </Callout>
           </Field>
         ) : null}
 
