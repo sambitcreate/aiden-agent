@@ -24,6 +24,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 | [Taracodlab Learnings](taracodlab-learnings-plan.md)                                               | Partial | Phases A–B and D, plus core Phase E, are implemented; the remaining roadmap is open.                                                                                                                                      |
 | [Telegram First-Class Agent Parity](telegram-first-class-agent-parity-plan.md)                     | Active  | Controls, compaction, skills, rich inbound, drafts/activity, buttons, documents, Settings, and onboarding are green; Threaded Mode/profiles/extensions/TTS/live smoke remain.                                                               |
 | [Update, Microphone, and Computer Use Hardening](update-microphone-computer-use-hardening-plan.md) | Partial | Installed acceptance found a silent stalled download; observable full-download recovery is implemented, while repaired-build → next-release and clean-TCC acceptance remain.                                              |
+| [Web Access Rehaul](web-access-rehaul-plan.md)                                                     | Planned | Replace key-required direct Exa search with explicit opt-in anonymous Exa MCP search plus an optional encrypted user key, bounded transport, truthful privacy/rate-limit states, and aligned foreground/Bot/child UI.       |
 
 ## Completed
 
