@@ -9,6 +9,7 @@ export const MAX_EXA_RESULT_TEXT_CHARACTERS = 1_200;
 
 const MAX_QUERY_CHARACTERS = 2_000;
 const MAX_API_KEY_CHARACTERS = 4_096;
+const MAX_API_KEY_BYTES = 8_192;
 const MAX_RESULTS = 10;
 const MAX_SSE_EVENTS = 64;
 const JSON_RPC_ID = 1;
@@ -73,6 +74,10 @@ function codePointLength(value: string): number {
   return Array.from(value).length;
 }
 
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
 function sliceCodePoints(value: string, maximum: number): string {
   return Array.from(value).slice(0, maximum).join("");
 }
@@ -127,7 +132,11 @@ function normalizedApiKey(value: unknown): string {
     throw new Error(closedError("authentication").message);
   }
   const key = value.trim();
-  if (key.length === 0 || codePointLength(key) > MAX_API_KEY_CHARACTERS) {
+  if (
+    key.length === 0 ||
+    codePointLength(key) > MAX_API_KEY_CHARACTERS ||
+    utf8ByteLength(key) > MAX_API_KEY_BYTES
+  ) {
     throw new Error(closedError("authentication").message);
   }
   return key;
@@ -192,10 +201,12 @@ export function exaMcpHttpError(status: unknown): ExaMcpErrorContract {
   return closedError("invalid_response");
 }
 
-export function exaMcpTransportError(
-  kind: "network" | "timeout" | "cancelled" | "redirect",
-): ExaMcpErrorContract {
-  return closedError(kind === "redirect" ? "policy" : kind);
+export function exaMcpTransportError(kind: unknown): ExaMcpErrorContract {
+  if (kind === "redirect") return closedError("policy");
+  if (kind === "network" || kind === "timeout" || kind === "cancelled") {
+    return closedError(kind);
+  }
+  return closedError("invalid_response");
 }
 
 function isRecord(value: unknown): value is JsonRecord {

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
 import { emptyPortableConfig } from "./portable-config-core.js";
+import { freshWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { BotRuntimeInventoryLeaseRegistry } from "./bot-runtime-inventory-lease.js";
 import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admission-core.js";
 import {
@@ -15,7 +16,9 @@ import {
 } from "./bot-runtime-inventory-publication.js";
 
 function expectPublicationAbort(
-  publish: (invalidate: (reason: Parameters<BotRuntimeInventoryLeaseRegistry["invalidate"]>[0]) => void) => void,
+  publish: (
+    invalidate: (reason: Parameters<BotRuntimeInventoryLeaseRegistry["invalidate"]>[0]) => void,
+  ) => void,
 ): void {
   const registry = new BotRuntimeInventoryLeaseRegistry();
   const lease = registry.acquire();
@@ -30,37 +33,76 @@ test("settings availability publication fences active Bot work", () => {
       { settings: { computerUseEnabled: true } },
       { settings: { computerUseEnabled: false } },
       invalidate,
-    ));
+    ),
+  );
+});
+
+test("every normalized Web Search route mutation fences active Bot work", () => {
+  const previous = { settings: { webSearch: freshWebSearchSettings() } };
+  expectPublicationAbort((invalidate) =>
+    invalidateChangedBotSettingsAuthority(
+      previous,
+      {
+        settings: {
+          webSearch: {
+            ...freshWebSearchSettings(),
+            enabled: false,
+          },
+        },
+      },
+      invalidate,
+    ),
+  );
+
+  const routeChanged = freshWebSearchSettings();
+  routeChanged.selection = {
+    mode: "fixed",
+    providerId: "exa",
+    credentialMode: "anonymous",
+  };
+  expectPublicationAbort((invalidate) =>
+    invalidateChangedBotSettingsAuthority(
+      previous,
+      { settings: { webSearch: routeChanged } },
+      invalidate,
+    ),
+  );
 });
 
 test("provider, MCP, and configured-skill publications each fence active Bot work", () => {
   const cases = [
     (current: ReturnType<typeof emptyPortableConfig>) => {
-      current.providers = [{
-        id: "provider",
-        kind: "openai",
-        label: "Provider",
-        baseUrl: "https://example.invalid",
-        needsKey: false,
-      }];
+      current.providers = [
+        {
+          id: "provider",
+          kind: "openai",
+          label: "Provider",
+          baseUrl: "https://example.invalid",
+          needsKey: false,
+        },
+      ];
     },
     (current: ReturnType<typeof emptyPortableConfig>) => {
-      current.mcpServers = [{
-        id: "mcp",
-        name: "MCP",
-        transport: "http",
-        url: "https://example.invalid/mcp",
-        enabled: true,
-      }];
+      current.mcpServers = [
+        {
+          id: "mcp",
+          name: "MCP",
+          transport: "http",
+          url: "https://example.invalid/mcp",
+          enabled: true,
+        },
+      ];
     },
     (current: ReturnType<typeof emptyPortableConfig>) => {
-      current.skills = [{
-        id: "skill",
-        name: "Skill",
-        description: "Description",
-        instructions: "Changed instructions",
-        enabled: true,
-      }];
+      current.skills = [
+        {
+          id: "skill",
+          name: "Skill",
+          description: "Description",
+          instructions: "Changed instructions",
+          enabled: true,
+        },
+      ];
     },
   ];
   for (const mutate of cases) {
@@ -78,19 +120,19 @@ test("unchanged and first-observed config publications do not spuriously abort",
   const lease = registry.acquire();
   const current = emptyPortableConfig();
   invalidateChangedBotPortableAuthority(current, structuredClone(current), (reason) =>
-    registry.invalidate(reason));
+    registry.invalidate(reason),
+  );
   invalidateChangedBotPortableAuthority(null, current, (reason) => registry.invalidate(reason));
   invalidateChangedBotSettingsAuthority(null, { settings: {} }, (reason) =>
-    registry.invalidate(reason));
+    registry.invalidate(reason),
+  );
   invalidateChangedBotSettingsAuthority(
     { settings: { profileName: "Before" } },
     { settings: { profileName: "After" } },
     (reason) => registry.invalidate(reason),
   );
-  invalidateChangedBotProviderModelAuthority(
-    { byProvider: {} },
-    { byProvider: {} },
-    (reason) => registry.invalidate(reason),
+  invalidateChangedBotProviderModelAuthority({ byProvider: {} }, { byProvider: {} }, (reason) =>
+    registry.invalidate(reason),
   );
   invalidateChangedBotProviderModelAuthority(
     null,
@@ -106,19 +148,23 @@ test("custom provider model-only publication fences active Bot work", () => {
       { byProvider: { provider: { models: ["old"] } } },
       { byProvider: { provider: { models: ["new"] } } },
       invalidate,
-    ));
+    ),
+  );
 });
 
 test("Pi provider refresh fences leases acquired during durable-to-memory publication", async () => {
   const registry = new BotRuntimeInventoryLeaseRegistry();
   const before = registry.acquire();
   let between: ReturnType<BotRuntimeInventoryLeaseRegistry["acquire"]> | undefined;
-  const result = await withBotProviderInventoryMutation(async () => {
-    assert.equal(before.signal.aborted, true);
-    between = registry.acquire();
-    between.assertCurrent();
-    return "published";
-  }, (reason) => registry.invalidate(reason));
+  const result = await withBotProviderInventoryMutation(
+    async () => {
+      assert.equal(before.signal.aborted, true);
+      between = registry.acquire();
+      between.assertCurrent();
+      return "published";
+    },
+    (reason) => registry.invalidate(reason),
+  );
 
   assert.equal(result, "published");
   assert.ok(between);

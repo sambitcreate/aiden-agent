@@ -533,15 +533,22 @@ lint, format, and diff checks pass, and autonomous authority remains closed.
 
 ### Phase 1 — Core registry and default Exa route
 
+Status: Complete (2026-08-28)
+
 - Add pure registry/core modules, generic encrypted credential access, fenced
   IPC, normalized result attribution, and the generation-scoped router.
 - Implement bounded anonymous/keyed Exa adapters and the new default/migration.
 - Move foreground and child Web Search onto the shared service.
 - Keep Fixed strict and Automatic route `[Exa anonymous]` by default.
 
-Exit: fresh foreground search works without a key; explicit upgrades remain off;
-no setup/startup request occurs; legacy keyed Exa still works; all autonomous
-authority tests stay closed.
+Exit result: fresh attended foreground search uses bounded anonymous Exa without
+a key, explicit upgrades remain off, and legacy keyed Exa migrates through the
+provider-scoped encrypted credential seam. Generic active-document-fenced IPC,
+redacted readiness, strict Fixed/ordered Automatic routing, per-attempt child
+budgets, post-I/O revalidation, and shared foreground/child/Bot/schedule runtime
+wiring are implemented. Unsupported future settings remain durable but project
+closed. Focused Web Search, config-store, Bot, child, schedule, Assistant, type,
+lint, format, and diff checks pass with autonomous authority unchanged.
 
 ### Phase 2 — Provider-zoo UI and first provider wave
 

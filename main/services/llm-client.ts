@@ -17,10 +17,8 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
-import {
-  createVisionAnalysisTool,
-  INSPECT_IMAGE_TOOL_NAME,
-} from "./vision-analysis-tool.js";
+import { webSearchService } from "./web-search-main.js";
+import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
   APPROVAL_TOOL_NAMES,
   DISCLOSURE_APPROVAL_TOOL_NAMES,
@@ -34,7 +32,6 @@ import {
 } from "./bot-file-tool-router.js";
 import { gitInfo } from "./git.js";
 import { configStore } from "./config-store.js";
-import { secrets } from "./secrets.js";
 import { chatStore } from "./chat-store.js";
 import { botStore } from "./bot-store.js";
 import {
@@ -276,11 +273,7 @@ function uniqueResponseImages(
 ): Attachment[] {
   const images = [...sharedImages];
   for (const attachment of displayedImages) {
-    if (
-      images.some(
-        (item) => item.id === attachment.id || item.data === attachment.data,
-      )
-    ) {
+    if (images.some((item) => item.id === attachment.id || item.data === attachment.data)) {
       continue;
     }
     images.push(attachment);
@@ -593,11 +586,7 @@ async function prepareGeneration(
     if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
       throw new Error("This response already contains the maximum number of images.");
     }
-    if (
-      existing.some(
-        (item) => item.id === attachment.id || item.data === attachment.data,
-      )
-    ) {
+    if (existing.some((item) => item.id === attachment.id || item.data === attachment.data)) {
       return;
     }
     const nextBytes = existing.reduce((sum, item) => sum + item.size, 0) + attachment.size;
@@ -606,17 +595,15 @@ async function prepareGeneration(
     }
     sharedImages.push(attachment);
   };
-  const runtime = botContext?.prepared.runtime ??
-    await resolveModelRuntime(params.providerId, params.model, signal);
+  const runtime =
+    botContext?.prepared.runtime ??
+    (await resolveModelRuntime(params.providerId, params.model, signal));
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
     : [];
   const botRuntimeCatalog = botContext
-    ? await resolveBotRuntimeCatalogSnapshot(
-        botContext.admission.authority,
-        signal,
-      )
+    ? await resolveBotRuntimeCatalogSnapshot(botContext.admission.authority, signal)
     : undefined;
   const attendedAssistant = params.mode === "assistant";
   const assistantPersonaMode =
@@ -626,16 +613,18 @@ async function prepareGeneration(
   // The dock persona is never folder-scoped. Project automation mode is
   // main-only and reaches this branch only after the persisted approval profile
   // has bound the scheduled run to a workspace.
-  const workspace = botContext?.prepared.workspace ??
+  const workspace =
+    botContext?.prepared.workspace ??
     (params.workspaceId && !assistantPersonaMode
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined);
   if (workspace && !botBound) await assertManagedWorktreeAdmission(workspace);
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
-  const git = folderPath && (!botContext || botContext.admission.authority.files.botHome)
-    ? await gitInfo(folderPath)
-    : { isRepo: false };
+  const git =
+    folderPath && (!botContext || botContext.admission.authority.files.botHome)
+      ? await gitInfo(folderPath)
+      : { isRepo: false };
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
@@ -656,7 +645,7 @@ async function prepareGeneration(
       ? settings.googleThinkingByModel?.[params.model]
       : params.providerId === OPENAI_CODEX_PROVIDER_ID
         ? settings.codexThinkingByModel?.[params.model]
-      : params.providerId === ANTHROPIC_PROVIDER_ID
+        : params.providerId === ANTHROPIC_PROVIDER_ID
           ? settings.anthropicThinkingByModel?.[params.model]
           : settings.providerThinkingByModel?.[params.providerId]?.[params.model];
   const thinkingLevel = resolveGenerationThinkingLevel(
@@ -703,19 +692,22 @@ async function prepareGeneration(
   const childWriteRollout = subagentChildWriteEnabled();
   const childShellRollout = subagentChildShellEnabled();
   const childDelegationRollout = subagentChildDelegationEnabled();
-  const subagentWriteEnabled = subagentWorkspaceWriteAllowedForGeneration({
-    subagentsAllowed: allowSubagents,
-    childWriteRollout,
-    v2StoreSelected: subagentRunStore.selection === "v2",
-    workspacePermission: workspace?.permission,
-    generationPermission: permission,
-  }) && (!botContext || botContext.admission.authority.files.botHome);
-  const subagentWebEnabled =
+  const subagentWriteEnabled =
+    subagentWorkspaceWriteAllowedForGeneration({
+      subagentsAllowed: allowSubagents,
+      childWriteRollout,
+      v2StoreSelected: subagentRunStore.selection === "v2",
+      workspacePermission: workspace?.permission,
+      generationPermission: permission,
+    }) &&
+    (!botContext || botContext.admission.authority.files.botHome);
+  const subagentWebAvailability =
     allowSubagents &&
     childWebRollout &&
-    settings.exaEnabled === true &&
-    (!botContext || botHasOrdinaryCapability(botContext, "web")) &&
-    Boolean(await secrets.getKey("exa"));
+    (!botContext || botHasOrdinaryCapability(botContext, "web"))
+      ? await webSearchService.availability()
+      : undefined;
+  const subagentWebEnabled = subagentWebAvailability?.ready === true;
   const discoveredSubagentMcpInventory =
     allowSubagents && childMcpRollout && subagentRunStore.selection === "v2"
       ? await resolveProductionSubagentMcpInventory(signal)
@@ -782,10 +774,7 @@ async function prepareGeneration(
               : configStore.getWorkspace(workspaceId),
           validateWorkspace: async (candidate) => {
             if (!botContext) return assertManagedWorktreeAdmission(candidate);
-            if (
-              candidate.id !== workspace.id ||
-              candidate.folderPath !== workspace.folderPath
-            ) {
+            if (candidate.id !== workspace.id || candidate.folderPath !== workspace.folderPath) {
               throw new Error("The Bot subagent workspace changed.");
             }
             await botManagedWorkspace.revalidate(botContext.prepared.managedWorkspace);
@@ -895,12 +884,15 @@ async function prepareGeneration(
     !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME) &&
     (!botContext || options.interactionSurface !== "telegram") &&
     (!botContext || botHasOrdinaryCapability(botContext, "schedules"));
-  const botScheduleToolNames = botContext && schedulingAllowed
-    ? new Set(buildSchedulingTools({
-        workspaceId: workspace?.id,
-        allowScheduling: true,
-      }).map(({ name }) => name))
-    : new Set<string>();
+  const botScheduleToolNames =
+    botContext && schedulingAllowed
+      ? new Set(
+          buildSchedulingTools({
+            workspaceId: workspace?.id,
+            allowScheduling: true,
+          }).map(({ name }) => name),
+        )
+      : new Set<string>();
   let tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
@@ -909,10 +901,9 @@ async function prepareGeneration(
       permission: toolPermission,
       computerUse,
       allowScheduling: schedulingAllowed,
-      allowMcpTools:
-        botContext
-          ? options.allowMcpTools !== false && botConnectionIds!.length > 0
-          : options.allowMcpTools,
+      allowMcpTools: botContext
+        ? options.allowMcpTools !== false && botConnectionIds!.length > 0
+        : options.allowMcpTools,
       mcpServerIds: botContext ? botConnectionIds : options.mcpServerIds,
       mcpServerBindings: options.mcpServerBindings,
       allowSubagents,
@@ -939,17 +930,14 @@ async function prepareGeneration(
               subagentDelegationEnabled,
             )
         : undefined,
-      shareImage: folderPath
-        ? shareImage
-        : undefined,
+      shareImage: folderPath ? shareImage : undefined,
       includeCodingTools: !botContext,
       imageInspectionTool:
         botContext && !supportsImages && botContext.admission.authority.visionProvider
           ? createVisionAnalysisTool({
               attachments: chat.messages.flatMap((message) => message.attachments ?? []),
               authority: {
-                providerId:
-                  botContext.admission.authority.visionProvider.sourceProviderId,
+                providerId: botContext.admission.authority.visionProvider.sourceProviderId,
                 modelId: botContext.admission.authority.visionProvider.sourceModelId,
                 revalidateBeforeEffect: () => botContext.admission.revalidateBeforeEffect(),
               },
@@ -976,23 +964,29 @@ async function prepareGeneration(
         root: "/",
       });
     }
-    fileLocations.push(...botApprovedRoots.map(({ device, inode, ...location }) => ({
-      ...location,
-      expectedIdentity: { device, inode },
-    })));
+    fileLocations.push(
+      ...botApprovedRoots.map(({ device, inode, ...location }) => ({
+        ...location,
+        expectedIdentity: { device, inode },
+      })),
+    );
     if (fileLocations.length > 0) {
-      tools.push(...buildBotFileTools({
-        defaultLocation: fileLocations[0]!,
-        additionalLocations: fileLocations.slice(1),
-      }));
+      tools.push(
+        ...buildBotFileTools({
+          defaultLocation: fileLocations[0]!,
+          additionalLocations: fileLocations.slice(1),
+        }),
+      );
     }
     if (authority.files.botHome) {
-      tools.push(createShareImageTool({
-        workspaceRoot: authority.workingDirectory,
-        expectedWorkspaceIdentity: authority.managedHome.incarnation,
-        scopeToWorkspace: true,
-        share: shareImage,
-      }));
+      tools.push(
+        createShareImageTool({
+          workspaceRoot: authority.workingDirectory,
+          expectedWorkspaceIdentity: authority.managedHome.incarnation,
+          scopeToWorkspace: true,
+          share: shareImage,
+        }),
+      );
     }
     if (authority.shell.enabled) {
       const shell = buildPinnedCodingTools(authority.workingDirectory).find(
@@ -1023,21 +1017,21 @@ async function prepareGeneration(
         ? true
         : tool.name === INSPECT_IMAGE_TOOL_NAME
           ? !supportsImages && Boolean(authority.visionProvider)
-        : mcpToolNames.has(tool.name)
-          ? true
-          : tool.name === "web_search"
-            ? webAllowed
-            : tool.name === COMPUTER_USE_TOOL_NAME
-              ? computerAllowed
-              : tool.name === "subagent"
-                ? subagentsAllowed
-                : BOT_FILE_TOOL_NAMES.includes(tool.name as (typeof BOT_FILE_TOOL_NAMES)[number])
-                  ? fileLocations.length > 0
-                : tool.name === "run_command"
-                    ? authority.shell.enabled
-                : tool.name === SHARE_IMAGE_TOOL_NAME
-                  ? authority.files.botHome
-                  : botScheduleToolNames.has(tool.name);
+          : mcpToolNames.has(tool.name)
+            ? true
+            : tool.name === "web_search"
+              ? webAllowed
+              : tool.name === COMPUTER_USE_TOOL_NAME
+                ? computerAllowed
+                : tool.name === "subagent"
+                  ? subagentsAllowed
+                  : BOT_FILE_TOOL_NAMES.includes(tool.name as (typeof BOT_FILE_TOOL_NAMES)[number])
+                    ? fileLocations.length > 0
+                    : tool.name === "run_command"
+                      ? authority.shell.enabled
+                      : tool.name === SHARE_IMAGE_TOOL_NAME
+                        ? authority.files.botHome
+                        : botScheduleToolNames.has(tool.name);
       return allowed ? [protectAdmittedBotTool(tool, botContext.admission)] : [];
     });
   }
@@ -1075,8 +1069,7 @@ async function prepareGeneration(
         const existing = responseImages();
         if (
           existing.some(
-            (item) =>
-              item.id === artifact.attachment.id || item.data === artifact.attachment.data,
+            (item) => item.id === artifact.attachment.id || item.data === artifact.attachment.data,
           )
         ) {
           return false;
@@ -1336,14 +1329,14 @@ export const llmClient = {
         cancellationOrigin,
         isCurrent: () =>
           initializing.get(streamId) === initialization ||
-          (active.get(streamId)?.chatId === params.chatId &&
-            active.get(streamId)?.owner === owner),
+          (active.get(streamId)?.chatId === params.chatId && active.get(streamId)?.owner === owner),
         append: (message, meta) => chatStore.appendMessage(params.chatId, message, meta),
-        onUnknownOutcome: (terminalError) => logger.error(
-          "pi",
-          `Could not persist the initialization outcome for stream ${streamId}`,
-          terminalError,
-        ),
+        onUnknownOutcome: (terminalError) =>
+          logger.error(
+            "pi",
+            `Could not persist the initialization outcome for stream ${streamId}`,
+            terminalError,
+          ),
       });
     };
     try {
@@ -1353,19 +1346,13 @@ export const llmClient = {
       }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
-      authoritativeBot = await resolveBotForGeneration(
-        chat,
-        authoritativeMode,
-        (botId) => botStore.get(botId),
+      authoritativeBot = await resolveBotForGeneration(chat, authoritativeMode, (botId) =>
+        botStore.get(botId),
       );
       if (authoritativeBot) {
-        const canonical = selectCanonicalBotChat(
-          await chatStore.listByBot(authoritativeBot.id),
-        );
+        const canonical = selectCanonicalBotChat(await chatStore.listByBot(authoritativeBot.id));
         if (canonical?.id !== chat.id) {
-          throw new Error(
-            "This historical Bot chat is read-only. Open the Bot's current chat.",
-          );
+          throw new Error("This historical Bot chat is read-only. Open the Bot's current chat.");
         }
         const providerId = chat.providerId;
         const model = chat.model;
@@ -1377,16 +1364,14 @@ export const llmClient = {
         }
         const admission = await admitBotAfterProviderAuthPreflight({
           signal: initialization.controller.signal,
-          preflightAuth: () => preflightBotModelAuth(
-            providerId,
-            model,
-            initialization.controller.signal,
-          ),
-          admit: () => botRuntimeAuthority.admit({
-            audienceId: options.botAudienceId ?? BOT_DESKTOP_AUDIENCE_ID,
-            botId,
-            chatId: chat.id,
-          }),
+          preflightAuth: () =>
+            preflightBotModelAuth(providerId, model, initialization.controller.signal),
+          admit: () =>
+            botRuntimeAuthority.admit({
+              audienceId: options.botAudienceId ?? BOT_DESKTOP_AUDIENCE_ID,
+              botId,
+              chatId: chat.id,
+            }),
         });
         const invalidate = () => {
           active.get(streamId)?.agent.abort();
@@ -1463,10 +1448,7 @@ export const llmClient = {
       );
     } catch (error) {
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        await persistInitializationTerminal(
-          "cancelled",
-          initialization.cancellationOrigin,
-        );
+        await persistInitializationTerminal("cancelled", initialization.cancellationOrigin);
         sendGeneration(streamId, "chat:done", {
           streamId,
           content: "",
@@ -1478,7 +1460,12 @@ export const llmClient = {
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
-        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(
+          streamId,
+          params.chatId,
+          initialization.workspaceId,
+          params.workspaceId,
+        );
         return false;
       }
       await persistInitializationTerminal("failed");
@@ -1674,20 +1661,22 @@ export const llmClient = {
       // Omit them from Bot prompts and tool schemas instead of granting an
       // unclassified capability through an alternate contribution path.
       const runtimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
-        ? [{
-            id: "aiden.bot-runtime-authority",
-            beforeProviderRequest: async ({ model: requestModel }) => {
-              assertExactBotProviderDispatch(
-                {
-                  provider: preparedBotContext.prepared.runtime.model.provider,
-                  model: preparedBotContext.admission.authority.provider.sourceModelId,
-                },
-                { provider: requestModel.provider, model: requestModel.id },
-              );
-              await preparedBotContext.admission.revalidateBeforeEffect();
-              return undefined;
+        ? [
+            {
+              id: "aiden.bot-runtime-authority",
+              beforeProviderRequest: async ({ model: requestModel }) => {
+                assertExactBotProviderDispatch(
+                  {
+                    provider: preparedBotContext.prepared.runtime.model.provider,
+                    model: preparedBotContext.admission.authority.provider.sourceModelId,
+                  },
+                  { provider: requestModel.provider, model: requestModel.id },
+                );
+                await preparedBotContext.admission.revalidateBeforeEffect();
+                return undefined;
+              },
             },
-          }]
+          ]
         : [...runtimeExtensionSnapshot.extensions, ...generationExtensions];
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
@@ -1831,8 +1820,7 @@ export const llmClient = {
           if (preparedBotContext) {
             const allowedSkill = skillSnapshot?.available.find(
               (skill) =>
-                skill.name === currentUser.skill?.name &&
-                skill.source === currentUser.skill.source,
+                skill.name === currentUser.skill?.name && skill.source === currentUser.skill.source,
             );
             if (!allowedSkill) {
               throw new Error("This skill is not enabled for this Bot chat.");
@@ -2035,12 +2023,7 @@ export const llmClient = {
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
-            if (
-              !scheduleApproval &&
-              !workspaceApproval &&
-              !disclosureApproval &&
-              !botMcpApproval
-            ) {
+            if (!scheduleApproval && !workspaceApproval && !disclosureApproval && !botMcpApproval) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
@@ -2317,10 +2300,7 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       await computerUse?.close().catch(() => {});
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        await persistInitializationTerminal(
-          "cancelled",
-          initialization.cancellationOrigin,
-        );
+        await persistInitializationTerminal("cancelled", initialization.cancellationOrigin);
         sendGeneration(streamId, "chat:done", {
           streamId,
           content: "",
@@ -2332,7 +2312,12 @@ export const llmClient = {
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
-        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(
+          streamId,
+          params.chatId,
+          initialization.workspaceId,
+          params.workspaceId,
+        );
         return false;
       }
       await persistInitializationTerminal("failed");
@@ -2525,10 +2510,7 @@ export const llmClient = {
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
-      await persistInitializationTerminal(
-        "cancelled",
-        activeGeneration.cancellationOrigin,
-      );
+      await persistInitializationTerminal("cancelled", activeGeneration.cancellationOrigin);
       await piTurnLease?.rollback().catch((error) => {
         logger.error(
           "pi",
@@ -2550,7 +2532,12 @@ export const llmClient = {
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
+      broadcastChatSettled(
+        streamId,
+        params.chatId,
+        activeGeneration.workspaceId,
+        params.workspaceId,
+      );
       return false;
     }
 
@@ -2648,9 +2635,7 @@ export const llmClient = {
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed"
-              ? runtimeOutcome.providerFailure
-              : undefined,
+            runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", {
@@ -2739,7 +2724,12 @@ export const llmClient = {
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
-          broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
+          broadcastChatSettled(
+            streamId,
+            params.chatId,
+            activeGeneration.workspaceId,
+            params.workspaceId,
+          );
         }
       }
     })();

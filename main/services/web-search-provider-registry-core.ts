@@ -1121,6 +1121,16 @@ export interface WebSearchRouteReadiness {
   configurationStatus: WebSearchProviderConfigurationStatus;
 }
 
+/** Whole renderer-facing state; all credential details remain main-owned. */
+export interface WebSearchRendererSnapshot {
+  settings: WebSearchSettingsV2;
+  providers: readonly WebSearchProviderRendererMetadata[];
+  selection: WebSearchSelection;
+  /** Ordered route membership, duplicated from selection for simple card joins. */
+  route: readonly WebSearchRouteEntry[];
+  routeReadiness: readonly WebSearchRouteReadiness[];
+}
+
 /** Pure readiness projection; no key metadata is accepted or returned. */
 export function webSearchRouteReadiness(
   settings: WebSearchSettingsV2,

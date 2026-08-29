@@ -65,6 +65,7 @@ test("request validation closes query, count, and credential bounds without echo
     () => buildExaMcpRequest("query", 11, { mode: "anonymous" }),
     () => buildExaMcpRequest("query", 1.5, { mode: "anonymous" }),
     () => buildExaMcpRequest("query", 5, { mode: "api-key", apiKey: `${PRIVATE_KEY}\n` }),
+    () => buildExaMcpRequest("query", 5, { mode: "api-key", apiKey: "😀".repeat(2_049) }),
   ]) {
     assert.throws(operation, (error: unknown) => {
       assert.ok(error instanceof Error);
@@ -221,6 +222,12 @@ test("transport errors expose only stable route-policy categories", () => {
       },
     ],
   );
+  assert.deepEqual(exaMcpTransportError(`network:${PRIVATE_BODY}:${PRIVATE_KEY}`), {
+    providerId: "exa",
+    category: "invalid_response",
+    fallbackEligible: true,
+    message: "Exa returned an invalid response.",
+  });
 });
 
 test("malformed contract values fail closed without exposing input", () => {
