@@ -13,6 +13,7 @@ import {
   assertAssistantScheduleExecutionBoundary,
   isSilentAssistantScheduleResponse,
   scheduledTaskGenerationMode,
+  scheduledTaskAllowsWebSearch,
 } from "./schedule-guard.js";
 import { showScheduledNotification } from "./schedule-notification.js";
 import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.js";
@@ -244,6 +245,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     if (!prompt) throw new Error("The scheduled task prompt is empty.");
     if (signal.aborted) throw new Error("Scheduled task was cancelled.");
     const excluded = new Set<string>([SCHEDULE_TOOL_NAME]);
+    if (!scheduledTaskAllowsWebSearch(task)) excluded.add("web_search");
     if (task.permission === "read-only") {
       for (const name of APPROVAL_TOOL_NAMES) excluded.add(name);
     }

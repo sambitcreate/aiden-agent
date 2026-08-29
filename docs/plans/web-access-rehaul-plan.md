@@ -1,6 +1,6 @@
 # Web Access Rehaul
 
-Status: Planned
+Status: Active
 
 Research date: 2026-08-28
 
@@ -515,6 +515,8 @@ route, route readiness, provider config, credential, and grant changes.
 
 ### Phase 0 — Evidence, contracts, and authority freeze
 
+Status: Complete (2026-08-28)
+
 - Build the 28-provider evidence matrix and mark each Shipped, Experimental, or
   Blocked.
 - Freeze settings v2, redacted snapshot, registry, request/result/error, route,
@@ -524,8 +526,10 @@ route, route readiness, provider config, credential, and grant changes.
   Bot and schedule ceilings before changing global availability.
 - Capture Exa MCP fixtures plus request/response/error fixtures for Wave 1.
 
-Exit: contract tests fail against the current Exa-only implementation and prove
-that a global default cannot widen autonomous authority.
+Exit result: the v2 settings/provider registry, bounded shared/Exa contracts,
+fixtures, conservative migration, explicit Full Bot Web grant, and explicit
+schedule Web grant are implemented. Focused Web Search, Bot, schedule, type,
+lint, format, and diff checks pass, and autonomous authority remains closed.
 
 ### Phase 1 — Core registry and default Exa route
 

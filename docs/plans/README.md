@@ -24,7 +24,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 | [Taracodlab Learnings](taracodlab-learnings-plan.md)                                               | Partial | Phases A–B and D, plus core Phase E, are implemented; the remaining roadmap is open.                                                                                                                                      |
 | [Telegram First-Class Agent Parity](telegram-first-class-agent-parity-plan.md)                     | Active  | Controls, compaction, skills, rich inbound, drafts/activity, buttons, documents, Settings, and onboarding are green; Threaded Mode/profiles/extensions/TTS/live smoke remain.                                                               |
 | [Update, Microphone, and Computer Use Hardening](update-microphone-computer-use-hardening-plan.md) | Partial | Installed acceptance found a silent stalled download; observable full-download recovery is implemented, while repaired-build → next-release and clean-TCC acceptance remain.                                              |
-| [Web Access Rehaul](web-access-rehaul-plan.md)                                                     | Planned | Make fresh foreground Web Search default-on through anonymous Exa, add an evidence-gated provider zoo with explicit Automatic/Fixed routing and full-width provider setup, and preserve existing Bot/schedule authority.       |
+| [Web Access Rehaul](web-access-rehaul-plan.md)                                                     | Active | Phase 0 ships the v2 provider/settings contracts, bounded Exa fixtures/parser, conservative migration, and explicit Bot/schedule Web authority; runtime registry integration is next.       |
 
 ## Completed
 

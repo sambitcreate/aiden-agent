@@ -87,16 +87,25 @@ export function botToolCapabilityAllowed(
   authority: Readonly<BotRuntimeEffectiveAuthority>,
   capability: BotToolCapability,
 ): boolean {
-  if (authority.accessMode === "full") return true;
+  // Full Access mirrors the ordinary inventory, except Web Search is an
+  // explicit authority dimension and must still have an exact published
+  // grant. This keeps generic tool filtering from widening the Phase 0
+  // Full-Bot ceiling when the inventory merely reports Web as available.
+  if (
+    authority.accessMode === "full" &&
+    (capability.kind !== "other" || capability.ordinaryKind !== "web")
+  ) {
+    return true;
+  }
   switch (capability.kind) {
     case "file":
       return exactFileGrant(authority, capability);
     case "shell":
       return Boolean(
         authority.shell.enabled &&
-          authority.workingDirectory === capability.workingDirectory &&
-          authority.shell.shellFingerprint === capability.shellFingerprint &&
-          authority.shell.exactFingerprint === capability.shellExactFingerprint,
+        authority.workingDirectory === capability.workingDirectory &&
+        authority.shell.shellFingerprint === capability.shellFingerprint &&
+        authority.shell.exactFingerprint === capability.shellExactFingerprint,
       );
     case "mcp": {
       const connection = authority.connections.find(
@@ -154,9 +163,7 @@ function wrapBotTool(candidate: BotToolCandidate, admission: BotToolAdmissionPor
       // managed-home identity here, not just a generation-time snapshot.
       await admission.revalidateBeforeEffect();
       if (admission.signal.aborted) throw abortReason(admission.signal);
-      const effectSignal = signal
-        ? AbortSignal.any([signal, admission.signal])
-        : admission.signal;
+      const effectSignal = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;
       return execute(toolCallId, params, effectSignal, onUpdate);
     },
   };
@@ -203,8 +210,7 @@ export function filterBotAgentTools(
   return candidates
     .filter(
       (candidate) =>
-        candidate.available &&
-        botToolCapabilityAllowed(admission.authority, candidate.capability),
+        candidate.available && botToolCapabilityAllowed(admission.authority, candidate.capability),
     )
     .map((candidate) => wrapBotTool(candidate, admission));
 }
@@ -222,8 +228,7 @@ export function filterBotSkillSnapshot(
   const skills = snapshot.skills.filter((skill) => allowedSkillToolNames.has(skill.toolKey));
   const invocationIds = new Set(skills.map(({ invocationId }) => invocationId));
   const available = snapshot.available.filter(
-    (skill) =>
-      invocationIds.has(skill.invocationId) && allowedSkillToolNames.has(skill.toolKey),
+    (skill) => invocationIds.has(skill.invocationId) && allowedSkillToolNames.has(skill.toolKey),
   );
   const catalog = snapshot.catalog.filter(({ invocationId }) => invocationIds.has(invocationId));
   return Object.freeze({
@@ -279,10 +284,12 @@ export function exactBotMcpToolNames(
         candidate.toolsetFingerprint === connection.toolsetFingerprint &&
         candidate.exactFingerprint === connection.exactFingerprint,
     );
-    if (!current) throw new Error("A selected Bot connection changed while this response was starting.");
+    if (!current)
+      throw new Error("A selected Bot connection changed while this response was starting.");
     for (const grant of connection.tools) {
       const liveTool = current.tools.find((candidate) => sameExactMcpTool(grant, candidate));
-      if (!liveTool) throw new Error("A selected Bot connection tool changed while this response was starting.");
+      if (!liveTool)
+        throw new Error("A selected Bot connection tool changed while this response was starting.");
       const name = modelToolName(connection.sourceId, liveTool.name);
       if (result.has(name)) throw new Error("Selected Bot connection tool names overlap.");
       result.set(name, grant);
@@ -313,9 +320,8 @@ export function filterExactBotSubagentMcpInventory(
     );
     if (!connection) return [];
     const tools = scope.tools.filter((tool) => {
-      const effectFingerprint = tool.effect === "read"
-        ? plainDigest({ effect: "read" })
-        : tool.effectProfile.fingerprint;
+      const effectFingerprint =
+        tool.effect === "read" ? plainDigest({ effect: "read" }) : tool.effectProfile.fingerprint;
       const exactFingerprint = botCapabilityFactsFingerprint({
         name: tool.toolName,
         inputSchemaFingerprint: tool.schemaHash,

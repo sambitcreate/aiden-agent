@@ -12,6 +12,7 @@ import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type { WebSearchSettingsV2 } from "../../main/services/web-search-provider-registry-core";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -741,6 +742,8 @@ export interface AppSettings {
   lastModel?: string;
   hiddenModelsByProvider?: Record<string, string[]>;
   exaEnabled?: boolean;
+  /** Versioned Web Search routing/preferences; credentials stay main-owned. */
+  webSearch?: WebSearchSettingsV2;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
   geminiUsageScope?: GeminiUsageScope;
