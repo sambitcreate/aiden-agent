@@ -37,6 +37,8 @@ import {
 import { WEB_SEARCH_WAVE1_ADAPTER_FACTORIES } from "./web-search-wave1-adapters.js";
 import { WEB_SEARCH_WAVE2_BATCH_A_ADAPTER_FACTORIES } from "./web-search-wave2-batch-a.js";
 import { WEB_SEARCH_WAVE2_BATCH_B_ADAPTER_FACTORIES } from "./web-search-wave2-batch-b.js";
+import { WEB_SEARCH_WAVE4_BATCH_A_ADAPTER_FACTORIES } from "./web-search-wave4-batch-a.js";
+import { WEB_SEARCH_WAVE4_BATCH_B_ADAPTER_FACTORIES } from "./web-search-wave4-batch-b.js";
 import {
   getWebSearchProviderDefinition,
   type WebSearchCredentialMode,
@@ -523,6 +525,8 @@ export const WEB_SEARCH_ADAPTER_FACTORIES: Readonly<
   exa: createExaWebSearchAdapter,
   ...WEB_SEARCH_WAVE2_BATCH_A_ADAPTER_FACTORIES,
   ...WEB_SEARCH_WAVE2_BATCH_B_ADAPTER_FACTORIES,
+  ...WEB_SEARCH_WAVE4_BATCH_A_ADAPTER_FACTORIES,
+  ...WEB_SEARCH_WAVE4_BATCH_B_ADAPTER_FACTORIES,
 });
 
 export function webSearchAdapterFactory(providerId: unknown): WebSearchAdapterFactory | undefined {

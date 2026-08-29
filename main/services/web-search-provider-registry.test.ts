@@ -35,6 +35,14 @@ const WAVE2_PROVIDER_IDS = [
 
 for (const providerId of WAVE2_PROVIDER_IDS) SHIPPED_PROVIDER_IDS.add(providerId);
 
+const WAVE4_PROVIDER_IDS = [
+  "serpdive",
+  "valyu",
+  "xcrawl",
+] as const satisfies readonly WebSearchProviderId[];
+
+for (const providerId of WAVE4_PROVIDER_IDS) SHIPPED_PROVIDER_IDS.add(providerId);
+
 test("release state is exactly the reviewed adapter-backed providers", () => {
   const shipped = new Set(
     WEB_SEARCH_PROVIDER_REGISTRY.filter((definition) => definition.releaseState === "shipped").map(
@@ -51,6 +59,14 @@ test("release state is exactly the reviewed adapter-backed providers", () => {
   }
   assert.equal(getWebSearchProviderDefinition("exa")?.releaseState, "shipped");
   for (const providerId of WAVE2_PROVIDER_IDS) {
+    const definition = getWebSearchProviderDefinition(providerId);
+    assert.ok(definition);
+    assert.equal(definition.releaseState, "shipped");
+    assert.equal(definition.adapterVersion, 1);
+    assert.equal(definition.explicitOnly, true);
+    assert.equal(definition.automaticByDefault, false);
+  }
+  for (const providerId of WAVE4_PROVIDER_IDS) {
     const definition = getWebSearchProviderDefinition(providerId);
     assert.ok(definition);
     assert.equal(definition.releaseState, "shipped");
@@ -76,7 +92,14 @@ test("the main registry exposes only shipped adapter factories and keeps experim
     assert.equal(adapter.providerId, providerId);
     assert.equal(adapter.adapterVersion, 1);
   }
-  for (const providerId of ["serpbase", "xcrawl", "searxng", "firecrawl"]) {
+  for (const providerId of [
+    "anysearch",
+    "brightdata",
+    "duckduckgo",
+    "firecrawl",
+    "searxng",
+    "serpbase",
+  ]) {
     assert.equal(webSearchAdapterFactory(providerId), undefined);
     assert.equal(webSearchAdapterAvailable(providerId), false);
   }

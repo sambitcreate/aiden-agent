@@ -599,6 +599,8 @@ lint, format, build, and changed-scope React review gates pass.
 
 ### Phase 4 — Long-tail adapters and experimental sources
 
+Status: Complete (2026-08-29)
+
 - Add long-tail hosted providers in evidence-backed batches.
 - Keep cost-sensitive providers explicit-only with prominent quota/billing copy.
 - Treat DuckDuckGo parsing as experimental and never automatic by default.
@@ -607,6 +609,18 @@ lint, format, build, and changed-scope React review gates pass.
 
 Exit: release inventory reflects only tested adapters and no provider can bypass
 the common safety envelope.
+
+Exit result: SERPdive ships on its documented free/fair-use `krill` model,
+XCrawl ships with both outer completion and nested success validation, and
+Valyu is forced to `search_type: "web"`; all three remain explicit-only and use
+header-only credentials, fixed origins, bounded responses, and closed errors.
+AnySearch has a fixture-tested candidate but remains outside the release map
+until its exact success envelope has immutable primary evidence. SearchInfinity,
+Querit, Bocha, and Bright Data remain experimental for contract, privacy, or
+provider-config gates. DuckDuckGo remains experimental; Firecrawl/SearXNG still
+require the private-network/SSRF gate; xAI/Kimi session reuse remains closed;
+SerpBase remains blocked from any secret-in-URL path. No held provider is
+routable through the main adapter registry.
 
 ### Phase 5 — Onboarding, docs, packaging, and rollout
 
