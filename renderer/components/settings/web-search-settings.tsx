@@ -12,6 +12,8 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ExternalLink,
   Globe2,
   KeyRound,
@@ -65,6 +67,7 @@ type WebSearchFilter =
   | "api-key"
   | "existing-account"
   | "self-hosted";
+type WebSearchSettingsView = "overview" | "providers";
 
 const DEFAULT_FALLBACK_ON: AutomaticSelection["fallbackOn"] = [
   "transient",
@@ -219,19 +222,6 @@ function providerMatchesSearch(provider: WebSearchProvider, search: string): boo
     .includes(search);
 }
 
-function routeSummary(snapshot: WebSearchRendererSnapshot): string {
-  const labels = snapshot.route.map((entry) => {
-    const provider = snapshot.providers.find(
-      (candidate) => candidate.id === entry.providerId && candidate.releaseState === "shipped",
-    );
-    return provider?.label ?? "Unavailable provider";
-  });
-  if (snapshot.selection.mode === "fixed") {
-    return `Fixed · ${labels[0] ?? "Unavailable provider"}`;
-  }
-  return labels.length > 0 ? `Automatic · ${labels.join(" → ")}` : "Automatic · No destination";
-}
-
 function routeEntryFor(
   snapshot: WebSearchRendererSnapshot,
   providerId: WebSearchProviderId,
@@ -247,47 +237,98 @@ function LinkIcon() {
   return <ExternalLink aria-hidden="true" className="size-3.5" />;
 }
 
-function ProviderGroup({
+function ProviderListGroup({
+  id,
   title,
   providers,
   route,
   fixedProviderId,
-  onConfigure,
-  onAddToRoute,
-  onUseForSearch,
+  onSelect,
 }: {
+  id?: string;
   title: string;
   providers: readonly WebSearchProvider[];
   route: readonly WebSearchRouteEntry[];
   fixedProviderId?: WebSearchProviderId;
-  onConfigure: (provider: WebSearchProvider, trigger: HTMLButtonElement) => void;
-  onAddToRoute: (provider: WebSearchProvider) => void;
-  onUseForSearch: (provider: WebSearchProvider) => void;
+  onSelect: (provider: WebSearchProvider, trigger: HTMLButtonElement) => void;
 }) {
-  if (providers.length === 0) return null;
+  if (providers.length === 0) return id ? <div id={id} hidden /> : null;
   const headingId = `web-search-group-${title.toLocaleLowerCase().replace(/ /g, "-")}`;
   return (
-    <section aria-labelledby={headingId}>
+    <section id={id} aria-labelledby={headingId}>
       <div className="mb-2 flex items-center gap-2 px-1">
         <Text id={headingId} variant="small-strong" color="secondary">
           {title}
         </Text>
         <Badge>{providers.length}</Badge>
       </div>
-      <div className="grid grid-cols-1 gap-3 min-[680px]:grid-cols-2">
+      <div className="overflow-hidden rounded-card border border-separator bg-popover shadow-control">
         {providers.map((provider) => (
-          <ProviderCard
+          <ProviderListRow
             key={provider.id}
             provider={provider}
             route={route}
             fixedProviderId={fixedProviderId}
-            onConfigure={onConfigure}
-            onAddToRoute={onAddToRoute}
-            onUseForSearch={onUseForSearch}
+            onSelect={onSelect}
           />
         ))}
       </div>
     </section>
+  );
+}
+
+function ProviderListRow({
+  provider,
+  route,
+  fixedProviderId,
+  onSelect,
+}: {
+  provider: WebSearchProvider;
+  route: readonly WebSearchRouteEntry[];
+  fixedProviderId?: WebSearchProviderId;
+  onSelect: (provider: WebSearchProvider, trigger: HTMLButtonElement) => void;
+}) {
+  const inRoute = route.some((entry) => entry.providerId === provider.id);
+  const isFixed = fixedProviderId === provider.id;
+  const status = providerStatus(provider);
+  const connection =
+    provider.costClass === "built-in-free"
+      ? "Built in"
+      : provider.configurationStatus === "configured"
+        ? "Connected"
+        : "Setup required";
+  return (
+    <button
+      type="button"
+      data-web-search-provider-row
+      data-provider-id={provider.id}
+      onClick={(event) => onSelect(provider, event.currentTarget)}
+      className="group flex w-full min-w-0 items-center gap-3 border-b border-separator px-3.5 py-3 text-left outline-none transition-colors duration-150 last:border-b-0 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring motion-reduce:transition-none"
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+        <ProviderIcon
+          providerId={provider.id}
+          providerLabel={provider.label}
+          className="size-4.5"
+        />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Text as="span" variant="small-strong" truncate>
+            {provider.label}
+          </Text>
+          {isFixed ? <Badge color="blue">Active</Badge> : inRoute ? <Badge>In route</Badge> : null}
+        </span>
+        <Text as="span" variant="small" color="secondary" className="mt-0.5 block truncate">
+          {connection} · {COST_LABELS[provider.costClass]}
+        </Text>
+      </span>
+      <Badge color={status.color}>{status.label}</Badge>
+      <ChevronRight
+        aria-hidden="true"
+        className="size-4 shrink-0 text-tertiary transition-transform duration-150 group-hover:translate-x-0.5 motion-reduce:transition-none"
+      />
+    </button>
   );
 }
 
@@ -298,6 +339,7 @@ function ProviderCard({
   onConfigure,
   onAddToRoute,
   onUseForSearch,
+  disabled,
 }: {
   provider: WebSearchProvider;
   route: readonly WebSearchRouteEntry[];
@@ -305,6 +347,7 @@ function ProviderCard({
   onConfigure: (provider: WebSearchProvider, trigger: HTMLButtonElement) => void;
   onAddToRoute: (provider: WebSearchProvider) => void;
   onUseForSearch: (provider: WebSearchProvider) => void;
+  disabled?: boolean;
 }) {
   const inRoute = route.some((entry) => entry.providerId === provider.id);
   const isFixed = fixedProviderId === provider.id;
@@ -378,6 +421,7 @@ function ProviderCard({
         <Button
           variant="transparent"
           size="small"
+          disabled={disabled}
           onClick={(event) => onConfigure(provider, event.currentTarget)}
         >
           {provider.configurationStatus === "configured" ? "Manage" : "Configure"}
@@ -386,7 +430,7 @@ function ProviderCard({
           <Button
             variant={isFixed ? "muted" : "filled"}
             size="small"
-            disabled={isFixed}
+            disabled={isFixed || disabled}
             aria-pressed={isFixed}
             onClick={() => onUseForSearch(provider)}
           >
@@ -398,7 +442,12 @@ function ProviderCard({
             In route
           </Button>
         ) : (
-          <Button variant="filled" size="small" onClick={() => onAddToRoute(provider)}>
+          <Button
+            variant="filled"
+            size="small"
+            disabled={disabled}
+            onClick={() => onAddToRoute(provider)}
+          >
             <Plus className="size-4" />
             Add to route
           </Button>
@@ -416,6 +465,7 @@ function RouteEntryRow({
   readiness,
   onMove,
   onRemove,
+  disabled,
 }: {
   entry: WebSearchRouteEntry;
   index: number;
@@ -424,6 +474,7 @@ function RouteEntryRow({
   readiness: WebSearchRendererSnapshot["routeReadiness"][number] | undefined;
   onMove: (index: number, direction: -1 | 1) => void;
   onRemove: (index: number) => void;
+  disabled?: boolean;
 }) {
   const status = routeStatusLabel(provider, readiness);
   const providerLabel = provider?.label ?? "Unavailable provider";
@@ -435,6 +486,7 @@ function RouteEntryRow({
       aria-posinset={index + 1}
       aria-setsize={total}
       onKeyDown={(event) => {
+        if (disabled) return;
         if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
         event.preventDefault();
         onMove(index, event.key === "ArrowUp" ? -1 : 1);
@@ -471,7 +523,7 @@ function RouteEntryRow({
           size="small"
           variant="transparent"
           className="size-7"
-          disabled={index === 0}
+          disabled={disabled || index === 0}
           aria-label={`Move ${providerLabel} up`}
           title="Move up"
           onClick={() => onMove(index, -1)}
@@ -483,7 +535,7 @@ function RouteEntryRow({
           size="small"
           variant="transparent"
           className="size-7"
-          disabled={index === total - 1}
+          disabled={disabled || index === total - 1}
           aria-label={`Move ${providerLabel} down`}
           title="Move down"
           onClick={() => onMove(index, 1)}
@@ -495,7 +547,7 @@ function RouteEntryRow({
           size="small"
           variant="transparent"
           className="size-7"
-          disabled={total === 1}
+          disabled={disabled || total === 1}
           aria-label={`Remove ${providerLabel} from automatic route`}
           title={total === 1 ? "At least one destination is required" : "Remove from route"}
           onClick={() => onRemove(index)}
@@ -514,7 +566,6 @@ function ProviderSetupDialog({
   onOpenChange,
   onSnapshot,
   returnFocus,
-  onApplyRouteMode,
 }: {
   provider: WebSearchProvider;
   snapshot: WebSearchRendererSnapshot;
@@ -522,10 +573,6 @@ function ProviderSetupDialog({
   onOpenChange: (open: boolean) => void;
   onSnapshot: (snapshot: WebSearchRendererSnapshot) => void;
   returnFocus: () => HTMLElement | null;
-  onApplyRouteMode: (
-    providerId: WebSearchProviderId,
-    credentialMode: CredentialMode,
-  ) => Promise<WebSearchRendererSnapshot | undefined>;
 }) {
   const routeEntry = routeEntryFor(snapshot, provider.id);
   const [keyDraft, setKeyDraft] = React.useState("");
@@ -538,9 +585,7 @@ function ProviderSetupDialog({
   const [routeMode, setRouteMode] = React.useState<CredentialMode>(
     routeEntry?.credentialMode ?? defaultCredentialMode(provider),
   );
-  const [busy, setBusy] = React.useState<
-    "credential" | "config" | "route" | "existing-auth" | null
-  >(null);
+  const [busy, setBusy] = React.useState<"credential" | "config" | "existing-auth" | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -685,27 +730,12 @@ function ProviderSetupDialog({
     }
   };
 
-  const applyRouteMode = async () => {
-    if (busy) return;
-    setBusy("route");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await onApplyRouteMode(provider.id, routeMode);
-      if (next) setMessage("Route mode updated. Saving credentials never changes this choice.");
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t update the route mode."));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const routeModeDescription =
     routeMode === "anonymous"
-      ? "Uses the provider’s free or anonymous route when available."
+      ? "No credential is needed for this provider’s free or anonymous connection."
       : routeMode === "existing-provider-auth"
-        ? "Uses the separately approved saved OpenAI account. Approval never changes this route selection."
-        : "Uses the saved credential for this provider. Saving a key alone never activates this mode.";
+        ? "Approve the saved OpenAI account below. Approval never changes the active route."
+        : "Save a provider-specific API key below. Saving it never activates or selects this provider.";
 
   return (
     <Dialog
@@ -776,14 +806,14 @@ function ProviderSetupDialog({
 
         {provider.credentialKind === "optional-api-key" || supportsExistingAuth ? (
           <Field
-            label="Route mode"
-            description={`${routeModeDescription} Route membership is a separate choice from credential saving.`}
+            label="Connection method"
+            description={routeModeDescription}
             orientation="vertical"
           >
             <RadioGroup
               value={routeMode}
               onValueChange={(value) => setRouteMode(value as CredentialMode)}
-              aria-label={`${provider.label} route mode`}
+              aria-label={`${provider.label} connection method`}
               className="grid gap-2"
             >
               {provider.credentialKind === "optional-api-key" ? (
@@ -822,7 +852,7 @@ function ProviderSetupDialog({
                       Use my API key
                     </Text>
                     <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Use your saved key for this route; your key remains encrypted on this device.
+                      Store a provider-specific key encrypted on this device.
                     </Text>
                   </span>
                 </label>
@@ -843,31 +873,18 @@ function ProviderSetupDialog({
                       Use approved OpenAI account
                     </Text>
                     <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Uses the saved account only after the separate approval below; OpenAI quota
-                      and billing apply.
+                      Approve the saved account below; OpenAI quota and billing apply.
                     </Text>
                   </span>
                 </label>
               ) : null}
             </RadioGroup>
-            <Button
-              variant="transparent"
-              size="small"
-              className="mt-2 justify-self-start"
-              disabled={!routeEntry || Boolean(busy)}
-              onClick={() => void applyRouteMode()}
-            >
-              Apply mode to current route
-            </Button>
-            {!routeEntry ? (
-              <Text variant="small" color="tertiary">
-                Add this provider to the route before applying a mode.
-              </Text>
-            ) : null}
           </Field>
         ) : null}
 
-        {providerNeedsApiKey(provider) ? (
+        {providerNeedsApiKey(provider) &&
+        (!supportsExistingAuth || routeMode === "api-key") &&
+        (provider.credentialKind !== "optional-api-key" || routeMode === "api-key") ? (
           <Field
             label={provider.credentialKind === "optional-api-key" ? "Optional API key" : "API key"}
             description={
@@ -915,7 +932,7 @@ function ProviderSetupDialog({
           </Field>
         ) : null}
 
-        {supportsExistingAuth ? (
+        {supportsExistingAuth && (routeMode === "existing-provider-auth" || existingAuthReady) ? (
           <Field
             label="Saved OpenAI account"
             description="Approval is provider-scoped and separate from route selection. It reads local encrypted state only; it does not send a request."
@@ -1092,8 +1109,16 @@ export function WebSearchSettings() {
   const [search, setSearch] = React.useState("");
   const [filter, setFilter] = React.useState<WebSearchFilter>("all");
   const [showMoreProviders, setShowMoreProviders] = React.useState(false);
+  const [view, setView] = React.useState<WebSearchSettingsView>("overview");
+  const [routingExpanded, setRoutingExpanded] = React.useState(false);
+  const [browserProviderId, setBrowserProviderId] = React.useState<WebSearchProviderId | null>(
+    null,
+  );
   const [editingProvider, setEditingProvider] = React.useState<WebSearchProvider | null>(null);
   const setupTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const browseProvidersTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const browserHeadingRef = React.useRef<HTMLHeadingElement | null>(null);
+  const providerDetailHeadingRef = React.useRef<HTMLHeadingElement | null>(null);
   const [mutation, setMutation] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -1126,6 +1151,7 @@ export function WebSearchSettings() {
         return next;
       } catch (caught) {
         setError(errorMessage(caught, "Couldn’t save Web Search settings."));
+        if (name === "selection" || name === "route") setRoutingExpanded(true);
         if (focusTarget?.isConnected) requestAnimationFrame(() => focusTarget.focus());
         return undefined;
       } finally {
@@ -1186,8 +1212,11 @@ export function WebSearchSettings() {
       provider.costClass !== "built-in-free" &&
       provider.configurationStatus === "configured",
   );
+  const primaryProviderIds = new Set(
+    [...builtinProviders, ...connectedProviders].map((provider) => provider.id),
+  );
   const moreProviders = filteredProviders.filter(
-    (provider) => !builtinProviders.includes(provider) && !connectedProviders.includes(provider),
+    (provider) => !primaryProviderIds.has(provider.id),
   );
   const visibleMoreProviders = filtering || showMoreProviders ? moreProviders : [];
   const editing = editingProvider
@@ -1210,13 +1239,87 @@ export function WebSearchSettings() {
       snapshot.routeReadiness.find((candidate) => candidate.providerId === entry.providerId)?.ready
     );
   }).length;
+  const routeProviders = activeRoute
+    .map((entry) => shippedProviders.find((provider) => provider.id === entry.providerId))
+    .filter((provider): provider is WebSearchProvider => provider !== undefined);
+  const routeProviderLabels = routeProviders.map((provider) => provider.label);
+  const routeRecipientSummary =
+    routeProviderLabels.length === 0
+      ? "No ready destination is selected."
+      : routeProviderLabels.length === 1
+        ? `A derived query may be sent to ${routeProviderLabels[0]} only when search is used.`
+        : `After an eligible failure, the same derived query may be sent sequentially to ${routeProviderLabels.join(", ")}; Aiden never fans out.`;
+  const routeMayUseBilling = routeProviders.some(
+    (provider) => provider.costClass === "paid" || provider.costClass === "quota",
+  );
+  const routeUsesOnlyFreeProviders =
+    routeProviders.length > 0 &&
+    routeProviders.every(
+      (provider) =>
+        provider.costClass === "built-in-free" || provider.costClass === "provider-free",
+    );
+  const routeCostSummary = routeMayUseBilling
+    ? "May use provider quota or paid usage"
+    : routeUsesOnlyFreeProviders
+      ? "Free route"
+      : routeProviders.some((provider) => provider.costClass === "self-hosted")
+        ? "Uses your self-hosted service"
+        : "Review provider cost before use";
+  const routeModeSummary =
+    currentSelection.mode === "automatic"
+      ? `Automatic · ${activeRoute.length} destination${activeRoute.length === 1 ? "" : "s"}`
+      : `Fixed · ${routeProviderLabels[0] ?? "Unavailable provider"}`;
+  const routeStatusColor =
+    routeReadyCount === activeRoute.length && activeRoute.length > 0
+      ? "green"
+      : routeReadyCount === 0
+        ? "red"
+        : undefined;
+  const configuredProviders = shippedProviders.filter(
+    (provider) =>
+      provider.costClass !== "built-in-free" && provider.configurationStatus === "configured",
+  );
+  const browserProvider = browserProviderId
+    ? shippedProviders.find((provider) => provider.id === browserProviderId)
+    : undefined;
 
   const openSetup = (provider: WebSearchProvider, trigger: HTMLButtonElement) => {
     setupTriggerRef.current = trigger;
     setEditingProvider(provider);
   };
 
+  const openProviderBrowser = () => {
+    setView("providers");
+    setBrowserProviderId(null);
+    requestAnimationFrame(() => browserHeadingRef.current?.focus());
+  };
+
+  const closeProviderBrowser = () => {
+    setView("overview");
+    setBrowserProviderId(null);
+    requestAnimationFrame(() => browseProvidersTriggerRef.current?.focus());
+  };
+
+  const openProviderDetail = (provider: WebSearchProvider, _trigger: HTMLButtonElement) => {
+    setBrowserProviderId(provider.id);
+    requestAnimationFrame(() => providerDetailHeadingRef.current?.focus());
+  };
+
+  const closeProviderDetail = () => {
+    const providerId = browserProviderId;
+    setBrowserProviderId(null);
+    requestAnimationFrame(() => {
+      if (!providerId) return;
+      document
+        .querySelector<HTMLButtonElement>(
+          `[data-web-search-provider-row][data-provider-id="${providerId}"]`,
+        )
+        ?.focus();
+    });
+  };
+
   const setEnabled = (enabled: boolean) => {
+    if (mutation) return;
     void performMutation(
       "enabled",
       () => webSearchApi.setEnabled(enabled),
@@ -1227,6 +1330,7 @@ export function WebSearchSettings() {
   };
 
   const setAutomatic = () => {
+    if (mutation) return;
     const route =
       currentSelection.mode === "automatic"
         ? currentSelection.route
@@ -1262,6 +1366,7 @@ export function WebSearchSettings() {
   };
 
   const setFixedProvider = (providerId: WebSearchProviderId) => {
+    if (mutation) return;
     const provider = shippedProviders.find((candidate) => candidate.id === providerId);
     if (!provider) return;
     const existing = routeEntryFor(snapshot, providerId);
@@ -1277,24 +1382,8 @@ export function WebSearchSettings() {
     );
   };
 
-  const setRouteCredentialMode = async (
-    providerId: WebSearchProviderId,
-    credentialMode: CredentialMode,
-  ): Promise<WebSearchRendererSnapshot | undefined> => {
-    if (currentSelection.mode === "fixed" && currentSelection.providerId === providerId) {
-      return performMutation("route", () =>
-        webSearchApi.setSelection({ ...currentSelection, credentialMode }),
-      );
-    }
-    if (currentSelection.mode !== "automatic") return undefined;
-    const route = currentSelection.route.map((entry) =>
-      entry.providerId === providerId ? { ...entry, credentialMode } : entry,
-    );
-    if (!route.some((entry) => entry.providerId === providerId)) return undefined;
-    return performMutation("route", () => webSearchApi.setAutomaticRoute(route));
-  };
-
   const addToRoute = (provider: WebSearchProvider, requestedMode?: CredentialMode) => {
+    if (mutation) return;
     const route = activeRoute.some((entry) => entry.providerId === provider.id)
       ? activeRoute
       : [
@@ -1312,6 +1401,7 @@ export function WebSearchSettings() {
   };
 
   const moveRouteEntry = (index: number, direction: -1 | 1) => {
+    if (mutation) return;
     if (currentSelection.mode !== "automatic") return;
     const nextIndex = index + direction;
     if (index < 0 || nextIndex < 0 || nextIndex >= activeRoute.length) return;
@@ -1322,6 +1412,7 @@ export function WebSearchSettings() {
   };
 
   const removeRouteEntry = (index: number) => {
+    if (mutation) return;
     if (currentSelection.mode !== "automatic" || activeRoute.length <= 1) return;
     const provider = snapshot.providers.find(
       (candidate) =>
@@ -1339,80 +1430,336 @@ export function WebSearchSettings() {
     (provider) => !activeRoute.some((entry) => entry.providerId === provider.id),
   );
 
+  if (view === "providers") {
+    if (browserProvider) {
+      return (
+        <div className="flex flex-col gap-5 pb-8">
+          <Button
+            variant="transparent"
+            size="small"
+            className="self-start"
+            onClick={closeProviderDetail}
+          >
+            <ChevronLeft className="size-4" />
+            All providers
+          </Button>
+          <header className="px-1">
+            <h1
+              ref={providerDetailHeadingRef}
+              tabIndex={-1}
+              className="text-heading1 font-semibold text-primary outline-none"
+            >
+              {browserProvider.label}
+            </h1>
+            <Text as="p" variant="regular" color="secondary" className="mt-1 max-w-xl">
+              Review connection, cost, and privacy details. Configuration never sends a search or
+              changes the active route by itself.
+            </Text>
+          </header>
+          <ProviderCard
+            provider={browserProvider}
+            route={activeRoute}
+            fixedProviderId={fixedProviderId}
+            onConfigure={openSetup}
+            onAddToRoute={addToRoute}
+            onUseForSearch={(provider) => setFixedProvider(provider.id)}
+            disabled={Boolean(mutation)}
+          />
+          <Callout>
+            <Text variant="small-strong">Setup is request-free</Text>
+            <Text as="p" variant="small" color="secondary">
+              Saving provider details stores them on this Mac. It does not test the connection,
+              enable Web Search, or select this provider.
+            </Text>
+          </Callout>
+          {editing ? (
+            <ProviderSetupDialog
+              provider={editing}
+              snapshot={snapshot}
+              open={editing !== null}
+              onOpenChange={(open) => {
+                if (!open) setEditingProvider(null);
+              }}
+              onSnapshot={applySnapshot}
+              returnFocus={() => setupTriggerRef.current}
+            />
+          ) : null}
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col gap-5 pb-8">
+        <Button
+          variant="transparent"
+          size="small"
+          className="self-start"
+          onClick={closeProviderBrowser}
+        >
+          <ChevronLeft className="size-4" />
+          Back to Web Search
+        </Button>
+        <header className="px-1">
+          <h1
+            ref={browserHeadingRef}
+            tabIndex={-1}
+            className="text-heading1 font-semibold text-primary outline-none"
+          >
+            Browse providers
+          </h1>
+          <Text as="p" variant="regular" color="secondary" className="mt-1 max-w-xl">
+            Compare reviewed search services, then open one to configure it. Saving credentials
+            never selects a provider or makes a network request.
+          </Text>
+        </header>
+
+        <section
+          aria-label="Current Web Search route"
+          className="rounded-card border border-separator bg-well px-4 py-3"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Text variant="small-strong">Current route</Text>
+            <Badge color={routeStatusColor}>{routeModeSummary}</Badge>
+            <Text variant="small" color="secondary">
+              {routeReadyCount}/{activeRoute.length} ready · {routeCostSummary}
+            </Text>
+          </div>
+          <Text as="p" variant="small" color="secondary" className="mt-1.5">
+            {routeRecipientSummary}
+          </Text>
+        </section>
+
+        <section aria-labelledby="web-search-provider-browser-heading">
+          <Text id="web-search-provider-browser-heading" as="h2" variant="strong">
+            Provider catalog
+          </Text>
+          <div className="mt-3 flex flex-col gap-2">
+            <label className="flex h-10 items-center gap-2 rounded-control border border-field bg-input px-3 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:border-focus-ring focus-within:bg-popover motion-reduce:transition-none">
+              <Search aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  event.preventDefault();
+                  if (search) setSearch("");
+                  else closeProviderBrowser();
+                }}
+                placeholder="Search shipped providers…"
+                aria-label="Search shipped Web Search providers"
+                className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-secondary"
+              />
+              {search ? (
+                <Button
+                  iconOnly
+                  size="small"
+                  variant="transparent"
+                  className="size-7"
+                  aria-label="Clear provider search"
+                  onClick={() => setSearch("")}
+                >
+                  <X className="size-3.5" />
+                </Button>
+              ) : null}
+            </label>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter providers">
+              {FILTERS.map((option) => (
+                <Button
+                  key={option.id}
+                  size="small"
+                  variant={filter === option.id ? "muted" : "transparent"}
+                  aria-pressed={filter === option.id}
+                  className={
+                    filter === option.id ? "bg-list-selection text-primary" : "text-secondary"
+                  }
+                  onClick={() => setFilter(option.id)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+            <Text variant="small" color="tertiary" aria-live="polite">
+              {filteredProviders.length} shipped provider
+              {filteredProviders.length === 1 ? "" : "s"} · select one for details
+            </Text>
+          </div>
+
+          <div className="mt-4 flex flex-col gap-5">
+            <ProviderListGroup
+              title="Built in"
+              providers={builtinProviders}
+              route={activeRoute}
+              fixedProviderId={fixedProviderId}
+              onSelect={openProviderDetail}
+            />
+            <ProviderListGroup
+              title="Connected"
+              providers={connectedProviders}
+              route={activeRoute}
+              fixedProviderId={fixedProviderId}
+              onSelect={openProviderDetail}
+            />
+            <ProviderListGroup
+              id="web-search-more-providers"
+              title="More providers"
+              providers={visibleMoreProviders}
+              route={activeRoute}
+              fixedProviderId={fixedProviderId}
+              onSelect={openProviderDetail}
+            />
+            {moreProviders.length > 0 && !filtering ? (
+              <Button
+                variant="transparent"
+                className="self-start"
+                aria-expanded={showMoreProviders}
+                aria-controls="web-search-more-providers"
+                onClick={() => setShowMoreProviders((value) => !value)}
+              >
+                <ChevronDown
+                  className={`size-4 transition-transform duration-150 motion-reduce:transition-none ${showMoreProviders ? "rotate-180" : ""}`}
+                />
+                {showMoreProviders
+                  ? "Show fewer providers"
+                  : `Show ${moreProviders.length} more providers`}
+              </Button>
+            ) : null}
+            {filteredProviders.length === 0 ? (
+              <EmptyState
+                placement="inline"
+                title="No shipped providers match"
+                description="Clear the search and filters to browse every reviewed provider."
+              />
+            ) : null}
+            {filteredProviders.length === 0 ? (
+              <Button
+                variant="transparent"
+                className="self-center"
+                onClick={() => {
+                  setSearch("");
+                  setFilter("all");
+                }}
+              >
+                Clear search and filters
+              </Button>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6 pb-8">
-      <header className="flex items-start gap-4 px-1">
-        <div className="flex size-11 shrink-0 items-center justify-center rounded-card bg-accent/10 text-accent">
-          <Globe2 aria-hidden="true" className="size-5" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Text as="h1" variant="heading1">
-              Web Search
-            </Text>
-            <Badge color={snapshot.settings.enabled ? "green" : undefined}>
-              {snapshot.settings.enabled ? "On" : "Off"}
-            </Badge>
-          </div>
+      <header className="flex items-start justify-between gap-4 px-1">
+        <div className="min-w-0">
+          <Text as="h1" variant="heading1">
+            Web Search
+          </Text>
           <Text
+            id="web-search-master-description"
             as="p"
             variant="regular"
             color="secondary"
             className="mt-1 max-w-xl leading-relaxed"
           >
-            Choose which reviewed service can search the web for an attended conversation. Provider,
-            cost, privacy, and fallback decisions stay in Settings—not in the model prompt.
+            Search current information in attended conversations. No startup or background search
+            occurs.
           </Text>
         </div>
-      </header>
-
-      <section className="overflow-hidden rounded-card border border-separator bg-popover shadow-control">
-        <div className="flex items-start gap-3 p-4">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
-            <Globe2 aria-hidden="true" className="size-4.5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <Text variant="strong">Allow Web Search</Text>
-              <Text variant="small" color="tertiary">
-                {snapshot.settings.enabled
-                  ? "Available in attended chats"
-                  : "Unavailable until you turn it on"}
-              </Text>
-            </div>
-            <Text
-              as="p"
-              variant="small"
-              color="secondary"
-              className="mt-1 max-w-xl leading-relaxed"
-            >
-              New profiles start on with Exa’s built-in free route. No background or startup
-              searches occur; Aiden sends a derived query only when an eligible chat actually uses
-              search.
-            </Text>
-          </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Text variant="small-strong" color={snapshot.settings.enabled ? "primary" : "secondary"}>
+            {snapshot.settings.enabled ? "On" : "Off"}
+          </Text>
           <Switch
             checked={snapshot.settings.enabled}
             onCheckedChange={setEnabled}
             disabled={Boolean(mutation)}
             aria-label="Allow Web Search"
+            aria-describedby="web-search-master-description"
           />
         </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-separator bg-well px-4 py-3">
-          <Text variant="small-strong" color="secondary">
-            Active route
-          </Text>
-          <Text variant="small" color="secondary">
-            {routeSummary(snapshot)}
-          </Text>
-          <Badge color={routeReadyCount > 0 ? "green" : "red"}>
-            {routeReadyCount}/{activeRoute.length} ready
-          </Badge>
-          {mutation ? (
-            <Text role="status" aria-live="polite" variant="small" color="tertiary">
-              Saving…
+      </header>
+
+      <section
+        aria-labelledby="web-search-current-setup"
+        className="overflow-hidden rounded-card border border-separator bg-popover shadow-control"
+      >
+        <div className="p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-control bg-accent/10 text-accent">
+              <Globe2 aria-hidden="true" className="size-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <Text id="web-search-current-setup" variant="strong">
+                Current search setup
+              </Text>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <Badge color={snapshot.settings.enabled ? "green" : undefined}>
+                  {snapshot.settings.enabled ? "Available" : "Turned off"}
+                </Badge>
+                <Badge color={routeStatusColor}>
+                  {routeReadyCount}/{activeRoute.length} ready
+                </Badge>
+                <Badge>{routeCostSummary}</Badge>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 rounded-control bg-well px-3.5 py-3">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Text variant="small-strong">{routeModeSummary}</Text>
+              {routeProviderLabels.length > 0 ? (
+                <Text variant="small" color="secondary">
+                  {routeProviderLabels.join(" → ")}
+                </Text>
+              ) : null}
+            </div>
+            <Text as="p" variant="small" color="secondary" className="mt-1.5 leading-relaxed">
+              {routeRecipientSummary}
             </Text>
+          </div>
+          {routeReadyCount === 0 ? (
+            <Callout color="red" className="mt-3" role="alert">
+              <Text variant="small-strong" color="red">
+                No listed provider is ready
+              </Text>
+              <Text as="p" variant="small" color="secondary">
+                Open Routing options or browse providers to finish setup. Searches fail closed until
+                a destination is ready.
+              </Text>
+            </Callout>
           ) : null}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Button
+              ref={browseProvidersTriggerRef}
+              variant="filled"
+              size="small"
+              onClick={openProviderBrowser}
+            >
+              Browse providers
+              <ChevronRight className="size-4" />
+            </Button>
+            <Button
+              variant="transparent"
+              size="small"
+              aria-expanded={routingExpanded}
+              aria-controls="web-search-routing-options"
+              onClick={() => setRoutingExpanded((value) => !value)}
+            >
+              <ChevronDown
+                className={`size-4 transition-transform duration-150 motion-reduce:transition-none ${routingExpanded ? "rotate-180" : ""}`}
+              />
+              Routing options
+              <Text as="span" variant="small" color="tertiary">
+                {routeModeSummary} · {routeReadyCount}/{activeRoute.length} ready
+              </Text>
+            </Button>
+            {mutation ? (
+              <Text role="status" aria-live="polite" variant="small" color="tertiary">
+                Saving…
+              </Text>
+            ) : null}
+          </div>
         </div>
       </section>
 
@@ -1442,309 +1789,240 @@ export function WebSearchSettings() {
         </Text>
       ) : null}
 
-      <FieldSet title="Routing">
-        <Field
-          label="Choose a routing policy"
-          description="Automatic follows your ordered route and may continue only for the disclosed fallback categories. Fixed uses exactly one provider and never falls back."
-          orientation="vertical"
-        >
-          <RadioGroup
-            value={currentSelection.mode}
-            onValueChange={(value) => {
-              if (value === "automatic") {
-                setAutomatic();
-              } else if (value === "fixed") {
-                const nextProviderId = fixedProviderId ?? shippedProviders[0]?.id;
-                if (nextProviderId) setFixedProvider(nextProviderId);
-              }
-            }}
-            aria-label="Web Search routing policy"
-            className="grid gap-2 min-[560px]:grid-cols-2"
-          >
-            <label
-              htmlFor="web-search-routing-automatic"
-              className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-3 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+      {routingExpanded ? (
+        <div id="web-search-routing-options">
+          <FieldSet title="Routing options">
+            <Field
+              label="Choose a routing policy"
+              description="Automatic follows your ordered route and may continue only for the disclosed fallback categories. Fixed uses exactly one provider and never falls back."
+              orientation="vertical"
             >
-              <RadioGroupItem
-                id="web-search-routing-automatic"
-                value="automatic"
-                className="mt-0.5 shrink-0"
-              />
-              <span className="min-w-0">
-                <Text as="span" variant="small-strong" className="block">
-                  Automatic
-                </Text>
-                <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                  Try listed destinations in order after an eligible failure.
-                </Text>
-              </span>
-            </label>
-            <label
-              htmlFor="web-search-routing-fixed"
-              className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-3 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-            >
-              <RadioGroupItem
-                id="web-search-routing-fixed"
-                value="fixed"
-                className="mt-0.5 shrink-0"
-              />
-              <span className="min-w-0">
-                <Text as="span" variant="small-strong" className="block">
-                  Fixed provider
-                </Text>
-                <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                  Send only to one destination; failures stay visible.
-                </Text>
-              </span>
-            </label>
-          </RadioGroup>
-        </Field>
-
-        {currentSelection.mode === "automatic" ? (
-          <Field
-            label="Ordered automatic route"
-            description="Aiden never fans out. Each destination receives the query only if it is listed here and the previous failure is eligible for fallback."
-            orientation="vertical"
-          >
-            <ol
-              data-web-search-route-list
-              aria-label="Ordered automatic Web Search route"
-              className="grid gap-2"
-            >
-              {activeRoute.map((entry, index) => (
-                <RouteEntryRow
-                  key={entry.providerId}
-                  entry={entry}
-                  index={index}
-                  total={activeRoute.length}
-                  provider={snapshot.providers.find(
-                    (candidate) =>
-                      candidate.id === entry.providerId && candidate.releaseState === "shipped",
-                  )}
-                  readiness={snapshot.routeReadiness.find(
-                    (candidate) => candidate.providerId === entry.providerId,
-                  )}
-                  onMove={moveRouteEntry}
-                  onRemove={removeRouteEntry}
-                />
-              ))}
-            </ol>
-            <div className="mt-3 flex flex-col gap-2 min-[540px]:flex-row min-[540px]:items-center">
-              <Select
-                value=""
-                onValueChange={(providerId) => {
-                  const provider = shippedProviders.find(
-                    (candidate) => candidate.id === providerId,
-                  );
-                  if (provider) addToRoute(provider);
+              <RadioGroup
+                value={currentSelection.mode}
+                disabled={Boolean(mutation)}
+                onValueChange={(value) => {
+                  if (value === "automatic") {
+                    setAutomatic();
+                  } else if (value === "fixed") {
+                    const nextProviderId = fixedProviderId ?? shippedProviders[0]?.id;
+                    if (nextProviderId) setFixedProvider(nextProviderId);
+                  }
                 }}
-                disabled={routeProviderOptions.length === 0 || Boolean(mutation)}
+                aria-label="Web Search routing policy"
+                className="grid gap-2 min-[560px]:grid-cols-2"
               >
-                <SelectTrigger
-                  aria-label="Add provider to automatic route"
-                  className="min-[540px]:max-w-sm"
+                <label
+                  htmlFor="web-search-routing-automatic"
+                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-3 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
                 >
-                  <SelectValue placeholder="Add a provider to the route…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {routeProviderOptions.map((provider) => (
-                    <SelectItem key={provider.id} value={provider.id}>
-                      {provider.label} · {COST_LABELS[provider.costClass]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {routeProviderOptions.length === 0 ? (
-                <Text variant="small" color="tertiary">
-                  All shipped providers are already listed.
-                </Text>
-              ) : null}
-            </div>
-            <details className="mt-3 rounded-control bg-well px-3 py-2">
-              <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none marker:hidden focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring">
-                <ChevronDown
-                  aria-hidden="true"
-                  className="size-3.5 transition-transform duration-150 open:rotate-180 motion-reduce:transition-none"
-                />
-                Fallback conditions
-              </summary>
-              <Text as="p" variant="small" color="secondary" className="mt-2 leading-relaxed">
-                Automatic can continue after these categories. Authentication, invalid
-                configuration, cancellation, and policy failures stop immediately.
-              </Text>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {currentSelection.fallbackOn.map((kind) => (
-                  <Badge key={kind}>{FALLBACK_LABELS[kind]}</Badge>
-                ))}
-              </div>
-            </details>
-          </Field>
-        ) : (
-          <Field
-            label="Fixed provider"
-            description="This destination receives every Web Search request while selected. Fixed mode never silently tries another provider."
-            orientation="vertical"
-          >
-            <Select
-              value={currentSelection.providerId}
-              onValueChange={(providerId) => setFixedProvider(providerId as WebSearchProviderId)}
-              disabled={Boolean(mutation)}
-            >
-              <SelectTrigger aria-label="Fixed Web Search provider">
-                <SelectValue>{fixedProvider?.label ?? "Unavailable provider"}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {shippedProviders.map((provider) => (
-                  <SelectItem key={provider.id} value={provider.id}>
-                    {provider.label} · {COST_LABELS[provider.costClass]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Callout className="mt-3" aria-live="polite">
-              <div className="flex items-start gap-2.5">
-                {selectedFixedStatus.color === "red" ? (
-                  <TriangleAlert className="mt-0.5 size-4 shrink-0 text-red" />
-                ) : (
-                  <Check className="mt-0.5 size-4 shrink-0 text-green" />
-                )}
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Text variant="small-strong">
-                      {fixedProvider?.label ?? "Unavailable provider"}
+                  <RadioGroupItem
+                    id="web-search-routing-automatic"
+                    value="automatic"
+                    className="mt-0.5 shrink-0"
+                  />
+                  <span className="min-w-0">
+                    <Text as="span" variant="small-strong" className="block">
+                      Automatic
                     </Text>
-                    <Badge color={selectedFixedStatus.color}>{selectedFixedStatus.label}</Badge>
-                  </div>
-                  <Text as="p" variant="small" color="secondary" className="mt-1">
-                    {selectedFixedStatus.color === "red"
-                      ? "Finish provider setup or choose another shipped destination. Requests fail closed until this provider is ready."
-                      : `Uses ${CREDENTIAL_MODE_LABELS[selectedFixedCredentialMode]}.`}
-                  </Text>
-                </div>
-              </div>
-            </Callout>
-          </Field>
-        )}
-      </FieldSet>
-
-      <FieldSet
-        title={
-          <span className="flex flex-wrap items-center gap-2">
-            Provider catalog <Badge color="blue">{shippedProviders.length} shipped</Badge>
-          </span>
-        }
-      >
-        <div className="flex flex-col gap-4 p-4">
-          <div className="flex flex-col gap-2">
-            <label className="flex h-10 items-center gap-2 rounded-control border border-field bg-input px-3 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:border-focus-ring focus-within:bg-popover motion-reduce:transition-none">
-              <Search aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    setSearch("");
-                    event.currentTarget.blur();
-                  }
-                }}
-                placeholder="Search shipped providers…"
-                aria-label="Search shipped Web Search providers"
-                className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-secondary"
-              />
-              {search ? (
-                <Button
-                  iconOnly
-                  size="small"
-                  variant="transparent"
-                  className="size-7"
-                  aria-label="Clear provider search"
-                  onClick={() => setSearch("")}
+                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+                      Try listed destinations in order after an eligible failure.
+                    </Text>
+                  </span>
+                </label>
+                <label
+                  htmlFor="web-search-routing-fixed"
+                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-3 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
                 >
-                  <X className="size-3.5" />
-                </Button>
-              ) : null}
-            </label>
-            <div className="flex flex-wrap gap-1.5" role="toolbar" aria-label="Filter providers">
-              {FILTERS.map((option) => (
-                <Button
-                  key={option.id}
-                  size="small"
-                  variant={filter === option.id ? "muted" : "transparent"}
-                  aria-pressed={filter === option.id}
-                  className={
-                    filter === option.id ? "bg-list-selection text-primary" : "text-secondary"
-                  }
-                  onClick={() => setFilter(option.id)}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-            <Text variant="small" color="tertiary" aria-live="polite">
-              {filteredProviders.length} shipped provider{filteredProviders.length === 1 ? "" : "s"}{" "}
-              · non-shipped and blocked providers are not shown
-            </Text>
-          </div>
+                  <RadioGroupItem
+                    id="web-search-routing-fixed"
+                    value="fixed"
+                    className="mt-0.5 shrink-0"
+                  />
+                  <span className="min-w-0">
+                    <Text as="span" variant="small-strong" className="block">
+                      Fixed provider
+                    </Text>
+                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+                      Send only to one destination; failures stay visible.
+                    </Text>
+                  </span>
+                </label>
+              </RadioGroup>
+            </Field>
 
-          <div className="flex flex-col gap-5">
-            <ProviderGroup
-              title="Built in"
-              providers={builtinProviders}
-              route={activeRoute}
-              fixedProviderId={
-                currentSelection.mode === "fixed" ? currentSelection.providerId : undefined
-              }
-              onConfigure={openSetup}
-              onAddToRoute={addToRoute}
-              onUseForSearch={(provider) => setFixedProvider(provider.id)}
-            />
-            <ProviderGroup
-              title="Connected"
-              providers={connectedProviders}
-              route={activeRoute}
-              fixedProviderId={
-                currentSelection.mode === "fixed" ? currentSelection.providerId : undefined
-              }
-              onConfigure={openSetup}
-              onAddToRoute={addToRoute}
-              onUseForSearch={(provider) => setFixedProvider(provider.id)}
-            />
-            <ProviderGroup
-              title="More providers"
-              providers={visibleMoreProviders}
-              route={activeRoute}
-              fixedProviderId={
-                currentSelection.mode === "fixed" ? currentSelection.providerId : undefined
-              }
-              onConfigure={openSetup}
-              onAddToRoute={addToRoute}
-              onUseForSearch={(provider) => setFixedProvider(provider.id)}
-            />
-            {moreProviders.length > 0 && !filtering ? (
-              <Button
-                variant="transparent"
-                className="self-start"
-                aria-expanded={showMoreProviders}
-                onClick={() => setShowMoreProviders((value) => !value)}
+            {currentSelection.mode === "automatic" ? (
+              <Field
+                label="Ordered automatic route"
+                description="Aiden never fans out. Each destination receives the query only if it is listed here and the previous failure is eligible for fallback."
+                orientation="vertical"
               >
-                <ChevronDown
-                  className={`size-4 transition-transform duration-150 motion-reduce:transition-none ${showMoreProviders ? "rotate-180" : ""}`}
-                />
-                {showMoreProviders ? "Show fewer providers" : "Show more providers"}
-              </Button>
-            ) : null}
-            {filteredProviders.length === 0 ? (
-              <EmptyState
-                placement="inline"
-                title="No shipped providers match"
-                description="Try another search or filter. Aiden keeps planned and blocked providers out of the release catalog."
-              />
-            ) : null}
-          </div>
+                <ol
+                  data-web-search-route-list
+                  aria-label="Ordered automatic Web Search route"
+                  className="grid gap-2"
+                >
+                  {activeRoute.map((entry, index) => (
+                    <RouteEntryRow
+                      key={entry.providerId}
+                      entry={entry}
+                      index={index}
+                      total={activeRoute.length}
+                      provider={snapshot.providers.find(
+                        (candidate) =>
+                          candidate.id === entry.providerId && candidate.releaseState === "shipped",
+                      )}
+                      readiness={snapshot.routeReadiness.find(
+                        (candidate) => candidate.providerId === entry.providerId,
+                      )}
+                      onMove={moveRouteEntry}
+                      onRemove={removeRouteEntry}
+                      disabled={Boolean(mutation)}
+                    />
+                  ))}
+                </ol>
+                <div className="mt-3 flex flex-col gap-2 min-[540px]:flex-row min-[540px]:items-center">
+                  <Select
+                    value=""
+                    onValueChange={(providerId) => {
+                      const provider = shippedProviders.find(
+                        (candidate) => candidate.id === providerId,
+                      );
+                      if (provider) addToRoute(provider);
+                    }}
+                    disabled={routeProviderOptions.length === 0 || Boolean(mutation)}
+                  >
+                    <SelectTrigger
+                      aria-label="Add provider to automatic route"
+                      className="min-[540px]:max-w-sm"
+                    >
+                      <SelectValue placeholder="Add a provider to the route…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {routeProviderOptions.map((provider) => (
+                        <SelectItem key={provider.id} value={provider.id}>
+                          {provider.label} · {COST_LABELS[provider.costClass]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {routeProviderOptions.length === 0 ? (
+                    <Text variant="small" color="tertiary">
+                      All shipped providers are already listed.
+                    </Text>
+                  ) : null}
+                </div>
+                <details className="mt-3 rounded-control bg-well px-3 py-2">
+                  <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none marker:hidden focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring">
+                    <ChevronDown
+                      aria-hidden="true"
+                      className="size-3.5 transition-transform duration-150 open:rotate-180 motion-reduce:transition-none"
+                    />
+                    Fallback conditions
+                  </summary>
+                  <Text as="p" variant="small" color="secondary" className="mt-2 leading-relaxed">
+                    Automatic can continue after these categories. Authentication, invalid
+                    configuration, cancellation, and policy failures stop immediately.
+                  </Text>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {currentSelection.fallbackOn.map((kind) => (
+                      <Badge key={kind}>{FALLBACK_LABELS[kind]}</Badge>
+                    ))}
+                  </div>
+                </details>
+              </Field>
+            ) : (
+              <Field
+                label="Fixed provider"
+                description="This destination receives every Web Search request while selected. Fixed mode never silently tries another provider."
+                orientation="vertical"
+              >
+                <Select
+                  value={currentSelection.providerId}
+                  onValueChange={(providerId) =>
+                    setFixedProvider(providerId as WebSearchProviderId)
+                  }
+                  disabled={Boolean(mutation)}
+                >
+                  <SelectTrigger aria-label="Fixed Web Search provider">
+                    <SelectValue>{fixedProvider?.label ?? "Unavailable provider"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {shippedProviders.map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id}>
+                        {provider.label} · {COST_LABELS[provider.costClass]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Callout className="mt-3" aria-live="polite">
+                  <div className="flex items-start gap-2.5">
+                    {selectedFixedStatus.color === "red" ? (
+                      <TriangleAlert className="mt-0.5 size-4 shrink-0 text-red" />
+                    ) : (
+                      <Check className="mt-0.5 size-4 shrink-0 text-green" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Text variant="small-strong">
+                          {fixedProvider?.label ?? "Unavailable provider"}
+                        </Text>
+                        <Badge color={selectedFixedStatus.color}>{selectedFixedStatus.label}</Badge>
+                      </div>
+                      <Text as="p" variant="small" color="secondary" className="mt-1">
+                        {selectedFixedStatus.color === "red"
+                          ? "Finish provider setup or choose another shipped destination. Requests fail closed until this provider is ready."
+                          : `Uses ${CREDENTIAL_MODE_LABELS[selectedFixedCredentialMode]}.`}
+                      </Text>
+                    </div>
+                  </div>
+                </Callout>
+              </Field>
+            )}
+          </FieldSet>
         </div>
-      </FieldSet>
+      ) : null}
+
+      {configuredProviders.length > 0 ? (
+        <section aria-labelledby="web-search-connected-providers">
+          <div className="mb-2 flex items-center justify-between gap-3 px-1">
+            <div className="flex items-center gap-2">
+              <Text id="web-search-connected-providers" variant="small-strong" color="secondary">
+                Connected providers
+              </Text>
+              <Badge>{configuredProviders.length}</Badge>
+            </div>
+            <Button variant="transparent" size="small" onClick={openProviderBrowser}>
+              Manage
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+          <div className="overflow-hidden rounded-card border border-separator bg-popover">
+            {configuredProviders.slice(0, 3).map((provider) => (
+              <div
+                key={provider.id}
+                className="flex items-center gap-3 border-b border-separator px-3.5 py-2.5 last:border-b-0"
+              >
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+                  <ProviderIcon
+                    providerId={provider.id}
+                    providerLabel={provider.label}
+                    className="size-4"
+                  />
+                </span>
+                <Text variant="small-strong" className="min-w-0 flex-1" truncate>
+                  {provider.label}
+                </Text>
+                <Text variant="small" color="secondary">
+                  {COST_LABELS[provider.costClass]}
+                </Text>
+                <Badge color={provider.ready ? "green" : undefined}>
+                  {provider.ready ? "Ready" : "Connected"}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section
         aria-labelledby="web-search-privacy"
@@ -1754,26 +2032,16 @@ export function WebSearchSettings() {
           <LockKeyhole aria-hidden="true" className="mt-0.5 size-4.5 shrink-0 text-secondary" />
           <div className="min-w-0">
             <Text id="web-search-privacy" variant="strong">
-              Privacy and authority
+              Privacy and access
             </Text>
-            <ul className="mt-2 grid gap-1.5 pl-4 text-small text-secondary marker:text-tertiary">
-              <li>
-                Aiden may derive a query from the conversation and send it to the selected provider
-                only when search is used. Avoid private information.
-              </li>
-              <li>
-                Automatic routing can send the same query sequentially to more than one listed
-                destination after an eligible failure; it never fans out.
-              </li>
-              <li>
-                Provider keys stay encrypted on this device and are never shown back, placed in
-                URLs, or passed to the model. Search results are untrusted web evidence.
-              </li>
-              <li>
-                Turning Web Search off preserves route order and credentials. Existing Bots and
-                schedules need their own explicit Web Search grant.
-              </li>
-            </ul>
+            <Text as="p" variant="small" color="secondary" className="mt-1.5 leading-relaxed">
+              {routeRecipientSummary} Avoid private information. Provider keys remain encrypted on
+              this device and are never passed to the model.
+            </Text>
+            <Text as="p" variant="small" color="secondary" className="mt-1.5 leading-relaxed">
+              Turning Web Search off preserves routes and credentials. Bots and schedules still
+              require their own explicit Web Search grant.
+            </Text>
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
                 variant="transparent"
@@ -1804,7 +2072,6 @@ export function WebSearchSettings() {
           }}
           onSnapshot={applySnapshot}
           returnFocus={() => setupTriggerRef.current}
-          onApplyRouteMode={setRouteCredentialMode}
         />
       ) : null}
     </div>

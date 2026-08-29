@@ -648,6 +648,15 @@ live installed matrix remains a release-owner acceptance gate because it require
 real provider credentials/accounts and intentionally sends queries to external
 services; no such credentials were supplied or inferred during implementation.
 
+Post-delivery UX refinement (2026-08-29): Web Search Settings now opens on one
+route-aware summary that keeps enablement, readiness, every possible recipient,
+and cost risk visible. Routing is an explicit inline disclosure with a useful
+collapsed summary, while provider discovery is a nested Settings drill-in with
+compact rows, focused provider detail, and Back-focus restoration. Provider
+connection fields reveal contextually, and credential setup no longer exposes a
+route-mode mutation. The focused Web Search suite and Settings Electron journey
+cover the new disclosure and navigation contract.
+
 ## Test matrix
 
 ### Core, adapters, and routing
