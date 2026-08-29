@@ -4,6 +4,7 @@ import { configStore } from "./config-store.js";
 import { configStores } from "./portable-config.js";
 import { webSearchCredentials } from "./web-search-credentials.js";
 import { webSearchExistingAuthReuse } from "./web-search-auth-reuse-main.js";
+import { webSearchRollout } from "./web-search-rollout.js";
 import { WebSearchService } from "./web-search.js";
 
 /**
@@ -43,4 +44,5 @@ export const webSearchService = new WebSearchService({
   getExistingAuthStatus: () => webSearchExistingAuthReuse.status(),
   resolveExistingAuth: () => webSearchExistingAuthReuse.resolve(),
   persistSettings: (patch) => configStore.setSettings(patch),
+  rollout: webSearchRollout,
 });

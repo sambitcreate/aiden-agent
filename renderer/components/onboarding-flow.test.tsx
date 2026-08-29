@@ -238,6 +238,32 @@ test("onboarding is an application modal with an explicit provider deferral", ()
   assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
 });
 
+test("pre-workspace Web Search disclosure is default-aware, explicit, and request-free", () => {
+  assert.match(source, /data-onboarding-web-search/u);
+  assert.match(source, /const webSearch = useWebSearch\(\)/u);
+  assert.match(source, /const next = await webSearchApi\.setEnabled\(enabled\)/u);
+  assert.match(source, /queryClient\.setQueryData\(queryKeys\.webSearch, next\)/u);
+  assert.match(
+    source,
+    /Fresh profiles start with Web Search on; anonymous Exa is the initial\s+recipient/u,
+  );
+  assert.match(
+    source,
+    /send\s+that query and your network\s+address to Exa only when the model\s+invokes search/u,
+  );
+  assert.match(source, /This screen makes no\s+network\s+request/u);
+  assert.match(source, /Existing opt-outs and routes stay unchanged/u);
+  assert.match(
+    source,
+    /disabled=\{!webSearch\.data \|\| webSearch\.isFetching \|\| webSearchSaving\}/u,
+  );
+  assert.match(source, /aria-label="Allow Web Search in attended chats"/u);
+  assert.match(source, /aria-describedby="onboarding-web-search-description"/u);
+  assert.match(source, /motion-reduce:transition-none/u);
+  assert.doesNotMatch(source, /exaApi\.(setEnabled|setKey)/u);
+  assert.doesNotMatch(source, /setWebSearchEnabled\(true\)/u);
+});
+
 test("hosted keys validate before selection and endpoint routes require discovered models", () => {
   const hostedKeyFlow = source.slice(
     source.indexOf("const validateHostedApiKey"),
@@ -293,6 +319,11 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     source,
     /Create reusable instructions, then type \$ to attach one to your next message\./u,
   );
+  assert.match(
+    featurePresentation,
+    /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
+  );
+  assert.doesNotMatch(featurePresentation, /choose to connect it/u);
   assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
   assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings →\s*Remote\s+Access/u);
   for (const group of [
@@ -335,7 +366,10 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
   assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
-  assert.match(featurePresentation, /benchmark-only OpenRouter key never imports its model catalog/u);
+  assert.match(
+    featurePresentation,
+    /benchmark-only OpenRouter key never imports its model catalog/u,
+  );
   assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
   assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 25);

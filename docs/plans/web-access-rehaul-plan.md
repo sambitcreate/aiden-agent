@@ -1,10 +1,10 @@
 # Web Access Rehaul
 
-Status: Active
+Status: Implemented; credential-backed installed acceptance pending
 
 Research date: 2026-08-28
 
-Updated: 2026-08-28 after the default-on and provider-zoo decision
+Updated: 2026-08-29 after Phase 5 implementation and development-package verification
 
 ## Goal
 
@@ -178,9 +178,9 @@ notes, and deterministic fixtures. Settings may show a disabled **Planned** card
 only in development builds; release builds show shipped adapters, so the provider
 zoo never advertises a dead connection.
 
-## Before and proposed after
+## Before and implemented after
 
-| Area                   | Before                                                                    | Proposed after                                                                                                                                                 |
+| Area                   | Before                                                                    | Implemented after                                                                                                                                              |
 | ---------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Fresh default          | Web Search is unavailable and off until an Exa key is saved.              | Web Search is on for a fresh attended foreground profile, with an automatic route containing only anonymous Exa.                                               |
 | First network use      | Impossible without a saved key.                                           | No startup or setup request; the first eligible `web_search` call contacts Exa and the user can turn it off immediately.                                       |
@@ -624,6 +624,8 @@ routable through the main adapter registry.
 
 ### Phase 5 — Onboarding, docs, packaging, and rollout
 
+Status: Implemented (2026-08-29); live credential-backed installed acceptance remains
+
 - Add the pre-workspace default-on disclosure/toggle and update the bento tile,
   artwork contract, privacy copy, and Settings keywords.
 - Add focused `test:web-search` coverage to `package.json` and `pretest`.
@@ -631,6 +633,20 @@ routable through the main adapter registry.
   acceptance with free, keyed, automatic, fixed, Bot, schedule, and child paths.
 - Roll out registry/Settings behind a kill switch while keeping Exa anonymous as
   the recoverable baseline.
+
+Exit result: onboarding now discloses the default anonymous Exa recipient before
+workspace use, offers a request-free toggle, and advertises the shipped provider
+zoo in the tested bento gallery. The provider zoo is default-on behind the
+startup-bound `AIDEN_WEB_SEARCH_PROVIDER_ZOO_ENABLED` switch; exact `0` projects a
+fixed Exa-only baseline without destroying hidden routes, provider configuration,
+credentials, or the global enabled state. Rollback rejects hidden route/config
+mutations, never wakes a dormant key, and fails closed when Exa is unavailable.
+Focused Web Search (125), onboarding (49), Bot (430), schedule (87), Assistant
+(116), type, scoped lint/format, changed-scope React review, build, Settings E2E,
+development packaging, and hardened package verification pass. The eight-step
+live installed matrix remains a release-owner acceptance gate because it requires
+real provider credentials/accounts and intentionally sends queries to external
+services; no such credentials were supplied or inferred during implementation.
 
 ## Test matrix
 

@@ -56,11 +56,18 @@ import {
   type WebSearchRouteReadiness,
   type WebSearchSettingsV2,
 } from "../services/web-search-provider-registry-core.js";
+import { webSearchAdapterAvailable } from "../services/web-search-provider-registry.js";
 import {
   webSearchExistingAuthRendererStatus,
   type WebSearchExistingAuthRendererOption,
   type WebSearchExistingAuthRendererStatus,
 } from "../services/web-search-auth-reuse-core.js";
+import {
+  assertWebSearchRolloutMutationAllowed,
+  webSearchProviderVisible,
+  webSearchRollout,
+  webSearchSettingsForRollout,
+} from "../services/web-search-rollout.js";
 
 interface ActiveVoiceTranscription {
   controller: AbortController;
@@ -98,7 +105,9 @@ function webSearchSettingsSnapshot(
     settings: structuredClone(settings),
     // This helper receives only categorical statuses. The registry projection
     // removes fixed origins and all credential details.
-    providers: projectWebSearchProviderRegistry(statuses),
+    providers: projectWebSearchProviderRegistry(statuses).filter((provider) =>
+      webSearchProviderVisible(provider.id, webSearchRollout),
+    ),
     selection,
     route,
     routeReadiness: webSearchRouteReadiness(
@@ -112,7 +121,13 @@ function webSearchSettingsSnapshot(
           },
         ]),
       ) as Partial<Record<WebSearchProviderId, WebSearchProviderReadiness>>,
-    ) as WebSearchRouteReadiness[],
+    ).map((readiness) => ({
+      ...readiness,
+      // Credential readiness alone cannot make a provider available when its
+      // reviewed main-process adapter is absent (for example, a rollback
+      // build with Exa intentionally disabled).
+      ready: readiness.ready && statuses[readiness.providerId]?.ready === true,
+    })) as WebSearchRouteReadiness[],
     existingAuth,
   };
 }
@@ -129,7 +144,13 @@ function supportsApiKeyCredential(
 }
 
 async function readWebSearchSnapshot(): Promise<WebSearchRendererSnapshot> {
-  const settings = await configStore.getWebSearchSettings();
+  // The rollout is an immutable main-process projection. The durable settings
+  // document remains untouched so re-enabling the zoo restores the user's
+  // route, provider configuration, and credentials exactly as saved.
+  const settings = webSearchSettingsForRollout(
+    await configStore.getWebSearchSettings(),
+    webSearchRollout,
+  );
   const statuses: Partial<Record<WebSearchProviderId, WebSearchProviderStatus>> = {};
   let existingAuthOptions: readonly WebSearchExistingAuthRendererOption[] = [];
   let existingAuthStatus = webSearchExistingAuthRendererStatus("not-consented");
@@ -145,7 +166,9 @@ async function readWebSearchSnapshot(): Promise<WebSearchRendererSnapshot> {
     existingAuthStatus = webSearchExistingAuthRendererStatus("invalid");
   }
   await Promise.all(
-    WEB_SEARCH_PROVIDER_REGISTRY.map(async (definition) => {
+    WEB_SEARCH_PROVIDER_REGISTRY.filter((definition) =>
+      webSearchProviderVisible(definition.id, webSearchRollout),
+    ).map(async (definition) => {
       const config = settings.providerConfig[definition.id];
       if (supportsApiKeyCredential(definition)) {
         let hasCredential = false;
@@ -168,6 +191,7 @@ async function readWebSearchSnapshot(): Promise<WebSearchRendererSnapshot> {
                 : "not-required"
               : "needs-setup",
           ready:
+            webSearchAdapterAvailable(definition.id) &&
             definition.releaseState === "shipped" &&
             (hasCredential ||
               hasExistingProviderAuth ||
@@ -181,14 +205,17 @@ async function readWebSearchSnapshot(): Promise<WebSearchRendererSnapshot> {
         const configured = typeof config?.endpoint === "string";
         statuses[definition.id] = {
           configurationStatus: configured ? "configured" : "needs-setup",
-          ready: definition.releaseState === "shipped" && configured,
+          ready:
+            webSearchAdapterAvailable(definition.id) &&
+            definition.releaseState === "shipped" &&
+            configured,
         };
         return;
       }
       if (definition.credentialKind === "none") {
         statuses[definition.id] = {
           configurationStatus: "not-required",
-          ready: definition.releaseState === "shipped",
+          ready: webSearchAdapterAvailable(definition.id) && definition.releaseState === "shipped",
         };
         return;
       }
@@ -446,28 +473,33 @@ export function registerPhase2Handlers(): void {
   });
   ipcMain.handle("webSearch:existingAuth:consent", async (event, value: unknown) => {
     const owner = webSearchMutationOwner(event);
+    assertWebSearchRolloutMutationAllowed("existing-auth", undefined, webSearchRollout);
     await webSearchExistingAuthReuse.consent(value, () => !owner.isDestroyed());
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     return readWebSearchSnapshot();
   });
   ipcMain.handle("webSearch:existingAuth:revoke", async (event) => {
     const owner = webSearchMutationOwner(event);
+    assertWebSearchRolloutMutationAllowed("existing-auth", undefined, webSearchRollout);
     await webSearchExistingAuthReuse.revoke(() => !owner.isDestroyed());
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     return readWebSearchSnapshot();
   });
   ipcMain.handle("webSearch:setEnabled", async (event, enabled: unknown) => {
     if (typeof enabled !== "boolean") throw new Error("Web Search enabled must be a boolean.");
+    assertWebSearchRolloutMutationAllowed("set-enabled", undefined, webSearchRollout);
     return updateWebSearchSnapshot(event, (current) =>
       normalizeWebSearchSettings({ ...current, enabled }),
     );
   });
   ipcMain.handle("webSearch:setSelection", async (event, selection: unknown) => {
+    assertWebSearchRolloutMutationAllowed("set-selection", undefined, webSearchRollout);
     return updateWebSearchSnapshot(event, (current) =>
       normalizeWebSearchSettings({ ...current, selection }),
     );
   });
   ipcMain.handle("webSearch:setAutomaticRoute", async (event, route: unknown) => {
+    assertWebSearchRolloutMutationAllowed("set-automatic-route", undefined, webSearchRollout);
     return updateWebSearchSnapshot(event, (current) => {
       const fallbackOn =
         current.selection.mode === "automatic"
@@ -485,6 +517,7 @@ export function registerPhase2Handlers(): void {
       if (!isWebSearchProviderId(providerId)) {
         throw new Error("Unknown Web Search provider.");
       }
+      assertWebSearchRolloutMutationAllowed("set-provider-config", providerId, webSearchRollout);
       return updateWebSearchSnapshot(event, (current) => {
         const nextProviderConfig: Record<string, unknown> = { ...current.providerConfig };
         if (providerConfig === null) delete nextProviderConfig[providerId];
@@ -496,6 +529,7 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("webSearch:setCredential", async (event, providerId: unknown, key: unknown) => {
     const owner = webSearchMutationOwner(event);
     if (!isWebSearchProviderId(providerId)) throw new Error("Unknown Web Search provider.");
+    assertWebSearchRolloutMutationAllowed("set-credential", providerId, webSearchRollout);
     const settings = await configStore.getWebSearchSettings();
     const reference = webSearchCredentials.reference(
       providerId,
@@ -508,6 +542,7 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("webSearch:removeCredential", async (event, providerId: unknown) => {
     const owner = webSearchMutationOwner(event);
     if (!isWebSearchProviderId(providerId)) throw new Error("Unknown Web Search provider.");
+    assertWebSearchRolloutMutationAllowed("set-credential", providerId, webSearchRollout);
     const settings = await configStore.getWebSearchSettings();
     const reference = webSearchCredentials.reference(
       providerId,
@@ -529,6 +564,7 @@ export function registerPhase2Handlers(): void {
   });
   ipcMain.handle("exa:setKey", async (event, key: unknown) => {
     const owner = webSearchMutationOwner(event);
+    assertWebSearchRolloutMutationAllowed("set-credential", "exa", webSearchRollout);
     const settings = await configStore.getWebSearchSettings();
     const reference = webSearchCredentials.reference("exa", settings.providerConfig.exa);
     const value = typeof key === "string" ? key.trim() : "";
@@ -545,6 +581,7 @@ export function registerPhase2Handlers(): void {
   });
   ipcMain.handle("exa:setEnabled", async (event, enabled: unknown) => {
     if (typeof enabled !== "boolean") throw new Error("Web Search enabled must be a boolean.");
+    assertWebSearchRolloutMutationAllowed("set-enabled", undefined, webSearchRollout);
     await updateWebSearchSnapshot(event, (current) => ({ ...current, enabled }));
     return configStore.getSettings();
   });

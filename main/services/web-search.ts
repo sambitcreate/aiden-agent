@@ -39,6 +39,12 @@ import {
   type WebSearchAdapterRequest,
   type WebSearchFetch,
 } from "./web-search-provider-registry.js";
+import {
+  pinWebSearchRolloutPolicy,
+  webSearchRollout,
+  webSearchSettingsForRollout,
+  type WebSearchRolloutPolicy,
+} from "./web-search-rollout.js";
 import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
 import type { WebSearchExistingAuthRendererStatus } from "./web-search-auth-reuse-core.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
@@ -63,6 +69,8 @@ export interface WebSearchServiceDependencies {
   fetch?: WebSearchFetch;
   /** Injectable adapter map for deterministic router policy tests. */
   adapterFactories?: Readonly<Partial<Record<WebSearchProviderId, WebSearchAdapterFactory>>>;
+  /** Startup-bound main-process rollout; never comes from renderer input. */
+  rollout?: WebSearchRolloutPolicy;
   /** Shortened only in tests; production uses the shared 20-second bound. */
   timeoutMs?: number;
 }
@@ -162,9 +170,13 @@ export class WebSearchService {
   private readonly adapterFactories: Readonly<
     Partial<Record<WebSearchProviderId, WebSearchAdapterFactory>>
   >;
+  private readonly rollout: WebSearchRolloutPolicy;
 
   constructor(private readonly dependencies: WebSearchServiceDependencies) {
     this.adapterFactories = dependencies.adapterFactories ?? WEB_SEARCH_ADAPTER_FACTORIES;
+    // The default policy is captured when the main service is constructed.
+    // It is intentionally not re-read per request or generation.
+    this.rollout = pinWebSearchRolloutPolicy(dependencies.rollout ?? webSearchRollout);
   }
 
   /**
@@ -340,15 +352,19 @@ export class WebSearchService {
       legacyCredential = await this.readCredential("exa");
     }
 
-    const settings = migrateWebSearchSettings({
+    const durableSettings = migrateWebSearchSettings({
       webSearch: current.webSearch,
       exaEnabled: current.exaEnabled,
       hasExaKey: legacyCredential !== undefined,
       evidence,
     });
     if (current.webSearch === undefined && this.dependencies.persistSettings) {
-      await this.dependencies.persistSettings({ webSearch: settings });
+      // Persist only the migration result. Rollback is a runtime projection;
+      // it must never erase the user's provider route or configuration.
+      await this.dependencies.persistSettings({ webSearch: durableSettings });
     }
+
+    const settings = webSearchSettingsForRollout(durableSettings, this.rollout);
 
     const routeForCredential =
       settings.selection.mode === "fixed" ? [settings.selection] : settings.selection.route;

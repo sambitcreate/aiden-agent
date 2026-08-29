@@ -39,8 +39,8 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { ProviderIcon } from "./provider-icon";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { CodexProviderSettings } from "./settings/codex-provider-settings";
-import { Button, Dialog, Field, Input, Text, toast } from "./ui";
-import { appApi, providersApi, profileApi } from "../lib/ipc";
+import { Button, Dialog, Field, Input, Switch, Text, toast } from "./ui";
+import { appApi, profileApi, providersApi, webSearchApi } from "../lib/ipc";
 import {
   clearLegacyOnboardingCompletion,
   markOnboardingComplete,
@@ -58,7 +58,7 @@ import {
   isOnboardingBuiltinProviderReady,
   onboardingBuiltinProviderSetupLabel,
 } from "../lib/pi-provider-display";
-import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
+import { queryKeys, useCodexProviderStatus, useProviders, useWebSearch } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
 import {
@@ -290,7 +290,8 @@ const featureBentos: FeatureBento[] = [
     id: "webSearch",
     group: "extend",
     title: "Web Search",
-    description: "Give the workspace agent live Exa search when you choose to connect it.",
+    description:
+      "Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings.",
     icon: Globe2,
     imageUrl: FEATURE_ILLUSTRATIONS.webSearch,
     size: "standard",
@@ -461,6 +462,7 @@ export function OnboardingFlow() {
   const queryClient = useQueryClient();
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();
+  const webSearch = useWebSearch();
   // Main-owned state is authoritative. Block the workbench until it has been
   // checked so a stale legacy renderer marker cannot expose a bypass window.
   const [open, setOpen] = React.useState(true);
@@ -481,44 +483,49 @@ export function OnboardingFlow() {
   const [discovering, setDiscovering] = React.useState(false);
   const [providerError, setProviderError] = React.useState<string | null>(null);
   const [providerSkipped, setProviderSkipped] = React.useState(false);
+  const [webSearchSaving, setWebSearchSaving] = React.useState(false);
   const onboardingSnapshotRef = React.useRef<OnboardingSnapshot | null>(null);
   const readyProviderIdRef = React.useRef<string | null>(null);
   const savingRef = React.useRef(false);
+  const webSearchSavingRef = React.useRef(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
   const profileInitializedRef = React.useRef(false);
   const loadGenerationRef = React.useRef(0);
 
-  const loadOnboarding = React.useCallback(async (reopen = false) => {
-    const generation = loadGenerationRef.current + 1;
-    loadGenerationRef.current = generation;
-    setStateReady(false);
-    setOnboardingLoadError(null);
-    try {
-      const snapshot = reopen
-        ? await appApi.setOnboardingOutcome("incomplete")
-        : await appApi.getOnboardingState(!shouldShowOnboarding());
-      if (loadGenerationRef.current !== generation) return;
-      onboardingSnapshotRef.current = snapshot;
-      readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
-      setProviderSkipped(false);
-      setIndex(onboardingStepIndex(snapshot));
-      setOpen(shouldOpenOnboarding(snapshot.outcome));
-      if (snapshot.profileReady && !profileInitializedRef.current) {
-        const current = await profileApi.get();
-        profileInitializedRef.current = true;
-        setName(current.name);
-        queryClient.setQueryData(queryKeys.profile, current);
+  const loadOnboarding = React.useCallback(
+    async (reopen = false) => {
+      const generation = loadGenerationRef.current + 1;
+      loadGenerationRef.current = generation;
+      setStateReady(false);
+      setOnboardingLoadError(null);
+      try {
+        const snapshot = reopen
+          ? await appApi.setOnboardingOutcome("incomplete")
+          : await appApi.getOnboardingState(!shouldShowOnboarding());
+        if (loadGenerationRef.current !== generation) return;
+        onboardingSnapshotRef.current = snapshot;
+        readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
+        setProviderSkipped(false);
+        setIndex(onboardingStepIndex(snapshot));
+        setOpen(shouldOpenOnboarding(snapshot.outcome));
+        if (snapshot.profileReady && !profileInitializedRef.current) {
+          const current = await profileApi.get();
+          profileInitializedRef.current = true;
+          setName(current.name);
+          queryClient.setQueryData(queryKeys.profile, current);
+        }
+        setStateReady(true);
+        if (reopen) clearLegacyOnboardingCompletion();
+      } catch (error) {
+        if (loadGenerationRef.current !== generation) return;
+        setOnboardingLoadError(
+          error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
+        );
+        setOpen(true);
       }
-      setStateReady(true);
-      if (reopen) clearLegacyOnboardingCompletion();
-    } catch (error) {
-      if (loadGenerationRef.current !== generation) return;
-      setOnboardingLoadError(
-        error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
-      );
-      setOpen(true);
-    }
-  }, [queryClient]);
+    },
+    [queryClient],
+  );
 
   React.useEffect(() => {
     void loadOnboarding();
@@ -545,10 +552,9 @@ export function OnboardingFlow() {
     codexStatus.data?.configured === true &&
     codexStatus.data.needsAttention === false &&
     codexStatus.data.models.length > 0;
-  const canContinue =
-    !stateReady
-      ? false
-      : step === "profile"
+  const canContinue = !stateReady
+    ? false
+    : step === "profile"
       ? name.trim().length > 0
       : step === "provider"
         ? choice === "openai-signin"
@@ -562,6 +568,28 @@ export function OnboardingFlow() {
     setBaseUrl(nextFields.baseUrl);
     setChoice(nextChoice);
     setProviderError(null);
+  };
+
+  const setWebSearchEnabled = async (enabled: boolean) => {
+    if (!webSearch.data || webSearchSavingRef.current) return;
+    const focusTarget =
+      typeof document !== "undefined" && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    webSearchSavingRef.current = true;
+    setWebSearchSaving(true);
+    try {
+      // The migration/default decision stays main-owned. Onboarding only
+      // persists an explicit user choice through the fenced generic seam.
+      const next = await webSearchApi.setEnabled(enabled);
+      queryClient.setQueryData(queryKeys.webSearch, next);
+    } catch (error) {
+      if (focusTarget?.isConnected) requestAnimationFrame(() => focusTarget.focus());
+      toast.error(error instanceof Error ? error.message : "Couldn’t update Web Search.");
+    } finally {
+      webSearchSavingRef.current = false;
+      setWebSearchSaving(false);
+    }
   };
 
   const completeProviderStep = async (providerId: string) => {
@@ -908,6 +936,82 @@ export function OnboardingFlow() {
                     Stored privately on this Mac.
                   </Text>
                 </div>
+                <section
+                  data-onboarding-web-search
+                  aria-busy={webSearchSaving || webSearch.isFetching || undefined}
+                  aria-labelledby="onboarding-web-search-title"
+                  className="mt-6 rounded-card border border-separator bg-well p-4 shadow-control motion-reduce:transition-none"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-accent/10 text-accent">
+                      <Globe2 aria-hidden="true" className="size-4.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <Text id="onboarding-web-search-title" variant="small-strong">
+                            Web Search
+                          </Text>
+                          <Text
+                            as="span"
+                            variant="small"
+                            color="tertiary"
+                            className="ml-2"
+                            aria-live="polite"
+                          >
+                            {webSearch.data
+                              ? webSearch.data.settings.enabled
+                                ? "On"
+                                : "Off"
+                              : webSearch.isError
+                                ? "Unavailable"
+                                : "Checking local setting…"}
+                          </Text>
+                        </div>
+                        <Switch
+                          checked={webSearch.data?.settings.enabled === true}
+                          onCheckedChange={(enabled) => void setWebSearchEnabled(enabled)}
+                          disabled={!webSearch.data || webSearch.isFetching || webSearchSaving}
+                          aria-label="Allow Web Search in attended chats"
+                          aria-describedby="onboarding-web-search-description"
+                          className="motion-reduce:transition-none motion-reduce:[&_*]:transition-none"
+                        />
+                      </div>
+                      <Text
+                        id="onboarding-web-search-description"
+                        as="p"
+                        variant="small"
+                        color="secondary"
+                        className="mt-2 leading-5"
+                      >
+                        Fresh profiles start with Web Search on; anonymous Exa is the initial
+                        recipient. Existing opt-outs and routes stay unchanged. Aiden may derive a
+                        search query from this conversation and send that query and your network
+                        address to Exa only when the model invokes search. This screen makes no
+                        network request.
+                      </Text>
+                      <Text as="p" variant="small" color="tertiary" className="mt-2 leading-5">
+                        Turn it off here, or choose another provider later in Settings → Web Search.
+                      </Text>
+                      {webSearch.isError && !webSearch.data ? (
+                        <Text role="alert" variant="small" color="red" className="mt-2 block">
+                          The local Web Search setting could not be read. No change was made.
+                        </Text>
+                      ) : null}
+                      {webSearchSaving ? (
+                        <Text
+                          role="status"
+                          aria-live="polite"
+                          variant="small"
+                          color="tertiary"
+                          className="mt-2 block"
+                        >
+                          Saving Web Search preference…
+                        </Text>
+                      ) : null}
+                    </div>
+                  </div>
+                </section>
               </div>
             ) : null}
 

@@ -43,19 +43,19 @@ async function assertRenderedSettingsDestination(
       return;
     case "Web Search":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Web Search (Exa)", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Web Search", exact: true }),
       ).toBeVisible();
       return;
     case "Remote Access":
       await expect(
         page.getByRole("heading", { level: 2, name: "Remote Access", exact: true }),
       ).toBeVisible();
-      await expect(page.getByRole("switch", { name: "Enable Aiden Remote Access" })).toHaveAttribute(
-        "data-state",
-        "unchecked",
-      );
       await expect(
-        page.getByRole("group")
+        page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
+      ).toHaveAttribute("data-state", "unchecked");
+      await expect(
+        page
+          .getByRole("group")
           .filter({ has: page.getByRole("switch", { name: "Enable Aiden Remote Access" }) })
           .getByText("Off", { exact: true }),
       ).toBeVisible();
