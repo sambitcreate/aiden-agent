@@ -1813,7 +1813,7 @@ export function WebSearchSettings() {
               >
                 <label
                   htmlFor="web-search-routing-automatic"
-                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-3 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-3 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
                 >
                   <RadioGroupItem
                     id="web-search-routing-automatic"
@@ -1831,7 +1831,7 @@ export function WebSearchSettings() {
                 </label>
                 <label
                   htmlFor="web-search-routing-fixed"
-                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-3 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-3 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
                 >
                   <RadioGroupItem
                     id="web-search-routing-fixed"

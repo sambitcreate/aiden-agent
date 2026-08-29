@@ -33,6 +33,7 @@ test("the default surface keeps enablement, recipients, readiness, and cost visi
 });
 
 test("routing is a useful explicit disclosure with both policies preserved", () => {
+  const routingPolicy = between('aria-label="Web Search routing policy"', "</RadioGroup>");
   assert.match(source, /aria-expanded=\{routingExpanded\}/u);
   assert.match(source, /aria-controls="web-search-routing-options"/u);
   assert.match(source, /routingExpanded \? \(/u);
@@ -41,6 +42,7 @@ test("routing is a useful explicit disclosure with both policies preserved", () 
   assert.match(source, />\s*Automatic\s*<\/Text>/u);
   assert.match(source, />\s*Fixed provider\s*<\/Text>/u);
   assert.match(source, /Fixed mode never falls back/u);
+  assert.doesNotMatch(routingPolicy, /border-separator|border-accent/u);
 });
 
 test("automatic routing is an ordered, keyboard-operable editor", () => {
