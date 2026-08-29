@@ -1,0 +1,2 @@
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"SSE source\",\"url\":\"https://example.test/parallel-sse\",\"excerpts\":[\"SSE evidence\"]}]}"}]}}

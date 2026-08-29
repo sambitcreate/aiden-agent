@@ -140,36 +140,36 @@ AnySearch, XCrawl, xAI, Bright Data, SerpBase, Serper, and Valyu from broad
 fan-out because they are costly, quota-backed, fragile, or explicitly opt-in.
 Aiden preserves that caution and does not implement `all` in this plan.
 
-| Provider | Pi configuration/auth | Aiden delivery wave |
-| --- | --- | --- |
-| Exa | Anonymous hosted MCP or API key | Foundation and fresh default |
-| Parallel MCP | Anonymous hosted MCP; optional key | Wave 1, explicit-only |
-| DuckDuckGo | Anonymous HTML scraping | Wave 4, explicit-only/experimental |
-| SearXNG | User endpoint; optional auth in Pi | Wave 2 after SSRF design |
-| OpenAI/Codex | API key or compatible signed-in provider auth | Wave 1 API key; Wave 3 credential reuse |
-| Brave | API key | Wave 1 |
-| Parallel REST | API key | Wave 2 |
-| Tavily | API key | Wave 1 |
-| Perplexity | API key | Wave 1 |
-| Gemini | API key, ADC/gateway, or opt-in browser cookies in Pi | Wave 1 API key only; no browser cookies |
-| Kimi | Kimi Code Plan session in Pi | Wave 4 after subscription-authority design |
-| xAI | API key or compatible signed-in provider auth | Wave 3, explicit-only |
-| Firecrawl | Hosted/self-hosted endpoint and optional API key | Wave 2 after endpoint policy |
-| TinyFish | API key | Wave 2 |
-| Search1API | API key | Wave 2 |
-| Searchinfinity | API key | Wave 4 |
-| Querit | API key; separate Search/Contents products | Wave 4 |
-| Jina | API key | Wave 2 |
-| SERPdive | API key and retrieval model | Wave 4 |
-| Kagi | API key | Wave 2 |
-| Bocha | API key | Wave 4 |
-| Ollama Cloud | API key; this is not a local Ollama daemon | Wave 2 |
-| AnySearch | Anonymous with optional API key in Pi | Wave 4, explicit-only |
-| XCrawl | API key | Wave 4, explicit-only |
-| Valyu | API key | Wave 4, explicit-only |
-| Bright Data | API key and SERP zone | Wave 4, explicit-only/cost warning |
-| SerpBase | API key sent in a URL query in Pi | Blocked until a reviewed no-secret-in-URL contract exists |
-| Serper | API key | Wave 3, explicit-only |
+| Provider       | Pi configuration/auth                                 | Aiden delivery wave                                       |
+| -------------- | ----------------------------------------------------- | --------------------------------------------------------- |
+| Exa            | Anonymous hosted MCP or API key                       | Foundation and fresh default                              |
+| Parallel MCP   | Anonymous hosted MCP; optional key                    | Wave 1, explicit-only                                     |
+| DuckDuckGo     | Anonymous HTML scraping                               | Wave 4, explicit-only/experimental                        |
+| SearXNG        | User endpoint; optional auth in Pi                    | Wave 2 after SSRF design                                  |
+| OpenAI/Codex   | API key or compatible signed-in provider auth         | Wave 1 API key; Wave 3 credential reuse                   |
+| Brave          | API key                                               | Wave 1                                                    |
+| Parallel REST  | API key                                               | Wave 2                                                    |
+| Tavily         | API key                                               | Wave 1                                                    |
+| Perplexity     | API key                                               | Wave 1                                                    |
+| Gemini         | API key, ADC/gateway, or opt-in browser cookies in Pi | Wave 1 API key only; no browser cookies                   |
+| Kimi           | Kimi Code Plan session in Pi                          | Wave 4 after subscription-authority design                |
+| xAI            | API key or compatible signed-in provider auth         | Wave 3, explicit-only                                     |
+| Firecrawl      | Hosted/self-hosted endpoint and optional API key      | Wave 2 after endpoint policy                              |
+| TinyFish       | API key                                               | Wave 2                                                    |
+| Search1API     | API key                                               | Wave 2                                                    |
+| Searchinfinity | API key                                               | Wave 4                                                    |
+| Querit         | API key; separate Search/Contents products            | Wave 4                                                    |
+| Jina           | API key                                               | Wave 2                                                    |
+| SERPdive       | API key and retrieval model                           | Wave 4                                                    |
+| Kagi           | API key                                               | Wave 2                                                    |
+| Bocha          | API key                                               | Wave 4                                                    |
+| Ollama Cloud   | API key; this is not a local Ollama daemon            | Wave 2                                                    |
+| AnySearch      | Anonymous with optional API key in Pi                 | Wave 4, explicit-only                                     |
+| XCrawl         | API key                                               | Wave 4, explicit-only                                     |
+| Valyu          | API key                                               | Wave 4, explicit-only                                     |
+| Bright Data    | API key and SERP zone                                 | Wave 4, explicit-only/cost warning                        |
+| SerpBase       | API key sent in a URL query in Pi                     | Blocked until a reviewed no-secret-in-URL contract exists |
+| Serper         | API key                                               | Wave 3, explicit-only                                     |
 
 Before any wave exposes a provider as usable, Phase 0 records its official
 endpoint and redirects, auth placement, query/body/result limits, capabilities,
@@ -180,23 +180,23 @@ zoo never advertises a dead connection.
 
 ## Before and proposed after
 
-| Area | Before | Proposed after |
-| --- | --- | --- |
-| Fresh default | Web Search is unavailable and off until an Exa key is saved. | Web Search is on for a fresh attended foreground profile, with an automatic route containing only anonymous Exa. |
-| First network use | Impossible without a saved key. | No startup or setup request; the first eligible `web_search` call contacts Exa and the user can turn it off immediately. |
-| Provider scope | One implicit direct Exa API path. | Registry-backed provider zoo with staged, evidence-gated adapters. |
-| Connection UI | One global toggle plus one cramped Exa key row. | Global switch, Automatic/Fixed choice, disclosed ordered route, searchable provider catalog, and provider setup sheets. |
-| API-key input | Required and coupled to enablement. | Optional provider-scoped full-width input with separate Save/Replace/Remove actions; saved values stay write-only. |
-| Free choices | None. | Exa anonymous is built in; Parallel MCP, SearXNG, AnySearch, and experimental DuckDuckGo arrive only in their reviewed waves. |
-| Paid-provider behavior | Exa key is required, so all searches use it. | Saving a key never selects or routes to it; paid fallback requires a separate explicit route action. |
-| Routing | No routing layer. | Fixed mode fails closed; Automatic mode tries only a user-visible ordered route and never fans out concurrently. |
-| Model authority | Model supplies query and result count to Exa. | Tool schema stays small; provider, route, credentials, cost, and privacy remain user-owned Settings state. |
-| Credentials | One encrypted `exa` secret and Exa-specific IPC. | Main-only provider-scoped encrypted secrets, generic fenced IPC, and no secret metadata in renderer snapshots. |
-| Results/errors | Exa implied; raw upstream detail can enter errors. | Normalized results identify the answering provider; safe activity identifies attempted providers and closed error categories. |
-| Bots | Availability is global, key-gated, and Full Bot capabilities are dynamic. | Default-on foreground availability does not grant existing Bots Web Search; Full Bot acknowledgement and exact Web grants are migrated explicitly. |
-| Schedules | Ordinary schedules inherit ambient Web Search when globally available. | Existing and new schedules default Web Search authority off unless the task explicitly grants it. |
-| Children | Duplicated Exa transport behind approvals and budgets. | Existing grant/approval/revocation gates call the shared router; each provider attempt consumes a network-budget unit. |
-| Onboarding | Tour says users must connect Exa. | Before first workspace use, a concise default-on disclosure names Exa, explains derived queries, and offers an on-by-default toggle; the feature tile remains. |
+| Area                   | Before                                                                    | Proposed after                                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fresh default          | Web Search is unavailable and off until an Exa key is saved.              | Web Search is on for a fresh attended foreground profile, with an automatic route containing only anonymous Exa.                                               |
+| First network use      | Impossible without a saved key.                                           | No startup or setup request; the first eligible `web_search` call contacts Exa and the user can turn it off immediately.                                       |
+| Provider scope         | One implicit direct Exa API path.                                         | Registry-backed provider zoo with staged, evidence-gated adapters.                                                                                             |
+| Connection UI          | One global toggle plus one cramped Exa key row.                           | Global switch, Automatic/Fixed choice, disclosed ordered route, searchable provider catalog, and provider setup sheets.                                        |
+| API-key input          | Required and coupled to enablement.                                       | Optional provider-scoped full-width input with separate Save/Replace/Remove actions; saved values stay write-only.                                             |
+| Free choices           | None.                                                                     | Exa anonymous is built in; Parallel MCP, SearXNG, AnySearch, and experimental DuckDuckGo arrive only in their reviewed waves.                                  |
+| Paid-provider behavior | Exa key is required, so all searches use it.                              | Saving a key never selects or routes to it; paid fallback requires a separate explicit route action.                                                           |
+| Routing                | No routing layer.                                                         | Fixed mode fails closed; Automatic mode tries only a user-visible ordered route and never fans out concurrently.                                               |
+| Model authority        | Model supplies query and result count to Exa.                             | Tool schema stays small; provider, route, credentials, cost, and privacy remain user-owned Settings state.                                                     |
+| Credentials            | One encrypted `exa` secret and Exa-specific IPC.                          | Main-only provider-scoped encrypted secrets, generic fenced IPC, and no secret metadata in renderer snapshots.                                                 |
+| Results/errors         | Exa implied; raw upstream detail can enter errors.                        | Normalized results identify the answering provider; safe activity identifies attempted providers and closed error categories.                                  |
+| Bots                   | Availability is global, key-gated, and Full Bot capabilities are dynamic. | Default-on foreground availability does not grant existing Bots Web Search; Full Bot acknowledgement and exact Web grants are migrated explicitly.             |
+| Schedules              | Ordinary schedules inherit ambient Web Search when globally available.    | Existing and new schedules default Web Search authority off unless the task explicitly grants it.                                                              |
+| Children               | Duplicated Exa transport behind approvals and budgets.                    | Existing grant/approval/revocation gates call the shared router; each provider attempt consumes a network-budget unit.                                         |
+| Onboarding             | Tour says users must connect Exa.                                         | Before first workspace use, a concise default-on disclosure names Exa, explains derived queries, and offers an on-by-default toggle; the feature tile remains. |
 
 ## Product contract
 
@@ -221,14 +221,14 @@ class before confirmation.
 
 Migration rules:
 
-| Legacy state | Migrated state |
-| --- | --- |
-| `exaEnabled: false`, with or without key | Disabled; preserve key without using it |
-| `exaEnabled: true` + key | Enabled, Fixed Exa with API-key mode |
-| `exaEnabled: true` + no key | Enabled, Automatic route `[Exa anonymous]` |
-| Fresh/uninitialized profile + no key | Enabled, Automatic route `[Exa anonymous]` |
-| Existing completed profile + undefined flag + no key | Disabled to avoid retroactive network behavior |
-| Undefined flag + dormant key | Preserve key but do not silently spend it; use install/onboarding evidence to distinguish fresh from upgrade |
+| Legacy state                                         | Migrated state                                                                                               |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `exaEnabled: false`, with or without key             | Disabled; preserve key without using it                                                                      |
+| `exaEnabled: true` + key                             | Enabled, Fixed Exa with API-key mode                                                                         |
+| `exaEnabled: true` + no key                          | Enabled, Automatic route `[Exa anonymous]`                                                                   |
+| Fresh/uninitialized profile + no key                 | Enabled, Automatic route `[Exa anonymous]`                                                                   |
+| Existing completed profile + undefined flag + no key | Disabled to avoid retroactive network behavior                                                               |
+| Undefined flag + dormant key                         | Preserve key but do not silently spend it; use install/onboarding evidence to distinguish fresh from upgrade |
 
 Migration needs a durable fresh-profile/install-state discriminator; it must not
 infer “fresh” from the absence of `exaEnabled` alone. The old field remains a
@@ -466,16 +466,16 @@ required model-provider onboarding path.
 
 ## Runtime authority and migration
 
-| Runtime | Planned authority behavior |
-| --- | --- |
-| Attended foreground chat | Available when global Web Search is enabled; fresh default is on |
-| Existing Full Bot | Does not gain Web Search until the user accepts the revised Full capability notice or grants Web explicitly |
-| New Full Bot | Confirmation explicitly names Web Search; grant is recorded, not inferred only from global availability |
-| Custom Bot | Existing exact Web grant remains authoritative; global enablement is availability, not authority |
-| Existing ordinary schedule | Web Search authority migrates false and stays false until explicitly enabled for that schedule |
-| New ordinary schedule | Web Search/network scope defaults off and is shown in creation/editing when relevant |
-| Aiden dock / Assistant automation | Remains excluded by the current positive allowlist |
-| Child agent | Requires parent grant, rollout, approval binding, global enabled state, ready route, and effect-time revalidation |
+| Runtime                           | Planned authority behavior                                                                                        |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Attended foreground chat          | Available when global Web Search is enabled; fresh default is on                                                  |
+| Existing Full Bot                 | Does not gain Web Search until the user accepts the revised Full capability notice or grants Web explicitly       |
+| New Full Bot                      | Confirmation explicitly names Web Search; grant is recorded, not inferred only from global availability           |
+| Custom Bot                        | Existing exact Web grant remains authoritative; global enablement is availability, not authority                  |
+| Existing ordinary schedule        | Web Search authority migrates false and stays false until explicitly enabled for that schedule                    |
+| New ordinary schedule             | Web Search/network scope defaults off and is shown in creation/editing when relevant                              |
+| Aiden dock / Assistant automation | Remains excluded by the current positive allowlist                                                                |
+| Child agent                       | Requires parent grant, rollout, approval binding, global enabled state, ready route, and effect-time revalidation |
 
 Implement Web Search as an explicit authority dimension instead of relying on
 Full Bot's dynamic “all currently available tools” behavior. Existing Full Bots
@@ -552,6 +552,8 @@ lint, format, and diff checks pass with autonomous authority unchanged.
 
 ### Phase 2 — Provider-zoo UI and first provider wave
 
+Status: Complete (2026-08-29)
+
 - Build Settings hierarchy, provider catalog, search/filters, route editor,
   provider setup sheet, full-width inputs, status/error states, and redacted
   mutations.
@@ -561,6 +563,15 @@ lint, format, and diff checks pass with autonomous authority unchanged.
 
 Exit: users can configure providers without selecting them, select Fixed or an
 explicit Automatic route, and understand every destination and cost class.
+
+Exit result: Settings now exposes a release-only provider catalog with search,
+filters, provider disclosures, write-only setup dialogs, full-width inputs,
+Fixed selection, and a keyboard-operable ordered Automatic route. Parallel MCP,
+OpenAI, Brave, Tavily, Perplexity, and Gemini API-key adapters ship behind the
+shared bounded transport and generic routed-credential seam. Provider setup
+performs no request and does not change route membership. Web Search, Bot,
+schedule, Assistant, child-agent, type, lint, format, build, and React review
+gates pass; autonomous authority remains unchanged.
 
 ### Phase 3 — Foundational breadth and provider-auth reuse
 

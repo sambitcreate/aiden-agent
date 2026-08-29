@@ -296,7 +296,9 @@ export class WebSearchService {
     const evidence = nonSecretMigrationEvidence(current, marker);
 
     let legacyCredential: string | undefined;
+    let legacyCredentialRead = false;
     if (current.webSearch === undefined && current.exaEnabled === true) {
+      legacyCredentialRead = true;
       legacyCredential = await this.readCredential("exa");
     }
 
@@ -310,22 +312,32 @@ export class WebSearchService {
       await this.dependencies.persistSettings({ webSearch: settings });
     }
 
-    let exaCredential = legacyCredential;
     const routeForCredential =
       settings.selection.mode === "fixed" ? [settings.selection] : settings.selection.route;
-    if (
-      exaCredential === undefined &&
-      routeForCredential.some(
-        (entry) => entry.providerId === "exa" && entry.credentialMode === "api-key",
-      )
-    ) {
-      exaCredential = await this.readCredential("exa");
+    const credentials = new Map<WebSearchProviderId, string | undefined>();
+    if (legacyCredentialRead) {
+      // The legacy Exa read above is a migration discriminator and remains
+      // the credential for a legacy keyed Exa selection. Do not read it twice.
+      credentials.set("exa", legacyCredential);
+    }
+    const routedApiKeyEntries = routeForCredential.filter(
+      (entry) => entry.credentialMode === "api-key" && !credentials.has(entry.providerId),
+    );
+    const routedCredentials = await Promise.all(
+      routedApiKeyEntries.map(async (entry) => ({
+        providerId: entry.providerId,
+        credential: await this.readCredential(entry.providerId),
+      })),
+    );
+    for (const { providerId, credential } of routedCredentials) {
+      credentials.set(providerId, credential);
     }
 
     const route = snapshotWebSearchRoute(settings);
     const attempts = await Promise.all(
       route.route.map(async (entry): Promise<PreparedAttempt> => {
-        const credential = entry.providerId === "exa" ? exaCredential : undefined;
+        const credential =
+          entry.credentialMode === "api-key" ? credentials.get(entry.providerId) : undefined;
         const readiness: WebSearchProviderReadiness = {
           ...(entry.credentialMode === "api-key"
             ? { hasCredential: credential !== undefined }

@@ -1,0 +1,25 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "structuredContent": {
+      "results": [
+        {
+          "title": "Parallel MCP programmatic use",
+          "url": "https://docs.parallel.ai/integrations/mcp/programmatic-use",
+          "excerpts": ["Parallel Search MCP exposes web search over JSON-RPC."]
+        },
+        {
+          "title": "",
+          "url": "https://example.test/parallel-second",
+          "excerpts": ["A second untrusted Parallel source."]
+        },
+        {
+          "title": "Discarded unsafe source",
+          "url": "javascript:alert(1)",
+          "excerpts": ["This source must not escape the adapter."]
+        }
+      ]
+    }
+  }
+}

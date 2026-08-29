@@ -16,6 +16,26 @@ import {
   type ExaMcpErrorCategory,
 } from "./web-search-exa-core.js";
 import {
+  buildParallelMcpRequest,
+  parallelMcpTransportError,
+  parseParallelMcpResponse,
+  type ParallelMcpCredential,
+  type ParallelMcpErrorCategory,
+} from "./web-search-parallel-mcp-core.js";
+import {
+  buildPerplexityRequest,
+  perplexityTransportError,
+  parsePerplexityResponse,
+  type PerplexityErrorCategory,
+} from "./web-search-perplexity-core.js";
+import {
+  buildGeminiRequest,
+  geminiTransportError,
+  parseGeminiResponse,
+  type GeminiErrorCategory,
+} from "./web-search-gemini-core.js";
+import { WEB_SEARCH_WAVE1_ADAPTER_FACTORIES } from "./web-search-wave1-adapters.js";
+import {
   getWebSearchProviderDefinition,
   type WebSearchCredentialMode,
   type WebSearchProviderId,
@@ -55,26 +75,33 @@ export interface WebSearchAdapterFactoryOptions {
   readonly fetch?: WebSearchFetch;
 }
 
-function asWebSearchError(category: ExaMcpErrorCategory): WebSearchError {
+function asWebSearchError(
+  category:
+    | ExaMcpErrorCategory
+    | ParallelMcpErrorCategory
+    | PerplexityErrorCategory
+    | GeminiErrorCategory,
+  providerId: WebSearchProviderId = "exa",
+): WebSearchError {
   switch (category) {
     case "invalid_request":
-      return webSearchError("invalid-request", "exa");
+      return webSearchError("invalid-request", providerId);
     case "authentication":
-      return webSearchError("auth", "exa");
+      return webSearchError("auth", providerId);
     case "rate_limit":
-      return webSearchError("quota", "exa");
+      return webSearchError("quota", providerId);
     case "upstream":
-      return webSearchError("transient", "exa");
+      return webSearchError("transient", providerId);
     case "network":
-      return webSearchError("network", "exa");
+      return webSearchError("network", providerId);
     case "timeout":
-      return webSearchError("timeout", "exa");
+      return webSearchError("timeout", providerId);
     case "cancelled":
-      return webSearchError("cancelled", "exa");
+      return webSearchError("cancelled", providerId);
     case "policy":
-      return webSearchError("config", "exa");
+      return webSearchError("config", providerId);
     case "invalid_response":
-      return webSearchError("invalid-response", "exa");
+      return webSearchError("invalid-response", providerId);
   }
 }
 
@@ -118,13 +145,14 @@ export async function readBoundedWebSearchResponse(
   response: Response,
   signal: AbortSignal,
   maximumBytes: number,
+  providerId: WebSearchProviderId = "exa",
 ): Promise<Uint8Array> {
   const declared = responseContentLength(response);
   if (declared !== undefined && declared > maximumBytes) {
     await response.body?.cancel().catch(() => undefined);
-    throw webSearchError("invalid-response", "exa");
+    throw webSearchError("invalid-response", providerId);
   }
-  if (!response.body) throw webSearchError("invalid-response", "exa");
+  if (!response.body) throw webSearchError("invalid-response", providerId);
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -133,10 +161,14 @@ export async function readBoundedWebSearchResponse(
     while (true) {
       const chunk = await raceReader(reader, signal);
       if (chunk.done) break;
+      if (!(chunk.value instanceof Uint8Array)) {
+        await reader.cancel().catch(() => undefined);
+        throw webSearchError("invalid-response", providerId);
+      }
       total += chunk.value.byteLength;
       if (total > maximumBytes) {
         await reader.cancel().catch(() => undefined);
-        throw webSearchError("invalid-response", "exa");
+        throw webSearchError("invalid-response", providerId);
       }
       chunks.push(chunk.value);
     }
@@ -236,10 +268,255 @@ export function createExaWebSearchAdapter(
   });
 }
 
-/** Only Exa is shippable in this phase. Other catalog entries have no factory. */
+type Wave1ErrorCategory =
+  | ExaMcpErrorCategory
+  | ParallelMcpErrorCategory
+  | PerplexityErrorCategory
+  | GeminiErrorCategory;
+
+interface Wave1RequestContract {
+  readonly url: string;
+  readonly init: {
+    readonly method: "POST";
+    readonly redirect: "error";
+    readonly credentials: "omit";
+    readonly cache: "no-store";
+    readonly referrerPolicy: "no-referrer";
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body: string;
+  };
+}
+
+interface Wave1ParseSuccess {
+  readonly ok: true;
+  readonly value: { readonly results: readonly { title: string; url: string; text: string }[] };
+}
+
+interface Wave1ParseFailure {
+  readonly ok: false;
+  readonly error: { readonly category: Wave1ErrorCategory };
+}
+
+type Wave1ParseOutcome = Wave1ParseSuccess | Wave1ParseFailure;
+
+function mapWave1TransportFailure(
+  providerId: WebSearchProviderId,
+  error: unknown,
+  request: WebSearchAdapterRequest,
+  transportError: (kind: unknown) => { category: Wave1ErrorCategory },
+): WebSearchError {
+  if (request.signal.aborted) {
+    return asWebSearchError(
+      transportError(request.timedOut?.() === true ? "timeout" : "cancelled").category,
+      providerId,
+    );
+  }
+  if (isRedirectFailure(error)) {
+    return asWebSearchError(transportError("redirect").category, providerId);
+  }
+  return asWebSearchError("network", providerId);
+}
+
+async function runWave1AdapterSearch(
+  providerId: WebSearchProviderId,
+  request: WebSearchAdapterRequest,
+  fetchImpl: WebSearchFetch,
+  buildRequest: () => Wave1RequestContract,
+  parseResponse: (
+    response: {
+      status: number;
+      body: Uint8Array;
+      contentType?: string;
+    },
+    maximumResults: number,
+  ) => Wave1ParseOutcome,
+  transportError: (kind: unknown) => { category: Wave1ErrorCategory },
+): Promise<WebSearchResultSet> {
+  if (request.signal.aborted) {
+    throw webSearchError(request.timedOut?.() === true ? "timeout" : "cancelled", providerId);
+  }
+  let built: Wave1RequestContract;
+  try {
+    built = buildRequest();
+  } catch (error) {
+    if (error instanceof WebSearchError) throw error;
+    throw webSearchError("invalid-request", providerId);
+  }
+
+  let response: Response;
+  try {
+    response = await fetchImpl(built.url, {
+      ...built.init,
+      signal: request.signal,
+    });
+  } catch (error) {
+    throw mapWave1TransportFailure(providerId, error, request, transportError);
+  }
+  if (!response || typeof response.status !== "number") {
+    throw webSearchError("invalid-response", providerId);
+  }
+  if (!response.headers || typeof response.headers.get !== "function") {
+    throw webSearchError("invalid-response", providerId);
+  }
+
+  if (response.status < 200 || response.status >= 300) {
+    await response.body?.cancel().catch(() => undefined);
+    const parsed = parseResponse(
+      { status: response.status, body: new Uint8Array(0) },
+      request.numResults,
+    );
+    if (!parsed.ok) throw asWebSearchError(parsed.error.category, providerId);
+    throw webSearchError("invalid-response", providerId);
+  }
+
+  let body: Uint8Array;
+  try {
+    body = await readBoundedWebSearchResponse(response, request.signal, 256 * 1_024, providerId);
+  } catch (error) {
+    if (error instanceof WebSearchError) throw error;
+    throw mapWave1TransportFailure(providerId, error, request, transportError);
+  }
+  if (request.signal.aborted) {
+    throw webSearchError(request.timedOut?.() === true ? "timeout" : "cancelled", providerId);
+  }
+  let contentType: string | undefined;
+  try {
+    contentType = response.headers.get("content-type") ?? undefined;
+  } catch {
+    throw webSearchError("invalid-response", providerId);
+  }
+  const parsed = parseResponse({ status: response.status, body, contentType }, request.numResults);
+  if (!parsed.ok) throw asWebSearchError(parsed.error.category, providerId);
+  try {
+    return normalizeWebSearchResultSet(providerId, { results: parsed.value.results });
+  } catch (error) {
+    if (error instanceof WebSearchError) throw error;
+    throw webSearchError("invalid-response", providerId);
+  }
+}
+
+function apiKeyCredential(
+  request: WebSearchAdapterRequest,
+  providerId: WebSearchProviderId,
+): string {
+  if (request.credentialMode !== "api-key" || request.credential === undefined) {
+    throw webSearchError("auth", providerId);
+  }
+  const credential = request.credential;
+  const normalized = credential.trim();
+  if (
+    !normalized ||
+    /\p{Cc}/u.test(credential) ||
+    Array.from(normalized).length > 4_096 ||
+    new TextEncoder().encode(normalized).byteLength > 8 * 1_024
+  ) {
+    throw webSearchError("auth", providerId);
+  }
+  return normalized;
+}
+
+export function createParallelMcpWebSearchAdapter(
+  options: WebSearchAdapterFactoryOptions = {},
+): WebSearchAdapter {
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const definition = getWebSearchProviderDefinition("parallel-mcp");
+  if (!definition || definition.releaseState !== "shipped") {
+    throw webSearchError("unavailable", "parallel-mcp");
+  }
+  if (typeof fetchImpl !== "function") throw webSearchError("unavailable", "parallel-mcp");
+
+  return Object.freeze({
+    providerId: "parallel-mcp" as const,
+    adapterVersion: definition.adapterVersion,
+    async search(request: WebSearchAdapterRequest): Promise<WebSearchResultSet> {
+      const credential: ParallelMcpCredential =
+        request.credentialMode === "anonymous"
+          ? { mode: "anonymous" }
+          : { mode: "api-key", apiKey: apiKeyCredential(request, "parallel-mcp") };
+      return runWave1AdapterSearch(
+        "parallel-mcp",
+        request,
+        fetchImpl,
+        () => buildParallelMcpRequest(request.query, request.numResults, credential),
+        (response, maximumResults) => parseParallelMcpResponse(response, maximumResults),
+        parallelMcpTransportError,
+      );
+    },
+  });
+}
+
+export const parallelMcpWebSearchAdapterFactory = createParallelMcpWebSearchAdapter;
+
+export function createPerplexityWebSearchAdapter(
+  options: WebSearchAdapterFactoryOptions = {},
+): WebSearchAdapter {
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const definition = getWebSearchProviderDefinition("perplexity");
+  if (!definition || definition.releaseState !== "shipped") {
+    throw webSearchError("unavailable", "perplexity");
+  }
+  if (typeof fetchImpl !== "function") throw webSearchError("unavailable", "perplexity");
+
+  return Object.freeze({
+    providerId: "perplexity" as const,
+    adapterVersion: definition.adapterVersion,
+    async search(request: WebSearchAdapterRequest): Promise<WebSearchResultSet> {
+      const apiKey = apiKeyCredential(request, "perplexity");
+      return runWave1AdapterSearch(
+        "perplexity",
+        request,
+        fetchImpl,
+        () => buildPerplexityRequest(request.query, request.numResults, apiKey),
+        (response, maximumResults) => parsePerplexityResponse(response, maximumResults),
+        perplexityTransportError,
+      );
+    },
+  });
+}
+
+export const perplexityWebSearchAdapterFactory = createPerplexityWebSearchAdapter;
+
+export function createGeminiWebSearchAdapter(
+  options: WebSearchAdapterFactoryOptions = {},
+): WebSearchAdapter {
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const definition = getWebSearchProviderDefinition("gemini");
+  if (!definition || definition.releaseState !== "shipped") {
+    throw webSearchError("unavailable", "gemini");
+  }
+  if (typeof fetchImpl !== "function") throw webSearchError("unavailable", "gemini");
+
+  return Object.freeze({
+    providerId: "gemini" as const,
+    adapterVersion: definition.adapterVersion,
+    async search(request: WebSearchAdapterRequest): Promise<WebSearchResultSet> {
+      const apiKey = apiKeyCredential(request, "gemini");
+      return runWave1AdapterSearch(
+        "gemini",
+        request,
+        fetchImpl,
+        () => buildGeminiRequest(request.query, request.numResults, apiKey),
+        (response, maximumResults) => parseGeminiResponse(response, maximumResults),
+        geminiTransportError,
+      );
+    },
+  });
+}
+
+export const geminiWebSearchAdapterFactory = createGeminiWebSearchAdapter;
+
+/** Main-only factories for all adapters whose Wave 1 contracts are shipped. */
 export const WEB_SEARCH_ADAPTER_FACTORIES: Readonly<
   Partial<Record<WebSearchProviderId, WebSearchAdapterFactory>>
-> = Object.freeze({ exa: createExaWebSearchAdapter });
+> = Object.freeze({
+  openai: WEB_SEARCH_WAVE1_ADAPTER_FACTORIES.openai,
+  brave: WEB_SEARCH_WAVE1_ADAPTER_FACTORIES.brave,
+  "parallel-mcp": parallelMcpWebSearchAdapterFactory,
+  tavily: WEB_SEARCH_WAVE1_ADAPTER_FACTORIES.tavily,
+  perplexity: perplexityWebSearchAdapterFactory,
+  gemini: geminiWebSearchAdapterFactory,
+  exa: createExaWebSearchAdapter,
+});
 
 export function webSearchAdapterFactory(providerId: unknown): WebSearchAdapterFactory | undefined {
   return typeof providerId === "string" &&

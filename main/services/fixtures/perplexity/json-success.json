@@ -1,0 +1,25 @@
+{
+  "id": "search-1",
+  "model": "sonar",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Answer prose stays outside the evidence contract."
+      }
+    }
+  ],
+  "search_results": [
+    {
+      "title": "Perplexity Sonar API",
+      "url": "https://docs.perplexity.ai/api-reference/sonar-post",
+      "snippet": "The Sonar API returns web-grounded answers and citations."
+    },
+    {
+      "name": "Second Perplexity source",
+      "link": "https://example.test/perplexity-second",
+      "description": "A second untrusted Perplexity source."
+    }
+  ],
+  "citations": ["https://example.test/perplexity-citation"]
+}

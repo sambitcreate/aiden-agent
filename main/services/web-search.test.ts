@@ -125,6 +125,142 @@ test("legacy keyed Exa migration uses a fixed API-key snapshot without putting t
   assert.equal(JSON.stringify(snapshot).includes(PRIVATE_KEY), false);
 });
 
+test("keyed Wave 1 routes read only the routed provider credential and publish results", async () => {
+  const calls: string[] = [];
+  const requestInits: RequestInit[] = [];
+  const service = new WebSearchService({
+    getSettings: async () => ({
+      webSearch: {
+        ...freshWebSearchSettings(),
+        selection: { mode: "fixed", providerId: "perplexity", credentialMode: "api-key" },
+      },
+    }),
+    getCredential: async (providerId) => {
+      calls.push(providerId);
+      return providerId === "perplexity" ? PRIVATE_KEY : undefined;
+    },
+    fetch: async (input, init) => {
+      assert.equal(String(input), "https://api.perplexity.ai/chat/completions");
+      requestInits.push(init ?? {});
+      return response(
+        JSON.stringify({
+          citations: [
+            {
+              title: "Perplexity source",
+              url: "https://example.test/perplexity-source",
+              snippet: "Perplexity evidence",
+            },
+          ],
+        }),
+      );
+    },
+  });
+
+  const availability = await service.availability();
+  assert.equal(availability.ready, true);
+  assert.deepEqual(availability.route, [
+    { providerId: "perplexity", ready: true, configurationStatus: "configured" },
+  ]);
+  const result = await service.search({ query: "current Perplexity documentation" });
+  assert.equal(result.providerId, "perplexity");
+  assert.equal(result.results[0]?.url, "https://example.test/perplexity-source");
+  assert.deepEqual(calls, ["perplexity", "perplexity"]);
+  const headers = requestInits[0]?.headers as Record<string, string>;
+  assert.equal(headers.Authorization, `Bearer ${PRIVATE_KEY}`);
+  assert.equal(JSON.stringify(requestInits[0]).includes(PRIVATE_KEY), true);
+  assert.equal(requestInits[0]?.body?.toString().includes(PRIVATE_KEY), false);
+});
+
+test("a keyed Wave 1 route without its provider credential is closed before fetch", async () => {
+  const calls: string[] = [];
+  let fetchCalls = 0;
+  const service = new WebSearchService({
+    getSettings: async () => ({
+      webSearch: {
+        ...freshWebSearchSettings(),
+        selection: { mode: "fixed", providerId: "gemini", credentialMode: "api-key" },
+      },
+    }),
+    getCredential: async (providerId) => {
+      calls.push(providerId);
+      return undefined;
+    },
+    fetch: async () => {
+      fetchCalls += 1;
+      return response("{}");
+    },
+  });
+
+  const availability = await service.availability();
+  assert.equal(availability.ready, false);
+  assert.deepEqual(availability.route, [
+    { providerId: "gemini", ready: false, configurationStatus: "needs-setup" },
+  ]);
+  await assert.rejects(
+    service.search({ query: "current Gemini documentation" }),
+    (error: unknown) =>
+      error instanceof WebSearchError && error.kind === "config" && error.providerId === "gemini",
+  );
+  assert.deepEqual(calls, ["gemini", "gemini"]);
+  assert.equal(fetchCalls, 0);
+});
+
+test("Parallel MCP supports anonymous and keyed routes without cross-reading credentials", async () => {
+  const parallelBody = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    result: {
+      structuredContent: {
+        results: [
+          {
+            title: "Parallel source",
+            url: "https://example.test/parallel",
+            excerpts: ["Evidence"],
+          },
+        ],
+      },
+    },
+  });
+  const run = async (
+    credentialMode: "anonymous" | "api-key",
+  ): Promise<{ calls: string[]; init: RequestInit | undefined; result: WebSearchResultSet }> => {
+    const calls: string[] = [];
+    let requestInit: RequestInit | undefined;
+    const service = new WebSearchService({
+      getSettings: async () => ({
+        webSearch: {
+          ...freshWebSearchSettings(),
+          selection: { mode: "fixed", providerId: "parallel-mcp", credentialMode },
+        },
+      }),
+      getCredential: async (providerId) => {
+        calls.push(providerId);
+        return providerId === "parallel-mcp" ? PRIVATE_KEY : undefined;
+      },
+      fetch: async (_input, init) => {
+        requestInit = init;
+        return response(parallelBody);
+      },
+    });
+    const result = await service.search({ query: "current Parallel documentation" });
+    return { calls, init: requestInit, result };
+  };
+
+  const anonymous = await run("anonymous");
+  assert.deepEqual(anonymous.calls, []);
+  assert.equal(anonymous.result.providerId, "parallel-mcp");
+  assert.equal((anonymous.init?.headers as Record<string, string>)?.Authorization, undefined);
+
+  const keyed = await run("api-key");
+  assert.deepEqual(keyed.calls, ["parallel-mcp"]);
+  assert.equal(keyed.result.providerId, "parallel-mcp");
+  assert.equal(
+    (keyed.init?.headers as Record<string, string>)?.Authorization,
+    `Bearer ${PRIVATE_KEY}`,
+  );
+  assert.equal(keyed.init?.body?.toString().includes(PRIVATE_KEY), false);
+});
+
 test("enabled routes without a ready adapter do not publish an unusable tool", async () => {
   const service = new WebSearchService({
     getSettings: async () => ({

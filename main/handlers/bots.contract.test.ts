@@ -19,10 +19,7 @@ test("bot identity and managed-home chats use the transaction-owned application 
 
 test("desktop and paired Telegram principals have explicit one-time notice IPC paths", () => {
   const bots = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
-  const ipc = readFileSync(
-    new URL("../../renderer/lib/ipc.ts", import.meta.url),
-    "utf8",
-  );
+  const ipc = readFileSync(new URL("../../renderer/lib/ipc.ts", import.meta.url), "utf8");
   for (const channel of [
     "bots:getAccessNotice",
     "bots:acknowledgeAccessNotice",
@@ -38,10 +35,7 @@ test("desktop and paired Telegram principals have explicit one-time notice IPC p
 
 test("desktop Bot editor owns access and model selection through revisioned IPC", () => {
   const bots = readFileSync(new URL("./bots.ts", import.meta.url), "utf8");
-  const ipc = readFileSync(
-    new URL("../../renderer/lib/ipc.ts", import.meta.url),
-    "utf8",
-  );
+  const ipc = readFileSync(new URL("../../renderer/lib/ipc.ts", import.meta.url), "utf8");
   for (const channel of [
     "bots:getCapabilityCatalog",
     "bots:getBotAccess",
@@ -107,7 +101,7 @@ test("generation resolves persisted bot identity and leaves ordinary prompts unc
   const client = readFileSync(new URL("../services/llm-client.ts", import.meta.url), "utf8");
   assert.match(
     client,
-    /resolveBotForGeneration\([\s\S]{0,140}\(botId\) => botStore\.get\(botId\)/u,
+    /resolveBotForGeneration\([\s\S]{0,140}\(botId\) =>\s*botStore\.get\(botId\)/u,
   );
   assert.match(client, /const botSystemPrompt = authoritativeBot/u);
   assert.match(client, /\? withBotRuntimeInstructions\(/u);
@@ -145,13 +139,28 @@ test("Telegram profile reset and deletion share the binding incarnation fence", 
     new URL("../services/telegram/telegram-service.ts", import.meta.url),
     "utf8",
   );
-  assert.match(service, /deleteProfile[\s\S]*telegramProfileMutationFence\.runDestructive\(profile/u);
-  assert.match(service, /resetPairing[\s\S]*telegramProfileMutationFence\.runDestructive\(profile/u);
-  assert.match(service, /deleteProfile[\s\S]*telegramBotBindingAuthority\.disableProfile\(profile\)/u);
-  assert.match(service, /resetPairing[\s\S]*telegramBotBindingAuthority\.disableProfile\(profile\)/u);
+  assert.match(
+    service,
+    /deleteProfile[\s\S]*telegramProfileMutationFence\.runDestructive\(profile/u,
+  );
+  assert.match(
+    service,
+    /resetPairing[\s\S]*telegramProfileMutationFence\.runDestructive\(profile/u,
+  );
+  assert.match(
+    service,
+    /deleteProfile[\s\S]*telegramBotBindingAuthority\.disableProfile\(profile\)/u,
+  );
+  assert.match(
+    service,
+    /resetPairing[\s\S]*telegramBotBindingAuthority\.disableProfile\(profile\)/u,
+  );
   assert.match(service, /deleteProfile[\s\S]*revokeTelegramBotNoticeForCurrentOwner\(profile\)/u);
   assert.match(service, /resetPairing[\s\S]*revokeTelegramBotNoticeForCurrentOwner\(profile\)/u);
-  assert.match(service, /async start\(\): Promise<void> \{\s*await telegramBotBindings\.assertHealthy\(\)/u);
+  assert.match(
+    service,
+    /async start\(\): Promise<void> \{\s*await telegramBotBindings\.assertHealthy\(\)/u,
+  );
 });
 
 test("Remote production wires Bot notice and retained-chat policy authority", () => {

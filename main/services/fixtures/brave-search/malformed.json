@@ -1,0 +1,5 @@
+{
+  "type": "search",
+  "query": { "original": "malformed" },
+  "web": { "type": "search", "results": "not-an-array" }
+}
