@@ -317,6 +317,11 @@ textarea {
   scrollbar-color: color-mix(in srgb, var(--text-primary), transparent 60%) transparent;
 }
 
+/* Keep classic vertical scrollbars from changing any scrolling box's width. */
+:where(.overflow-y-auto, .overflow-auto, .overflow-y-scroll, .overflow-scroll) {
+  scrollbar-gutter: stable;
+}
+
 .scroll-edge-mask {
   --scroll-fade-size: 14px;
   transition: mask-image 120ms ease-out;
@@ -1876,7 +1881,6 @@ textarea {
 }
 
 .appearance-color-control:focus-within {
-  border-color: var(--focus-ring);
   background: var(--surface-input);
 }
 
@@ -2053,7 +2057,6 @@ textarea {
 }
 
 .appearance-number-control input:focus-visible {
-  border-color: var(--focus-ring);
   background: var(--surface-input);
 }
 

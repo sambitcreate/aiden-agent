@@ -59,6 +59,7 @@ test("automatic routing is an ordered, keyboard-operable editor", () => {
 });
 
 test("provider catalog supports search, disclosure filters, and provider-safe links", () => {
+  const providerCatalog = between("Provider catalog", 'aria-label="Filter providers"');
   assert.match(source, /type WebSearchSettingsView = "overview" \| "providers"/u);
   assert.match(source, /Back to Web Search/u);
   assert.match(source, /Browse providers/u);
@@ -71,6 +72,8 @@ test("provider catalog supports search, disclosure filters, and provider-safe li
   assert.match(source, /type="search"/u);
   assert.match(source, /Search shipped Web Search providers/u);
   assert.match(source, /role="group" aria-label="Filter providers"/u);
+  assert.match(providerCatalog, /focus-within:bg-popover/u);
+  assert.doesNotMatch(providerCatalog, /focus-within:border-focus-ring/u);
   for (const label of ["All", "Free", "Connected", "API key", "Existing account", "Self-hosted"]) {
     assert.match(source, new RegExp(`label: "${label.replace(" ", "\\s+")}"`, "u"));
   }

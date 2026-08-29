@@ -1534,7 +1534,7 @@ export function WebSearchSettings() {
             Provider catalog
           </Text>
           <div className="mt-3 flex flex-col gap-2">
-            <label className="flex h-10 items-center gap-2 rounded-control border border-field bg-input px-3 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:border-focus-ring focus-within:bg-popover motion-reduce:transition-none">
+            <label className="flex h-10 items-center gap-2 rounded-control border border-field bg-input px-3 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:bg-popover motion-reduce:transition-none">
               <Search aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
               <input
                 type="search"
