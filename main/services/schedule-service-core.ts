@@ -107,7 +107,7 @@ export function createScheduleServiceCore(
 
   function dispatch(
     taskId: string,
-    options: { automatic: boolean; runId?: string },
+    options: { automatic: boolean; runId?: string; expectedUpdatedAt?: number },
   ): Promise<ScheduledRun> {
     if (runningTasks.has(taskId)) {
       throw new Error("This scheduled task is already running.");
@@ -125,6 +125,12 @@ export function createScheduleServiceCore(
       try {
         const task = await store.get(taskId);
         if (!task) throw new Error(`Scheduled task ${taskId} not found.`);
+        if (
+          options.expectedUpdatedAt !== undefined &&
+          task.updatedAt !== options.expectedUpdatedAt
+        ) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         state.workspaceId = task.workspaceId;
         workspaceResolved = true;
         resolveWorkspaceReady();
@@ -457,10 +463,14 @@ export function createScheduleServiceCore(
 
     runNow(
       id: string,
-      options: { signal?: AbortSignal; runId?: string } = {},
+      options: { signal?: AbortSignal; runId?: string; expectedUpdatedAt?: number } = {},
     ): Promise<ScheduledRun> {
       throwIfAborted(options.signal, "run");
-      const operation = dispatch(id, { automatic: false, runId: options.runId });
+      const operation = dispatch(id, {
+        automatic: false,
+        runId: options.runId,
+        expectedUpdatedAt: options.expectedUpdatedAt,
+      });
       if (!options.signal) return operation;
       const cancel = () => {
         const state = runningTasks.get(id);

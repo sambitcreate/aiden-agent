@@ -372,6 +372,10 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
   assert.match(
     featurePresentation,
+    /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
+  );
+  assert.match(
+    featurePresentation,
     /benchmark-only OpenRouter key never imports its model catalog/u,
   );
   assert.match(featurePresentation, /Live catalog checks happen only when you choose/u);

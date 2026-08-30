@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cronFromScheduleDraft,
   filterScheduledTasks,
   formatNextRun,
   formatSchedule,
+  scheduleDraftFromCron,
   scheduledTaskStatus,
 } from "./scheduled-task-view.js";
 import type { ScheduledTask } from "./types.js";
@@ -70,8 +72,46 @@ test("common cron schedules are presented as human-readable cadence", () => {
   );
   assert.equal(formatSchedule("*/15 * * * *", localTimezone, reference), "Every 15 minutes");
   assert.equal(
+    formatSchedule("20 * * * *", localTimezone, reference),
+    "Every hour at 20 minutes past",
+  );
+  assert.equal(
     formatSchedule("0 9 1 * *", localTimezone, reference),
     "Monthly on the 1st at 9:00 AM",
   );
   assert.equal(formatSchedule("5 0 9 * * *", localTimezone, reference), "Custom schedule");
+});
+
+test("common schedules round-trip through human editor controls", () => {
+  for (const cron of [
+    "*/15 * * * *",
+    "20 * * * *",
+    "0 9 * * *",
+    "30 8 * * 1-5",
+    "0 16 * * 5",
+    "45 7 12 * *",
+  ]) {
+    assert.equal(cronFromScheduleDraft(scheduleDraftFromCron(cron)), cron);
+  }
+});
+
+test("unusual and legacy schedules remain byte-for-byte custom until edited", () => {
+  for (const cron of ["5 0 9 * * *", "0 9 * * 1,3,5", "0 9 * 1 *"]) {
+    const draft = scheduleDraftFromCron(cron);
+    assert.equal(draft.cadence, "custom");
+    assert.equal(cronFromScheduleDraft(draft), cron);
+  }
+});
+
+test("human editor controls build bounded persisted cron expressions", () => {
+  const base = scheduleDraftFromCron("0 9 * * *");
+  assert.equal(
+    cronFromScheduleDraft({ ...base, cadence: "minutes", minuteInterval: 100 }),
+    "*/59 * * * *",
+  );
+  assert.equal(
+    cronFromScheduleDraft({ ...base, cadence: "weekly", time: "13:05", weekday: 3 }),
+    "5 13 * * 3",
+  );
+  assert.equal(cronFromScheduleDraft({ ...base, cadence: "monthly", monthDay: 0 }), "0 9 1 * *");
 });

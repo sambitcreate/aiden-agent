@@ -1690,6 +1690,7 @@
       ],
       "post": {
         "operationId": "respondApproval",
+        "description": "Resolve an approval owned by this device. Allowing schedule_task or edit_automation additionally requires schedule:write; clients without that grant may deny only.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "approval:respond",
         "parameters": [
@@ -2777,6 +2778,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/TaskId"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -5471,7 +5475,7 @@
           },
           "canAllow": {
             "type": "boolean",
-            "description": "False when exact privileged details are intentionally host-only; mobile clients must offer Deny only."
+            "description": "False when exact privileged details are intentionally host-only or the device lacks a capability required to allow this mutation; mobile clients must offer Deny only."
           }
         },
         "additionalProperties": false

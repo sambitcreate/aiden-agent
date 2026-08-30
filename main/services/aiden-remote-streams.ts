@@ -3,7 +3,10 @@ import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import {
+  ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
+  ASSISTANT_AUTOMATION_TOOL_NAME,
   isAssistantAutomationApprovalDetails,
+  isScheduledTaskApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
@@ -16,6 +19,7 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   parseAidenRemoteStreamEvent,
+  type AidenRemoteCapability,
 } from "./aiden-remote-protocol.js";
 import {
   AidenIdempotencyLedger,
@@ -166,11 +170,16 @@ function boundedText(value: unknown, maximum: number): string {
 
 function approvalDetails(value: unknown): ToolApprovalDetails | undefined {
   return isAssistantAutomationApprovalDetails(value)
+    || isScheduledTaskApprovalDetails(value)
     || isSubagentWorkspaceWriteApprovalDetails(value)
     || isSubagentMcpMutationApprovalDetails(value)
     || isSubagentShellApprovalDetails(value)
     ? structuredClone(value)
     : undefined;
+}
+
+function approvalIsHostOnly(details: ToolApprovalDetails | undefined): boolean {
+  return details !== undefined && details.kind !== "scheduled-task";
 }
 
 function terminal(state: AidenRemoteStreamState): boolean {
@@ -979,7 +988,10 @@ export class AidenRemoteStreamService {
     const approval = this.pendingApprovalForStream(stream.streamId);
     if (!approval) return null;
     const { details: _hostOnly, ...mobile } = approval;
-    return { ...mobile, canAllow: approval.details ? false : approval.canAllow };
+    return {
+      ...mobile,
+      canAllow: approvalIsHostOnly(approval.details) ? false : approval.canAllow,
+    };
   }
 
   approvalChatId(deviceId: string, approvalId: string): string {
@@ -997,6 +1009,29 @@ export class AidenRemoteStreamService {
       );
     }
     return approval.chatId;
+  }
+
+  approvalRequiredCapability(
+    deviceId: string,
+    approvalId: string,
+  ): AidenRemoteCapability | undefined {
+    this.prune();
+    const approval = this.approvals.get(approvalId);
+    if (
+      !approval ||
+      approval.deviceId !== deviceId ||
+      approval.expiresAt <= this.options.now()
+    ) {
+      throw new AidenRemoteServiceError(
+        "approval_expired",
+        "This approval is no longer available.",
+        409,
+      );
+    }
+    return approval.toolName === ASSISTANT_AUTOMATION_TOOL_NAME ||
+      approval.toolName === ASSISTANT_AUTOMATION_EDIT_TOOL_NAME
+      ? "schedule:write"
+      : undefined;
   }
 
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null {
@@ -1095,7 +1130,7 @@ export class AidenRemoteStreamService {
           if (!approval || approval.deviceId !== deviceId || approval.expiresAt <= this.options.now()) {
             throw new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
           }
-          if (decision === "allow" && (approval.details !== undefined || !approval.canAllow)) {
+          if (decision === "allow" && (approvalIsHostOnly(approval.details) || !approval.canAllow)) {
             throw new AidenRemoteServiceError(
               "capability_denied",
               "This approval can only be allowed from the Mac.",

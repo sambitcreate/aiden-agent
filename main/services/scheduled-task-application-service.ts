@@ -25,7 +25,7 @@ export interface ScheduledTaskApplicationDependencies {
     resume(id: string, options?: { signal?: AbortSignal; expectedUpdatedAt?: number }): Promise<ScheduledTask>;
     runNow(
       id: string,
-      options?: { signal?: AbortSignal; runId?: string },
+      options?: { signal?: AbortSignal; runId?: string; expectedUpdatedAt?: number },
     ): Promise<ScheduledRun>;
     setGlobalEnabled(enabled: boolean): Promise<void>;
     isRunning(id: string): boolean;
@@ -199,9 +199,9 @@ export function createScheduledTaskApplicationService(
     resume: (id: string, revision?: string, signal?: AbortSignal) =>
       mutateExisting(id, revision, (expectedUpdatedAt) =>
         dependencies.service.resume(id, { signal, expectedUpdatedAt })),
-    runNow: async (id: string, runId?: string) => {
-      await get(id);
-      const run = dependencies.service.runNow(id, { runId });
+    runNow: async (id: string, runId?: string, revision?: string) => {
+      const expectedUpdatedAt = expectedTaskRevision(await get(id), revision);
+      const run = dependencies.service.runNow(id, { runId, expectedUpdatedAt });
       if (runId) {
         void run.catch(() => undefined);
         return undefined;

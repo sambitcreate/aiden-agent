@@ -5,6 +5,9 @@ import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.TimeZone
 
 @Serializable
@@ -188,17 +191,119 @@ data class AidenScheduledTaskDraft(
         )
 }
 
+enum class AidenScheduledTaskFilter(val title: String) {
+    ALL("All"),
+    ACTIVE("Active"),
+    PAUSED("Paused")
+}
+
+object AidenScheduledTaskPresentation {
+    private val weekdayNames = mapOf(
+        "0" to "Sunday",
+        "1" to "Monday",
+        "2" to "Tuesday",
+        "3" to "Wednesday",
+        "4" to "Thursday",
+        "5" to "Friday",
+        "6" to "Saturday",
+        "7" to "Sunday"
+    )
+
+    fun visible(
+        tasks: List<AidenScheduledTask>,
+        query: String,
+        filter: AidenScheduledTaskFilter
+    ): List<AidenScheduledTask> {
+        val needle = query.trim()
+        return tasks.filter { task ->
+            val matchesFilter = when (filter) {
+                AidenScheduledTaskFilter.ALL -> true
+                AidenScheduledTaskFilter.ACTIVE -> task.enabled
+                AidenScheduledTaskFilter.PAUSED -> !task.enabled
+            }
+            matchesFilter && (needle.isEmpty() ||
+                task.name.contains(needle, ignoreCase = true) ||
+                task.prompt?.contains(needle, ignoreCase = true) == true)
+        }.sortedWith(
+            compareByDescending<AidenScheduledTask> { it.enabled }
+                .thenBy { it.nextRunAt ?: Instant.MAX }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+        )
+    }
+
+    fun schedule(task: AidenScheduledTask): String {
+        val fields = task.schedule.trim().split(Regex("\\s+"))
+        if (fields.size != 5) return "Custom schedule"
+        val (minute, hour, dayOfMonth, month, dayOfWeek) = fields
+        if (minute.startsWith("*/") && hour == "*" && dayOfMonth == "*" && month == "*" && dayOfWeek == "*") {
+            val interval = minute.removePrefix("*/").toIntOrNull()
+            if (interval != null && interval > 0) return "Every $interval minute${if (interval == 1) "" else "s"}"
+        }
+        if (minute == "0" && hour.startsWith("*/") && dayOfMonth == "*" && month == "*" && dayOfWeek == "*") {
+            val interval = hour.removePrefix("*/").toIntOrNull()
+            if (interval != null && interval > 0) return "Every $interval hour${if (interval == 1) "" else "s"}"
+        }
+        val minuteValue = minute.toIntOrNull()
+        val hourValue = hour.toIntOrNull()
+        if (minuteValue in 0..59 && hour == "*" && dayOfMonth == "*" && month == "*" && dayOfWeek == "*") {
+            return if (minuteValue == 0) {
+                "Every hour"
+            } else {
+                "Every hour at $minuteValue minute${if (minuteValue == 1) "" else "s"} past"
+            }
+        }
+        if (minuteValue in 0..59 && hourValue in 0..23 && dayOfMonth == "*" && month == "*") {
+            val time = clockTime(hourValue!!, minuteValue!!)
+            return when (dayOfWeek) {
+                "*" -> "Daily at $time"
+                "1-5" -> "Weekdays at $time"
+                else -> weekdayNames[dayOfWeek]?.let { "$it at $time" } ?: "Custom schedule"
+            }
+        }
+        return "Custom schedule"
+    }
+
+    fun timestamp(value: Instant?, zoneId: ZoneId = ZoneId.systemDefault()): String? {
+        if (value == null) return null
+        return DateTimeFormatter.ofPattern("MMM d 'at' h:mm a", Locale.getDefault())
+            .withZone(zoneId)
+            .format(value)
+    }
+
+    fun status(task: AidenScheduledTask): String = when {
+        task.running -> "Running"
+        task.enabled -> "Active"
+        else -> "Paused"
+    }
+
+    private fun clockTime(hour: Int, minute: Int): String {
+        val suffix = if (hour < 12) "AM" else "PM"
+        val displayHour = when (val normalized = hour % 12) {
+            0 -> 12
+            else -> normalized
+        }
+        return String.format(Locale.US, "%d:%02d %s", displayHour, minute, suffix)
+    }
+}
+
 object AidenScheduledTaskValidation {
     fun tasks(tasks: List<AidenScheduledTask>): List<AidenScheduledTask> {
         if (tasks.size > 10_000) throw AidenRemoteClientException.InvalidResponse()
         val ids = mutableSetOf<String>()
         for (task in tasks) {
-            if (task.id.isEmpty() || task.id.length > 160 || !ids.add(task.id) ||
-                !task.revision.startsWith("rev_") || task.name.isEmpty() || task.name.length > 120 ||
+            val mcpServerIds = task.mcpServerIds.orEmpty()
+            if (!task.id.matches(Regex("^[A-Za-z0-9._:-]{1,160}$")) || !ids.add(task.id) ||
+                !task.revision.startsWith("rev_") || task.revision.length > 160 ||
+                task.name.isEmpty() || task.name.length > 120 ||
                 task.schedule.isEmpty() || task.schedule.length > 500 ||
                 task.timezone.isEmpty() || task.timezone.length > 120 ||
                 (task.prompt != null && task.prompt.length > 32_768) ||
-                (task.scriptId != null && (!task.scriptId.startsWith("script_") || task.scriptId.length != 50))
+                (task.workspaceId != null && (task.workspaceId.isEmpty() || task.workspaceId.length > 128)) ||
+                (task.providerId != null && (task.providerId.isEmpty() || task.providerId.length > 256)) ||
+                (task.modelId != null && (task.modelId.isEmpty() || task.modelId.length > 256)) ||
+                mcpServerIds.size > 64 || mcpServerIds.toSet().size != mcpServerIds.size ||
+                mcpServerIds.any { it.isEmpty() || it.length > 256 } ||
+                (task.scriptId != null && !task.scriptId.matches(Regex("^script_[A-Za-z0-9_-]{43}$")))
             ) {
                 throw AidenRemoteClientException.InvalidResponse()
             }

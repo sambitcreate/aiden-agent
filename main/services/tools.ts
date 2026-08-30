@@ -158,6 +158,9 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.imageInspectionTool) tools.push(ctx.imageInspectionTool);
   if (ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
+  if (ctx.allowScheduling !== false) {
+    tools.push(createAssistantProjectTool(), createAssistantMcpServerTool());
+  }
   tools.push(...buildSchedulingTools(ctx));
   if (ctx.allowSubagents === true) {
     registerSubagentTool(tools, ctx.createSubagentTool);

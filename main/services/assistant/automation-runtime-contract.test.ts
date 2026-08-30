@@ -63,6 +63,22 @@ test("attended Assistant sees MCP identities but never ambient connector tools",
   assert.match(client, /mcpInventoryTruncated: assistantMcpInventory\.truncated/u);
 });
 
+test("ordinary chats can inspect bounded MCP identities before scheduling external work", () => {
+  const tools = between(
+    source("../tools.ts"),
+    "const tools: AgentTool[] = [];",
+    "// Folder-scoped coding tools",
+  );
+  assert.match(
+    tools,
+    /ctx\.allowScheduling !== false[\s\S]*createAssistantProjectTool\(\), createAssistantMcpServerTool\(\)/u,
+  );
+  assert.match(tools, /tools\.push\(\.\.\.buildSchedulingTools\(ctx\)\)/u);
+
+  const scheduleTool = source("../schedule-tool.ts");
+  assert.match(scheduleTool, /clearWorkspace[\s\S]*global scope instead of the current\/default workspace/u);
+});
+
 test("the internal project automation mode cannot be requested by the renderer", () => {
   const parser = source("../../handlers/chat-params.ts");
   assert.match(parser, /p\.mode !== undefined && p\.mode !== "assistant"/u);

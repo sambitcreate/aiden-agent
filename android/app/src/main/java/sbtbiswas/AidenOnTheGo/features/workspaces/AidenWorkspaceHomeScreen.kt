@@ -83,6 +83,7 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledTasksScreen
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.models.AidenChat
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
@@ -154,9 +155,12 @@ private fun AidenWorkspaceHome(
     val client by coordinator.client.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
     val hasCompletedWorkspaceRefresh by coordinator.hasCompletedWorkspaceRefresh.collectAsState()
+    val installations by coordinator.installationStore.installations.collectAsState()
+    val activeInstallationId by coordinator.installationStore.activeInstallationId.collectAsState()
     val workspaces by coordinator.workspaces.collectAsState()
     val archivedByInstance by coordinator.archiveStore.workspaceIDsByInstance.collectAsState()
     val chats by viewModel.chats.collectAsState()
+    val scheduledTasks by viewModel.scheduledTasks.collectAsState()
     val usage by viewModel.usage.collectAsState()
     val modelCatalog by viewModel.modelCatalog.collectAsState()
     val usageErrorMessage by viewModel.usageErrorMessage.collectAsState()
@@ -164,6 +168,8 @@ private fun AidenWorkspaceHome(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val chatLoadErrorMessage by viewModel.chatLoadErrorMessage.collectAsState()
     val chatListLoadState by viewModel.chatListLoadState.collectAsState()
+    val canReadSchedules = installations.firstOrNull { it.id == activeInstallationId }
+        ?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
 
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -208,7 +214,7 @@ private fun AidenWorkspaceHome(
     val chatListUnavailable = chatListLoadState == AidenChatListLoadState.FAILED
     val chatCreationBlocked = chatListLoadState != AidenChatListLoadState.LOADED
 
-    LaunchedEffect(workspaces, client, connectionState) {
+    LaunchedEffect(workspaces, client, connectionState, canReadSchedules) {
         viewModel.hydrate(workspaces)
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.load()
     }
@@ -351,7 +357,8 @@ private fun AidenWorkspaceHome(
                             AidenWorkspaceNavigationRow(
                                 icon = Icons.Outlined.CalendarMonth,
                                 title = "Scheduled Tasks",
-                                enabled = connectionState == AidenConnectionState.CONNECTED,
+                                enabled = canReadSchedules &&
+                                        (connectionState == AidenConnectionState.CONNECTED || scheduledTasks.isNotEmpty()),
                                 onClick = { showScheduledTasks = true }
                             )
                             AidenWorkspaceNavigationRow(
@@ -566,7 +573,11 @@ private fun AidenWorkspaceHome(
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
             Box(Modifier.fillMaxWidth().heightIn(min = 520.dp)) {
-                AidenScheduledTasksScreen(coordinator) { showScheduledTasks = false }
+                AidenScheduledTasksScreen(
+                    coordinator = coordinator,
+                    pendingRunKeys = viewModel.pendingScheduledRunKeys(activeInstallationId.orEmpty()),
+                    onNavigateBack = { showScheduledTasks = false }
+                )
             }
         }
     }

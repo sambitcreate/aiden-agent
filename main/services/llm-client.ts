@@ -118,6 +118,7 @@ import {
   SCHEDULE_TOOL_NAME,
   attachAssistantScheduleMcpApproval,
   prepareAssistantEditAutomationProposal,
+  prepareStandardScheduleApproval,
   repairAssistantScheduleMcpTarget,
   resolveAssistantScheduleMcpServers,
   resolveAssistantScheduleProject,
@@ -963,7 +964,7 @@ async function prepareGeneration(
       allowTelegramDirect:
         !botBound &&
         (!assistantMode || attendedAssistant || options.interactionSurface === "telegram"),
-      assistantModelSelection: attendedAssistant ? assistantModelSelection : undefined,
+      assistantModelSelection: schedulingAllowed ? assistantModelSelection : undefined,
       createSubagentTool: subagentSupervisor
         ? () =>
             createSubagentTool(
@@ -1562,6 +1563,7 @@ export const llmClient = {
       providerName: runtime.provider.label,
       model: model.id,
       modelName: model.name,
+      providerFingerprint: scheduledProviderFingerprint(runtime.provider),
     };
     const exposeReasoning = shouldExposeReasoning(runtime.provider, showLocalModelReasoning);
 
@@ -2157,6 +2159,7 @@ export const llmClient = {
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
+            let preparedStandardScheduleSummary: string | undefined;
             if (!scheduleApproval && !workspaceApproval && !disclosureApproval && !botMcpApproval) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
@@ -2202,9 +2205,33 @@ export const llmClient = {
                       : "Aiden rejected this automation change.",
                 };
               }
+            } else if (createScheduleApproval) {
+              try {
+                const prepared = await prepareStandardScheduleApproval(
+                  context.args,
+                  approvalModelSelection,
+                  undefined,
+                  workspaceId,
+                );
+                if (signal?.aborted) throw new Error("Scheduled task action was cancelled.");
+                preparedStandardScheduleSummary = prepared.summary;
+                approvalDetails = prepared.details;
+              } catch (error) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason:
+                    error instanceof Error
+                      ? error.message
+                      : "Aiden rejected this scheduled task action.",
+                };
+              }
             }
             summary = editScheduleApproval
               ? summarizeEditAutomationToolCall(context.args)
+              : preparedStandardScheduleSummary
+                ? preparedStandardScheduleSummary
               : scheduleApproval
                 ? summarizeScheduleToolCall(context.args)
                 : summarizeToolCall(context.toolCall.name, context.args);

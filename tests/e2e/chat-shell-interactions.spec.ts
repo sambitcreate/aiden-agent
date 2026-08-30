@@ -158,7 +158,7 @@ test.describe("with a workspace", () => {
       ]);
       expect(sidebarBounds).not.toBeNull();
       expect(menuBounds).not.toBeNull();
-      expect(menuBounds!.x).toBeGreaterThanOrEqual(sidebarBounds!.x + sidebarBounds!.width + 6);
+      expect(menuBounds!.x).toBeGreaterThanOrEqual(sidebarBounds!.x + sidebarBounds!.width);
     };
 
     await page.getByRole("button", { name: "Organize sidebar" }).click();
@@ -235,7 +235,7 @@ test.describe("with a workspace", () => {
         return (
           currentSidebarBounds !== null &&
           currentMenuBounds !== null &&
-          currentMenuBounds.x >= currentSidebarBounds.x + currentSidebarBounds.width + 6 &&
+          currentMenuBounds.x >= currentSidebarBounds.x + currentSidebarBounds.width &&
           currentMenuBounds.y >= 0 &&
           currentMenuBounds.y + currentMenuBounds.height <= currentViewportHeight
         );

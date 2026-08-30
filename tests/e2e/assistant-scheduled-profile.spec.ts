@@ -27,8 +27,8 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await assistantComposer.fill("");
   await page.getByRole("button", { name: "Minimize Aiden" }).click();
 
-  // Scheduled templates only open an editor. Escape closes it without saving;
-  // unavailable creation remains a valid, explicit product state.
+  // Natural-language creation stays available even if manual task dependencies
+  // are unavailable. Templates only open an editor; Escape closes without saving.
   await page.getByRole("button", { name: "Scheduled", exact: true }).click();
   await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();
   const taskSearch = page.getByRole("searchbox", { name: "Search scheduled tasks" });
@@ -50,6 +50,7 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
     "true",
   );
   await page.getByRole("tab", { name: "All", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Create with Aiden", exact: true })).toBeEnabled();
   const dailyBrief = page.getByRole("button", { name: /Daily brief/u });
   await expect(dailyBrief).toBeVisible();
   if (await dailyBrief.isEnabled()) {
@@ -58,7 +59,7 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
   } else {
-    await expect(page.getByRole("button", { name: "Create" })).toBeDisabled();
+    await expect(dailyBrief).toBeDisabled();
   }
 
   await page.getByRole("button", { name: "Profile", exact: true }).click();

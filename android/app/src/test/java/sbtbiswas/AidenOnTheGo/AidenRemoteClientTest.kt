@@ -98,6 +98,32 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun testScheduledRunBindsRevisionAndIdempotencyKey() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(202).setBody(
+                """
+                {
+                    "taskId": "task_1",
+                    "runId": "run_1",
+                    "status": "accepted",
+                    "acceptedAt": "2026-08-30T12:00:00Z"
+                }
+                """.trimIndent()
+            )
+        )
+        val key = UUID.fromString("11111111-1111-1111-1111-111111111111")
+
+        val accepted = client.runScheduledTask("task_1", "rev_task_1", key)
+
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/aiden/v1/scheduled-tasks/task_1/run", request.path)
+        assertEquals("rev_task_1", request.getHeader("If-Match"))
+        assertEquals(key.toString(), request.getHeader("Idempotency-Key"))
+        assertEquals("run_1", accepted.runId)
+    }
+
+    @Test
     fun testStartTurnEndpoint() = runBlocking {
         val exactText = """NFC café | NFD cafe\u0301 | 👩🏽‍💻 | /Users/example/Aiden Projects/π.kt | C:\Users\example\Aiden Projects\pi.kt | /api/aiden/v1/chats/chat_01?after=42 | https://example.test/a%2Fb?q=hello%20world#résumé | UUID 123e4567-e89b-12d3-a456-426614174000 | base64 SGVsbG8sIFdvcmxkIQ== | hex deadbeef0123456789ABCDEF | Authorization: Bearer visible-placeholder | visible prose keys Reasoning_Content Tool-Arguments tool.result S_e.c-r e t"""
         val jsonResponse = """
