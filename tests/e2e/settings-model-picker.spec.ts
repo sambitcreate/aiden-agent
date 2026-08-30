@@ -170,7 +170,12 @@ test("every Settings destination renders and a one-model local inventory stays u
     await expect(page.getByText("Accessibility access", { exact: true })).toHaveCount(0);
     await page.getByRole("combobox").first().click();
     await page.getByRole("option", { name: "On-device (Parakeet)", exact: true }).click();
-    await expect(page.getByText(/copies the transcript to the clipboard/u)).toBeVisible();
+    await expect(
+      page.getByText(
+        "Completed transcripts are copied to the clipboard so you can paste them into any app.",
+        { exact: true },
+      ),
+    ).toBeVisible();
 
     await settingsNavigation.getByRole("button", { name: "About", exact: true }).click();
     await expect(page.getByRole("link", { name: "Open releases", exact: true })).toBeVisible();
