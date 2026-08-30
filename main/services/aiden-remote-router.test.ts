@@ -24,6 +24,8 @@ async function fixture(options: {
   chatClassification?: "present" | "missing" | "error";
   chatPayloadError?: "reconciling";
   oversizedChatResponse?: boolean;
+  approvalCanAllow?: boolean;
+  approvalRequiredCapability?: AidenRemoteCapability;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -486,9 +488,11 @@ async function fixture(options: {
         toolCallId: "tool-1",
         toolName: "bash",
         expiresAt: new Date(60_000).toISOString(),
-        canAllow: false,
+        canAllow: options.approvalCanAllow ?? false,
       }),
       approvalChatId: () => "chat-1",
+      approvalRequiredCapability: () =>
+        options.approvalRequiredCapability,
       cancel: async (deviceId, streamId, _key) => {
         calls.push(`cancel:${deviceId}:${streamId}`);
         return {
@@ -1242,6 +1246,98 @@ test("authenticated chat, model, turn, stream, cancel, and approval routes prese
     assert.equal((await approval.json()).decision, "deny");
   } finally {
     await app.close();
+  }
+});
+
+test("chat-created schedule approvals require both approval and schedule-write grants", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const withoutScheduleWrite = await fixture({
+    capabilities: ["chat:read", "chat:write", "approval:respond"],
+    approvalCanAllow: true,
+    approvalRequiredCapability: "schedule:write",
+  });
+  try {
+    const snapshot = await fetch(
+      `${withoutScheduleWrite.base}/streams/stream-1/approval`,
+      { headers },
+    );
+    assert.equal(snapshot.status, 200);
+    assert.equal((await snapshot.json()).approval.canAllow, false);
+
+    const blocked = await fetch(
+      `${withoutScheduleWrite.base}/approvals/approval-1/respond`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "idempotency-key": "schedule-allow-blocked-01",
+        },
+        body: JSON.stringify({ decision: "allow" }),
+      },
+    );
+    assert.equal(blocked.status, 403);
+    assert.equal((await blocked.json()).error.code, "capability_denied");
+    assert.equal(
+      withoutScheduleWrite.calls.some((call) => call.startsWith("approval:")),
+      false,
+    );
+
+    const denied = await fetch(
+      `${withoutScheduleWrite.base}/approvals/approval-1/respond`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "idempotency-key": "schedule-deny-allowed-01",
+        },
+        body: JSON.stringify({ decision: "deny" }),
+      },
+    );
+    assert.equal(denied.status, 200);
+    assert.equal((await denied.json()).decision, "deny");
+  } finally {
+    await withoutScheduleWrite.close();
+  }
+
+  const withScheduleWrite = await fixture({
+    capabilities: [
+      "chat:read",
+      "chat:write",
+      "approval:respond",
+      "schedule:write",
+    ],
+    approvalCanAllow: true,
+    approvalRequiredCapability: "schedule:write",
+  });
+  try {
+    const snapshot = await fetch(
+      `${withScheduleWrite.base}/streams/stream-1/approval`,
+      { headers },
+    );
+    assert.equal(snapshot.status, 200);
+    assert.equal((await snapshot.json()).approval.canAllow, true);
+
+    const allowed = await fetch(
+      `${withScheduleWrite.base}/approvals/approval-1/respond`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "idempotency-key": "schedule-allow-granted-01",
+        },
+        body: JSON.stringify({ decision: "allow" }),
+      },
+    );
+    assert.equal(allowed.status, 200);
+    assert.equal((await allowed.json()).decision, "allow");
+  } finally {
+    await withScheduleWrite.close();
   }
 });
 

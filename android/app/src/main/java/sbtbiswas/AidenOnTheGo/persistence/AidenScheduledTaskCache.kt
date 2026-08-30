@@ -50,6 +50,15 @@ class AidenScheduledTaskCache(private val root: File) {
     }
 
     @Synchronized
+    fun loadForScheduleReadAccess(instanceId: String, canRead: Boolean): Snapshot? {
+        if (!canRead) {
+            purge(instanceId)
+            return null
+        }
+        return load(instanceId)
+    }
+
+    @Synchronized
     fun store(
         instanceId: String,
         tasks: List<AidenScheduledTask>,

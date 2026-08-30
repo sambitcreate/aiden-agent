@@ -700,15 +700,42 @@ data class AidenApprovalResponse(
 data class AidenPendingApproval(
     val id: String,
     val summary: String,
+    val toolName: String,
     val expiresAt: Instant,
+    val canRespond: Boolean,
+    val hasRequiredWriteCapability: Boolean,
+    val hostCanAllow: Boolean,
     val canAllow: Boolean
 )
 
+data class AidenApprovalCapabilities(
+    val canRespond: Boolean,
+    val canWriteSchedules: Boolean
+) {
+    companion object {
+        val UNRESTRICTED = AidenApprovalCapabilities(canRespond = true, canWriteSchedules = true)
+    }
+}
+
 object AidenApprovalPresentation {
+    private val automationTools = setOf("schedule_task", "edit_automation")
+
     fun oneLineSummary(summary: String): String {
         val collapsed = summary.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
         return if (collapsed.isEmpty()) "Review requested action" else collapsed
     }
+
+    fun isAutomation(toolName: String): Boolean = automationTools.contains(toolName)
+
+    fun title(toolName: String): String = when (toolName) {
+        "schedule_task" -> "Create this automation?"
+        "edit_automation" -> "Save these automation changes?"
+        else -> "Approval Required"
+    }
+
+    fun requiresMacConfirmation(approval: AidenPendingApproval): Boolean =
+        isAutomation(approval.toolName) && approval.canRespond &&
+                approval.hasRequiredWriteCapability && !approval.hostCanAllow
 }
 
 object AidenPendingApprovalResolution {
@@ -716,16 +743,23 @@ object AidenPendingApprovalResolution {
         approval: AidenStreamPendingApproval?,
         streamId: String,
         chatId: String,
+        capabilities: AidenApprovalCapabilities = AidenApprovalCapabilities.UNRESTRICTED,
         now: Instant = Instant.now()
     ): AidenPendingApproval? {
         if (approval == null || approval.streamId != streamId || approval.chatId != chatId || !approval.expiresAt.isAfter(now)) {
             return null
         }
+        val hasRequiredWriteCapability =
+            !AidenApprovalPresentation.isAutomation(approval.toolName) || capabilities.canWriteSchedules
         return AidenPendingApproval(
             id = approval.approvalId,
             summary = approval.summary,
+            toolName = approval.toolName,
             expiresAt = approval.expiresAt,
-            canAllow = approval.canAllow
+            canRespond = capabilities.canRespond,
+            hasRequiredWriteCapability = hasRequiredWriteCapability,
+            hostCanAllow = approval.canAllow,
+            canAllow = approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
         )
     }
 }

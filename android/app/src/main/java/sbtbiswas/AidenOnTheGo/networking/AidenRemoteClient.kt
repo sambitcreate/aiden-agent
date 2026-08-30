@@ -1123,8 +1123,7 @@ class AidenRemoteClient(
     }
 
     suspend fun scheduledTask(id: String): AidenScheduledTask = executeRequest("/scheduled-tasks/$id") { bytes ->
-        val task = json.decodeFromString<AidenScheduledTask>(String(bytes, Charsets.UTF_8))
-        AidenScheduledTaskValidation.tasks(listOf(task))[0]
+        decodeScheduledTask(bytes)
     }
 
     suspend fun createScheduledTask(
@@ -1137,7 +1136,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(201)
     ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
+        decodeScheduledTask(bytes)
     }
 
     suspend fun updateScheduledTask(
@@ -1150,7 +1149,7 @@ class AidenRemoteClient(
         ifMatchRevision = revision,
         bodyJson = json.encodeToString(mutation)
     ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
+        decodeScheduledTask(bytes)
     }
 
     suspend fun removeScheduledTask(id: String, revision: String) =
@@ -1172,7 +1171,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
+        decodeScheduledTask(bytes)
     }
 
     suspend fun resumeScheduledTask(
@@ -1186,7 +1185,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
+        decodeScheduledTask(bytes)
     }
 
     suspend fun runScheduledTask(
@@ -1511,6 +1510,11 @@ class AidenRemoteClient(
         return executeRequest("/usage?range=$range") { bytes ->
             json.decodeFromString(String(bytes, Charsets.UTF_8))
         }
+    }
+
+    private fun decodeScheduledTask(bytes: ByteArray): AidenScheduledTask {
+        val task = json.decodeFromString<AidenScheduledTask>(String(bytes, Charsets.UTF_8))
+        return AidenScheduledTaskValidation.tasks(listOf(task)).first()
     }
 
     // Request/Response helper DTOs

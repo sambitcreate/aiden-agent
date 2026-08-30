@@ -187,7 +187,11 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `GET /streams/{streamId}`
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
 - `POST /streams/{streamId}/cancel`: request cancellation of the authenticated parent turn stream. This is not a child/subtree control endpoint; any internal child shutdown is a Mac-owned consequence of cancelling the parent and is never separately addressable by mobile.
-- `POST /approvals/{approvalId}/respond`: `allow` or `deny` only.
+- `POST /approvals/{approvalId}/respond`: `allow` or `deny` only. Allowing a
+  `schedule_task` or `edit_automation` approval additionally requires the
+  authenticated device's `schedule:write` grant. A device that can respond to
+  approvals but lacks that mutation grant still receives the bounded approval
+  with `canAllow: false` and may deny it; an attempted allow fails closed.
 - `GET /streams/{streamId}/approval`: current bounded approval snapshot, or `null` after resolution.
 
 Turn start returns `turnId`, `streamId`, accepted state, and canonical appended message. The generation owner is the authenticated device/stream, not a socket. Disconnect never resends the prompt or cancels the turn. Restart during an active remote turn records one explicit interrupted terminal state and never retries the provider call.

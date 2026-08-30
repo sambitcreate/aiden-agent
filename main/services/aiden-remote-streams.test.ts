@@ -244,6 +244,50 @@ test("cancel and approval decisions are bound to the owning device and owner ide
   assert.equal(app.cancelled.length, 1);
 });
 
+test("schedule-tool approvals declare the schedule-write capability boundary", () => {
+  const app = fixture();
+  const owner = app.service.create(
+    "device-1",
+    "stream-1",
+    "chat-1",
+    "turn-1",
+  );
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-1",
+    summary: "Create a daily brief",
+    toolName: "schedule_task",
+  });
+  assert.equal(
+    app.service.approvalRequiredCapability("device-1", "approval-1"),
+    "schedule:write",
+  );
+
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-edit",
+    summary: "Update a daily brief",
+    toolName: "edit_automation",
+  });
+  assert.equal(
+    app.service.approvalRequiredCapability("device-1", "approval-edit"),
+    "schedule:write",
+  );
+  assert.throws(
+    () =>
+      app.service.approvalRequiredCapability("device-2", "approval-1"),
+    (error: unknown) => (error as { code?: string }).code === "approval_expired",
+  );
+
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-2",
+    summary: "Read a file",
+    toolName: "read_file",
+  });
+  assert.equal(
+    app.service.approvalRequiredCapability("device-1", "approval-2"),
+    undefined,
+  );
+});
+
 test("approval status is authoritative across reconnect and can be resolved from the host", () => {
   const changed: string[] = [];
   const decisions: string[] = [];
@@ -342,6 +386,55 @@ test("privileged approval details remain host-only and mobile can deny but canno
   assert.equal(denied.decision, "deny");
   assert.equal(service.pendingApproval("device-1", "stream-1"), null);
   assert.match(app.approvals[0] ?? "", /:deny:/u);
+});
+
+test("bounded standard schedule approvals remain mobile-allowable without exposing details", async () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-schedule",
+    summary:
+      'Create scheduled task "Inbox monitor" · Every day at 9:00 AM · Full access · MCP Gmail (gmail) · Local Provider / Local Model',
+    details: {
+      kind: "scheduled-task",
+      action: "create",
+      taskId: null,
+      expectedUpdatedAt: null,
+      enabled: true,
+      name: "Inbox monitor",
+      prompt: "Summarize inbox changes.",
+      script: null,
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      nextRunAt: 2_000_000_000_000,
+      notify: true,
+      mode: "llm",
+      permission: "full",
+      workspaceId: null,
+      workspaceName: null,
+      mcpServerIds: ["gmail"],
+      mcpServerNames: ["Gmail"],
+      providerId: "local-provider",
+      providerName: "Local Provider",
+      model: "local-model",
+      modelName: "Local Model",
+      legacyGlobalMcp: false,
+      schedulerEnabled: true,
+    },
+  });
+
+  const mobile = app.service.pendingApproval("device-1", "stream-1");
+  assert.equal(mobile?.details, undefined);
+  assert.equal(mobile?.canAllow, true);
+  assert.match(mobile?.summary ?? "", /Full access · MCP Gmail \(gmail\)/u);
+  const allowed = await app.service.respondApproval(
+    "device-1",
+    "approval-schedule",
+    "allow",
+    "approval-schedule-allow-key",
+  );
+  assert.equal(allowed.decision, "allow");
+  assert.match(app.approvals[0] ?? "", /:allow:/u);
 });
 
 test("multiple approvals remain queued and cancellation synchronously clears them", async () => {

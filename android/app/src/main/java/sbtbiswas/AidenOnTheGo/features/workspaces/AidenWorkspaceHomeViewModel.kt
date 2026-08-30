@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
+import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledRunIdempotencyKeys
 import sbtbiswas.AidenOnTheGo.models.AidenChat
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledTask
 import sbtbiswas.AidenOnTheGo.models.AidenModelCatalog
@@ -22,6 +23,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Duration
 import java.time.Instant
 
@@ -55,6 +57,11 @@ class AidenWorkspaceHomeViewModel(
     private var loadingClient: AidenRemoteClient? = null
     private var hydratedInstanceId: String? = null
     private var hydratedWorkspaceIds: Set<String> = emptySet()
+    private var hydratedCanReadSchedules: Boolean? = null
+    private val pendingRunKeysByInstance = mutableMapOf<String, AidenScheduledRunIdempotencyKeys>()
+
+    fun pendingScheduledRunKeys(instanceId: String): AidenScheduledRunIdempotencyKeys =
+        pendingRunKeysByInstance.getOrPut(instanceId) { AidenScheduledRunIdempotencyKeys() }
 
     init {
         viewModelScope.launch {
@@ -87,16 +94,27 @@ class AidenWorkspaceHomeViewModel(
     fun hydrate(workspaces: List<AidenWorkspace>) {
         val instanceId = coordinator.activeInstanceId ?: return
         val workspaceIds = workspaces.map { it.id }.toSet()
-        if (hydratedInstanceId == instanceId && hydratedWorkspaceIds == workspaceIds) return
+        val canReadSchedules = coordinator.installationStore.activeInstallation
+            ?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
+        if (hydratedInstanceId == instanceId && hydratedWorkspaceIds == workspaceIds &&
+            hydratedCanReadSchedules == canReadSchedules
+        ) return
 
         val cached = workspaces.flatMap { workspace ->
             chatCache.loadChats(instanceId, workspace.id).orEmpty()
         }
         _chats.value = regularNewestFirst(cached)
-        _scheduledTasks.value = coordinator.scheduledCache.load(instanceId)?.tasks.orEmpty()
+        _scheduledTasks.value = if (canReadSchedules) {
+            coordinator.scheduledCache.loadForScheduleReadAccess(instanceId, canRead = true)?.tasks.orEmpty()
+        } else {
+            coordinator.scheduledCache.loadForScheduleReadAccess(instanceId, canRead = false)
+            emptyList()
+        }
         _usage.value = usageCache.load(instanceId)
         hydratedInstanceId = instanceId
         hydratedWorkspaceIds = workspaceIds
+        hydratedCanReadSchedules = canReadSchedules
+        loadedClient = null
     }
 
     fun load(force: Boolean = false) {
@@ -111,8 +129,13 @@ class AidenWorkspaceHomeViewModel(
             try {
                 var allCoreSucceeded = false
                 supervisorScope {
+                    val scheduleReadAllowed = coordinator.installationStore.activeInstallation
+                        ?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
                     val chatsRequest = async { request { client.chats() } }
-                    val tasksRequest = async { request { client.scheduledTasks() } }
+                    val tasksRequest = async {
+                        if (scheduleReadAllowed) request { client.scheduledTasks() }
+                        else Result.success(emptyList<AidenScheduledTask>())
+                    }
                     val usageRequest = async { request { client.usage() } }
                     val catalogRequest = async { request { client.modelCatalog() } }
 
@@ -120,11 +143,18 @@ class AidenWorkspaceHomeViewModel(
                         if (coordinator.client.value === client) acceptChats(accepted)
                     }
                     tasksRequest.await().onSuccess { accepted ->
-                        if (coordinator.client.value === client) {
+                        val canStillReadSchedules = coordinator.installationStore.activeInstallation
+                            ?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
+                        if (coordinator.client.value === client && canStillReadSchedules) {
                             _scheduledTasks.value = accepted
                             coordinator.activeInstanceId?.let { instanceId ->
                                 coordinator.scheduledCache.store(instanceId, accepted, settings = null)
                             }
+                        } else if (!canStillReadSchedules) {
+                            coordinator.activeInstanceId?.let { instanceId ->
+                                coordinator.scheduledCache.loadForScheduleReadAccess(instanceId, canRead = false)
+                            }
+                            _scheduledTasks.value = emptyList()
                         }
                     }
                     val usageResult = usageRequest.await()

@@ -306,11 +306,16 @@ export const usageApi = {
 
 export const scheduleApi = {
   list: () => invoke<ScheduledTask[]>("schedule:list"),
-  save: (task: ScheduledTaskInput) => invoke<ScheduledTask>("schedule:save", task),
-  remove: (id: string) => invoke<void>("schedule:remove", id),
-  pause: (id: string) => invoke<ScheduledTask>("schedule:pause", id),
-  resume: (id: string) => invoke<ScheduledTask>("schedule:resume", id),
-  runNow: (id: string) => invoke<ScheduledRun>("schedule:runNow", id),
+  save: (task: ScheduledTaskInput, expectedUpdatedAt?: number) =>
+    invoke<ScheduledTask>("schedule:save", task, expectedUpdatedAt),
+  remove: (id: string, expectedUpdatedAt: number) =>
+    invoke<void>("schedule:remove", id, expectedUpdatedAt),
+  pause: (id: string, expectedUpdatedAt: number) =>
+    invoke<ScheduledTask>("schedule:pause", id, expectedUpdatedAt),
+  resume: (id: string, expectedUpdatedAt: number) =>
+    invoke<ScheduledTask>("schedule:resume", id, expectedUpdatedAt),
+  runNow: (id: string, expectedUpdatedAt: number) =>
+    invoke<ScheduledRun>("schedule:runNow", id, expectedUpdatedAt),
   runs: (id: string) => invoke<ScheduledRun[]>("schedule:runs", id),
   preview: (cron: string, timezone: string, count = 3) =>
     invoke<number[]>("schedule:preview", cron, timezone, count),

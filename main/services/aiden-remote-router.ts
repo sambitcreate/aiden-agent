@@ -100,7 +100,7 @@ export interface AidenRemoteRouterDependencies {
   models?: Pick<AidenRemoteModelService, "list">;
   streams?: Pick<
     AidenRemoteStreamService,
-    "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "cancel" | "respondApproval" | "openEvents"
+    "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
   >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
@@ -1973,7 +1973,23 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const chatId = dependencies.streams.streamChatId(device.id, streamApprovalMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
-        writeJson(response, 200, { approval: dependencies.streams.pendingApproval(device.id, streamApprovalMatch[1]!) });
+        const pending = dependencies.streams.pendingApproval(
+          device.id,
+          streamApprovalMatch[1]!,
+        );
+        const requiredCapability = pending
+          ? dependencies.streams.approvalRequiredCapability(
+              device.id,
+              pending.approvalId,
+            )
+          : undefined;
+        const approval =
+          pending &&
+          requiredCapability &&
+          !device.capabilities.has(requiredCapability)
+            ? { ...pending, canAllow: false }
+            : pending;
+        writeJson(response, 200, { approval });
         return;
       }
       const cancelMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/cancel$/u.exec(path);
@@ -1998,6 +2014,7 @@ export function createAidenRemoteRequestHandler(
         requireNoQuery(query);
         route = "approvalRespond";
         const body = await readJsonBody(request);
+        const decision = approvalDecision(body);
         const device = await authenticate(request, dependencies.devices, "approval:respond");
         deviceIdSuffix = device.id.slice(-8);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
@@ -2011,12 +2028,22 @@ export function createAidenRemoteRequestHandler(
             device,
             chatId,
             "approval",
-            () => dependencies.streams!.respondApproval(
-              device.id,
-              approvalMatch[1]!,
-              approvalDecision(body),
-              key,
-            ),
+            () => {
+              const requiredCapability =
+                dependencies.streams!.approvalRequiredCapability(
+                  device.id,
+                  approvalMatch[1]!,
+                );
+              if (decision === "allow" && requiredCapability) {
+                requireDeviceCapabilities(device, [requiredCapability]);
+              }
+              return dependencies.streams!.respondApproval(
+                device.id,
+                approvalMatch[1]!,
+                decision,
+                key,
+              );
+            },
           ),
         );
         return;
