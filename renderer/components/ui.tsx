@@ -807,6 +807,7 @@ export function ScrollArea({
   autoScrollToBottom,
   autoScrollDeps = [],
   showScrollToBottomButton,
+  scrollToBottomButtonOffset = 0,
   className,
   children,
 }: React.PropsWithChildren<{
@@ -818,6 +819,7 @@ export function ScrollArea({
   autoScrollToBottom?: boolean;
   autoScrollDeps?: unknown[];
   showScrollToBottomButton?: boolean;
+  scrollToBottomButtonOffset?: number;
   className?: string;
 }>) {
   const viewport = React.useRef<HTMLDivElement>(null);
@@ -944,7 +946,7 @@ export function ScrollArea({
           onClick={() => scrollToBottom()}
           aria-label="Scroll to bottom"
           className="absolute left-1/2 z-20 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
-          style={{ bottom: footerHeight + 12 }}
+          style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
         >
           <ArrowDownToLine />
         </Button>

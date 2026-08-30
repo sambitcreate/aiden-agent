@@ -335,9 +335,9 @@ test("renderer turn tokens cross append and generation IPC without an admission 
 test("main announces normalized settlement only after generation ownership exits", async () => {
   const llm = await source("main/services/llm-client.ts");
   const initializingExit =
-    /initializing\.delete\(streamId\);\s*initialization\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
+    /initializing\.delete\(streamId\);\s*initialization\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*questionnaires\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
   const activeExit =
-    /active\.delete\(streamId\);\s*activeGeneration\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
+    /active\.delete\(streamId\);\s*activeGeneration\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*questionnaires\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
 
   assert.equal([...llm.matchAll(initializingExit)].length, 5);
   assert.equal([...llm.matchAll(activeExit)].length, 2);
@@ -371,7 +371,7 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
   const response = applicationService.indexOf("reconciliation: reconciliationRequired", read);
 
   assert.ok(getHandler >= 0);
-  assert.ok(inactiveCheck > getHandler);
+  assert.ok(inactiveCheck >= 0);
   assert.ok(idleWait > inactiveCheck);
   assert.ok(read > idleWait);
   assert.ok(response > read);

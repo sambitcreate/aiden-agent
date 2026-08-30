@@ -127,6 +127,9 @@ review, and archive this plan only when the complete acceptance matrix passes.
 - Latest-main parity reconciliation retains Web Search, diagnostics, Gemini
   voice transcription, Model Pad, companion projections, raster and sandboxed
   generative UI artifacts, and response/accessibility improvements on Linux.
+  The attended-chat Ask User Question composer and the native todo, BTW, and
+  Advisor Pi extensions are also platform-neutral and covered by both Ubuntu
+  and Fedora Linux CI gates.
   The shared capability projection now also hides Bots and all Bot entry points
   until Linux receives equivalent native security bindings. Settings and
   Command-K share the same availability filter, dictation never invokes macOS

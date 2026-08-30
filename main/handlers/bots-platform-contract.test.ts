@@ -6,7 +6,7 @@ test("Bot IPC registration is narrowed by the main-owned host policy", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
   assert.match(
     source,
-    /if \(hostPlatformCapabilities\(\)\.bots\) registerBotHandlers\(\)/u,
+    /if \(hostPlatformCapabilities\(\)\.bots\) registerBotHandlers\(\);\s+registerBtwHandlers\(\)/u,
   );
 });
 

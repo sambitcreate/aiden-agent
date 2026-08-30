@@ -255,8 +255,8 @@ jobs:
       - name: Verify TypeScript and lint
         run: npm run type-check && npm run lint
 
-      - name: Run Linux contracts and native helper tests
-        run: npm run test:linux-contracts && npm run test:linux-native
+      - name: Run Pi extension, Linux contract, and native helper tests
+        run: npm run test:pi-extensions && npm run test:linux-contracts && npm run test:linux-native
 
       - name: Build, install, and verify Linux distributions
         run: |
@@ -336,8 +336,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Verify Fedora contracts and native helpers
-        run: npm run type-check && npm run test:linux-contracts && npm run test:linux-native
+      - name: Verify Fedora Pi extensions, contracts, and native helpers
+        run: npm run type-check && npm run test:pi-extensions && npm run test:linux-contracts && npm run test:linux-native
 
       - name: Build, install, and verify RPM package
         run: |

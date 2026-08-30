@@ -313,6 +313,10 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
     /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u,
   );
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
+  assert.match(
+    pane,
+    /capabilities\.computerUse && settings\.data\?\.computerUseEnabled === true/u,
+  );
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });

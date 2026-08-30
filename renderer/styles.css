@@ -275,6 +275,102 @@ body {
   background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
 }
 
+.ask-user-question-shell {
+  animation: ask-user-question-in 180ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.ask-user-question-icon,
+.ask-user-question-pill,
+.ask-user-question-option,
+.ask-user-question-custom {
+  transition:
+    background-color 150ms ease-out,
+    box-shadow 150ms ease-out,
+    color 150ms ease-out,
+    opacity 150ms ease-out;
+}
+
+.ask-user-question-icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 999px;
+}
+
+.ask-user-question-icon svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.ask-user-question-icon:hover:not(:disabled),
+.ask-user-question-icon:focus-visible,
+.ask-user-question-custom:hover:not(:disabled),
+.ask-user-question-custom:focus-visible {
+  background: var(--surface-control);
+  color: var(--text-primary);
+}
+
+.ask-user-question-option:hover:not(:disabled),
+.ask-user-question-option:focus-visible,
+.ask-user-question-option.is-selected {
+  background: var(--surface-control);
+}
+
+.ask-user-question-option:focus-visible,
+.ask-user-question-custom:focus-visible,
+.ask-user-question-icon:focus-visible,
+.ask-user-question-pill:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus-ring) 72%, transparent);
+}
+
+.ask-user-question-option-arrow {
+  opacity: 0;
+}
+
+.ask-user-question-option:hover .ask-user-question-option-arrow,
+.ask-user-question-option:focus-visible .ask-user-question-option-arrow,
+.ask-user-question-option.is-selected .ask-user-question-option-arrow {
+  opacity: 1;
+}
+
+.ask-user-question-pill {
+  min-height: 2.25rem;
+  flex-shrink: 0;
+  border: 1px solid var(--border-field);
+  border-radius: 999px;
+  padding-inline: 0.9rem;
+  background: var(--surface-popover);
+  color: var(--text-primary);
+  box-shadow: var(--elevation-control);
+}
+
+.ask-user-question-pill:hover:not(:disabled) {
+  background: var(--surface-control-hover);
+  box-shadow: var(--elevation-control-hover);
+}
+
+.ask-user-question-pill:active:not(:disabled) {
+  background: var(--surface-control-active);
+  box-shadow: var(--elevation-control-pressed);
+}
+
+.ask-user-question-shell :disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+@keyframes ask-user-question-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .diff-line-marker {
   display: inline-block;
   width: 1.2ch;

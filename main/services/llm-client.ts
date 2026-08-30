@@ -142,6 +142,9 @@ import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { computerUseSupported } from "./computer-use/platform.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
+import { advisorRuntime } from "./advisor-runtime-main.js";
+import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
+import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
 import { persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
@@ -235,6 +238,7 @@ import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import {
   PiAgentRuntimeHarness,
   piAgentRuntimeExtensions,
@@ -261,6 +265,22 @@ import {
 } from "./generative-ui-extension.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
+import {
+  createAskUserQuestionExtension,
+  shouldEnableAskUserQuestionExtension,
+} from "./ask-user-question-extension.js";
+import { AskUserQuestionCoordinator } from "./ask-user-question-coordinator.js";
+import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
+import {
+  createTodoExtension,
+  shouldEnableTodoExtension,
+} from "./rpiv-todo/extension.js";
+import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
+import { isTodoSnapshotFailure, replayTodoState } from "./rpiv-todo/replay.js";
+import {
+  todoSnapshotForRenderer,
+  unavailableTodoSnapshot,
+} from "../../renderer/shared/todo.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -507,6 +527,11 @@ const approvals = new ToolApprovalCoordinator((prompt) => {
     throw new Error("The generation's renderer document is no longer active.");
   }
 });
+const questionnaires = new AskUserQuestionCoordinator((prompt) => {
+  if (!sendGeneration(prompt.streamId, "chat:questionnaire", prompt)) {
+    throw new Error("The generation's renderer document is no longer active.");
+  }
+});
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
 // miss before the outer parent shutdown deadline can release a soak receipt.
@@ -574,6 +599,7 @@ async function prepareGeneration(
   computerUseGateSnapshot: number,
   activatedComputerUse: (controller: ComputerUseController) => void,
   ownerDocumentId: string,
+  rendererOwner: boolean,
   options: GenerationExecutionOptions,
 ) {
   const sharedImages: Attachment[] = [];
@@ -612,6 +638,27 @@ async function prepareGeneration(
     params.mode === "assistant" || params.mode === "assistant-unattended";
   const assistantAutomationMode = params.mode === "assistant-automation";
   const assistantMode = assistantPersonaMode || assistantAutomationMode;
+  if (
+    shouldEnableAskUserQuestionExtension({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      botBound,
+      rendererOwner,
+      excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
+    })
+  ) {
+    generationExtensions.push(
+      createAskUserQuestionExtension({
+        request: (toolCallId, questions, requestSignal) =>
+          questionnaires.request(
+            { streamId, toolCallId, questions },
+            ownerDocumentId,
+            requestSignal,
+          ),
+      }),
+    );
+  }
   // The dock persona is never folder-scoped. Project automation mode is
   // main-only and reaches this branch only after the persisted approval profile
   // has bound the scheduled run to a workspace.
@@ -1450,6 +1497,7 @@ export const llmClient = {
           initialization.computerUse = computerUse;
         },
         owner.documentId,
+        owner.id !== 0,
         options,
       );
     } catch (error) {
@@ -1466,6 +1514,7 @@ export const llmClient = {
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
+        questionnaires.releaseStream(streamId);
         broadcastChatSettled(
           streamId,
           params.chatId,
@@ -1480,6 +1529,7 @@ export const llmClient = {
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
@@ -1662,11 +1712,46 @@ export const llmClient = {
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
     try {
+      piSession = await piCompactionSessionStore.openChat(params.chatId);
+      if (
+        shouldEnableTodoExtension({
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          assistantMode: authoritativeMode !== undefined,
+          botBound: preparedBotContext !== undefined,
+          rendererOwner: owner.id !== 0,
+          excluded: options.excludeToolNames?.has(TODO_TOOL_NAME) ?? false,
+        })
+      ) {
+        try {
+          const todoState = await replayTodoState(piSession);
+          const publishTodo = (state: typeof todoState) => {
+            sendGeneration(streamId, "chat:todo", {
+              streamId,
+              snapshot: todoSnapshotForRenderer(params.chatId, state),
+            });
+          };
+          generationExtensions.push(
+            createTodoExtension(todoState, { onDurableSnapshot: publishTodo }),
+          );
+          publishTodo(todoState);
+        } catch (error) {
+          if (!isTodoSnapshotFailure(error)) throw error;
+          // Never log task content or fall back past a corrupt newer snapshot.
+          // The ordinary chat remains usable, but todo stays unavailable until
+          // its private journal is repaired or the chat is deleted.
+          sendGeneration(streamId, "chat:todo", {
+            streamId,
+            snapshot: unavailableTodoSnapshot(params.chatId),
+          });
+          logger.warn("pi", `Disabled todo for chat ${params.chatId}: invalid durable snapshot.`);
+        }
+      }
       const runtimeExtensionSnapshot = piAgentRuntimeExtensions.snapshotWithRevision();
       // Runtime extensions are not yet represented in the exact Bot catalog.
       // Omit them from Bot prompts and tool schemas instead of granting an
       // unclassified capability through an alternate contribution path.
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
+      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
         ? [
             {
               id: "aiden.bot-runtime-authority",
@@ -1684,6 +1769,56 @@ export const llmClient = {
             },
           ]
         : [...runtimeExtensionSnapshot.extensions, ...generationExtensions];
+      const toolsBeforeAdvisor = resolvePiAgentRuntimeStaticContributions(
+        "",
+        tools,
+        baseRuntimeExtensions,
+      ).tools;
+      const advisorExtension = await advisorRuntime.extensionForGeneration({
+        scope: {
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          mode: authoritativeMode,
+          bot: preparedBotContext !== undefined,
+          child: false,
+          rendererOwner: owner.id !== 0,
+          excluded: options.excludeToolNames?.has(ADVISOR_TOOL_NAME) ?? false,
+        },
+        executor: {
+          providerId: runtime.provider.id,
+          modelId: model.id,
+          effort: thinkingLevel,
+        },
+        executorTools: toolsBeforeAdvisor,
+        getLiveMessages: (toolCallId) =>
+          candidate
+            ? snapshotAdvisorRuntimeMessages(candidate.state, toolCallId)
+            : [],
+        ...(shouldEnableAskUserQuestionExtension({
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          assistantMode: authoritativeMode !== undefined,
+          botBound: preparedBotContext !== undefined,
+          rendererOwner: owner.id !== 0,
+          excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
+        })
+          ? {
+              requestQuestionnaire: (
+                toolCallId: string,
+                questions: Parameters<typeof questionnaires.request>[0]["questions"],
+                requestSignal?: AbortSignal,
+              ) =>
+                questionnaires.request(
+                  { streamId, toolCallId, questions },
+                  owner.documentId,
+                  requestSignal,
+                ),
+            }
+          : {}),
+      });
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = advisorExtension
+        ? [...baseRuntimeExtensions, advisorExtension]
+        : baseRuntimeExtensions;
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -1763,7 +1898,6 @@ export const llmClient = {
         systemPrompt,
         tools: runtimeTools,
       });
-      piSession = await piCompactionSessionStore.openChat(params.chatId);
       const onCompactionEvent = (event: PiCompactionEvent) => {
         if (event.type === "start") {
           activeCompactionStepId = timeline.compactionStarted();
@@ -2318,6 +2452,7 @@ export const llmClient = {
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
+        questionnaires.releaseStream(streamId);
         broadcastChatSettled(
           streamId,
           params.chatId,
@@ -2332,6 +2467,7 @@ export const llmClient = {
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
@@ -2344,6 +2480,7 @@ export const llmClient = {
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
     }
@@ -2538,6 +2675,7 @@ export const llmClient = {
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      questionnaires.releaseStream(streamId);
       broadcastChatSettled(
         streamId,
         params.chatId,
@@ -2730,6 +2868,7 @@ export const llmClient = {
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
+          questionnaires.releaseStream(streamId);
           broadcastChatSettled(
             streamId,
             params.chatId,
@@ -2747,6 +2886,10 @@ export const llmClient = {
   /** Resolve a pending tool-approval request from the UI. */
   approve(approvalId: string, decision: ApprovalDecision, ownerDocumentId?: string): boolean {
     return approvals.decide(approvalId, decision === "allow", ownerDocumentId);
+  },
+
+  answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {
+    return questionnaires.respond(promptId, response, ownerDocumentId);
   },
 
   /**
@@ -2771,6 +2914,7 @@ export const llmClient = {
     endLoadMonitor(runtimeOwner, streamId, false);
     void runtimeOwner.computerUse?.close();
     approvals.detachStream(streamId);
+    questionnaires.detachStream(streamId);
     logger.info("pi", `Renderer detached from generation ${streamId}; work remains main-owned.`);
     return true;
   },
@@ -2844,6 +2988,7 @@ export const llmClient = {
 
   /** Stop and drain foreground work before cross-store chat deletion begins. */
   async cancelChat(chatId: string): Promise<void> {
+    await btwService.forget(chatId);
     for (const [streamId, entry] of [...initializing.entries()]) {
       if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
     }
@@ -2908,6 +3053,12 @@ export const llmClient = {
     ) {
       return null;
     }
+    // Foreground admission and BTW reservation fence each other: an existing
+    // side question is aborted here, while a concurrent BTW start rechecks
+    // isChatBusy after it reserves its per-chat slot. These calls are adjacent
+    // and synchronous on Electron's main thread, so no reservation can enter
+    // between the abort and the foreground claim.
+    btwOperationRegistry.abortForForeground(chatId);
     return chatTurnAdmission.tryBegin(chatId, turnId, ownerId, chatHasGenerationOwnership(chatId));
   },
 
@@ -2960,10 +3111,12 @@ export const llmClient = {
   },
 
   abortAll(): void {
+    btwService.shutdown();
     chatTurnAdmission.releaseAll();
     for (const [streamId] of initializing) this.cancel(streamId, "application_shutdown");
     for (const [streamId] of active) this.cancel(streamId, "application_shutdown");
     approvals.shutdown();
+    questionnaires.shutdown();
   },
 
   async shutdown(): Promise<boolean> {

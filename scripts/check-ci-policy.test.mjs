@@ -22,6 +22,11 @@ test("Android CI only runs for Android or CI workflow changes", async () => {
   assert.match(workflow, /npm run test:model-catalog/u);
 });
 
+test("both Linux package gates exercise the desktop Pi extensions", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  assert.equal(workflow.match(/npm run test:pi-extensions/gu)?.length, 2);
+});
+
 test("model catalog workflow verifies read-only and publishes with isolated credentials", async () => {
   const workflow = await readFile(catalogWorkflowUrl, "utf8");
 

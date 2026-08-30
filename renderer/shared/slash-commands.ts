@@ -93,7 +93,7 @@ export type SlashCommandAction =
       kind: "session";
       action: "fork" | "clone" | "export" | "details" | "logout" | "worktree";
     }
-  | { kind: "composer-instruction"; instruction: "visualize" };
+  | { kind: "composer-instruction"; instruction: "visualize" | "btw" };
 
 export type SlashCommandAvailability =
   | "always"
@@ -455,6 +455,19 @@ export const SLASH_COMMANDS = Object.freeze([
     behavior: "picker",
     availability: "always",
     argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "btw",
+    aliases: ["side-question"],
+    title: "Ask a side question",
+    description: "Ask about this chat without adding a message to its history.",
+    keywords: ["aside", "ephemeral", "question", "context"],
+    icon: "chat",
+    action: { kind: "composer-instruction", instruction: "btw" },
+    behavior: "argument",
+    availability: "idle-chat-session",
+    argument: "optional-prompt",
     draftPolicy: "preserve",
   }),
   define({
