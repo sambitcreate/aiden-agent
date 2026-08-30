@@ -48,7 +48,14 @@ function validateModel(modelValue, providerId, modelId) {
   if (typeof model.name !== "string" || model.name.length === 0) {
     throw new Error(`models.dev model ${providerId}/${modelId} must have a name.`);
   }
-  for (const field of ["id", "knowledge", "release_date", "last_updated"]) {
+  for (const field of [
+    "id",
+    "description",
+    "family",
+    "knowledge",
+    "release_date",
+    "last_updated",
+  ]) {
     assertOptionalString(model[field], `${providerId}/${modelId}.${field}`);
   }
   for (const field of ["attachment", "reasoning", "tool_call", "open_weights"]) {

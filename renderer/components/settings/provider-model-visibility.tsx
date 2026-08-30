@@ -7,6 +7,7 @@ import { settingsApi } from "../../lib/ipc";
 import { createModelEntries } from "../../lib/model-picker-data";
 import { queryKeys, useSettings } from "../../lib/queries";
 import type { AppSettings, Provider } from "../../lib/types";
+import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
 import { isModelHidden } from "../../shared/model-visibility";
 
 export function ProviderModelVisibility({ provider }: { provider: Provider }) {
@@ -23,6 +24,8 @@ export function ProviderModelVisibility({ provider }: { provider: Provider }) {
     isModelHidden(hidden, provider.id, entry.model),
   ).length;
   const shownCount = entries.length - hiddenCount;
+  const policyHidden =
+    provider.id === GOOGLE_PROVIDER_ID && settings.data?.geminiUsageScope === "transcription_only";
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filtered = normalizedQuery
     ? entries.filter((entry) =>
@@ -84,62 +87,71 @@ export function ProviderModelVisibility({ provider }: { provider: Provider }) {
             model pickers on this Mac and paired Aiden clients.
           </Text>
         </div>
-        <div
-          className="flex flex-wrap items-center justify-end gap-1"
-          role="group"
-          aria-label={`${provider.label} model visibility actions`}
-        >
-          {shownCount > 0 ? (
-            <Button
-              size="small"
-              variant="transparent"
-              disabled={pending !== undefined}
-              onClick={() => void hideAll()}
-            >
-              {pending?.kind === "hide-all" ? "Hiding…" : "Hide all"}
-            </Button>
-          ) : null}
-          {hiddenCount > 0 ? (
-            <Button
-              size="small"
-              variant="muted"
-              disabled={pending !== undefined}
-              onClick={() => void showAll()}
-            >
-              {pending?.kind === "show-all" ? "Showing…" : "Show all"}
-            </Button>
-          ) : null}
-        </div>
+        {!policyHidden ? (
+          <div
+            className="flex flex-wrap items-center justify-end gap-1"
+            role="group"
+            aria-label={`${provider.label} model visibility actions`}
+          >
+            {shownCount > 0 ? (
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={pending !== undefined}
+                onClick={() => void hideAll()}
+              >
+                {pending?.kind === "hide-all" ? "Hiding…" : "Hide all"}
+              </Button>
+            ) : null}
+            {hiddenCount > 0 ? (
+              <Button
+                size="small"
+                variant="muted"
+                disabled={pending !== undefined}
+                onClick={() => void showAll()}
+              >
+                {pending?.kind === "show-all" ? "Showing…" : "Show all"}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <Text variant="small" color="tertiary" className="shrink-0 tabular-nums">
           {shownCount} shown · {hiddenCount} hidden
         </Text>
-        <Button
-          type="button"
-          size="small"
-          variant="transparent"
-          aria-expanded={expanded}
-          aria-controls={`model-visibility-controls-${provider.id}`}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          Manage individual models
-          <ChevronDown
-            className={`size-3.5 transition-transform motion-reduce:transition-none ${expanded ? "rotate-180" : ""}`}
-            aria-hidden="true"
-          />
-        </Button>
+        {!policyHidden ? (
+          <Button
+            type="button"
+            size="small"
+            variant="transparent"
+            aria-expanded={expanded}
+            aria-controls={`model-visibility-controls-${provider.id}`}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            Manage individual models
+            <ChevronDown
+              className={`size-3.5 transition-transform motion-reduce:transition-none ${expanded ? "rotate-180" : ""}`}
+              aria-hidden="true"
+            />
+          </Button>
+        ) : null}
       </div>
 
-      {shownCount === 0 ? (
+      {policyHidden ? (
+        <Text variant="small" color="tertiary" as="p" className="mt-2" role="status">
+          Google chat models are hidden by transcription-only access. Change Gemini access to Full
+          models before managing model visibility.
+        </Text>
+      ) : shownCount === 0 ? (
         <Text variant="small" color="tertiary" as="p" className="mt-2" role="status">
           All models are hidden from new model selections. Existing chats keep their configured
           model.
         </Text>
       ) : null}
 
-      {expanded ? (
+      {expanded && !policyHidden ? (
         <div id={`model-visibility-controls-${provider.id}`} className="mt-2 grid gap-2">
           <Input
             value={query}

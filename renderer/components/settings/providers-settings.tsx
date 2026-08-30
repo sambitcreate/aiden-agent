@@ -442,13 +442,16 @@ export function ProvidersSettings() {
             />
           </Button>
         </div>
+        <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
+          This foreground update contacts built-in catalog services and models.dev. It sends no
+          prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
+          identifier.
+        </Text>
         {catalogDetailsOpen ? (
           <div id="provider-catalog-details" className="mt-2 border-t border-separator pt-2">
             <Text as="p" variant="small" color="tertiary" className="leading-relaxed">
-              Updating contacts built-in provider catalog services and models.dev. Aiden sends no
-              prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
-              identifier. Downloaded models.dev data affects display details only, never which
-              models can run or their runtime limits.
+              Downloaded models.dev data affects display details only, never which models can run or
+              their runtime limits.
             </Text>
             <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
               Model details:{" "}

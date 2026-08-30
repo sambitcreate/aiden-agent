@@ -389,9 +389,6 @@ export function registerProviderHandlers(): void {
             : "The models.dev catalog could not be updated.",
       };
     }
-    if (inventory.errors.length === 0 || modelsDev.ok) {
-      invalidateBotRuntimeInventoryAuthority("provider_configuration");
-    }
     return {
       providers: inventory.providers,
       inventoryErrors: inventory.errors,

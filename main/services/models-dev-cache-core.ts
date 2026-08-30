@@ -127,8 +127,8 @@ export async function fetchModelsDevCatalog(
   }
   const controller = new AbortController();
   const deadlineError = new Error("models.dev did not respond before the refresh deadline.");
-  const timer = setTimeout(() => controller.abort(deadlineError), timeoutMs);
-  try {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const request = (async () => {
     const response = await fetchImpl(MODELS_DEV_ENDPOINT, {
       method: "GET",
       headers: { accept: "application/json" },
@@ -147,8 +147,17 @@ export async function fetchModelsDevCatalog(
       if (error instanceof SyntaxError) throw new Error("models.dev returned malformed JSON.");
       throw error;
     }
+  })();
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(deadlineError);
+      controller.abort(deadlineError);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([request, deadline]);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 

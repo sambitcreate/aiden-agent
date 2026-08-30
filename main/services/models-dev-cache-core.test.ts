@@ -115,3 +115,10 @@ test("foreground fetch rejects redirects, malformed data, and unsafe numeric lim
     /non-negative number/u,
   );
 });
+
+test("foreground fetch enforces its deadline when a fetch implementation ignores abort", async () => {
+  await assert.rejects(
+    fetchModelsDevCatalog(() => new Promise<Response>(() => undefined), 10),
+    /refresh deadline/u,
+  );
+});

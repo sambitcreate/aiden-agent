@@ -46,6 +46,19 @@ export function isModelSelectionAvailable(
   return Boolean(provider && isUsable(provider) && provider.models.includes(selection.model));
 }
 
+/** Existing chats may retain hidden models; empty chats must use a visible selection. */
+export function isModelSelectionReadyForNewWork(
+  selection: ModelSelection,
+  providers: Provider[] | undefined,
+  hiddenModelsByProvider: AppSettings["hiddenModelsByProvider"],
+  hasMessages: boolean,
+): boolean {
+  return (
+    isModelSelectionAvailable(selection, providers) &&
+    (hasMessages || !isModelHidden(hiddenModelsByProvider, selection.providerId, selection.model))
+  );
+}
+
 /** Resolve the selection used for new work while leaving explicit legacy selections intact. */
 export function resolveVisibleModelSelection(
   selection: ModelSelection,
