@@ -9,6 +9,7 @@ import {
   Field,
   FieldSet,
   Input,
+  InlineMetadata,
   Select,
   SelectContent,
   SelectItem,
@@ -464,7 +465,7 @@ export function ProviderEditor({
                         modelMetadata[defaultModel]?.name
                           ? { name: modelMetadata[defaultModel].name }
                           : modelInfo.data?.[defaultModel],
-                      ).label} · Hidden
+                      ).label} <InlineMetadata>· Hidden</InlineMetadata>
                     </SelectItem>
                   ) : null}
                   {visibleDefaultModels.map((m) => (
