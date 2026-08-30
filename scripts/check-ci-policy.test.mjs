@@ -19,6 +19,7 @@ test("Android CI only runs for Android or CI workflow changes", async () => {
   assert.match(workflow, /if ! changed_files="\$\(git diff --name-only/u);
   assert.match(workflow, /^ {4}needs: changes$/mu);
   assert.match(workflow, /^ {4}if: \$\{\{ needs\.changes\.outputs\.android == 'true' \}\}$/mu);
+  assert.match(workflow, /npm run test:model-catalog/u);
 });
 
 test("model catalog workflow verifies read-only and publishes with isolated credentials", async () => {

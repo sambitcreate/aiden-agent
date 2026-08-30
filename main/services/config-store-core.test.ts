@@ -335,6 +335,53 @@ test("Gemini usage scope gates Google models without changing local or OpenAI vo
   assert.equal(openai.hiddenModelsByProvider?.google, undefined);
 });
 
+test("Gemini usage scope repairs divergent imported Google policy state", async (t) => {
+  const full = await harness(t);
+  await fs.writeFile(
+    full.settingsFile,
+    JSON.stringify({
+      settings: {
+        geminiUsageScope: "models_and_transcription",
+        hiddenModelsByProvider: { google: ["*", "gemini-private"] },
+      },
+    }),
+    "utf-8",
+  );
+
+  assert.deepEqual((await full.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "shown",
+    exceptions: ["gemini-private"],
+  });
+  await full.store.setSettings({ profileName: "Repaired" });
+  assert.deepEqual(
+    (await readJson<{ settings: { hiddenModelsByProvider?: unknown } }>(full.settingsFile)).settings
+      .hiddenModelsByProvider,
+    { google: { defaultVisibility: "shown", exceptions: ["gemini-private"] } },
+  );
+
+  const transcriptionOnly = await harness(t);
+  await fs.writeFile(
+    transcriptionOnly.settingsFile,
+    JSON.stringify({
+      settings: {
+        geminiUsageScope: "transcription_only",
+        hiddenModelsByProvider: {
+          google: { defaultVisibility: "shown", exceptions: ["gemini-private"] },
+        },
+      },
+    }),
+    "utf-8",
+  );
+  assert.deepEqual(
+    (await transcriptionOnly.store.getSettings()).hiddenModelsByProvider?.google,
+    {
+      defaultVisibility: "shown",
+      exceptions: ["gemini-private"],
+      policyHidden: true,
+    },
+  );
+});
+
 test("removing a provider clears its model visibility preferences", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

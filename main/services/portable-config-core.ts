@@ -38,7 +38,11 @@ import type {
 import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "./types.js";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 import { isConfiguredSkill, isConfiguredSkillList } from "./skill-config-limits.js";
-import { normalizeHiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
+import {
+  normalizeHiddenModelsByProvider,
+  withProviderPolicyHidden,
+} from "../../renderer/shared/model-visibility.js";
+import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 
@@ -491,6 +495,18 @@ function normalizeTelegramProfiles(value: unknown): AppSettings["telegramProfile
   return result;
 }
 
+/** Gemini usage scope is the sole authority for the Google policy gate. */
+function normalizedSettingsVisibility(settings: {
+  hiddenModelsByProvider?: unknown;
+  geminiUsageScope?: unknown;
+}) {
+  return withProviderPolicyHidden(
+    normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider),
+    GOOGLE_PROVIDER_ID,
+    settings.geminiUsageScope === "transcription_only",
+  );
+}
+
 function normalizeSettingsShape(value: unknown): SettingsShape {
   const root = isRecord(value) ? structuredClone(value) : {};
   const { settings, ...rest } = root;
@@ -575,7 +591,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   ] as const) {
     if (settings[key] !== undefined && !isRecord(settings[key])) delete normalized[key];
   }
-  const hiddenModelsByProvider = normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider);
+  const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
   return {
@@ -590,7 +606,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;
-  const hiddenModelsByProvider = normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider);
+  const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete runtime.hiddenModelsByProvider;
   const retainKnownValue = (key: keyof AppSettings, allowed: readonly string[]): void => {
