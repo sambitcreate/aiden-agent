@@ -133,7 +133,7 @@ export interface AidenRemoteServiceOptions {
         >;
         chats?: Pick<AidenRemoteChatService, "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
-        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "cancel" | "respondApproval" | "openEvents">;
+        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
@@ -176,7 +176,7 @@ export interface AidenRemoteServiceOptions {
         >;
         chats?: Pick<AidenRemoteChatService, "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
-        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "cancel" | "respondApproval" | "openEvents">;
+        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;

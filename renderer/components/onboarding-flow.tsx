@@ -337,7 +337,8 @@ const featureBentos: FeatureBento[] = [
     id: "schedules",
     group: "control",
     title: "Scheduled Automations",
-    description: "Schedule recurring model work or trusted scripts, then run or pause anytime.",
+    description:
+      "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime.",
     icon: CalendarClock,
     imageUrl: FEATURE_ILLUSTRATIONS.schedules,
     size: "tall",

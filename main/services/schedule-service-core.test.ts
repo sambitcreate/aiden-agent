@@ -274,6 +274,21 @@ test("revision-checked saves update one task and reject stale overwrites", async
   assert.equal((await testbed.store.get(task.id))?.cron, "0 9 * * *");
 });
 
+test("manual runs compare the exact task revision before execution starts", async () => {
+  const testbed = harness();
+  const task = await addTask(testbed.store);
+  await assert.rejects(
+    testbed.service.runNow(task.id, { expectedUpdatedAt: task.updatedAt + 1 }),
+    /changed.*Refresh/iu,
+  );
+  assert.equal(testbed.hasPending(task.id), false);
+  const run = testbed.service.runNow(task.id, { expectedUpdatedAt: task.updatedAt });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(testbed.hasPending(task.id), true);
+  await testbed.service.stopAndSettle();
+  await run;
+});
+
 test("cancellation after persistence compensates before scheduling the task", async () => {
   const testbed = harness();
   const originalSave = testbed.store.saveWithRollback.bind(testbed.store);

@@ -44,6 +44,16 @@ test("automation approvals reuse the app surface entrance motion", () => {
   );
 });
 
+test("scheduled task details reuse the reduced-motion-gated surface entrance", () => {
+  const styles = source("../styles.css");
+  const scheduledTasks = source("../components/scheduled-tasks-view.tsx");
+  assert.match(
+    styles,
+    /:root\[data-reduce-motion="false"\] \.scheduled-task-detail\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms cubic-bezier\(0\.19, 1, 0\.22, 1\)/u,
+  );
+  assert.match(scheduledTasks, /className="scheduled-task-detail/u);
+});
+
 test("the panel settles downward as it fades out", () => {
   const keyframes = between(
     source("../styles.css"),
@@ -138,8 +148,8 @@ test("the hotkey waits for the central command listener and uses the dock comman
 test("Scheduled Tasks can open Aiden's composer without discarding an existing draft", () => {
   const scheduledTasks = source("../components/scheduled-tasks-view.tsx");
   const dock = source("../components/assistant/assistant-dock.tsx");
-  assert.match(scheduledTasks, /Create with Aiden Assistant/u);
-  assert.match(scheduledTasks, /Create manually/u);
+  assert.match(scheduledTasks, /Create with Aiden/u);
+  assert.match(scheduledTasks, /Set up with controls/u);
   assert.match(scheduledTasks, /requestAssistantAutomationComposer/u);
   assert.match(scheduledTasks, /onCloseAutoFocus/u);
   assert.match(scheduledTasks, /event\.preventDefault\(\)/u);

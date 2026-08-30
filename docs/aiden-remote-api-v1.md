@@ -187,7 +187,11 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `GET /streams/{streamId}`
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
 - `POST /streams/{streamId}/cancel`: request cancellation of the authenticated parent turn stream. This is not a child/subtree control endpoint; any internal child shutdown is a Mac-owned consequence of cancelling the parent and is never separately addressable by mobile.
-- `POST /approvals/{approvalId}/respond`: `allow` or `deny` only.
+- `POST /approvals/{approvalId}/respond`: `allow` or `deny` only. Allowing a
+  `schedule_task` or `edit_automation` approval additionally requires the
+  authenticated device's `schedule:write` grant. A device that can respond to
+  approvals but lacks that mutation grant still receives the bounded approval
+  with `canAllow: false` and may deny it; an attempted allow fails closed.
 - `GET /streams/{streamId}/approval`: current bounded approval snapshot, or `null` after resolution.
 
 Turn start returns `turnId`, `streamId`, accepted state, and canonical appended message. The generation owner is the authenticated device/stream, not a socket. Disconnect never resends the prompt or cancels the turn. Restart during an active remote turn records one explicit interrupted terminal state and never retries the provider call.
@@ -266,7 +270,7 @@ Git mutations reuse the workspace operation registry and mutation gate plus cano
 - `GET /scheduled-tasks/scripts?workspaceId=...`
 - `GET|PATCH /scheduled-tasks/settings`
 
-Edits use `If-Match`/`expectedUpdatedAt`; settings use an equivalent revision. `run` requires an idempotency key and returns `202` with a durable `runId`. Socket loss does not cancel execution. Status is observed in run history. Cancellation follows existing remove/pause/global-disable/revocation/shutdown policy; v1 adds no bespoke remote cancel action.
+Edits and task actions (`pause`, `resume`, and `run`) use `If-Match`/`expectedUpdatedAt`; settings use an equivalent revision. `run` also requires an idempotency key and returns `202` with a durable `runId`. Older clients that omit `If-Match` fail closed with `400` and must refresh before starting a run. Reusing one run key with a different revision returns `409 idempotency_conflict`, allowing clients to discard the stale key instead of retrying an ambiguous operation. Socket loss does not cancel execution. Status is observed in run history. Cancellation follows existing remove/pause/global-disable/revocation/shutdown policy; v1 adds no bespoke remote cancel action.
 
 ## 6. SSE envelope and ordering
 
