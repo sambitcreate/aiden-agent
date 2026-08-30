@@ -2132,6 +2132,108 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(normalized.codeFontSize, 10)
     }
 
+    func testUnifiedWorkspaceSidebarProjectsOwnedChatsWithoutDuplicates() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        let workspaces = [
+            AidenWorkspace(
+                id: "alpha",
+                name: "Alpha",
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(20),
+                revision: "alpha-r1"
+            ),
+            AidenWorkspace(
+                id: "beta",
+                name: "Beta",
+                permission: .ask,
+                hasFolder: false,
+                isManagedWorktree: false,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(10),
+                revision: "beta-r1"
+            ),
+        ]
+        let chats = [
+            AidenChat(
+                id: "alpha-chat",
+                workspaceId: "alpha",
+                title: "Review API",
+                providerId: nil,
+                modelId: nil,
+                messages: [],
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(30),
+                revision: "chat-r1"
+            ),
+            AidenChat(
+                id: "orphan-chat",
+                workspaceId: "removed",
+                title: "Removed",
+                providerId: nil,
+                modelId: nil,
+                messages: [],
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(40),
+                revision: "chat-r2"
+            ),
+        ]
+
+        let projection = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: chats,
+            searchText: ""
+        )
+        XCTAssertEqual(projection.sections.map(\.workspace.id), ["alpha", "beta"])
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-chat"])
+        XCTAssertEqual(projection.sections[1].chats, [])
+        XCTAssertEqual(projection.recents.map(\.id), ["alpha-chat"])
+
+        let search = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: chats,
+            searchText: "api"
+        )
+        XCTAssertEqual(search.sections.map(\.workspace.id), ["alpha"])
+        XCTAssertEqual(search.recents.map(\.id), ["alpha-chat"])
+    }
+
+    @MainActor
+    func testUnifiedWorkspaceSidebarPreferencesPersistPerInstallation() throws {
+        let suiteName = "AidenWorkspaceSidebarTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenProductNavigationStore(defaults: defaults)
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-one"), .workspace)
+        store.setWorkspaceSidebarOrganization(.recent, for: "mac-one")
+        store.toggleExpandedSidebarWorkspace("alpha", for: "mac-one")
+        store.toggleExpandedSidebarWorkspace("beta", for: "mac-two")
+
+        let restored = AidenProductNavigationStore(defaults: defaults)
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .recent)
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+
+        restored.pruneExpandedSidebarWorkspaces(validWorkspaceIDs: ["other"], for: "mac-one")
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), [])
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+
+        restored.purge(instanceID: "mac-one")
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .workspace)
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), [])
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+    }
+
     func testWorkspaceSelectionSurvivesAdaptiveLayoutChangesAndReconcilesCRUD() {
         let ids = ["workspace-a", "workspace-b", "workspace-c"]
         var selected = AidenWorkspaceNavigation.reconciledSelection(current: nil, workspaceIDs: ids)
@@ -2217,6 +2319,17 @@ final class AidenAppearanceTests: XCTestCase {
                 workspaceIDs: ids
             ),
             []
+        )
+        XCTAssertEqual(
+            AidenWorkspaceNavigation.compactPath(
+                enteringFromSplit: true,
+                current: ["workspace-a"],
+                selectedWorkspaceID: "workspace-a",
+                workspaceIDs: ids,
+                preservingSelectedChat: true
+            ),
+            [],
+            "A selected chat should remain the compact destination across a size-class transition"
         )
     }
 

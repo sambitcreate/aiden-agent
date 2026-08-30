@@ -320,6 +320,10 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     /Create reusable instructions, then type \$ to attach one to your next message\./u,
   );
   assert.match(
+    source,
+    /Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline\./u,
+  );
+  assert.match(
     featurePresentation,
     /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
   );

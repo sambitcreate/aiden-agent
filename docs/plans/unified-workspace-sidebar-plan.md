@@ -1,0 +1,80 @@
+# Unified Workspace Sidebar
+
+Status: Active — Phase 1 implemented on desktop, iOS, and Android; the summary-only remote read remains a measured follow-up.
+
+## Outcome
+
+Aiden now treats registered workspaces and their chats as one navigation graph. The default sidebar is grouped by workspace; a persisted **Recent only** mode presents the same chats as one time-ordered list. A chat is never rendered in both projections at once.
+
+“Workspace” remains Aiden's canonical product and protocol term. The project-oriented screenshots are interaction references, not instructions to introduce a second Project entity or migrate existing IDs.
+
+## Three independent proposals and triage
+
+| Proposal | Strongest idea | Cost or risk | Decision |
+| --- | --- | --- | --- |
+| A — projection-first | Reuse the existing unscoped chat read and workspace registry, then build one client-side projection. Expansion is side-effect free and new-chat creation is explicit. | Mobile still receives full chat payloads for its global home read. | Selected as the Phase 1 baseline because it changes no shared protocol and ships the information architecture consistently. |
+| B — summary-contract-first | Add a paginated chat-summary endpoint before changing any client UI. | Delays the user-facing improvement and introduces a cross-client/server migration before the navigation semantics are proven. | Deferred as the performance follow-up. |
+| C — adaptive-outline-first | Use the same grouped outline, but emphasize iPad detail-column selection and Android adaptive behavior. | Also proposed a new summary contract in the first delivery. | Its adaptive-navigation recommendations were incorporated into Proposal A. |
+
+The integrated plan therefore uses A's low-risk data path, C's iPad detail-column behavior, and B/C's summary endpoint as an explicit follow-up rather than a blocker.
+
+## Interaction contract
+
+- Default organization is **By workspace**. Each workspace is a disclosure row containing its chats.
+- Expanding or collapsing a workspace never creates a chat, switches execution context, or navigates away.
+- **New chat** is an explicit row/action. Selecting an existing chat may switch the active execution workspace before opening it.
+- **Recent only** is an alternate projection, not a second section below the workspace outline.
+- Search matches workspace names and chat titles. A matching workspace reveals its chats; a matching chat reveals its owning workspace.
+- Empty workspaces remain visible and expose an explicit **New chat** action.
+- Reserved Assistant records, Bot homes, archived workspaces, and chats whose workspace is no longer registered are excluded.
+- Organization and disclosure state are device-local. Native clients scope it to the paired Aiden installation.
+- Bots remain a separate product area and do not enter the workspace outline.
+
+## Phase 1 implementation
+
+### Electron
+
+- The sidebar reads the registered workspace list plus the existing unscoped regular-chat metadata query.
+- A pure projection whitelists chats by registered workspace ID, sorts workspace groups by newest activity, powers search, and produces the alternate recent list.
+- The active workspace opens by default, disclosure state persists in bounded local storage, and long groups expose a bounded initial slice with **Show more**.
+- Workspace actions moved onto their owning row: new chat, open latest chat, reveal folder, and safe remove/delete-worktree flows. Empty workspaces never create a chat through an open action.
+- Existing route-driven selection, title reveal, keyboard chat shortcuts, working indicators, rename, and delete behavior are reused across both organizations.
+
+### iOS and iPadOS
+
+- The home list uses the same workspace-owned projection and a persisted per-installation organization/disclosure store.
+- iPhone retains push navigation. On regular-width iPad, selecting a chat presents it in the detail column rather than a modal sheet.
+- Device-local workspace archive state is applied before projection and stale disclosure IDs are pruned.
+
+### Android
+
+- Compose uses the same pure workspace-owned projection and explicit empty-workspace creation row.
+- Organization and disclosure state persist per installation in the existing product navigation store and are removed with installation data.
+- The separate directory is retained as **Manage Workspaces** for CRUD and environment details.
+
+## Independent review hardening
+
+Two fresh-context reviews were completed before publication, split across desktop behavior and native-client parity. Their confirmed findings were incorporated:
+
+- Workspace disclosure preferences are pruned only after authoritative registries/snapshots load, so cold launch and installation changes cannot erase state.
+- Desktop chat loading and failures are distinct from a successful empty result; empty-workspace creation is available only after the list resolves.
+- Desktop shortcuts are derived from the rows actually rendered, and duplicate workspace names are disambiguated in rows, actions, accessibility labels, and destructive confirmations.
+- Native workspace groups render a bounded preview with explicit **Show more**, Android chat rows retain stable identity, and equal-timestamp ordering matches desktop/iOS.
+- iOS sidebar preferences live in the purgeable product-navigation store, archived IDs are pruned, and one selected-chat identity survives compact/regular transitions.
+- Android pruning waits for a completed workspace refresh and disclosure controls expose expanded/collapsed semantics to TalkBack.
+- The projection tests are registered in the normal `npm test` preflight, not only in a feature-local script.
+
+## Phase 2: bounded remote summaries
+
+The current mobile home read predates this UI and returns full chat transcripts. That remains functionally correct, cached, and unchanged by Phase 1, but it is inefficient for installations with many chats.
+
+Before widening rollout, measure payload size, decode time, and memory on representative large histories. If the existing bounds are material, add an authenticated paginated summary projection containing only chat ID, workspace ID, title/title-pending state, timestamps, revision, and safe activity status. Preserve the current full-chat endpoint for detail reads. Update both native clients together and add fixture parity tests before switching their home loaders.
+
+## Acceptance gates
+
+- A chat appears exactly once in either organization and never leaks from a removed/reserved workspace.
+- Disclosure has no create/navigation side effect; explicit create targets the selected workspace.
+- Cross-workspace chat selection reconciles the active execution context.
+- Search, empty workspaces, long groups, workspace removal, managed-worktree deletion, archive state, and installation switching remain deterministic.
+- Keyboard focus remains visible on non-text controls; text fields keep Aiden's background/caret focus treatment without accent borders.
+- Focused desktop projection/sidebar tests, TypeScript, onboarding, iOS source/test compilation, and Android unit/lint/assemble gates pass.

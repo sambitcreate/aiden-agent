@@ -204,7 +204,56 @@ class AidenWorkspaceHomeViewModel(
 fun regularNewestFirst(chats: List<AidenChat>): List<AidenChat> =
     AidenChat.regularWorkspaceChats(chats)
         .distinctBy { it.id }
-        .sortedWith(compareByDescending<AidenChat> { it.updatedAt }.thenBy { it.title.lowercase() })
+        .sortedWith(compareByDescending<AidenChat> { it.updatedAt }.thenBy { it.id })
+
+data class AidenWorkspaceSidebarSection(
+    val workspace: AidenWorkspace,
+    val chats: List<AidenChat>,
+    val newestActivityAt: Instant
+)
+
+data class AidenWorkspaceSidebarProjection(
+    val sections: List<AidenWorkspaceSidebarSection>,
+    val recents: List<AidenChat>
+)
+
+fun projectAidenWorkspaceSidebar(
+    workspaces: List<AidenWorkspace>,
+    chats: List<AidenChat>,
+    searchQuery: String
+): AidenWorkspaceSidebarProjection {
+    val query = searchQuery.trim()
+    val workspacesById = workspaces.associateBy { it.id }
+    val regularChats = regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
+    val chatsByWorkspace = regularChats.groupBy { it.workspaceId }
+    val sections = workspaces.mapNotNull { workspace ->
+        val allChats = chatsByWorkspace[workspace.id].orEmpty()
+        val workspaceMatches = query.isNotEmpty() && workspace.name.contains(query, ignoreCase = true)
+        val visibleChats = when {
+            query.isEmpty() || workspaceMatches -> allChats
+            else -> allChats.filter { it.title.contains(query, ignoreCase = true) }
+        }
+        if (query.isNotEmpty() && !workspaceMatches && visibleChats.isEmpty()) return@mapNotNull null
+        AidenWorkspaceSidebarSection(
+            workspace = workspace,
+            chats = visibleChats,
+            newestActivityAt = maxOf(
+                workspace.updatedAt ?: Instant.EPOCH,
+                allChats.firstOrNull()?.updatedAt ?: Instant.EPOCH
+            )
+        )
+    }.sortedWith(
+        compareByDescending<AidenWorkspaceSidebarSection> { it.newestActivityAt }
+            .thenBy { it.workspace.name.lowercase() }
+            .thenBy { it.workspace.id }
+    )
+    val recents = regularChats.filter { chat ->
+        query.isEmpty() ||
+            chat.title.contains(query, ignoreCase = true) ||
+            workspacesById[chat.workspaceId]?.name?.contains(query, ignoreCase = true) == true
+    }
+    return AidenWorkspaceSidebarProjection(sections, recents)
+}
 
 fun aidenRelativeTimestamp(updatedAt: Instant, now: Instant = Instant.now()): String {
     val seconds = Duration.between(updatedAt, now).seconds.coerceAtLeast(0)

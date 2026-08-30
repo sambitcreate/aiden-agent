@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.FolderSpecial
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.WifiOff
@@ -40,6 +41,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -57,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,6 +72,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -79,17 +85,21 @@ import sbtbiswas.AidenOnTheGo.models.AidenChat
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
+import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
+private const val AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT = 20
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AidenWorkspaceShellScreen(
     coordinator: AidenRemoteCoordinator,
     viewModel: AidenWorkspaceHomeViewModel,
+    navigationStore: AidenProductNavigationStore,
     onNavigateToChat: (String) -> Unit,
     onNavigateToFiles: (String) -> Unit,
     onNavigateToGit: (String) -> Unit,
@@ -108,6 +118,7 @@ fun AidenWorkspaceShellScreen(
             AidenWorkspaceDestination.HOME -> AidenWorkspaceHome(
                 coordinator = coordinator,
                 viewModel = viewModel,
+                navigationStore = navigationStore,
                 productSwitcher = productSwitcher,
                 onOpenSettings = onOpenSettings,
                 onOpenDirectory = { destination = AidenWorkspaceDestination.DIRECTORY },
@@ -129,6 +140,7 @@ fun AidenWorkspaceShellScreen(
 private fun AidenWorkspaceHome(
     coordinator: AidenRemoteCoordinator,
     viewModel: AidenWorkspaceHomeViewModel,
+    navigationStore: AidenProductNavigationStore,
     productSwitcher: @Composable () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDirectory: () -> Unit,
@@ -139,6 +151,7 @@ private fun AidenWorkspaceHome(
     val snackbarHostState = remember { SnackbarHostState() }
     val client by coordinator.client.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
+    val hasCompletedWorkspaceRefresh by coordinator.hasCompletedWorkspaceRefresh.collectAsState()
     val workspaces by coordinator.workspaces.collectAsState()
     val archivedByInstance by coordinator.archiveStore.workspaceIDsByInstance.collectAsState()
     val chats by viewModel.chats.collectAsState()
@@ -158,6 +171,23 @@ private fun AidenWorkspaceHome(
     var showScratchConfirmation by rememberSaveable { mutableStateOf(false) }
     var workspaceName by rememberSaveable { mutableStateOf("") }
     var creationStatus by remember { mutableStateOf<String?>(null) }
+    val activeInstanceId = coordinator.activeInstanceId
+    var sidebarOrganizationRaw by rememberSaveable(activeInstanceId) {
+        mutableStateOf(
+            activeInstanceId?.let(navigationStore::workspaceSidebarOrganization)?.name
+                ?: AidenWorkspaceSidebarOrganization.WORKSPACE.name
+        )
+    }
+    var expandedWorkspaceIds by rememberSaveable(activeInstanceId) {
+        mutableStateOf(
+            activeInstanceId?.let(navigationStore::expandedSidebarWorkspaceIds)?.toList()
+                ?: emptyList()
+        )
+    }
+    var fullyRevealedWorkspaceIds by rememberSaveable(activeInstanceId) {
+        mutableStateOf(emptyList<String>())
+    }
+    var showSidebarOrganizationMenu by remember { mutableStateOf(false) }
     val usageSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val archivedIds = coordinator.activeInstanceId?.let { archivedByInstance[it] }.orEmpty()
@@ -165,11 +195,11 @@ private fun AidenWorkspaceHome(
         workspaces.filterNot { archivedIds.contains(it.id) }
     }
     val activeById = remember(activeWorkspaces) { activeWorkspaces.associateBy { it.id } }
-    val visibleChats = remember(chats, activeById, searchQuery) {
-        chats.filter { chat ->
-            activeById.containsKey(chat.workspaceId) &&
-                (searchQuery.isBlank() || chat.title.contains(searchQuery.trim(), ignoreCase = true))
-        }
+    val sidebarOrganization = runCatching {
+        AidenWorkspaceSidebarOrganization.valueOf(sidebarOrganizationRaw)
+    }.getOrDefault(AidenWorkspaceSidebarOrganization.WORKSPACE)
+    val sidebarProjection = remember(activeWorkspaces, chats, searchQuery) {
+        projectAidenWorkspaceSidebar(activeWorkspaces, chats, searchQuery)
     }
 
     LaunchedEffect(workspaces, client, connectionState) {
@@ -178,6 +208,27 @@ private fun AidenWorkspaceHome(
     }
     LaunchedEffect(errorMessage) {
         errorMessage?.let { snackbarHostState.showSnackbar(it, actionLabel = "Retry") }
+    }
+    LaunchedEffect(
+        activeInstanceId,
+        activeWorkspaces.map(AidenWorkspace::id),
+        connectionState,
+        hasCompletedWorkspaceRefresh
+    ) {
+        val instanceId = activeInstanceId ?: return@LaunchedEffect
+        if (connectionState != AidenConnectionState.CONNECTED || !hasCompletedWorkspaceRefresh) {
+            return@LaunchedEffect
+        }
+        val validIds = activeWorkspaces.map(AidenWorkspace::id).toSet()
+        var reconciled = expandedWorkspaceIds.filter(validIds::contains).toSet()
+        if (reconciled.isEmpty() && activeWorkspaces.isNotEmpty()) {
+            reconciled = setOf(activeWorkspaces.first().id)
+        }
+        if (reconciled != expandedWorkspaceIds.toSet()) {
+            expandedWorkspaceIds = reconciled.toList()
+            navigationStore.setExpandedSidebarWorkspaceIds(instanceId, reconciled)
+        }
+        fullyRevealedWorkspaceIds = fullyRevealedWorkspaceIds.filter(validIds::contains)
     }
 
     fun createChat(workspace: AidenWorkspace, status: String = "Opening chat…") {
@@ -288,40 +339,150 @@ private fun AidenWorkspaceHome(
                             )
                             AidenWorkspaceNavigationRow(
                                 icon = Icons.Outlined.FolderOpen,
-                                title = "Workspaces",
+                                title = "Manage Workspaces",
                                 showsChevron = false,
                                 onClick = onOpenDirectory
                             )
                         }
                     }
-                    item {
+                }
+
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = AidenUi.ScreenGutter, vertical = 12.dp)
+                    ) {
                         Text(
-                            "Chats",
+                            if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                                "Workspaces"
+                            } else {
+                                "Recents"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = palette.foreground,
-                            modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 12.dp)
+                            modifier = Modifier.weight(1f)
                         )
+                        Box {
+                            IconButton(onClick = { showSidebarOrganizationMenu = true }) {
+                                Icon(Icons.Outlined.MoreVert, "Organize sidebar", tint = palette.secondary)
+                            }
+                            DropdownMenu(
+                                expanded = showSidebarOrganizationMenu,
+                                onDismissRequest = { showSidebarOrganizationMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("By workspace") },
+                                    leadingIcon = {
+                                        if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                                            Text("✓", color = palette.accent)
+                                        }
+                                    },
+                                    onClick = {
+                                        sidebarOrganizationRaw =
+                                            AidenWorkspaceSidebarOrganization.WORKSPACE.name
+                                        activeInstanceId?.let {
+                                            navigationStore.setWorkspaceSidebarOrganization(
+                                                it,
+                                                AidenWorkspaceSidebarOrganization.WORKSPACE
+                                            )
+                                        }
+                                        showSidebarOrganizationMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Recent only") },
+                                    leadingIcon = {
+                                        if (sidebarOrganization == AidenWorkspaceSidebarOrganization.RECENT) {
+                                            Text("✓", color = palette.accent)
+                                        }
+                                    },
+                                    onClick = {
+                                        sidebarOrganizationRaw =
+                                            AidenWorkspaceSidebarOrganization.RECENT.name
+                                        activeInstanceId?.let {
+                                            navigationStore.setWorkspaceSidebarOrganization(
+                                                it,
+                                                AidenWorkspaceSidebarOrganization.RECENT
+                                            )
+                                        }
+                                        showSidebarOrganizationMenu = false
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
 
-                if (visibleChats.isEmpty() && !isLoading) {
+                val projectionIsEmpty = if (
+                    sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
+                ) {
+                    sidebarProjection.sections.isEmpty()
+                } else {
+                    sidebarProjection.recents.isEmpty()
+                }
+                if (projectionIsEmpty && !isLoading) {
                     item {
                         AidenEmptyState(
-                            icon = if (isSearching) Icons.Outlined.Search else Icons.Outlined.AddComment,
-                            title = if (isSearching) "No Matching Chats" else "No Chats Yet",
-                            body = if (isSearching) "Try a different search term." else "Start a new Workspace chat to begin.",
+                            icon = if (isSearching) Icons.Outlined.Search else Icons.Outlined.FolderOpen,
+                            title = if (isSearching) {
+                                "No Matches"
+                            } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                                "No Workspaces Yet"
+                            } else {
+                                "No Chats Yet"
+                            },
+                            body = if (isSearching) {
+                                "Try a different search term."
+                            } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                                "Add a workspace to begin."
+                            } else {
+                                "Start a new Workspace chat to begin."
+                            },
                             modifier = Modifier.padding(top = if (isSearching) 80.dp else 32.dp)
                         )
                     }
                 }
 
-                items(visibleChats, key = AidenChat::id) { chat ->
-                    AidenWorkspaceChatRow(
-                        chat = chat,
-                        workspaceName = activeById[chat.workspaceId]?.name.orEmpty(),
-                        onClick = { onNavigateToChat(chat.id) }
-                    )
+                if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                    items(sidebarProjection.sections, key = { it.workspace.id }) { section ->
+                        AidenWorkspaceSidebarSectionRow(
+                            section = section,
+                            expanded = searchQuery.isNotBlank() ||
+                                expandedWorkspaceIds.contains(section.workspace.id),
+                            canCreateChat = connectionState == AidenConnectionState.CONNECTED &&
+                                creationStatus == null,
+                            onToggle = {
+                                val next = expandedWorkspaceIds.toMutableSet()
+                                if (!next.remove(section.workspace.id)) next.add(section.workspace.id)
+                                expandedWorkspaceIds = next.toList()
+                                activeInstanceId?.let {
+                                    navigationStore.setExpandedSidebarWorkspaceIds(it, next)
+                                }
+                            },
+                            onCreateChat = { createChat(section.workspace) },
+                            onNavigateToChat = onNavigateToChat,
+                            revealsAllChats = fullyRevealedWorkspaceIds.contains(
+                                section.workspace.id
+                            ),
+                            onRevealAllChats = {
+                                fullyRevealedWorkspaceIds =
+                                    fullyRevealedWorkspaceIds + section.workspace.id
+                            }
+                        )
+                    }
+                } else {
+                    items(sidebarProjection.recents, key = AidenChat::id) { chat ->
+                        AidenWorkspaceChatRow(
+                            chat = chat,
+                            workspaceName = activeById[chat.workspaceId]?.name.orEmpty(),
+                            showsWorkspaceName = true,
+                            indented = false,
+                            onClick = { onNavigateToChat(chat.id) }
+                        )
+                    }
                 }
             }
 
@@ -577,13 +738,155 @@ private fun AidenWorkspaceNavigationRow(
 }
 
 @Composable
-private fun AidenWorkspaceChatRow(chat: AidenChat, workspaceName: String, onClick: () -> Unit) {
+internal fun AidenWorkspaceSidebarSectionRow(
+    section: AidenWorkspaceSidebarSection,
+    expanded: Boolean,
+    canCreateChat: Boolean,
+    onToggle: () -> Unit,
+    onCreateChat: () -> Unit,
+    onNavigateToChat: (String) -> Unit,
+    revealsAllChats: Boolean = false,
+    onRevealAllChats: () -> Unit = {}
+) {
+    val palette = AidenTheme.palette
+    val visibleChats = if (revealsAllChats) {
+        section.chats
+    } else {
+        section.chats.take(AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT)
+    }
+    val remainingChatCount = section.chats.size - visibleChats.size
+    Column(Modifier.fillMaxWidth()) {
+        Surface(
+            onClick = onToggle,
+            color = Color.Transparent,
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 1.dp)
+                .testTag("workspace_disclosure_${section.workspace.id}")
+                .semantics {
+                    stateDescription = if (expanded) "Expanded" else "Collapsed"
+                }
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    if (expanded) "⌄" else "›",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = palette.secondary,
+                    modifier = Modifier.width(18.dp)
+                )
+                Icon(
+                    Icons.Outlined.FolderOpen,
+                    contentDescription = null,
+                    tint = palette.accent,
+                    modifier = Modifier.size(21.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    section.workspace.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.foreground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (section.chats.isNotEmpty()) {
+                    Text(
+                        section.chats.size.toString(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.secondary
+                    )
+                }
+            }
+        }
+
+        if (expanded) {
+            visibleChats.forEach { chat ->
+                key(chat.id) {
+                    AidenWorkspaceChatRow(
+                        chat = chat,
+                        workspaceName = section.workspace.name,
+                        showsWorkspaceName = false,
+                        indented = true,
+                        onClick = { onNavigateToChat(chat.id) }
+                    )
+                }
+            }
+            if (section.chats.isEmpty()) {
+                Surface(
+                    onClick = onCreateChat,
+                    enabled = canCreateChat,
+                    color = Color.Transparent,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.AddComment,
+                            contentDescription = null,
+                            tint = palette.secondary,
+                            modifier = Modifier.size(19.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "New chat",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = palette.secondary
+                        )
+                    }
+                }
+            }
+            if (remainingChatCount > 0) {
+                Surface(
+                    onClick = onRevealAllChats,
+                    color = Color.Transparent,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
+                ) {
+                    Text(
+                        "Show $remainingChatCount more",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.secondary,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AidenWorkspaceChatRow(
+    chat: AidenChat,
+    workspaceName: String,
+    showsWorkspaceName: Boolean,
+    indented: Boolean,
+    onClick: () -> Unit
+) {
     val palette = AidenTheme.palette
     Surface(
         onClick = onClick,
         color = Color.Transparent,
         shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 1.dp)
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = if (indented) 42.dp else 14.dp,
+                end = 14.dp,
+                top = 1.dp,
+                bottom = 1.dp
+            )
     ) {
         Row(
             verticalAlignment = Alignment.Top,
@@ -598,8 +901,16 @@ private fun AidenWorkspaceChatRow(chat: AidenChat, workspaceName: String, onClic
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(3.dp))
-                Text(workspaceName, style = MaterialTheme.typography.bodySmall, color = palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (showsWorkspaceName) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        workspaceName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             Spacer(Modifier.width(12.dp))
             Text(aidenRelativeTimestamp(chat.updatedAt), style = MaterialTheme.typography.labelMedium, color = palette.secondary)

@@ -1,5 +1,7 @@
 import SwiftUI
 
+private let aidenWorkspaceSidebarPreviewLimit = 20
+
 enum AidenRelativeTimestamp {
     static func text(for date: Date, now: Date = Date()) -> String {
         let elapsed = max(0, now.timeIntervalSince(date))
@@ -276,14 +278,77 @@ enum AidenWorkspaceNavigation {
         enteringFromSplit: Bool,
         current: [String],
         selectedWorkspaceID: String?,
-        workspaceIDs: [String]
+        workspaceIDs: [String],
+        preservingSelectedChat: Bool = false
     ) -> [String] {
+        if preservingSelectedChat { return [] }
         let current = reconciledCompactPath(current: current, workspaceIDs: workspaceIDs)
         if !current.isEmpty { return current }
         guard enteringFromSplit,
               let selectedWorkspaceID,
               workspaceIDs.contains(selectedWorkspaceID) else { return [] }
         return [selectedWorkspaceID]
+    }
+}
+
+enum AidenWorkspaceSidebarOrganization: String, Codable, Equatable {
+    case workspace
+    case recent
+}
+
+struct AidenWorkspaceSidebarSection: Identifiable, Equatable {
+    let workspace: AidenWorkspace
+    let chats: [AidenChat]
+    let newestActivityAt: Date
+
+    var id: String { workspace.id }
+}
+
+struct AidenWorkspaceSidebarProjection: Equatable {
+    let sections: [AidenWorkspaceSidebarSection]
+    let recents: [AidenChat]
+
+    static func make(
+        workspaces: [AidenWorkspace],
+        chats: [AidenChat],
+        searchText: String
+    ) -> Self {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspaceByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
+        let regularChats = chats
+            .filter { !$0.isBotChat && workspaceByID[$0.workspaceId] != nil }
+            .sorted { left, right in
+                left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
+            }
+        let chatsByWorkspace = Dictionary(grouping: regularChats, by: \AidenChat.workspaceId)
+        let sections = workspaces.compactMap { workspace -> AidenWorkspaceSidebarSection? in
+            let allChats = chatsByWorkspace[workspace.id] ?? []
+            let workspaceMatches = !query.isEmpty && workspace.name.localizedCaseInsensitiveContains(query)
+            let visibleChats = query.isEmpty || workspaceMatches
+                ? allChats
+                : allChats.filter { $0.title.localizedCaseInsensitiveContains(query) }
+            guard query.isEmpty || workspaceMatches || !visibleChats.isEmpty else { return nil }
+            return AidenWorkspaceSidebarSection(
+                workspace: workspace,
+                chats: visibleChats,
+                newestActivityAt: max(workspace.updatedAt, allChats.first?.updatedAt ?? .distantPast)
+            )
+        }
+        .sorted { left, right in
+            if left.newestActivityAt != right.newestActivityAt {
+                return left.newestActivityAt > right.newestActivityAt
+            }
+            if left.workspace.name != right.workspace.name {
+                return left.workspace.name.localizedStandardCompare(right.workspace.name) == .orderedAscending
+            }
+            return left.workspace.id < right.workspace.id
+        }
+        let recents = regularChats.filter { chat in
+            guard !query.isEmpty else { return true }
+            return chat.title.localizedCaseInsensitiveContains(query)
+                || workspaceByID[chat.workspaceId]?.name.localizedCaseInsensitiveContains(query) == true
+        }
+        return Self(sections: sections, recents: recents)
     }
 }
 
@@ -401,9 +466,10 @@ struct AidenWorkspaceShellView: View {
     @State private var isShowingAppSettings = false
     @State private var isShowingScheduledTasks = false
     @State private var isShowingUsage = false
-    @State private var intentChat: AidenChat?
-    @State private var intentStartsVoice = false
+    @State private var selectedSidebarChat: AidenChat?
+    @State private var selectedSidebarChatStartsVoice = false
     @State private var homeModel = AidenHomeModel()
+    @State private var fullyRevealedSidebarWorkspaceIDs: Set<String> = []
     @State private var searchText = ""
     @State private var isSearching = false
     @State private var isShowingNewAgentChoices = false
@@ -471,6 +537,22 @@ struct AidenWorkspaceShellView: View {
         activeWorkspaces.map(\.id)
     }
 
+    private var sidebarOrganization: AidenWorkspaceSidebarOrganization {
+        navigationStore.workspaceSidebarOrganization(for: coordinator.activeInstanceId)
+    }
+
+    private var expandedSidebarWorkspaceIDs: Set<String> {
+        navigationStore.expandedSidebarWorkspaceIDs(for: coordinator.activeInstanceId)
+    }
+
+    private var sidebarProjection: AidenWorkspaceSidebarProjection {
+        AidenWorkspaceSidebarProjection.make(
+            workspaces: activeWorkspaces,
+            chats: homeModel.chats,
+            searchText: searchText
+        )
+    }
+
     var body: some View {
         Group {
             if usesSplitNavigation {
@@ -479,7 +561,20 @@ struct AidenWorkspaceShellView: View {
                         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
                 } detail: {
                     NavigationStack {
-                        workspaceDetail(workspaceID: selectedWorkspaceId)
+                        if let selectedSidebarChat {
+                            AidenChatDetailView(
+                                coordinator: coordinator,
+                                chat: selectedSidebarChat,
+                                autoStartVoice: selectedSidebarChatStartsVoice,
+                                onChatUpdated: { updated in
+                                    homeModel.accept(updated)
+                                    self.selectedSidebarChat = updated
+                                }
+                            )
+                            .id(selectedSidebarChat.id)
+                        } else {
+                            workspaceDetail(workspaceID: selectedWorkspaceId)
+                        }
                     }
                 }
                 .navigationSplitViewStyle(.balanced)
@@ -488,6 +583,25 @@ struct AidenWorkspaceShellView: View {
                     compactWorkspaceSidebar
                         .navigationDestination(for: String.self) { workspaceID in
                             workspaceDetail(workspaceID: workspaceID)
+                        }
+                        .navigationDestination(
+                            isPresented: Binding(
+                                get: { selectedSidebarChat != nil },
+                                set: { if !$0 { clearSelectedSidebarChat() } }
+                            )
+                        ) {
+                            if let selectedSidebarChat {
+                                AidenChatDetailView(
+                                    coordinator: coordinator,
+                                    chat: selectedSidebarChat,
+                                    autoStartVoice: selectedSidebarChatStartsVoice,
+                                    onChatUpdated: { updated in
+                                        homeModel.accept(updated)
+                                        self.selectedSidebarChat = updated
+                                    }
+                                )
+                                .id(selectedSidebarChat.id)
+                            }
                         }
                 }
             }
@@ -563,21 +677,6 @@ struct AidenWorkspaceShellView: View {
                 }
             }
         }
-        .sheet(item: $intentChat) { chat in
-            NavigationStack {
-                AidenChatDetailView(
-                    coordinator: coordinator,
-                    chat: chat,
-                    autoStartVoice: intentStartsVoice,
-                    onChatUpdated: { homeModel.accept($0) }
-                )
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { intentChat = nil }
-                    }
-                }
-            }
-        }
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -608,13 +707,23 @@ struct AidenWorkspaceShellView: View {
         .onChange(of: coordinator.workspaceSnapshotRevision) { _, _ in
             syncArchivedWorkspaceProjection()
             reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            navigationStore.pruneExpandedSidebarWorkspaces(
+                validWorkspaceIDs: Set(activeWorkspaceIDs),
+                for: coordinator.activeInstanceId
+            )
         }
         .onChange(of: archivedWorkspaceIDs) { _, _ in
             syncArchivedWorkspaceProjection()
             reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            navigationStore.pruneExpandedSidebarWorkspaces(
+                validWorkspaceIDs: Set(activeWorkspaceIDs),
+                for: coordinator.activeInstanceId
+            )
         }
         .onChange(of: coordinator.activeInstanceId) { _, _ in
             isShowingScheduledTasks = false
+            clearSelectedSidebarChat()
+            fullyRevealedSidebarWorkspaceIDs = []
             syncArchivedWorkspaceProjection()
             if coordinator.connectionState == .connected {
                 reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
@@ -637,13 +746,24 @@ struct AidenWorkspaceShellView: View {
                     enteringFromSplit: wasSplit,
                     current: compactWorkspacePath,
                     selectedWorkspaceID: selectedWorkspaceId,
-                    workspaceIDs: workspaceIDs
+                    workspaceIDs: workspaceIDs,
+                    preservingSelectedChat: selectedSidebarChat != nil
                 )
             }
         }
         .task {
             syncArchivedWorkspaceProjection()
             reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            navigationStore.ensureExpandedSidebarWorkspace(
+                selectedWorkspaceId,
+                for: coordinator.activeInstanceId
+            )
+            if coordinator.connectionState == .connected {
+                navigationStore.pruneExpandedSidebarWorkspaces(
+                    validWorkspaceIDs: Set(activeWorkspaceIDs),
+                    for: coordinator.activeInstanceId
+                )
+            }
         }
         .task(id: AidenNavigationResolutionID(
             request: navigationRequest,
@@ -660,8 +780,22 @@ struct AidenWorkspaceShellView: View {
 
     private var regularWorkspaceSidebar: some View {
         ZStack(alignment: .bottomTrailing) {
-            homeList { chat in
-                Button { intentChat = chat } label: { homeChatRow(chat) }
+            homeList { workspace in
+                Button {
+                    navigate(to: workspace.id)
+                } label: {
+                    Image(systemName: "arrow.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(workspace.name)")
+            } chatRow: { chat in
+                Button { openChat(chat) } label: {
+                    homeChatRow(chat, showsWorkspace: sidebarOrganization == .recent)
+                }
                     .buttonStyle(.plain)
             }
             if !isSearching {
@@ -676,16 +810,24 @@ struct AidenWorkspaceShellView: View {
 
     private var compactWorkspaceSidebar: some View {
         ZStack(alignment: .bottomTrailing) {
-            homeList { chat in
-                NavigationLink {
-                    AidenChatDetailView(
-                        coordinator: coordinator,
-                        chat: chat,
-                        onChatUpdated: { homeModel.accept($0) }
-                    )
-                } label: {
-                    homeChatRow(chat)
+            homeList { workspace in
+                NavigationLink(value: workspace.id) {
+                    Image(systemName: "arrow.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(workspace.name)")
+            } chatRow: { chat in
+                Button { openChat(chat) } label: {
+                    homeChatRow(
+                        chat,
+                        showsWorkspace: sidebarOrganization == .recent
+                    )
+                }
+                .buttonStyle(.plain)
             }
             if !isSearching {
                 newAgentButton
@@ -697,16 +839,8 @@ struct AidenWorkspaceShellView: View {
         .animation(.smooth(duration: 0.24, extraBounce: 0), value: isSearching)
     }
 
-    private var filteredChats: [AidenChat] {
-        let activeWorkspaceIDSet = Set(activeWorkspaceIDs)
-        let visibleChats = homeModel.chats.filter {
-            !$0.isBotChat && activeWorkspaceIDSet.contains($0.workspaceId)
-        }
-        guard !searchText.isEmpty else { return visibleChats }
-        return visibleChats.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
-    }
-
-    private func homeList<ChatRow: View>(
+    private func homeList<WorkspaceDestination: View, ChatRow: View>(
+        @ViewBuilder workspaceDestination: @escaping (AidenWorkspace) -> WorkspaceDestination,
         @ViewBuilder chatRow: @escaping (AidenChat) -> ChatRow
     ) -> some View {
         List {
@@ -723,19 +857,117 @@ struct AidenWorkspaceShellView: View {
                     .listRowBackground(palette.canvas)
             }
 
-            if !isSearching {
-                Text("Chats")
+            HStack(spacing: 12) {
+                Text(sidebarOrganization == .workspace ? "Workspaces" : "Recents")
                     .font(.title3.bold())
                     .foregroundStyle(palette.foreground)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 26)
-                    .padding(.bottom, 10)
-                    .listRowInsets(EdgeInsets())
+
+                Spacer(minLength: 8)
+
+                sidebarOrganizationMenu
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, isSearching ? 10 : 26)
+            .padding(.bottom, 10)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(palette.canvas)
+
+            if sidebarOrganization == .workspace, sidebarProjection.sections.isEmpty,
+               !homeModel.isLoading {
+                ContentUnavailableView(
+                    searchText.isEmpty ? "No Workspaces Yet" : "No Matching Workspaces",
+                    systemImage: searchText.isEmpty ? "folder" : "magnifyingglass",
+                    description: Text(searchText.isEmpty
+                        ? "Add a workspace to begin."
+                        : "Try a different search term.")
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+            } else if sidebarOrganization == .workspace {
+                ForEach(sidebarProjection.sections) { section in
+                    let expanded = !searchText.isEmpty
+                        || expandedSidebarWorkspaceIDs.contains(section.workspace.id)
+                    let revealsAll = fullyRevealedSidebarWorkspaceIDs.contains(section.workspace.id)
+                    let visibleChats = revealsAll
+                        ? section.chats
+                        : Array(section.chats.prefix(aidenWorkspaceSidebarPreviewLimit))
+                    let remainingChatCount = section.chats.count - visibleChats.count
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Button {
+                                navigationStore.toggleExpandedSidebarWorkspace(
+                                    section.workspace.id,
+                                    for: coordinator.activeInstanceId
+                                )
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(palette.secondary)
+                                        .frame(width: 12)
+                                    Image(systemName: section.workspace.hasFolder ? "folder" : "tray")
+                                        .font(.body.weight(.medium))
+                                        .foregroundStyle(palette.accent)
+                                        .frame(width: 22)
+                                    Text(section.workspace.name)
+                                        .font(.headline.weight(.semibold))
+                                        .foregroundStyle(palette.foreground)
+                                        .lineLimit(1)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(
+                                "\(expanded ? "Collapse" : "Expand") \(section.workspace.name)"
+                            )
+
+                            workspaceDestination(section.workspace)
+                        }
+
+                        if expanded {
+                            ForEach(visibleChats) { chat in
+                                chatRow(chat)
+                                    .padding(.leading, 30)
+                            }
+                            if section.chats.isEmpty {
+                                Button {
+                                    Task { await createNewAgent(in: section.workspace) }
+                                } label: {
+                                    Label("New chat", systemImage: "square.and.pencil")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(palette.secondary)
+                                        .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+                                        .padding(.leading, 34)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(
+                                    coordinator.connectionState != .connected
+                                        || coordinator.isMutating
+                                        || isCreatingAgent
+                                )
+                            }
+                            if remainingChatCount > 0 {
+                                Button {
+                                    fullyRevealedSidebarWorkspaceIDs.insert(section.workspace.id)
+                                } label: {
+                                    Text("Show (remainingChatCount) more")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(palette.secondary)
+                                        .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+                                        .padding(.leading, 34)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                     .listRowSeparator(.hidden)
                     .listRowBackground(palette.canvas)
-            }
-
-            if filteredChats.isEmpty, !homeModel.isLoading {
+                }
+            } else if sidebarProjection.recents.isEmpty, !homeModel.isLoading {
                 ContentUnavailableView(
                     searchText.isEmpty ? "No Chats Yet" : "No Matching Chats",
                     systemImage: searchText.isEmpty ? "bubble.left" : "magnifyingglass",
@@ -747,7 +979,7 @@ struct AidenWorkspaceShellView: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(palette.canvas)
             } else {
-                ForEach(filteredChats) { chat in
+                ForEach(sidebarProjection.recents) { chat in
                     chatRow(chat)
                         .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                         .listRowSeparator(.hidden)
@@ -766,6 +998,34 @@ struct AidenWorkspaceShellView: View {
             await homeModel.load(coordinator: coordinator)
         }
         .overlay { if homeModel.isLoading && homeModel.chats.isEmpty { ProgressView() } }
+    }
+
+    private var sidebarOrganizationMenu: some View {
+        Menu {
+            Picker("Organize sidebar", selection: Binding(
+                get: { sidebarOrganization },
+                set: {
+                    navigationStore.setWorkspaceSidebarOrganization(
+                        $0,
+                        for: coordinator.activeInstanceId
+                    )
+                }
+            )) {
+                Label("By workspace", systemImage: "list.bullet.indent").tag(
+                    AidenWorkspaceSidebarOrganization.workspace
+                )
+                Label("Recent only", systemImage: "clock").tag(
+                    AidenWorkspaceSidebarOrganization.recent
+                )
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(palette.secondary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Organize sidebar")
     }
 
     private var homeHeader: some View {
@@ -900,7 +1160,7 @@ struct AidenWorkspaceShellView: View {
         .contentShape(Rectangle())
     }
 
-    private func homeChatRow(_ chat: AidenChat) -> some View {
+    private func homeChatRow(_ chat: AidenChat, showsWorkspace: Bool) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(chat.title)
@@ -908,7 +1168,8 @@ struct AidenWorkspaceShellView: View {
                     .foregroundStyle(palette.foreground)
                     .lineLimit(2)
 
-                if let workspace = coordinator.workspaces.first(where: { $0.id == chat.workspaceId }) {
+                if showsWorkspace,
+                   let workspace = coordinator.workspaces.first(where: { $0.id == chat.workspaceId }) {
                     Text(workspace.name)
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
@@ -1077,8 +1338,7 @@ struct AidenWorkspaceShellView: View {
             }
             await homeModel.load(coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return }
-            navigate(to: workspace.id)
-            intentChat = chat
+            openChat(chat)
             coordinator.haptics.play(
                 completionFeedback,
                 scope: hapticScope,
@@ -1128,9 +1388,28 @@ struct AidenWorkspaceShellView: View {
         }
     }
 
-    private func navigate(to workspaceID: String) {
+    private func openChat(_ chat: AidenChat, startsVoice: Bool = false) {
+        guard activeWorkspaceIDs.contains(chat.workspaceId) else { return }
+        selectedWorkspaceId = chat.workspaceId
+        navigationStore.ensureExpandedSidebarWorkspace(
+            chat.workspaceId,
+            for: coordinator.activeInstanceId
+        )
+        if !usesSplitNavigation { compactWorkspacePath = [] }
+        selectedSidebarChatStartsVoice = startsVoice
+        selectedSidebarChat = chat
+    }
+
+    private func navigate(to workspaceID: String, clearsSelectedChat: Bool = true) {
         guard activeWorkspaceIDs.contains(workspaceID) else { return }
+        if clearsSelectedChat {
+            clearSelectedSidebarChat()
+        }
         selectedWorkspaceId = workspaceID
+        navigationStore.ensureExpandedSidebarWorkspace(
+            workspaceID,
+            for: coordinator.activeInstanceId
+        )
         if !usesSplitNavigation {
             compactWorkspacePath = [workspaceID]
         }
@@ -1145,6 +1424,10 @@ struct AidenWorkspaceShellView: View {
 
     private func reconcileNavigation(workspaceIDs: [String]) {
         if coordinator.connectionState == .connecting, workspaceIDs.isEmpty { return }
+        if let selectedSidebarChat, !workspaceIDs.contains(selectedSidebarChat.workspaceId) {
+            clearSelectedSidebarChat()
+        }
+        fullyRevealedSidebarWorkspaceIDs.formIntersection(workspaceIDs)
         selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
             current: selectedWorkspaceId,
             workspaceIDs: workspaceIDs
@@ -1153,6 +1436,11 @@ struct AidenWorkspaceShellView: View {
             current: compactWorkspacePath,
             workspaceIDs: workspaceIDs
         )
+    }
+
+    private func clearSelectedSidebarChat() {
+        selectedSidebarChat = nil
+        selectedSidebarChatStartsVoice = false
     }
 
     private func syncArchivedWorkspaceProjection() {
@@ -1219,8 +1507,7 @@ struct AidenWorkspaceShellView: View {
                 navigate(to: chat.workspaceId)
             }
             guard coordinator.isCurrent(context) else { return }
-            intentStartsVoice = request.startsVoice
-            intentChat = chat
+            openChat(chat, startsVoice: request.startsVoice)
         } catch {
             guard coordinator.isCurrent(context) else { return }
             coordinator.presentedError = error.localizedDescription
