@@ -1843,6 +1843,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
         displayedStreamingArtifacts.length,
       ]}
       showScrollToBottomButton
+      scrollToBottomButtonOffset={
+        todoSnapshot?.availability === "unavailable" ||
+        todoSnapshot?.tasks.some(
+          (task) => task.status !== "deleted" && task.status !== "completed",
+        )
+          ? 44
+          : 0
+      }
       footer={
         <>
           <EventPresence

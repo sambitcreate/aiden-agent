@@ -1,42 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  ADVISOR_DISCLOSURE_VERSION,
-  emptyAdvisorConfiguration,
-  parseAdvisorConfiguration,
-  parseAdvisorSelection,
-} from "./advisor.js";
+import { parseAdvisorSelection } from "./advisor.js";
 
-test("advisor configuration parser is strict and versioned", () => {
+test("one-call advisor selection parser is strict and never carries persisted policy", () => {
   const selection = {
     providerId: "anthropic",
     modelId: "claude-reviewer",
     effort: "high",
-    disabledForExecutors: [{ providerId: "openai", modelId: "strong", minEffort: "high" }],
-    disclosureVersion: ADVISOR_DISCLOSURE_VERSION,
   };
   assert.deepEqual(parseAdvisorSelection(selection), selection);
-  assert.deepEqual(
-    parseAdvisorConfiguration({
-      version: 1,
-      selection,
-      disabledForExecutors: selection.disabledForExecutors,
-    }),
-    { version: 1, selection, disabledForExecutors: selection.disabledForExecutors },
-  );
   assert.equal(parseAdvisorSelection({ ...selection, future: true }), undefined);
   assert.equal(parseAdvisorSelection({ ...selection, effort: "ultra" }), undefined);
+  assert.equal(parseAdvisorSelection({ providerId: "anthropic" }), undefined);
   assert.equal(
-    parseAdvisorConfiguration({ version: 2, selection: null, disabledForExecutors: [] }),
-    null,
+    parseAdvisorSelection({ ...selection, providerId: "anthropic\u202Eoverride" }),
+    undefined,
   );
-  assert.equal(
-    parseAdvisorConfiguration({ version: 1, selection, disabledForExecutors: [] }),
-    null,
-  );
-  assert.deepEqual(emptyAdvisorConfiguration(), {
-    version: 1,
-    selection: null,
-    disabledForExecutors: [],
-  });
+  assert.equal(parseAdvisorSelection({ ...selection, modelId: "claude\u2028reviewer" }), undefined);
+  assert.equal(parseAdvisorSelection(null), undefined);
 });

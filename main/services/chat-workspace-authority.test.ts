@@ -101,12 +101,12 @@ test("generation initialization persists terminal outcomes before releasing owne
   assert.equal(failurePersists?.length, 3);
 
   for (const status of ["cancelled", "failed"] as const) {
-    const persistIndex = startSource.indexOf(
+    const persistMatch =
       status === "cancelled"
-        ? 'await persistInitializationTerminal(\n          "cancelled"'
-        : 'await persistInitializationTerminal("failed")',
-    );
-    assert.ok(persistIndex >= 0);
+        ? /await persistInitializationTerminal\(\s*"cancelled"/u.exec(startSource)
+        : /await persistInitializationTerminal\("failed"\)/u.exec(startSource);
+    assert.ok(persistMatch?.index !== undefined);
+    const persistIndex = persistMatch.index;
     const cleanupIndex = startSource.indexOf(
       "releaseGenerationSkillReservation(initialization)",
       persistIndex,

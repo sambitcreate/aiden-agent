@@ -1,8 +1,12 @@
 import { logger } from "../platform.js";
 import { AdvisorAttemptStore } from "./advisor-attempt-store.js";
-import { AdvisorRuntime } from "./advisor-runtime.js";
-import { AdvisorSettingsStore } from "./advisor-settings-store.js";
+import {
+  AdvisorRuntime,
+  advisorCandidatesFromProviders,
+  type AdvisorCandidate,
+} from "./advisor-runtime.js";
 import { resolveModelRuntime } from "./model-runtime.js";
+import { listConfiguredProviders } from "./provider-list-main.js";
 import {
   assistantUsageRecord,
   isLocalModelProvider,
@@ -10,12 +14,15 @@ import {
 } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 
-export const advisorSettingsStore = new AdvisorSettingsStore();
 export const advisorAttemptStore = new AdvisorAttemptStore();
 
+export async function listAdvisorCandidates(): Promise<AdvisorCandidate[]> {
+  return advisorCandidatesFromProviders(await listConfiguredProviders());
+}
+
 export const advisorRuntime = new AdvisorRuntime({
-  settings: advisorSettingsStore,
   attempts: advisorAttemptStore,
+  listCandidates: listAdvisorCandidates,
   resolveRuntime: resolveModelRuntime,
   recordUsage: async (message, runtime) => {
     await usageStore.record(
@@ -46,3 +53,11 @@ export const advisorRuntime = new AdvisorRuntime({
     });
   },
 });
+
+export function initializeAdvisorRuntime(): void {
+  void advisorRuntime.initialize().catch((error) => {
+    logger.warn("advisor", "Advisor attempt recovery failed during startup.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}

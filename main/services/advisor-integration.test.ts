@@ -36,10 +36,27 @@ test("Advisor receives authoritative surface, mode, executor, and tool inventory
   assert.match(hook, /modelId: model\.id/u);
   assert.match(hook, /effort: thinkingLevel/u);
   assert.match(hook, /executorTools: toolsBeforeAdvisor/u);
+  assert.match(hook, /requestQuestionnaire:/u);
+  assert.match(hook, /questionnaires\.request/u);
+  assert.match(hook, /owner\.documentId/u);
 });
 
-test("Advisor no-replay recovery initializes with main handler startup", () => {
-  const handler = readFileSync(new URL("../handlers/advisor.ts", import.meta.url), "utf8");
-  assert.match(handler, /advisorRuntime\.initialize\(\)\.catch/u);
-  assert.ok(handler.indexOf("advisorRuntime.initialize") < handler.indexOf('ipcMain.handle("advisor:get"'));
+test("Advisor no-replay recovery initializes at app handler startup without settings IPC", () => {
+  const registry = readFileSync(new URL("../handlers/index.ts", import.meta.url), "utf8");
+  const runtime = readFileSync(new URL("./advisor-runtime-main.ts", import.meta.url), "utf8");
+  const rendererIpc = readFileSync(new URL("../../renderer/lib/ipc.ts", import.meta.url), "utf8");
+  const modelDataSettings = readFileSync(
+    new URL("../../renderer/components/settings/model-data-settings.tsx", import.meta.url),
+    "utf8",
+  );
+  const channels = readFileSync(
+    new URL("../../renderer/preload-channels.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(registry, /initializeAdvisorRuntime\(\)/u);
+  assert.match(runtime, /advisorRuntime\.initialize\(\)\.catch/u);
+  assert.doesNotMatch(channels, /"advisor:"/u);
+  assert.doesNotMatch(registry, /registerAdvisorHandlers/u);
+  assert.doesNotMatch(rendererIpc, /advisorApi|advisor:get|advisor:set/u);
+  assert.doesNotMatch(modelDataSettings, /AdvisorSettings|advisor-settings/u);
 });

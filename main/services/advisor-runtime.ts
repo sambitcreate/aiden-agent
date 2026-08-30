@@ -6,35 +6,119 @@ import type {
   AgentToolUpdateCallback,
 } from "@earendil-works/pi-agent-core";
 import { Type, type AssistantMessage } from "@earendil-works/pi-ai";
-import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import type {
+  AskUserQuestionResponseV1,
+  AskUserQuestionV1,
+} from "../../renderer/shared/ask-user-question.js";
+import {
+  ASK_USER_MAX_LABEL_LENGTH,
+  parseAskUserQuestions,
+} from "../../renderer/shared/ask-user-question.js";
+import {
+  GENERATION_THINKING_LEVELS,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
 import { parseAdvisorSelection, type AdvisorSelectionV1 } from "../../renderer/shared/advisor.js";
 import { AdvisorAttemptStore, type AdvisorAttemptFailure } from "./advisor-attempt-store.js";
 import { boundedAdvisorText, projectAdvisorContext } from "./advisor-context.js";
-import { AdvisorSettingsStore } from "./advisor-settings-store.js";
 import { resolveGenerationThinkingLevel } from "./generation-runtime.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
+import type { Provider } from "./types.js";
 
 export const ADVISOR_EXTENSION_ID = "aiden.rpiv.advisor";
 export const ADVISOR_TOOL_NAME = "advisor";
 export const ADVISOR_TIMEOUT_MS = 90_000;
+export const MAX_ADVISOR_CANDIDATES = 64;
+export const MAX_ADVISOR_QUESTION_OPTIONS = 4;
+export const MAX_ADVISOR_PROMPT_CANDIDATES = 12;
 
 export const ADVISOR_REVIEWER_SYSTEM_PROMPT =
   "You are a tool-free advisor to another model that is executing the user's task. Read the surviving conversation and executor-tool evidence. Return exactly one concise, directive response: a concrete plan, a correction to the current approach, or a stop signal requiring user input. Never call tools, never address the user, never claim to have performed work, and do not reveal hidden reasoning. Ground guidance in the supplied evidence.";
 
-export const ADVISOR_EXECUTOR_PROMPT =
-  "An advisor tool is available for one optional second opinion during this response. Use it only when stronger judgment would materially reduce risk—for a consequential ambiguity, a non-converging approach, or before an irreversible decision. It takes no parameters and forwards the surviving conversation and tool evidence to the reviewer selected by the user. Do not call it routinely. After a successful consultation, briefly attribute and restate any material guidance in your visible reply; never expose hidden reasoning or dump the raw advisor response.";
+export const ADVISOR_TRANSFER_NOTICE =
+  "Advisor sends bounded surviving conversation, completed tool evidence, a sanitized tool inventory, and supported images to the selected provider in a separate tool-free request. Aiden never attaches provider credentials and applies best-effort credential redaction, but remaining content may still be sensitive.";
 
-const EFFORT_ORDER: readonly GenerationThinkingLevel[] = [
-  "off",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
+const ADVISOR_EXECUTOR_GUIDANCE =
+  "An advisor tool is available for one optional second opinion during this response. Use it only when stronger judgment would materially reduce risk—for a consequential ambiguity, a non-converging approach, or before an irreversible decision. Never silently choose a reviewer. After a successful consultation, briefly attribute and restate both the material guidance and the Advisor transfer notice in your visible reply; never expose hidden reasoning or dump the raw advisor response.";
+
+const THINKING_EFFORTS = GENERATION_THINKING_LEVELS.filter(
+  (level): level is Exclude<GenerationThinkingLevel, "off"> => level !== "off",
+);
+
+export interface AdvisorCandidate {
+  providerId: string;
+  providerLabel: string;
+  modelId: string;
+  modelLabel: string;
+  efforts: readonly Exclude<GenerationThinkingLevel, "off">[];
+}
+
+function boundedLabel(
+  value: string,
+  fallback: string,
+  maximum = ASK_USER_MAX_LABEL_LENGTH,
+): string {
+  const normalized = value
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const points = Array.from(normalized || fallback);
+  return points.length <= maximum ? points.join("") : `${points.slice(0, maximum - 1).join("")}…`;
+}
+
+function normalizeAdvisorCandidate(candidate: AdvisorCandidate): AdvisorCandidate | undefined {
+  const selection = parseAdvisorSelection({
+    providerId: candidate.providerId,
+    modelId: candidate.modelId,
+  });
+  if (!selection) return undefined;
+  return {
+    providerId: selection.providerId,
+    providerLabel: boundedLabel(candidate.providerLabel, selection.providerId),
+    modelId: selection.modelId,
+    modelLabel: boundedLabel(candidate.modelLabel, selection.modelId),
+    efforts: candidate.efforts.filter((effort) => THINKING_EFFORTS.includes(effort)),
+  };
+}
+
+export function advisorCandidatesFromProviders(providers: readonly Provider[]): AdvisorCandidate[] {
+  const candidates: AdvisorCandidate[] = [];
+  const seen = new Set<string>();
+  for (const provider of providers) {
+    if (provider.needsKey && !provider.hasKey) continue;
+    const models = [...provider.models].sort((left, right) => {
+      if (left === provider.defaultModel) return -1;
+      if (right === provider.defaultModel) return 1;
+      return 0;
+    });
+    for (const modelId of models) {
+      const selection = parseAdvisorSelection({ providerId: provider.id, modelId });
+      if (!selection) continue;
+      const key = advisorCandidateKey(selection);
+      if (seen.has(key)) continue;
+      const metadata = provider.modelMetadata?.[modelId];
+      if (isNonChatModel({ model: modelId, metadataType: metadata?.type })) continue;
+      seen.add(key);
+      const efforts = (metadata?.thinkingLevels ?? []).filter(
+        (level): level is Exclude<GenerationThinkingLevel, "off"> => level !== "off",
+      );
+      const candidate = normalizeAdvisorCandidate({
+        providerId: provider.id,
+        providerLabel: provider.label,
+        modelId,
+        modelLabel: metadata?.name?.trim() || modelId,
+        efforts,
+      });
+      if (!candidate) continue;
+      candidates.push(candidate);
+      if (candidates.length >= MAX_ADVISOR_CANDIDATES) return candidates;
+    }
+  }
+  return candidates;
+}
 
 export interface AdvisorGenerationScope {
   usageSource?: string;
@@ -74,22 +158,9 @@ async function preflightAdvisorRuntimeAuth(
   if (signal?.aborted) throw signal.reason;
 }
 
-export function advisorBlockedForExecutor(
-  selection: AdvisorSelectionV1,
-  executor: { providerId: string; modelId: string; effort?: GenerationThinkingLevel },
-): boolean {
-  const actualEffort = EFFORT_ORDER.indexOf(executor.effort ?? "off");
-  return selection.disabledForExecutors.some((rule) => {
-    if (rule.providerId !== executor.providerId || rule.modelId !== executor.modelId) return false;
-    if (rule.minEffort === undefined) return true;
-    const threshold = EFFORT_ORDER.indexOf(rule.minEffort);
-    return threshold >= 0 && actualEffort >= threshold;
-  });
-}
-
 export interface AdvisorRuntimeDependencies {
-  settings: AdvisorSettingsStore;
   attempts: AdvisorAttemptStore;
+  listCandidates(): Promise<readonly AdvisorCandidate[]>;
   resolveRuntime(
     providerId: string,
     modelId: string,
@@ -108,6 +179,11 @@ export interface AdvisorExtensionInput {
   executor: { providerId: string; modelId: string; effort?: GenerationThinkingLevel };
   executorTools: readonly AgentTool[];
   getLiveMessages(toolCallId: string): readonly AgentMessage[];
+  requestQuestionnaire?(
+    toolCallId: string,
+    questions: AskUserQuestionV1[],
+    signal?: AbortSignal,
+  ): Promise<AskUserQuestionResponseV1>;
 }
 
 export interface AdvisorToolDetails {
@@ -143,10 +219,7 @@ function assertAdvisorRuntimeSelection(
   selection: AdvisorSelectionV1,
   runtime: ResolvedModelRuntime,
 ): void {
-  if (
-    runtime.provider.id !== selection.providerId ||
-    runtime.model.id !== selection.modelId
-  ) {
+  if (runtime.provider.id !== selection.providerId || runtime.model.id !== selection.modelId) {
     throw new Error("The resolved advisor identity does not match the selection.");
   }
   if (
@@ -191,88 +264,246 @@ async function withRequestSignal<T>(
   }
 }
 
+function boundedUniqueLabel(
+  value: string,
+  suffix: string,
+  maximum = ASK_USER_MAX_LABEL_LENGTH,
+): string {
+  const suffixPoints = Array.from(suffix);
+  const available = Math.max(1, maximum - suffixPoints.length);
+  return `${Array.from(value).slice(0, available).join("")}${suffix}`;
+}
+
+function advisorCandidateKey(candidate: Pick<AdvisorCandidate, "providerId" | "modelId">): string {
+  return JSON.stringify([candidate.providerId, candidate.modelId]);
+}
+
+function candidateShorthand(candidate: AdvisorCandidate): string {
+  return `${candidate.providerId}/${candidate.modelId}`;
+}
+
+function candidateDescriptor(candidate: Pick<AdvisorCandidate, "providerId" | "modelId">): string {
+  return `providerId=${JSON.stringify(candidate.providerId)} modelId=${JSON.stringify(candidate.modelId)}`;
+}
+
+export function advisorCandidateShortlist(
+  candidates: readonly AdvisorCandidate[],
+  executor: AdvisorExtensionInput["executor"],
+  partial: { providerId?: string; modelId?: string } = {},
+): AdvisorCandidate[] {
+  const seen = new Set<string>();
+  const matching = candidates.filter((candidate) => {
+    if (partial.providerId && candidate.providerId !== partial.providerId) return false;
+    if (partial.modelId && candidate.modelId !== partial.modelId) return false;
+    const key = advisorCandidateKey(candidate);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const alternatives = matching.filter(
+    (candidate) =>
+      candidate.providerId !== executor.providerId || candidate.modelId !== executor.modelId,
+  );
+  const current = matching.filter(
+    (candidate) =>
+      candidate.providerId === executor.providerId && candidate.modelId === executor.modelId,
+  );
+  return [...alternatives, ...current].slice(0, MAX_ADVISOR_QUESTION_OPTIONS);
+}
+
+function questionnaireSelection(
+  response: AskUserQuestionResponseV1,
+  choices: ReadonlyMap<string, AdvisorCandidate>,
+  candidates: readonly AdvisorCandidate[],
+  effort: AdvisorSelectionV1["effort"],
+): AdvisorSelectionV1 | null {
+  if (response.cancelled) return null;
+  const answer = response.answers.find((entry) => entry.questionIndex === 0);
+  if (!answer || answer.kind === "multi") return null;
+  if (answer.kind === "option") {
+    const candidate = choices.get(answer.answer);
+    return candidate
+      ? {
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          ...(effort ? { effort } : {}),
+        }
+      : null;
+  }
+  const custom = answer.answer.trim();
+  const shorthandMatches = candidates.filter(
+    (candidate) =>
+      custom.localeCompare(candidateShorthand(candidate), undefined, {
+        sensitivity: "accent",
+      }) === 0,
+  );
+  if (shorthandMatches.length === 1) {
+    const candidate = shorthandMatches[0]!;
+    return {
+      providerId: candidate.providerId,
+      modelId: candidate.modelId,
+      ...(effort ? { effort } : {}),
+    };
+  }
+  if (shorthandMatches.length > 1) return null;
+  try {
+    const tuple = JSON.parse(custom) as unknown;
+    if (Array.isArray(tuple) && tuple.length === 2) {
+      return (
+        parseAdvisorSelection({
+          providerId: tuple[0],
+          modelId: tuple[1],
+          ...(effort ? { effort } : {}),
+        }) ?? null
+      );
+    }
+  } catch {
+    // Preserve the convenient provider/model shorthand below.
+  }
+  const slash = custom.indexOf("/");
+  return slash > 0 && slash === custom.lastIndexOf("/")
+    ? (parseAdvisorSelection({
+        providerId: custom.slice(0, slash).trim(),
+        modelId: custom.slice(slash + 1).trim(),
+        ...(effort ? { effort } : {}),
+      }) ?? null)
+    : null;
+}
+
+async function chooseAdvisorSelection(
+  parameters: unknown,
+  candidates: readonly AdvisorCandidate[],
+  input: AdvisorExtensionInput,
+  toolCallId: string,
+  signal?: AbortSignal,
+): Promise<AdvisorSelectionV1 | null> {
+  const direct = parseAdvisorSelection(parameters);
+  if (direct) return direct;
+  const partial =
+    parameters && typeof parameters === "object" && !Array.isArray(parameters)
+      ? (parameters as { providerId?: unknown; modelId?: unknown; effort?: unknown })
+      : {};
+  const hasProviderId = partial.providerId !== undefined;
+  const hasModelId = partial.modelId !== undefined;
+  // A malformed or partial exact request must fail closed. The chooser is only
+  // for calls that omitted both identity fields.
+  if (hasProviderId || hasModelId || !input.requestQuestionnaire) return null;
+  const providerId = typeof partial.providerId === "string" ? partial.providerId : undefined;
+  const modelId = typeof partial.modelId === "string" ? partial.modelId : undefined;
+  const effort = THINKING_EFFORTS.find((candidate) => candidate === partial.effort);
+  const shortlist = advisorCandidateShortlist(candidates, input.executor, { providerId, modelId });
+  if (shortlist.length === 0) return null;
+  const labels = new Set<string>(["Continue without Advisor", "Other", "Type something.", "Next"]);
+  const choices = new Map<string, AdvisorCandidate>();
+  const options = shortlist.map((candidate, index) => {
+    const baseLabel = boundedLabel(
+      `${candidate.providerLabel} · ${candidate.modelLabel}`,
+      candidateDescriptor(candidate),
+    );
+    let label = baseLabel;
+    let suffix = index + 2;
+    while (labels.has(label)) {
+      label = boundedUniqueLabel(baseLabel, ` · ${suffix}`);
+      suffix += 1;
+    }
+    labels.add(label);
+    choices.set(label, candidate);
+    return {
+      label,
+      description: `${candidateDescriptor(candidate)} · One tool-free reviewer request.`,
+    };
+  });
+  if (options.length === 1) {
+    options.push({
+      label: "Continue without Advisor",
+      description: "Skip this consultation and let the active model continue on its own.",
+    });
+  }
+  const questions = parseAskUserQuestions([
+    {
+      question: `Which provider and model should Aiden use for this one Advisor consultation? ${ADVISOR_TRANSFER_NOTICE}`,
+      header: "Advisor model",
+      multiSelect: false,
+      options,
+    },
+  ]);
+  if (!questions) return null;
+  const response = await input.requestQuestionnaire(toolCallId, questions, signal);
+  return questionnaireSelection(response, choices, candidates, effort);
+}
+
+function executorPrompt(candidates: readonly AdvisorCandidate[], canAskUser: boolean): string {
+  const catalog = candidates
+    .slice(0, MAX_ADVISOR_PROMPT_CANDIDATES)
+    .map((candidate) => `- ${candidateDescriptor(candidate)}`)
+    .join("\n");
+  const selectionGuidance = canAskUser
+    ? "If the latest user request explicitly names an available reviewer provider and model, first state the Advisor transfer notice visibly, then pass both exact IDs to advisor. Otherwise call advisor without either ID: Aiden will pause and use Ask User Question so the user chooses for this consultation."
+    : "This surface cannot show the Advisor model chooser. Call advisor only when the latest user request explicitly names both exact reviewer IDs; first state the Advisor transfer notice visibly, then pass both IDs. Otherwise do not call advisor.";
+  const omitted = Math.max(0, candidates.length - MAX_ADVISOR_PROMPT_CANDIDATES);
+  const omittedNotice = omitted > 0 ? `\n- …and ${omitted} more configured targets` : "";
+  return `${ADVISOR_EXECUTOR_GUIDANCE}\n\nAdvisor transfer notice: ${ADVISOR_TRANSFER_NOTICE}\n\n${selectionGuidance}\n\nConfigured reviewer targets (exact provider/model IDs):\n${catalog}${omittedNotice}`;
+}
+
 export class AdvisorRuntime {
-  private settingsInitializePromise: Promise<void> | undefined;
   private attemptsInitializePromise: Promise<void> | undefined;
 
   constructor(private readonly dependencies: AdvisorRuntimeDependencies) {}
 
   initialize(): Promise<void> {
-    return Promise.all([this.initializeSettings(), this.initializeAttempts()]).then(
-      () => undefined,
-    );
-  }
-
-  private initializeSettings(): Promise<void> {
-    this.settingsInitializePromise ??= this.dependencies.settings.initialize();
-    return this.settingsInitializePromise;
-  }
-
-  private initializeAttempts(): Promise<void> {
     this.attemptsInitializePromise ??= this.dependencies.attempts.initialize();
     return this.attemptsInitializePromise;
-  }
-
-  async configuration() {
-    await this.initializeSettings();
-    return this.dependencies.settings.get();
-  }
-
-  async setSelection(
-    value: unknown,
-    assertCurrent: () => void = () => undefined,
-  ): Promise<Awaited<ReturnType<AdvisorSettingsStore["get"]>>> {
-    await this.initializeSettings();
-    if (value === null) {
-      assertCurrent();
-      return this.dependencies.settings.setSelection(null, assertCurrent);
-    }
-    // Validate provider/model/effort before publishing the new selection.
-    const selection = parseAdvisorSelection(value);
-    if (!selection) throw new Error("Invalid advisor selection.");
-    const runtime = await this.dependencies.resolveRuntime(selection.providerId, selection.modelId);
-    assertAdvisorRuntimeSelection(selection, runtime);
-    await preflightAdvisorRuntimeAuth(runtime);
-    // Provider/auth resolution is asynchronous. Revalidate the initiating
-    // renderer document immediately before publishing its selection.
-    assertCurrent();
-    return this.dependencies.settings.replaceSelection(selection, assertCurrent);
   }
 
   async extensionForGeneration(
     input: AdvisorExtensionInput,
   ): Promise<PiAgentRuntimeExtension | null> {
-    if (!advisorAllowedForGeneration(input.scope)) {
-      return null;
-    }
-    let selection: AdvisorSelectionV1 | null;
+    if (!advisorAllowedForGeneration(input.scope)) return null;
+    let candidates: readonly AdvisorCandidate[];
     try {
-      await this.initializeSettings();
-      ({ selection } = await this.dependencies.settings.get());
+      const seen = new Set<string>();
+      candidates = (await this.dependencies.listCandidates())
+        .map(normalizeAdvisorCandidate)
+        .filter((candidate): candidate is AdvisorCandidate => {
+          if (!candidate) return false;
+          const key = advisorCandidateKey(candidate);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, MAX_ADVISOR_CANDIDATES);
     } catch (error) {
-      this.dependencies.reportFailure?.("settings", error);
+      this.dependencies.reportFailure?.("catalog", error);
       return null;
     }
-    if (!selection || advisorBlockedForExecutor(selection, input.executor)) return null;
+    if (candidates.length === 0) return null;
     try {
-      await this.initializeAttempts();
+      await this.initialize();
     } catch (error) {
       this.dependencies.reportFailure?.("journal", error);
       return null;
     }
 
     let used = false;
+    const effortSchema = Type.Union(THINKING_EFFORTS.map((effort) => Type.Literal(effort)));
     const tool = declarePiRuntimeReplay(
       {
         name: ADVISOR_TOOL_NAME,
         label: "Advisor",
         description:
-          "Request one tool-free second opinion from the reviewer model selected by the user. Takes no parameters. Aiden forwards the surviving conversation and executor tool evidence automatically. Use only when stronger judgment would materially change the approach.",
-        parameters: Type.Object({}, { additionalProperties: false }),
+          "Request one tool-free second opinion. Pass providerId and modelId only when the user explicitly named the reviewer; otherwise omit them and Aiden will ask the user to choose through Ask User Question.",
+        parameters: Type.Object(
+          {
+            providerId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+            modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+            effort: Type.Optional(effortSchema),
+          },
+          { additionalProperties: false },
+        ),
         executionMode: "sequential" as const,
         execute: async (
           toolCallId: string,
-          _parameters: unknown,
+          parameters: unknown,
           signal?: AbortSignal,
           onUpdate?: AgentToolUpdateCallback<AdvisorToolDetails>,
         ): Promise<AgentToolResult<AdvisorToolDetails>> => {
@@ -282,9 +513,22 @@ export class AdvisorRuntime {
             });
           }
           used = true;
-          const advisorLabel = `${selection.providerId}/${selection.modelId}`;
+          const selection = await chooseAdvisorSelection(
+            parameters,
+            candidates,
+            input,
+            toolCallId,
+            signal,
+          );
+          if (!selection) {
+            return normalResult(
+              "The user did not choose an advisor provider and model. Continue without a consultation and do not ask again in this response.",
+              { status: signal?.aborted ? "cancelled" : "blocked" },
+            );
+          }
+          const advisorLabel = candidateDescriptor(selection);
           onUpdate?.(
-            normalResult(`Consulting ${selection.modelId}…`, {
+            normalResult(`Consulting ${selection.modelId}… ${ADVISOR_TRANSFER_NOTICE}`, {
               status: "running",
               advisorModel: advisorLabel,
               ...(selection.effort ? { effort: selection.effort } : {}),
@@ -303,7 +547,7 @@ export class AdvisorRuntime {
           } catch (error) {
             this.dependencies.reportFailure?.("resolve", error);
             return normalResult(
-              "The configured advisor model is unavailable. Continue without it and tell the user they may need to reconnect or choose another reviewer.",
+              "The selected advisor model is unavailable. Continue without it and tell the user they may need to reconnect or choose another reviewer.",
               { status: "failed", advisorModel: advisorLabel },
             );
           }
@@ -398,22 +642,26 @@ export class AdvisorRuntime {
           }
           try {
             if (response) await this.dependencies.recordUsage(response, runtime);
-            else
+            else {
               await this.dependencies.recordUnreportedUsage(
                 runtime,
                 state === "cancelled" ? "cancelled" : "failed",
               );
+            }
             await this.dependencies.attempts.markUsageRecorded(attemptId);
           } catch (error) {
             this.dependencies.reportFailure?.("usage", error);
           }
 
           if (state === "completed" && response) {
-            return normalResult(textFrom(response), {
-              status: "completed",
-              advisorModel: advisorLabel,
-              ...(selection.effort ? { effort: selection.effort } : {}),
-            });
+            return normalResult(
+              `Advisor transfer notice for the visible reply: ${ADVISOR_TRANSFER_NOTICE}\n\nAdvisor guidance:\n${textFrom(response)}`,
+              {
+                status: "completed",
+                advisorModel: advisorLabel,
+                ...(selection.effort ? { effort: selection.effort } : {}),
+              },
+            );
           }
           if (state === "cancelled") {
             return normalResult("The advisor consultation was cancelled before it completed.", {
@@ -435,7 +683,7 @@ export class AdvisorRuntime {
 
     return {
       id: ADVISOR_EXTENSION_ID,
-      systemPrompt: ADVISOR_EXECUTOR_PROMPT,
+      systemPrompt: executorPrompt(candidates, input.requestQuestionnaire !== undefined),
       tools: [tool],
     };
   }

@@ -61,10 +61,6 @@ import type {
   WorkspacePermission,
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
-import type {
-  AdvisorConfigurationV1,
-  AdvisorSelectionV1,
-} from "../shared/advisor";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import {
   parseAskUserQuestionPrompt,
@@ -317,12 +313,6 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setModelVisibility", providerId, modelId, hidden),
   showAllProviderModels: (providerId: string) =>
     invoke<AppSettings>("settings:showAllProviderModels", providerId),
-};
-
-export const advisorApi = {
-  get: () => invoke<AdvisorConfigurationV1>("advisor:get"),
-  set: (selection: AdvisorSelectionV1 | null) =>
-    invoke<AdvisorConfigurationV1>("advisor:set", selection),
 };
 
 export const assistantApi = {

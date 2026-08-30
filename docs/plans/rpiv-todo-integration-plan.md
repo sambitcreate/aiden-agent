@@ -6,7 +6,7 @@ Reference: `@juicesharp/rpiv-todo` 2.8.0 in `rpiv-mono/packages/rpiv-todo` (MIT)
 
 ## Product outcome
 
-For an ordinary renderer-owned desktop chat, the model can maintain a durable task graph with one current task. A compact panel above the composer shows completed, current, pending, and blocked work. The state survives generation boundaries, reload, and Pi compaction because every successful or rejected tool call returns the complete post-call snapshot in the private Pi journal. Empty task lists stay out of the way. There is no setup, network access, onboarding tile, or renderer access to private descriptions, owners, or metadata.
+For an ordinary renderer-owned desktop chat, the model can maintain a durable task graph with one current task. A floating elevated chip above the composer shows the current step without changing transcript or footer geometry; hover or keyboard focus opens the complete task list in a portal overlay. The chip stays visible while any task is pending or in progress and removes its visual chrome once all visible tasks are completed or deleted. The state survives generation boundaries, reload, and Pi compaction because every successful or rejected tool call returns the complete post-call snapshot in the private Pi journal. Empty and completed task lists stay out of the way. There is no setup, network access, onboarding tile, or renderer access to private descriptions, owners, or metadata.
 
 The extension is deliberately excluded from Assistant mode, Bots, Telegram/mobile, scheduled or child work, non-renderer-owned generations, and requests that explicitly exclude the `todo` tool. Those surfaces need separate product and authority decisions rather than silently inheriting a desktop capability.
 
@@ -19,7 +19,7 @@ The extension is deliberately excluded from Assistant mode, Bots, Telegram/mobil
 5. `main/services/llm-client.ts` opens the private chat session before freezing runtime contributions, replays todo state, requires an explicitly classified chat usage source, publishes the initial projection, and sends later projections only after journal durability. Verified corrupt replay immediately publishes the content-free unavailable projection.
 6. `main/handlers/chats.ts` exposes an owner-fenced `chats:todoSnapshot` read. It rechecks the exact renderer document after asynchronous work. Corrupt todo journals return a content-free unavailable state; other storage errors remain errors.
 7. `renderer/shared/todo.ts` is the only renderer projection. Its strict versioned allowlist contains `id`, `subject`, `status`, `activeForm`, and `blockedBy`. Tool arguments/results, descriptions, ownership, metadata, and journal structure remain private.
-8. `renderer/lib/ipc.ts` validates both snapshot reads and stream notifications, and fences notifications by generation stream and chat id. A local live-snapshot revision fence prevents a slow initial read from replacing newer generation state. `renderer/components/todo-panel.tsx` renders the bounded, accessible disclosure above the composer with semantic Aiden tokens, per-task screen-reader status, a bounded polite progress announcement, and reduced-motion behavior.
+8. `renderer/lib/ipc.ts` validates both snapshot reads and stream notifications, and fences notifications by generation stream and chat id. A local live-snapshot revision fence prevents a slow initial read from replacing newer generation state. `renderer/components/todo-panel.tsx` renders a zero-layout-height elevated chip anchored above the footer and a portal-backed, headerless hover/focus task list with semantic Aiden tokens, per-task screen-reader status, bounded polite progress/unavailable announcements, and reduced-motion behavior. `ScrollArea` raises its centered scroll-to-bottom control only while this overlay is visible, so the two controls never share a hit target. Fully completed plans retain only the live-region completion announcement.
 9. `main/services/generation-timeline.ts` exposes only the content-free activity label “Update task list.”
 
 ## Intentional differences from upstream
@@ -28,9 +28,9 @@ The extension is deliberately excluded from Assistant mode, Bots, Telegram/mobil
 - One active task is a hard reducer invariant, not prompt-only guidance.
 - Snapshot parsing rejects accessors, proxies, sparse arrays, cycles, excessive depth/nodes/bytes, unknown schema versions, dangling dependencies, and corrupt newest results.
 - Validation errors keep the tool result structurally successful and replayable instead of relying on thrown extension errors.
-- The panel uses Aiden's document-scoped IPC and React surface instead of a terminal widget. Native `<details>` supplies keyboard disclosure; the list is visually bounded.
+- The task surface uses Aiden's document-scoped IPC and React surface instead of a terminal widget. A Radix hover card supplies mouse and keyboard-focus disclosure without resizing the transcript; the portal list is visually bounded.
 - Copy/fork operations copy visible chat history but start with an empty private todo journal. This prevents hidden operational state from crossing chat authority boundaries.
-- `/todos`, a global collapse shortcut, editable renderer tasks, localization packs, and onboarding are not imported. The always-available compact panel is the primary user-visible value.
+- `/todos`, a global collapse shortcut, editable renderer tasks, localization packs, and onboarding are not imported. The contextual chip is the primary user-visible value while work remains.
 
 ## Acceptance and coverage
 
@@ -41,7 +41,7 @@ The extension is deliberately excluded from Assistant mode, Bots, Telegram/mobil
 - admission fencing, per-generation state isolation, cancellation, replay policy, and real harness coverage proving publication follows successful durable append and never follows append failure;
 - closed renderer projection and unavailable-state parsing;
 - slow-initial-read versus live-snapshot ordering and immediate corrupt-replay unavailability;
-- panel progress/current/dependency/completion/empty/unavailable rendering, per-task screen-reader status, and bounded polite announcements;
+- floating chip progress/current state, portal detail/dependency rendering, completed/empty self-hiding, unavailable warning, per-task screen-reader status, and bounded polite announcements;
 - IPC inventory plus stream/chat scoping and malformed notification rejection;
 - the content-free generation timeline label.
 
@@ -52,4 +52,4 @@ Before release, perform one packaged macOS visual pass with a long list, keyboar
 - Version 1 has no migration path. A future schema must add an explicit parser/replay migration rather than weakening validation.
 - A corrupt newest snapshot intentionally makes the panel unavailable until the private journal is repaired or the chat is deleted; a future repair action needs an explicit destructive-data design.
 - The durable observer may republish the unchanged snapshot after other tool results. This is bounded and correct, but a future typed event could avoid redundant IPC.
-- The compact panel is read-only. Direct manipulation, command-palette access, per-chat collapse persistence, and mobile/Bot/Assistant adoption are separate product proposals with their own authority and test gates.
+- The floating surface is read-only. Direct manipulation, command-palette access, completed-plan history, and mobile/Bot/Assistant adoption are separate product proposals with their own authority and test gates.

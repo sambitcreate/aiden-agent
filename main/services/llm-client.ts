@@ -1799,6 +1799,27 @@ export const llmClient = {
           candidate
             ? snapshotAdvisorRuntimeMessages(candidate.state, toolCallId)
             : [],
+        ...(shouldEnableAskUserQuestionExtension({
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          assistantMode: authoritativeMode !== undefined,
+          botBound: preparedBotContext !== undefined,
+          rendererOwner: owner.id !== 0,
+          excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
+        })
+          ? {
+              requestQuestionnaire: (
+                toolCallId: string,
+                questions: Parameters<typeof questionnaires.request>[0]["questions"],
+                requestSignal?: AbortSignal,
+              ) =>
+                questionnaires.request(
+                  { streamId, toolCallId, questions },
+                  owner.documentId,
+                  requestSignal,
+                ),
+            }
+          : {}),
       });
       const runtimeExtensions: readonly PiAgentRuntimeExtension[] = advisorExtension
         ? [...baseRuntimeExtensions, advisorExtension]

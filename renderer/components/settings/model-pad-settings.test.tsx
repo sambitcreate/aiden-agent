@@ -132,8 +132,9 @@ test("Model Pad progressively discloses supporting and advanced controls", () =>
 });
 
 test("legacy direct Artificial Analysis settings are retired", () => {
-  assert.match(modelDataSource, /<AdvisorSettings \/>/u);
   assert.match(modelDataSource, /<ModelPadSettings \/>/u);
+  assert.doesNotMatch(modelDataSource, /AdvisorSettings/u);
+  assert.match(modelDataSource, /Advisor selection happens at the point of consultation/u);
   assert.doesNotMatch(modelDataSource, /artificialAnalysisApi/u);
   assert.doesNotMatch(modelDataSource, /Legacy direct benchmark source/u);
   assert.doesNotMatch(source, /useArtificialAnalysisStatus/u);

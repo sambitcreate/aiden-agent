@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TodoPanel } from "./todo-panel.js";
 
-test("renders bounded progress, current work, dependencies, and completed state", () => {
+const source = readFileSync(new URL("./todo-panel.tsx", import.meta.url), "utf8");
+const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
+const uiSource = readFileSync(new URL("./ui.tsx", import.meta.url), "utf8");
+
+test("renders a floating elevated progress chip without an inline expanding panel", () => {
   const html = renderToStaticMarkup(
     <TodoPanel
       snapshot={{
@@ -18,19 +23,24 @@ test("renders bounded progress, current work, dependencies, and completed state"
       }}
     />,
   );
-  assert.match(html, /Tasks/u);
-  assert.match(html, /1\/3/u);
+  assert.match(html, /Step 2 \/ 3/u);
   assert.match(html, /Writing code/u);
-  assert.match(html, /Blocked by #2 Implement/u);
-  assert.match(html, /line-through/u);
-  assert.match(html, /max-h-48/u);
+  assert.match(html, /bottom-full/u);
+  assert.match(html, /shadow-popover/u);
+  assert.match(html, /Focus or hover for full details/u);
+  assert.doesNotMatch(html, /<details/u);
   assert.match(html, /role="status"/u);
   assert.match(html, /aria-live="polite"/u);
   assert.match(html, /aria-atomic="true"/u);
   assert.match(html, /Task progress: 1 of 3 completed\. In progress: Writing code\./u);
-  assert.match(html, /Completed\./u);
-  assert.match(html, /In progress\./u);
-  assert.match(html, /Pending, blocked by task 2\./u);
+  assert.match(source, /<HoverCard openDelay=\{160\} closeDelay=\{120\}>/u);
+  assert.match(source, /<HoverCardContent[\s\S]*side="top"/u);
+  assert.match(source, /Blocked by\{" "\}/u);
+  assert.match(source, /max-h-\[min\(26rem,55vh\)\]/u);
+  assert.match(source, /taskStatusText\(task, dependencyIds\)/u);
+  assert.doesNotMatch(source, />Task progress<|complete<\/span>/u);
+  assert.match(chatPaneSource, /scrollToBottomButtonOffset=\{[\s\S]*\? 44[\s\S]*: 0/u);
+  assert.match(uiSource, /footerHeight \+ 12 \+ Math\.max\(0, scrollToBottomButtonOffset\)/u);
 });
 
 test("bounds the polite progress announcement even for maximum-length task copy", () => {
@@ -56,19 +66,36 @@ test("bounds the polite progress announcement even for maximum-length task copy"
   assert.match(announcement, /…$/u);
 });
 
-test("hides empty ready state and explains fail-closed state inline", () => {
+test("hides empty and fully completed plans while preserving completion announcement", () => {
   assert.equal(
     renderToStaticMarkup(
       <TodoPanel snapshot={{ version: 1, chatId: "chat-1", availability: "ready", tasks: [] }} />,
     ),
     "",
   );
-  assert.match(
-    renderToStaticMarkup(
-      <TodoPanel
-        snapshot={{ version: 1, chatId: "chat-1", availability: "unavailable", tasks: [] }}
-      />,
-    ),
-    /could not be verified/u,
+  const completed = renderToStaticMarkup(
+    <TodoPanel
+      snapshot={{
+        version: 1,
+        chatId: "chat-1",
+        availability: "ready",
+        tasks: [{ id: 1, subject: "Done", status: "completed" }],
+      }}
+    />,
   );
+  assert.doesNotMatch(completed, /<button/u);
+  assert.match(completed, /All tasks complete/u);
+});
+
+test("fail-closed state uses a floating warning chip instead of reserving chat height", () => {
+  const unavailable = renderToStaticMarkup(
+    <TodoPanel
+      snapshot={{ version: 1, chatId: "chat-1", availability: "unavailable", tasks: [] }}
+    />,
+  );
+  assert.match(unavailable, /Tasks unavailable/u);
+  assert.match(source, /could not verify this chat’s private task state/u);
+  assert.match(source, /absolute inset-x-0 bottom-full/u);
+  assert.match(unavailable, /role="status"/u);
+  assert.match(unavailable, /aria-live="polite"/u);
 });
