@@ -25,7 +25,7 @@ function fixture() {
     },
     save: async (input: ScheduledTaskInput, options: { expectedRevision?: string } = {}) => {
       const existing = input.id ? tasks.get(input.id) : undefined;
-      if (options.expectedRevision && options.expectedRevision !== `revision:${existing?.updatedAt}`) {
+      if (options.expectedRevision && (!existing || options.expectedRevision !== scheduledTaskRevision(existing))) {
         throw new Error("This automation changed.");
       }
       const updatedAt = ++clock;
@@ -137,6 +137,18 @@ test("scheduled task run retries reuse one accepted run and history is bounded a
   const first = await value.service.run("device-1", created.id, created.revision, "run-key-12345678");
   const replay = await value.service.run("device-1", created.id, created.revision, "run-key-12345678");
   assert.deepEqual(replay, first);
+  assert.equal(value.runStarts(), 1);
+  const updated = await value.service.update("device-1", created.id, created.revision, {
+    ...llmMutation,
+    name: "Updated morning review",
+  });
+  await assert.rejects(
+    value.service.run("device-1", created.id, updated.revision, "run-key-12345678"),
+    (error: unknown) => (
+      (error as { code?: string; status?: number }).code === "idempotency_conflict"
+      && (error as { status?: number }).status === 409
+    ),
+  );
   assert.equal(value.runStarts(), 1);
   const history = await value.service.runs(created.id);
   assert.equal(history.runs[0]?.id, first.runId);

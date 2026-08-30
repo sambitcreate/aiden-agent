@@ -3,6 +3,7 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteModelService } from "./aiden-remote-models.js";
 import {
   AidenIdempotencyLedger,
+  AidenOperationContractError,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
 import type { ScheduledTaskApplicationService } from "./scheduled-task-application-service.js";
@@ -115,6 +116,48 @@ function mapRun(run: ScheduledRun) {
 
 function mapError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
+  if (error instanceof AidenOperationContractError) {
+    switch (error.code) {
+      case "idempotency_conflict":
+        throw new AidenRemoteServiceError(
+          error.code,
+          "This scheduled-task request reused an idempotency key for a different operation.",
+          409,
+        );
+      case "idempotency_in_flight":
+        throw new AidenRemoteServiceError(
+          error.code,
+          "This scheduled-task request is still being reconciled.",
+          409,
+          true,
+        );
+      case "idempotency_capacity":
+        throw new AidenRemoteServiceError(
+          error.code,
+          "Aiden is handling too many scheduled-task requests. Try again shortly.",
+          429,
+          true,
+        );
+      case "revision_conflict":
+        throw new AidenRemoteServiceError(
+          error.code,
+          "This scheduled task changed. Refresh it before trying again.",
+          409,
+        );
+      case "capability_denied":
+        throw new AidenRemoteServiceError(
+          error.code,
+          "Schedule access changed. Refresh the connection before trying again.",
+          403,
+        );
+      case "internal_error":
+        throw new AidenRemoteServiceError(
+          error.code,
+          "Aiden could not safely complete this scheduled-task request.",
+          500,
+        );
+    }
+  }
   const message = error instanceof Error ? error.message : "";
   if (/not found/iu.test(message)) {
     throw new AidenRemoteServiceError("not_found", "This scheduled task no longer exists.", 404);
