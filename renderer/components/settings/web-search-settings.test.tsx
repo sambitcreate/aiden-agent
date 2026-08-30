@@ -58,6 +58,15 @@ test("automatic routing is an ordered, keyboard-operable editor", () => {
   assert.match(source, /fallbackOn/u);
 });
 
+test("provider menus visually subordinate quota and paid usage metadata", () => {
+  assert.match(source, /provider\.costClass === "quota" \|\| provider\.costClass === "paid"/u);
+  assert.match(
+    source,
+    /<InlineMetadata>· \{COST_LABELS\[provider\.costClass\]\}<\/InlineMetadata>/u,
+  );
+  assert.equal(source.match(/<ProviderOptionLabel provider=\{provider\} \/>/gu)?.length, 2);
+});
+
 test("provider catalog supports search, disclosure filters, and provider-safe links", () => {
   const providerCatalog = between("Provider catalog", 'aria-label="Filter providers"');
   assert.match(source, /type WebSearchSettingsView = "overview" \| "providers"/u);
