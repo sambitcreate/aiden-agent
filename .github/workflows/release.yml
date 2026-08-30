@@ -237,11 +237,14 @@ jobs:
           XDG_CONFIG_HOME="$smoke_root/config" \
           XDG_CACHE_HOME="$smoke_root/cache" \
           XDG_DATA_HOME="$smoke_root/data" \
-            timeout --kill-after=5s 15s xvfb-run --auto-servernum aiden-agent --no-sandbox \
+            timeout --signal=KILL 15s xvfb-run --auto-servernum aiden-agent --no-sandbox \
               >"$smoke_root/output.log" 2>&1
           status=$?
           set -e
-          if [[ "$status" -ne 124 ]]; then
+          # A living GUI is the success condition. Kill the whole timeout
+          # process group instead of asking Electron to perform a production
+          # shutdown inside an incomplete headless desktop session.
+          if [[ "$status" -ne 137 ]]; then
             cat "$smoke_root/output.log"
             exit 1
           fi
