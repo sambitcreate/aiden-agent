@@ -42,6 +42,7 @@ import {
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
+import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
@@ -367,6 +368,35 @@ export function registerProviderHandlers(): void {
   ipcMain.handle("providers:refreshIfStale", async (event) => {
     providerAuthOwner(event);
     return refreshProviderCatalogs(undefined, false);
+  });
+
+  ipcMain.handle("providers:catalogStatus", () => modelsDevCacheStatus());
+
+  ipcMain.handle("providers:updateCatalogs", async (event) => {
+    providerAuthOwner(event);
+    const inventory = await refreshProviderCatalogs();
+    let modelsDev;
+    try {
+      const refreshed = await modelsDevCacheRuntime.refresh();
+      modelsDev = { ok: true as const, status: refreshed.status };
+    } catch (error) {
+      modelsDev = {
+        ok: false as const,
+        status: await modelsDevCacheStatus(),
+        message:
+          error instanceof Error
+            ? error.message.slice(0, 240)
+            : "The models.dev catalog could not be updated.",
+      };
+    }
+    if (inventory.errors.length === 0 || modelsDev.ok) {
+      invalidateBotRuntimeInventoryAuthority("provider_configuration");
+    }
+    return {
+      providers: inventory.providers,
+      inventoryErrors: inventory.errors,
+      modelsDev,
+    };
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());

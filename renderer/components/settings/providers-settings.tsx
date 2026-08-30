@@ -37,6 +37,7 @@ import { splitPiBuiltinProviders } from "../../lib/pi-provider-display";
 import {
   queryKeys,
   useFoundationModelsConnection,
+  useModelCatalogStatus,
   useProviders,
   useSettings,
 } from "../../lib/queries";
@@ -154,6 +155,7 @@ export function ProvidersSettings() {
   const providers = useProviders();
   const settings = useSettings();
   const foundationModels = useFoundationModelsConnection();
+  const modelCatalogStatus = useModelCatalogStatus();
   const [editing, setEditing] = React.useState<Provider | null>(null);
   const editingFocusTarget = React.useRef(new ProviderEditorFocusTarget());
   const addProviderTriggerRef = React.useRef<HTMLButtonElement | null>(null);
@@ -166,6 +168,8 @@ export function ProvidersSettings() {
   const [savingTitleProvider, setSavingTitleProvider] = React.useState(false);
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
   const [refreshingProviders, setRefreshingProviders] = React.useState(false);
+  const [catalogOutcome, setCatalogOutcome] = React.useState<string | null>(null);
+  const [catalogDetailsOpen, setCatalogDetailsOpen] = React.useState(false);
   const [showMoreBuiltinProviders, setShowMoreBuiltinProviders] = React.useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.providers });
@@ -256,20 +260,28 @@ export function ProvidersSettings() {
 
   const refreshProviders = async () => {
     setRefreshingProviders(true);
+    setCatalogOutcome(null);
     try {
-      const result = await providersApi.refresh();
+      const result = await providersApi.updateCatalogs();
       qc.setQueryData(queryKeys.providers, result.providers);
-      if (result.errors.length > 0) {
-        toast.warning(
-          `${result.errors.length} provider catalog${result.errors.length === 1 ? "" : "s"} could not refresh; cached models were kept.`,
-        );
+      qc.setQueryData(queryKeys.modelCatalogStatus, result.modelsDev.status);
+      if (result.modelsDev.ok) {
+        await qc.invalidateQueries({ queryKey: ["modelInfo"] });
+      }
+      await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+      const inventoryOk = result.inventoryErrors.length === 0;
+      if (inventoryOk && result.modelsDev.ok) {
+        setCatalogOutcome("Provider inventory and model details are up to date.");
+        toast.success("Model catalogs updated.");
       } else {
-        toast.success("Built-in provider models refreshed.");
+        const outcome = `${inventoryOk ? "Provider inventory updated" : "Provider inventory kept cached data"}; ${result.modelsDev.ok ? "model details updated" : "model details kept cached data"}.`;
+        setCatalogOutcome(outcome);
+        toast.warning(outcome);
       }
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't refresh built-in provider models.",
-      );
+      const message = error instanceof Error ? error.message : "Couldn't update model catalogs.";
+      setCatalogOutcome("Catalog update failed; cached data is still available.");
+      toast.error(message);
     } finally {
       setRefreshingProviders(false);
     }
@@ -334,16 +346,15 @@ export function ProvidersSettings() {
             Connect models to Aiden and manage the providers you already use.
           </Text>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
           <Button
-            variant="transparent"
+            variant="muted"
             size="small"
-            iconOnly
-            aria-label="Refresh built-in provider models"
             disabled={refreshingProviders}
             onClick={() => void refreshProviders()}
           >
             <RefreshCw className={`size-4 ${refreshingProviders ? "animate-spin" : ""}`} />
+            {refreshingProviders ? "Updating…" : "Update model catalogs"}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -410,6 +421,46 @@ export function ProvidersSettings() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+      </div>
+
+      <div className="-mt-4 rounded-card border border-separator px-4 py-3" aria-live="polite">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Text variant="small" color="secondary">
+            {catalogOutcome ??
+              "Provider catalogs determine what can run; model details improve names and capability hints."}
+          </Text>
+          <Button
+            variant="transparent"
+            size="small"
+            aria-expanded={catalogDetailsOpen}
+            aria-controls="provider-catalog-details"
+            onClick={() => setCatalogDetailsOpen((open) => !open)}
+          >
+            Catalog details
+            <ChevronDown
+              className={`size-3.5 transition-transform motion-reduce:transition-none ${catalogDetailsOpen ? "rotate-180" : ""}`}
+            />
+          </Button>
+        </div>
+        {catalogDetailsOpen ? (
+          <div id="provider-catalog-details" className="mt-2 border-t border-separator pt-2">
+            <Text as="p" variant="small" color="tertiary" className="leading-relaxed">
+              Updating contacts built-in provider catalog services and models.dev. Aiden sends no
+              prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
+              identifier. Downloaded models.dev data affects display details only, never which
+              models can run or their runtime limits.
+            </Text>
+            <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
+              Model details:{" "}
+              {modelCatalogStatus.data?.source === "device-cache"
+                ? "device cache"
+                : "bundled snapshot"}
+              {modelCatalogStatus.data?.fetchedAt
+                ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
+                : ""}
+            </Text>
+          </div>
+        ) : null}
       </div>
 
       <CodexProviderSettings />

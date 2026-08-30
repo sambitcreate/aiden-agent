@@ -39,6 +39,8 @@ import type {
   Profile,
   Provider,
   ProviderCatalogRefreshResult,
+  ProviderCatalogUpdateResult,
+  ModelsDevCatalogStatus,
   OnboardingProviderValidationResult,
   ProviderModelMetadata,
   CodexProviderSnapshot,
@@ -195,6 +197,8 @@ export const providersApi = {
   refresh: (providerId?: string) =>
     invoke<ProviderCatalogRefreshResult>("providers:refresh", providerId),
   refreshIfStale: () => invoke<ProviderCatalogRefreshResult>("providers:refreshIfStale"),
+  catalogStatus: () => invoke<ModelsDevCatalogStatus>("providers:catalogStatus"),
+  updateCatalogs: () => invoke<ProviderCatalogUpdateResult>("providers:updateCatalogs"),
   validateOnboardingApiKey: (providerId: "openai" | "anthropic", key: string) =>
     invoke<OnboardingProviderValidationResult>(
       "providers:validateOnboardingApiKey",

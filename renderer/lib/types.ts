@@ -68,6 +68,21 @@ export interface ProviderCatalogRefreshResult {
   errors: Array<{ providerId: string; message: string }>;
 }
 
+export interface ModelsDevCatalogStatus {
+  source: "bundled" | "device-cache";
+  fetchedAt: string | null;
+}
+
+export interface ProviderCatalogUpdateResult {
+  providers: Provider[];
+  inventoryErrors: Array<{ providerId: string; message: string }>;
+  modelsDev: {
+    ok: boolean;
+    status: ModelsDevCatalogStatus;
+    message?: string;
+  };
+}
+
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex" as const;
 
 export interface CodexModelSummary {
