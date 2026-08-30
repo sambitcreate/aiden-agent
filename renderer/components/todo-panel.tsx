@@ -112,7 +112,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
         <HoverCardTrigger asChild>
           <button
             type="button"
-            className="pointer-events-auto flex min-h-9 max-w-[min(100%,38rem)] items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow,transform] duration-150 hover:-translate-y-0.5 hover:bg-popover hover:shadow-modal focus-visible:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-focus motion-reduce:transform-none motion-reduce:transition-none"
+            className="pointer-events-auto flex min-h-9 max-w-[min(100%,38rem)] items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover hover:shadow-modal focus-visible:ring-2 focus-visible:ring-focus motion-reduce:transition-none"
             aria-label={`Tasks: step ${currentIndex} of ${tasks.length}. ${chipDetail}. Focus or hover for full details.`}
           >
             {current ? (
