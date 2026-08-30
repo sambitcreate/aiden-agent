@@ -53,6 +53,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
@@ -160,6 +162,8 @@ private fun AidenWorkspaceHome(
     val usageErrorMessage by viewModel.usageErrorMessage.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val chatLoadErrorMessage by viewModel.chatLoadErrorMessage.collectAsState()
+    val chatListLoadState by viewModel.chatListLoadState.collectAsState()
 
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -201,13 +205,30 @@ private fun AidenWorkspaceHome(
     val sidebarProjection = remember(activeWorkspaces, chats, searchQuery) {
         projectAidenWorkspaceSidebar(activeWorkspaces, chats, searchQuery)
     }
+    val chatListUnavailable = chatListLoadState == AidenChatListLoadState.FAILED
+    val chatCreationBlocked = chatListLoadState != AidenChatListLoadState.LOADED
 
     LaunchedEffect(workspaces, client, connectionState) {
         viewModel.hydrate(workspaces)
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.load()
     }
     LaunchedEffect(errorMessage) {
-        errorMessage?.let { snackbarHostState.showSnackbar(it, actionLabel = "Retry") }
+        errorMessage?.let {
+            if (
+                snackbarHostState.showSnackbar(it, actionLabel = "Retry") ==
+                SnackbarResult.ActionPerformed
+            ) {
+                viewModel.refresh(workspaces)
+            }
+        }
+    }
+    LaunchedEffect(chatListUnavailable) {
+        if (chatListUnavailable) {
+            showNewChatChoices = false
+            showExistingWorkspacePicker = false
+            showNewWorkspaceDialog = false
+            showScratchConfirmation = false
+        }
     }
     LaunchedEffect(
         activeInstanceId,
@@ -232,6 +253,14 @@ private fun AidenWorkspaceHome(
     }
 
     fun createChat(workspace: AidenWorkspace, status: String = "Opening chat…") {
+        if (chatCreationBlocked) {
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                )
+            }
+            return
+        }
         val activeClient = client ?: return
         creationStatus = status
         scope.launch {
@@ -250,7 +279,11 @@ private fun AidenWorkspaceHome(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            AnimatedVisibility(visible = !isSearching, enter = fadeIn(), exit = fadeOut()) {
+            AnimatedVisibility(
+                visible = !isSearching && !chatCreationBlocked,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
                 FloatingActionButton(
                     onClick = {
                         if (connectionState == AidenConnectionState.CONNECTED) showNewChatChoices = true
@@ -416,72 +449,83 @@ private fun AidenWorkspaceHome(
                     }
                 }
 
-                val projectionIsEmpty = if (
-                    sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
-                ) {
-                    sidebarProjection.sections.isEmpty()
-                } else {
-                    sidebarProjection.recents.isEmpty()
-                }
-                if (projectionIsEmpty && !isLoading) {
+                if (chatListUnavailable) {
                     item {
-                        AidenEmptyState(
-                            icon = if (isSearching) Icons.Outlined.Search else Icons.Outlined.FolderOpen,
-                            title = if (isSearching) {
-                                "No Matches"
-                            } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                "No Workspaces Yet"
-                            } else {
-                                "No Chats Yet"
-                            },
-                            body = if (isSearching) {
-                                "Try a different search term."
-                            } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                "Add a workspace to begin."
-                            } else {
-                                "Start a new Workspace chat to begin."
-                            },
-                            modifier = Modifier.padding(top = if (isSearching) 80.dp else 32.dp)
-                        )
-                    }
-                }
-
-                if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                    items(sidebarProjection.sections, key = { it.workspace.id }) { section ->
-                        AidenWorkspaceSidebarSectionRow(
-                            section = section,
-                            expanded = searchQuery.isNotBlank() ||
-                                expandedWorkspaceIds.contains(section.workspace.id),
-                            canCreateChat = connectionState == AidenConnectionState.CONNECTED &&
-                                creationStatus == null,
-                            onToggle = {
-                                val next = expandedWorkspaceIds.toMutableSet()
-                                if (!next.remove(section.workspace.id)) next.add(section.workspace.id)
-                                expandedWorkspaceIds = next.toList()
-                                activeInstanceId?.let {
-                                    navigationStore.setExpandedSidebarWorkspaceIds(it, next)
-                                }
-                            },
-                            onCreateChat = { createChat(section.workspace) },
-                            onNavigateToChat = onNavigateToChat,
-                            revealsAllChats = fullyRevealedWorkspaceIds.contains(
-                                section.workspace.id
-                            ),
-                            onRevealAllChats = {
-                                fullyRevealedWorkspaceIds =
-                                    fullyRevealedWorkspaceIds + section.workspace.id
-                            }
+                        AidenWorkspaceChatLoadErrorState(
+                            message = chatLoadErrorMessage ?: "Reconnect and try again.",
+                            onRetry = { viewModel.refresh(workspaces) },
+                            modifier = Modifier.padding(top = 32.dp)
                         )
                     }
                 } else {
-                    items(sidebarProjection.recents, key = AidenChat::id) { chat ->
-                        AidenWorkspaceChatRow(
-                            chat = chat,
-                            workspaceName = activeById[chat.workspaceId]?.name.orEmpty(),
-                            showsWorkspaceName = true,
-                            indented = false,
-                            onClick = { onNavigateToChat(chat.id) }
-                        )
+                    val projectionIsEmpty = if (
+                        sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
+                    ) {
+                        sidebarProjection.sections.isEmpty()
+                    } else {
+                        sidebarProjection.recents.isEmpty()
+                    }
+                    if (projectionIsEmpty && !isLoading) {
+                        item {
+                            AidenEmptyState(
+                                icon = if (isSearching) Icons.Outlined.Search else Icons.Outlined.FolderOpen,
+                                title = if (isSearching) {
+                                    "No Matches"
+                                } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                                    "No Workspaces Yet"
+                                } else {
+                                    "No Chats Yet"
+                                },
+                                body = if (isSearching) {
+                                    "Try a different search term."
+                                } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                                    "Add a workspace to begin."
+                                } else {
+                                    "Start a new Workspace chat to begin."
+                                },
+                                modifier = Modifier.padding(top = if (isSearching) 80.dp else 32.dp)
+                            )
+                        }
+                    }
+
+                    if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                        items(sidebarProjection.sections, key = { it.workspace.id }) { section ->
+                            AidenWorkspaceSidebarSectionRow(
+                                section = section,
+                                expanded = searchQuery.isNotBlank() ||
+                                    expandedWorkspaceIds.contains(section.workspace.id),
+                                canCreateChat = connectionState == AidenConnectionState.CONNECTED &&
+                                    creationStatus == null &&
+                                    !chatCreationBlocked,
+                                onToggle = {
+                                    val next = expandedWorkspaceIds.toMutableSet()
+                                    if (!next.remove(section.workspace.id)) next.add(section.workspace.id)
+                                    expandedWorkspaceIds = next.toList()
+                                    activeInstanceId?.let {
+                                        navigationStore.setExpandedSidebarWorkspaceIds(it, next)
+                                    }
+                                },
+                                onCreateChat = { createChat(section.workspace) },
+                                onNavigateToChat = onNavigateToChat,
+                                revealsAllChats = fullyRevealedWorkspaceIds.contains(
+                                    section.workspace.id
+                                ),
+                                onRevealAllChats = {
+                                    fullyRevealedWorkspaceIds =
+                                        fullyRevealedWorkspaceIds + section.workspace.id
+                                }
+                            )
+                        }
+                    } else {
+                        items(sidebarProjection.recents, key = AidenChat::id) { chat ->
+                            AidenWorkspaceChatRow(
+                                chat = chat,
+                                workspaceName = activeById[chat.workspaceId]?.name.orEmpty(),
+                                showsWorkspaceName = true,
+                                indented = false,
+                                onClick = { onNavigateToChat(chat.id) }
+                            )
+                        }
                     }
                 }
             }
@@ -607,6 +651,14 @@ private fun AidenWorkspaceHome(
             onNameChanged = { workspaceName = it },
             onDismiss = { showNewWorkspaceDialog = false },
             onCreate = {
+                if (chatCreationBlocked) {
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                        )
+                    }
+                    return@AidenWorkspaceNameDialog
+                }
                 val name = workspaceName.trim()
                 if (name.isEmpty()) return@AidenWorkspaceNameDialog
                 showNewWorkspaceDialog = false
@@ -631,6 +683,14 @@ private fun AidenWorkspaceHome(
             confirmButton = {
                 Button(
                     onClick = {
+                        if (chatCreationBlocked) {
+                            scope.launch {
+                                snackbarHostState.showSnackbar(
+                                    chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                                )
+                            }
+                            return@Button
+                        }
                         showScratchConfirmation = false
                         creationStatus = "Preparing scratch workspace…"
                         scope.launch {
@@ -650,6 +710,23 @@ private fun AidenWorkspaceHome(
             containerColor = palette.canvas
         )
     }
+}
+
+@Composable
+internal fun AidenWorkspaceChatLoadErrorState(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AidenEmptyState(
+        icon = Icons.Outlined.WifiOff,
+        title = "Chats Couldn't Load",
+        body = message,
+        modifier = modifier.semantics { error(message) },
+        action = {
+            Button(onClick = onRetry) { Text("Try Again") }
+        }
+    )
 }
 
 @Composable

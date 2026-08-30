@@ -211,9 +211,19 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
 
   assert.match(overflowMenu, /closest<HTMLElement>\("\[data-sidebar\]"\)/u);
   assert.match(overflowMenu, /Math\.ceil\(sidebarBounds\.right - triggerBounds\.right\) \+ 8/u);
+  assert.match(
+    overflowMenu,
+    /triggerBounds\.bottom > window\.innerHeight \/ 2 \? "end" : "start"/u,
+  );
+  assert.match(overflowMenu, /triggerBounds\.bottom - \(window\.innerHeight - viewportPadding\)/u);
+  assert.match(overflowMenu, /viewportPadding - triggerBounds\.top/u);
+  assert.match(overflowMenu, /alignOffset=\{contentAlignOffset\}/u);
+  assert.match(overflowMenu, /window\.addEventListener\("resize", positionOutsideSidebar\)/u);
+  assert.match(overflowMenu, /window\.removeEventListener\("resize", positionOutsideSidebar\)/u);
   assert.match(overflowMenu, /side="right"/u);
-  assert.match(overflowMenu, /align="start"/u);
+  assert.match(overflowMenu, /align=\{contentAlign\}/u);
   assert.match(overflowMenu, /avoidCollisions=\{false\}/u);
+  assert.match(overflowMenu, /maxHeight: contentMaxHeight, overflowY: "auto"/u);
   assert.match(sidebar, /ariaLabel="Organize sidebar"/u);
   assert.match(
     sidebar,

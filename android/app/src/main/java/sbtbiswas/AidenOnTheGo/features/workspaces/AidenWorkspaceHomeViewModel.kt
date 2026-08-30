@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -24,6 +25,13 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
 import java.time.Duration
 import java.time.Instant
+
+enum class AidenChatListLoadState {
+    UNRESOLVED,
+    LOADING,
+    LOADED,
+    FAILED
+}
 
 class AidenWorkspaceHomeViewModel(
     private val coordinator: AidenRemoteCoordinator,
@@ -48,11 +56,20 @@ class AidenWorkspaceHomeViewModel(
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _chatLoadErrorMessage = MutableStateFlow<String?>(null)
+    val chatLoadErrorMessage: StateFlow<String?> = _chatLoadErrorMessage.asStateFlow()
+
+    private val _chatListLoadState = MutableStateFlow(AidenChatListLoadState.UNRESOLVED)
+    val chatListLoadState: StateFlow<AidenChatListLoadState> = _chatListLoadState.asStateFlow()
+
     private val _usageErrorMessage = MutableStateFlow<String?>(null)
     val usageErrorMessage: StateFlow<String?> = _usageErrorMessage.asStateFlow()
 
     private var loadedClient: AidenRemoteClient? = null
+    private var loadedInstanceId: String? = null
     private var loadingClient: AidenRemoteClient? = null
+    private var loadingJob: Job? = null
+    private var loadGeneration = 0
     private var hydratedInstanceId: String? = null
     private var hydratedWorkspaceIds: Set<String> = emptySet()
 
@@ -89,25 +106,43 @@ class AidenWorkspaceHomeViewModel(
         val workspaceIds = workspaces.map { it.id }.toSet()
         if (hydratedInstanceId == instanceId && hydratedWorkspaceIds == workspaceIds) return
 
+        if (hydratedInstanceId != instanceId) {
+            loadGeneration += 1
+            loadedClient = null
+            loadedInstanceId = null
+            loadingClient = null
+            loadingJob?.cancel()
+            loadingJob = null
+            _isLoading.value = false
+            _chatListLoadState.value = AidenChatListLoadState.UNRESOLVED
+        }
+
         val cached = workspaces.flatMap { workspace ->
             chatCache.loadChats(instanceId, workspace.id).orEmpty()
         }
         _chats.value = regularNewestFirst(cached)
         _scheduledTasks.value = coordinator.scheduledCache.load(instanceId)?.tasks.orEmpty()
         _usage.value = usageCache.load(instanceId)
+        _chatLoadErrorMessage.value = null
+        _errorMessage.value = null
         hydratedInstanceId = instanceId
         hydratedWorkspaceIds = workspaceIds
     }
 
     fun load(force: Boolean = false) {
         val client = coordinator.client.value ?: return
-        if (loadingClient === client) return
-        if (!force && loadedClient === client) return
+        val instanceId = coordinator.activeInstanceId ?: return
+        if (loadingClient === client && !force) return
+        if (!force && loadedClient === client && loadedInstanceId == instanceId) return
+        loadingJob?.cancel()
+        val requestGeneration = ++loadGeneration
         loadingClient = client
 
-        viewModelScope.launch {
-            _isLoading.value = _chats.value.isEmpty()
+        loadingJob = viewModelScope.launch {
+            _isLoading.value = true
             _errorMessage.value = null
+            _chatLoadErrorMessage.value = null
+            _chatListLoadState.value = AidenChatListLoadState.LOADING
             try {
                 var allCoreSucceeded = false
                 supervisorScope {
@@ -116,46 +151,70 @@ class AidenWorkspaceHomeViewModel(
                     val usageRequest = async { request { client.usage() } }
                     val catalogRequest = async { request { client.modelCatalog() } }
 
-                    chatsRequest.await().onSuccess { accepted ->
-                        if (coordinator.client.value === client) acceptChats(accepted)
-                    }
-                    tasksRequest.await().onSuccess { accepted ->
-                        if (coordinator.client.value === client) {
-                            _scheduledTasks.value = accepted
-                            coordinator.activeInstanceId?.let { instanceId ->
-                                coordinator.scheduledCache.store(instanceId, accepted, settings = null)
+                    val chatsResult = chatsRequest.await()
+                    chatsResult
+                        .onSuccess { accepted ->
+                            if (isCurrentLoad(requestGeneration, client, instanceId)) {
+                                acceptChats(accepted)
+                                _chatLoadErrorMessage.value = null
+                                _chatListLoadState.value = AidenChatListLoadState.LOADED
                             }
                         }
+                        .onFailure { failure ->
+                            if (isCurrentLoad(requestGeneration, client, instanceId)) {
+                                _chatLoadErrorMessage.value =
+                                    failure.message ?: "Aiden couldn't load chats."
+                                _chatListLoadState.value = AidenChatListLoadState.FAILED
+                            }
+                        }
+                    val tasksResult = tasksRequest.await()
+                    tasksResult.onSuccess { accepted ->
+                            if (isCurrentLoad(requestGeneration, client, instanceId)) {
+                                _scheduledTasks.value = accepted
+                                coordinator.scheduledCache.store(instanceId, accepted, settings = null)
+                            }
                     }
                     val usageResult = usageRequest.await()
                     usageResult
                         .onSuccess { accepted ->
-                            if (coordinator.client.value === client) {
+                            if (isCurrentLoad(requestGeneration, client, instanceId)) {
                                 _usage.value = accepted
-                                coordinator.activeInstanceId?.let { usageCache.store(it, accepted) }
+                                usageCache.store(instanceId, accepted)
                                 _usageErrorMessage.value = null
                             }
                         }
                         .onFailure { failure ->
-                            if (coordinator.client.value === client) {
+                            if (isCurrentLoad(requestGeneration, client, instanceId)) {
                                 _usageErrorMessage.value = failure.message ?: "Aiden couldn't load Usage."
                             }
                         }
-                    catalogRequest.await().onSuccess { accepted ->
-                        if (coordinator.client.value === client) _modelCatalog.value = accepted
+                    val catalogResult = catalogRequest.await()
+                    catalogResult.onSuccess { accepted ->
+                        if (isCurrentLoad(requestGeneration, client, instanceId)) {
+                            _modelCatalog.value = accepted
+                        }
                     }
 
-                    val failures = listOf(chatsRequest.await(), tasksRequest.await(), usageRequest.await())
+                    val failures = listOf(chatsResult, tasksResult, usageResult)
                         .mapNotNull { it.exceptionOrNull() }
                     if (failures.size == 3) {
-                        _errorMessage.value = failures.firstOrNull()?.message ?: "Aiden couldn't refresh Workspace data."
+                        if (isCurrentLoad(requestGeneration, client, instanceId)) {
+                            _errorMessage.value = failures.firstOrNull()?.message
+                                ?: "Aiden couldn't refresh Workspace data."
+                        }
                     }
                     allCoreSucceeded = failures.isEmpty()
                 }
-                if (coordinator.client.value === client && allCoreSucceeded) loadedClient = client
+                if (isCurrentLoad(requestGeneration, client, instanceId) && allCoreSucceeded) {
+                    loadedClient = client
+                    loadedInstanceId = instanceId
+                }
             } finally {
-                if (loadingClient === client) loadingClient = null
-                _isLoading.value = false
+                if (isCurrentLoad(requestGeneration, client, instanceId)) {
+                    loadingClient = null
+                    loadingJob = null
+                    _isLoading.value = false
+                }
             }
         }
     }
@@ -187,6 +246,15 @@ class AidenWorkspaceHomeViewModel(
     } catch (error: Exception) {
         Result.failure(error)
     }
+
+    private fun isCurrentLoad(
+        generation: Int,
+        client: AidenRemoteClient,
+        instanceId: String
+    ): Boolean = loadGeneration == generation &&
+        loadingClient === client &&
+        coordinator.client.value === client &&
+        coordinator.activeInstanceId == instanceId
 
     companion object {
         fun factory(

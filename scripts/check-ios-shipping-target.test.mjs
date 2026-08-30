@@ -678,6 +678,29 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.ok(usageIndex < workspacesIndex);
   assert.ok(homeNavigationIndex >= 0 && homeNavigationIndex < sidebarIndex);
   assert.match(shell, /Label\("By workspace"[\s\S]*?Label\("Recent only"/u);
+  assert.match(shell, /enum ChatListLoadState: Equatable/u);
+  assert.match(shell, /var chatListLoadState: ChatListLoadState = \.unresolved/u);
+  assert.match(shell, /var chatLoadErrorMessage: String\?/u);
+  assert.match(
+    shell,
+    /case \.failure\(let error\):[\s\S]{0,180}chatListLoadState = \.failed\(error\.localizedDescription\)/u,
+  );
+  assert.match(
+    shell,
+    /if chatListUnavailable \{[\s\S]*?Chats Couldn’t Load[\s\S]*?Button\("Try Again"\)/u,
+  );
+  assert.match(
+    shell,
+    /private var chatCreationBlocked:[\s\S]{0,180}homeModel\.chatListLoadState != \.loaded/u,
+  );
+  assert.match(shell, /loadingContext != context/u);
+  assert.match(shell, /if loadingContext == context \{[\s\S]{0,100}isLoading = false/u);
+  assert.match(
+    shell,
+    /\.task\(id: AidenHomeLoadID\([\s\S]{0,160}instanceID: coordinator\.activeInstanceId/u,
+  );
+  assert.match(shell, /Text\("Show \\\(remainingChatCount\) more"\)/u);
+  assert.doesNotMatch(shell, /Text\("Show \(remainingChatCount\) more"\)/u);
   assert.match(shell, /AidenProductSwitcherButton\([\s\S]*?searchChrome/u);
   assert.match(
     productShell,
@@ -757,7 +780,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     shell,
     /count: homeModel\.scheduledTasks\.count|count: coordinator\.workspaces\.count/u,
   );
-  assert.match(shell, /task\(id: coordinator\.connectionState\)[\s\S]*?homeModel\.load/u);
+  assert.match(
+    shell,
+    /task\(id: AidenHomeLoadID\([\s\S]*?connectionState: coordinator\.connectionState[\s\S]*?homeModel\.load/u,
+  );
   assert.match(
     shell,
     /AidenNavigationResolutionID\([\s\S]*?connectionState: coordinator\.connectionState[\s\S]*?resolveNavigationRequest/u,

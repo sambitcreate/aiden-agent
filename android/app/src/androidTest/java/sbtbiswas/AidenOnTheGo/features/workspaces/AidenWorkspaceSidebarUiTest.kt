@@ -6,11 +6,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,5 +63,24 @@ class AidenWorkspaceSidebarUiTest {
         disclosure.assert(
             SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded")
         )
+    }
+
+    @Test
+    fun chatLoadFailureShowsErrorAndRetryAction() {
+        var retried = false
+
+        compose.setContent {
+            AidenTheme {
+                AidenWorkspaceChatLoadErrorState(
+                    message = "The Mac didn't respond.",
+                    onRetry = { retried = true }
+                )
+            }
+        }
+
+        compose.onNodeWithText("Chats Couldn't Load").assertIsDisplayed()
+        compose.onNodeWithText("The Mac didn't respond.").assertIsDisplayed()
+        compose.onNodeWithText("Try Again").performClick()
+        assertTrue(retried)
     }
 }

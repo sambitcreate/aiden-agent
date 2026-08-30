@@ -38,7 +38,7 @@ The integrated plan therefore uses A's low-risk data path, C's iPad detail-colum
 - A pure projection whitelists chats by registered workspace ID, sorts workspace groups by newest activity, powers search, and produces the alternate recent list.
 - The active workspace opens by default, disclosure state persists in bounded local storage, and long groups expose a bounded initial slice with **Show more**.
 - Workspace actions moved onto their owning row: new chat, open latest chat, reveal folder, and safe remove/delete-worktree flows. Empty workspaces never create a chat through an open action.
-- Sidebar organization and per-workspace ellipsis menus anchor outside the sidebar's right edge, preserving the navigation beneath them at every saved sidebar width.
+- Sidebar organization and per-workspace ellipsis menus anchor outside the sidebar's right edge, preserving the navigation beneath them at every saved sidebar width; lower triggers align upward, tall menus scroll within available height, and open menus recompute on viewport changes.
 - Existing route-driven selection, title reveal, keyboard chat shortcuts, working indicators, rename, and delete behavior are reused across both organizations.
 
 ### iOS and iPadOS
@@ -46,12 +46,14 @@ The integrated plan therefore uses A's low-risk data path, C's iPad detail-colum
 - The home list uses the same workspace-owned projection and a persisted per-installation organization/disclosure store.
 - iPhone retains push navigation. On regular-width iPad, selecting a chat presents it in the detail column rather than a modal sheet.
 - Device-local workspace archive state is applied before projection and stale disclosure IDs are pruned.
+- Chat-list readiness is scoped to the active installation/request lease. Initial reads (including reads with cached rows), installation switches, and failures block new-chat/workspace creation until the current installation loads successfully; failures render an explicit retry state and stale requests cannot overwrite a newer load.
 
 ### Android
 
 - Compose uses the same pure workspace-owned projection and explicit empty-workspace creation row.
 - Organization and disclosure state persist per installation in the existing product navigation store and are removed with installation data.
 - The separate directory is retained as **Manage Workspaces** for CRUD and environment details.
+- Chat-list readiness is scoped to the active installation/client request. Initial reads (including reads with cached rows), installation switches, and failures block every creation entry point until the current installation loads successfully; failures render an accessible retry state and stale requests cannot complete a newer load.
 
 ## Independent review hardening
 

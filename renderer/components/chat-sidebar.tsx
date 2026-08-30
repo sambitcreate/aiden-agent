@@ -114,20 +114,56 @@ function SidebarOverflowMenu({
 }>) {
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const [sideOffset, setSideOffset] = React.useState(8);
+  const [contentAlign, setContentAlign] = React.useState<"start" | "end">("start");
+  const [contentAlignOffset, setContentAlignOffset] = React.useState(0);
+  const [contentMaxHeight, setContentMaxHeight] = React.useState<number>();
+  const [open, setOpen] = React.useState(false);
 
-  const positionOutsideSidebar = React.useCallback((open: boolean) => {
-    if (!open) return;
+  const positionOutsideSidebar = React.useCallback(() => {
     const trigger = triggerRef.current;
     const sidebar = trigger?.closest<HTMLElement>("[data-sidebar]");
     if (!trigger || !sidebar) return;
 
     const triggerBounds = trigger.getBoundingClientRect();
     const sidebarBounds = sidebar.getBoundingClientRect();
+    const nextAlign = triggerBounds.bottom > window.innerHeight / 2 ? "end" : "start";
+    const viewportPadding = 8;
+    const nextAlignOffset =
+      nextAlign === "end"
+        ? Math.max(0, triggerBounds.bottom - (window.innerHeight - viewportPadding))
+        : Math.max(0, viewportPadding - triggerBounds.top);
+    const contentEdge =
+      nextAlign === "end"
+        ? triggerBounds.bottom - nextAlignOffset
+        : triggerBounds.top + nextAlignOffset;
     setSideOffset(Math.max(8, Math.ceil(sidebarBounds.right - triggerBounds.right) + 8));
+    setContentAlign(nextAlign);
+    setContentAlignOffset(nextAlignOffset);
+    setContentMaxHeight(
+      Math.max(
+        1,
+        Math.floor(
+          nextAlign === "end"
+            ? contentEdge - viewportPadding
+            : window.innerHeight - contentEdge - viewportPadding,
+        ),
+      ),
+    );
   }, []);
 
+  React.useEffect(() => {
+    if (!open) return;
+    window.addEventListener("resize", positionOutsideSidebar);
+    return () => window.removeEventListener("resize", positionOutsideSidebar);
+  }, [open, positionOutsideSidebar]);
+
   return (
-    <DropdownMenu onOpenChange={positionOutsideSidebar}>
+    <DropdownMenu
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) positionOutsideSidebar();
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <Button
           ref={triggerRef}
@@ -142,10 +178,12 @@ function SidebarOverflowMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         side="right"
-        align="start"
+        align={contentAlign}
+        alignOffset={contentAlignOffset}
         sideOffset={sideOffset}
         avoidCollisions={false}
         className={contentClassName}
+        style={{ maxHeight: contentMaxHeight, overflowY: "auto" }}
       >
         {children}
       </DropdownMenuContent>
@@ -448,7 +486,9 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
   const qc = useQueryClient();
   const { workspaces, activeId, select, isReady: workspaceRegistryReady } = useActiveWorkspace();
   const environmentPanel = useEnvironmentPanel();
@@ -601,7 +641,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   React.useEffect(() => {
     if (!workspaceRegistryReady) return;
     const preferences = parseSidebarPreferences(
-      JSON.stringify({ organization, expandedWorkspaceIds: [...expandedWorkspaceIds] }),
+      JSON.stringify({
+        organization,
+        expandedWorkspaceIds: [...expandedWorkspaceIds],
+      }),
       workspaces.map((workspace) => workspace.id),
     );
     localStorage.setItem(SIDEBAR_PREFERENCES_KEY, JSON.stringify(preferences));
@@ -852,7 +895,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       else toast.info(`“${result.title}” already fits this chat.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Apple couldn't rename that chat.");
-      await qc.invalidateQueries({ queryKey: queryKeys.foundationModelsConnection });
+      await qc.invalidateQueries({
+        queryKey: queryKeys.foundationModelsConnection,
+      });
     } finally {
       setRenamingWithAppleId(null);
     }

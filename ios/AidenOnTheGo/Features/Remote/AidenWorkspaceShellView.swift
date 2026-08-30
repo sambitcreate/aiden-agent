@@ -143,12 +143,27 @@ enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 private final class AidenHomeModel {
+    enum ChatListLoadState: Equatable {
+        case unresolved
+        case loading
+        case loaded
+        case failed(String)
+    }
+
     var chats: [AidenChat] = []
     var scheduledTasks: [AidenScheduledTask] = []
     var usage: AidenUsageSummary?
     var modelCatalog: AidenModelCatalog?
     var isLoading = false
     var errorMessage: String?
+    var chatListLoadState: ChatListLoadState = .unresolved
+    private var contentContext: AidenRemoteRequestContext?
+    private var loadingContext: AidenRemoteRequestContext?
+
+    var chatLoadErrorMessage: String? {
+        guard case .failed(let message) = chatListLoadState else { return nil }
+        return message
+    }
 
     func accept(_ chat: AidenChat) {
         guard !chat.isBotChat else { return }
@@ -160,19 +175,34 @@ private final class AidenHomeModel {
     func load(coordinator: AidenRemoteCoordinator) async {
         guard coordinator.connectionState == .connected,
               let context = try? coordinator.requestContext(),
-              !isLoading else { return }
+              loadingContext != context else { return }
         let plan = AidenHomeLoadPlan(
             installation: coordinator.installationStore.activeInstallation
         )
+        if contentContext != context {
+            contentContext = context
+            chats = []
+            scheduledTasks = []
+            usage = nil
+            modelCatalog = nil
+        }
         if !plan.loadsChats {
             chats = []
             modelCatalog = nil
+            chatListLoadState = .loaded
         }
         if !plan.loadsScheduledTasks { scheduledTasks = [] }
         if !plan.loadsUsage { usage = nil }
+        loadingContext = context
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        if plan.loadsChats { chatListLoadState = .loading }
+        defer {
+            if loadingContext == context {
+                loadingContext = nil
+                isLoading = false
+            }
+        }
         do {
             let client = try coordinator.remoteClient(for: context)
             async let chatsRequest = aidenLoadHomeSegment(enabled: plan.loadsChats) {
@@ -200,8 +230,11 @@ private final class AidenHomeModel {
                 if let loadedChats {
                     chats = AidenChat.regularWorkspaceChats(from: loadedChats)
                         .sorted { $0.updatedAt > $1.updatedAt }
+                    chatListLoadState = .loaded
                 }
-            case .failure(let error): failures.append(error)
+            case .failure(let error):
+                failures.append(error)
+                chatListLoadState = .failed(error.localizedDescription)
             }
             switch tasksResult {
             case .success(let loadedTasks):
@@ -226,6 +259,7 @@ private final class AidenHomeModel {
         } catch {
             if coordinator.isCurrent(context) {
                 errorMessage = error.localizedDescription
+                if plan.loadsChats { chatListLoadState = .failed(error.localizedDescription) }
             }
         }
     }
@@ -259,6 +293,11 @@ private func aidenLoadHomeSegment<Value: Sendable>(
 
 private struct AidenNavigationResolutionID: Equatable {
     let request: AidenNavigationRequest?
+    let connectionState: AidenRemoteConnectionState
+}
+
+private struct AidenHomeLoadID: Equatable {
+    let instanceID: String?
     let connectionState: AidenRemoteConnectionState
 }
 
@@ -553,6 +592,15 @@ struct AidenWorkspaceShellView: View {
         )
     }
 
+    private var chatListUnavailable: Bool {
+        if case .failed = homeModel.chatListLoadState { return true }
+        return false
+    }
+
+    private var chatCreationBlocked: Bool {
+        homeModel.chatListLoadState != .loaded
+    }
+
     var body: some View {
         Group {
             if usesSplitNavigation {
@@ -771,7 +819,10 @@ struct AidenWorkspaceShellView: View {
         )) {
             await resolveNavigationRequest()
         }
-        .task(id: coordinator.connectionState) {
+        .task(id: AidenHomeLoadID(
+            instanceID: coordinator.activeInstanceId,
+            connectionState: coordinator.connectionState
+        )) {
             await homeModel.load(coordinator: coordinator)
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
@@ -873,7 +924,20 @@ struct AidenWorkspaceShellView: View {
             .listRowSeparator(.hidden)
             .listRowBackground(palette.canvas)
 
-            if sidebarOrganization == .workspace, sidebarProjection.sections.isEmpty,
+            if chatListUnavailable {
+                ContentUnavailableView {
+                    Label("Chats Couldn’t Load", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                } description: {
+                    Text(homeModel.chatLoadErrorMessage ?? "Reconnect and try again.")
+                } actions: {
+                    Button("Try Again") {
+                        Task { await homeModel.load(coordinator: coordinator) }
+                    }
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+            } else if sidebarOrganization == .workspace, sidebarProjection.sections.isEmpty,
                !homeModel.isLoading {
                 ContentUnavailableView(
                     searchText.isEmpty ? "No Workspaces Yet" : "No Matching Workspaces",
@@ -947,13 +1011,14 @@ struct AidenWorkspaceShellView: View {
                                     coordinator.connectionState != .connected
                                         || coordinator.isMutating
                                         || isCreatingAgent
+                                        || chatCreationBlocked
                                 )
                             }
                             if remainingChatCount > 0 {
                                 Button {
                                     fullyRevealedSidebarWorkspaceIDs.insert(section.workspace.id)
                                 } label: {
-                                    Text("Show (remainingChatCount) more")
+                                    Text("Show \(remainingChatCount) more")
                                         .font(.subheadline.weight(.medium))
                                         .foregroundStyle(palette.secondary)
                                         .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
@@ -1223,7 +1288,12 @@ struct AidenWorkspaceShellView: View {
                 .contentShape(Rectangle())
         }
         .aidenProminentGlassButton()
-        .disabled(coordinator.connectionState != .connected || coordinator.isMutating || isCreatingAgent)
+        .disabled(
+            coordinator.connectionState != .connected
+                || coordinator.isMutating
+                || isCreatingAgent
+                || chatCreationBlocked
+        )
         .accessibilityLabel("New Workspace Chat")
         .accessibilityHint("Choose the workspace for a new chat.")
         .matchedTransitionSource(id: "AidenNewAgentOptions", in: newAgentTransition)
@@ -1276,6 +1346,12 @@ struct AidenWorkspaceShellView: View {
 
     @MainActor
     private func createNewAgent(workspaceCreate: AidenWorkspaceCreate, status: String) async {
+        guard !chatCreationBlocked else {
+            coordinator.presentedError = homeModel.chatLoadErrorMessage
+                ?? String(localized: "Chats are unavailable. Try loading them again first.")
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return
+        }
         guard !isCreatingAgent else { return }
         isCreatingAgent = true
         agentCreationStatus = status
@@ -1307,6 +1383,12 @@ struct AidenWorkspaceShellView: View {
         managesProgress: Bool = true,
         completionFeedback: AidenHapticEvent = .success
     ) async {
+        guard !chatCreationBlocked else {
+            coordinator.presentedError = homeModel.chatLoadErrorMessage
+                ?? String(localized: "Chats are unavailable. Try loading them again first.")
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return
+        }
         guard !isCreatingAgent || !managesProgress else { return }
         if managesProgress {
             isCreatingAgent = true
