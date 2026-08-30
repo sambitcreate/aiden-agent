@@ -335,7 +335,12 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
   assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
-  assert.match(featurePresentation, /benchmark-only OpenRouter key never imports its model catalog/u);
+  assert.match(
+    featurePresentation,
+    /benchmark-only OpenRouter key never imports its model catalog/u,
+  );
+  assert.match(featurePresentation, /Live catalog checks happen only when you choose/u);
+  assert.match(featurePresentation, /ordinary browsing stays offline/u);
   assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
   assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 25);

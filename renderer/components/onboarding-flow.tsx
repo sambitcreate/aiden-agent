@@ -262,7 +262,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Personal Model Pad",
     description:
-      "Arrange favorite models on your own map; an optional benchmark-only OpenRouter key never imports its model catalog.",
+      "Arrange favorite models on your own map; an optional benchmark-only OpenRouter key never imports its model catalog. Live catalog checks happen only when you choose provider setup or Update model catalogs; ordinary browsing stays offline.",
     icon: ChartScatter,
     imageUrl: FEATURE_ILLUSTRATIONS.modelPad,
     size: "tall",
@@ -488,37 +488,40 @@ export function OnboardingFlow() {
   const profileInitializedRef = React.useRef(false);
   const loadGenerationRef = React.useRef(0);
 
-  const loadOnboarding = React.useCallback(async (reopen = false) => {
-    const generation = loadGenerationRef.current + 1;
-    loadGenerationRef.current = generation;
-    setStateReady(false);
-    setOnboardingLoadError(null);
-    try {
-      const snapshot = reopen
-        ? await appApi.setOnboardingOutcome("incomplete")
-        : await appApi.getOnboardingState(!shouldShowOnboarding());
-      if (loadGenerationRef.current !== generation) return;
-      onboardingSnapshotRef.current = snapshot;
-      readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
-      setProviderSkipped(false);
-      setIndex(onboardingStepIndex(snapshot));
-      setOpen(shouldOpenOnboarding(snapshot.outcome));
-      if (snapshot.profileReady && !profileInitializedRef.current) {
-        const current = await profileApi.get();
-        profileInitializedRef.current = true;
-        setName(current.name);
-        queryClient.setQueryData(queryKeys.profile, current);
+  const loadOnboarding = React.useCallback(
+    async (reopen = false) => {
+      const generation = loadGenerationRef.current + 1;
+      loadGenerationRef.current = generation;
+      setStateReady(false);
+      setOnboardingLoadError(null);
+      try {
+        const snapshot = reopen
+          ? await appApi.setOnboardingOutcome("incomplete")
+          : await appApi.getOnboardingState(!shouldShowOnboarding());
+        if (loadGenerationRef.current !== generation) return;
+        onboardingSnapshotRef.current = snapshot;
+        readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
+        setProviderSkipped(false);
+        setIndex(onboardingStepIndex(snapshot));
+        setOpen(shouldOpenOnboarding(snapshot.outcome));
+        if (snapshot.profileReady && !profileInitializedRef.current) {
+          const current = await profileApi.get();
+          profileInitializedRef.current = true;
+          setName(current.name);
+          queryClient.setQueryData(queryKeys.profile, current);
+        }
+        setStateReady(true);
+        if (reopen) clearLegacyOnboardingCompletion();
+      } catch (error) {
+        if (loadGenerationRef.current !== generation) return;
+        setOnboardingLoadError(
+          error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
+        );
+        setOpen(true);
       }
-      setStateReady(true);
-      if (reopen) clearLegacyOnboardingCompletion();
-    } catch (error) {
-      if (loadGenerationRef.current !== generation) return;
-      setOnboardingLoadError(
-        error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
-      );
-      setOpen(true);
-    }
-  }, [queryClient]);
+    },
+    [queryClient],
+  );
 
   React.useEffect(() => {
     void loadOnboarding();
@@ -545,10 +548,9 @@ export function OnboardingFlow() {
     codexStatus.data?.configured === true &&
     codexStatus.data.needsAttention === false &&
     codexStatus.data.models.length > 0;
-  const canContinue =
-    !stateReady
-      ? false
-      : step === "profile"
+  const canContinue = !stateReady
+    ? false
+    : step === "profile"
       ? name.trim().length > 0
       : step === "provider"
         ? choice === "openai-signin"

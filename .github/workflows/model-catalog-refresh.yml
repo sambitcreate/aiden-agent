@@ -1,0 +1,68 @@
+name: Model catalog refresh
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: model-catalog-refresh-main
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    if: >-
+      github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]' ||
+      !contains(github.event.head_commit.message, 'chore: refresh models.dev catalog')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Refresh models.dev snapshot
+        run: npm run models:refresh
+
+      - name: Verify model catalog contracts
+        run: npm run test:model-catalog
+
+      - name: Ensure only the snapshot changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          unexpected="$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -v '^resources/model-capabilities.json$' || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Catalog refresh changed files outside the approved snapshot:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Commit changed snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- resources/model-capabilities.json; then
+            echo "models.dev snapshot is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- resources/model-capabilities.json
+          git commit -m "chore: refresh models.dev catalog"
+          git push origin HEAD:main

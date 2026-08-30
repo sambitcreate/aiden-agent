@@ -115,6 +115,7 @@
     "release:verify": "node scripts/verify-macos-package.mjs --release",
     "models:refresh": "node scripts/update-model-capabilities.mjs",
     "test:provider-model-catalog": "tsx --test renderer/components/settings/provider-model-visibility.test.tsx renderer/lib/model-picker-data.test.ts renderer/shared/gemini-usage-scope.test.ts main/services/config-store-core.test.ts main/services/aiden-remote-models.test.ts main/services/bot-capability-inventory-ports.test.ts",
+    "test:model-catalog": "npm run test:provider-model-catalog && tsx --test main/services/models-dev-cache-core.test.ts renderer/components/settings/providers-catalog-update.test.tsx main/services/models.test.ts scripts/model-snapshot-core.test.mjs && node --test scripts/update-model-capabilities.test.mjs scripts/check-ci-policy.test.mjs",
     "release:update-model-capabilities": "npm run models:refresh",
     "dist": "node scripts/run-macos-distribution.mjs",
     "test:portable-config": "tsx --test main/services/aiden-config-dir.test.ts main/services/portable-config-core.test.ts main/services/portable-config-core.roundtrip.test.ts main/services/portable-config-watch-core.test.ts main/services/data-store.test.ts main/services/data-store.resilience.test.ts main/services/config-store-core.test.ts main/services/secret-map-core.test.ts"

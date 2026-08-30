@@ -105,11 +105,13 @@ test("foreground fetch rejects redirects, malformed data, and unsafe numeric lim
       async () =>
         new Response(
           JSON.stringify({
-            openai: { models: { unsafe: { name: "Unsafe", limit: { context: 99_000_000 } } } },
+            openai: {
+              models: { unsafe: { name: "Unsafe", limit: { context: 99_000_000_000 } } },
+            },
           }),
         ),
       1_000,
     ),
-    /unsafe limit/u,
+    /non-negative number/u,
   );
 });

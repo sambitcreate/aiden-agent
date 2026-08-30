@@ -1,14 +1,16 @@
 import { Buffer } from "node:buffer";
-import { parseModelCatalog, type ModelCatalog } from "./models-catalog-core.js";
+import {
+  MAX_MODELS_DEV_ID_LENGTH,
+  MAX_MODELS_DEV_MODELS,
+  MAX_MODELS_DEV_NUMERIC_VALUE,
+  MAX_MODELS_DEV_PROVIDERS,
+  parseModelCatalog,
+  type ModelCatalog,
+} from "./models-catalog-core.js";
 
 export const MODELS_DEV_ENDPOINT = "https://models.dev/api.json";
 export const MODELS_DEV_CACHE_SCHEMA_VERSION = 1 as const;
 export const MAX_MODELS_DEV_RESPONSE_BYTES = 64 * 1024 * 1024;
-export const MAX_MODELS_DEV_PROVIDERS = 1_024;
-export const MAX_MODELS_DEV_MODELS = 100_000;
-export const MAX_MODELS_DEV_ID_LENGTH = 512;
-export const MAX_MODELS_DEV_NUMERIC_VALUE = 10_000_000;
-
 export interface ModelsDevCacheDocument {
   schemaVersion: typeof MODELS_DEV_CACHE_SCHEMA_VERSION;
   appVersion: string;

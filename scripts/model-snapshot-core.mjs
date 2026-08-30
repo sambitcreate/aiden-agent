@@ -2,6 +2,11 @@ function record(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 
+export const MAX_MODELS_DEV_PROVIDERS = 1_024;
+export const MAX_MODELS_DEV_MODELS = 100_000;
+export const MAX_MODELS_DEV_ID_LENGTH = 512;
+export const MAX_MODELS_DEV_NUMERIC_VALUE = 1_000_000_000;
+
 function assertOptionalString(value, field) {
   if (value !== undefined && typeof value !== "string") {
     throw new Error(`models.dev model ${field} must be a string when present.`);
@@ -24,7 +29,13 @@ function assertOptionalStringArray(value, field) {
 }
 
 function assertOptionalLimit(value, field) {
-  if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+  if (
+    value !== undefined &&
+    (typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      value < 0 ||
+      value > MAX_MODELS_DEV_NUMERIC_VALUE)
+  ) {
     throw new Error(`models.dev model ${field} must be a non-negative number when present.`);
   }
 }
@@ -65,18 +76,28 @@ export function validateModelsDevSnapshot(value) {
     throw new Error("models.dev returned an unexpected payload.");
   }
   let modelCount = 0;
-  for (const [providerId, providerValue] of Object.entries(catalog)) {
+  const providers = Object.entries(catalog);
+  if (providers.length > MAX_MODELS_DEV_PROVIDERS) {
+    throw new Error("models.dev returned too many providers.");
+  }
+  for (const [providerId, providerValue] of providers) {
+    if (providerId.length === 0 || providerId.length > MAX_MODELS_DEV_ID_LENGTH) {
+      throw new Error("models.dev returned an invalid provider identity.");
+    }
     const provider = record(providerValue);
     const models = record(provider?.models);
     if (!provider || !models) {
       throw new Error(`models.dev provider ${providerId} must contain a models object.`);
     }
     for (const [modelId, model] of Object.entries(models)) {
-      if (modelId.length === 0) {
-        throw new Error(`models.dev provider ${providerId} contains an empty model id.`);
+      if (modelId.length === 0 || modelId.length > MAX_MODELS_DEV_ID_LENGTH) {
+        throw new Error(`models.dev provider ${providerId} contains an invalid model id.`);
       }
       validateModel(model, providerId, modelId);
       modelCount += 1;
+      if (modelCount > MAX_MODELS_DEV_MODELS) {
+        throw new Error("models.dev returned too many models.");
+      }
     }
   }
   if (Object.keys(catalog).length === 0 || modelCount === 0) {
