@@ -44,13 +44,20 @@ async function runWriter(root, overrides = {}, input = Buffer.alloc(0)) {
   );
   const stdout = [];
   const stderr = [];
+  let stdinFailure;
   child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
   child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  child.stdin.on("error", (error) => {
+    // Invalid metadata is rejected before the helper reads stdin. Linux can
+    // report that intentional early close as EPIPE while end() is flushing.
+    if (error?.code !== "EPIPE") stdinFailure = error;
+  });
   child.stdin.end(input);
   const result = await new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal }));
   });
+  if (stdinFailure) throw stdinFailure;
   return {
     ...result,
     stdout: Buffer.concat(stdout).toString("utf8"),
