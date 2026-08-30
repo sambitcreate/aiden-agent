@@ -84,6 +84,9 @@ jobs:
       - name: Verify branding, updater, and release policy
         run: npm run test:branding
 
+      - name: Verify model catalog contracts
+        run: npm run test:model-catalog
+
       - name: Run JavaScript, TypeScript, and Computer Use tests
         env:
           AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"

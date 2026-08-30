@@ -39,6 +39,8 @@ import type {
   Profile,
   Provider,
   ProviderCatalogRefreshResult,
+  ProviderCatalogUpdateResult,
+  ModelsDevCatalogStatus,
   OnboardingProviderValidationResult,
   ProviderModelMetadata,
   CodexProviderSnapshot,
@@ -202,6 +204,8 @@ export const providersApi = {
   refresh: (providerId?: string) =>
     invoke<ProviderCatalogRefreshResult>("providers:refresh", providerId),
   refreshIfStale: () => invoke<ProviderCatalogRefreshResult>("providers:refreshIfStale"),
+  catalogStatus: () => invoke<ModelsDevCatalogStatus>("providers:catalogStatus"),
+  updateCatalogs: () => invoke<ProviderCatalogUpdateResult>("providers:updateCatalogs"),
   validateOnboardingApiKey: (providerId: "openai" | "anthropic", key: string) =>
     invoke<OnboardingProviderValidationResult>(
       "providers:validateOnboardingApiKey",
@@ -268,6 +272,8 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setModelVisibility", providerId, modelId, hidden),
   showAllProviderModels: (providerId: string) =>
     invoke<AppSettings>("settings:showAllProviderModels", providerId),
+  hideAllProviderModels: (providerId: string) =>
+    invoke<AppSettings>("settings:hideAllProviderModels", providerId),
 };
 
 export const assistantApi = {
@@ -360,7 +366,9 @@ export const diagnosticsApi = {
     invoke<{ exported: boolean; manifest?: unknown }>("diagnostics:export", includeCrashDumps),
   delete: () => invoke<boolean>("diagnostics:delete"),
   enableMode: () =>
-    invoke<{ enabled: boolean; expiresAt: null; disablesOnRestart: true }>("diagnostics:mode-enable"),
+    invoke<{ enabled: boolean; expiresAt: null; disablesOnRestart: true }>(
+      "diagnostics:mode-enable",
+    ),
 };
 
 // ── Exa web search ────────────────────────────────────────────────────
@@ -724,8 +732,7 @@ export const chatsApi = {
   setComputerUse: (id: string, enabled: boolean) =>
     invoke<Chat>("chats:setComputerUse", id, enabled),
   remove: (id: string) => invoke<void>("chats:remove", id),
-  abandonTurn: (id: string, turnId: string) =>
-    invoke<boolean>("chats:abandonTurn", id, turnId),
+  abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,

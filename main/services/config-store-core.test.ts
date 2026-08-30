@@ -246,18 +246,29 @@ test("model visibility updates are atomic and provider-scoped", async (t) => {
   ]);
 
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    anthropic: ["claude-sonnet"],
-    google: ["gemini-flash", "gemini-pro"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-sonnet"] },
+    google: { defaultVisibility: "shown", exceptions: ["gemini-flash", "gemini-pro"] },
   });
 
   await h.store.setModelVisibility("google", "gemini-pro", false);
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    anthropic: ["claude-sonnet"],
-    google: ["gemini-flash"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-sonnet"] },
+    google: { defaultVisibility: "shown", exceptions: ["gemini-flash"] },
   });
   await h.store.showAllProviderModels("google");
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    anthropic: ["claude-sonnet"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-sonnet"] },
+  });
+
+  await h.store.hideAllProviderModels("google");
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "hidden",
+    exceptions: [],
+  });
+  await h.store.setModelVisibility("google", "gemini-pro", false);
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "hidden",
+    exceptions: ["gemini-pro"],
   });
 });
 
@@ -274,16 +285,21 @@ test("Gemini voice setup atomically selects voice and gates every Google chat mo
   assert.equal(voiceOnly.voiceModel, "gemini-3.5-transcribe-live");
   assert.equal(voiceOnly.geminiUsageScope, "transcription_only");
   assert.deepEqual(voiceOnly.hiddenModelsByProvider, {
-    anthropic: ["claude-private"],
-    google: ["*", "gemini-private"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-private"] },
+    google: {
+      defaultVisibility: "shown",
+      exceptions: ["gemini-private"],
+      policyHidden: true,
+    },
   });
 
   await h.store.setModelVisibility("google", "future-gemini", false);
   await h.store.showAllProviderModels("google");
-  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, [
-    "*",
-    "gemini-private",
-  ]);
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "shown",
+    exceptions: ["gemini-private"],
+    policyHidden: true,
+  });
 
   const full = await h.store.setGeminiVoiceSetup(
     "models_and_transcription",
@@ -291,8 +307,8 @@ test("Gemini voice setup atomically selects voice and gates every Google chat mo
   );
   assert.equal(full.geminiUsageScope, "models_and_transcription");
   assert.deepEqual(full.hiddenModelsByProvider, {
-    anthropic: ["claude-private"],
-    google: ["gemini-private"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-private"] },
+    google: { defaultVisibility: "shown", exceptions: ["gemini-private"] },
   });
 });
 
@@ -307,7 +323,11 @@ test("Gemini usage scope gates Google models without changing local or OpenAI vo
   assert.equal(local.voiceProvider, "local");
   assert.equal(local.voiceModel, "local-voice-selection");
   assert.equal(local.geminiUsageScope, "transcription_only");
-  assert.deepEqual(local.hiddenModelsByProvider?.google, ["*"]);
+  assert.deepEqual(local.hiddenModelsByProvider?.google, {
+    defaultVisibility: "shown",
+    exceptions: [],
+    policyHidden: true,
+  });
 
   await h.store.setSettings({
     voiceProvider: "openai",
@@ -320,6 +340,53 @@ test("Gemini usage scope gates Google models without changing local or OpenAI vo
   assert.equal(openai.hiddenModelsByProvider?.google, undefined);
 });
 
+test("Gemini usage scope repairs divergent imported Google policy state", async (t) => {
+  const full = await harness(t);
+  await fs.writeFile(
+    full.settingsFile,
+    JSON.stringify({
+      settings: {
+        geminiUsageScope: "models_and_transcription",
+        hiddenModelsByProvider: { google: ["*", "gemini-private"] },
+      },
+    }),
+    "utf-8",
+  );
+
+  assert.deepEqual((await full.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "shown",
+    exceptions: ["gemini-private"],
+  });
+  await full.store.setSettings({ profileName: "Repaired" });
+  assert.deepEqual(
+    (await readJson<{ settings: { hiddenModelsByProvider?: unknown } }>(full.settingsFile)).settings
+      .hiddenModelsByProvider,
+    { google: { defaultVisibility: "shown", exceptions: ["gemini-private"] } },
+  );
+
+  const transcriptionOnly = await harness(t);
+  await fs.writeFile(
+    transcriptionOnly.settingsFile,
+    JSON.stringify({
+      settings: {
+        geminiUsageScope: "transcription_only",
+        hiddenModelsByProvider: {
+          google: { defaultVisibility: "shown", exceptions: ["gemini-private"] },
+        },
+      },
+    }),
+    "utf-8",
+  );
+  assert.deepEqual(
+    (await transcriptionOnly.store.getSettings()).hiddenModelsByProvider?.google,
+    {
+      defaultVisibility: "shown",
+      exceptions: ["gemini-private"],
+      policyHidden: true,
+    },
+  );
+});
+
 test("removing a provider clears its model visibility preferences", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
@@ -329,7 +396,7 @@ test("removing a provider clears its model visibility preferences", async (t) =>
   await h.store.removeProvider(provider.id);
 
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    other: ["other-model"],
+    other: { defaultVisibility: "shown", exceptions: ["other-model"] },
   });
 });
 
@@ -566,7 +633,7 @@ test("released onboarding local identity migration re-homes cache and remembered
   assert.deepEqual(listed.modelMetadata, provider.modelMetadata);
   assert.equal((await h.store.getSettings()).lastProviderId, "custom:lmstudio");
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    "custom:lmstudio": ["qwen3-8b"],
+    "custom:lmstudio": { defaultVisibility: "shown", exceptions: ["qwen3-8b"] },
   });
   const cache = await readJson<{ byProvider: Record<string, unknown> }>(h.cacheFile);
   assert.equal(cache.byProvider[releasedId], undefined);

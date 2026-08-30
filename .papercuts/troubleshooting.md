@@ -142,6 +142,9 @@
 - A mobile verification shell may know the Android SDK through `android info` while Gradle still lacks both Java and `ANDROID_HOME`. On this workstation, use Android Studio's bundled JBR as `JAVA_HOME` and the SDK path reported by `android info` as `ANDROID_HOME`; do not write a developer-specific `local.properties` into the repository.
 - A generic-hardware `xcodebuild build-for-testing` can finish compiling Swift app/test sources and then remain silent in a stuck `ibtoold` finalization pass. Distinguish that local Xcode tooling hang from a Swift compile failure, retain the generic `platform=iOS` destination (never substitute a simulator), and let the clean CI hardware-target compile provide the terminal gate.
 - A dictation stop can arrive before microphone or Live-session startup finishes, and a Live transcript can be visible before its finalization handshake succeeds. Latch stop intent by operation identity, keep one wall-clock budget across Live and batch fallback, preserve committed Live text, and ensure cancellation remains callable after audio capture disconnects.
+- Release-time and live validators for the same downloaded catalog can drift even when both look strict. Keep one shared acceptance corpus that runs every payload through both validators, including optional display strings and numeric bounds, so packaging cannot emit a snapshot the runtime will reject.
+- A post-merge updater should not run dependency installation or repository scripts with `contents: write`. Verify and test under read-only permissions, transfer a hashed artifact, and give only a minimal publish job write access with checkout credentials disabled and the token scoped to its final push command.
+
 ## Packaged Electron consent acceptance without a shipped bypass
 
 Artifact-level diagnostics acceptance needs to exercise renderer ownership,

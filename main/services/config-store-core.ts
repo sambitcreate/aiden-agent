@@ -50,6 +50,7 @@ import { mergeProviderThinkingPreference } from "../../renderer/shared/provider-
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import {
+  hideAllProviderModels,
   remapHiddenModelProvider,
   withModelVisibility,
   withoutProviderVisibility,
@@ -874,6 +875,18 @@ export function createConfigStore(
           return structuredClone(config.settings);
         }
         config.settings.hiddenModelsByProvider = withoutProviderVisibility(
+          config.settings.hiddenModelsByProvider,
+          providerId,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /** Atomically hide current and future models for one provider. */
+    async hideAllProviderModels(providerId: string): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.hiddenModelsByProvider = hideAllProviderModels(
           config.settings.hiddenModelsByProvider,
           providerId,
         );

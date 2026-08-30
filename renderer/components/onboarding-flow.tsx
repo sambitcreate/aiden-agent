@@ -262,7 +262,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Personal Model Pad",
     description:
-      "Arrange favorite models on your own map; an optional benchmark-only OpenRouter key never imports its model catalog.",
+      "Arrange favorite models on your own map; an optional benchmark-only OpenRouter key never imports its model catalog. Live catalog checks happen only when you choose provider setup or Update model catalogs; ordinary browsing stays offline.",
     icon: ChartScatter,
     imageUrl: FEATURE_ILLUSTRATIONS.modelPad,
     size: "tall",

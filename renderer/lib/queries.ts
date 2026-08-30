@@ -60,6 +60,7 @@ export const queryKeys = {
   scheduledSettings: ["scheduledSettings"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
+  modelCatalogStatus: ["modelCatalogStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
   usage: (range: UsageDateRange) => ["usage", range] as const,
@@ -123,6 +124,10 @@ export async function refreshModelInsightsState(
 
 export function useProviders() {
   return useQuery({ queryKey: queryKeys.providers, queryFn: providersApi.list });
+}
+
+export function useModelCatalogStatus() {
+  return useQuery({ queryKey: queryKeys.modelCatalogStatus, queryFn: providersApi.catalogStatus });
 }
 
 export function useCodexProviderStatus() {

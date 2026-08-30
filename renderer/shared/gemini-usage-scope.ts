@@ -1,12 +1,8 @@
-import { normalizeHiddenModelsByProvider, type HiddenModelsByProvider } from "./model-visibility";
+import { type HiddenModelsByProvider, withProviderPolicyHidden } from "./model-visibility";
 
 export type GeminiUsageScope = "transcription_only" | "models_and_transcription";
 
-/**
- * A visibility sentinel paired with the execution policy below: existing
- * chats may still execute their pinned Google model, while every current and
- * future Google model stays out of new model selectors.
- */
+/** Legacy persisted sentinel migrated by model-visibility normalization. */
 export const ALL_PROVIDER_MODELS = "*";
 
 export function isGeminiUsageScope(value: unknown): value is GeminiUsageScope {
@@ -35,13 +31,5 @@ export function hiddenModelsForGeminiScope(
   providerId: string,
   scope: GeminiUsageScope,
 ): HiddenModelsByProvider | undefined {
-  const normalized = normalizeHiddenModelsByProvider(current) ?? {};
-  const providerModels = new Set(normalized[providerId] ?? []);
-  if (scope === "transcription_only") providerModels.add(ALL_PROVIDER_MODELS);
-  else providerModels.delete(ALL_PROVIDER_MODELS);
-
-  const next = { ...normalized };
-  if (providerModels.size > 0) next[providerId] = [...providerModels];
-  else delete next[providerId];
-  return normalizeHiddenModelsByProvider(next);
+  return withProviderPolicyHidden(current, providerId, scope === "transcription_only");
 }
