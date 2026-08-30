@@ -46,7 +46,7 @@ The integrated plan therefore uses A's low-risk data path, C's iPad detail-colum
 - The home list uses the same workspace-owned projection and a persisted per-installation organization/disclosure store.
 - iPhone retains push navigation. On regular-width iPad, selecting a chat presents it in the detail column rather than a modal sheet.
 - Device-local workspace archive state is applied before projection and stale disclosure IDs are pruned.
-- Chat-list readiness is scoped to the active installation/request lease. Initial reads (including reads with cached rows), installation switches, and failures block new-chat/workspace creation until the current installation loads successfully; failures render an explicit retry state and stale requests cannot overwrite a newer load.
+- Chat-list readiness is scoped to the active installation/request lease. Initial reads (including reads with cached rows), installation switches, and failures block new-chat/workspace creation until the current installation loads successfully; failures render an explicit retry state and stale requests cannot overwrite a newer load. Connection-driven task cancellation is non-failing, and a unique load-attempt fence lets the restarted task supersede the cancelled request without being skipped.
 
 ### Android
 

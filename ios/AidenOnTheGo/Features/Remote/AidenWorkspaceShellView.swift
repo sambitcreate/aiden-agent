@@ -143,6 +143,11 @@ enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 private final class AidenHomeModel {
+    private struct LoadAttempt: Equatable {
+        let id = UUID()
+        let context: AidenRemoteRequestContext
+    }
+
     enum ChatListLoadState: Equatable {
         case unresolved
         case loading
@@ -158,7 +163,7 @@ private final class AidenHomeModel {
     var errorMessage: String?
     var chatListLoadState: ChatListLoadState = .unresolved
     private var contentContext: AidenRemoteRequestContext?
-    private var loadingContext: AidenRemoteRequestContext?
+    private var loadingAttempt: LoadAttempt?
 
     var chatLoadErrorMessage: String? {
         guard case .failed(let message) = chatListLoadState else { return nil }
@@ -174,8 +179,8 @@ private final class AidenHomeModel {
 
     func load(coordinator: AidenRemoteCoordinator) async {
         guard coordinator.connectionState == .connected,
-              let context = try? coordinator.requestContext(),
-              loadingContext != context else { return }
+              let context = try? coordinator.requestContext() else { return }
+        let attempt = LoadAttempt(context: context)
         let plan = AidenHomeLoadPlan(
             installation: coordinator.installationStore.activeInstallation
         )
@@ -193,13 +198,13 @@ private final class AidenHomeModel {
         }
         if !plan.loadsScheduledTasks { scheduledTasks = [] }
         if !plan.loadsUsage { usage = nil }
-        loadingContext = context
+        loadingAttempt = attempt
         isLoading = true
         errorMessage = nil
         if plan.loadsChats { chatListLoadState = .loading }
         defer {
-            if loadingContext == context {
-                loadingContext = nil
+            if loadingAttempt == attempt {
+                loadingAttempt = nil
                 isLoading = false
             }
         }
@@ -217,13 +222,13 @@ private final class AidenHomeModel {
             async let usageRequest = aidenLoadHomeSegment(enabled: plan.loadsUsage) {
                 try await client.usage()
             }
-            let (chatsResult, tasksResult, catalogResult, usageResult) = await (
+            let (chatsResult, tasksResult, catalogResult, usageResult) = try await (
                 chatsRequest,
                 tasksRequest,
                 catalogRequest,
                 usageRequest
             )
-            guard coordinator.isCurrent(context) else { return }
+            guard loadingAttempt == attempt, coordinator.isCurrent(context) else { return }
             var failures: [Error] = []
             switch chatsResult {
             case .success(let loadedChats):
@@ -256,8 +261,10 @@ private final class AidenHomeModel {
             case .failure(let error): failures.append(error)
             }
             errorMessage = failures.first?.localizedDescription
+        } catch let error where aidenIsCancellation(error) {
+            return
         } catch {
-            if coordinator.isCurrent(context) {
+            if loadingAttempt == attempt, coordinator.isCurrent(context) {
                 errorMessage = error.localizedDescription
                 if plan.loadsChats { chatListLoadState = .failed(error.localizedDescription) }
             }
@@ -282,10 +289,15 @@ struct AidenHomeLoadPlan: Equatable {
 private func aidenLoadHomeSegment<Value: Sendable>(
     enabled: Bool,
     operation: @escaping @Sendable () async throws -> Value
-) async -> Result<Value?, Error> {
+) async throws -> Result<Value?, Error> {
+    try Task.checkCancellation()
     guard enabled else { return .success(nil) }
     do {
-        return .success(try await operation())
+        let value = try await operation()
+        try Task.checkCancellation()
+        return .success(value)
+    } catch let error where aidenIsCancellation(error) {
+        throw CancellationError()
     } catch {
         return .failure(error)
     }

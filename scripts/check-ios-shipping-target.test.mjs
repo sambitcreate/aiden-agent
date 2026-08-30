@@ -693,8 +693,26 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     shell,
     /private var chatCreationBlocked:[\s\S]{0,180}homeModel\.chatListLoadState != \.loaded/u,
   );
-  assert.match(shell, /loadingContext != context/u);
-  assert.match(shell, /if loadingContext == context \{[\s\S]{0,100}isLoading = false/u);
+  assert.match(shell, /private struct LoadAttempt:[\s\S]{0,120}let id = UUID\(\)/u);
+  assert.match(shell, /loadingAttempt = attempt/u);
+  assert.match(
+    shell,
+    /guard loadingAttempt == attempt, coordinator\.isCurrent\(context\) else \{ return \}/u,
+  );
+  assert.match(shell, /if loadingAttempt == attempt \{[\s\S]{0,100}isLoading = false/u);
+  assert.match(
+    shell,
+    /catch let error where aidenIsCancellation\(error\) \{\s*throw CancellationError\(\)/u,
+  );
+  assert.match(
+    shell,
+    /aidenLoadHomeSegment[\s\S]*?try Task\.checkCancellation\(\)[\s\S]*?let value = try await operation\(\)[\s\S]*?try Task\.checkCancellation\(\)/u,
+  );
+  assert.match(
+    shell,
+    /catch let error where aidenIsCancellation\(error\) \{\s*return\s*\}\s*catch/u,
+  );
+  assert.doesNotMatch(shell, /loadingContext/u);
   assert.match(
     shell,
     /\.task\(id: AidenHomeLoadID\([\s\S]{0,160}instanceID: coordinator\.activeInstanceId/u,
@@ -941,7 +959,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     chat,
     /AidenApprovalCard[\s\S]*?Image\(systemName: "shield"\)[\s\S]*?Text\(AidenApprovalPresentation\.title\(for: kind\)\)[\s\S]*?font\(\.subheadline\.weight\(\.semibold\)\)/u,
   );
-  assert.match(chat, /Text\(AidenApprovalPresentation\.detail\(for: kind\)\)[\s\S]*?font\(\.caption\)/u);
+  assert.match(
+    chat,
+    /Text\(AidenApprovalPresentation\.detail\(for: kind\)\)[\s\S]*?font\(\.caption\)/u,
+  );
   assert.match(chat, /Text\(summary\)[\s\S]*?font\(\.caption\.monospaced\(\)\)/u);
   assert.match(
     chat,
