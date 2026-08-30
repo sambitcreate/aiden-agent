@@ -140,6 +140,31 @@ test("slash availability combines the dispatcher with composer-specific state", 
     /allow workspace access/iu,
   );
   assert.match(
+    slashCommandAvailability(command("btw"), { ...context, hasCompletedTurn: false }).reason ?? "",
+    /complete an assistant turn/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("btw"), {
+      ...context,
+      hasAttachmentsOrSelectedSkill: true,
+    }).reason ?? "",
+    /remove attachments/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("btw"), {
+      ...context,
+      sideQuestionBlockedReason: "Side questions are not available in Bot chats.",
+    }).reason ?? "",
+    /not available in Bot chats/iu,
+  );
+  assert.deepEqual(
+    slashCommandAvailability(command("clone"), {
+      ...context,
+      sideQuestionBlockedReason: "Side questions are not available in Bot chats.",
+    }),
+    { available: true },
+  );
+  assert.match(
     slashCommandAvailability(command("clone"), {
       ...context,
       payloadAfterToken: true,

@@ -27,6 +27,8 @@ import { registerSubagentHandlers } from "./subagents.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
+import { registerBtwHandlers } from "./btw.js";
+import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -39,6 +41,7 @@ export function registerHandlers(): void {
   });
 
   registerDiagnosticHandlers();
+  initializeAdvisorRuntime();
 
   // AI chat client handlers
   registerProviderHandlers();
@@ -62,6 +65,7 @@ export function registerHandlers(): void {
   registerSubagentHandlers();
   registerAidenRemoteHandlers();
   registerBotHandlers();
+  registerBtwHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

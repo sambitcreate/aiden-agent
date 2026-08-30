@@ -119,7 +119,7 @@ interface ComposerProps {
     text: string,
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
-    options?: { visualize?: boolean },
+    options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
@@ -163,6 +163,7 @@ interface ComposerProps {
   latestAssistantResponse?: string;
   slashNavigationBlockedReason?: string;
   slashSessionBlockedReason?: string;
+  sideQuestionBlockedReason?: string;
   onOpenSettings?: (section?: SettingsSection) => void;
   onRenameChat?: (title: string) => void | Promise<void>;
   onOpenReview?: () => void;
@@ -270,6 +271,7 @@ export function Composer({
   latestAssistantResponse,
   slashNavigationBlockedReason,
   slashSessionBlockedReason,
+  sideQuestionBlockedReason,
   onOpenSettings,
   onRenameChat,
   onOpenReview,
@@ -506,6 +508,7 @@ export function Composer({
           : undefined,
       navigationBlockedReason: slashNavigationBlockedReason,
       sessionActionBlockedReason: slashSessionBlockedReason,
+      sideQuestionBlockedReason,
       chatCloneBlockedReason: forkEligibility.cloneBlocked
         ? "This chat has too many messages to clone safely. Fork from an earlier turn instead."
         : undefined,
@@ -553,6 +556,7 @@ export function Composer({
       slashActionBusy,
       slashNavigationBlockedReason,
       slashSessionBlockedReason,
+      sideQuestionBlockedReason,
       slashSession,
       selectedSkill,
       text,
@@ -699,6 +703,7 @@ export function Composer({
       selectedSkill?: SelectedSkillInvocation;
       skillRevision: number;
       visualize?: boolean;
+      btw?: boolean;
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -722,7 +727,9 @@ export function Composer({
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
-          payload.visualize ? { visualize: true } : undefined,
+          payload.visualize || payload.btw
+            ? { visualize: payload.visualize, btw: payload.btw }
+            : undefined,
         );
         return true;
       } catch (error) {
@@ -844,11 +851,17 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          if (instruction !== "visualize") return false;
           const nextPrompt =
             prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const missingPromptMessage = instruction === "btw"
+            ? "Add a question after /btw, then send."
+            : "Add what to visualize after /visualize, then send.";
           if (!nextPrompt) {
-            toast.info("Add what to visualize after /visualize, then send.");
+            toast.info(missingPromptMessage);
+            return false;
+          }
+          if (instruction === "btw" && (attachments.length > 0 || selectedSkill)) {
+            toast.info("Remove attachments and the selected skill before asking a side question.");
             return false;
           }
           if (selectedSkillState && selectedSkillState.state !== "valid") {
@@ -857,13 +870,23 @@ export function Composer({
           }
           const submittedAttachments = attachments;
           const submittedSkillRevision = skillSelection.revision;
+          if (instruction === "visualize") {
+            return sendComposerPayload({
+              draftText: text,
+              sendText: nextPrompt,
+              attachments: submittedAttachments,
+              selectedSkill,
+              skillRevision: submittedSkillRevision,
+              visualize: true,
+            });
+          }
           return sendComposerPayload({
             draftText: text,
             sendText: nextPrompt,
             attachments: submittedAttachments,
             selectedSkill,
             skillRevision: submittedSkillRevision,
-            visualize: true,
+            btw: true,
           });
         },
       });

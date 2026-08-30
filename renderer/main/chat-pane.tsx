@@ -11,6 +11,9 @@ import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
+import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { TodoPanel } from "../components/todo-panel";
+import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
@@ -114,6 +117,7 @@ import {
   subscribeDetachedLifecycleStreams,
 } from "../lib/chat-terminal-sync";
 import {
+  ASSISTANT_WORKSPACE_ID,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
@@ -122,6 +126,12 @@ import { isAppendReconciliationRequired } from "../shared/chat-message-contract"
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
+import type {
+  AskUserQuestionPromptV1,
+  AskUserQuestionResponseV1,
+} from "../shared/ask-user-question";
+import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
+import type { BtwEventV1 } from "../shared/btw";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -161,6 +171,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  const sideQuestionBlockedReason = chat.data?.botId || bot.data
+    ? "Side questions are not available in Bot chats."
+    : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
+      ? "Side questions are not available in Assistant chats."
+      : undefined;
   const detachedGenerationDraining = React.useSyncExternalStore(
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
@@ -372,6 +387,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshot[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
+  const [questionnaire, setQuestionnaire] = React.useState<AskUserQuestionPromptV1 | null>(null);
+  const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
+  const [btwView, setBtwView] = React.useState<BtwLiveView | null>(null);
+  const [todoSnapshot, setTodoSnapshot] = React.useState<TodoSnapshotViewV1 | null>(null);
   const [computerUseSaving, setComputerUseSaving] = React.useState(false);
   const [thinkingSaving, setThinkingSaving] = React.useState(false);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
@@ -382,6 +401,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const visualizeTurnRef = React.useRef(false);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
+  const todoSnapshotReadFenceRef = React.useRef<TodoSnapshotReadFence | null>(null);
+  const todoSnapshotReadFence =
+    todoSnapshotReadFenceRef.current ??= new TodoSnapshotReadFence();
+  const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
   const terminalShortcut = useShortcutLabel("terminal.toggle");
@@ -429,6 +452,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   chatIdRef.current = chatId;
+  React.useEffect(() => {
+    btwViewRef.current = btwView;
+  }, [btwView]);
+
+  React.useEffect(
+    () =>
+      chatsApi.onBtwEvent((event: BtwEventV1) => {
+        if (event.chatId !== chatIdRef.current) return;
+        setBtwView((current) => reduceBtwView(current, event));
+      }),
+    [],
+  );
 
   React.useEffect(() => {
     let active = true;
@@ -471,6 +506,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
         generationRef.current = null;
         generationChatIdRef.current = null;
       }
+      const sideQuestion = btwViewRef.current;
+      if (
+        sideQuestion &&
+        sideQuestion.requestId !== "pending" &&
+        (sideQuestion.status === "starting" || sideQuestion.status === "running")
+      ) {
+        void chatsApi.btwCancel(departingChatId, sideQuestion.requestId);
+      }
       if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
       deltaFrameRef.current = null;
       pendingDeltaRef.current = "";
@@ -487,6 +530,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // the incoming chatId never paints a frame carrying the outgoing chat's
   // stream, timeline, or approvals.
   React.useLayoutEffect(() => {
+    todoSnapshotReadFence.reset(chatId);
     setStreamingText(null);
     setStreamingReasoning(null);
     clearTextStreaming();
@@ -503,8 +547,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setLiveSubagents([]);
     setError(null);
     setApprovals([]);
+    setQuestionnaire(null);
+    setQuestionnaireSubmitting(false);
+    setBtwView(null);
+    setTodoSnapshot(null);
     decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
+  }, [chatId]);
+
+  React.useEffect(() => {
+    let current = true;
+    const ticket = todoSnapshotReadFence.beginInitialRead(chatId);
+    void chatsApi.todoSnapshot(chatId).then(
+      (snapshot) => {
+        if (
+          current &&
+          chatIdRef.current === chatId &&
+          todoSnapshotReadFence.canApplyInitial(ticket)
+        ) {
+          setTodoSnapshot(snapshot);
+        }
+      },
+      () => {
+        // The chat remains usable. A verified corrupt journal is represented by
+        // an explicit unavailable snapshot; transport/lifecycle failures stay quiet.
+      },
+    );
+    return () => {
+      current = false;
+    };
   }, [chatId]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
@@ -767,6 +838,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       generationTimelineRef.current = null;
       setLiveSubagents([]);
       setApprovals([]);
+      setQuestionnaire(null);
+      setQuestionnaireSubmitting(false);
       const scheduleStreamFlush = () => {
         if (deltaFrameRef.current !== null) return;
         deltaFrameRef.current = window.requestAnimationFrame(() => {
@@ -907,6 +980,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setApprovals((prev) => [...prev, prompt]);
             }
           },
+          onQuestionnaire: (prompt) => {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              setQuestionnaireSubmitting(false);
+              setQuestionnaire(prompt);
+            }
+          },
+          onTodo: (snapshot) => {
+            if (
+              mountedRef.current &&
+              generationIntentRef.current === generationIntent &&
+              snapshot.chatId === chatId
+            ) {
+              todoSnapshotReadFence.markLive(snapshot.chatId);
+              setTodoSnapshot(snapshot);
+            }
+          },
           onDone: async (full, finalTimeline, updatedChat, finalReasoning) => {
             if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
@@ -946,6 +1035,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setGenerationTimeline(null);
               generationTimelineRef.current = null;
               setApprovals([]);
+              setQuestionnaire(null);
+              setQuestionnaireSubmitting(false);
             }
           },
           onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
@@ -1012,6 +1103,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   generationTimelineRef.current = null;
                 }
                 setApprovals([]);
+                setQuestionnaire(null);
+                setQuestionnaireSubmitting(false);
                 const persistedFailure =
                   updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
                   updatedChat.messages[updatedChat.messages.length - 1]?.providerFailure;
@@ -1058,8 +1151,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean },
+      options?: { visualize?: boolean; btw?: boolean },
     ) => {
+      if (options?.btw) {
+        if (attachments.length > 0 || skillInvocation) {
+          throw new Error("Side questions do not accept attachments or skills.");
+        }
+        const question = text.trim();
+        setBtwView({
+          requestId: "pending",
+          question,
+          answer: "",
+          status: "starting",
+          hasHistory: btwViewRef.current?.hasHistory ?? false,
+          contextTrimmed: false,
+          sequence: -1,
+        });
+        try {
+          const receipt = await chatsApi.btwStart(chatId, question);
+          setBtwView((current) =>
+            current?.requestId === "pending"
+              ? { ...current, requestId: receipt.requestId }
+              : current,
+          );
+        } catch (error) {
+          setBtwView((current) => current?.requestId === "pending" ? null : current);
+          throw error;
+        }
+        return;
+      }
       visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
@@ -1179,6 +1299,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationTimelineRef.current = null;
     setLiveSubagents([]);
     setApprovals([]);
+    setQuestionnaire(null);
+    setQuestionnaireSubmitting(false);
     decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
   }, []);
@@ -1224,6 +1346,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [chatId],
+  );
+
+  const answerQuestionnaire = React.useCallback(
+    async (response: AskUserQuestionResponseV1) => {
+      if (!questionnaire || questionnaireSubmitting) return;
+      setQuestionnaireSubmitting(true);
+      try {
+        await chatsApi.answerQuestionnaire(questionnaire.promptId, response);
+        if (chatIdRef.current === chatId) setQuestionnaire(null);
+      } catch (questionError) {
+        if (chatIdRef.current !== chatId) return;
+        toast.error(
+          questionError instanceof Error ? questionError.message : "Couldn't send that answer.",
+        );
+      } finally {
+        if (chatIdRef.current === chatId) setQuestionnaireSubmitting(false);
+      }
+    },
+    [chatId, questionnaire, questionnaireSubmitting],
   );
 
   const openFolder = React.useCallback(() => {
@@ -1733,9 +1874,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
         displayedGenerationTimeline,
         agentActivity?.phase,
         approvals.length,
+        questionnaire?.promptId,
         displayedStreamingArtifacts.length,
       ]}
       showScrollToBottomButton
+      scrollToBottomButtonOffset={
+        todoSnapshot?.availability === "unavailable" ||
+        todoSnapshot?.tasks.some(
+          (task) => task.status !== "deleted" && task.status !== "completed",
+        )
+          ? 44
+          : 0
+      }
       footer={
         <>
           <EventPresence
@@ -1854,7 +2004,40 @@ export function ChatPane({ chatId }: { chatId: string }) {
               </div>
             ) : null}
           </EventPresence>
-          <Composer
+          <TodoPanel snapshot={todoSnapshot} />
+          {btwView ? (
+            <BtwCard
+              view={btwView}
+              onAsk={(question) => handleSend(question, [], undefined, { btw: true })}
+              onCancel={async () => {
+                if (btwView.requestId !== "pending") {
+                  await chatsApi.btwCancel(chatId, btwView.requestId);
+                }
+              }}
+              onClear={async () => {
+                await chatsApi.btwClear(chatId);
+                setBtwView(null);
+              }}
+              onClose={async () => {
+                if (
+                  btwView.requestId !== "pending" &&
+                  (btwView.status === "starting" || btwView.status === "running")
+                ) {
+                  await chatsApi.btwCancel(chatId, btwView.requestId);
+                }
+                setBtwView(null);
+              }}
+            />
+          ) : null}
+          {questionnaire ? (
+            <AskUserQuestionComposer
+              key={questionnaire.promptId}
+              prompt={questionnaire}
+              submitting={questionnaireSubmitting}
+              onRespond={answerQuestionnaire}
+            />
+          ) : (
+            <Composer
             // Keyed so the draft and attachments stay scoped to one chat. The
             // route no longer remounts the pane, and Composer owns that text
             // without a chatId reset of its own.
@@ -1915,6 +2098,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             currentChatTitle={chat.data?.title}
             latestAssistantResponse={latestAssistantResponse}
             slashNavigationBlockedReason={settingsBlockedReason}
+            sideQuestionBlockedReason={sideQuestionBlockedReason}
             slashSessionBlockedReason={
               documentAppendReconciliationRequired
                 ? "Reload Aiden before copying this chat."
@@ -1995,6 +2179,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               />
             }
           />
+          )}
         </>
       }
     >

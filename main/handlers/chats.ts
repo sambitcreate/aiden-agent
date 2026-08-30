@@ -52,6 +52,12 @@ import {
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
+import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
+import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
+import {
+  todoSnapshotForRenderer,
+  unavailableTodoSnapshot,
+} from "../../renderer/shared/todo.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -81,6 +87,31 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:get", async (_event, id: unknown) =>
     chatApplicationService.get(asString(id, "id")),
   );
+
+  ipcMain.handle("chats:todoSnapshot", async (event, id: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Todo state requires the active application document."),
+    );
+    const chatId = asString(id, "id");
+    const chat = await chatStore.get(chatId);
+    if (!chat || chat.botId || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
+      return null;
+    }
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    try {
+      const snapshot = todoSnapshotForRenderer(
+        chatId,
+        await replayTodoState(await piCompactionSessionStore.openChat(chatId)),
+      );
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+      return snapshot;
+    } catch (error) {
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+      if (!isTodoSnapshotFailure(error)) throw error;
+      return unavailableTodoSnapshot(chatId);
+    }
+  });
 
   ipcMain.handle("chats:waitUntilIdle", async (_event, id: unknown) =>
     chatApplicationService.waitUntilIdle(asString(id, "id")),
