@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   isAssistantAutomationApprovalDetails,
+  isScheduledTaskApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
   type AssistantAutomationApprovalDetails,
+  type ScheduledTaskApprovalDetails,
   type SubagentMcpMutationApprovalDetails,
   type SubagentWorkspaceWriteApprovalDetails,
 } from "./assistant.js";
@@ -69,6 +71,58 @@ const workspaceWrite: SubagentWorkspaceWriteApprovalDetails = {
   commandWillRun: false,
   refuseIfChanged: true,
 };
+
+const scheduledTaskApproval: ScheduledTaskApprovalDetails = {
+  kind: "scheduled-task",
+  action: "create",
+  taskId: null,
+  expectedUpdatedAt: null,
+  enabled: true,
+  name: "Inbox monitor",
+  prompt: "Summarize inbox changes.",
+  script: null,
+  cron: "0 9 * * *",
+  timezone: "UTC",
+  nextRunAt: 1_800_000_000_000,
+  notify: true,
+  mode: "llm",
+  permission: "full",
+  workspaceId: null,
+  workspaceName: null,
+  mcpServerIds: ["gmail"],
+  mcpServerNames: ["Gmail"],
+  providerId: "local-provider",
+  providerName: "Local Provider",
+  model: "local-model",
+  modelName: "Local Model",
+  legacyGlobalMcp: false,
+  schedulerEnabled: true,
+};
+
+test("standard schedule approval details bind exact action, content, and scope", () => {
+  assert.equal(isScheduledTaskApprovalDetails(scheduledTaskApproval), true);
+  assert.equal(
+    isScheduledTaskApprovalDetails({ ...scheduledTaskApproval, action: "update" }),
+    false,
+  );
+  assert.equal(
+    isScheduledTaskApprovalDetails({
+      ...scheduledTaskApproval,
+      action: "update",
+      taskId: "task-1",
+      expectedUpdatedAt: 4,
+    }),
+    true,
+  );
+  assert.equal(
+    isScheduledTaskApprovalDetails({ ...scheduledTaskApproval, mcpServerNames: [] }),
+    false,
+  );
+  assert.equal(
+    isScheduledTaskApprovalDetails({ ...scheduledTaskApproval, prompt: "Unsafe\u2028line" }),
+    false,
+  );
+});
 
 test("Assistant automation details require a matching project identity for Full access", () => {
   assert.equal(isAssistantAutomationApprovalDetails(base), true);

@@ -307,6 +307,8 @@ fun AidenChatDetailScreen(
                     exit = shrinkVertically() + fadeOut()
                 ) {
                     pendingApproval?.let { approval ->
+                        val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
+                        val requiresDesktopConfirmation = AidenApprovalPresentation.requiresDesktopConfirmation(approval)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -317,10 +319,15 @@ fun AidenChatDetailScreen(
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Warning, contentDescription = null, tint = palette.warning, modifier = Modifier.size(18.dp))
+                                    Icon(
+                                        if (isAutomation) Icons.Default.Schedule else Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = palette.warning,
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Approval Required",
+                                        text = AidenApprovalPresentation.title(approval.toolName),
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = palette.warning
@@ -332,29 +339,50 @@ fun AidenChatDetailScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = palette.foreground
                                 )
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    Button(
-                                        onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY) },
-                                        shape = RoundedCornerShape(10.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                                            contentColor = palette.danger
-                                        )
+                                if (!approval.canRespond) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "This paired device can review approvals but cannot respond.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.secondary
+                                    )
+                                } else if (isAutomation && !approval.hasRequiredWriteCapability) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Schedule write access is required to approve this task.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.secondary
+                                    )
+                                } else if (requiresDesktopConfirmation) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.secondary
+                                    )
+                                }
+                                if (approval.canRespond) {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
                                     ) {
-                                        Text("Deny", color = palette.danger, fontWeight = FontWeight.SemiBold)
-                                    }
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Button(
-                                        onClick = { viewModel.respondToApproval(AidenApprovalDecision.ALLOW) },
-                                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                        shape = RoundedCornerShape(10.dp),
-                                        enabled = approval.canAllow
-                                    ) {
-                                        Text("Allow", color = Color.White, fontWeight = FontWeight.Bold)
+                                        Button(
+                                            onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY) },
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Text(if (isAutomation) "Cancel" else "Deny", fontWeight = FontWeight.SemiBold)
+                                        }
+                                        if (approval.canAllow) {
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Button(
+                                                onClick = { viewModel.respondToApproval(AidenApprovalDecision.ALLOW) },
+                                                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                                                shape = RoundedCornerShape(10.dp)
+                                            ) {
+                                                Text(if (isAutomation) "Approve task" else "Allow once", color = Color.White, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
                                     }
                                 }
                             }

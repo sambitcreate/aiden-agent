@@ -18,6 +18,7 @@ import {
   LIST_SCHEDULED_TASKS_TOOL_NAME,
   prepareAssistantEditAutomationProposal,
   prepareAssistantScheduleProposal,
+  prepareStandardScheduleApproval,
   resolveAssistantScheduleMcpServers,
   resolveAssistantScheduleProject,
   scheduleTaskToolsForContext,
@@ -67,9 +68,7 @@ function scheduledTask(input: ScheduledTaskInput, id: string): ScheduledTask {
     workspaceId: input.workspaceId,
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.model ? { model: input.model } : {}),
-    ...(input.providerFingerprint
-      ? { providerFingerprint: input.providerFingerprint }
-      : {}),
+    ...(input.providerFingerprint ? { providerFingerprint: input.providerFingerprint } : {}),
     prompt: input.prompt,
     script: input.script,
     permission: input.permission ?? "read-only",
@@ -101,17 +100,13 @@ function fakeDependencies() {
     list: async () => structuredClone(tasks),
     get: async (id) => structuredClone(tasks.find((task) => task.id === id)),
     save: async (input, expectedUpdatedAt, signal) => {
-      if (signal?.aborted)
-        throw new Error("Scheduled task save was cancelled.");
+      if (signal?.aborted) throw new Error("Scheduled task save was cancelled.");
       const existingIndex = input.id
         ? tasks.findIndex((candidate) => candidate.id === input.id)
         : -1;
       const existing = existingIndex >= 0 ? tasks[existingIndex] : undefined;
       if (input.id && !existing) throw new Error("not found");
-      if (
-        expectedUpdatedAt !== undefined &&
-        existing?.updatedAt !== expectedUpdatedAt
-      ) {
+      if (expectedUpdatedAt !== undefined && existing?.updatedAt !== expectedUpdatedAt) {
         throw new Error("stale revision");
       }
       const task = {
@@ -123,31 +118,45 @@ function fakeDependencies() {
       else tasks.push(task);
       return structuredClone(task);
     },
-    pause: async (id) => {
+    pause: async (id, expectedUpdatedAt, signal) => {
+      if (signal?.aborted) throw new Error("cancelled");
       const task = tasks.find((candidate) => candidate.id === id);
       if (!task) throw new Error("not found");
+      if (task.updatedAt !== expectedUpdatedAt) throw new Error("stale revision");
       task.enabled = false;
+      task.updatedAt += 1;
       return structuredClone(task);
     },
-    resume: async (id) => {
+    resume: async (id, expectedUpdatedAt, signal) => {
+      if (signal?.aborted) throw new Error("cancelled");
       const task = tasks.find((candidate) => candidate.id === id);
       if (!task) throw new Error("not found");
+      if (task.updatedAt !== expectedUpdatedAt) throw new Error("stale revision");
       task.enabled = true;
+      task.updatedAt += 1;
       return structuredClone(task);
     },
-    remove: async (id) => {
+    remove: async (id, expectedUpdatedAt, signal) => {
+      if (signal?.aborted) throw new Error("cancelled");
       const index = tasks.findIndex((candidate) => candidate.id === id);
       if (index < 0) throw new Error("not found");
+      if (tasks[index]?.updatedAt !== expectedUpdatedAt) throw new Error("stale revision");
       tasks.splice(index, 1);
     },
-    runNow: async (id) => ({
-      id: "run-1",
-      taskId: id,
-      startedAt: 2,
-      finishedAt: 3,
-      result: "success",
-      output: "done",
-    }),
+    runNow: async (id, expectedUpdatedAt, signal) => {
+      if (signal?.aborted) throw new Error("cancelled");
+      const task = tasks.find((candidate) => candidate.id === id);
+      if (!task) throw new Error("not found");
+      if (task.updatedAt !== expectedUpdatedAt) throw new Error("stale revision");
+      return {
+        id: "run-1",
+        taskId: id,
+        startedAt: 2,
+        finishedAt: 3,
+        result: "success",
+        output: "done",
+      };
+    },
     getWorkspace: async (id) => (id === workspace.id ? workspace : undefined),
     listMcpServers: async () => [GMAIL_SERVER],
     validateScript: async (input) => {
@@ -162,12 +171,11 @@ function fakeDependencies() {
 function jsonResult(value: AgentToolResult<null>): Record<string, unknown> {
   const block = value.content[0];
   assert.equal(block?.type, "text");
-  if (!block || block.type !== "text")
-    throw new Error("Expected a text tool result.");
+  if (!block || block.type !== "text") throw new Error("Expected a text tool result.");
   return JSON.parse(block.text) as Record<string, unknown>;
 }
 
-test("schedule_task supports the full create/list/pause/resume/run/remove lifecycle", async () => {
+test("schedule_task supports the full create/update/list/pause/resume/run/remove lifecycle", async () => {
   const fake = fakeDependencies();
   const tool = createScheduleTaskTool(
     { kind: "standard", defaultWorkspaceId: "workspace-1" },
@@ -189,50 +197,476 @@ test("schedule_task supports the full create/list/pause/resume/run/remove lifecy
   const listed = jsonResult(await tool.execute("list", { action: "list" }));
   assert.equal((listed.tasks as ScheduledTask[]).length, 1);
   assert.equal((listed.tasks as ScheduledTask[])[0]?.prompt, undefined);
+  assert.equal((listed.tasks as ScheduledTask[])[0]?.updatedAt, 1);
+
+  const updated = jsonResult(
+    await tool.execute("update", {
+      action: "update",
+      id: "task-1",
+      taskName: "Daily brief",
+      expectedUpdatedAt: 1,
+      name: "Weekday brief",
+      cron: "30 8 * * 1-5",
+      notify: false,
+    }),
+  );
+  assert.equal((updated.task as ScheduledTask).name, "Weekday brief");
+  assert.equal((updated.task as ScheduledTask).cron, "30 8 * * 1-5");
+  assert.equal((updated.task as ScheduledTask).notify, false);
+  assert.equal((updated.task as ScheduledTask).updatedAt, 2);
 
   assert.equal(
     (
-      jsonResult(await tool.execute("pause", { action: "pause", id: "task-1" }))
-        .task as ScheduledTask
+      jsonResult(
+        await tool.execute("pause", {
+          action: "pause",
+          id: "task-1",
+          taskName: "Weekday brief",
+          expectedUpdatedAt: 2,
+        }),
+      ).task as ScheduledTask
     ).enabled,
     false,
   );
   assert.equal(
     (
       jsonResult(
-        await tool.execute("resume", { action: "resume", id: "task-1" }),
+        await tool.execute("resume", {
+          action: "resume",
+          id: "task-1",
+          taskName: "Weekday brief",
+          expectedUpdatedAt: 3,
+        }),
       ).task as ScheduledTask
     ).enabled,
     true,
   );
   assert.equal(
     (
-      jsonResult(await tool.execute("run", { action: "run_now", id: "task-1" }))
-        .run as ScheduledRun
+      jsonResult(
+        await tool.execute("run", {
+          action: "run_now",
+          id: "task-1",
+          taskName: "Weekday brief",
+          expectedUpdatedAt: 4,
+        }),
+      ).run as ScheduledRun
     ).result,
     "success",
   );
   assert.equal(
-    jsonResult(await tool.execute("remove", { action: "remove", id: "task-1" }))
-      .removed,
+    jsonResult(
+      await tool.execute("remove", {
+        action: "remove",
+        id: "task-1",
+        taskName: "Weekday brief",
+        expectedUpdatedAt: 4,
+      }),
+    ).removed,
     "task-1",
   );
   assert.equal(fake.tasks.length, 0);
 });
 
+test("standard schedule updates reject stale revisions and Assistant-owned automations", async () => {
+  const fake = fakeDependencies();
+  fake.tasks.push({
+    id: "task-1",
+    name: "Daily brief",
+    enabled: true,
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize updates.",
+    permission: "read-only",
+    notify: true,
+    createdAt: 1,
+    updatedAt: 4,
+  });
+  const tool = createScheduleTaskTool({ kind: "standard" }, fake.dependencies);
+  await assert.rejects(
+    tool.execute("stale", {
+      action: "update",
+      id: "task-1",
+      taskName: "Daily brief",
+      expectedUpdatedAt: 3,
+      timezone: "America/New_York",
+    }),
+    /changed|stale revision/iu,
+  );
+  fake.tasks[0] = { ...fake.tasks[0]!, executionProfile: "assistant" };
+  await assert.rejects(
+    tool.execute("protected", {
+      action: "update",
+      id: "task-1",
+      taskName: "Daily brief",
+      expectedUpdatedAt: 4,
+      timezone: "America/New_York",
+    }),
+    /protected by Aiden Assistant/iu,
+  );
+  assert.equal(fake.tasks[0]?.timezone, "UTC");
+});
+
+test("standard lifecycle mutations bind the listed name and fail closed on stale revisions", async () => {
+  const fake = fakeDependencies();
+  fake.tasks.push({
+    id: "task-1",
+    name: "Daily brief",
+    enabled: true,
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize updates.",
+    permission: "read-only",
+    notify: true,
+    createdAt: 1,
+    updatedAt: 4,
+  });
+  const tool = createScheduleTaskTool({ kind: "standard" }, fake.dependencies);
+  await assert.rejects(
+    tool.execute("stale-pause", {
+      action: "pause",
+      id: "task-1",
+      taskName: "Daily brief",
+      expectedUpdatedAt: 3,
+    }),
+    /changed|revision/iu,
+  );
+  await assert.rejects(
+    tool.execute("wrong-name", {
+      action: "remove",
+      id: "task-1",
+      taskName: "Another task",
+      expectedUpdatedAt: 4,
+    }),
+    /changed|list tasks again/iu,
+  );
+  await assert.rejects(
+    tool.execute("stale-run", {
+      action: "run_now",
+      id: "task-1",
+      taskName: "Daily brief",
+      expectedUpdatedAt: 3,
+    }),
+    /changed|revision/iu,
+  );
+  assert.equal(fake.tasks[0]?.enabled, true);
+  assert.equal(fake.tasks.length, 1);
+});
+
+test("standard approvals merge hidden Full, project, and exact MCP scope before consent", async () => {
+  const fake = fakeDependencies();
+  fake.tasks.push({
+    ...scheduledTask(
+      {
+        name: "External monitor",
+        enabled: true,
+        mode: "llm",
+        cron: "0 9 * * *",
+        timezone: "UTC",
+        prompt: "Old private prompt.",
+        permission: "full",
+        mcpServerIds: ["gmail"],
+        providerId: "local-provider",
+        model: "local-model",
+        providerFingerprint: "b".repeat(64),
+      },
+      "task-external",
+    ),
+    updatedAt: 9,
+  });
+  const args = {
+    action: "update",
+    id: "task-external",
+    taskName: "External monitor",
+    expectedUpdatedAt: 9,
+    prompt: "New private prompt contents.",
+  };
+  const prepared = await prepareStandardScheduleApproval(
+    args,
+    ASSISTANT_MODEL_SELECTION,
+    fake.dependencies,
+  );
+  assert.equal(prepared.details.permission, "full");
+  assert.deepEqual(prepared.details.mcpServerIds, ["gmail"]);
+  assert.deepEqual(prepared.details.mcpServerNames, ["Gmail"]);
+  assert.match(prepared.summary, /Full access/u);
+  assert.match(prepared.summary, /MCP Gmail \(gmail\)/u);
+  assert.doesNotMatch(prepared.summary, /private prompt/iu);
+});
+
+test("standard approvals freeze legacy MCP inheritance and reject running it before migration", async () => {
+  const fake = fakeDependencies();
+  const legacy = {
+    ...scheduledTask(
+      {
+        name: "Legacy monitor",
+        enabled: true,
+        mode: "llm",
+        cron: "0 9 * * *",
+        timezone: "UTC",
+        prompt: "Summarize messages.",
+        permission: "full",
+      },
+      "task-legacy",
+    ),
+    mcpServerIds: undefined,
+    updatedAt: 7,
+  };
+  fake.tasks.push(legacy);
+  const update = await prepareStandardScheduleApproval(
+    {
+      action: "update",
+      id: legacy.id,
+      taskName: legacy.name,
+      expectedUpdatedAt: legacy.updatedAt,
+      prompt: "Summarize new messages.",
+    },
+    ASSISTANT_MODEL_SELECTION,
+    fake.dependencies,
+  );
+  assert.equal(update.details.legacyGlobalMcp, true);
+  assert.deepEqual(update.details.mcpServerIds, ["gmail"]);
+  assert.match(update.summary, /freezes legacy inherited MCP access/u);
+  await assert.rejects(
+    prepareStandardScheduleApproval(
+      {
+        action: "run_now",
+        id: legacy.id,
+        taskName: legacy.name,
+        expectedUpdatedAt: legacy.updatedAt,
+      },
+      ASSISTANT_MODEL_SELECTION,
+      fake.dependencies,
+    ),
+    /Update it first/u,
+  );
+});
+
+test("ordinary workspace chats can explicitly create a global exact-MCP task", async () => {
+  const fake = fakeDependencies();
+  const args = {
+    action: "create",
+    name: "Inbox monitor",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize inbox changes.",
+    clearWorkspace: true,
+    permission: "full" as const,
+    mcpServerIds: ["gmail"],
+  };
+  const prepared = await prepareStandardScheduleApproval(
+    args,
+    ASSISTANT_MODEL_SELECTION,
+    fake.dependencies,
+    "workspace-1",
+  );
+  assert.equal(prepared.details.workspaceId, null);
+  assert.deepEqual(prepared.details.mcpServerNames, ["Gmail"]);
+  const tool = createScheduleTaskTool(
+    {
+      kind: "standard",
+      defaultWorkspaceId: "workspace-1",
+      modelSelection: ASSISTANT_MODEL_SELECTION,
+    },
+    fake.dependencies,
+  );
+  await tool.execute("create-global", args);
+  assert.equal(fake.tasks[0]?.workspaceId, undefined);
+  assert.deepEqual(fake.tasks[0]?.mcpServerIds, ["gmail"]);
+  assert.equal(fake.tasks[0]?.providerId, "local-provider");
+});
+
+test("mobile-safe approval summaries either show every exact MCP identity or reject", async () => {
+  const fake = fakeDependencies();
+  const servers = Array.from({ length: 16 }, (_, index): McpServer => ({
+    ...GMAIL_SERVER,
+    id: `server-${index}`,
+    name: `Service ${index}`,
+  }));
+  fake.dependencies.listMcpServers = async () => servers;
+  const input = {
+    action: "create",
+    name: "All services",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize service updates.",
+    clearWorkspace: true,
+    permission: "full" as const,
+    mcpServerIds: servers.map(({ id }) => id),
+  };
+  const prepared = await prepareStandardScheduleApproval(
+    input,
+    ASSISTANT_MODEL_SELECTION,
+    fake.dependencies,
+  );
+  assert.ok(prepared.summary.length <= 1_900);
+  for (const server of servers) {
+    assert.match(prepared.summary, new RegExp(`${server.name} \\(${server.id}\\)`, "u"));
+  }
+
+  const oversized = servers.map((server, index) => ({
+    ...server,
+    id: `${index}-${"i".repeat(150)}`,
+    name: `${index}-${"n".repeat(110)}`,
+  }));
+  fake.dependencies.listMcpServers = async () => oversized;
+  await assert.rejects(
+    prepareStandardScheduleApproval(
+      { ...input, mcpServerIds: oversized.map(({ id }) => id) },
+      ASSISTANT_MODEL_SELECTION,
+      fake.dependencies,
+    ),
+    /too large to review safely/u,
+  );
+});
+
+test("standard updates freeze legacy global MCP inheritance without widening project tasks", async () => {
+  const fake = fakeDependencies();
+  fake.tasks.push(
+    {
+      id: "legacy-global",
+      name: "Legacy global",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "Review connected services.",
+      permission: "full",
+      notify: true,
+      createdAt: 1,
+      updatedAt: 4,
+    },
+    {
+      id: "legacy-project",
+      name: "Legacy project",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      workspaceId: "workspace-1",
+      prompt: "Review this project.",
+      permission: "full",
+      notify: true,
+      createdAt: 1,
+      updatedAt: 7,
+    },
+    {
+      id: "legacy-project-clear",
+      name: "Legacy project clear",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      workspaceId: "workspace-1",
+      prompt: "Review this project, then detach it.",
+      permission: "full",
+      notify: true,
+      createdAt: 1,
+      updatedAt: 11,
+    },
+    {
+      id: "script-to-llm",
+      name: "Script becoming a summary",
+      enabled: true,
+      mode: "script",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      script: "report.sh",
+      permission: "full",
+      notify: true,
+      createdAt: 1,
+      updatedAt: 13,
+    },
+  );
+  const tool = createScheduleTaskTool({ kind: "standard" }, fake.dependencies);
+  await tool.execute("freeze-global", {
+    action: "update",
+    id: "legacy-global",
+    taskName: "Legacy global",
+    expectedUpdatedAt: 4,
+    name: "Legacy global updated",
+  });
+  await tool.execute("narrow-project", {
+    action: "update",
+    id: "legacy-project",
+    taskName: "Legacy project",
+    expectedUpdatedAt: 7,
+    name: "Legacy project updated",
+  });
+  assert.deepEqual(fake.tasks[0]?.mcpServerIds, ["gmail"]);
+  assert.deepEqual(fake.tasks[1]?.mcpServerIds, []);
+
+  await tool.execute("clear-project", {
+    action: "update",
+    id: "legacy-project-clear",
+    taskName: "Legacy project clear",
+    expectedUpdatedAt: 11,
+    clearWorkspace: true,
+  });
+  await tool.execute("script-to-llm", {
+    action: "update",
+    id: "script-to-llm",
+    taskName: "Script becoming a summary",
+    expectedUpdatedAt: 13,
+    mode: "llm",
+    prompt: "Summarize the latest report.",
+  });
+  assert.deepEqual(fake.tasks[2]?.mcpServerIds, []);
+  assert.deepEqual(fake.tasks[3]?.mcpServerIds, []);
+
+  await tool.execute("narrow-global", {
+    action: "update",
+    id: "legacy-global",
+    taskName: "Legacy global updated",
+    expectedUpdatedAt: 5,
+    permission: "read-only",
+  });
+  assert.equal(fake.tasks[0]?.permission, "read-only");
+  assert.deepEqual(fake.tasks[0]?.mcpServerIds, []);
+  await assert.rejects(
+    tool.execute("implicit-conflicting-access", {
+      action: "update",
+      id: "legacy-global",
+      taskName: "Legacy global updated",
+      expectedUpdatedAt: 6,
+      mcpServerIds: ["gmail"],
+    }),
+    /MCP-enabled scheduled tasks require Full permission/iu,
+  );
+  await assert.rejects(
+    tool.execute("conflicting-access", {
+      action: "update",
+      id: "legacy-project",
+      taskName: "Legacy project updated",
+      expectedUpdatedAt: 8,
+      permission: "read-only",
+      mcpServerIds: ["gmail"],
+    }),
+    /MCP-enabled scheduled tasks require Full permission/iu,
+  );
+});
+
 test("schedule_task forwards cancellation to every standard mutation", async () => {
   const fake = fakeDependencies();
   const observed: Array<[string, AbortSignal | undefined]> = [];
-  for (const action of ["pause", "resume", "remove", "runNow"] as const) {
-    const original = fake.dependencies[action];
-    Object.assign(fake.dependencies, {
-      [action]: async (id: string, signal?: AbortSignal) => {
-        observed.push([action, signal]);
-        if (signal?.aborted) throw new Error("cancelled before mutation");
-        return original(id, signal);
-      },
-    });
-  }
+  fake.dependencies.pause = async (_id, _expectedUpdatedAt, signal) => {
+    observed.push(["pause", signal]);
+    throw new Error("pause dependency should not run");
+  };
+  fake.dependencies.resume = async (_id, _expectedUpdatedAt, signal) => {
+    observed.push(["resume", signal]);
+    throw new Error("resume dependency should not run");
+  };
+  fake.dependencies.remove = async (_id, _expectedUpdatedAt, signal) => {
+    observed.push(["remove", signal]);
+    throw new Error("remove dependency should not run");
+  };
+  fake.dependencies.runNow = async (_id, _expectedUpdatedAt, signal) => {
+    observed.push(["runNow", signal]);
+    throw new Error("run-now dependency should not run");
+  };
   await fake.dependencies.save({
     name: "Cancelable",
     cron: "0 9 * * *",
@@ -269,6 +703,7 @@ test("schedule_task validates scripts in the bound workspace and rejects unsafe 
   });
   assert.equal(fake.tasks[0]?.permission, "full");
   assert.deepEqual(fake.calls.validatedScripts, [
+    { script: "report.sh", workspaceRoot: "/project" },
     { script: "report.sh", workspaceRoot: "/project" },
   ]);
   await assert.rejects(
@@ -343,11 +778,7 @@ test("attended Assistant scheduling exposes separate list, create, and edit tool
       allowScheduling: true,
       assistantModelSelection: ASSISTANT_MODEL_SELECTION,
     }).map((candidate) => candidate.name),
-    [
-      LIST_SCHEDULED_TASKS_TOOL_NAME,
-      SCHEDULE_TOOL_NAME,
-      EDIT_AUTOMATION_TOOL_NAME,
-    ],
+    [LIST_SCHEDULED_TASKS_TOOL_NAME, SCHEDULE_TOOL_NAME, EDIT_AUTOMATION_TOOL_NAME],
   );
   const schema = tool.parameters as {
     properties?: Record<string, { const?: unknown }>;
@@ -366,12 +797,7 @@ test("attended Assistant scheduling exposes separate list, create, and edit tool
     "timezone",
     "workspaceId",
   ]);
-  assert.deepEqual(schema.required?.slice().sort(), [
-    "action",
-    "cron",
-    "name",
-    "prompt",
-  ]);
+  assert.deepEqual(schema.required?.slice().sort(), ["action", "cron", "name", "prompt"]);
   assert.equal(schema.additionalProperties, false);
   assert.doesNotMatch(JSON.stringify(schema), /run_now|pause|resume|remove/u);
 
@@ -437,20 +863,14 @@ test("edit_automation updates one exact task without creating a duplicate", asyn
     }),
   );
 
-  const editTool = createAssistantEditAutomationTool(
-    ASSISTANT_MODEL_SELECTION,
-    fake.dependencies,
-  );
+  const editTool = createAssistantEditAutomationTool(ASSISTANT_MODEL_SELECTION, fake.dependencies);
   assert.equal(editTool.name, EDIT_AUTOMATION_TOOL_NAME);
   const schema = editTool.parameters as {
     properties?: Record<string, unknown>;
     required?: string[];
     additionalProperties?: boolean;
   };
-  assert.deepEqual(schema.required?.slice().sort(), [
-    "expectedUpdatedAt",
-    "id",
-  ]);
+  assert.deepEqual(schema.required?.slice().sort(), ["expectedUpdatedAt", "id"]);
   assert.equal(schema.additionalProperties, false);
   assert.equal(schema.properties?.action, undefined);
   assert.equal(schema.properties?.mode, undefined);
@@ -508,10 +928,7 @@ test("edit_automation rejects stale, ambiguous, and non-Assistant edits", async 
     createdAt: 1,
     updatedAt: 4,
   });
-  const tool = createAssistantEditAutomationTool(
-    ASSISTANT_MODEL_SELECTION,
-    fake.dependencies,
-  );
+  const tool = createAssistantEditAutomationTool(ASSISTANT_MODEL_SELECTION, fake.dependencies);
   await assert.rejects(
     tool.execute("stale", {
       id: "task-1",
@@ -589,10 +1006,7 @@ test("attended Assistant allows confirmed project access but rejects unbound Ful
     },
     { action: "remove", id: "task-1" },
   ]) {
-    await assert.rejects(
-      tool.execute("blocked", params),
-      /cannot|only|requires/iu,
-    );
+    await assert.rejects(tool.execute("blocked", params), /cannot|only|requires/iu);
   }
   await assert.rejects(
     tool.execute("missing-project", {
@@ -728,10 +1142,7 @@ test("attended Assistant bounds every string copied into the confirmation", asyn
       prompt: "p".repeat(32 * 1024 + 1),
     },
   ]) {
-    await assert.rejects(
-      tool.execute("too-long", params),
-      /characters or fewer/iu,
-    );
+    await assert.rejects(tool.execute("too-long", params), /characters or fewer/iu);
   }
   assert.equal(fake.tasks.length, 0);
 });
@@ -777,10 +1188,7 @@ test("Assistant approval resolution binds a trusted project name to the exact pr
   assert.equal(proposal.details.workspaceId, "workspace-1");
   assert.equal(proposal.details.permission, "full");
   assert.deepEqual(
-    await resolveAssistantScheduleProject(
-      proposal,
-      fake.dependencies.getWorkspace,
-    ),
+    await resolveAssistantScheduleProject(proposal, fake.dependencies.getWorkspace),
     {
       workspaceId: "workspace-1",
       workspaceName: "Project",
@@ -803,10 +1211,7 @@ test("Assistant approval resolution binds exact enabled MCP names", async () => 
   );
   assert.equal(proposal.details.permission, "full");
   assert.deepEqual(
-    await resolveAssistantScheduleMcpServers(
-      proposal,
-      fake.dependencies.listMcpServers,
-    ),
+    await resolveAssistantScheduleMcpServers(proposal, fake.dependencies.listMcpServers),
     {
       mcpServerIds: ["gmail"],
       mcpServerNames: ["Gmail"],
@@ -904,6 +1309,7 @@ test("attended Assistant cancellation during persistence leaves no saved task", 
 test("schedule mutations require live approval without exposing prompt contents", () => {
   assert.equal(scheduleToolRequiresApproval({ action: "list" }), false);
   assert.equal(scheduleToolRequiresApproval({ action: "create" }), true);
+  assert.equal(scheduleToolRequiresApproval({ action: "update" }), true);
   const summary = summarizeScheduleToolCall({
     action: "create",
     name: "Daily report",
@@ -911,5 +1317,71 @@ test("schedule mutations require live approval without exposing prompt contents"
     prompt: "private prompt contents",
   });
   assert.match(summary, /Daily report/);
+  assert.match(summary, /Every day at 9:00 AM/u);
+  assert.doesNotMatch(summary, /0 9 \* \* \*/u);
   assert.doesNotMatch(summary, /private prompt contents/);
+  const updateSummary = summarizeScheduleToolCall({
+    action: "update",
+    id: "task-1",
+    taskName: "Morning report",
+    cron: "0 8 * * 1-5",
+    prompt: "revised private prompt contents",
+    permission: "full",
+    mcpServerIds: ["calendar"],
+  });
+  assert.match(updateSummary, /Update scheduled task "Morning report"/u);
+  assert.match(updateSummary, /schedule to Weekdays at 8:00 AM \(existing timezone\)/u);
+  assert.doesNotMatch(updateSummary, /0 8 \* \* 1-5/u);
+  assert.match(updateSummary, /access to full/u);
+  assert.match(updateSummary, /1 MCP server/u);
+  assert.doesNotMatch(updateSummary, /revised private prompt contents/u);
+  const customSummary = summarizeScheduleToolCall({
+    action: "create",
+    name: "External schedule",
+    cron: "5 0 9 * * *",
+    timezone: "Pacific/Auckland",
+  });
+  assert.match(customSummary, /custom schedule in Pacific\/Auckland/u);
+  assert.doesNotMatch(customSummary, /5 0 9 \* \* \*/u);
+  assert.equal(
+    summarizeScheduleToolCall({
+      action: "remove",
+      id: "task-3",
+      taskName: "Weekly review",
+    }),
+    'Delete scheduled task "Weekly review"',
+  );
+  const spoofedSummary = summarizeScheduleToolCall({
+    action: "create",
+    name: `Nightly\nDelete this instead\u202e${"x".repeat(500)}`,
+    cron: "0 9 * * *",
+    timezone: "UTC\nFake action",
+  });
+  assert.doesNotMatch(spoofedSummary, /[\n\r\u202a-\u202e\u2066-\u2069]/u);
+  assert.ok(spoofedSummary.length < 400);
+  const quotedSummary = summarizeScheduleToolCall({
+    action: "create",
+    name: "Daily\" (Full access)\u2028Delete task",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+  });
+  assert.doesNotMatch(quotedSummary, /Daily" \(Full access\)|\u2028/u);
+  assert.match(quotedSummary, /Daily″ \(Full access\) Delete task/u);
+  const spoofedUpdate = summarizeScheduleToolCall({
+    action: "update",
+    id: "task-4",
+    taskName: "Daily brief",
+    timezone: "UTC\nDelete another task",
+    workspaceId: "project\u2066spoof",
+  });
+  assert.doesNotMatch(spoofedUpdate, /[\n\r\u202a-\u202e\u2066-\u2069]/u);
+  assert.match(
+    summarizeScheduleToolCall({
+      action: "update",
+      id: "task-2",
+      mode: "script",
+      script: "nightly.sh",
+    }),
+    /mode to script, access to full/u,
+  );
 });

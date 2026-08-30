@@ -127,6 +127,8 @@ review, and archive this plan only when the complete acceptance matrix passes.
 - Latest-main parity reconciliation retains Web Search, diagnostics, Gemini
   voice transcription, Model Pad, companion projections, raster and sandboxed
   generative UI artifacts, and response/accessibility improvements on Linux.
+  Chat-native Scheduled Tasks, including revision-bound remote runs and shared
+  desktop/mobile presentation, are also platform-neutral on Linux.
   The attended-chat Ask User Question composer and the native todo, BTW, and
   Advisor Pi extensions are also platform-neutral and covered by both Ubuntu
   and Fedora Linux CI gates.

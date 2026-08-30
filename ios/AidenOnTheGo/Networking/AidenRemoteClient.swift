@@ -1197,11 +1197,13 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     func runScheduledTask(
         id: String,
+        revision: String,
         idempotencyKey: UUID = UUID()
     ) async throws -> AidenScheduledRunAccepted {
         try await send(
             method: "POST", path: ["scheduled-tasks", id, "run"],
-            headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [202]
+            headers: ["If-Match": revision, "Idempotency-Key": idempotencyKey.uuidString.lowercased()],
+            acceptedStatus: [202]
         )
     }
 

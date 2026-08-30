@@ -273,7 +273,7 @@ export function ScheduledTasksSettings() {
         confirmVariant="destructive"
         onConfirm={async () => {
           if (!removing) return;
-          await scheduleApi.remove(removing.id);
+          await scheduleApi.remove(removing.id, removing.updatedAt);
           setRemoving(null);
           await queryClient.invalidateQueries({ queryKey: queryKeys.scheduledTasks });
         }}

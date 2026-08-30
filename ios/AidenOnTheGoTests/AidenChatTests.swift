@@ -1102,6 +1102,158 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    func testScheduledTaskApprovalRequiresResponseAndScheduleWriteCapabilities() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let proposal = AidenStreamPendingApproval(
+            approvalId: "approval-schedule-1",
+            streamId: "stream-1",
+            chatId: "chat-1",
+            summary: "Daily report · weekdays at 9:00 AM · Read Only",
+            toolCallId: "tool-1",
+            toolName: "schedule_task",
+            expiresAt: now.addingTimeInterval(60),
+            canAllow: true
+        )
+
+        let allowed = AidenPendingApprovalResolution.resolve(
+            proposal,
+            streamId: "stream-1",
+            chatId: "chat-1",
+            capabilities: .init(canRespond: true, canWriteSchedules: true),
+            now: now
+        )
+        XCTAssertEqual(allowed?.kind, .scheduledTask)
+        XCTAssertEqual(allowed?.summary, proposal.summary)
+        XCTAssertEqual(allowed?.canRespond, true)
+        XCTAssertEqual(allowed?.hasRequiredWriteCapability, true)
+        XCTAssertEqual(allowed?.hostCanAllow, true)
+        XCTAssertEqual(allowed?.canAllow, true)
+
+        let readOnlySchedules = AidenPendingApprovalResolution.resolve(
+            proposal,
+            streamId: "stream-1",
+            chatId: "chat-1",
+            capabilities: .init(canRespond: true, canWriteSchedules: false),
+            now: now
+        )
+        XCTAssertEqual(readOnlySchedules?.canRespond, true)
+        XCTAssertEqual(readOnlySchedules?.hasRequiredWriteCapability, false)
+        XCTAssertEqual(readOnlySchedules?.canAllow, false)
+
+        let cannotRespond = AidenPendingApprovalResolution.resolve(
+            proposal,
+            streamId: "stream-1",
+            chatId: "chat-1",
+            capabilities: .init(canRespond: false, canWriteSchedules: true),
+            now: now
+        )
+        XCTAssertEqual(cannotRespond?.canRespond, false)
+        XCTAssertEqual(cannotRespond?.hasRequiredWriteCapability, true)
+        XCTAssertEqual(cannotRespond?.canAllow, false)
+
+        let hostOnly = AidenPendingApprovalResolution.resolve(
+            AidenStreamPendingApproval(
+                approvalId: proposal.approvalId,
+                streamId: proposal.streamId,
+                chatId: proposal.chatId,
+                summary: proposal.summary,
+                toolCallId: proposal.toolCallId,
+                toolName: proposal.toolName,
+                expiresAt: proposal.expiresAt,
+                canAllow: false
+            ),
+            streamId: "stream-1",
+            chatId: "chat-1",
+            capabilities: .init(canRespond: true, canWriteSchedules: true),
+            now: now
+        )
+        XCTAssertEqual(hostOnly?.canRespond, true)
+        XCTAssertEqual(hostOnly?.hasRequiredWriteCapability, true)
+        XCTAssertEqual(hostOnly?.hostCanAllow, false)
+        XCTAssertEqual(hostOnly?.canAllow, false)
+    }
+
+    func testScheduledTaskApprovalPresentationUsesUnattendedWorkCopy() {
+        XCTAssertEqual(AidenApprovalKind(toolName: "schedule_task"), .scheduledTask)
+        XCTAssertEqual(AidenApprovalKind(toolName: "edit_automation"), .scheduledTask)
+        XCTAssertEqual(AidenApprovalKind(toolName: "run_command"), .action)
+        XCTAssertEqual(AidenApprovalPresentation.title(for: .scheduledTask), "Review scheduled task")
+        XCTAssertEqual(AidenApprovalPresentation.allowTitle(for: .scheduledTask), "Approve task")
+        XCTAssertEqual(AidenApprovalPresentation.denyTitle(for: .scheduledTask), "Cancel")
+    }
+
+    func testScheduledTaskApprovalRechecksNarrowedCapabilitiesBeforeResponding() throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let proposal = AidenStreamPendingApproval(
+            approvalId: "approval-schedule-current",
+            streamId: "stream-1",
+            chatId: "chat-1",
+            summary: "Daily report · weekdays at 9:00 AM · Read Only",
+            toolCallId: "tool-1",
+            toolName: "schedule_task",
+            expiresAt: now.addingTimeInterval(60),
+            canAllow: true
+        )
+        let approval = try XCTUnwrap(AidenPendingApprovalResolution.resolve(
+            proposal,
+            streamId: "stream-1",
+            chatId: "chat-1",
+            capabilities: .unrestricted,
+            now: now
+        ))
+
+        XCTAssertEqual(
+            AidenApprovalResponseAuthorization.resolve(
+                approval: approval,
+                decision: .allow,
+                capabilities: .init(canRespond: true, canWriteSchedules: false)
+            ),
+            .scheduleWriteRequired
+        )
+        XCTAssertEqual(
+            AidenApprovalResponseAuthorization.resolve(
+                approval: approval,
+                decision: .deny,
+                capabilities: .init(canRespond: true, canWriteSchedules: false)
+            ),
+            .allowed,
+            "Deny remains available without schedule write authority."
+        )
+        XCTAssertEqual(
+            AidenApprovalResponseAuthorization.resolve(
+                approval: approval,
+                decision: .allow,
+                capabilities: .init(canRespond: false, canWriteSchedules: true)
+            ),
+            .approvalResponseRequired
+        )
+
+        let hostOnly = try XCTUnwrap(AidenPendingApprovalResolution.resolve(
+            .init(
+                approvalId: proposal.approvalId,
+                streamId: proposal.streamId,
+                chatId: proposal.chatId,
+                summary: proposal.summary,
+                toolCallId: proposal.toolCallId,
+                toolName: proposal.toolName,
+                expiresAt: proposal.expiresAt,
+                canAllow: false
+            ),
+            streamId: "stream-1",
+            chatId: "chat-1",
+            capabilities: .unrestricted,
+            now: now
+        ))
+        XCTAssertEqual(
+            AidenApprovalResponseAuthorization.resolve(
+                approval: hostOnly,
+                decision: .allow,
+                capabilities: .unrestricted
+            ),
+            .hostApprovalRequired
+        )
+    }
+
     func testApprovalSummaryCollapsesWhitespaceForCompactDisclosure() {
         XCTAssertEqual(
             AidenApprovalPresentation.oneLineSummary("Run command:\n  find ~/Downloads   -type f"),

@@ -29,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
@@ -639,7 +640,8 @@ class AidenChatViewModel(
             val approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId = streamId,
-                chatId = chatId
+                chatId = chatId,
+                capabilities = approvalCapabilities()
             )
             if (approval != null) {
                 _pendingApproval.value = approval
@@ -675,6 +677,25 @@ class AidenChatViewModel(
             _pendingApproval.value = null
             return
         }
+        val capabilities = approvalCapabilities()
+        if (!capabilities.canRespond) {
+            _presentedError.value = "This paired device can review approvals but cannot respond."
+            return
+        }
+        val canCurrentlyAllow = approval.hostCanAllow &&
+                (!AidenApprovalPresentation.isAutomation(approval.toolName) || capabilities.canWriteSchedules)
+        if (decision == AidenApprovalDecision.ALLOW && !canCurrentlyAllow) {
+            _presentedError.value = if (AidenApprovalPresentation.isAutomation(approval.toolName)) {
+                if (!capabilities.canWriteSchedules) {
+                    "Schedule write access is required to approve this task."
+                } else {
+                    "Confirm this automation in Aiden on your paired desktop after reviewing its full access scope."
+                }
+            } else {
+                "This action must be confirmed in the Aiden desktop app."
+            }
+            return
+        }
         val client = activeClient() ?: return
         val streamId = activeStreamId ?: return
         val previousState = _streamState.value
@@ -693,6 +714,19 @@ class AidenChatViewModel(
                 }
             }
         }
+    }
+
+    private fun approvalCapabilities(): AidenApprovalCapabilities {
+        val installation = coordinator.installationStore.activeInstallation
+        if (coordinator.activeInstanceId != instanceId ||
+            installation?.instanceId != instanceId || installation.deviceId != deviceId
+        ) {
+            return AidenApprovalCapabilities(canRespond = false, canWriteSchedules = false)
+        }
+        return AidenApprovalCapabilities(
+            canRespond = installation.hasNegotiatedAccess(AidenRemoteCapability.APPROVAL_RESPOND),
+            canWriteSchedules = installation.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_WRITE)
+        )
     }
 
     private suspend fun reconcileChat(): Boolean {

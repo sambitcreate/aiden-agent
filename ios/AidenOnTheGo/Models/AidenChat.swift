@@ -1249,7 +1249,53 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     let id: String
     let summary: String
     let expiresAt: Date
+    let kind: AidenApprovalKind
+    let canRespond: Bool
+    let hasRequiredWriteCapability: Bool
+    let hostCanAllow: Bool
     let canAllow: Bool
+}
+
+enum AidenApprovalKind: Equatable, Sendable {
+    case action
+    case scheduledTask
+
+    init(toolName: String) {
+        switch toolName {
+        case "schedule_task", "edit_automation":
+            self = .scheduledTask
+        default:
+            self = .action
+        }
+    }
+}
+
+struct AidenApprovalCapabilities: Equatable, Sendable {
+    let canRespond: Bool
+    let canWriteSchedules: Bool
+
+    static let unrestricted = Self(canRespond: true, canWriteSchedules: true)
+}
+
+enum AidenApprovalResponseAuthorization: Equatable, Sendable {
+    case allowed
+    case approvalResponseRequired
+    case scheduleWriteRequired
+    case hostApprovalRequired
+
+    static func resolve(
+        approval: AidenPendingApproval,
+        decision: AidenApprovalDecision,
+        capabilities: AidenApprovalCapabilities
+    ) -> Self {
+        guard capabilities.canRespond else { return .approvalResponseRequired }
+        guard decision == .allow else { return .allowed }
+        guard approval.hostCanAllow else { return .hostApprovalRequired }
+        guard approval.kind != .scheduledTask || capabilities.canWriteSchedules else {
+            return .scheduleWriteRequired
+        }
+        return .allowed
+    }
 }
 
 enum AidenApprovalPresentation {
@@ -1259,6 +1305,36 @@ enum AidenApprovalPresentation {
             .joined(separator: " ")
         return collapsed.isEmpty ? String(localized: "Review requested action") : collapsed
     }
+
+    static func title(for kind: AidenApprovalKind) -> String {
+        switch kind {
+        case .action: String(localized: "Approval needed")
+        case .scheduledTask: String(localized: "Review scheduled task")
+        }
+    }
+
+    static func detail(for kind: AidenApprovalKind) -> String {
+        switch kind {
+        case .action:
+            String(localized: "Review this one action before Aiden continues.")
+        case .scheduledTask:
+            String(localized: "Check the exact schedule and unattended access before Aiden saves it.")
+        }
+    }
+
+    static func denyTitle(for kind: AidenApprovalKind) -> String {
+        switch kind {
+        case .action: String(localized: "Deny")
+        case .scheduledTask: String(localized: "Cancel")
+        }
+    }
+
+    static func allowTitle(for kind: AidenApprovalKind) -> String {
+        switch kind {
+        case .action: String(localized: "Allow once")
+        case .scheduledTask: String(localized: "Approve task")
+        }
+    }
 }
 
 enum AidenPendingApprovalResolution {
@@ -1266,17 +1342,24 @@ enum AidenPendingApprovalResolution {
         _ approval: AidenStreamPendingApproval?,
         streamId: String,
         chatId: String,
+        capabilities: AidenApprovalCapabilities = .unrestricted,
         now: Date = Date()
     ) -> AidenPendingApproval? {
         guard let approval,
               approval.streamId == streamId,
               approval.chatId == chatId,
               approval.expiresAt > now else { return nil }
+        let kind = AidenApprovalKind(toolName: approval.toolName)
+        let hasRequiredWriteCapability = kind != .scheduledTask || capabilities.canWriteSchedules
         return AidenPendingApproval(
             id: approval.approvalId,
             summary: approval.summary,
             expiresAt: approval.expiresAt,
-            canAllow: approval.canAllow
+            kind: kind,
+            canRespond: capabilities.canRespond,
+            hasRequiredWriteCapability: hasRequiredWriteCapability,
+            hostCanAllow: approval.canAllow,
+            canAllow: approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
         )
     }
 }

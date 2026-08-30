@@ -55,7 +55,10 @@ function fixture() {
         return next;
       },
       runNow: async (id, options = {}) => {
-        savedOptions.push({ runId: options.runId });
+        savedOptions.push({ runId: options.runId, expectedUpdatedAt: options.expectedUpdatedAt });
+        if (options.expectedUpdatedAt !== undefined && tasks.get(id)?.updatedAt !== options.expectedUpdatedAt) {
+          throw new Error("revision");
+        }
         const run: ScheduledRun = { id: options.runId ?? "run-local", taskId: id, startedAt: 1, finishedAt: 2, result: "success", output: "ok" };
         runs.set(id, [run]);
         return run;
@@ -92,11 +95,13 @@ test("shared scheduled-task service validates inventory and carries revisions in
   assert.equal(value.savedOptions[value.savedOptions.length - 1]?.expectedUpdatedAt, task.updatedAt);
 });
 
-test("shared scheduled-task service carries a caller-owned run ID and revision-checks settings", async () => {
+test("shared scheduled-task service carries a caller-owned run ID, task revision, and revision-checks settings", async () => {
   const value = fixture();
   const task = await value.service.save({ name: "Run", mode: "llm", cron: "* * * * *", timezone: "UTC", permission: "read-only", prompt: "hello" });
-  await value.service.runNow(task.id, "run_remote");
+  await assert.rejects(value.service.runNow(task.id, undefined, "rev_stale"), /changed/u);
+  await value.service.runNow(task.id, "run_remote", scheduledTaskRevision(task));
   assert.equal(value.savedOptions[value.savedOptions.length - 1]?.runId, "run_remote");
+  assert.equal(value.savedOptions[value.savedOptions.length - 1]?.expectedUpdatedAt, task.updatedAt);
   const current = await value.service.settings();
   await assert.rejects(value.service.updateSettings("rev_stale", { enabled: false }), /changed/u);
   const updated = await value.service.updateSettings(current.revision, { enabled: false });

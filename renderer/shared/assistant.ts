@@ -58,6 +58,35 @@ export interface AssistantAutomationApprovalDetails {
   schedulerEnabled: boolean;
 }
 
+/** Exact host-resolved scope for an approval-gated schedule action from any chat. */
+export interface ScheduledTaskApprovalDetails {
+  kind: "scheduled-task";
+  action: "create" | "update" | "pause" | "resume" | "remove" | "run_now";
+  taskId: string | null;
+  expectedUpdatedAt: number | null;
+  enabled: boolean;
+  name: string;
+  prompt: string | null;
+  script: string | null;
+  cron: string;
+  timezone: string;
+  nextRunAt: number;
+  notify: boolean;
+  mode: "llm" | "script";
+  permission: "read-only" | "full";
+  workspaceId: string | null;
+  workspaceName: string | null;
+  mcpServerIds: string[];
+  mcpServerNames: string[];
+  providerId: string;
+  providerName: string;
+  model: string;
+  modelName: string;
+  /** True only while migrating a legacy Full task that inherited enabled connectors. */
+  legacyGlobalMcp: boolean;
+  schedulerEnabled: boolean;
+}
+
 /** Renderer-safe facts for one exact, attended child file mutation. */
 export interface SubagentWorkspaceWriteApprovalDetails {
   kind: "subagent-workspace-write";
@@ -135,6 +164,7 @@ export function isSubagentShellApprovalShell(value: unknown): value is SubagentS
 
 export type ToolApprovalDetails =
   | AssistantAutomationApprovalDetails
+  | ScheduledTaskApprovalDetails
   | SubagentWorkspaceWriteApprovalDetails
   | SubagentMcpMutationApprovalDetails
   | SubagentShellApprovalDetails;
@@ -549,6 +579,76 @@ export function isAssistantAutomationApprovalDetails(
     safeApprovalText(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT) &&
     (mcpServerIds.length === 0 || details.permission === "full") &&
     (details.permission !== "full" || details.workspaceId !== null || mcpServerIds.length > 0) &&
+    typeof details.schedulerEnabled === "boolean"
+  );
+}
+
+/** Fail-closed renderer/Remote boundary for schedule approvals from ordinary chats. */
+export function isScheduledTaskApprovalDetails(
+  value: unknown,
+): value is ScheduledTaskApprovalDetails {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const details = value as Record<string, unknown>;
+  const actionIsValid =
+    details.action === "create" ||
+    details.action === "update" ||
+    details.action === "pause" ||
+    details.action === "resume" ||
+    details.action === "remove" ||
+    details.action === "run_now";
+  const existingIdentityIsValid =
+    details.action === "create"
+      ? details.taskId === null && details.expectedUpdatedAt === null
+      : safeApprovalText(details.taskId, ASSISTANT_AUTOMATION_TASK_ID_LIMIT) &&
+        typeof details.expectedUpdatedAt === "number" &&
+        Number.isSafeInteger(details.expectedUpdatedAt) &&
+        details.expectedUpdatedAt >= 0;
+  const projectIsValid =
+    (details.workspaceId === null && details.workspaceName === null) ||
+    (safeApprovalText(details.workspaceId, ASSISTANT_AUTOMATION_WORKSPACE_ID_LIMIT) &&
+      safeApprovalText(details.workspaceName, ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT));
+  const mcpServerIds = Array.isArray(details.mcpServerIds) ? details.mcpServerIds : [];
+  const mcpServerNames = Array.isArray(details.mcpServerNames) ? details.mcpServerNames : [];
+  const mcpServersAreValid =
+    Array.isArray(details.mcpServerIds) &&
+    Array.isArray(details.mcpServerNames) &&
+    mcpServerIds.length <= ASSISTANT_AUTOMATION_MCP_SERVER_LIMIT &&
+    mcpServerIds.length === mcpServerNames.length &&
+    new Set(mcpServerIds).size === mcpServerIds.length &&
+    mcpServerIds.every((id) => safeApprovalText(id, ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT)) &&
+    mcpServerNames.every((name) =>
+      safeApprovalText(name, ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT),
+    );
+  const contentIsValid =
+    details.mode === "llm"
+      ? safeApprovalText(details.prompt, ASSISTANT_AUTOMATION_PROMPT_LIMIT, true) &&
+        details.script === null
+      : details.mode === "script" &&
+        details.prompt === null &&
+        safeApprovalText(details.script, ASSISTANT_AUTOMATION_PROMPT_LIMIT);
+  return (
+    details.kind === "scheduled-task" &&
+    actionIsValid &&
+    existingIdentityIsValid &&
+    typeof details.enabled === "boolean" &&
+    safeApprovalText(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT) &&
+    contentIsValid &&
+    safeApprovalText(details.cron, ASSISTANT_AUTOMATION_CRON_LIMIT) &&
+    safeApprovalText(details.timezone, ASSISTANT_AUTOMATION_TIMEZONE_LIMIT) &&
+    typeof details.nextRunAt === "number" &&
+    Number.isFinite(details.nextRunAt) &&
+    details.nextRunAt >= 0 &&
+    typeof details.notify === "boolean" &&
+    (details.permission === "read-only" || details.permission === "full") &&
+    projectIsValid &&
+    mcpServersAreValid &&
+    (details.workspaceId === null || mcpServerIds.length === 0) &&
+    safeApprovalText(details.providerId, ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT) &&
+    safeApprovalText(details.providerName, ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT) &&
+    safeApprovalText(details.model, ASSISTANT_AUTOMATION_MODEL_ID_LIMIT) &&
+    safeApprovalText(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT) &&
+    (mcpServerIds.length === 0 || details.permission === "full") &&
+    typeof details.legacyGlobalMcp === "boolean" &&
     typeof details.schedulerEnabled === "boolean"
   );
 }

@@ -552,15 +552,100 @@ class AidenChatTest {
             canAllow = false
         )
 
-        val resolved = AidenPendingApprovalResolution.resolve(valid, "stream-1", "chat-1", now)
+        val resolved = AidenPendingApprovalResolution.resolve(valid, "stream-1", "chat-1", now = now)
         assertNotNull(resolved)
         assertEquals("approval-1", resolved?.id)
+        assertEquals("run", resolved?.toolName)
+        assertTrue(resolved!!.canRespond)
+        assertTrue(resolved.hasRequiredWriteCapability)
+        assertFalse(resolved.hostCanAllow)
         assertFalse(resolved!!.canAllow)
 
-        assertNull(AidenPendingApprovalResolution.resolve(null, "stream-1", "chat-1", now))
-        assertNull(AidenPendingApprovalResolution.resolve(valid, "stream-2", "chat-1", now))
-        assertNull(AidenPendingApprovalResolution.resolve(valid, "stream-1", "chat-2", now))
-        assertNull(AidenPendingApprovalResolution.resolve(valid.copy(expiresAt = now), "stream-1", "chat-1", now))
+        assertNull(AidenPendingApprovalResolution.resolve(null, "stream-1", "chat-1", now = now))
+        assertNull(AidenPendingApprovalResolution.resolve(valid, "stream-2", "chat-1", now = now))
+        assertNull(AidenPendingApprovalResolution.resolve(valid, "stream-1", "chat-2", now = now))
+        assertNull(AidenPendingApprovalResolution.resolve(valid.copy(expiresAt = now), "stream-1", "chat-1", now = now))
+    }
+
+    @Test
+    fun testAutomationApprovalPresentationPreservesHostOnlyConfirmation() {
+        val approval = AidenPendingApproval(
+            id = "approval-automation",
+            summary = "  Create   a daily report  ",
+            toolName = "schedule_task",
+            expiresAt = Instant.ofEpochSecond(20_000),
+            canRespond = true,
+            hasRequiredWriteCapability = true,
+            hostCanAllow = false,
+            canAllow = false
+        )
+
+        assertTrue(AidenApprovalPresentation.isAutomation(approval.toolName))
+        assertEquals("Create this automation?", AidenApprovalPresentation.title(approval.toolName))
+        assertEquals("Create a daily report", AidenApprovalPresentation.oneLineSummary(approval.summary))
+        assertTrue(AidenApprovalPresentation.requiresDesktopConfirmation(approval))
+        assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
+        assertEquals("Approval Required", AidenApprovalPresentation.title("run_command"))
+    }
+
+    @Test
+    fun testAutomationApprovalRequiresNegotiatedWriteAndResponseCapabilities() {
+        val now = Instant.ofEpochSecond(10_000)
+        val valid = AidenStreamPendingApproval(
+            approvalId = "approval-1",
+            streamId = "stream-1",
+            chatId = "chat-1",
+            summary = "Create a daily report",
+            toolCallId = "tool-1",
+            toolName = "schedule_task",
+            expiresAt = now.plusSeconds(60),
+            canAllow = true
+        )
+
+        val allowed = AidenPendingApprovalResolution.resolve(
+            valid,
+            "stream-1",
+            "chat-1",
+            capabilities = AidenApprovalCapabilities(canRespond = true, canWriteSchedules = true),
+            now = now
+        )
+        assertTrue(allowed!!.canRespond)
+        assertTrue(allowed.hasRequiredWriteCapability)
+        assertTrue(allowed.hostCanAllow)
+        assertTrue(allowed.canAllow)
+
+        val readOnlySchedule = AidenPendingApprovalResolution.resolve(
+            valid,
+            "stream-1",
+            "chat-1",
+            capabilities = AidenApprovalCapabilities(canRespond = true, canWriteSchedules = false),
+            now = now
+        )
+        assertTrue(readOnlySchedule!!.canRespond)
+        assertFalse(readOnlySchedule.hasRequiredWriteCapability)
+        assertFalse(readOnlySchedule.canAllow)
+        assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(readOnlySchedule))
+
+        val cannotRespond = AidenPendingApprovalResolution.resolve(
+            valid,
+            "stream-1",
+            "chat-1",
+            capabilities = AidenApprovalCapabilities(canRespond = false, canWriteSchedules = true),
+            now = now
+        )
+        assertFalse(cannotRespond!!.canRespond)
+        assertTrue(cannotRespond.hasRequiredWriteCapability)
+        assertFalse(cannotRespond.canAllow)
+
+        val ordinaryAction = AidenPendingApprovalResolution.resolve(
+            valid.copy(toolName = "run_command"),
+            "stream-1",
+            "chat-1",
+            capabilities = AidenApprovalCapabilities(canRespond = true, canWriteSchedules = false),
+            now = now
+        )
+        assertTrue(ordinaryAction!!.hasRequiredWriteCapability)
+        assertTrue(ordinaryAction.canAllow)
     }
 
     @Test

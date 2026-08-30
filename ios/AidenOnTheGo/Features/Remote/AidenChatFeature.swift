@@ -1490,7 +1490,33 @@ final class AidenChatViewModel {
         }
         let previousState = streamState
         guard let streamID = activeStreamID else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
+        guard let context = try? coordinator.requestContext(for: instanceId) else {
+            streamState = .reconciling
+            presentedError = String(localized: "Approval access changed. Reopen this chat on the active Aiden Agent and review the request again.")
+            return
+        }
+        let capabilities = approvalCapabilities(for: context)
+        let authorization = AidenApprovalResponseAuthorization.resolve(
+            approval: approval,
+            decision: decision,
+            capabilities: capabilities
+        )
+        guard authorization == .allowed else {
+            presentedError = switch authorization {
+            case .allowed:
+                nil
+            case .approvalResponseRequired:
+                String(localized: "Approval response access was removed from this paired device. The request has been refreshed without sending a decision.")
+            case .scheduleWriteRequired:
+                String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
+            case .hostApprovalRequired:
+                String(localized: "This request can only be approved on your paired desktop.")
+            }
+            streamState = .reconciling
+            coordinator.haptics.play(.warning, scope: hapticScope)
+            await restorePendingApproval(streamID: streamID, context: context)
+            return
+        }
         pendingApproval = nil
         streamState = .running
         do {
@@ -1823,7 +1849,8 @@ final class AidenChatViewModel {
             guard let approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId: streamID,
-                chatId: chat.id
+                chatId: chat.id,
+                capabilities: approvalCapabilities(for: context)
             ) else {
                 pendingApproval = nil
                 streamState = .reconciling
@@ -1851,6 +1878,21 @@ final class AidenChatViewModel {
             streamState = .reconciling
             await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
         }
+    }
+
+    private func approvalCapabilities(
+        for context: AidenRemoteRequestContext
+    ) -> AidenApprovalCapabilities {
+        guard coordinator.isCurrent(context),
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == context.instanceId,
+              installation.deviceId == context.deviceId else {
+            return AidenApprovalCapabilities(canRespond: false, canWriteSchedules: false)
+        }
+        return AidenApprovalCapabilities(
+            canRespond: installation.hasNegotiatedAccess(to: .approvalRespond),
+            canWriteSchedules: installation.hasNegotiatedAccess(to: .scheduleWrite)
+        )
     }
 
     @discardableResult
@@ -3933,6 +3975,9 @@ private struct AidenLiveResponseView: View {
             if let approval = model.pendingApproval {
                 AidenApprovalCard(
                     summary: approval.summary,
+                    kind: approval.kind,
+                    canRespond: approval.canRespond,
+                    hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
                     onDeny: { Task { await model.respondToApproval(.deny) } },
                     onAllow: { Task { await model.respondToApproval(.allow) } }
@@ -3979,6 +4024,9 @@ private struct AidenApprovalCard: View {
     @State private var isExpanded = false
 
     let summary: String
+    let kind: AidenApprovalKind
+    let canRespond: Bool
+    let hasRequiredWriteCapability: Bool
     let canAllow: Bool
     let onDeny: () -> Void
     let onAllow: () -> Void
@@ -3996,82 +4044,111 @@ private struct AidenApprovalCard: View {
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Approval needed")
+                    Text(AidenApprovalPresentation.title(for: kind))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(palette.foreground)
 
-                    Text("Review this one action before Aiden continues.")
+                    Text(AidenApprovalPresentation.detail(for: kind))
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Text(AidenApprovalPresentation.oneLineSummary(summary))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(palette.foreground)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(palette.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 36)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .accessibilityLabel("Requested action")
-            .accessibilityValue(AidenApprovalPresentation.oneLineSummary(summary))
-            .accessibilityHint(isExpanded ? "Collapses action details" : "Expands action details")
-
-            if isExpanded {
+            if kind == .scheduledTask {
                 Text(summary)
                     .font(.caption.monospaced())
-                    .foregroundStyle(palette.secondary)
+                    .foregroundStyle(palette.foreground)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+                    .accessibilityLabel("Scheduled task proposal")
+                    .accessibilityValue(summary)
+            } else {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(AidenApprovalPresentation.oneLineSummary(summary))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(palette.foreground)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-
-                Button(action: onDeny) {
-                    Text("Deny")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.foreground)
-                        .padding(.horizontal, 13)
-                        .frame(height: 34)
-                        .aidenApprovalActionGlass()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(palette.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 36)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.vertical, 5)
+                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityLabel("Requested action")
+                .accessibilityValue(AidenApprovalPresentation.oneLineSummary(summary))
+                .accessibilityHint(isExpanded ? "Collapses action details" : "Expands action details")
 
-                if canAllow {
-                    Button(action: onAllow) {
-                        Text("Allow once")
+                if isExpanded {
+                    Text(summary)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(palette.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+
+            if !canRespond {
+                Label("This paired device can review approvals but cannot respond.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            } else if kind == .scheduledTask && !hasRequiredWriteCapability {
+                Label("Schedule write access is required to approve this task.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            } else if kind == .scheduledTask && !canAllow {
+                Label("This task must be approved on your paired desktop.", systemImage: "desktopcomputer")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            }
+
+            if canRespond {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+
+                    Button(action: onDeny) {
+                        Text(AidenApprovalPresentation.denyTitle(for: kind))
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.canvas)
+                            .foregroundStyle(palette.foreground)
                             .padding(.horizontal, 13)
                             .frame(height: 34)
-                            .aidenApprovalActionGlass(tint: palette.accent)
+                            .aidenApprovalActionGlass()
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 5)
+
+                    if canAllow {
+                        Button(action: onAllow) {
+                            Text(AidenApprovalPresentation.allowTitle(for: kind))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.canvas)
+                                .padding(.horizontal, 13)
+                                .frame(height: 34)
+                                .aidenApprovalActionGlass(tint: palette.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 5)
+                    }
                 }
             }
         }
