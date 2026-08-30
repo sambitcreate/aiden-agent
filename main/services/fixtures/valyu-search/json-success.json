@@ -1,0 +1,56 @@
+{
+  "success": true,
+  "tx_id": "valyu_fixture_transaction",
+  "query": "current Valyu docs",
+  "results": [
+    {
+      "id": "valyu_fixture_1",
+      "title": "Valyu Search API",
+      "url": "https://docs.valyu.ai/api-reference/endpoint/search",
+      "content": "Valyu Search returns web results with usage metadata.",
+      "description": "A Valyu result description.",
+      "source": "web",
+      "price": 0.001,
+      "length": 55,
+      "data_type": "webpage",
+      "source_type": "web"
+    },
+    {
+      "id": "valyu_fixture_2",
+      "title": "Second Valyu source",
+      "url": "https://example.test/valyu-second",
+      "content": "A second untrusted Valyu result.",
+      "description": null,
+      "source": "web",
+      "price": 0.001,
+      "length": 33,
+      "data_type": "webpage",
+      "source_type": "web"
+    },
+    {
+      "id": "valyu_fixture_duplicate",
+      "title": "Duplicate Valyu source",
+      "url": "https://example.test/valyu-second",
+      "content": "This duplicate is discarded.",
+      "source": "web",
+      "price": 0.001,
+      "length": 29,
+      "data_type": "webpage",
+      "source_type": "web"
+    },
+    {
+      "id": "valyu_fixture_unsafe",
+      "title": "Unsafe Valyu source",
+      "url": "javascript:alert(1)",
+      "content": "This source must not escape the adapter.",
+      "source": "web",
+      "price": 0.001,
+      "length": 39,
+      "data_type": "webpage",
+      "source_type": "web"
+    }
+  ],
+  "results_by_source": { "web": 4 },
+  "total_deduction_dollars": 0.002,
+  "total_characters": 88
+}

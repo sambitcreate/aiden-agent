@@ -9,10 +9,7 @@ import {
 } from "./chat-workspace-authority.js";
 
 test("persisted chat workspace ownership is authoritative over renderer input", () => {
-  assert.equal(
-    authoritativeChatWorkspaceId("workspace-a", "workspace-a"),
-    "workspace-a",
-  );
+  assert.equal(authoritativeChatWorkspaceId("workspace-a", "workspace-a"), "workspace-a");
   assert.throws(
     () => authoritativeChatWorkspaceId("workspace-a", "workspace-b"),
     /different workspace/u,
@@ -34,18 +31,9 @@ test("legacy and omitted chat workspace ids normalize to the default workspace",
 });
 
 test("persisted chat identity is authoritative for attended Assistant mode", () => {
-  assert.equal(
-    authoritativeChatGenerationMode("assistant", undefined),
-    "assistant",
-  );
-  assert.equal(
-    authoritativeChatGenerationMode("assistant", "assistant"),
-    "assistant",
-  );
-  assert.equal(
-    authoritativeChatGenerationMode("workspace-a", undefined),
-    undefined,
-  );
+  assert.equal(authoritativeChatGenerationMode("assistant", undefined), "assistant");
+  assert.equal(authoritativeChatGenerationMode("assistant", "assistant"), "assistant");
+  assert.equal(authoritativeChatGenerationMode("workspace-a", undefined), undefined);
   assert.throws(
     () => authoritativeChatGenerationMode("workspace-a", "assistant"),
     /not an Aiden Assistant chat/u,
@@ -78,7 +66,9 @@ test("generation uses the persisted Assistant mode for handoff, tools, and promp
 test("generation initialization persists terminal outcomes before releasing ownership", () => {
   const llmClientSource = readFileSync(new URL("./llm-client.ts", import.meta.url), "utf8");
   const startSource = llmClientSource.slice(llmClientSource.indexOf("export const llmClient"));
-  const helperStart = startSource.indexOf("const initializationTerminalState = { attempted: false }");
+  const helperStart = startSource.indexOf(
+    "const initializationTerminalState = { attempted: false }",
+  );
   const firstCleanup = startSource.indexOf("releaseGenerationSkillReservation(initialization)");
   assert.ok(helperStart >= 0, "terminal persistence helper must be part of generation start");
   assert.ok(
@@ -87,25 +77,27 @@ test("generation initialization persists terminal outcomes before releasing owne
   );
   assert.match(llmClientSource, /import \{ persistGenerationInitializationTerminal \}/u);
   assert.match(startSource, /await persistGenerationInitializationTerminal\(\{/u);
-  assert.match(startSource, /append: \(message, meta\) => chatStore\.appendMessage\(params\.chatId, message, meta\)/u);
+  assert.match(
+    startSource,
+    /append: \(message, meta\) => chatStore\.appendMessage\(params\.chatId, message, meta\)/u,
+  );
   assert.match(startSource, /initializing\.get\(streamId\) === initialization/u);
   assert.match(startSource, /active\.get\(streamId\)\?\.owner === owner/u);
 
   const cancellationPersists = startSource.match(
     /await persistInitializationTerminal\(\s*"cancelled",\s*(?:initialization|activeGeneration)\.cancellationOrigin,?\s*\)/gu,
   );
-  const failurePersists = startSource.match(
-    /await persistInitializationTerminal\("failed"\)/gu,
-  );
+  const failurePersists = startSource.match(/await persistInitializationTerminal\("failed"\)/gu);
   assert.equal(cancellationPersists?.length, 3);
   assert.equal(failurePersists?.length, 3);
 
   for (const status of ["cancelled", "failed"] as const) {
-    const persistIndex = startSource.indexOf(
+    const persistMatch = startSource.match(
       status === "cancelled"
-        ? 'await persistInitializationTerminal(\n          "cancelled"'
-        : 'await persistInitializationTerminal("failed")',
+        ? /await persistInitializationTerminal\(\s*"cancelled",\s*(?:initialization|activeGeneration)\.cancellationOrigin,?\s*\)/u
+        : /await persistInitializationTerminal\("failed"\)/u,
     );
+    const persistIndex = persistMatch?.index ?? -1;
     assert.ok(persistIndex >= 0);
     const cleanupIndex = startSource.indexOf(
       "releaseGenerationSkillReservation(initialization)",
@@ -127,32 +119,14 @@ test("historical subagent reads require an exact persisted assistant-message ref
       runIds: ["run-1", "run-2"],
     },
   };
+  assert.equal(persistedChatReferencesSubagentRun([exactReference], "run-1", "generation-1"), true);
+  assert.equal(persistedChatReferencesSubagentRun([], "run-1", "generation-1"), false);
   assert.equal(
-    persistedChatReferencesSubagentRun(
-      [exactReference],
-      "run-1",
-      "generation-1",
-    ),
-    true,
-  );
-  assert.equal(
-    persistedChatReferencesSubagentRun([], "run-1", "generation-1"),
+    persistedChatReferencesSubagentRun([exactReference], "run-orphan", "generation-1"),
     false,
   );
   assert.equal(
-    persistedChatReferencesSubagentRun(
-      [exactReference],
-      "run-orphan",
-      "generation-1",
-    ),
-    false,
-  );
-  assert.equal(
-    persistedChatReferencesSubagentRun(
-      [exactReference],
-      "run-1",
-      "generation-other",
-    ),
+    persistedChatReferencesSubagentRun([exactReference], "run-1", "generation-other"),
     false,
   );
   assert.equal(

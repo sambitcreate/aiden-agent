@@ -9,7 +9,10 @@ import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabi
 import { createBotCapabilityCatalogMainService } from "./bot-capability-catalog-main.js";
 import { createBotProviderCredentialSignatureCore } from "./bot-capability-credential-signatures-core.js";
 import { createBotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
-import { createBotCapabilityInventoryPorts, type BotResolvedSkill } from "./bot-capability-inventory-ports.js";
+import {
+  createBotCapabilityInventoryPorts,
+  type BotResolvedSkill,
+} from "./bot-capability-inventory-ports.js";
 import { createBotCapabilityStore } from "./bot-capability-store.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -60,7 +63,10 @@ test("Bot provider signatures bind stored and custom authority while rejecting a
   const customB = await sign(customProvider, key, signal);
 
   const signatures = [apiKeyA, apiKeyB, oauth, customA, customB];
-  assert.equal(signatures.every((value) => value !== undefined), true);
+  assert.equal(
+    signatures.every((value) => value !== undefined),
+    true,
+  );
   assert.equal(new Set(signatures).size, signatures.length);
   for (const value of signatures) assert.match(value!, /^[a-f0-9]{64}$/u);
   assert.doesNotMatch(JSON.stringify(signatures), /stored-secret|oauth-a|custom-secret/u);
@@ -70,13 +76,15 @@ test("production-shaped catalogs keep restart identity and public ids across exa
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-production-catalog-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   let credential = hash("credential-a");
-  let skills: BotResolvedSkill[] = [{
-    sourceId: "skill:resolved",
-    label: "Resolved",
-    description: "A discovered skill",
-    instructions: "Private instructions",
-    available: true,
-  }];
+  let skills: BotResolvedSkill[] = [
+    {
+      sourceId: "skill:resolved",
+      label: "Resolved",
+      description: "A discovered skill",
+      instructions: "Private instructions",
+      available: true,
+    },
+  ];
   let randomCounter = 0;
   const createService = async () => {
     const protectedStore = createBotCapabilityStore({
@@ -86,28 +94,35 @@ test("production-shaped catalogs keep restart identity and public ids across exa
     });
     await protectedStore.initialize();
     const incarnations = createBotCapabilityIncarnationStore(protectedStore);
-    return createBotCapabilityCatalogMainService(createBotCapabilityInventoryPorts({
-      loadOpaqueSelectionKey: async () => Buffer.alloc(32, 9),
-      loadNoticeStatus: async () => ({ version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true }),
-      listProviders: async () => [{
-        id: "provider",
-        kind: "openai",
-        label: "Provider",
-        baseUrl: "https://provider.invalid/v1",
-        models: ["chat"],
-        needsKey: true,
-        hasKey: true,
-      }],
-      providerCredentialSignature: async () => credential,
-      listMcpServers: async () => [],
-      inspectMcpScopes: async () => [],
-      listSkills: async () => skills,
-      listApprovedLocations: async () => [],
-      incarnations,
-      getSettings: async () => ({}),
-      hasWebCredential: async () => false,
-      subagentsAvailable: () => false,
-    }));
+    return createBotCapabilityCatalogMainService(
+      createBotCapabilityInventoryPorts({
+        loadOpaqueSelectionKey: async () => Buffer.alloc(32, 9),
+        loadNoticeStatus: async () => ({
+          version: BOT_FULL_ACCESS_NOTICE_VERSION,
+          requiresAcknowledgement: true,
+        }),
+        listProviders: async () => [
+          {
+            id: "provider",
+            kind: "openai",
+            label: "Provider",
+            baseUrl: "https://provider.invalid/v1",
+            models: ["chat"],
+            needsKey: true,
+            hasKey: true,
+          },
+        ],
+        providerCredentialSignature: async () => credential,
+        listMcpServers: async () => [],
+        inspectMcpScopes: async () => [],
+        listSkills: async () => skills,
+        listApprovedLocations: async () => [],
+        incarnations,
+        getSettings: async () => ({}),
+        webSearchAvailability: async () => ({ ready: false }),
+        subagentsAvailable: () => false,
+      }),
+    );
   };
 
   const first = await (await createService()).snapshot({ audienceId: "device_a" });
@@ -125,13 +140,15 @@ test("production-shaped catalogs keep restart identity and public ids across exa
 
   skills = [];
   await (await createService()).snapshot({ audienceId: "device_a" });
-  skills = [{
-    sourceId: "skill:resolved",
-    label: "Resolved",
-    description: "A discovered skill",
-    instructions: "Private instructions",
-    available: true,
-  }];
+  skills = [
+    {
+      sourceId: "skill:resolved",
+      label: "Resolved",
+      description: "A discovered skill",
+      instructions: "Private instructions",
+      available: true,
+    },
+  ];
   const readded = await (await createService()).snapshot({ audienceId: "device_a" });
   assert.equal(readded.catalog.skills[0]?.id, first.catalog.skills[0]?.id);
 });
@@ -163,43 +180,56 @@ test("Bot-targeted catalogs isolate managed-home skills and stay stable across r
       mintIncarnation: () => Buffer.alloc(32, ++randomCounter).toString("base64url"),
     });
     await protectedStore.initialize();
-    return createBotCapabilityCatalogMainService(createBotCapabilityInventoryPorts({
-      loadOpaqueSelectionKey: async () => Buffer.alloc(32, 17),
-      loadNoticeStatus: async () => ({
-        version: BOT_FULL_ACCESS_NOTICE_VERSION,
-        requiresAcknowledgement: true,
+    return createBotCapabilityCatalogMainService(
+      createBotCapabilityInventoryPorts({
+        loadOpaqueSelectionKey: async () => Buffer.alloc(32, 17),
+        loadNoticeStatus: async () => ({
+          version: BOT_FULL_ACCESS_NOTICE_VERSION,
+          requiresAcknowledgement: true,
+        }),
+        listProviders: async () => [
+          {
+            id: "provider",
+            kind: "openai",
+            label: "Provider",
+            baseUrl: "https://provider.invalid/v1",
+            models: ["chat"],
+            needsKey: false,
+            hasKey: false,
+          },
+        ],
+        providerCredentialSignature: async () => hash("absent"),
+        listMcpServers: async () => [],
+        inspectMcpScopes: async () => [],
+        listSkills: async (target) => [
+          globalSkill,
+          ...(target ? [privateSkill(target.botId)] : []),
+        ],
+        listApprovedLocations: async () => [],
+        incarnations: createBotCapabilityIncarnationStore(protectedStore),
+        getSettings: async () => ({}),
+        webSearchAvailability: async () => ({ ready: false }),
+        subagentsAvailable: () => false,
       }),
-      listProviders: async () => [{
-        id: "provider",
-        kind: "openai",
-        label: "Provider",
-        baseUrl: "https://provider.invalid/v1",
-        models: ["chat"],
-        needsKey: false,
-        hasKey: false,
-      }],
-      providerCredentialSignature: async () => hash("absent"),
-      listMcpServers: async () => [],
-      inspectMcpScopes: async () => [],
-      listSkills: async (target) => [
-        globalSkill,
-        ...(target ? [privateSkill(target.botId)] : []),
-      ],
-      listApprovedLocations: async () => [],
-      incarnations: createBotCapabilityIncarnationStore(protectedStore),
-      getSettings: async () => ({}),
-      hasWebCredential: async () => false,
-      subagentsAvailable: () => false,
-    }));
+    );
   };
 
   const service = await createService();
   const botA = await service.snapshot({ audienceId: "device_a", botId: "bot:a" });
   const botB = await service.snapshot({ audienceId: "device_a", botId: "bot:b" });
   const createBot = await service.snapshot({ audienceId: "device_a" });
-  assert.deepEqual(botA.catalog.skills.map(({ label }) => label).sort(), ["Global", "Private bot:a"]);
-  assert.deepEqual(botB.catalog.skills.map(({ label }) => label).sort(), ["Global", "Private bot:b"]);
-  assert.deepEqual(createBot.catalog.skills.map(({ label }) => label), ["Global"]);
+  assert.deepEqual(botA.catalog.skills.map(({ label }) => label).sort(), [
+    "Global",
+    "Private bot:a",
+  ]);
+  assert.deepEqual(botB.catalog.skills.map(({ label }) => label).sort(), [
+    "Global",
+    "Private bot:b",
+  ]);
+  assert.deepEqual(
+    createBot.catalog.skills.map(({ label }) => label),
+    ["Global"],
+  );
   assert.doesNotMatch(JSON.stringify(botA.catalog), /bot:b|Secret instructions/u);
 
   const bPrivateId = botB.catalog.skills.find(({ label }) => label === "Private bot:b")!.id;
@@ -223,7 +253,9 @@ test("Bot-targeted catalogs isolate managed-home skills and stay stable across r
     /unavailable skill/u,
   );
 
-  const restartedA = await (await createService()).snapshot({ audienceId: "device_a", botId: "bot:a" });
+  const restartedA = await (
+    await createService()
+  ).snapshot({ audienceId: "device_a", botId: "bot:a" });
   assert.deepEqual(
     restartedA.catalog.skills.map(({ id, label }) => ({ id, label })),
     botA.catalog.skills.map(({ id, label }) => ({ id, label })),
@@ -240,15 +272,12 @@ test("shipping Bot inventory is wired to canonical Pi providers and model drift 
     "utf8",
   );
 
-  assert.match(services, /import \{ listConfiguredProviders \} from "\.\/provider-list-main\.js";/u);
+  assert.match(
+    services,
+    /import \{ listConfiguredProviders \} from "\.\/provider-list-main\.js";/u,
+  );
   assert.match(services, /listProviders: listConfiguredProviders/u);
   assert.doesNotMatch(services, /listProviders:\s*\(\)\s*=>\s*configStore\.listProviders\(\)/u);
-  assert.match(
-    models,
-    /withBotProviderInventoryMutation\(async \(\) =>/u,
-  );
-  assert.match(
-    models,
-    /\}, invalidateBotRuntimeInventoryAuthority\)/u,
-  );
+  assert.match(models, /withBotProviderInventoryMutation\(async \(\) =>/u);
+  assert.match(models, /\}, invalidateBotRuntimeInventoryAuthority\)/u);
 });

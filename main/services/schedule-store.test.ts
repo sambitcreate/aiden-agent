@@ -63,6 +63,7 @@ test("task store validates, updates, pauses, and retains runtime fields", async 
   assert.equal(created.permission, "read-only");
   assert.equal(created.notify, true);
   assert.equal(created.enabled, true);
+  assert.equal(created.webSearchEnabled, false);
   assert.ok(created.nextRunAt);
 
   const withChat = await store.updateRuntime(created.id, {
@@ -95,6 +96,52 @@ test("task store validates, updates, pauses, and retains runtime fields", async 
     }),
     /prompt/iu,
   );
+});
+
+test("ordinary schedule Web Search authority defaults closed, persists explicitly, and survives edits", async () => {
+  const store = testStore();
+  const closed = await store.save({
+    name: "Legacy-safe brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize current events.",
+  });
+  assert.equal(closed.webSearchEnabled, false);
+
+  const granted = await store.save({
+    id: closed.id,
+    name: closed.name,
+    mode: closed.mode,
+    cron: closed.cron,
+    timezone: closed.timezone,
+    prompt: closed.prompt,
+    permission: closed.permission,
+    webSearchEnabled: true,
+  });
+  assert.equal(granted.webSearchEnabled, true);
+
+  const edited = await store.save({
+    id: granted.id,
+    name: "Edited brief",
+    mode: granted.mode,
+    cron: granted.cron,
+    timezone: granted.timezone,
+    prompt: granted.prompt,
+    permission: granted.permission,
+  });
+  assert.equal(edited.webSearchEnabled, true);
+
+  const script = await store.save({
+    name: "Script brief",
+    mode: "script",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    script: "report.sh",
+    permission: "full",
+    webSearchEnabled: true,
+  });
+  assert.equal(script.webSearchEnabled, false);
 });
 
 test("task revisions advance monotonically when the clock does not", async () => {

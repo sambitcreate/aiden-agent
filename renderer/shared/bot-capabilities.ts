@@ -114,6 +114,8 @@ export type BotAccessUpdate =
       /** Optional Bot model authority. Older clients omit this pair. */
       providerId?: string;
       modelId?: string;
+      /** Explicit Web Search authority. Omission never grants network access. */
+      webSearchEnabled?: boolean;
       /** Omitted preserves, null clears, and an object exact-binds a companion. */
       visionModel?: BotModelSelection | null;
     }
@@ -133,10 +135,7 @@ export interface BotAccessViewBase {
 }
 
 export type BotAccessView = BotAccessViewBase &
-  (
-    | { accessMode: "full"; custom?: never }
-    | { accessMode: "custom"; custom: BotCustomSelection }
-  );
+  ({ accessMode: "full"; custom?: never } | { accessMode: "custom"; custom: BotCustomSelection });
 
 export type BotChatAccessUpdate =
   | {
@@ -160,10 +159,7 @@ export interface BotChatAccessViewBase {
 }
 
 export type BotChatAccessView = BotChatAccessViewBase &
-  (
-    | { mode: "inherit"; custom?: never }
-    | { mode: "custom"; custom: BotCustomSelection }
-  );
+  ({ mode: "inherit"; custom?: never } | { mode: "custom"; custom: BotCustomSelection });
 
 export interface BotNoticeAcknowledgement {
   version: typeof BOT_FULL_ACCESS_NOTICE_VERSION;
@@ -296,11 +292,7 @@ export function parseBotCustomSelection(value: unknown): BotCustomSelection {
       BOT_CAPABILITY_LIMITS.connections,
       "Custom connections",
     ),
-    skillIds: parseUniqueOpaqueIds(
-      value.skillIds,
-      BOT_CAPABILITY_LIMITS.skills,
-      "Custom skills",
-    ),
+    skillIds: parseUniqueOpaqueIds(value.skillIds, BOT_CAPABILITY_LIMITS.skills, "Custom skills"),
     otherCapabilityIds: parseUniqueOpaqueIds(
       value.otherCapabilityIds,
       BOT_CAPABILITY_LIMITS.otherCapabilities,
@@ -309,16 +301,16 @@ export function parseBotCustomSelection(value: unknown): BotCustomSelection {
   };
 }
 
-function validOptionalModelSelection(
-  value: Record<string, unknown>,
-  key: string,
-): boolean {
+function validOptionalModelSelection(value: Record<string, unknown>, key: string): boolean {
   if (!Object.prototype.hasOwnProperty.call(value, key) || value[key] === null) return true;
   const selection = value[key];
-  return isRecord(selection) && hasOnlyKeys(selection, ["providerId", "modelId"])
-    && Object.keys(selection).length === 2
-    && isBoundedBotText(selection.providerId, BOT_CAPABILITY_LIMITS.providerIdChars)
-    && isBoundedBotText(selection.modelId, BOT_CAPABILITY_LIMITS.modelIdChars);
+  return (
+    isRecord(selection) &&
+    hasOnlyKeys(selection, ["providerId", "modelId"]) &&
+    Object.keys(selection).length === 2 &&
+    isBoundedBotText(selection.providerId, BOT_CAPABILITY_LIMITS.providerIdChars) &&
+    isBoundedBotText(selection.modelId, BOT_CAPABILITY_LIMITS.modelIdChars)
+  );
 }
 
 function parseNullableModelSelection(value: unknown): BotModelSelection | null {
@@ -343,14 +335,15 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
         "confirmedForeground",
         "providerId",
         "modelId",
+        "webSearchEnabled",
         "visionModel",
       ]) ||
       value.confirmedForeground !== true ||
       hasProviderId !== hasModelId ||
-      (hasProviderId && (
-        !isBoundedBotText(value.providerId, BOT_CAPABILITY_LIMITS.providerIdChars) ||
-        !isBoundedBotText(value.modelId, BOT_CAPABILITY_LIMITS.modelIdChars)
-      )) ||
+      (hasProviderId &&
+        (!isBoundedBotText(value.providerId, BOT_CAPABILITY_LIMITS.providerIdChars) ||
+          !isBoundedBotText(value.modelId, BOT_CAPABILITY_LIMITS.modelIdChars))) ||
+      (value.webSearchEnabled !== undefined && typeof value.webSearchEnabled !== "boolean") ||
       !validOptionalModelSelection(value, "visionModel")
     ) {
       throw new BotCapabilityValidationError("Full Access requires foreground confirmation.");
@@ -365,6 +358,7 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
             modelId: value.modelId as string,
           }
         : {}),
+      ...(value.webSearchEnabled === undefined ? {} : { webSearchEnabled: value.webSearchEnabled }),
       ...(Object.prototype.hasOwnProperty.call(value, "visionModel")
         ? { visionModel: parseNullableModelSelection(value.visionModel) }
         : {}),
@@ -372,12 +366,7 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
   }
   if (
     value.accessMode !== "custom" ||
-    !hasOnlyKeys(value, [
-      "accessMode",
-      "catalogRevision",
-      "custom",
-      "visionModel",
-    ]) ||
+    !hasOnlyKeys(value, ["accessMode", "catalogRevision", "custom", "visionModel"]) ||
     !validOptionalModelSelection(value, "visionModel")
   ) {
     throw new BotCapabilityValidationError("Invalid Bot access update.");
@@ -414,12 +403,7 @@ export function parseBotChatAccessUpdate(value: unknown): BotChatAccessUpdate {
   }
   if (
     value.mode !== "custom" ||
-    !hasOnlyKeys(value, [
-      "mode",
-      "catalogRevision",
-      "expectedBotPolicyRevision",
-      "custom",
-    ]) ||
+    !hasOnlyKeys(value, ["mode", "catalogRevision", "expectedBotPolicyRevision", "custom"]) ||
     Object.keys(value).length !== 4
   ) {
     throw new BotCapabilityValidationError("Invalid Custom Bot chat access update.");
@@ -540,9 +524,7 @@ export function botCustomSelectionsEqual(
   left: BotCustomSelection,
   right: BotCustomSelection,
 ): boolean {
-  return (
-    botCustomSelectionIsSubset(left, right) && botCustomSelectionIsSubset(right, left)
-  );
+  return botCustomSelectionIsSubset(left, right) && botCustomSelectionIsSubset(right, left);
 }
 
 /** True when moving between two Custom selections removes any prior grant. */
@@ -601,18 +583,18 @@ export function validateSelectionAgainstCatalog(
     for (const id of ids) {
       const option = choices.find((candidate) => candidate.id === id);
       if (!option || (requireAvailable && !option.available)) {
-        throw new BotCapabilityValidationError(`Bot Custom access contains an unavailable ${label}.`);
+        throw new BotCapabilityValidationError(
+          `Bot Custom access contains an unavailable ${label}.`,
+        );
       }
     }
   };
   const provider = catalog.providers.find(({ id }) => id === selection.providerId);
   const model = provider?.models.find(({ id }) => id === selection.modelId);
-  if (
-    !provider ||
-    !model ||
-    (requireAvailable && (!provider.available || !model.available))
-  ) {
-    throw new BotCapabilityValidationError("Bot Custom access contains an unavailable AI connection.");
+  if (!provider || !model || (requireAvailable && (!provider.available || !model.available))) {
+    throw new BotCapabilityValidationError(
+      "Bot Custom access contains an unavailable AI connection.",
+    );
   }
   if (requireAvailable && selection.shellEnabled && !catalog.shellAvailable) {
     throw new BotCapabilityValidationError("Bot Custom access enables unavailable shell access.");

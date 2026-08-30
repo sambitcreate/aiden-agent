@@ -4,8 +4,13 @@ import type {
   SettingsShape,
 } from "./portable-config-core.js";
 import type { BotRuntimeInventoryMutation } from "./bot-runtime-inventory-lease.js";
+import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
 
 type Invalidate = (reason: BotRuntimeInventoryMutation) => void;
+
+function normalizedWebSearchAuthority(settings: SettingsShape["settings"]): string {
+  return JSON.stringify(parseWebSearchSettings(settings.webSearch) ?? null);
+}
 
 /**
  * Fence both sides of a Pi catalog refresh. Its durable store write happens
@@ -58,11 +63,11 @@ export function invalidateChangedBotSettingsAuthority(
 ): void {
   if (
     previous &&
-    (
-      previous.settings.exaEnabled !== next.settings.exaEnabled ||
+    (previous.settings.exaEnabled !== next.settings.exaEnabled ||
+      normalizedWebSearchAuthority(previous.settings) !==
+        normalizedWebSearchAuthority(next.settings) ||
       previous.settings.computerUseEnabled !== next.settings.computerUseEnabled ||
-      previous.settings.scheduledTasksEnabled !== next.settings.scheduledTasksEnabled
-    )
+      previous.settings.scheduledTasksEnabled !== next.settings.scheduledTasksEnabled)
   ) {
     invalidate("settings");
   }

@@ -22,15 +22,11 @@ import { createBotManagedWorkspaceService } from "./bot-managed-workspace.js";
 import { configStore } from "./config-store.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
 import { inspectConfiguredMcpToolsForBotCatalog } from "./mcp.js";
-import {
-  resolveBotMcpConnectionIdentities,
-  resolveBotMcpInventory,
-} from "./bot-mcp-inventory.js";
+import { resolveBotMcpConnectionIdentities, resolveBotMcpInventory } from "./bot-mcp-inventory.js";
 import {
   resolveBotCapabilitySkills,
   resolveBotRuntimeSkillBindings,
 } from "./bot-skill-inventory.js";
-import { secrets } from "./secrets.js";
 import { discoverSkillCandidates } from "./skills-discovery.js";
 import { subagentsEnabled } from "./subagents/feature-flag.js";
 import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js";
@@ -42,6 +38,7 @@ import {
 } from "./bot-runtime-inventory-lease.js";
 import { BotSkillContentWatcher } from "./bot-skill-content-watcher.js";
 import { skillRegistry } from "./skill-registry-main.js";
+import { webSearchService } from "./web-search-main.js";
 
 export const BOT_SERVICE_DIRECTORY = "bot-service";
 
@@ -83,7 +80,7 @@ export async function resolveBotRuntimeSkills(botId: string) {
     discover: (workspaceRoot) => discoverSkillCandidates(workspaceRoot),
   });
   await botSkillContentWatcher.watchSkillFiles(
-    skills.flatMap(({ runtimePath }) => runtimePath ? [runtimePath] : []),
+    skills.flatMap(({ runtimePath }) => (runtimePath ? [runtimePath] : [])),
   );
   return skills;
 }
@@ -109,16 +106,11 @@ const capabilityStateCheckpoint = createBotCapabilityStateCheckpoint({
     account: capabilityKeychainAccount,
   }),
   inspectInitialBootstrap: async () => {
-    const [bots, chats] = await Promise.all([
-      botStore.list(true),
-      chatStore.list(),
-    ]);
+    const [bots, chats] = await Promise.all([botStore.list(true), chatStore.list()]);
     const botIds = new Set(bots.map(({ id }) => id));
     const botChats = chats.filter(({ botId }) => botId !== undefined);
     if (bots.length === 0 && botChats.length === 0) return "clean";
-    return botChats.every(
-      ({ botId }) => botId !== undefined && botIds.has(botId),
-    )
+    return botChats.every(({ botId }) => botId !== undefined && botIds.has(botId))
       ? "legacy"
       : "deny";
   },
@@ -156,19 +148,14 @@ const botProviderCredentialSignature = createBotProviderCredentialSignature();
 export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
   createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: () => opaqueKeyStore.load(),
-    loadNoticeStatus: (audienceId) =>
-      botCapabilityStore.noticeStatus(audienceId),
+    loadNoticeStatus: (audienceId) => botCapabilityStore.noticeStatus(audienceId),
     // Bots and ordinary chats must see the same main-owned provider authority.
     // The inventory adapter below removes unconfigured connections and applies
     // the narrower Bot protocol bounds before anything reaches iOS.
     listProviders: listConfiguredProviders,
     providerCredentialSignature: async (provider, signal) => {
       if (signal.aborted) throw signal.reason;
-      return botProviderCredentialSignature(
-        provider,
-        await opaqueKeyStore.load(),
-        signal,
-      );
+      return botProviderCredentialSignature(provider, await opaqueKeyStore.load(), signal);
     },
     listMcpServers: () => configStore.listMcpServers(),
     inspectMcpScopes: (signal) =>
@@ -196,10 +183,8 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
       }),
     listApprovedLocations: async () => {
       // Dynamic import avoids coupling Bot storage initialization to Remote startup.
-      const { getAidenRemoteRuntime } =
-        await import("./aiden-remote-service-main.js");
-      const roots = (await (await getAidenRemoteRuntime()).state.snapshot())
-        .approvedRoots;
+      const { getAidenRemoteRuntime } = await import("./aiden-remote-service-main.js");
+      const roots = (await (await getAidenRemoteRuntime()).state.snapshot()).approvedRoots;
       return roots.map((root) => ({
         sourceId: root.id,
         label: root.label,
@@ -214,7 +199,10 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
     },
     incarnations: capabilityIncarnations,
     getSettings: () => configStore.getSettings(),
-    hasWebCredential: async () => Boolean(await secrets.getKey("exa")),
+    webSearchAvailability: async () => {
+      const availability = await webSearchService.availability();
+      return { ready: availability.ready };
+    },
     subagentsAvailable: () => subagentsEnabled(),
   }),
   {

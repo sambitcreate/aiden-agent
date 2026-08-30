@@ -34,6 +34,7 @@ export const INVOKE_PREFIXES = [
   "titleProviders:",
   "usage:",
   "voice:",
+  "webSearch:",
   "workspaces:",
 ] as const;
 

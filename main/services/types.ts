@@ -13,6 +13,7 @@ import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.j
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
+import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -354,6 +355,8 @@ export interface ScheduledTask {
   mcpServerBindings?: ScheduledMcpServerBinding[];
   /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
   executionProfile?: ScheduledTaskExecutionProfile;
+  /** Explicit Web Search authority. Missing legacy values are always treated as false. */
+  webSearchEnabled?: boolean;
   chatId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
@@ -394,6 +397,8 @@ export interface ScheduledTaskInput {
   mcpServerBindings?: ScheduledMcpServerBinding[];
   /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
   executionProfile?: ScheduledTaskExecutionProfile;
+  /** Explicit Web Search authority. New tasks default to false. */
+  webSearchEnabled?: boolean;
   notify?: boolean;
 }
 
@@ -517,6 +522,8 @@ export interface AppSettings {
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
   exaEnabled?: boolean;
+  /** Versioned Web Search routing/preferences; credentials stay main-owned. */
+  webSearch?: WebSearchSettingsV2;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
   /** Whether Google is exposed for voice only or for both chat models and voice. */

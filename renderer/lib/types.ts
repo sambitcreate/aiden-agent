@@ -12,6 +12,36 @@ import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type {
+  BoundedNonSecretProviderConfig,
+  WebSearchProviderId,
+  WebSearchProviderRendererMetadata,
+  WebSearchRendererSnapshot,
+  WebSearchRouteEntry,
+  WebSearchSelection,
+  WebSearchSettingsV2,
+} from "../../main/services/web-search-provider-registry-core";
+import type {
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererOption,
+  WebSearchExistingAuthRendererSnapshot,
+  WebSearchExistingAuthRendererStatus,
+} from "../../main/services/web-search-auth-reuse-core";
+export type {
+  BoundedNonSecretProviderConfig,
+  WebSearchProviderId,
+  WebSearchProviderRendererMetadata,
+  WebSearchRendererSnapshot,
+  WebSearchRouteEntry,
+  WebSearchSelection,
+  WebSearchSettingsV2,
+};
+export type {
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererOption,
+  WebSearchExistingAuthRendererSnapshot,
+  WebSearchExistingAuthRendererStatus,
+};
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
 export type { BotDefinition } from "../shared/bots";
 
@@ -578,6 +608,8 @@ export interface ScheduledTask {
   mcpServerIds?: string[];
   /** Main-owned runtime profile, exposed read-only for truthful capability display. */
   executionProfile?: ScheduledTaskExecutionProfile;
+  /** Explicit Web Search authority; omitted legacy values are closed. */
+  webSearchEnabled?: boolean;
   chatId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
@@ -612,6 +644,8 @@ export interface ScheduledTaskInput {
   permission?: ScheduledTaskPermission;
   /** Exact configured MCP servers this task may invoke unattended. */
   mcpServerIds?: string[];
+  /** Explicit Web Search authority. New tasks default to false. */
+  webSearchEnabled?: boolean;
   notify?: boolean;
 }
 
@@ -757,6 +791,8 @@ export interface AppSettings {
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
   exaEnabled?: boolean;
+  /** Versioned Web Search routing/preferences; credentials stay main-owned. */
+  webSearch?: WebSearchSettingsV2;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
   geminiUsageScope?: GeminiUsageScope;

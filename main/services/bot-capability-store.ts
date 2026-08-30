@@ -132,8 +132,7 @@ export class BotCapabilityStore {
       mintRevision:
         options.mintRevision ??
         ((kind, sequence) => `revision:${kind}:${sequence}:${randomUUID()}`),
-      mintIncarnation:
-        options.mintIncarnation ?? (() => randomBytes(32).toString("base64url")),
+      mintIncarnation: options.mintIncarnation ?? (() => randomBytes(32).toString("base64url")),
     };
     this.leases = options.leases ?? botCapabilityLeases;
   }
@@ -161,7 +160,9 @@ export class BotCapabilityStore {
     if (this.initialized) return;
     const loaded = await this.persistence.load();
     if (await this.persistence.loadedFromCorruptFile()) {
-      throw new BotCapabilityUnavailableError("Bot access storage is unreadable and was preserved.");
+      throw new BotCapabilityUnavailableError(
+        "Bot access storage is unreadable and was preserved.",
+      );
     }
     if (await this.persistence.loadedFromUnsafeFile()) {
       throw new BotCapabilityUnavailableError(
@@ -183,7 +184,9 @@ export class BotCapabilityStore {
 
   async noticeStatus(audienceId: string): Promise<BotNoticeStatus> {
     this.requireInitialized();
-    return this.serialized(async () => projectBotNoticeStatus(await this.persistence.load(), audienceId));
+    return this.serialized(async () =>
+      projectBotNoticeStatus(await this.persistence.load(), audienceId),
+    );
   }
 
   async acknowledgeNotice(
@@ -197,10 +200,7 @@ export class BotCapabilityStore {
       const prior = projectBotNoticeStatus(before, audienceId);
       const next = await this.persistence.update((state) => {
         assertCurrent?.();
-        return this.editor(state).acknowledgeNotice(
-          audienceId,
-          acknowledgement,
-        );
+        return this.editor(state).acknowledgeNotice(audienceId, acknowledgement);
       });
       if (
         !prior.requiresAcknowledgement &&
@@ -227,7 +227,9 @@ export class BotCapabilityStore {
 
   async auditBotInventory(botIds: readonly string[]): Promise<BotCapabilityPolicyAudit> {
     this.requireInitialized();
-    return this.serialized(async () => this.editor(await this.persistence.load()).auditBotInventory(botIds));
+    return this.serialized(async () =>
+      this.editor(await this.persistence.load()).auditBotInventory(botIds),
+    );
   }
 
   async migrateLegacyBotsToFull(input: {
@@ -396,19 +398,25 @@ export class BotCapabilityStore {
         );
       }
       const narrowing = botPolicyTransitionNarrows(policy, access);
-      const mayChangeFullModel =
-        access.accessMode === "full" && access.providerId !== undefined;
+      const mayChangeFullModel = access.accessMode === "full" && access.providerId !== undefined;
       const companionChanges = (() => {
         if (access.visionModel === undefined) return false;
         if (access.visionModel === null) return policy.visionModel !== undefined;
         if (!policy.visionModel || input.visionModelBinding === undefined) return true;
         const nextBinding = parseBoundBotProviderModel(input.visionModelBinding);
-        return policy.visionModel.selection.providerId !== access.visionModel.providerId ||
+        return (
+          policy.visionModel.selection.providerId !== access.visionModel.providerId ||
           policy.visionModel.selection.modelId !== access.visionModel.modelId ||
           boundBotProviderModelFingerprint(policy.visionModel.binding) !==
-            boundBotProviderModelFingerprint(nextBinding);
+            boundBotProviderModelFingerprint(nextBinding)
+        );
       })();
-      if (narrowing || mayChangeFullModel || companionChanges) {
+      const previousFullWebSearchEnabled =
+        policy.accessMode === "full" && policy.webSearchEnabled === true;
+      const nextFullWebSearchEnabled =
+        access.accessMode === "full" && (access.webSearchEnabled ?? previousFullWebSearchEnabled);
+      const webSearchChanged = previousFullWebSearchEnabled !== nextFullWebSearchEnabled;
+      if (narrowing || mayChangeFullModel || companionChanges || webSearchChanged) {
         this.leases.invalidateBot(policy.botId);
       }
       const result = await this.persistence.update((draft) => {
@@ -427,7 +435,9 @@ export class BotCapabilityStore {
 
   async getChatPolicy(chatId: string): Promise<BotChatAccessView> {
     this.requireInitialized();
-    return this.serialized(async () => projectBotChatAccessView(await this.persistence.load(), chatId));
+    return this.serialized(async () =>
+      projectBotChatAccessView(await this.persistence.load(), chatId),
+    );
   }
 
   async inspectArchivedReadAuthority(
@@ -632,6 +642,8 @@ export class BotCapabilityStore {
   }
 }
 
-export function createBotCapabilityStore(options: BotCapabilityStoreOptions = {}): BotCapabilityStore {
+export function createBotCapabilityStore(
+  options: BotCapabilityStoreOptions = {},
+): BotCapabilityStore {
   return new BotCapabilityStore(options);
 }

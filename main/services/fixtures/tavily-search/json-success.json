@@ -1,0 +1,18 @@
+{
+  "query": "current Tavily docs",
+  "answer": "This answer is intentionally ignored by the normalized source contract.",
+  "results": [
+    {
+      "title": "Tavily Search API",
+      "url": "https://docs.tavily.com/documentation/api-reference/endpoint/search",
+      "content": "Tavily Search returns source results with title, URL, and content.",
+      "raw_content": null
+    },
+    {
+      "title": "Second Tavily source",
+      "url": "https://example.test/tavily-second",
+      "content": "A second untrusted search result.",
+      "raw_content": "Raw content is not requested by this adapter."
+    }
+  ]
+}

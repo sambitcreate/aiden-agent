@@ -261,6 +261,16 @@ test("Full Access mirrors only currently available ordinary inventory", () => {
   );
 });
 
+test("Full Access does not infer Web Search from general availability", () => {
+  const webCandidate = capabilityCandidates().find(({ tool }) => tool.name === "web_search")!;
+  const fullAuthority: BotRuntimeEffectiveAuthority = {
+    ...customAuthority,
+    accessMode: "full",
+    otherCapabilities: [],
+  };
+  assert.equal(botToolCapabilityAllowed(fullAuthority, webCandidate.capability), false);
+});
+
 test("Custom publishes only exact Files, shell, MCP tools, skills, and other abilities", () => {
   assert.deepEqual(
     filterBotAgentTools(capabilityCandidates(), admission()).map(({ name }) => name),

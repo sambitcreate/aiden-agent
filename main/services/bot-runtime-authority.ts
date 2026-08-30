@@ -49,7 +49,8 @@ export const BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES = Object.freeze({
   chat_unavailable: "This Bot chat is not available to act.",
   access_unavailable: "This Bot's access is not available. Review its access settings.",
   provider_mismatch: "This Bot chat's AI connection no longer matches its access settings.",
-  capability_changed: "This Bot's available capabilities changed. Start again after reviewing access.",
+  capability_changed:
+    "This Bot's available capabilities changed. Start again after reviewing access.",
   managed_home_changed: "This Bot's managed folder changed. Restart Aiden to verify it safely.",
 } as const);
 
@@ -180,11 +181,7 @@ type BotStorePort = Pick<BotStore, "get">;
 type ChatStorePort = Pick<ChatStore, "get">;
 type CapabilityStorePort = Pick<
   BotCapabilityStore,
-  | "admit"
-  | "getBotBinding"
-  | "getBotPolicy"
-  | "getChatPolicy"
-  | "assertAuthorityBindingsCurrent"
+  "admit" | "getBotBinding" | "getBotPolicy" | "getChatPolicy" | "assertAuthorityBindingsCurrent"
 > & {
   getBotVisionModelAuthority?(
     botId: string,
@@ -241,8 +238,7 @@ function fileAuthority(
   // Full Mac includes the Bot's managed home, but the home remains the normal
   // working/default location. The Full Mac selector is an authority ceiling,
   // not a request to replace the Bot's cwd with the filesystem root.
-  const botHome =
-    Boolean(fullMac) || available.some((scope) => scope.option.kind === "bot_home");
+  const botHome = Boolean(fullMac) || available.some((scope) => scope.option.kind === "bot_home");
   const approvedLocations = available
     .filter((scope) => scope.option.kind === "approved_location")
     .map(scopeAuthority);
@@ -316,10 +312,7 @@ function customBinding(
 }
 
 function assertProviderMatchesChat(chat: Chat, provider: BotRuntimeProviderAuthority): void {
-  if (
-    chat.providerId !== provider.sourceProviderId ||
-    chat.model !== provider.sourceModelId
-  ) {
+  if (chat.providerId !== provider.sourceProviderId || chat.model !== provider.sourceModelId) {
     fail("provider_mismatch");
   }
 }
@@ -362,9 +355,7 @@ function buildAuthority(input: {
   let skills: BotRuntimeSkillAuthority[];
   let otherCapabilities: BotRuntimeOtherAuthority[];
   if (!custom) {
-    files = fileAuthority(
-      snapshot.resources.fileScopes.filter(({ option }) => option.available),
-    );
+    files = fileAuthority(snapshot.resources.fileScopes.filter(({ option }) => option.available));
     shell = snapshot.resources.shell.available
       ? {
           enabled: true,
@@ -375,11 +366,14 @@ function buildAuthority(input: {
     connections = snapshot.resources.connections
       .filter(({ option }) => option.available)
       .map(connectionAuthority);
-    skills = snapshot.resources.skills
-      .filter(({ option }) => option.available)
-      .map(skillAuthority);
+    skills = snapshot.resources.skills.filter(({ option }) => option.available).map(skillAuthority);
     otherCapabilities = snapshot.resources.otherCapabilities
-      .filter(({ option }) => option.available)
+      .filter(
+        ({ kind, option }) =>
+          option.available &&
+          (kind !== "web" ||
+            (admission.policy.accessMode === "full" && admission.policy.webSearchEnabled === true)),
+      )
       .map(otherAuthority);
   } else {
     const binding = customBinding(admission, snapshot);
@@ -393,7 +387,14 @@ function buildAuthority(input: {
       : { enabled: false };
     connections = binding.connections.map(connectionAuthority);
     skills = binding.skills.map(skillAuthority);
-    otherCapabilities = binding.otherCapabilities.map(otherAuthority);
+    otherCapabilities = binding.otherCapabilities
+      .filter(
+        ({ kind }) =>
+          kind !== "web" ||
+          admission.policy.accessMode !== "full" ||
+          admission.policy.webSearchEnabled === true,
+      )
+      .map(otherAuthority);
   }
   return freezeDeep({
     audienceId: input.audienceId,
@@ -431,13 +432,13 @@ function sameIdentity(
 ): boolean {
   return Boolean(
     bot &&
-      !bot.archivedAt &&
-      bot.id === expected.botId &&
-      chat &&
-      chat.id === expected.chatId &&
-      chat.botId === expected.botId &&
-      chat.providerId === expected.provider.sourceProviderId &&
-      chat.model === expected.provider.sourceModelId,
+    !bot.archivedAt &&
+    bot.id === expected.botId &&
+    chat &&
+    chat.id === expected.chatId &&
+    chat.botId === expected.botId &&
+    chat.providerId === expected.provider.sourceProviderId &&
+    chat.model === expected.provider.sourceModelId,
   );
 }
 
@@ -484,10 +485,12 @@ async function retainedProviders(
   return [
     ...retainedBotProviderForChat(chat),
     ...(vision
-      ? [{
-          sourceProviderId: vision.binding.sourceProviderId,
-          sourceModelId: vision.binding.sourceModelId,
-        }]
+      ? [
+          {
+            sourceProviderId: vision.binding.sourceProviderId,
+            sourceModelId: vision.binding.sourceModelId,
+          },
+        ]
       : []),
   ];
 }

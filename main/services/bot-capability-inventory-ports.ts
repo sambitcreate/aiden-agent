@@ -31,7 +31,8 @@ export interface BotCapabilityInventoryPortDependencies {
   listApprovedLocations(): Promise<readonly BotApprovedLocationInput[]>;
   incarnations: Pick<BotCapabilityIncarnationStore, "reconcileNamespace">;
   getSettings(): Promise<AppSettings>;
-  hasWebCredential(): Promise<boolean>;
+  /** Main-owned Web Search readiness; credentials and route details stay private. */
+  webSearchAvailability(): Promise<Readonly<{ ready: boolean }>>;
   subagentsAvailable(): boolean;
   shellFingerprint?: string;
   fullMacScopeFingerprint?: string;
@@ -130,8 +131,10 @@ function botCatalogProviderInputs(
   const orderedProviders = [
     ...[...retainedModels.keys()].map((sourceProviderId) => providerById.get(sourceProviderId)),
     ...providers,
-  ].filter((provider, index, values): provider is Provider =>
-    provider !== undefined && values.findIndex((candidate) => candidate?.id === provider.id) === index
+  ].filter(
+    (provider, index, values): provider is Provider =>
+      provider !== undefined &&
+      values.findIndex((candidate) => candidate?.id === provider.id) === index,
   );
 
   for (const provider of orderedProviders) {
@@ -140,10 +143,7 @@ function botCatalogProviderInputs(
 
     const seen = new Set<string>();
     const models: string[] = [];
-    const orderedModels = [
-      ...(retainedModels.get(provider.id) ?? []),
-      ...provider.models,
-    ];
+    const orderedModels = [...(retainedModels.get(provider.id) ?? []), ...provider.models];
     for (const modelId of orderedModels) {
       if (
         models.length >= BOT_CAPABILITY_LIMITS.modelsPerProvider ||
@@ -210,9 +210,7 @@ function connectionInventory(
         outputSchemaFingerprint: digest({ outputSchema: "not_declared" }),
         effect: tool.effect,
         effectFingerprint:
-          tool.effect === "read"
-            ? digest({ effect: "read" })
-            : tool.effectProfile.fingerprint,
+          tool.effect === "read" ? digest({ effect: "read" }) : tool.effectProfile.fingerprint,
       })),
     };
   });
@@ -244,7 +242,7 @@ function skillInventory(
 
 function ordinaryInventory(input: {
   settings: AppSettings;
-  hasWebCredential: boolean;
+  webSearchReady: boolean;
   subagentsAvailable: boolean;
 }): BotOrdinaryCapabilityInventory[] {
   const values: Array<{
@@ -257,7 +255,7 @@ function ordinaryInventory(input: {
       kind: "web",
       label: "Web search",
       description: "Search the web through Aiden's configured service.",
-      available: input.settings.exaEnabled === true && input.hasWebCredential,
+      available: input.webSearchReady,
     },
     {
       kind: "browser",
@@ -323,7 +321,8 @@ export function createBotCapabilityInventoryPorts(
       );
       const signatureByProvider = new Map(
         signatures.flatMap(({ provider, signature }) =>
-          signature === undefined ? [] : [[provider.id, signature] as const]),
+          signature === undefined ? [] : [[provider.id, signature] as const],
+        ),
       );
       const configured = botCatalogProviderInputs(
         configuredProviders.filter((provider) => signatureByProvider.has(provider.id)),
@@ -389,15 +388,20 @@ export function createBotCapabilityInventoryPorts(
         ...resolved.map(({ incarnationPartition }) => incarnationPartition ?? "global"),
       ]);
       const incarnations = (
-        await Promise.all([...partitions]
-          .map((partition) => dependencies.incarnations.reconcileNamespace(
-            "skill",
-            resolved.filter((skill) => (skill.incarnationPartition ?? "global") === partition).map((skill) => ({
-              sourceId: skill.sourceId,
-              credentialSignature: digest({ contract: "aiden-skill-no-credential-v1" }),
-            })),
-            { partition },
-          )))
+        await Promise.all(
+          [...partitions].map((partition) =>
+            dependencies.incarnations.reconcileNamespace(
+              "skill",
+              resolved
+                .filter((skill) => (skill.incarnationPartition ?? "global") === partition)
+                .map((skill) => ({
+                  sourceId: skill.sourceId,
+                  credentialSignature: digest({ contract: "aiden-skill-no-credential-v1" }),
+                })),
+              { partition },
+            ),
+          ),
+        )
       ).flat();
       const skills = skillInventory(
         resolved,
@@ -407,14 +411,14 @@ export function createBotCapabilityInventoryPorts(
       return skills;
     },
     async inspectOtherCapabilities(signal) {
-      const [settings, hasWebCredential] = await Promise.all([
+      const [settings, webSearchAvailability] = await Promise.all([
         dependencies.getSettings(),
-        dependencies.hasWebCredential(),
+        dependencies.webSearchAvailability(),
       ]);
       if (signal.aborted) throw signal.reason;
       return ordinaryInventory({
         settings,
-        hasWebCredential,
+        webSearchReady: webSearchAvailability.ready === true,
         subagentsAvailable: dependencies.subagentsAvailable(),
       });
     },

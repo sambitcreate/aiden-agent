@@ -146,7 +146,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
               <span className="text-[16px] font-medium">All settings</span>
             </div>
 
-            <label className="mb-6 flex h-10 items-center gap-2 rounded-control border border-field bg-background px-3 shadow-control transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:border-focus-ring focus-within:bg-input">
+            <label className="mb-6 flex h-10 items-center gap-2 rounded-control border border-field bg-background px-3 shadow-control transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:bg-input">
               <Search className="size-5 shrink-0 text-tertiary" />
               <input
                 type="search"

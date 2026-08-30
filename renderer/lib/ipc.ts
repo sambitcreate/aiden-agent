@@ -61,6 +61,13 @@ import type {
   WorkspaceFileIndex,
   WorkspaceFileWriteResult,
   WorkspacePermission,
+  BoundedNonSecretProviderConfig,
+  WebSearchProviderId,
+  WebSearchRendererSnapshot,
+  WebSearchRouteEntry,
+  WebSearchSelection,
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererSnapshot,
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
@@ -369,6 +376,30 @@ export const exaApi = {
   get: () => invoke<{ enabled: boolean; hasKey: boolean }>("exa:get"),
   setKey: (key: string) => invoke<{ hasKey: boolean }>("exa:setKey", key),
   setEnabled: (enabled: boolean) => invoke<AppSettings>("exa:setEnabled", enabled),
+};
+
+// ── Web Search provider registry ─────────────────────────────────────
+export const webSearchApi = {
+  get: () => invoke<WebSearchRendererSnapshot>("webSearch:get"),
+  getExistingAuth: () =>
+    invoke<WebSearchExistingAuthRendererSnapshot>("webSearch:existingAuth:get"),
+  consentExistingAuth: (request: WebSearchExistingAuthConsentRequest) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:existingAuth:consent", request),
+  revokeExistingAuth: () => invoke<WebSearchRendererSnapshot>("webSearch:existingAuth:revoke"),
+  setEnabled: (enabled: boolean) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:setEnabled", enabled),
+  setSelection: (selection: WebSearchSelection) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:setSelection", selection),
+  setAutomaticRoute: (route: WebSearchRouteEntry[]) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:setAutomaticRoute", route),
+  setProviderConfig: (
+    providerId: WebSearchProviderId,
+    providerConfig: BoundedNonSecretProviderConfig | null,
+  ) => invoke<WebSearchRendererSnapshot>("webSearch:setProviderConfig", providerId, providerConfig),
+  setCredential: (providerId: WebSearchProviderId, key: string) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:setCredential", providerId, key),
+  removeCredential: (providerId: WebSearchProviderId) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:removeCredential", providerId),
 };
 
 // ── Telegram remote control ──────────────────────────────────────────

@@ -1,0 +1,19 @@
+{
+  "query": "current SERPdive documentation",
+  "model": "krill",
+  "response_time_ms": 412,
+  "results": [
+    {
+      "url": "https://serpdive.com/docs",
+      "title": "SERPdive API documentation",
+      "date": "2026-08-21",
+      "content": "SERPdive returns source content for web search grounding."
+    },
+    {
+      "url": "https://example.test/serpdive-second",
+      "title": "Second SERPdive source",
+      "date": "2026-08-20",
+      "content": "A second untrusted SERPdive result."
+    }
+  ]
+}

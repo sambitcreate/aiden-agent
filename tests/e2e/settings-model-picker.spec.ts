@@ -43,19 +43,19 @@ async function assertRenderedSettingsDestination(
       return;
     case "Web Search":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Web Search (Exa)", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Web Search", exact: true }),
       ).toBeVisible();
       return;
     case "Remote Access":
       await expect(
         page.getByRole("heading", { level: 2, name: "Remote Access", exact: true }),
       ).toBeVisible();
-      await expect(page.getByRole("switch", { name: "Enable Aiden Remote Access" })).toHaveAttribute(
-        "data-state",
-        "unchecked",
-      );
       await expect(
-        page.getByRole("group")
+        page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
+      ).toHaveAttribute("data-state", "unchecked");
+      await expect(
+        page
+          .getByRole("group")
           .filter({ has: page.getByRole("switch", { name: "Enable Aiden Remote Access" }) })
           .getByText("Off", { exact: true }),
       ).toBeVisible();
@@ -120,6 +120,36 @@ test("every Settings destination renders and a one-model local inventory stays u
     await destination.click();
     await expect(destination).toHaveAttribute("aria-current", "page");
     await assertRenderedSettingsDestination(page, section);
+    if (section === "Web Search") {
+      await expect(page.getByText("Current search setup", { exact: true })).toBeVisible();
+      await expect(page.getByRole("radiogroup", { name: "Web Search routing policy" })).toHaveCount(
+        0,
+      );
+
+      const routingOptions = page.getByRole("button", { name: /Routing options/u });
+      await expect(routingOptions).toHaveAttribute("aria-expanded", "false");
+      await routingOptions.click();
+      await expect(
+        page.getByRole("radiogroup", { name: "Web Search routing policy" }),
+      ).toBeVisible();
+      await routingOptions.click();
+      await expect(page.getByRole("radiogroup", { name: "Web Search routing policy" })).toHaveCount(
+        0,
+      );
+
+      const browseProviders = page.getByRole("button", { name: /Browse providers/u });
+      await browseProviders.click();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Browse providers", exact: true }),
+      ).toBeFocused();
+      const exaProvider = page.getByRole("button", { name: /^Exa/u });
+      await exaProvider.click();
+      await expect(page.getByRole("heading", { level: 1, name: "Exa", exact: true })).toBeFocused();
+      await page.getByRole("button", { name: "All providers", exact: true }).click();
+      await expect(exaProvider).toBeFocused();
+      await page.getByRole("button", { name: "Back to Web Search", exact: true }).click();
+      await expect(browseProviders).toBeFocused();
+    }
   }
 
   const providers = settingsNavigation.getByRole("button", { name: "Providers", exact: true });

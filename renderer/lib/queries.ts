@@ -28,6 +28,7 @@ import {
   telegramApi,
   titleProvidersApi,
   usageApi,
+  webSearchApi,
   workspacesApi,
 } from "./ipc";
 import type {
@@ -68,6 +69,7 @@ export const queryKeys = {
   mcpServers: ["mcpServers"] as const,
   mcpPresets: ["mcpPresets"] as const,
   exa: ["exa"] as const,
+  webSearch: ["webSearch"] as const,
   telegram: ["telegram"] as const,
   aidenRemote: ["aidenRemote"] as const,
   engineStatus: ["engineStatus"] as const,
@@ -514,6 +516,14 @@ export function useMcpPresets() {
 export function useExaConfig() {
   return useQuery({ queryKey: queryKeys.exa, queryFn: exaApi.get });
 }
+
+/** Renderer-safe Web Search catalog/settings snapshot; main owns all secrets. */
+export function useWebSearch() {
+  return useQuery({ queryKey: queryKeys.webSearch, queryFn: webSearchApi.get });
+}
+
+/** Compatibility name for Settings callers that prefer an explicit suffix. */
+export const useWebSearchSettings = useWebSearch;
 
 export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
