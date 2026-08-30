@@ -65183,9 +65183,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.07896,
-          "output": 0.15792,
-          "cache_read": 0.015792
+          "input": 0.07868,
+          "output": 0.15736,
+          "cache_read": 0.015736
         }
       },
       "deepseek/deepseek-v4-pro-0813": {
