@@ -435,7 +435,7 @@ final class AidenScheduledTasksModel {
                 return
             }
             pendingRunKeys[task.id] = nil
-            outcomeMessage = String(localized: "Run accepted (\(accepted.runId.prefix(12))…). It continues on your Mac if this phone disconnects.")
+            outcomeMessage = String(localized: "Run accepted (\(accepted.runId.prefix(12))…). It continues on your paired desktop if this phone disconnects.")
             coordinator.haptics.play(
                 .actionStarted,
                 scope: hapticScope,
@@ -673,7 +673,7 @@ struct AidenScheduledTasksView: View {
                     ContentUnavailableView(
                         "Schedule Access Required",
                         systemImage: "lock.shield",
-                        description: Text("Enable schedule read access for this paired device on your Mac to view task definitions and cached run history.")
+                        description: Text("Enable schedule read access for this paired device on your desktop to view task definitions and cached run history.")
                     )
                     .listRowBackground(Color.clear)
                 } else {
@@ -702,7 +702,7 @@ struct AidenScheduledTasksView: View {
                         ContentUnavailableView(
                             "No Scheduled Tasks",
                             systemImage: "clock.badge.plus",
-                            description: Text("Ask Aiden in any chat to create unattended work that runs on your Mac.")
+                            description: Text("Ask Aiden in any chat to create unattended work that runs on your desktop.")
                         )
                         .listRowBackground(Color.clear)
                     } else if visibleTasks.isEmpty && !model.isLoading {
@@ -1110,7 +1110,7 @@ private struct AidenScheduledTaskEditor: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
-                            Text("Only enabled server names are shown. Connection details and credentials remain on your Mac.")
+                            Text("Only enabled server names are shown. Connection details and credentials remain on your desktop.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                     }
@@ -1128,8 +1128,8 @@ private struct AidenScheduledTaskEditor: View {
                     Picker("Permission", selection: $draft.permission) {
                         ForEach(AidenScheduledTaskPermission.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
-                    Toggle("Mac notification", isOn: $draft.notify)
-                    Text("Enabled tasks can run on your Mac while this phone is disconnected. Full permission can edit files and run commands without asking.")
+                    Toggle("Desktop notification", isOn: $draft.notify)
+                    Text("Enabled tasks can run on your desktop while this phone is disconnected. Full permission can edit files and run commands without asking.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                         if let validation = reviewValidationMessage { Section { Text(validation).foregroundStyle(.red) } }
@@ -1207,7 +1207,7 @@ private struct AidenScheduledTaskEditor: View {
                             }
                             LabeledContent("Notifications", value: draft.notify ? "On" : "Off")
                         }
-                        Section { Text("Confirm only if this unattended work should run on your Mac while the phone is disconnected.") }
+                        Section { Text("Confirm only if this unattended work should run on your desktop while the phone is disconnected.") }
                     }
                     .navigationTitle("Review Task")
                     .toolbar {

@@ -441,7 +441,7 @@ enum AidenAgentActivityPresentation {
         "web_search": ("Searching the web", "Searched the web"),
         "schedule_task": ("Scheduling", "Scheduled"),
         "edit_automation": ("Editing automation", "Edited automation"),
-        "computer_use": ("Using Mac", "Used Mac"),
+        "computer_use": ("Using Computer Use", "Used Computer Use"),
         "compact_context": ("Compacting context", "Compacted context"),
     ]
 
@@ -556,7 +556,7 @@ enum AidenAgentActivityPresentation {
         if changes > 0 { clauses.append("\(running ? "editing" : "edited") \(changes) file\(changes == 1 ? "" : "s")") }
         if commands > 0 { clauses.append("\(running ? "running" : "ran") \(commands) command\(commands == 1 ? "" : "s")") }
         if web > 0 { clauses.append("\(web) web search\(web == 1 ? "" : "es")") }
-        if mac > 0 { clauses.append("\(mac) Mac action\(mac == 1 ? "" : "s")") }
+        if mac > 0 { clauses.append("\(mac) Computer Use action\(mac == 1 ? "" : "s")") }
         if compactions > 0 { clauses.append(running ? "compacting context" : "compacted context") }
         if other > 0 { clauses.append("\(other) tool call\(other == 1 ? "" : "s")") }
         if clauses.isEmpty { return running ? "Working" : "Used \(tools.count) tool\(tools.count == 1 ? "" : "s")" }

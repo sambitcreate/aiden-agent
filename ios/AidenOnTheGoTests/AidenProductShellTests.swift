@@ -355,7 +355,7 @@ final class AidenProductShellTests: XCTestCase {
                 state: .waitingForApproval,
                 canRespondToApproval: false
             )?.label,
-            "Waiting for approval on Mac"
+            "Waiting for desktop approval"
         )
         XCTAssertEqual(
             aidenBotInboxActivityStatus(state: .running, canRespondToApproval: false)?.label,
@@ -529,7 +529,7 @@ final class AidenProductShellTests: XCTestCase {
         )
         XCTAssertEqual(
             aidenBotSwitcherCoachmarkDetail(canWrite: false),
-            "This Mac shared Bots as read-only. You can open their conversations here, then change Bot access on your Mac if you want to let them act."
+            "This desktop shared Bots as read-only. You can open their conversations here, then change Bot access on your paired desktop if you want to let them act."
         )
     }
 

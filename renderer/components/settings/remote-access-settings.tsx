@@ -96,9 +96,9 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
       return { badge: status.enabled ? "Connected" : "Configured", description: "This Aiden profile owns the mobile route." };
     }
     case "available":
-      return { badge: "Available", description: "The Aiden mobile route is available on this Mac." };
+      return { badge: "Available", description: "The Aiden mobile route is available on this desktop." };
     case "other_aiden_live":
-      return { badge: "In use", description: "Another running Aiden profile owns this Mac’s mobile route. Stop or disconnect it before connecting here." };
+      return { badge: "In use", description: "Another running Aiden profile owns this desktop’s mobile route. Stop or disconnect it before connecting here." };
     case "other_aiden_stale":
       return { badge: "Previous route found", description: "A previous Aiden profile left this route behind. Review it before taking over." };
     case "unrelated_conflict":
@@ -141,7 +141,8 @@ function friendlyTailscaleError(error: unknown): string {
   if (message.includes("tailscale_reconciliation_required")) return "Verify the previous Tailscale update before starting another route change.";
   if (message.includes("tailscale_not_connected")) return "Open Tailscale and sign in before connecting Aiden.";
   if (message.includes("tailscale_https_unavailable")) return "Enable HTTPS for this Tailscale device name before connecting Aiden.";
-  if (message.includes("tailscale_route_busy")) return "Another Aiden profile is updating this Mac’s mobile route. Wait a moment and try again.";
+  if (message.includes("tailscale_permission_denied")) return "On Linux, allow your user to manage Tailscale once with: sudo tailscale set --operator=$USER";
+  if (message.includes("tailscale_route_busy")) return "Another Aiden profile is updating this desktop’s mobile route. Wait a moment and try again.";
   return "Aiden couldn’t safely update the Tailscale route.";
 }
 
@@ -181,7 +182,7 @@ function RemoteAccessInfo() {
       <HoverCardContent align="start" className="w-80">
         <Text variant="small-strong">Aiden stays in control</Text>
         <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
-          Aiden On The Go can use only capabilities and folders approved on this Mac. Provider keys never leave Aiden, and the desktop app must be running. Tailscale is optional.
+          Aiden On The Go can use only capabilities and folders approved on this desktop. Provider keys never leave Aiden, and the desktop app must be running. Tailscale is optional.
         </Text>
       </HoverCardContent>
     </HoverCard>
@@ -322,7 +323,7 @@ export function RemoteAccessSettings() {
       setPairing(null);
       toast.error(settingsQuery.data.pairing
         ? "This pairing code was replaced by a newer pairing window."
-        : "This pairing window was closed on this Mac.");
+        : "This pairing window was closed on this desktop.");
       return;
     }
     if (pairingLifecycle.state === "cancelled") {
@@ -520,7 +521,7 @@ export function RemoteAccessSettings() {
         <Field
           label={(
             <span className="flex items-center gap-1.5">
-              This Mac
+              This desktop
               <RemoteAccessInfo />
             </span>
           )}
@@ -538,7 +539,7 @@ export function RemoteAccessSettings() {
           </div>
         </Field>
         <Field
-          label="Mac name"
+          label="Desktop name"
           description={`Shown on paired devices. Identity remains ${snapshot.instanceId.slice(-6)}.`}
         >
           <form
@@ -552,7 +553,7 @@ export function RemoteAccessSettings() {
               value={displayNameDraft}
               onChange={(event) => setDisplayNameDraft(event.target.value)}
               maxLength={80}
-              aria-label="Mac display name"
+              aria-label="Desktop display name"
               disabled={busy !== null}
             />
             <Button
@@ -617,7 +618,7 @@ export function RemoteAccessSettings() {
           </div>
         </Field>
         {groups.active.length === 0 && groups.pending.length === 0 && groups.inactive.length === 0 ? (
-          <div className="p-4 text-small text-secondary">No devices are paired with this Mac.</div>
+          <div className="p-4 text-small text-secondary">No devices are paired with this desktop.</div>
         ) : (
           <>
             {groups.active.map((device) => (
@@ -866,11 +867,11 @@ export function RemoteAccessSettings() {
             </Badge>
             <div className="w-full rounded-control bg-well px-4 py-3 text-left">
               <Text variant="small" color="secondary" className="block">
-                {pairingTransport === "tailscale" ? "Private Tailscale address" : "Nearby Mac address"}
+                {pairingTransport === "tailscale" ? "Private Tailscale address" : "Nearby desktop address"}
               </Text>
               <div className="mt-1 flex items-center justify-between gap-3">
                 <code className="min-w-0 break-all font-mono text-small text-primary">{pairing.endpoint}</code>
-                <CopyButton text={pairing.endpoint} label="Copy Mac address" />
+                <CopyButton text={pairing.endpoint} label="Copy desktop address" />
               </div>
             </div>
             <div
@@ -892,7 +893,7 @@ export function RemoteAccessSettings() {
               <Text variant="small" color="secondary" className="mt-2 block">
                 {pairingTransport === "tailscale"
                   ? "Enter this private address and the setup code on your iPhone or iPad."
-                  : "Select this discovered Mac, then enter the setup code on your iPhone or iPad."}
+                  : "Select this discovered desktop, then enter the setup code on your iPhone or iPad."}
               </Text>
             </div>
             <Text variant="small" color="secondary" role="status" aria-live="polite">
@@ -918,7 +919,7 @@ export function RemoteAccessSettings() {
         open={movePortReview}
         onOpenChange={setMovePortReview}
         title="Move this Remote Access endpoint?"
-        description="Aiden will choose an available private port and keep your device credentials. Previously paired devices may need to discover this Mac again on the local network. If this profile owns a Tailscale Serve route, disconnect that route first."
+        description="Aiden will choose an available private port and keep your device credentials. Previously paired devices may need to discover this desktop again on the local network. If this profile owns a Tailscale Serve route, disconnect that route first."
         confirmLabel="Use Another Port"
         busy={busy === "movePort"}
         keepOpenOnConfirm

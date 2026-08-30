@@ -341,7 +341,7 @@ export const scheduleApi = {
 export const profileApi = {
   get: () => invoke<Profile>("profile:get"),
   setName: (name: string) => invoke<Profile>("profile:setName", name),
-  shareImage: (dataUrl: string) => invoke<void>("profile:shareImage", dataUrl),
+  shareImage: (dataUrl: string) => invoke<boolean>("profile:shareImage", dataUrl),
 };
 
 // ── Skills ────────────────────────────────────────────────────────────

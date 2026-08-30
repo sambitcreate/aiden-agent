@@ -27,6 +27,7 @@ import {
   requestAccessibilityPermission,
   type AccessibilityPermissionState,
 } from "../../lib/accessibility-permission-core";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 async function openAccessibilitySettings(): Promise<void> {
   try {
@@ -217,6 +218,7 @@ function DictationHotkey() {
 
 export function DictationShortcutSettings() {
   const qc = useQueryClient();
+  const capabilities = useAppCapabilities();
   const settings = useSettings();
   const holdToTalk = settings.data?.dictationHoldToTalk === true;
   const silenceStop = settings.data?.dictationSilenceStop === true;
@@ -236,7 +238,15 @@ export function DictationShortcutSettings() {
   return (
     <FieldSet title="Dictation Shortcut">
       <DictationHotkey />
-      <AccessibilityAccess />
+      {capabilities.accessibilityPaste ? (
+        <AccessibilityAccess />
+      ) : (
+        <Callout color="blue">
+          <Text variant="small">
+            Completed transcripts are copied to the clipboard so you can paste them into any app.
+          </Text>
+        </Callout>
+      )}
       <Field
         label="Shortcut behavior"
         description="Choose how the global dictation shortcut starts and stops each recording."

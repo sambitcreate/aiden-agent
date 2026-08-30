@@ -213,7 +213,7 @@ export function DiagnosticsSettings() {
         open={confirmation === "mode"}
         onOpenChange={(open) => setConfirmation(open ? "mode" : null)}
         title="Enable local crash capture?"
-        description="Crash memory may contain sensitive content. Dumps stay on this Mac, are never uploaded automatically, retain at most three files for seven days, and capture turns off when Aiden restarts."
+        description="Crash memory may contain sensitive content. Dumps stay on this device, are never uploaded automatically, retain at most three files for seven days, and capture turns off when Aiden restarts."
         confirmLabel={action === "mode" ? "Enabling…" : "Enable until restart"}
         busy={action === "mode"}
         keepOpenOnConfirm

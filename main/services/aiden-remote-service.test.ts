@@ -10,9 +10,11 @@ import test from "node:test";
 import {
   AidenRemotePortInUseError,
   AidenRemoteService,
+  aidenRemoteBonjourBackend,
   aidenRemoteBonjourServiceName,
   aidenRemotePortCandidates,
 } from "./aiden-remote-service.js";
+
 import {
   AidenRemoteStateRegistry,
   createDefaultAidenRemoteState,
@@ -21,6 +23,11 @@ import {
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
 import type { AidenTailscaleStatus } from "./aiden-remote-tailscale-route.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
+
+test("Remote discovery selects the Node Bonjour backend on Linux", () => {
+  assert.equal(aidenRemoteBonjourBackend("darwin"), "dns-sd");
+  assert.equal(aidenRemoteBonjourBackend("linux"), "node");
+});
 
 async function canBind(
   port: number,

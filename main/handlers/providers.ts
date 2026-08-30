@@ -42,7 +42,6 @@ import {
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
-import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
@@ -370,29 +369,23 @@ export function registerProviderHandlers(): void {
     return refreshProviderCatalogs(undefined, false);
   });
 
-  ipcMain.handle("providers:catalogStatus", () => modelsDevCacheStatus());
+  ipcMain.handle("providers:catalogStatus", () => ({
+    source: "bundled" as const,
+    fetchedAt: null,
+  }));
 
   ipcMain.handle("providers:updateCatalogs", async (event) => {
     providerAuthOwner(event);
     const inventory = await refreshProviderCatalogs();
-    let modelsDev;
-    try {
-      const refreshed = await modelsDevCacheRuntime.refresh();
-      modelsDev = { ok: true as const, status: refreshed.status };
-    } catch (error) {
-      modelsDev = {
-        ok: false as const,
-        status: await modelsDevCacheStatus(),
-        message:
-          error instanceof Error
-            ? error.message.slice(0, 240)
-            : "The models.dev catalog could not be updated.",
-      };
-    }
     return {
       providers: inventory.providers,
       inventoryErrors: inventory.errors,
-      modelsDev,
+      // The live application is offline-only for models.dev. Release tooling
+      // refreshes the packaged snapshot before distribution.
+      modelsDev: {
+        ok: true as const,
+        status: { source: "bundled" as const, fetchedAt: null },
+      },
     };
   });
 
@@ -515,7 +508,7 @@ export function registerProviderHandlers(): void {
       next.dictationAccelerator = p.dictationAccelerator;
     if (
       p.chatTitleProviderId === "automatic" ||
-      p.chatTitleProviderId === "apple-foundation-models" ||
+      (p.chatTitleProviderId === "apple-foundation-models" && process.platform === "darwin") ||
       p.chatTitleProviderId === "chat-model"
     ) {
       next.chatTitleProviderId = p.chatTitleProviderId;

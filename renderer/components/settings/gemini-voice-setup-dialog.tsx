@@ -2,6 +2,7 @@ import { Brain, KeyRound, Mic2, ShieldCheck } from "lucide-react";
 
 import { Button, Dialog, Text, type DialogLayer } from "../ui";
 import type { GeminiUsageScope } from "../../lib/types";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 interface GeminiVoiceSetupDialogProps {
   open: boolean;
@@ -53,13 +54,14 @@ export function GeminiVoiceSetupDialog({
   onConfirm,
   onManageCredential,
 }: GeminiVoiceSetupDialogProps) {
+  const capabilities = useAppCapabilities();
   return (
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
       layer={layer}
       title={activatesVoice ? "Use Google Gemini for voice?" : "Set up Google Gemini access?"}
-      description="Choose exactly where Gemini appears, then review what leaves your Mac. You can change this later."
+      description="Choose exactly where Gemini appears, then review what leaves this device. You can change this later."
       confirmLabel={
         hasKey ? (activatesVoice ? "Use Gemini" : "Save Gemini access") : "Continue to API key"
       }
@@ -124,7 +126,7 @@ export function GeminiVoiceSetupDialog({
 
         <section className="rounded-card bg-well p-3" aria-labelledby="gemini-privacy-title">
           <Text id="gemini-privacy-title" as="h3" variant="small-strong">
-            Privacy & Mac access
+            Privacy & device access
           </Text>
           <ul className="mt-2 grid gap-2 text-small text-secondary">
             <li className="flex items-start gap-2">
@@ -139,15 +141,16 @@ export function GeminiVoiceSetupDialog({
               <KeyRound className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span>
                 <strong className="font-medium text-primary">API key.</strong> Stored encrypted on
-                this Mac and used for Gemini voice plus any existing chat already pinned to Google.
+                this device and used for Gemini voice plus any existing chat already pinned to Google.
               </span>
             </li>
             <li className="flex items-start gap-2">
               <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span>
-                <strong className="font-medium text-primary">Mac permissions.</strong> Microphone is
-                required to record. Accessibility is optional and used only to paste into another
-                app; without it Aiden copies the transcript. Gemini does not need Screen Recording.
+                <strong className="font-medium text-primary">System permissions.</strong> Microphone is
+                required to record. {capabilities.accessibilityPaste
+                  ? "Accessibility is optional and used only to paste into another app; without it Aiden copies the transcript. Gemini does not need Screen Recording."
+                  : "Aiden copies the transcript to the clipboard so you can paste it into another app."}
               </span>
             </li>
           </ul>

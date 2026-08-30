@@ -703,7 +703,7 @@ fun AidenBotEditorScreen(
                                 Divider(color = palette.canvas)
 
                                 // File scopes
-                                Text("Mac File Scopes", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                                Text("Desktop File Scopes", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
                                 currentCat.fileScopes.forEach { scopeItem ->
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,

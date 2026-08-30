@@ -315,6 +315,7 @@ export function ScheduledTasksView() {
   const settings = useScheduledTaskSettings();
   const mcpServers = useMcpServers();
   const [query, setQuery] = React.useState("");
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
   const [tab, setTab] = React.useState<ScheduledTaskTab>("all");
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<ScheduledTaskInput | null>(null);
@@ -517,20 +518,36 @@ export function ScheduledTasksView() {
           >
             <div className="min-w-0">
               <div className="mb-4 flex flex-wrap items-center gap-3">
-                <label className="relative min-w-[220px] flex-1">
+                <div className="relative min-w-[220px] flex-1">
                   <Search
                     className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-tertiary"
                     aria-hidden="true"
                   />
                   <Input
+                    ref={searchInputRef}
                     type="search"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="Search scheduled tasks"
                     aria-label="Search scheduled tasks"
-                    className="pl-9"
+                    className="pl-9 pr-9"
                   />
-                </label>
+                  {query ? (
+                    <Button
+                      iconOnly
+                      size="small"
+                      variant="transparent"
+                      className="absolute right-0.5 top-1/2 size-7 -translate-y-1/2 text-secondary"
+                      aria-label="Clear scheduled task search"
+                      onClick={() => {
+                        setQuery("");
+                        searchInputRef.current?.focus();
+                      }}
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  ) : null}
+                </div>
                 <div
                   role="tablist"
                   aria-label="Scheduled task status"

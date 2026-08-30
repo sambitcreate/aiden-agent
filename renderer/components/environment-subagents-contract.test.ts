@@ -36,18 +36,17 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("fresh renderer capabilities fail closed until main explicitly enables subagents", () => {
-  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false });
-  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false });
-  assert.deepEqual(parseAppCapabilities({ subagents: false }), {
-    subagents: false,
+test("fresh renderer capabilities fail closed until main explicitly enables features", () => {
+  assert.deepEqual(parseAppCapabilities(undefined), DISABLED_APP_CAPABILITIES);
+  assert.deepEqual(parseAppCapabilities({ subagents: "1", platform: "plan9" }), {
+    ...DISABLED_APP_CAPABILITIES,
   });
-  assert.deepEqual(parseAppCapabilities({ subagents: "1" }), {
-    subagents: false,
-  });
-  assert.deepEqual(parseAppCapabilities({ subagents: true }), {
+  assert.deepEqual(parseAppCapabilities({ subagents: true, platform: "linux" }), {
+    ...DISABLED_APP_CAPABILITIES,
+    platform: "linux",
     subagents: true,
   });
+  assert.equal(parseAppCapabilities({ bots: true }).bots, true);
   assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files"]);
 });
@@ -291,7 +290,10 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");
 
-  assert.match(appHandler, /capabilities:\s*\{\s*subagents: subagentsEnabled\(\),\s*\}/u);
+  assert.match(appHandler, /subagents: subagentsEnabled\(\)/u);
+  assert.match(appHandler, /const host = hostPlatformCapabilities\(\)/u);
+  assert.match(appHandler, /bots: host\.bots/u);
+  assert.match(appHandler, /computerUse: host\.computerUse/u);
   assert.match(bootstrap, /let appCapabilities = DISABLED_APP_CAPABILITIES/u);
   assert.match(bootstrap, /appCapabilities = parseAppCapabilities\(appInfo\.capabilities\)/u);
   assert.match(bootstrap, /capabilities=\{appCapabilities\}/u);
@@ -311,6 +313,10 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
     /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u,
   );
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
+  assert.match(
+    pane,
+    /capabilities\.computerUse && settings\.data\?\.computerUseEnabled === true/u,
+  );
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });

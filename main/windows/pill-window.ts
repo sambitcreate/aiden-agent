@@ -7,6 +7,7 @@ import { BrowserWindow, logger, screen } from "../platform.js";
 import type { IpcMainInvokeEvent } from "electron";
 import { getPillPreloadPath, getWindowUrl } from "./window-paths.js";
 import { isTrustedPillSender } from "./pill-window-security.js";
+import { shouldPositionDictationPill } from "./pill-window-platform.js";
 
 const PILL_WIDTH = 280;
 const PILL_HEIGHT = 56;
@@ -18,6 +19,7 @@ let loading: Promise<BrowserWindow> | null = null;
 let pillUrl = "";
 
 function positionPill(window: BrowserWindow): void {
+  if (!shouldPositionDictationPill()) return;
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const { workArea } = display;
   window.setBounds({
@@ -55,7 +57,7 @@ async function createPillWindow(): Promise<BrowserWindow> {
 
   // Float above other apps (including fullscreen spaces) without stealing focus.
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  window.setAlwaysOnTop(true, "status");
+  window.setAlwaysOnTop(true, process.platform === "darwin" ? "status" : "normal");
 
   window.on("closed", () => {
     pillWindow = null;

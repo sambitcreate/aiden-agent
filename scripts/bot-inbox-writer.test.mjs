@@ -44,13 +44,20 @@ async function runWriter(root, overrides = {}, input = Buffer.alloc(0)) {
   );
   const stdout = [];
   const stderr = [];
+  let stdinFailure;
   child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
   child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  child.stdin.on("error", (error) => {
+    // Invalid metadata is rejected before the helper reads stdin. Linux can
+    // report that intentional early close as EPIPE while end() is flushing.
+    if (error?.code !== "EPIPE") stdinFailure = error;
+  });
   child.stdin.end(input);
   const result = await new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal }));
   });
+  if (stdinFailure) throw stdinFailure;
   return {
     ...result,
     stdout: Buffer.concat(stdout).toString("utf8"),
@@ -59,7 +66,7 @@ async function runWriter(root, overrides = {}, input = Buffer.alloc(0)) {
 }
 
 test("native Bot inbox writer rejects the wrong managed-home inode before creation", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-native-inbox-identity-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runWriter(root, { inode: "1" });
@@ -69,7 +76,7 @@ test("native Bot inbox writer rejects the wrong managed-home inode before creati
 });
 
 test("native Bot inbox writer rejects extra stdin bytes and removes the leaf", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-native-inbox-length-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runWriter(root, { size: "3" }, Buffer.from([0, 1, 2, 3]));
@@ -82,7 +89,7 @@ test("native Bot inbox writer rejects extra stdin bytes and removes the leaf", a
 });
 
 test("native Bot inbox writer rejects values above Telegram's 20 MB ceiling", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-native-inbox-limit-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runWriter(root, { size: String(20 * 1024 * 1024 + 1) });

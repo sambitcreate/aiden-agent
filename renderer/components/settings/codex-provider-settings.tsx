@@ -286,7 +286,7 @@ export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLay
     try {
       await logoutCodexProvider(queryClient);
       if (mountedRef.current) dispatchAuth({ type: "clear-auth-failure" });
-      toast.success("Signed out of ChatGPT on this Mac.");
+      toast.success("Signed out of ChatGPT on this device.");
     } catch {
       toast.error("ChatGPT sign-out did not complete. Try again.");
     } finally {
@@ -362,13 +362,13 @@ export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLay
             </div>
             <Text variant="small" color="secondary" className="mt-1 block">
               Use your ChatGPT account for Codex models. OAuth credentials stay encrypted on this
-              Mac and are never shown to the renderer.
+              device and are never shown to the renderer.
             </Text>
             <Text variant="small" color="tertiary" className="mt-1 block">
               {signingOut
-                ? "Aiden is removing the encrypted ChatGPT credential from this Mac."
+                ? "Aiden is removing the encrypted ChatGPT credential from this device."
                 : status.isFetching
-                  ? "Aiden is checking the ChatGPT credential stored on this Mac."
+                  ? "Aiden is checking the ChatGPT credential stored on this device."
                   : status.isError
                     ? "Aiden couldn't read the stored sign-in. Retry, sign in again, or clear it."
                     : needsAttention
@@ -635,7 +635,7 @@ export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLay
         open={confirmSignOut}
         onOpenChange={setConfirmSignOut}
         title={status.isError ? "Clear ChatGPT sign-in?" : "Sign out of ChatGPT?"}
-        description="Aiden will remove the encrypted ChatGPT credential stored on this Mac. You can sign in again at any time."
+        description="Aiden will remove the encrypted ChatGPT credential stored on this device. You can sign in again at any time."
         confirmLabel={status.isError ? "Clear sign-in" : "Sign out"}
         confirmVariant="destructive"
         onConfirm={signOut}

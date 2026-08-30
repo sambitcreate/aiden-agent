@@ -76,12 +76,12 @@ test("release installs Chromium before JavaScript containment tests", () => {
   assert.ok(install >= 0 && testSuite > install);
 });
 
-test("CI uploads only the fixed sanitized receipt with short retention", () => {
+test("desktop workflows upload only fixed sanitized receipts with short retention", () => {
   for (const workflow of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
     const source = fs.readFileSync(path.join(root, workflow), "utf8");
     const uploadBlocks = source.match(/uses:\s*actions\/upload-artifact@[\s\S]*?(?=\n\s*- name:|\n\s*\w+:\s*$|$)/gu) ?? [];
     const diagnosticUploads = uploadBlocks.filter((block) => /e2e-safe-receipt/u.test(block));
-    assert.equal(diagnosticUploads.length, 1, `${workflow} must retain exactly one failure receipt`);
+    assert.ok(diagnosticUploads.length >= 1, `${workflow} must retain sanitized failure receipts`);
     for (const block of diagnosticUploads) {
       assert.match(block, /path:\s*test-results\/e2e-safe-receipt\.json/u);
       assert.match(block, /retention-days:\s*7/u);

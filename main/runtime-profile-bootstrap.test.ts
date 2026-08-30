@@ -49,7 +49,7 @@ test("development shortcut registration is gated without removing in-app menu ac
 test("visible main-process branding derives from the configured app name", () => {
   const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
   assert.match(main, /title: app\.getName\(\)/u);
-  assert.match(main, /label: app\.getName\(\)/u);
+  assert.match(main, /appName: app\.getName\(\)/u);
   assert.match(main, /app\.dock\?\.setBadge\("DEV"\)/u);
 });
 
@@ -69,6 +69,40 @@ test("optional background services cannot close an already visible desktop windo
   assert.match(
     main.slice(scheduleStart, updaterStart),
     /try \{[\s\S]*?await telegramService\.start\(\)[\s\S]*?catch \(error\)[\s\S]*?desktop app will remain available for repair/u,
+  );
+});
+
+test("Apple Foundation Models status probes remain behind the host capability policy", () => {
+  const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const chatTitle = readFileSync(
+    new URL("./services/chat-title.ts", import.meta.url),
+    "utf8",
+  );
+  const titleProviders = readFileSync(
+    new URL("./handlers/title-providers.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    main,
+    /function refreshFoundationModelsStatus[\s\S]*?if \(!hostPlatformCapabilities\(\)\.appleFoundationModels\) return;[\s\S]*?foundationModelsConnection\.status/u,
+  );
+  assert.doesNotMatch(
+    main,
+    /app\.on\("activate", \(\) => \{\s*void foundationModelsConnection\.status/u,
+  );
+  assert.match(
+    chatTitle,
+    /!hostPlatformCapabilities\(\)\.appleFoundationModels\s+\? null\s+: await foundationModelsConnection\.status/u,
+  );
+  assert.match(
+    chatTitle,
+    /generateFoundationModelsRename[\s\S]*?if \(!hostPlatformCapabilities\(\)\.appleFoundationModels\)/u,
+  );
+  assert.equal(
+    titleProviders.match(
+      /if \(!hostPlatformCapabilities\(\)\.appleFoundationModels\) return null;/gu,
+    )?.length,
+    2,
   );
 });
 

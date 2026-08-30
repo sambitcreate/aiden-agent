@@ -232,7 +232,7 @@ fun AidenBotImagePlaygroundSheet(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Bot photos generated on macOS can be synchronized to Android. You can also customize your Bot with the built-in Semantic Avatar studio.",
+                    text = "Bot photos generated on a supported Apple device can be synchronized to Android. You can also customize your Bot with the built-in Semantic Avatar studio.",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )

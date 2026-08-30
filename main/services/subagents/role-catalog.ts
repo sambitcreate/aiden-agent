@@ -71,7 +71,7 @@ export function subagentRoleSystemPrompt(
       : []),
     ...(shell
       ? [
-          "You have exact run_command access with full macOS-user host execution authority. Every command pauses for attended Allow once approval.",
+          "You have exact run_command access with full host-user execution authority. Every command pauses for attended Allow once approval.",
           "The minimal environment reduces ambient secrets only. This is not an OS sandbox, there is no rollback, commands may use arbitrary network access, and deliberately detached processes may survive cancellation.",
         ]
       : []),

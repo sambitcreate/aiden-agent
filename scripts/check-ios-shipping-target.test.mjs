@@ -423,7 +423,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(botSwift, /--bot-first-prototype-state/u);
   assert.match(botSwift, /--bot-first-prototype-screen/u);
   assert.match(botSwift, /case inbox[\s\S]*?case profile[\s\S]*?case editor[\s\S]*?case access[\s\S]*?case chat/u);
-  assert.match(botSwift, /Bots can use your Mac/u);
+  assert.match(botSwift, /Bots can use your paired desktop/u);
   assert.match(botSwift, /Continue with Full Access/u);
   assert.match(botSwift, /Customize first/u);
   assert.match(botSwift, /onDismiss: presentCustomEditorAfterNoticeIfNeeded/u);
@@ -499,8 +499,8 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(accessSection, /scope == \.bot \? access == \.custom : chatAccess == \.customize/u);
   assert.match(accessSection, /case \.shell: return ceiling\.shell/u);
   assert.match(accessSection, /\.disabled\(!allowed\)/u);
-  assert.match(botSwift, /case fullMac = "Full Mac"[\s\S]*?case botFolderOnly = "Bot folder only"[\s\S]*?case chosenLocations = "Chosen locations"[\s\S]*?case off = "Off"/u);
-  assert.match(accessSection, /Section\("Mac files"\)[\s\S]*?Picker\("Files", selection: \$files\)[\s\S]*?locationCatalog/u);
+  assert.match(botSwift, /case fullMac = "Full desktop"[\s\S]*?case botFolderOnly = "Bot folder only"[\s\S]*?case chosenLocations = "Chosen locations"[\s\S]*?case off = "Off"/u);
+  assert.match(accessSection, /Section\("Desktop files"\)[\s\S]*?Picker\("Files", selection: \$files\)[\s\S]*?locationCatalog/u);
   assert.match(accessSection, /Section \{[\s\S]*?Picker\("Connections", selection: \$connectionMode\)[\s\S]*?connectionCatalog[\s\S]*?Text\("Connections"\)/u);
   assert.match(accessSection, /All enabled/u);
   assert.match(accessSection, /Some connections are powered by MCP/u);
@@ -521,7 +521,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   );
   assert.doesNotMatch(
     accessSection,
-    /fullNoticeAccepted|Bots can use your Mac|Continue with Full Access|Customize first/u,
+    /fullNoticeAccepted|Bots can use your paired desktop|Continue with Full Access|Customize first/u,
   );
   assert.doesNotMatch(botSwift, /UserDefaults|Keychain|URLSession/u);
   assert.match(botSwift, /\.safeAreaInset\(edge: \.bottom/u);
@@ -635,7 +635,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     productShell,
     /one-time Full Access notice[\s\S]*?Choose Continue with Full Access or Customize first\./u,
   );
-  assert.match(productShell, /This Mac shared Bots as read-only\./u);
+  assert.match(productShell, /This desktop shared Bots as read-only\./u);
   assert.doesNotMatch(
     coachmark,
     /URLSession|AidenRemoteClient|managed (?:home|workspace)|Git repository/u,
@@ -651,7 +651,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(productShell, /AidenWorkspaceShellView\([\s\S]*?AidenBotShellView\(/u);
   assert.match(content, /AidenProductShellView\(/u);
   assert.match(shell, /Image\(systemName: "magnifyingglass"\)[\s\S]*?person\.crop\.circle\.fill/u);
-  assert.match(shell, /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Mac Folder"/u);
+  assert.match(shell, /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Desktop Folder"/u);
   assert.match(shell, /Image\(systemName: "square\.and\.pencil"\)[\s\S]*?aidenProminentGlassButton\(\)[\s\S]*?accessibilityLabel\("New Workspace Chat"\)/u);
   assert.match(shell, /content\.buttonStyle\(\.glass\)/u);
   assert.match(shell, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
@@ -697,7 +697,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /Archived Workspaces[\s\S]*?hidden only on this device/u);
   assert.match(shell, /swipeActions\(edge: \.leading, allowsFullSwipe: false\)/u);
   assert.match(shell, /swipeActions\(edge: \.trailing, allowsFullSwipe: false\)/u);
-  assert.match(shell, /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your Mac and on other devices/u);
+  assert.match(shell, /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your desktop and on other devices/u);
   assert.match(shell, /onRemove: workspace\.isManagedWorktree \|\| coordinator\.workspaces\.count <= 1/u);
   assert.match(shell, /if isArchived \{[\s\S]*?Button\(action: onToggleArchive\)/u);
   assert.match(shell, /activeWorkspaceIDSet[\s\S]*?visibleChats = homeModel\.chats\.filter/u);
@@ -710,7 +710,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(pairing, /static let advanced: \[AidenPairingMethod\] = \[\.pastePayload\]/u);
   assert.match(pairing, /case \.scanQRCode: return String\(localized: "Scan QR Code"\)/u);
-  assert.match(pairing, /case \.nearbyMac: return String\(localized: "Nearby Mac \+ Setup Code"\)/u);
+  assert.match(pairing, /case \.nearbyMac: return String\(localized: "Nearby Desktop \+ Setup Code"\)/u);
   assert.match(pairing, /case \.privateAddress: return String\(localized: "Private Address \+ Setup Code"\)/u);
   assert.match(pairing, /case \.nearbyMac: return String\(localized: "Local Network"\)/u);
   assert.match(pairing, /case \.privateAddress: return String\(localized: "Tailscale"\)/u);
@@ -723,7 +723,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /Paste Pairing Payload[\s\S]*?More pairing options/u);
   assert.match(pairing, /AidenMobileOnboardingPhase\.allCases[\s\S]*?Image\(phase\.imageName\)/u);
   assert.match(pairing, /BOTS AND WORKSPACES/u);
-  assert.match(pairing, /When Bots are available on your paired Mac[\s\S]*?tap the Aiden logo to switch\./u);
+  assert.match(pairing, /When Bots are available on your paired desktop[\s\S]*?tap the Aiden logo to switch\./u);
   assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
   assert.doesNotMatch(pairing, /AidenSidebarLogo/u);
   assert.match(pairing, /GeometryReader \{ proxy in[\s\S]*?AidenMobileOnboardingLayout\.contentWidth\(for: proxy\.size\.width\)[\s\S]*?AidenMobileOnboardingLayout\.contentHeight\(for: proxy\.size\.height\)/u);
@@ -755,8 +755,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(content, /showsIntroduction: !hasCompletedMobileOnboarding/u);
   assert.match(content, /onIntroductionComplete:[\s\S]*?hasCompletedMobileOnboarding = true/u);
   assert.match(pairing, /The QR already contains the selected Local Network or Tailscale address/u);
-  assert.match(pairing, /https:\/\/mac-name\.local:49220\/api\/aiden\/v1/u);
-  assert.match(pairing, /https:\/\/mac-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/desktop-name\.local:49220\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/desktop-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
   assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
   assert.match(chat, /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u);
   assert.doesNotMatch(chat, /PhotosPicker\(selection:/u);
@@ -806,6 +806,15 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     chat,
     /Text\(AidenApprovalPresentation\.denyTitle\(for: kind\)\)[\s\S]*?Text\(AidenApprovalPresentation\.allowTitle\(for: kind\)\)/u,
   );
+  assert.match(
+    chat,
+    /String\(localized: "This request can only be approved on your paired desktop\."\)/u,
+  );
+  assert.match(
+    chat,
+    /Label\("This task must be approved on your paired desktop\.", systemImage: "desktopcomputer"\)/u,
+  );
+  assert.doesNotMatch(chat, /(?:request can only|task must) be approved on your Mac/iu);
   assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: Capsule\(\)\)/u);
   assert.match(chat, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
   assert.doesNotMatch(chat, /Label\("Approval needed", systemImage: "hand\.raised"\)/u);

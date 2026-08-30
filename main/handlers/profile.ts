@@ -8,7 +8,7 @@ export function registerProfileHandlers(): void {
     if (typeof value !== "string") throw new Error("Profile name must be text.");
     return profileService.setName(value);
   });
-  ipcMain.handle("profile:shareImage", async (event, dataUrl: unknown) => {
-    await shareProfilePng(dataUrl, BrowserWindow.fromWebContents(event.sender));
-  });
+  ipcMain.handle("profile:shareImage", async (event, dataUrl: unknown) =>
+    shareProfilePng(dataUrl, BrowserWindow.fromWebContents(event.sender)),
+  );
 }

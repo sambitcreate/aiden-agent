@@ -34,6 +34,8 @@ export interface BotCapabilityInventoryPortDependencies {
   /** Main-owned Web Search readiness; credentials and route details stay private. */
   webSearchAvailability(): Promise<Readonly<{ ready: boolean }>>;
   subagentsAvailable(): boolean;
+  /** Host policy always narrows a persisted Computer Use preference. */
+  computerUseSupported?: () => boolean;
   shellFingerprint?: string;
   fullMacScopeFingerprint?: string;
   botHomeScopeFingerprint?: string;
@@ -244,6 +246,7 @@ function ordinaryInventory(input: {
   settings: AppSettings;
   webSearchReady: boolean;
   subagentsAvailable: boolean;
+  computerUseSupported: boolean;
 }): BotOrdinaryCapabilityInventory[] {
   const values: Array<{
     kind: BotOrdinaryCapabilityInventory["kind"];
@@ -267,7 +270,9 @@ function ordinaryInventory(input: {
       kind: "computer_use",
       label: "Computer Use",
       description: "Use the Mac visually through Aiden's existing attended controls.",
-      available: input.settings.computerUseEnabled === true,
+      available:
+        input.computerUseSupported &&
+        input.settings.computerUseEnabled === true,
     },
     {
       kind: "schedules",
@@ -420,6 +425,8 @@ export function createBotCapabilityInventoryPorts(
         settings,
         webSearchReady: webSearchAvailability.ready === true,
         subagentsAvailable: dependencies.subagentsAvailable(),
+        computerUseSupported:
+          dependencies.computerUseSupported?.() === true,
       });
     },
   };

@@ -2,14 +2,32 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { COMMANDS } from "../../renderer/shared/keybindings";
+import { applicationMenuTemplate } from "./application-menu-core";
 
 test("catalog native-menu ownership exactly matches derived Electron accelerators", () => {
-  const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
-  const menuCommandIds = [
-    ...main.matchAll(/accelerator:\s*command\("([^"]+)"\)/gu),
-  ]
-    .map((match) => match[1])
-    .sort();
+  const delivered = new Set<string>();
+  const menu = applicationMenuTemplate({
+    platform: "darwin",
+    appName: "Aiden Agent",
+    bindings: Object.fromEntries(COMMANDS.map((command) => [command.id, command.defaultBinding])),
+    actions: {
+      checkForUpdates() {},
+      deliverCommand(commandId) {
+        delivered.add(commandId);
+      },
+      reload() {},
+    },
+  });
+  const invokeItems = (items: typeof menu): void => {
+    for (const item of items) {
+      if (typeof item.click === "function") {
+        item.click({} as never, {} as never, {} as never);
+      }
+      if (Array.isArray(item.submenu)) invokeItems(item.submenu);
+    }
+  };
+  invokeItems(menu);
+  const menuCommandIds = [...delivered].sort();
   const catalogCommandIds = COMMANDS.filter((command) => command.nativeMenu)
     .map((command) => command.id)
     .sort();

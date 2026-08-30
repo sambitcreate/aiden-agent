@@ -38,7 +38,7 @@ sealed class AidenBotGeneratedAvatarError(val messageText: String) : Exception(m
     object SourceTooLarge : AidenBotGeneratedAvatarError("That image is too large. Choose another image.")
     object UnsupportedImage : AidenBotGeneratedAvatarError("That image format can't be used for a Bot photo.")
     object InvalidImage : AidenBotGeneratedAvatarError("Aiden couldn't prepare that image. Choose another image.")
-    object Unavailable : AidenBotGeneratedAvatarError("Reconnect to your Mac before saving this Bot photo.")
+    object Unavailable : AidenBotGeneratedAvatarError("Reconnect to your paired desktop before saving this Bot photo.")
 }
 
 enum class AidenBotGeneratedAvatarPhase {

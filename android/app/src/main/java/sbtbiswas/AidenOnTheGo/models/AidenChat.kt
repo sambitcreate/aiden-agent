@@ -355,7 +355,7 @@ object AidenAgentActivityPresentation {
         "web_search" to Pair("Searching the web", "Searched the web"),
         "schedule_task" to Pair("Scheduling", "Scheduled"),
         "edit_automation" to Pair("Editing automation", "Edited automation"),
-        "computer_use" to Pair("Using Mac", "Used Mac"),
+        "computer_use" to Pair("Using Computer Use", "Used Computer Use"),
         "compact_context" to Pair("Compacting context", "Compacted context")
     )
 
@@ -456,7 +456,7 @@ object AidenAgentActivityPresentation {
         if (changes > 0) clauses.add("${if (running) "editing" else "edited"} $changes file${if (changes == 1) "" else "s"}")
         if (commands > 0) clauses.add("${if (running) "running" else "ran"} $commands command${if (commands == 1) "" else "s"}")
         if (web > 0) clauses.add("$web web search${if (web == 1) "" else "es"}")
-        if (mac > 0) clauses.add("$mac Mac action${if (mac == 1) "" else "s"}")
+        if (mac > 0) clauses.add("$mac Computer Use action${if (mac == 1) "" else "s"}")
         if (compactions > 0) clauses.add(if (running) "compacting context" else "compacted context")
         if (other > 0) clauses.add("$other tool call${if (other == 1) "" else "s"}")
         if (clauses.isEmpty()) return if (running) "Working" else "Used ${tools.size} tool${if (tools.size == 1) "" else "s"}"
@@ -733,7 +733,7 @@ object AidenApprovalPresentation {
         else -> "Approval Required"
     }
 
-    fun requiresMacConfirmation(approval: AidenPendingApproval): Boolean =
+    fun requiresDesktopConfirmation(approval: AidenPendingApproval): Boolean =
         isAutomation(approval.toolName) && approval.canRespond &&
                 approval.hasRequiredWriteCapability && !approval.hostCanAllow
 }

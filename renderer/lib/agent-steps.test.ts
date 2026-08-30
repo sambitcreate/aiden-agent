@@ -255,7 +255,7 @@ test("summarizes a finished turn as one deterministic sentence", () => {
   );
   assert.equal(
     summarizeActivity(timeline("completed", tools({ web_search: 2, computer_use: 1 }))),
-    "2 web searches, 1 Mac action",
+    "2 web searches, 1 Computer Use action",
   );
 });
 

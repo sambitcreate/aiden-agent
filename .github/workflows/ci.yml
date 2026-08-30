@@ -223,3 +223,180 @@ jobs:
           path: test-results/e2e-safe-receipt.json
           if-no-files-found: error
           retention-days: 7
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install Linux test dependencies
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify TypeScript and lint
+        run: npm run type-check && npm run lint
+
+      - name: Run Pi extension, Linux contract, and native helper tests
+        run: npm run test:pi-extensions && npm run test:linux-contracts && npm run test:linux-native
+
+      - name: Build, install, and verify Linux distributions
+        run: |
+          set -euo pipefail
+          npm run dist:linux
+          node scripts/verify-linux-package.mjs release/linux-distribution
+          sudo apt-get install --yes ./release/linux-distribution/*.deb
+          dpkg --verify aiden-agent
+          ! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"
+          test -f /usr/share/applications/com.sambitcreate.aiden-agent.desktop
+          grep -F 'StartupWMClass=com.sambitcreate.aiden-agent' /usr/share/applications/com.sambitcreate.aiden-agent.desktop
+          expected_version="$(node -p 'require("./package.json").version')"
+          test "$(aiden-agent --no-sandbox --version)" = "$expected_version"
+          chmod +x ./release/linux-distribution/*.AppImage
+          appimage_output="$(./release/linux-distribution/*.AppImage --appimage-extract-and-run --no-sandbox --version)"
+          grep -F "$expected_version" <<<"$appimage_output"
+
+      - name: Prepare baseline-verified RPM for Fedora acceptance
+        if: matrix.arch == 'x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          rpm_files=(release/linux-distribution/*.rpm)
+          test "${#rpm_files[@]}" -eq 1
+          rpm_name="$(basename "${rpm_files[0]}")"
+          (
+            cd release/linux-distribution
+            sha256sum "$rpm_name" > rpm.sha256
+          )
+
+      - name: Upload baseline-verified RPM for Fedora acceptance
+        if: matrix.arch == 'x64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-rpm-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            release/linux-distribution/*.rpm
+            release/linux-distribution/rpm.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Smoke the installed GUI without a keyring session
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_root="$RUNNER_TEMP/aiden-linux-smoke-${{ matrix.arch }}"
+          mkdir -p "$smoke_root/home" "$smoke_root/config" "$smoke_root/cache" "$smoke_root/data"
+          set +e
+          HOME="$smoke_root/home" \
+          XDG_CONFIG_HOME="$smoke_root/config" \
+          XDG_CACHE_HOME="$smoke_root/cache" \
+          XDG_DATA_HOME="$smoke_root/data" \
+            timeout --signal=KILL 15s xvfb-run --auto-servernum aiden-agent --no-sandbox \
+              >"$smoke_root/output.log" 2>&1
+          status=$?
+          set -e
+          # A living GUI is the success condition. Kill the whole timeout
+          # process group instead of asking Electron to perform a production
+          # shutdown inside an incomplete headless desktop session.
+          if [[ "$status" -ne 137 ]]; then
+            cat "$smoke_root/output.log"
+            exit 1
+          fi
+          if grep -Eiq '(FATAL|symbol lookup error|error while loading shared libraries|Failed to start Aiden Agent)' "$smoke_root/output.log"; then
+            cat "$smoke_root/output.log"
+            exit 1
+          fi
+
+      - name: Run deterministic Electron E2E gate
+        if: matrix.arch == 'x64'
+        run: xvfb-run --auto-servernum npm run test:e2e
+
+      - name: Build sanitized E2E failure receipt
+        if: ${{ failure() && matrix.arch == 'x64' }}
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+
+      - name: Upload sanitized E2E failure receipt
+        if: ${{ failure() && matrix.arch == 'x64' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-e2e-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/e2e-safe-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
+  linux-rpm:
+    name: Linux x64 · Fedora RPM
+    needs: linux
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    timeout-minutes: 60
+    steps:
+      - name: Install Fedora build prerequisites
+        run: dnf install --assumeyes git gcc gcc-c++ make python3
+
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify Fedora Pi extensions, contracts, and native helpers
+        run: npm run type-check && npm run test:pi-extensions && npm run test:linux-contracts && npm run test:linux-native
+
+      - name: Download baseline-verified RPM
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: linux-rpm-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release/linux-rpm-smoke
+
+      - name: Install and verify baseline-verified RPM package
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          rpm_files=(release/linux-rpm-smoke/*.rpm)
+          test "${#rpm_files[@]}" -eq 1
+          (
+            cd release/linux-rpm-smoke
+            sha256sum --check rpm.sha256
+          )
+          expected_version="$(node -p 'require("./package.json").version')"
+          test "$(rpm -qp --queryformat '%{NAME} %{VERSION} %{ARCH}' "${rpm_files[0]}")" = \
+            "aiden-agent $expected_version x86_64"
+          dnf install --assumeyes "${rpm_files[0]}"
+          node scripts/verify-linux-package.mjs "/opt/Aiden Agent"
+          rpm_verify_output="$(rpm --verify aiden-agent || true)"
+          if [ -n "$rpm_verify_output" ]; then
+            # electron-builder deliberately enables its setuid fallback when
+            # user namespaces do not work (including containerized CI). Keep
+            # every other RPM integrity difference fatal and prove the exact
+            # privileged file owner/mode before accepting that one transition.
+            test "$rpm_verify_output" = '.M.......    /opt/Aiden Agent/chrome-sandbox'
+            test "$(stat -c '%a:%U:%G' '/opt/Aiden Agent/chrome-sandbox')" = '4755:root:root'
+          fi
+          ! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"
+          test "$(aiden-agent --no-sandbox --version)" = "$expected_version"

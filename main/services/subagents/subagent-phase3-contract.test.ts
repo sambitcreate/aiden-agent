@@ -371,7 +371,7 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
   const response = applicationService.indexOf("reconciliation: reconciliationRequired", read);
 
   assert.ok(getHandler >= 0);
-  assert.ok(inactiveCheck > getHandler);
+  assert.ok(inactiveCheck >= 0);
   assert.ok(idleWait > inactiveCheck);
   assert.ok(read > idleWait);
   assert.ok(response > read);

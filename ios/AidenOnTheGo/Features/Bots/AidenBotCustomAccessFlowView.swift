@@ -360,7 +360,7 @@ struct AidenBotCustomAccessFlowView: View {
             } header: {
                 Text("Bot")
             } footer: {
-                Text("Custom Access can only reduce what Aiden and your Mac already allow. Change the AI Provider or Model in Edit Bot.")
+                Text("Custom Access can only reduce what Aiden and the paired desktop already allow. Change the AI Provider or Model in Edit Bot.")
             }
 
             if isLoadingBot, draft == nil {
@@ -419,7 +419,7 @@ struct AidenBotCustomAccessFlowView: View {
                     .disabled(!canWrite)
                 optionSection(
                     title: "Other Capabilities",
-                    description: "Optional Aiden capabilities available on this Mac.",
+                    description: "Optional Aiden capabilities available on the paired desktop.",
                     options: catalog.otherCapabilities,
                     keyPath: \.otherCapabilityIDs
                 )
@@ -462,7 +462,7 @@ struct AidenBotCustomAccessFlowView: View {
 
             Toggle("Run commands", isOn: shellBinding(catalog))
                 .disabled(!catalog.shellAvailable && !(draft?.shellEnabled ?? false))
-                .accessibilityHint("Allows the bot to use Aiden’s existing shell tool on your Mac.")
+                .accessibilityHint("Allows the bot to use Aiden’s existing shell tool on the paired desktop.")
         } header: {
             Text("Files and Commands")
         } footer: {
@@ -483,7 +483,7 @@ struct AidenBotCustomAccessFlowView: View {
         )
         return Section {
             if visibleOptions.isEmpty {
-                Text("None configured on this Mac")
+                Text("None configured on the paired desktop")
                     .foregroundStyle(palette.secondary)
             } else {
                 ForEach(visibleOptions) { option in
@@ -709,7 +709,7 @@ struct AidenBotCustomAccessFlowView: View {
                   capturedContext == request.context,
                   selectedBotID == request.botID else { return }
             guard let loadedDraft = AidenBotCustomAccessDraft(access: detail.access, catalog: catalog) else {
-                botError = "No available AI provider and model can be selected on your Mac."
+                botError = "No available AI provider and model can be selected on your paired desktop."
                 return
             }
             selectedBot = detail
@@ -800,7 +800,7 @@ struct AidenBotCustomAccessFlowView: View {
                     access: authoritative.access,
                     catalog: refreshedCatalog
                 ) else {
-                    saveError = "Access may have changed on your Mac. Close and reopen this screen to refresh."
+                    saveError = "Access may have changed on your paired desktop. Close and reopen this screen to refresh."
                     return
                 }
                 selectedBot = authoritative

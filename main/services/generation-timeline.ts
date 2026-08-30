@@ -148,7 +148,7 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
     case "schedule_task":
       return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
-      return { label: "Use Mac", detail: safeDetail(values.action) };
+      return { label: "Use computer", detail: safeDetail(values.action) };
     case "compact_context":
       return { label: "Compact context" };
     case "ask_user_question":

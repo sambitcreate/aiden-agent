@@ -21,8 +21,9 @@ function source(relativePath: string): string {
 test("bots have dedicated roster, detail, and Pi chat routes", () => {
   const router = source("./router.tsx");
   const guard = source("./bot-chat-route.tsx");
-  assert.match(router, /path: "\/bots"[\s\S]*component: BotsView/u);
-  assert.match(router, /path: "\/bots\/\$botId"[\s\S]*component: BotsView/u);
+  assert.match(router, /path: "\/bots"[\s\S]*component: BotsRoute/u);
+  assert.match(router, /path: "\/bots\/\$botId"[\s\S]*component: BotsRoute/u);
+  assert.match(router, /capabilities\.bots \? children : <Navigate to="\/" replace \/>/u);
   assert.match(
     router,
     /path: "\/bots\/\$botId\/chat\/\$chatId"[\s\S]*<BotChatRouteView botId=\{botId\} chatId=\{chatId\}/u,
@@ -88,7 +89,7 @@ test("bot editor owns access mode, model selection, and capability toggles", () 
   // Catalog-driven provider and model pickers.
   assert.match(view, /aria-label="AI provider for this bot"/u);
   assert.match(view, /aria-label="AI model for this bot"/u);
-  assert.match(view, /Credentials stay on your Mac/u);
+  assert.match(view, /Credentials stay on this device/u);
   assert.match(view, /Image understanding/u);
   assert.match(view, /aria-label="Image understanding provider for this bot"/u);
   assert.match(view, /aria-label="Image understanding model for this bot"/u);
@@ -228,8 +229,8 @@ test("bot editor is a five-page wizard with gated Next, Back, and a review Confi
     view,
     /summaryRow\(\s*"Access",\s*accessDraft\.usesFullAccess \? "Full Access" : "Custom Access",/u,
   );
-  assert.match(view, /Everything Aiden and this Mac allow/u);
-  assert.match(view, /Credentials stay on your Mac/u);
+  assert.match(view, /Everything Aiden and this device allow/u);
+  assert.match(view, /Credentials stay on this device/u);
   // Page swap motion is quiet and disabled under reduced motion.
   assert.match(view, /aiden-bot-wizard-page/u);
   assert.match(styles, /\.aiden-bot-wizard-page \{/u);

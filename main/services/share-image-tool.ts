@@ -121,7 +121,7 @@ export function createShareImageTool(dependencies: ShareImageToolDependencies): 
     name: SHARE_IMAGE_TOOL_NAME,
     label: "Share Image",
     description:
-      "Attach a PNG or JPEG file from this Mac to your response so the user can view it in Aiden on Mac, iPhone, or iPad. Use this instead of opening Preview when the user asks to see or receive an image. Relative paths start at the active workspace; absolute paths are accepted after user approval.",
+      "Attach a PNG or JPEG file from this computer to your response so the user can view it in Aiden on desktop, iPhone, or iPad. Use this when the user asks to see or receive an image. Relative paths start at the active workspace; absolute paths are accepted after user approval.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative or absolute path to the PNG or JPEG." }),
     }),

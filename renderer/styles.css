@@ -71,7 +71,7 @@
 :root {
   color-scheme: light;
   font-family: var(--font-ui-family);
-  --font-ui-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-ui-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
   --font-code-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   --ui-font-size: 14px;
   --code-font-size: 12px;

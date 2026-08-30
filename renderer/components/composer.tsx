@@ -1,5 +1,5 @@
 // Message composer. On a new chat the top-row folder opens the workspace picker;
-// established chats reveal that folder in Finder. Git workspaces also show the
+// established chats reveal that folder in the system file manager. Git workspaces also show the
 // current branch. The input
 // row carries a new-chat button, a per-workspace permission control, the model
 // picker, voice input, and send/stop.
@@ -682,7 +682,7 @@ export function Composer({
         result.remainingAuthenticated === true
           ? `Removed Aiden's saved ${logoutProvider.label} credential. Another system credential is still available.`
           : result.remainingAuthenticated === false
-            ? `Signed out of ${logoutProvider.label} on this Mac.`
+            ? `Signed out of ${logoutProvider.label} on this device.`
             : `Removed Aiden's saved ${logoutProvider.label} credential. Provider availability will refresh.`,
       );
     } catch (error) {
@@ -1414,7 +1414,7 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
-          {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
+          {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
@@ -1453,16 +1453,16 @@ export function Composer({
                 className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
                 onClick={onOpenFolder}
                 disabled={!workspace?.folderPath}
-                aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+                aria-label={workspace?.folderPath ? "Open folder in file manager" : "Workspace"}
               >
                 <Folder className="size-4 shrink-0" />
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
-            {/* Execution location — Pi runs locally on this Mac. */}
+            {/* Execution location — Pi runs locally on this host. */}
             <span
               className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-              title="The agent runs locally on this Mac"
+              title="The agent runs locally on this device"
             >
               <Monitor className="size-4 shrink-0" />
               Local
@@ -2049,7 +2049,7 @@ export function Composer({
         open={logoutChooserOpen}
         onOpenChange={setLogoutChooserOpen}
         title="Sign out of a provider"
-        description="Choose an authenticated provider on this Mac."
+        description="Choose an authenticated provider on this device."
         confirmHidden
         returnFocus={() => inputRef?.current ?? null}
       >
@@ -2089,7 +2089,7 @@ export function Composer({
         description={
           <Text variant="small" color="secondary">
             This removes Aiden&apos;s encrypted {logoutProvider?.label ?? "provider"} credential
-            from this Mac. Existing chats remain. If no system credential is available, those models
+            from this device. Existing chats remain. If no system credential is available, those models
             cannot run until you sign in again.
           </Text>
         }

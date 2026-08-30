@@ -407,7 +407,7 @@ function McpEditor({
             <Field label="Arguments" description="Space-separated arguments passed to the command.">
               <Input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y @modelcontextprotocol/server-filesystem /path" />
             </Field>
-            <Field label="Environment" description="One KEY=VALUE per line. Values are stored in the app configuration on this Mac." orientation="vertical">
+            <Field label="Environment" description="One KEY=VALUE per line. Values are stored in the app configuration on this device." orientation="vertical">
               <Textarea value={env} onChange={(e) => setEnv(e.target.value)} placeholder="API_KEY=..." className="max-h-40" />
             </Field>
           </>
@@ -416,7 +416,7 @@ function McpEditor({
             <Field label="Server URL">
               <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/mcp" />
             </Field>
-            <Field label="Headers" description="One KEY=VALUE per line. Values are stored in the app configuration on this Mac." orientation="vertical">
+            <Field label="Headers" description="One KEY=VALUE per line. Values are stored in the app configuration on this device." orientation="vertical">
               <Textarea value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder="Authorization=Bearer ..." className="max-h-40" />
             </Field>
             <Field

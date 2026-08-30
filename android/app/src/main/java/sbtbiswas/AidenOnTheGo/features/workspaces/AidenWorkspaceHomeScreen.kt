@@ -287,7 +287,7 @@ private fun AidenWorkspaceHome(
                                         viewModel.load(force = true)
                                         scope.launch {
                                             snackbarHostState.showSnackbar(
-                                                usageErrorMessage ?: "Loading Usage from your Mac…"
+                                                usageErrorMessage ?: "Loading Usage from your paired desktop…"
                                             )
                                         }
                                     }

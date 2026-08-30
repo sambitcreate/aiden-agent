@@ -18,6 +18,7 @@
 
 import { app, logger } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { subagentsEnabled } from "../services/subagents/feature-flag.js";
 
 // App handlers - these are the methods your app provides to the frontend
@@ -25,12 +26,20 @@ export const appHandlers = {
   // Example: Get app information
   getInfo: async () => {
     logger.info("app", "App info requested");
+    const host = hostPlatformCapabilities();
     return {
       name: app.getName(),
       version: app.getVersion(),
       environment: currentRuntimeProfile().id,
       capabilities: {
+        platform: host.platform,
         subagents: subagentsEnabled(),
+        bots: host.bots,
+        computerUse: host.computerUse,
+        dockIcon: host.dockIcon,
+        accessibilityPaste: host.accessibilityPaste,
+        nativeShare: host.nativeShare,
+        appleFoundationModels: host.appleFoundationModels,
       },
     };
   },

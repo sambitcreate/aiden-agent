@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  isSubagentShellApprovalShell,
   isSubagentShellApprovalDetails,
   type SubagentShellApprovalDetails,
 } from "../shared/assistant.js";
@@ -33,6 +34,11 @@ const details: SubagentShellApprovalDetails = {
 
 test("shell approval parser is exact and malformed claims fail closed", () => {
   assert.equal(isSubagentShellApprovalDetails(details), true);
+  assert.equal(isSubagentShellApprovalShell("/bin/zsh -f -c"), true);
+  assert.equal(isSubagentShellApprovalShell("/bin/sh -c"), true);
+  assert.equal(isSubagentShellApprovalDetails({ ...details, shell: "/bin/sh -c" }), true);
+  assert.equal(isSubagentShellApprovalShell("/bin/bash -c"), false);
+  assert.equal(isSubagentShellApprovalDetails({ ...details, shell: "/bin/bash -c" }), false);
   assert.equal(isSubagentShellApprovalDetails({ ...details, rollbackAvailable: true }), false);
   assert.equal(isSubagentShellApprovalDetails({ ...details, command: "echo\u202ebad" }), false);
   assert.equal(isSubagentShellApprovalDetails({ ...details, extra: true }), false);

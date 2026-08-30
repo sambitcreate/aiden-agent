@@ -242,6 +242,7 @@ export class AidenRemotePairingService {
     },
     private readonly onStatusChanged: () => void = () => undefined,
     private readonly displayName: () => string = () => "Aiden Agent",
+    private readonly botCapabilitiesSupported: () => boolean = () => true,
   ) {}
 
   begin(
@@ -474,16 +475,18 @@ export class AidenRemotePairingService {
     // persistence failures can never turn this high-authority secret reusable.
     current.consumed = true;
     this.onStatusChanged();
+    const acceptsBotCapabilities =
+      input.acceptsBotCapabilities === true && this.botCapabilitiesSupported();
     let issued: Awaited<ReturnType<AidenRemoteStateRegistry["issueDevice"]>>;
     try {
       issued = await this.devices.issueDevice({
         name: input.deviceName,
         type: input.deviceType,
         clientVersion: input.clientVersion,
-        capabilities: input.acceptsBotCapabilities
+        capabilities: acceptsBotCapabilities
           ? AIDEN_REMOTE_CAPABILITIES
           : AIDEN_REMOTE_LEGACY_CAPABILITIES,
-        acceptsBotCapabilities: input.acceptsBotCapabilities === true,
+        acceptsBotCapabilities,
         authorizeCommit: () => this.window === current && !current.cancelled,
       });
       if (this.window !== current || current.cancelled) {

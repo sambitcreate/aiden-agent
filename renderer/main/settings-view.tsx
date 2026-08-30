@@ -35,7 +35,12 @@ import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
-import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
+import {
+  availableSettingsDestinations,
+  SETTINGS_DESTINATIONS,
+  type SettingsSection,
+} from "../lib/settings-section";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 type NavGroup = "Agent" | "App";
 
@@ -116,13 +121,23 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
   const router = useRouter();
   const navigate = useNavigate();
-  const section = initialSection ?? "providers";
+  const capabilities = useAppCapabilities();
+  const section =
+    initialSection === "computerUse" && !capabilities.computerUse
+      ? "providers"
+      : (initialSection ?? "providers");
   const [search, setSearch] = React.useState("");
 
   const query = search.trim().toLocaleLowerCase();
+  const availableDestinationIds = new Set(
+    availableSettingsDestinations(capabilities).map((destination) => destination.id),
+  );
+  const availableNav = NAV.filter((item) => availableDestinationIds.has(item.id));
   const filteredNav = query
-    ? NAV.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
-    : NAV;
+    ? availableNav.filter((item) =>
+        `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query),
+      )
+    : availableNav;
   const ActiveSection = CONTENT[section];
 
   return (

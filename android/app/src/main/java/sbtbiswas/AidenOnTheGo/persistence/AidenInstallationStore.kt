@@ -70,7 +70,7 @@ class AidenInstallationStore(
         val installation = AidenInstallation(
             instanceId = exchange.instanceId,
             deviceId = exchange.deviceId,
-            name = exchange.displayName ?: "Aiden Mac",
+            name = exchange.displayName ?: "Aiden desktop",
             endpoint = exchange.endpoint,
             serverSpkiSha256 = exchange.serverSpkiSha256,
             pairingTrust = trust,

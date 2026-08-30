@@ -212,7 +212,7 @@ function buildBotAccessUpdate(
   assertAvailable(catalog.skills, draft.skillIds, "skill");
   assertAvailable(catalog.otherCapabilities, draft.otherCapabilityIds, "capability");
   if (draft.shellEnabled && !catalog.shellAvailable) {
-    throw new Error("Run commands is not currently available on this Mac.");
+    throw new Error("Run commands is not currently available on this device.");
   }
   if (!botFileScopeSelectionIsCoherent(draft.fileScopeIds, catalog.fileScopes)) {
     throw new Error(BOT_FILE_SCOPE_SELECTION_GUIDANCE);
@@ -281,7 +281,7 @@ const botChatDateFormatter = new Intl.DateTimeFormat(undefined, {
 /** Wizard pages for the New/Edit Bot dialog; the last page is the review/confirm step. */
 const BOT_EDITOR_STEPS = [
   { title: "Identity", description: "Name this bot and describe how it should work." },
-  { title: "Access", description: "Choose how much of this Mac this bot may use." },
+  { title: "Access", description: "Choose how much of this device this bot may use." },
   { title: "Model", description: "Pick the provider and model this bot uses in every chat." },
   { title: "Capabilities", description: "Review the files, commands, connections, and skills it may use." },
   { title: "Review", description: "Check every choice, then confirm to save this bot." },
@@ -616,7 +616,7 @@ function BotEditor({
           <Callout title="Access choices are unavailable">
             <div className="space-y-3">
               <Text as="p" variant="small" color="secondary">
-                Aiden could not read this Mac’s Bot capability list, so access cannot be saved.
+                Aiden could not read this device’s Bot capability list, so access cannot be saved.
               </Text>
               <Button size="small" variant="filled" onClick={() => void catalogQuery.refetch()}>
                 Try again
@@ -657,9 +657,9 @@ function BotEditor({
               <Callout title="Review Full Access">
                 <div className="space-y-3">
                   <Text as="p" variant="small" color="secondary">
-                    Full Access lets this bot use everything Aiden and your Mac currently allow,
+                    Full Access lets this bot use everything Aiden and this device currently allow,
                     including the shell, enabled connections, and skills. Credentials stay on your
-                    Mac.
+                    device.
                   </Text>
                   <div className="flex gap-2">
                     <Button
@@ -695,13 +695,13 @@ function BotEditor({
               </Text>
             ) : accessUnavailable ? (
               <Text as="p" variant="small" color="secondary">
-                Aiden could not read this Mac’s Bot capability list yet. Go back and try again.
+                Aiden could not read this device’s Bot capability list yet. Go back and try again.
               </Text>
             ) : catalog && accessDraft ? (
             <Field
               orientation="vertical"
               label="AI provider and model"
-              description="This bot uses this provider and model in every chat. Credentials stay on your Mac."
+              description="This bot uses this provider and model in every chat. Credentials stay on this device."
             >
               <div className="grid gap-3">
                 <Select
@@ -840,7 +840,7 @@ function BotEditor({
                       )}
                       <Text as="p" variant="small" color="tertiary">
                         The attached image and a focused question go to this provider. Credentials
-                        stay on your Mac.
+                        stay on this device.
                       </Text>
                     </div>
                   </Callout>
@@ -870,7 +870,7 @@ function BotEditor({
             <Field
               orientation="vertical"
               label="Files and commands"
-              description="Choose which files the bot may work with and whether it may run commands on this Mac."
+              description="Choose which files the bot may work with and whether it may run commands on this device."
             >
               <ul className="space-y-1">
                 {catalog.fileScopes
@@ -921,7 +921,7 @@ function BotEditor({
             {([
               ["Connections", "Services and accounts this bot may use.", catalog.connections, "connectionIds"],
               ["Skills", "Aiden skills this bot may use.", catalog.skills, "skillIds"],
-              ["Other capabilities", "Additional capabilities available on this Mac.", catalog.otherCapabilities, "otherCapabilityIds"],
+              ["Other capabilities", "Additional capabilities available on this device.", catalog.otherCapabilities, "otherCapabilityIds"],
             ] as const).map(([title, description, options, key]) => {
               // Match iOS: hide unusable, unselected tombstones (e.g. skills
               // whose metadata failed validation) instead of surfacing rows
@@ -992,7 +992,7 @@ function BotEditor({
                     )
                   : null}
               {accessDraft.usesFullAccess
-                ? summaryRow("Capabilities", "Everything Aiden and this Mac allow")
+                ? summaryRow("Capabilities", "Everything Aiden and this device allow")
                 : summaryRow(
                     "Capabilities",
                     `${accessDraft.fileScopeIds.length} file scopes · `
@@ -1013,7 +1013,7 @@ function BotEditor({
               {bot
                 ? "Saving applies these choices to every new turn with this bot."
                 : "Creating applies these choices to every turn with this bot."}
-              {" "}Credentials stay on your Mac.
+              {" "}Credentials stay on this device.
             </Text>
           </div>
         ) : null}

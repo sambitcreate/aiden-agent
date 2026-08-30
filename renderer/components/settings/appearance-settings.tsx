@@ -57,6 +57,7 @@ import {
   type UiFontId,
 } from "../../shared/appearance";
 import type { NativeThemeInfo } from "../../preload";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 type CssProperties = React.CSSProperties & Record<`--${string}`, string>;
 const AIDEN_DOCK_ICON_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
@@ -416,12 +417,14 @@ function Preferences({
   config,
   disabled,
   dockPending,
+  showDockIcon,
   onChange,
   onDockChange,
 }: {
   config: AppearanceConfig;
   disabled: boolean;
   dockPending: boolean;
+  showDockIcon: boolean;
   onChange: (patch: Partial<AppearanceConfig>) => void;
   onDockChange: (preference: DockIconPreference) => void;
 }) {
@@ -437,29 +440,31 @@ function Preferences({
         <PreferenceRow label="Use pointer cursors" description="Show a pointer when hovering over interactive elements.">
           <Switch checked={config.pointerCursors} onCheckedChange={(checked) => onChange({ pointerCursors: checked })} aria-label="Use pointer cursors" />
         </PreferenceRow>
-        <PreferenceRow label="Dock icon" description="Choose the icon Aiden uses in the macOS Dock.">
-          <div className="appearance-dock-options" role="radiogroup" aria-label="Dock icon">
-            {([
-              { value: "aiden", label: "Color Aiden Dock icon", src: AIDEN_DOCK_ICON_URL },
-              { value: "monochrome", label: "Monochrome Aiden Dock icon", src: MONOCHROME_DOCK_ICON_URL },
-            ] satisfies ReadonlyArray<{ value: DockIconPreference; label: string; src: string }>).map((option, index, options) => (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-label={option.label}
-                aria-checked={config.dockIcon === option.value}
-                disabled={dockPending}
-                tabIndex={config.dockIcon === option.value ? 0 : -1}
-                onClick={() => onDockChange(option.value)}
-                onKeyDown={(event) => handleRadioNavigation(event, index, options, onDockChange)}
-              >
-                <img src={option.src} alt="" />
-              </button>
-            ))}
-          </div>
-        </PreferenceRow>
-        <PreferenceRow label="Reduce motion" description="Reduce animations or match the macOS preference.">
+        {showDockIcon ? (
+          <PreferenceRow label="Dock icon" description="Choose the icon Aiden uses in the macOS Dock.">
+            <div className="appearance-dock-options" role="radiogroup" aria-label="Dock icon">
+              {([
+                { value: "aiden", label: "Color Aiden Dock icon", src: AIDEN_DOCK_ICON_URL },
+                { value: "monochrome", label: "Monochrome Aiden Dock icon", src: MONOCHROME_DOCK_ICON_URL },
+              ] satisfies ReadonlyArray<{ value: DockIconPreference; label: string; src: string }>).map((option, index, options) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-label={option.label}
+                  aria-checked={config.dockIcon === option.value}
+                  disabled={dockPending}
+                  tabIndex={config.dockIcon === option.value ? 0 : -1}
+                  onClick={() => onDockChange(option.value)}
+                  onKeyDown={(event) => handleRadioNavigation(event, index, options, onDockChange)}
+                >
+                  <img src={option.src} alt="" />
+                </button>
+              ))}
+            </div>
+          </PreferenceRow>
+        ) : null}
+        <PreferenceRow label="Reduce motion" description="Reduce animations or match the system preference.">
           <SegmentedControl<ReduceMotionPreference>
             label="Reduce motion"
             value={config.reduceMotion}
@@ -496,7 +501,7 @@ function Preferences({
             onChange={(value) => onChange({ diffMarkers: value })}
           />
         </PreferenceRow>
-        <PreferenceRow label="Font smoothing" description="Use native macOS font anti-aliasing.">
+        <PreferenceRow label="Font smoothing" description="Use native system font anti-aliasing.">
           <Switch checked={config.fontSmoothing} onCheckedChange={(checked) => onChange({ fontSmoothing: checked })} aria-label="Font smoothing" />
         </PreferenceRow>
       </div>
@@ -505,6 +510,7 @@ function Preferences({
 }
 
 export function AppearanceSettings() {
+  const capabilities = useAppCapabilities();
   const [config, setConfig] = React.useState<AppearanceConfig>(() => readCachedAppearance() ?? createDefaultAppearanceConfig());
   const [hydrated, setHydrated] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -710,7 +716,7 @@ export function AppearanceSettings() {
         apply(configRef.current);
       } catch (error) {
         if (isCurrent()) {
-          toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the macOS appearance state."));
+          toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the system appearance state."));
         }
       }
     }).finally(() => {
@@ -791,6 +797,7 @@ export function AppearanceSettings() {
         config={config}
         disabled={hasSafetyIssues}
         dockPending={dockPending}
+        showDockIcon={capabilities.dockIcon}
         onChange={(patch) => update((current) => ({ ...current, ...patch }))}
         onDockChange={changeDock}
       />

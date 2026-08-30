@@ -2,13 +2,14 @@
   "name": "aiden-agent",
   "version": "0.36.1",
   "private": true,
-  "description": "A macOS AI workspace agent for local and hosted models",
+  "description": "A desktop AI workspace agent for local and hosted models",
   "keywords": [
     "ai-agent",
     "developer-tools",
     "electron",
     "lm-studio",
     "local-ai",
+    "linux",
     "macos",
     "mcp",
     "ollama",
@@ -20,6 +21,8 @@
     "url": "https://github.com/sambitcreate/aiden-agent/issues"
   },
   "author": "Sambit Biswas",
+  "license": "MIT",
+  "desktopName": "com.sambitcreate.aiden-agent.desktop",
   "repository": {
     "type": "git",
     "url": "https://github.com/sambitcreate/aiden-agent.git"
@@ -39,14 +42,14 @@
     "build:electron": "node scripts/patch-pi-oauth-branding.mjs && node scripts/build-electron.mjs",
     "dev": "npm run build:native:optional && npm run build:electron && concurrently -k -s first \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite --host 127.0.0.1 --port 4143 --strictPort",
-    "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && node scripts/prepare-macos-dev-runtime.mjs --run",
+    "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && node scripts/run-development-runtime.mjs",
     "dev:brand": "node scripts/prepare-macos-dev-runtime.mjs",
     "lint": "eslint .",
     "postinstall": "node scripts/patch-pi-oauth-branding.mjs && node scripts/vendor-generative-ui-libs.mjs",
     "generative-ui:vendor": "node scripts/vendor-generative-ui-libs.mjs",
     "pretest:generative-ui": "npm run build:subagent-file-mutator",
     "test:aiden-remote-speech": "tsx --test main/services/aiden-remote-speech.test.ts",
-    "pretest": "npm run build:worktree-remover && npm run test:aiden-remote-speech && npm run test:aiden-remote && npm run test:aiden-service-boundary && npm run test:ios-release && npm run test:terminal:coverage && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:display-image && npm run test:ask-user-question && npm run test:todo && npm run test:btw && npm run test:advisor && npm run test:generative-ui && npm run test:provider-failure && npm run test:web-search && npm run test:compaction && npm run test:subagents && tsx --test main/services/pi-remote-catalog.test.ts main/services/provider-model-info-core.test.ts main/services/aiden-remote-models.test.ts renderer/shared/provider-thinking.test.ts && npm run test:bots && npm run test:voice",
+    "pretest": "npm run build:worktree-remover && npm run test:aiden-remote-speech && npm run test:aiden-remote && npm run test:aiden-service-boundary && npm run test:ios-release && npm run test:terminal:coverage && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:display-image && npm run test:pi-extensions && npm run test:generative-ui && npm run test:provider-failure && npm run test:web-search && npm run test:compaction && npm run test:subagents && tsx --test main/services/pi-remote-catalog.test.ts main/services/provider-model-info-core.test.ts main/services/aiden-remote-models.test.ts renderer/shared/provider-thinking.test.ts && npm run test:bots && npm run test:voice",
     "pretest:coverage": "npm run build:worktree-remover && npm run build:subagent-run-store && npm run test:preflight && npm run test:scheduled && npm run test:google-provider && npm run test:config-recovery && npm run test:command-system && npm run test:slash-commands && npm run test:display-image && npm run test:generative-ui && npm run test:compaction && npm run test:subagents && npm run test:bots:coverage",
     "test:preflight": "npm run test:artificial-analysis && npm run test:model-pad && tsx --test main/services/appearance-preview-core.test.ts main/services/generation-timeline.test.ts main/services/local-runtime-status.test.ts main/services/mcp-tool-result.test.ts main/services/pi-thinking-disclosure.integration.test.ts renderer/components/activity-feed.test.tsx renderer/components/chat-sidebar.test.tsx renderer/components/composer.test.tsx renderer/components/settings/providers-settings.test.tsx renderer/main/chat-transition.test.tsx renderer/components/reasoning-block.test.tsx renderer/components/reasoning-visibility-control.test.tsx renderer/components/thinking-control.test.tsx renderer/lib/agent-steps.test.ts renderer/lib/button-appearance-contract.test.ts renderer/lib/dialog-motion-contract.test.ts renderer/lib/inline-metadata-hierarchy.test.ts renderer/lib/scrollbar-gutter-contract.test.ts renderer/lib/text-entry-focus-contract.test.ts renderer/lib/pill-appearance.test.ts renderer/lib/reasoning-disclosure.test.ts renderer/lib/streaming-motion-contract.test.ts renderer/lib/streaming-reveal.test.ts renderer/lib/voice-recorder-core.test.ts renderer/lib/media-recorder-stop.test.ts renderer/lib/dictation-vad.test.ts renderer/lib/dictation-sounds.test.ts renderer/pill-preload-channels.test.ts renderer/shared/anthropic-thinking.test.ts renderer/shared/app-update.test.ts renderer/shared/claim-check.test.ts renderer/shared/codex-thinking.test.ts renderer/shared/google-thinking.test.ts renderer/shared/provider-deployment.test.ts",
     "test:aiden-remote": "tsx --test main/handlers/aiden-remote.test.ts main/services/aiden-remote-approved-roots.test.ts main/services/aiden-remote-revocation.test.ts main/services/aiden-remote-bot-files.test.ts main/services/aiden-remote-bots.test.ts main/services/aiden-remote-chat-http.test.ts main/services/aiden-remote-chats.test.ts main/services/aiden-remote-files.test.ts main/services/aiden-remote-git.test.ts main/services/aiden-remote-models.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-opaque-handles.test.ts main/services/aiden-remote-operation-contract.test.ts main/services/aiden-remote-pairing.test.ts main/services/aiden-remote-ports.test.ts main/services/aiden-remote-router.test.ts main/services/aiden-remote-schedules.test.ts main/services/aiden-remote-service.test.ts main/services/aiden-remote-state.test.ts main/services/aiden-remote-streams.test.ts main/services/aiden-remote-tailscale-route.test.ts main/services/aiden-remote-tailscale.test.ts main/services/aiden-remote-tls-identity.test.ts main/services/aiden-remote-workspace-browser.test.ts main/services/aiden-remote-workspace-http.test.ts main/services/aiden-remote-workspaces.test.ts renderer/components/remote-connection-popover.test.tsx renderer/components/settings/remote-access-settings.test.tsx renderer/lib/remote-approval.test.ts renderer/lib/remote-connection-status.test.ts renderer/lib/remote-pairing-lifecycle.test.ts renderer/lib/settings-section.test.ts && node --test scripts/aiden-remote-lan-transport-spike.test.mjs",
@@ -66,6 +69,7 @@
     "test:todo": "tsx --test main/services/rpiv-todo/*.test.ts renderer/shared/todo.test.ts renderer/components/todo-panel.test.tsx main/services/generation-timeline.test.ts main/handlers/ipc-contract.test.ts renderer/lib/ipc-stream.test.ts",
     "test:btw": "tsx --test main/services/rpiv-btw/*.test.ts renderer/shared/btw.test.ts renderer/components/btw-card.test.tsx",
     "test:advisor": "tsx --test renderer/shared/advisor.test.ts main/services/advisor-context.test.ts main/services/advisor-attempt-store.test.ts main/services/advisor-runtime.test.ts main/services/advisor-integration.test.ts",
+    "test:pi-extensions": "npm run test:ask-user-question && npm run test:todo && npm run test:btw && npm run test:advisor",
     "test:generative-ui": "tsx --test main/services/generative-ui-html.test.ts main/services/generative-ui-extension.test.ts main/services/generative-ui-artifact-store.test.ts main/services/generative-ui-host-libraries.test.ts main/services/generative-ui-protocol.test.ts renderer/shared/chat-artifacts.test.ts renderer/shared/generative-ui.test.ts && node --test scripts/vendor-generative-ui-libs.test.mjs && playwright test --config=playwright.generative-ui.config.ts --fail-on-flaky-tests",
     "test:google-provider": "tsx --test main/services/anthropic-provider.test.ts main/services/google-provider.test.ts main/services/model-runtime-core.test.ts main/services/models.test.ts main/services/provider-config-migration-core.test.ts main/services/chat-store-core.test.ts main/services/schedule-store.test.ts renderer/lib/google-provider-migration.test.ts",
     "test:config-recovery": "tsx --test main/services/secret-map-core.test.ts main/services/provider-credential-rotation-core.test.ts main/services/legacy-pi-credential-migration-core.test.ts main/services/mcp-credential-cleanup-core.test.ts main/services/mcp-oauth-operation.test.ts main/services/mcp-oauth-session.test.ts main/services/mcp-oauth-store-core.test.ts",
@@ -115,6 +119,8 @@
     "format": "oxfmt .",
     "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run generative-ui:vendor && npm run build:native && npm run build && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
     "package:verify": "node scripts/verify-macos-package.mjs --development",
+    "package:linux": "npm run build && electron-builder --linux dir --config.forceCodeSigning=false --config.directories.output=release/linux-development --publish never",
+    "package:linux:verify": "node scripts/verify-linux-package.mjs release/linux-development",
     "release:preflight": "node scripts/check-macos-release.mjs",
     "release:check-consumers": "node scripts/check-release-consumers.mjs",
     "release:verify": "node scripts/verify-macos-package.mjs --release",
@@ -123,6 +129,10 @@
     "test:model-catalog": "npm run test:provider-model-catalog && tsx --test main/services/models-dev-cache-core.test.ts renderer/components/settings/providers-catalog-update.test.tsx main/services/models.test.ts scripts/model-snapshot-core.test.mjs && node --test scripts/update-model-capabilities.test.mjs scripts/check-ci-policy.test.mjs",
     "release:update-model-capabilities": "npm run models:refresh",
     "dist": "node scripts/run-macos-distribution.mjs",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb rpm --config.forceCodeSigning=false --config.directories.output=release/linux-distribution --publish never",
+    "test:linux-native": "node scripts/build-worktree-remover.mjs && node scripts/build-worktree-remover.mjs --test && node --test scripts/worktree-remover.test.mjs && node scripts/build-bot-inbox-writer.mjs && node scripts/build-bot-inbox-writer.mjs --test && node --test scripts/bot-inbox-writer.test.mjs && node scripts/build-subagent-run-store.mjs && node scripts/build-subagent-run-store.mjs --test && node --test scripts/subagent-run-store.test.mjs && tsx --test main/services/subagents/subagent-run-store-io.test.ts && node scripts/build-subagent-file-mutator.mjs && node scripts/build-subagent-file-mutator.mjs --test && node --test scripts/subagent-file-mutator.test.mjs && node scripts/build-subagent-shell-runner.mjs && node scripts/build-subagent-shell-runner.mjs --test && tsx --test main/services/subagents/subagent-shell-runner-io.test.ts",
+    "test:linux-contracts": "tsx --test main/application-lifecycle-core.test.ts main/desktop-cli-core.test.ts main/services/application-menu-core.test.ts main/services/computer-use/platform.test.ts main/services/external-editors.test.ts main/services/profile-share-files.test.ts main/services/provider-key-policy.test.ts main/services/secure-storage-core.test.ts main/windows/main-window-options.test.ts main/windows/pill-window-platform.test.ts renderer/components/environment-subagents-contract.test.ts renderer/lib/command-system-core.test.ts renderer/shared/keybindings.test.ts && node --test scripts/native-c-build-core.test.mjs scripts/configure-electron-fuses.test.mjs scripts/verify-linux-package.test.mjs",
+    "test:tailscale-live": "tsx scripts/aiden-remote-tailscale-live-acceptance.ts",
     "test:portable-config": "tsx --test main/services/aiden-config-dir.test.ts main/services/portable-config-core.test.ts main/services/portable-config-core.roundtrip.test.ts main/services/portable-config-watch-core.test.ts main/services/data-store.test.ts main/services/data-store.resilience.test.ts main/services/config-store-core.test.ts main/services/secret-map-core.test.ts"
   },
   "dependencies": {
@@ -135,6 +145,7 @@
     "@tanstack/react-router": "^1.131.36",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "bonjour-service": "1.4.4",
     "chart.js": "^4.5.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -221,6 +232,7 @@
     "asarUnpack": [
       "**/node_modules/sherpa-onnx-node/**",
       "**/node_modules/sherpa-onnx-darwin-*/**",
+      "**/node_modules/sherpa-onnx-linux-*/**",
       "**/node_modules/node-pty/**"
     ],
     "directories": {
@@ -242,14 +254,6 @@
       {
         "from": "resources/app-icon-monochrome.png",
         "to": "app-icon-monochrome.png"
-      },
-      {
-        "from": "resources/computer-use/cua-driver-artifact.json",
-        "to": "computer-use/cua-driver-artifact.json"
-      },
-      {
-        "from": "resources/computer-use/LICENSE.cua-driver.md",
-        "to": "computer-use/LICENSE.cua-driver.md"
       },
       {
         "from": "resources/generative-ui",
@@ -277,6 +281,16 @@
         "Contents/Helpers/aiden-subagent-file-mutator",
         "Contents/Helpers/aiden-subagent-shell-runner",
         "Contents/Helpers/aiden-worktree-remover"
+      ],
+      "extraResources": [
+        {
+          "from": "resources/computer-use/cua-driver-artifact.json",
+          "to": "computer-use/cua-driver-artifact.json"
+        },
+        {
+          "from": "resources/computer-use/LICENSE.cua-driver.md",
+          "to": "computer-use/LICENSE.cua-driver.md"
+        }
       ],
       "extraFiles": [
         {
@@ -316,6 +330,74 @@
         "NSMicrophoneUsageDescription": "Aiden Agent uses the microphone only when you choose voice input or dictation.",
         "NSAppleEventsUsageDescription": "Aiden Agent pastes dictated text into the app you are typing in."
       }
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
+    },
+    "linux": {
+      "artifactName": "Aiden-Agent-${version}-${arch}-linux.${ext}",
+      "category": "Development",
+      "description": "A desktop AI workspace agent for local and hosted models",
+      "executableName": "aiden-agent",
+      "icon": "resources/app-icon.png",
+      "maintainer": "Sambit Biswas",
+      "synopsis": "Private AI workspace agent",
+      "syncDesktopName": true,
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "extraFiles": [
+        {
+          "from": "build/native/aiden-worktree-remover",
+          "to": "Helpers/aiden-worktree-remover"
+        },
+        {
+          "from": "build/native/aiden-bot-inbox-writer",
+          "to": "Helpers/aiden-bot-inbox-writer"
+        },
+        {
+          "from": "build/native/aiden-subagent-run-store",
+          "to": "Helpers/aiden-subagent-run-store"
+        },
+        {
+          "from": "build/native/aiden-subagent-file-mutator",
+          "to": "Helpers/aiden-subagent-file-mutator"
+        },
+        {
+          "from": "build/native/aiden-subagent-shell-runner",
+          "to": "Helpers/aiden-subagent-shell-runner"
+        }
+      ]
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2t64 (>= 1.0.17) | libasound2 (>= 1.0.17)"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "(libXtst or libXtst6)",
+        "xdg-utils",
+        "at-spi2-core",
+        "(libuuid or libuuid1)",
+        "(libsecret or libsecret-1-0)",
+        "(alsa-lib or libasound2)"
+      ]
     },
     "dmg": {
       "artifactName": "Aiden-Agent-Beta-${version}-${arch}.${ext}",

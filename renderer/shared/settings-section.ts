@@ -124,6 +124,14 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
 ];
 
+export function availableSettingsDestinations(capabilities: {
+  computerUse: boolean;
+}): typeof SETTINGS_DESTINATIONS {
+  return capabilities.computerUse
+    ? SETTINGS_DESTINATIONS
+    : SETTINGS_DESTINATIONS.filter((destination) => destination.id !== "computerUse");
+}
+
 export function parseSettingsSection(value: unknown): SettingsSection | undefined {
   return typeof value === "string" && SETTINGS_SECTIONS.some((section) => section === value)
     ? (value as SettingsSection)

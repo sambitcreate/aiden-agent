@@ -231,7 +231,7 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
       <div className="flex flex-col gap-1">
         <Text variant="heading1">Transcription Models</Text>
         <Text variant="small" color="tertiary">
-          Download and manage on-device models. Everything runs locally — no audio leaves your Mac.
+          Download and manage on-device models. Everything runs locally — no audio leaves your device.
         </Text>
       </div>
 
@@ -271,7 +271,7 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
         open={deletingModel !== null}
         onOpenChange={(open) => !open && setDeletingModel(null)}
         title="Delete this model?"
-        description={deletingModel ? `“${deletingModel.name}” will be removed from this Mac. You can download it again later.` : null}
+        description={deletingModel ? `“${deletingModel.name}” will be removed from this device. You can download it again later.` : null}
         confirmLabel="Delete"
         confirmVariant="destructive"
         onConfirm={() => {

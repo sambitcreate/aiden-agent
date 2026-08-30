@@ -52,14 +52,14 @@ fun AidenAppearanceSettingsScreen(
         }
         runCatching { client.speechStatus() }
             .onSuccess { speechStatus = it; speechError = null }
-            .onFailure { speechError = it.message ?: "Mac transcription is unavailable." }
+            .onFailure { speechError = it.message ?: "Desktop transcription is unavailable." }
     }
 
     fun runSpeechAction(action: suspend () -> AidenSpeechStatus) {
         scope.launch {
             runCatching { action() }
                 .onSuccess { speechStatus = it; speechError = null }
-                .onFailure { speechError = it.message ?: "Mac transcription is unavailable." }
+                .onFailure { speechError = it.message ?: "Desktop transcription is unavailable." }
         }
     }
 
@@ -100,7 +100,7 @@ fun AidenAppearanceSettingsScreen(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text("Installations", style = MaterialTheme.typography.titleMedium, color = palette.foreground)
-                        Text("Pair or switch your Aiden Agent Mac", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                        Text("Pair or switch your Aiden Agent desktop", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                     }
                 }
             }
@@ -115,7 +115,7 @@ fun AidenAppearanceSettingsScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Choose where speech is transcribed. Paired Mac sends microphone audio over Aiden's encrypted pinned connection and does not retain it.",
+            text = "Choose where speech is transcribed. Paired desktop sends microphone audio over Aiden's encrypted pinned connection and does not retain it.",
             style = MaterialTheme.typography.bodySmall,
             color = palette.secondary
         )
@@ -131,7 +131,7 @@ fun AidenAppearanceSettingsScreen(
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Text(mode.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
                     Text(
-                        if (mode == AidenVoiceInputMode.ON_DEVICE) "Android SpeechRecognizer; speech stays on this device." else "Parakeet on your connected Aiden Agent Mac; final text appears after you stop.",
+                        if (mode == AidenVoiceInputMode.ON_DEVICE) "Android SpeechRecognizer; speech stays on this device." else "Parakeet on your connected Aiden Agent desktop; final text appears after you stop.",
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary
                     )
@@ -167,7 +167,7 @@ fun AidenAppearanceSettingsScreen(
         } else {
             val status = speechStatus
             if (remoteClient == null) {
-                Text("Connect to a paired Mac to configure transcription.", style = MaterialTheme.typography.bodySmall, color = palette.warning)
+                Text("Connect to a paired desktop to configure transcription.", style = MaterialTheme.typography.bodySmall, color = palette.warning)
             } else if (status == null && speechError == null) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             } else if (status != null) {

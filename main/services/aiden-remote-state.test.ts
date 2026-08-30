@@ -19,7 +19,7 @@ import {
   AIDEN_REMOTE_PRODUCTION_LAN_PORT,
 } from "./aiden-remote-ports.js";
 
-function fixture(initial?: unknown) {
+function fixture(initial?: unknown, botCapabilitiesSupported = true) {
   let stored = initial ?? createDefaultAidenRemoteState(() => Buffer.alloc(24, 7));
   const writes: AidenRemoteStateDocument[] = [];
   let failNextSave = false;
@@ -41,6 +41,8 @@ function fixture(initial?: unknown) {
     randomBytes: (size) => Buffer.alloc(size, ++randomCounter),
     deriveCredentialDigest: async (credential, salt) =>
       createHash("sha256").update(credential).update(salt).digest(),
+  }, {
+    botCapabilitiesSupported: () => botCapabilitiesSupported,
   });
   return {
     registry,
@@ -150,6 +152,38 @@ test("Bot-aware devices preserve only coherent explicitly negotiated Bot grants"
   assert.deepEqual(
     [...authenticated!.capabilities],
     ["server:read", "bot:read", "bot:write"],
+  );
+});
+
+test("Linux host policy removes persisted Bot negotiation and grants", async () => {
+  const darwin = fixture();
+  const issued = await darwin.registry.issueDevice({
+    name: "Previously Bot-aware iPhone",
+    type: "iphone",
+    clientVersion: "2.0",
+    capabilities: ["server:read", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+  });
+
+  const linux = fixture(darwin.stored(), false);
+  const initialized = await linux.registry.initialize();
+  assert.equal(initialized.devices[0]?.acceptsBotCapabilities, false);
+  assert.deepEqual(initialized.devices[0]?.capabilities, ["server:read"]);
+  assert.equal(linux.writes.length, 1);
+
+  const authenticated = await linux.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.acceptsBotCapabilities, false);
+  assert.deepEqual([...authenticated!.capabilities], ["server:read"]);
+
+  await assert.rejects(
+    linux.registry.issueDevice({
+      name: "New Bot-aware iPhone",
+      type: "iphone",
+      clientVersion: "2.0",
+      capabilities: ["server:read", "bot:read", "bot:write"],
+      acceptsBotCapabilities: true,
+    }),
+    /device capabilities/u,
   );
 });
 

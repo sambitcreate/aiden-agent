@@ -458,7 +458,7 @@ fun AidenWorkspaceEnvironmentScreen(
             onDismissRequest = { showConflictDialog = false },
             title = { Text("Conflict Detected", fontWeight = FontWeight.Bold) },
             text = {
-                Text("This file on your Mac was modified since you opened it. Would you like to reload the latest version from your Mac?")
+                Text("This file on your paired desktop was modified since you opened it. Would you like to reload the latest version from your desktop?")
             },
             confirmButton = {
                 Button(
@@ -478,7 +478,7 @@ fun AidenWorkspaceEnvironmentScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
                 ) {
-                    Text("Reload from Mac", color = Color.White)
+                    Text("Reload from desktop", color = Color.White)
                 }
             },
             dismissButton = {

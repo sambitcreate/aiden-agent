@@ -306,7 +306,11 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
   assert.match(source, /data-onboarding-bento/u);
-  assert.match(source, /data-onboarding-feature-count=\{featureBentos\.length\}/u);
+  assert.match(source, /data-onboarding-feature-count=\{visibleFeatureBentos\.length\}/u);
+  assert.match(
+    source,
+    /if \(!capabilities\.computerUse && feature\.id === "computerUse"\) continue/u,
+  );
   assert.match(source, /auto-rows-\[118px\][\s\S]*?grid-cols-6/u);
   assert.match(source, /FEATURE_LAYOUTS[\s\S]*?col-span-4 row-span-2/u);
   assert.match(source, /group-hover:opacity-100/u);
@@ -315,6 +319,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     source,
     /Use Command-K or \/ for app commands, and \$ to attach a reusable skill\./u,
   );
+  assert.match(source, /Use Ctrl-K or \/ for app commands/u);
   assert.match(
     source,
     /Create reusable instructions, then type \$ to attach one to your next message\./u,
@@ -374,8 +379,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     featurePresentation,
     /benchmark-only OpenRouter key never imports its model catalog/u,
   );
-  assert.match(featurePresentation, /Live catalog checks happen only when you choose/u);
-  assert.match(featurePresentation, /ordinary browsing stays offline/u);
+  assert.match(featurePresentation, /bundled model details stay offline during ordinary browsing/u);
   assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
   assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 25);

@@ -53,6 +53,7 @@ import {
   type BotRuntimeApprovedRoot,
 } from "./bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
+import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import {
   botManagedWorkspace,
   resolveBotRuntimeMcpConnectionIdentities,
@@ -140,6 +141,7 @@ import {
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
+import { computerUseSupported } from "./computer-use/platform.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
@@ -703,6 +705,7 @@ async function prepareGeneration(
   );
   let computerUse: ComputerUseController | undefined;
   if (
+    computerUseSupported() &&
     options.allowComputerUse !== false &&
     (!botContext || botHasOrdinaryCapability(botContext, "computer_use")) &&
     settings.computerUseEnabled === true &&
@@ -1394,6 +1397,9 @@ export const llmClient = {
       }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
+      if (chat.botId && !hostPlatformCapabilities().bots) {
+        throw new Error("Bot chats are not available on this platform.");
+      }
       authoritativeBot = await resolveBotForGeneration(chat, authoritativeMode, (botId) =>
         botStore.get(botId),
       );

@@ -119,7 +119,7 @@ export function VoiceSettings() {
           label="Provider"
           description={
             provider === "local"
-              ? "Transcribes on this Mac after an on-device model is downloaded."
+              ? "Transcribes on this device after an on-device model is downloaded."
               : `Sends recordings to ${provider === "openai" ? "OpenAI" : "Google"} for transcription.`
           }
         >

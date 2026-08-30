@@ -11,6 +11,8 @@ import {
   AIDEN_FUSE_VALUES,
   assertAidenFuseWire,
   makeSpawnHelpersExecutable,
+  packagedElectronExecutable,
+  packagedResourcesDirectory,
 } from "./configure-electron-fuses.mjs";
 
 const packageJson = JSON.parse(
@@ -99,6 +101,93 @@ test("makeSpawnHelpersExecutable is a no-op when node-pty is absent", async () =
   try {
     // No app.asar.unpacked tree at all: must not throw.
     await makeSpawnHelpersExecutable(appDir);
+  } finally {
+    await rm(appDir, { recursive: true, force: true });
+  }
+});
+
+test("Linux package paths target the native executable and resources tree", () => {
+  const context = {
+    electronPlatformName: "linux",
+    appOutDir: "/tmp/aiden/linux-unpacked",
+    packager: {
+      appInfo: { productFilename: "Aiden Agent" },
+      config: { linux: { executableName: "aiden-agent" } },
+      platformSpecificBuildOptions: { executableName: "aiden-agent" },
+    },
+  };
+  assert.equal(
+    packagedElectronExecutable(context),
+    "/tmp/aiden/linux-unpacked/aiden-agent",
+  );
+  assert.equal(
+    packagedResourcesDirectory(context.appOutDir, "linux"),
+    "/tmp/aiden/linux-unpacked/resources",
+  );
+});
+
+test("makeSpawnHelpersExecutable supports Linux's unpacked resource layout", async () => {
+  const appDir = await mkdtemp(path.join(tmpdir(), "fuses-pty-linux-"));
+  const prebuilds = path.join(
+    appDir,
+    "resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+    "linux-x64",
+  );
+  await mkdir(prebuilds, { recursive: true });
+  const helper = path.join(prebuilds, "spawn-helper");
+  const handle = await open(helper, "w", 0o644);
+  await handle.close();
+  try {
+    await makeSpawnHelpersExecutable(appDir, "linux");
+    assert.notEqual((await stat(helper)).mode & 0o111, 0);
+  } finally {
+    await rm(appDir, { recursive: true, force: true });
+  }
+});
+
+test("makeSpawnHelpersExecutable supports Linux node-gyp build output", async () => {
+  const appDir = await mkdtemp(path.join(tmpdir(), "fuses-pty-linux-build-"));
+  const release = path.join(
+    appDir,
+    "resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "node-pty",
+    "build",
+    "Release",
+  );
+  await mkdir(release, { recursive: true });
+  const helper = path.join(release, "spawn-helper");
+  const handle = await open(helper, "w", 0o644);
+  await handle.close();
+  try {
+    await makeSpawnHelpersExecutable(appDir, "linux");
+    assert.notEqual((await stat(helper)).mode & 0o111, 0);
+  } finally {
+    await rm(appDir, { recursive: true, force: true });
+  }
+});
+
+test("makeSpawnHelpersExecutable accepts Linux node-pty without a macOS-only helper", async () => {
+  const appDir = await mkdtemp(path.join(tmpdir(), "fuses-pty-linux-no-helper-"));
+  const release = path.join(
+    appDir,
+    "resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "node-pty",
+    "build",
+    "Release",
+  );
+  await mkdir(release, { recursive: true });
+  const moduleHandle = await open(path.join(release, "pty.node"), "w", 0o644);
+  await moduleHandle.close();
+  try {
+    await assert.doesNotReject(makeSpawnHelpersExecutable(appDir, "linux"));
   } finally {
     await rm(appDir, { recursive: true, force: true });
   }

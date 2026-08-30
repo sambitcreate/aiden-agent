@@ -15,6 +15,7 @@ import {
 import { resolveChatTitleRoute } from "./chat-title-routing.js";
 import { configStore } from "./config-store.js";
 import { foundationModelsConnection } from "./foundation-models-connection.js";
+import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { runtimeSupportsImages } from "./generation-runtime.js";
 import { resolveModelRuntime } from "./model-runtime.js";
 import {
@@ -204,7 +205,10 @@ async function generateFirstTurnTitle(input: {
   const settings = await configStore.getSettings();
   const titleProviderId = settings.chatTitleProviderId ?? "automatic";
   const foundationModelsStatus =
-    titleProviderId === "chat-model" ? null : await foundationModelsConnection.status();
+    titleProviderId === "chat-model" ||
+    !hostPlatformCapabilities().appleFoundationModels
+      ? null
+      : await foundationModelsConnection.status();
   const route = resolveChatTitleRoute(titleProviderId, foundationModelsStatus);
   if (route === "seed-only") return;
 
@@ -234,6 +238,9 @@ async function generateFirstTurnTitle(input: {
 }
 
 async function generateFoundationModelsRename(chatId: string): Promise<ChatTitleRenameResult> {
+  if (!hostPlatformCapabilities().appleFoundationModels) {
+    throw new Error("Apple Foundation Models are not available on this platform.");
+  }
   const backgroundTitle = inFlight.get(chatId);
   if (backgroundTitle) await backgroundTitle;
 

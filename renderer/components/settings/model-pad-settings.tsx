@@ -314,7 +314,7 @@ function ModelPadBenchmarkConnection() {
 
         <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
           <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 basis-72">
-            Stored with macOS secure encryption; normalized public scores stay in Aiden’s local
+            Stored with operating-system secure encryption; normalized public scores stay in Aiden’s local
             offline cache. Create or manage keys in{" "}
             <a
               href="https://openrouter.ai/settings/keys"
@@ -339,7 +339,7 @@ function ModelPadBenchmarkConnection() {
         open={confirmDisconnect}
         onOpenChange={setConfirmDisconnect}
         title="Disconnect Model Pad from OpenRouter?"
-        description="Aiden will remove the dedicated encrypted key and cached benchmark data from this Mac. Your providers, model list, and saved Model Pad positions will not change."
+        description="Aiden will remove the dedicated encrypted key and cached benchmark data from this device. Your providers, model list, and saved Model Pad positions will not change."
         confirmLabel="Disconnect"
         confirmVariant="destructive"
         busy={operation === "disconnect"}
@@ -635,7 +635,7 @@ export function ModelPadSettings() {
           : `${draftPlacementCount} model${draftPlacementCount === 1 ? "" : "s"} saved to your Pad.`,
       );
     } catch {
-      toast.error("Aiden couldn’t save your Model Pad on this Mac.");
+      toast.error("Aiden couldn’t save your Model Pad on this device.");
     }
   };
 

@@ -56,9 +56,9 @@ enum AidenBotsAvailability: Equatable, Sendable {
         case .mobileDisabled:
             "Bots aren’t available in this version of Aiden On The Go."
         case .unsupported:
-            "Bots need a newer version of Aiden Agent on your Mac."
+            "Bots need a newer version of Aiden Agent on your paired desktop."
         case .notGranted:
-            "Approve Bot access on your Mac, or pair this phone again."
+            "Approve Bot access on your paired desktop, or pair this phone again."
         }
     }
 
@@ -140,7 +140,7 @@ func aidenBotSwitcherCoachmarkDetail(canWrite: Bool) -> String {
     if canWrite {
         return "Before a Bot can act, Aiden shows a one-time Full Access notice. Choose Continue with Full Access or Customize first."
     }
-    return "This Mac shared Bots as read-only. You can open their conversations here, then change Bot access on your Mac if you want to let them act."
+    return "This desktop shared Bots as read-only. You can open their conversations here, then change Bot access on your paired desktop if you want to let them act."
 }
 
 func aidenBotChatAllowsMutations(
@@ -746,7 +746,7 @@ private struct AidenBotShellView: View {
             guard coordinator.connectionState == .connected else {
                 if cached == nil {
                     path = []
-                    coordinator.presentedError = "Reconnect to your Mac to open this Bot chat."
+                    coordinator.presentedError = "Reconnect to your paired desktop to open this Bot chat."
                 }
                 return
             }
@@ -1086,10 +1086,10 @@ private struct AidenFullAccessNoticeView: View {
                         .foregroundStyle(.tint)
                         .accessibilityHidden(true)
 
-                    Text("Bots can use your Mac")
+                    Text("Bots can use your paired desktop")
                         .font(.largeTitle.bold())
 
-                    Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired Mac. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
+                    Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired desktop. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
                         .font(.body)
 
                     if includesMigrationCopy {
@@ -1116,7 +1116,7 @@ private struct AidenFullAccessNoticeView: View {
                     .disabled(isSaving)
 
                     if isSaving {
-                        ProgressView("Saving on your Mac…")
+                        ProgressView("Saving on your paired desktop…")
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -1377,7 +1377,7 @@ struct AidenProductShellView: View {
         case .coaching:
             EmptyView()
         case .checking:
-            ProgressView("Checking Bot access on your Mac…")
+            ProgressView("Checking Bot access on your paired desktop…")
                 .padding()
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         case .failed(let message):

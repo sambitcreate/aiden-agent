@@ -11,20 +11,38 @@ import { cleanupDictationTranscript } from "./dictation-cleanup.js";
 import { shouldAcceptDictationPress } from "./dictation-hotkey.js";
 import { watchMacKeyUntilUp } from "./dictation-key-state.js";
 import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
+import { dictationPlatformBehavior } from "./dictation-platform.js";
 import { pasteTranscript, runAtomicMacPaste, type PasteDeps } from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
 
 let lastPressAt = 0;
 
 function livePasteDeps(): PasteDeps {
+  const behavior = dictationPlatformBehavior();
   return {
     writeClipboard: (text) => clipboard.writeText(text),
     // Delivery must never steal focus with a native permission prompt. Users
     // grant paste access explicitly from Settings; otherwise we copy safely.
-    isAccessibilityTrusted: () => systemPreferences.isTrustedAccessibilityClient(false),
-    pasteWithPreservedClipboard: runAtomicMacPaste,
+    isAccessibilityTrusted: () =>
+      behavior.accessibilityPaste &&
+      systemPreferences.isTrustedAccessibilityClient(false),
+    pasteWithPreservedClipboard: behavior.accessibilityPaste
+      ? runAtomicMacPaste
+      : async () => false,
     log: (message, error) => logger.warn("dictation", message, error),
   };
+}
+
+async function deliverTranscript(text: string) {
+  if (!dictationPlatformBehavior().accessibilityPaste) {
+    clipboard.writeText(text);
+    return {
+      outcome: "copied" as const,
+      reason: "paste-unavailable" as const,
+      message: "Copied — automatic paste is not available on this system.",
+    };
+  }
+  return pasteTranscript(text, livePasteDeps());
 }
 
 const coordinator = new DictationCoordinator({
@@ -32,20 +50,25 @@ const coordinator = new DictationCoordinator({
   hidePill,
   destroyPill,
   broadcast: (payload) => ipcMain.broadcast("dictation:state", payload),
-  paste: (text) => pasteTranscript(text, livePasteDeps()),
+  paste: deliverTranscript,
   setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimer: (timer) => clearTimeout(timer),
   logError: (message, error) => logger.error("dictation", message, error),
-  isHoldToTalk: async () => (await configStore.getSettings()).dictationHoldToTalk === true,
+  isHoldToTalk: async () =>
+    dictationPlatformBehavior().holdToTalk &&
+    (await configStore.getSettings()).dictationHoldToTalk === true,
   shouldCleanup: async () => (await configStore.getSettings()).dictationCleanup === true,
   cleanupTranscript: cleanupDictationTranscript,
   getHoldKeyCode: async () => {
+    if (!dictationPlatformBehavior().holdToTalk) return null;
     const settings = await configStore.getSettings();
     const binding = effectiveBindings(settings.keybindings, settings)["dictation.toggle"];
     return acceleratorPrimaryMacKeyCode(binding);
   },
   startHoldWatch: (keyCode, onRelease, onFailed) =>
-    watchMacKeyUntilUp(keyCode, onRelease, { onFailed }),
+    dictationPlatformBehavior().holdToTalk
+      ? watchMacKeyUntilUp(keyCode, onRelease, { onFailed })
+      : null,
 });
 
 /** Hotkey callback (fire-and-forget). Debounced against OS key chatter. */

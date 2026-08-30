@@ -1324,7 +1324,7 @@ export function createAssistantEditAutomationTool(
         ),
         notify: Type.Optional(
           Type.Boolean({
-            description: "Replacement macOS notification preference.",
+            description: "Replacement desktop notification preference.",
           }),
         ),
       },
@@ -1429,7 +1429,7 @@ export function createScheduleTaskTool(
           ),
           notify: Type.Optional(
             Type.Boolean({
-              description: "Show a macOS notification after non-silent runs.",
+              description: "Show a desktop notification after non-silent runs.",
             }),
           ),
         },
@@ -1561,7 +1561,7 @@ export function createScheduleTaskTool(
       ),
       notify: Type.Optional(
         Type.Boolean({
-          description: "Show a macOS notification after non-silent runs.",
+          description: "Show a desktop notification after non-silent runs.",
         }),
       ),
     }),

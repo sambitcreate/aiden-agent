@@ -10,7 +10,7 @@ import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js
 import { DataStore } from "./data-store.js";
 import {
   AidenRemoteService,
-  DnsSdAidenRemoteBonjourPublisher,
+  createAidenRemoteBonjourPublisher,
   type AidenRemoteServiceLogEntry,
 } from "./aiden-remote-service.js";
 import {
@@ -110,6 +110,7 @@ import {
   botFavoritesStore,
   withBotFavoritesMutation,
 } from "./bot-favorites-main.js";
+import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
 const OPERATIONS_FILE = "aiden-remote-operations-v1.json";
@@ -133,7 +134,8 @@ async function mapWithConcurrency<Input, Output>(
   return output;
 }
 
-async function macComputerName(): Promise<string> {
+async function computerDisplayName(): Promise<string> {
+  if (process.platform !== "darwin") return os.hostname();
   try {
     const { stdout } = await execFileAsync(
       "/usr/sbin/scutil",
@@ -233,12 +235,13 @@ export interface AidenRemoteRuntime {
 }
 
 let runtimePromise: Promise<AidenRemoteRuntime> | null = null;
+let activeRuntime: AidenRemoteRuntime | null = null;
 
 async function createRuntime(): Promise<AidenRemoteRuntime> {
   const runtimeProfile = currentRuntimeProfile();
   const userData = app.getPath("userData");
   const hostname = os.hostname();
-  const defaultDisplayName = defaultAidenRemoteDisplayName(await macComputerName());
+  const defaultDisplayName = defaultAidenRemoteDisplayName(await computerDisplayName());
   const store = new DataStore<AidenRemoteStateDocument>(
     STATE_FILE,
     createDefaultAidenRemoteState(
@@ -290,6 +293,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       await store.save(document);
       ipcMain.broadcast("remote:changed", {});
     },
+  }, undefined, {
+    botCapabilitiesSupported: () => hostPlatformCapabilities().bots,
   });
   const operationStore = new DataStore<AidenIdempotencySnapshot>(
     OPERATIONS_FILE,
@@ -358,13 +363,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         models: AidenRemoteModelService;
         streams: AidenRemoteStreamService;
         files: AidenRemoteFileService;
-        botFiles: AidenRemoteBotFileService;
+        botFiles?: AidenRemoteBotFileService;
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
-        bots: AidenRemoteBotService;
-        botNotice: {
+        bots?: AidenRemoteBotService;
+        botNotice?: {
           status: typeof botApplicationService.noticeStatus;
           acknowledge: typeof botApplicationService.acknowledgeNotice;
         };
@@ -377,13 +382,14 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   const service = new AidenRemoteService({
     state,
     appVersion: app.getVersion(),
+    botCapabilitiesSupported: () => hostPlatformCapabilities().bots,
     hostname,
     tailscale,
     portCandidates: (preferredPort) => aidenRemotePortCandidatesForProfile(
       runtimeProfile.id,
       preferredPort,
     ),
-    bonjour: new DnsSdAidenRemoteBonjourPublisher(writeRemoteLog),
+    bonjour: createAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
     workspaceApi: async (instanceId) => {
       if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
@@ -431,6 +437,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               logger.error("aiden-remote", "Could not persist the remote stream journal.", error),
           });
           activeStreams = streams;
+          const botsSupported = hostPlatformCapabilities().bots;
           const chats = new AidenRemoteChatService({
             application: chatApplicationService,
             chatStore,
@@ -449,10 +456,29 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             },
             streams,
             models,
-            bots: botStore,
-            botMutations: botMutationGate,
-            retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
-            botTurnAuthorityPreflight: preflightBotTurnAuthority,
+            bots: botsSupported
+              ? botStore
+              : { get: async () => null },
+            botMutations: botsSupported
+              ? botMutationGate
+              : {
+                  run: async <Result>(
+                    _botId: string,
+                    _action: () => Promise<Result>,
+                  ): Promise<Result> => {
+                    throw new AidenRemoteServiceError(
+                      "not_found",
+                      "This Aiden chat no longer exists.",
+                      404,
+                    );
+                  },
+                },
+            ...(botsSupported
+              ? {
+                  retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
+                  botTurnAuthorityPreflight: preflightBotTurnAuthority,
+                }
+              : {}),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
@@ -490,7 +516,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               return "unavailable";
             }
           };
-          const bots = new AidenRemoteBotService({
+          const bots = botsSupported ? new AidenRemoteBotService({
             application: botApplicationService,
             chatStore,
             avatar: createMainBotAvatarApplicationAdapter(instanceId),
@@ -594,26 +620,28 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyBotsChanged: () => ipcMain.broadcast("bots:changed", {}),
             notifyChatsChanged: () => ipcMain.broadcast("chats:changed", {}),
-          });
+          }) : undefined;
           const files = new AidenRemoteFileService({
             instanceId,
             application: workspaceEnvironmentApplicationService,
             owners: workspaceOwners,
           });
-          const botFiles = new AidenRemoteBotFileService({
-            instanceId,
-            authority: botRuntimeAuthority,
-            archivedRead: createBotArchivedFileReadAuthority({
-              bots: botStore,
-              chats: chatStore,
-              capabilities: botCapabilityStore,
-              catalog: botCapabilityCatalog,
-              managedWorkspace: botManagedWorkspace,
-              mutationGate: botMutationGate,
-              inventoryLeases: botRuntimeInventoryLeases,
-            }),
-            chats: chatStore,
-          });
+          const botFiles = botsSupported
+            ? new AidenRemoteBotFileService({
+                instanceId,
+                authority: botRuntimeAuthority,
+                archivedRead: createBotArchivedFileReadAuthority({
+                  bots: botStore,
+                  chats: chatStore,
+                  capabilities: botCapabilityStore,
+                  catalog: botCapabilityCatalog,
+                  managedWorkspace: botManagedWorkspace,
+                  mutationGate: botMutationGate,
+                  inventoryLeases: botRuntimeInventoryLeases,
+                }),
+                chats: chatStore,
+              })
+            : undefined;
           const git = new AidenRemoteGitService({
             application: workspaceEnvironmentApplicationService,
             owners: workspaceOwners,
@@ -649,20 +677,30 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             models,
             streams,
             files,
-            botFiles,
             git,
             schedules,
             usage: usageStore,
             speech,
-            bots,
-            botNotice: {
-              status: (deviceId) => botApplicationService.noticeStatus(deviceId),
-              acknowledge: (deviceId, acknowledgement) =>
-                botApplicationService.acknowledgeNotice(
-                  deviceId,
-                  acknowledgement,
-                ),
-            },
+            ...(botsSupported
+              ? {
+                  botFiles,
+                  bots,
+                  botNotice: {
+                    status: (deviceId: string) =>
+                      botApplicationService.noticeStatus(deviceId),
+                    acknowledge: (
+                      deviceId: string,
+                      acknowledgement: Parameters<
+                        typeof botApplicationService.acknowledgeNotice
+                      >[1],
+                    ) =>
+                      botApplicationService.acknowledgeNotice(
+                        deviceId,
+                        acknowledgement,
+                      ),
+                  },
+                }
+              : {}),
             settle: () => streams.settlePersistence(),
             workspaces: new AidenRemoteWorkspaceService({
               application: workspaceApplicationService,
@@ -682,7 +720,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     }),
     log: writeRemoteLog,
   });
-  return {
+  const runtime: AidenRemoteRuntime = {
     service,
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
@@ -695,13 +733,17 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       }, deviceId);
       // Cleanup is intentionally idempotent: a retry after a crash between the
       // device tombstone and notice removal must still remove the acceptance.
-      await botApplicationService.revokeNoticeAudience(deviceId);
+      if (hostPlatformCapabilities().bots) {
+        await botApplicationService.revokeNoticeAudience(deviceId);
+      }
       return revoked;
     },
     pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
     respondApprovalFromHost: (chatId, approvalId, decision) =>
       activeStreams?.respondApprovalFromHost(chatId, approvalId, decision) ?? false,
   };
+  activeRuntime = runtime;
+  return runtime;
 }
 
 export function getAidenRemoteService(): Promise<AidenRemoteService> {
@@ -712,6 +754,10 @@ export function getAidenRemoteService(): Promise<AidenRemoteService> {
 export function getAidenRemoteRuntime(): Promise<AidenRemoteRuntime> {
   runtimePromise ??= createRuntime();
   return runtimePromise;
+}
+
+export function aidenRemoteServiceKeepsApplicationAlive(): boolean {
+  return activeRuntime?.service.keepsApplicationAlive() === true;
 }
 
 export async function initializeAidenRemoteService(): Promise<void> {

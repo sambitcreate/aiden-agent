@@ -9,7 +9,7 @@ const SETTINGS_SECTIONS = [
   "Remote Access",
   "Scheduled tasks",
   "Aiden",
-  "Computer Use",
+  ...(process.platform === "darwin" ? (["Computer Use"] as const) : []),
   "Voice",
   "Keyboard shortcuts",
   "Appearance",
@@ -114,6 +114,11 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(
     settingsNavigation.getByRole("button", { name: "Providers", exact: true }),
   ).toBeVisible();
+  if (process.platform === "linux") {
+    await expect(
+      settingsNavigation.getByRole("button", { name: "Computer Use", exact: true }),
+    ).toHaveCount(0);
+  }
 
   for (const section of SETTINGS_SECTIONS) {
     const destination = settingsNavigation.getByRole("button", { name: section, exact: true });
@@ -150,6 +155,30 @@ test("every Settings destination renders and a one-model local inventory stays u
       await page.getByRole("button", { name: "Back to Web Search", exact: true }).click();
       await expect(browseProviders).toBeFocused();
     }
+  }
+
+  if (process.platform === "linux") {
+    await settingsNavigation.getByRole("button", { name: "Providers", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Refresh Apple Foundation Models status" }),
+    ).toHaveCount(0);
+
+    await settingsNavigation.getByRole("button", { name: "Appearance", exact: true }).click();
+    await expect(page.getByText("Dock icon", { exact: true })).toHaveCount(0);
+
+    await settingsNavigation.getByRole("button", { name: "Voice", exact: true }).click();
+    await expect(page.getByText("Accessibility access", { exact: true })).toHaveCount(0);
+    await page.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "On-device (Parakeet)", exact: true }).click();
+    await expect(
+      page.getByText(
+        "Completed transcripts are copied to the clipboard so you can paste them into any app.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+
+    await settingsNavigation.getByRole("button", { name: "About", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Open releases", exact: true })).toBeVisible();
   }
 
   const providers = settingsNavigation.getByRole("button", { name: "Providers", exact: true });

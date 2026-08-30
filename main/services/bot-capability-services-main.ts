@@ -39,6 +39,7 @@ import {
 import { BotSkillContentWatcher } from "./bot-skill-content-watcher.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { webSearchService } from "./web-search-main.js";
+import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 
 export const BOT_SERVICE_DIRECTORY = "bot-service";
 
@@ -204,6 +205,7 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
       return { ready: availability.ready };
     },
     subagentsAvailable: () => subagentsEnabled(),
+    computerUseSupported: () => hostPlatformCapabilities().computerUse,
   }),
   {
     onRuntimeSnapshot: (botId, snapshot) => {

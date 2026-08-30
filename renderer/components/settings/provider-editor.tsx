@@ -349,7 +349,7 @@ export function ProviderEditor({
           label="Deployment"
           description={
             deployment === "local"
-              ? "Aiden shows model-loading status and treats usage as on-device when this Mac (or a marked private host) serves the model."
+              ? "Aiden shows model-loading status and treats usage as on-device when this device (or a marked private host) serves the model."
               : "Hosted cloud APIs skip local model-loading status and may track usage cost when available."
           }
         >
@@ -374,7 +374,7 @@ export function ProviderEditor({
           label="Authentication"
           description={
             needsKey
-              ? "This endpoint requires an API key. It is encrypted on this Mac."
+              ? "This endpoint requires an API key. It is encrypted on this device."
               : isTailnetEndpoint(baseUrl)
                 ? "Tailscale controls network reachability. Add an API key only if this server requires one."
                 : "No API key is requested or stored. Aiden sends no Authorization or API-key header."

@@ -37,7 +37,6 @@ import { splitPiBuiltinProviders } from "../../lib/pi-provider-display";
 import {
   queryKeys,
   useFoundationModelsConnection,
-  useModelCatalogStatus,
   useProviders,
   useSettings,
 } from "../../lib/queries";
@@ -50,6 +49,7 @@ import {
 } from "../../lib/types";
 import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
 import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
@@ -152,10 +152,10 @@ function BuiltinProviderRows({
 
 export function ProvidersSettings() {
   const qc = useQueryClient();
+  const capabilities = useAppCapabilities();
   const providers = useProviders();
   const settings = useSettings();
-  const foundationModels = useFoundationModelsConnection();
-  const modelCatalogStatus = useModelCatalogStatus();
+  const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const [editing, setEditing] = React.useState<Provider | null>(null);
   const editingFocusTarget = React.useRef(new ProviderEditorFocusTarget());
   const addProviderTriggerRef = React.useRef<HTMLButtonElement | null>(null);
@@ -167,9 +167,6 @@ export function ProvidersSettings() {
   const [removing, setRemoving] = React.useState<Provider | null>(null);
   const [savingTitleProvider, setSavingTitleProvider] = React.useState(false);
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
-  const [refreshingProviders, setRefreshingProviders] = React.useState(false);
-  const [catalogOutcome, setCatalogOutcome] = React.useState<string | null>(null);
-  const [catalogDetailsOpen, setCatalogDetailsOpen] = React.useState(false);
   const [showMoreBuiltinProviders, setShowMoreBuiltinProviders] = React.useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.providers });
@@ -179,7 +176,11 @@ export function ProvidersSettings() {
   const builtins = list.filter((provider) => provider.isBuiltin);
   const customProviders = list.filter((provider) => !provider.isBuiltin);
   const { featured: featuredBuiltins, more: moreBuiltins } = splitPiBuiltinProviders(builtins);
-  const titleProviderId = settings.data?.chatTitleProviderId ?? "automatic";
+  const titleProviderId =
+    !capabilities.appleFoundationModels &&
+    settings.data?.chatTitleProviderId === "apple-foundation-models"
+      ? "automatic"
+      : (settings.data?.chatTitleProviderId ?? "automatic");
 
   const openBuiltinSetup = (provider: Provider) => {
     if (provider.id !== GOOGLE_PROVIDER_ID) {
@@ -258,35 +259,6 @@ export function ProvidersSettings() {
     }
   };
 
-  const refreshProviders = async () => {
-    setRefreshingProviders(true);
-    setCatalogOutcome(null);
-    try {
-      const result = await providersApi.updateCatalogs();
-      qc.setQueryData(queryKeys.providers, result.providers);
-      qc.setQueryData(queryKeys.modelCatalogStatus, result.modelsDev.status);
-      if (result.modelsDev.ok) {
-        await qc.invalidateQueries({ queryKey: ["modelInfo"] });
-      }
-      await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
-      const inventoryOk = result.inventoryErrors.length === 0;
-      if (inventoryOk && result.modelsDev.ok) {
-        setCatalogOutcome("Provider inventory and model details are up to date.");
-        toast.success("Model catalogs updated.");
-      } else {
-        const outcome = `${inventoryOk ? "Provider inventory updated" : "Provider inventory kept cached data"}; ${result.modelsDev.ok ? "model details updated" : "model details kept cached data"}.`;
-        setCatalogOutcome(outcome);
-        toast.warning(outcome);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Couldn't update model catalogs.";
-      setCatalogOutcome("Catalog update failed; cached data is still available.");
-      toast.error(message);
-    } finally {
-      setRefreshingProviders(false);
-    }
-  };
-
   const addCustom = (template: "lmstudio" | "ollama" | "custom" | "tailnet") => {
     editingFocusTarget.current.capture(addProviderTriggerRef.current);
     const id =
@@ -347,15 +319,6 @@ export function ProvidersSettings() {
           </Text>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-          <Button
-            variant="muted"
-            size="small"
-            disabled={refreshingProviders}
-            onClick={() => void refreshProviders()}
-          >
-            <RefreshCw className={`size-4 ${refreshingProviders ? "animate-spin" : ""}`} />
-            {refreshingProviders ? "Updating…" : "Update model catalogs"}
-          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button ref={addProviderTriggerRef} variant="filled" size="small">
@@ -423,52 +386,14 @@ export function ProvidersSettings() {
         </div>
       </div>
 
-      <div className="-mt-4 rounded-card border border-separator px-4 py-3" aria-live="polite">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Text variant="small" color="secondary">
-            {catalogOutcome ??
-              "Provider catalogs determine what can run; model details improve names and capability hints."}
-          </Text>
-          <Button
-            variant="transparent"
-            size="small"
-            aria-expanded={catalogDetailsOpen}
-            aria-controls="provider-catalog-details"
-            onClick={() => setCatalogDetailsOpen((open) => !open)}
-          >
-            Catalog details
-            <ChevronDown
-              className={`size-3.5 transition-transform motion-reduce:transition-none ${catalogDetailsOpen ? "rotate-180" : ""}`}
-            />
-          </Button>
-        </div>
-        <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
-          This foreground update contacts built-in catalog services and models.dev. It sends no
-          prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
-          identifier.
-        </Text>
-        {catalogDetailsOpen ? (
-          <div id="provider-catalog-details" className="mt-2 border-t border-separator pt-2">
-            <Text as="p" variant="small" color="tertiary" className="leading-relaxed">
-              Downloaded models.dev data affects display details only, never which models can run or
-              their runtime limits.
-            </Text>
-            <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
-              Model details:{" "}
-              {modelCatalogStatus.data?.source === "device-cache"
-                ? "device cache"
-                : "bundled snapshot"}
-              {modelCatalogStatus.data?.fetchedAt
-                ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
-                : ""}
-            </Text>
-          </div>
-        ) : null}
-      </div>
+      <Text as="p" variant="small" color="tertiary" className="-mt-4 leading-relaxed">
+        Provider inventories come from the services you configure. Descriptive model details use the
+        bundled release snapshot and stay offline during ordinary app use.
+      </Text>
 
       <CodexProviderSettings />
 
-      {foundationModels.data ? (
+      {capabilities.appleFoundationModels && foundationModels.data ? (
         <div
           className="rounded-card border border-separator"
           aria-busy={refreshingFoundationModels}
@@ -523,7 +448,7 @@ export function ProvidersSettings() {
             </summary>
             <div className="flex flex-col gap-3 px-4 pb-4 pt-1 sm:flex-row sm:items-end sm:justify-between">
               <Text variant="small" color="tertiary" as="p" className="max-w-md">
-                Automatic prefers this Mac, then uses the selected chat model only when Apple is
+                Automatic prefers this device, then uses the selected chat model only when Apple is
                 unavailable. On-device only never falls back to a network provider.
               </Text>
               <Select
@@ -546,6 +471,37 @@ export function ProvidersSettings() {
               </Select>
             </div>
           </details>
+        </div>
+      ) : !capabilities.appleFoundationModels ? (
+        <div className="rounded-card border border-separator px-3.5 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <Text variant="small-strong" as="p">
+                Chat title provider
+              </Text>
+              <Text variant="small" color="tertiary" as="p" className="mt-0.5">
+                Automatic uses your selected chat model. Choose Selected chat model to make that
+                preference explicit.
+              </Text>
+            </div>
+            <Select
+              value={titleProviderId}
+              disabled={savingTitleProvider}
+              onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
+            >
+              <SelectTrigger
+                size="small"
+                className="w-full shrink-0 sm:w-48"
+                aria-label="Chat title provider"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="automatic">Automatic</SelectItem>
+                <SelectItem value="chat-model">Selected chat model</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       ) : null}
 

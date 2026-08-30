@@ -16,6 +16,7 @@ import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
+import { mainWindowOptions } from "./windows/main-window-options.js";
 import {
   initShortcut,
   initDictationShortcut,
@@ -67,6 +68,7 @@ import {
   effectiveBindings,
   migrateLegacyKeybindings,
 } from "../renderer/shared/keybindings.js";
+import { applicationMenuTemplate } from "./services/application-menu-core.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import type { AppSettings, Chat } from "./services/types.js";
 import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
@@ -122,6 +124,7 @@ import {
 import { rendererDocumentOwner } from "./services/renderer-document-owner.js";
 import { decideRendererRecovery } from "./services/renderer-crash-recovery.js";
 import {
+  aidenRemoteServiceKeepsApplicationAlive,
   initializeAidenRemoteService,
   stopAidenRemoteServiceAndSettle,
 } from "./services/aiden-remote-service-main.js";
@@ -129,6 +132,20 @@ import { initializeBotApplicationService } from "./services/bot-application-serv
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
+import { desktopVersionRequested } from "./desktop-cli-core.js";
+import { shouldQuitAfterAllWindowsClose } from "./application-lifecycle-core.js";
+import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+
+if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
+  process.stdout.write(`${app.getVersion()}\n`);
+  app.exit(0);
+}
+
+if (process.platform === "linux") {
+  // Supporting Wayland compositors can register Electron global shortcuts
+  // through the desktop portal instead of relying on X11 key grabs.
+  app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
+}
 
 registerGenerativeUiScheme();
 
@@ -928,20 +945,20 @@ async function applyDockIconPreference(
   preference: DockIconPreference,
 ): Promise<boolean> {
   if (process.platform !== "darwin" || !app.dock) return false;
-  const iconPath =
-    preference === "monochrome"
-      ? isPackagedRuntime()
-        ? path.join(process.resourcesPath, "app-icon-monochrome.png")
-        : path.join(app.getAppPath(), "resources", "app-icon-monochrome.png")
-      : isPackagedRuntime()
-        ? path.join(process.resourcesPath, "app-icon.png")
-        : path.join(app.getAppPath(), "resources", "app-icon.png");
+  const iconPath = applicationIconPath(preference === "monochrome");
   const icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty())
     throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
   app.dock.setIcon(icon);
   await app.dock.show();
   return true;
+}
+
+function applicationIconPath(monochrome = false): string {
+  const fileName = monochrome ? "app-icon-monochrome.png" : "app-icon.png";
+  return isPackagedRuntime()
+    ? path.join(process.resourcesPath, fileName)
+    : path.join(app.getAppPath(), "resources", fileName);
 }
 
 async function restoreDockIconPreference(
@@ -991,6 +1008,11 @@ function openExternalUrl(value: string): void {
   }
 }
 
+function refreshFoundationModelsStatus(force = false): void {
+  if (!hostPlatformCapabilities().appleFoundationModels) return;
+  void foundationModelsConnection.status(force ? { force: true } : undefined);
+}
+
 async function createMainWindow(): Promise<void> {
   let rendererCrashTimes: number[] = [];
   // macOS activate, a second-instance event, or a newly registered global
@@ -1024,24 +1046,16 @@ async function createMainWindow(): Promise<void> {
   }
 
   mainWindow = new BrowserWindow({
+    ...mainWindowOptions(
+      getPreloadPath(),
+      process.platform,
+      nativeTheme.shouldUseDarkColors,
+    ),
     ...restoredWindowState.bounds,
-    minWidth: 390,
-    minHeight: 456,
     title: app.getName(),
-    titleBarStyle: "hiddenInset",
-    // Center the 12px macOS window controls in the renderer's 52px top bar.
-    trafficLightPosition: { x: 14, y: 20 },
-    backgroundColor: "#00000000",
-    transparent: true,
-    vibrancy: "sidebar",
-    visualEffectState: "active",
-    show: false,
-    webPreferences: {
-      preload: getPreloadPath(),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    ...(process.platform === "linux"
+      ? { icon: nativeImage.createFromPath(applicationIconPath()) }
+      : {}),
   });
   resetRendererReadiness();
 
@@ -1490,99 +1504,23 @@ function setupApplicationMenu(
   const bindings = effectiveBindings(
     migrateLegacyKeybindings(settings.keybindings, settings),
   );
-  const command = (commandId: keyof typeof bindings) =>
-    bindings[commandId] ?? undefined;
-  const menu = Menu.buildFromTemplate([
-    {
-      label: app.getName(),
-      submenu: [
-        { role: "about" },
-        {
-          label: "Check for Updates…",
-          click: () => void appUpdateService.checkNow(true),
+  const menu = Menu.buildFromTemplate(
+    applicationMenuTemplate({
+      platform: process.platform,
+      appName: app.getName(),
+      bindings,
+      actions: {
+        checkForUpdates: () => void appUpdateService.checkNow(true),
+        deliverCommand: (commandId) =>
+          deliverMainWindowNotificationSafely("app:command", { commandId }),
+        reload: (ignoreCache) => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            void requestWindowReload(mainWindow, { ignoreCache });
+          }
         },
-        { type: "separator" },
-        {
-          label: "Command Palette…",
-          accelerator: command("commandPalette.toggle"),
-          click: () =>
-            deliverMainWindowNotificationSafely("app:command", {
-              commandId: "commandPalette.toggle",
-            }),
-        },
-        {
-          label: "Settings…",
-          accelerator: command("settings.open"),
-          click: () =>
-            deliverMainWindowNotificationSafely("app:command", {
-              commandId: "settings.open",
-            }),
-        },
-        { type: "separator" },
-        { role: "services" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    },
-    {
-      label: "File",
-      submenu: [
-        {
-          label: "New Chat",
-          accelerator: command("chat.new"),
-          click: () =>
-            deliverMainWindowNotificationSafely("app:command", {
-              commandId: "chat.new",
-            }),
-        },
-        {
-          label: "Open Workspace in Preferred Editor",
-          accelerator: command("workspace.openPreferredEditor"),
-          click: () =>
-            deliverMainWindowNotificationSafely("app:command", {
-              commandId: "workspace.openPreferredEditor",
-            }),
-        },
-        { type: "separator" },
-        { role: "close" },
-      ],
-    },
-    { role: "editMenu" },
-    {
-      label: "View",
-      submenu: [
-        {
-          label: "Reload",
-          accelerator: "Command+R",
-          click: () => {
-            if (mainWindow && !mainWindow.isDestroyed())
-              void requestWindowReload(mainWindow);
-          },
-        },
-        {
-          label: "Force Reload",
-          accelerator: "Command+Shift+R",
-          click: () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              void requestWindowReload(mainWindow, { ignoreCache: true });
-            }
-          },
-        },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
-        { type: "separator" },
-        { role: "togglefullscreen" },
-      ],
-    },
-    { role: "windowMenu" },
-  ]);
+      },
+    }),
+  );
   Menu.setApplicationMenu(menu);
 }
 
@@ -1611,14 +1549,23 @@ if (!ownsSingleInstanceLock) {
 
   app.on("second-instance", () => showMainWindow());
   app.on("window-all-closed", () => {
+    const backgroundServiceRunning = aidenRemoteServiceKeepsApplicationAlive();
     logger.info("electron-lifecycle", "All application windows closed", {
       platform: process.platform,
+      backgroundServiceRunning,
     });
-    if (process.platform !== "darwin") app.quit();
+    if (
+      shouldQuitAfterAllWindowsClose(
+        process.platform,
+        backgroundServiceRunning,
+      )
+    ) {
+      app.quit();
+    }
   });
 
   app.on("activate", () => {
-    void foundationModelsConnection.status({ force: true });
+    refreshFoundationModelsStatus(true);
     showMainWindow();
   });
 
@@ -1857,14 +1804,16 @@ if (!ownsSingleInstanceLock) {
           );
         }
       }
-      try {
-        await initializeBotApplicationService();
-      } catch (error) {
-        logger.error(
-          "bots",
-          "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
-          error,
-        );
+      if (hostPlatformCapabilities().bots) {
+        try {
+          await initializeBotApplicationService();
+        } catch (error) {
+          logger.error(
+            "bots",
+            "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
+            error,
+          );
+        }
       }
       const visibleChatIds = new Set(
         (await chatStore.list()).map((chat) => chat.id),
@@ -1991,7 +1940,7 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
-      void foundationModelsConnection.status();
+      refreshFoundationModelsStatus();
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
 

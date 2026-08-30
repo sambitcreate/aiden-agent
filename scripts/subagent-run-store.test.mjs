@@ -155,7 +155,7 @@ async function requestPromptly(request, operation) {
 }
 
 function parseData(response) {
-  const match = /^data ([0-9a-f]+(?:-[0-9a-f]+){8}) ([A-Za-z0-9+/]*={0,2})$/u.exec(response);
+  const match = /^data ([0-9a-f]+(?:-[0-9a-f]+){6,8}) ([A-Za-z0-9+/]*={0,2})$/u.exec(response);
   assert.ok(match);
   return {
     generation: match[1],
@@ -164,7 +164,7 @@ function parseData(response) {
 }
 
 test("a helper never acknowledges a generation installed by another writer", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-native-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const directory = path.join(root, "private-runs");
@@ -180,7 +180,7 @@ test("a helper never acknowledges a generation installed by another writer", asy
 
   const generationA = parseData(await writerB.request("read")).generation;
   const writerBResult = await writerB.request(writeCommand(generationA, "writer B\n"));
-  assert.match(writerBResult, /^ok [0-9a-f]+(?:-[0-9a-f]+){8}$/u);
+  assert.match(writerBResult, /^ok [0-9a-f]+(?:-[0-9a-f]+){6,8}$/u);
   await writeFile(`${marker}.continue`, "continue\n", { mode: 0o600 });
 
   assert.equal(await writerAResult, "error destination_changed");
@@ -196,7 +196,7 @@ test("a helper never acknowledges a generation installed by another writer", asy
 });
 
 test("a FIFO destination fails closed without blocking reads or expected-generation writes", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-fifo-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const directory = path.join(root, "private-runs");
@@ -205,7 +205,7 @@ test("a FIFO destination fails closed without blocking reads or expected-generat
 
   const bootstrap = startHelper(t, directory, productionBinary);
   const initial = await bootstrap.request(writeCommand("missing", "authorized store\n"));
-  const expectedGeneration = /^ok ([0-9a-f]+(?:-[0-9a-f]+){8})$/u.exec(initial)?.[1];
+  const expectedGeneration = /^ok ([0-9a-f]+(?:-[0-9a-f]+){6,8})$/u.exec(initial)?.[1];
   assert.ok(expectedGeneration);
   await bootstrap.close();
 
@@ -233,7 +233,7 @@ test("a FIFO destination fails closed without blocking reads or expected-generat
 });
 
 test("cleanup skips owned temporary FIFOs without blocking", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-cleanup-fifo-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const directory = path.join(root, "private-runs");
@@ -252,7 +252,7 @@ test("cleanup skips owned temporary FIFOs without blocking", async (t) => {
 });
 
 test("a post-install in-place rewrite with its mtime restored is not acknowledged", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-in-place-race-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const directory = path.join(root, "private-runs");
@@ -290,7 +290,7 @@ test("a post-install in-place rewrite with its mtime restored is not acknowledge
 });
 
 test("a hardlink added after read validation is rejected without chmodding its inode", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-link-race-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const directory = path.join(root, "private-runs");
@@ -329,7 +329,7 @@ test("a hardlink added after read validation is rejected without chmodding its i
 });
 
 test("a displaced old store replacement survives the final atomic capture boundary", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-displaced-race-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const directory = path.join(root, "private-runs");
@@ -366,7 +366,7 @@ test("a displaced old store replacement survives the final atomic capture bounda
 });
 
 test("cleanup preserves a replacement raced in immediately before atomic capture", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-cleanup-race-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const directory = path.join(root, "private-runs");
@@ -393,7 +393,7 @@ test("cleanup preserves a replacement raced in immediately before atomic capture
 });
 
 test("production run-store ignores native capture pause controls", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-production-controls-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const directory = path.join(root, "private-runs");
@@ -410,7 +410,7 @@ test("production run-store ignores native capture pause controls", async (t) => 
   assert.ok(initialGeneration);
   assert.match(
     await helper.request(writeCommand(initialGeneration, "second\n")),
-    /^ok [0-9a-f]+(?:-[0-9a-f]+){8}$/u,
+    /^ok [0-9a-f]+(?:-[0-9a-f]+){6,8}$/u,
   );
   await writeFile(stale, "stale\n", { mode: 0o600 });
   assert.equal(await helper.request("cleanup"), "ok 1");

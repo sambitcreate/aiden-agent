@@ -27,6 +27,7 @@ import { registerSubagentHandlers } from "./subagents.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 
@@ -64,7 +65,7 @@ export function registerHandlers(): void {
   registerTelegramHandlers();
   registerSubagentHandlers();
   registerAidenRemoteHandlers();
-  registerBotHandlers();
+  if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");

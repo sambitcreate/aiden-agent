@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   AidenRemoteTailscaleController,
   createSystemTailscaleCommandRunner,
+  tailscaleBinaryCandidates,
+  tailscaleCommandErrorCode,
   withAidenTailscaleRouteLock,
   type AidenTailscaleCommandRunner,
   type AidenTailscaleStatusReadFailureCategory,
@@ -19,6 +21,7 @@ test("system Tailscale runner forces CLI mode for Finder-style production launch
     environment: NodeJS.ProcessEnv | undefined;
   }> = [];
   const runner = await createSystemTailscaleCommandRunner({
+    platform: "darwin",
     environment: {
       HOME: "/test-home",
       TAILSCALE_BE_CLI: "0",
@@ -32,7 +35,8 @@ test("system Tailscale runner forces CLI mode for Finder-style production launch
       return {
         stdout: args[0] === "status"
           ? JSON.stringify({
-            Self: { DNSName: "aiden.tailnet.ts.net." },
+            BackendState: "Running",
+            Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
             CertDomains: ["aiden.tailnet.ts.net"],
           })
           : "{}",
@@ -51,6 +55,61 @@ test("system Tailscale runner forces CLI mode for Finder-style production launch
     assert.equal(execution.environment?.TERM, undefined);
     assert.equal(execution.environment?.TAILSCALE_BE_CLI, "1");
   }
+});
+
+test("Tailscale discovery uses fixed platform-specific executable locations", () => {
+  assert.deepEqual(tailscaleBinaryCandidates("linux"), [
+    "/usr/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "/run/current-system/sw/bin/tailscale",
+  ]);
+  assert.deepEqual(tailscaleBinaryCandidates("darwin"), [
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+  ]);
+  assert.deepEqual(tailscaleBinaryCandidates("win32"), []);
+});
+
+test("Linux Tailscale runner does not force the packaged macOS CLI environment", async () => {
+  let environment: NodeJS.ProcessEnv | undefined;
+  const runner = await createSystemTailscaleCommandRunner({
+    platform: "linux",
+    environment: { AIDEN_TEST: "1" },
+    resolveBinary: async () => "/usr/bin/tailscale",
+    execute: async (_binary, _args, options) => {
+      environment = options.env;
+      return { stdout: "{}" };
+    },
+  });
+  await runner?.run(["status", "--json"]);
+  assert.equal(environment?.AIDEN_TEST, "1");
+  assert.equal(environment?.TAILSCALE_BE_CLI, undefined);
+});
+
+test("Linux operator denial maps to an actionable stable code", () => {
+  assert.equal(
+    tailscaleCommandErrorCode({
+      stderr:
+        "Access denied: serve config denied; run tailscale set --operator=$USER",
+    }),
+    "tailscale_permission_denied",
+  );
+  assert.equal(tailscaleCommandErrorCode({ stderr: "permission denied" }), undefined);
+});
+
+test("a named but offline Tailscale node remains disconnected", async () => {
+  const controller = new AidenRemoteTailscaleController({
+    run: async (args) =>
+      args[0] === "status"
+        ? JSON.stringify({
+            BackendState: "Stopped",
+            Self: { DNSName: "aiden.tailnet.ts.net.", Online: false },
+            CertDomains: ["aiden.tailnet.ts.net"],
+          })
+        : "{}",
+  });
+  assert.equal((await controller.status()).errorCode, "not_connected");
 });
 
 async function availableLoopbackPort(): Promise<number> {
@@ -72,7 +131,8 @@ function fixture(options: { emptyServeStatus?: boolean; certDomains?: unknown } 
       calls.push([...args]);
       if (args[0] === "status") {
         return JSON.stringify({
-          Self: { DNSName: "aiden.tailnet.ts.net." },
+          BackendState: "Running",
+          Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
           CertDomains: options.certDomains ?? ["aiden.tailnet.ts.net"],
         });
       }
@@ -159,7 +219,8 @@ test("combined route inspection retries a transient CLI read and recovers", asyn
       }
       if (args[0] === "status") {
         return JSON.stringify({
-          Self: { DNSName: "aiden.tailnet.ts.net." },
+          BackendState: "Running",
+          Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
           CertDomains: ["aiden.tailnet.ts.net"],
         });
       }
@@ -286,7 +347,8 @@ test("first-listener verification rejects a route without explicit TCP 443 HTTPS
       calls.push([...args]);
       if (args[0] === "status") {
         return JSON.stringify({
-          Self: { DNSName: "aiden.tailnet.ts.net." },
+          BackendState: "Running",
+          Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
           CertDomains: ["aiden.tailnet.ts.net"],
         });
       }
@@ -379,7 +441,8 @@ function takeoverFixture(options: {
       calls.push([...args]);
       if (args[0] === "status") {
         return JSON.stringify({
-          Self: { DNSName: "aiden.tailnet.ts.net." },
+          BackendState: "Running",
+          Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
           CertDomains: ["aiden.tailnet.ts.net"],
         });
       }

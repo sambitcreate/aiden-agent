@@ -14,9 +14,9 @@ function HowAidenWorks() {
       </Field>
       <Field
         label="Conversation history"
-        description="Aiden conversations are stored on this Mac in a private assistant workspace."
+        description="Aiden conversations are stored on this device in a private assistant workspace."
       >
-        <Badge>On this Mac</Badge>
+        <Badge>On this device</Badge>
       </Field>
       <Field
         label="Access"

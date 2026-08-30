@@ -440,7 +440,7 @@ fun AidenWorkspaceDirectoryScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Add Mac Folder...") },
+                                text = { Text("Add Desktop Folder...") },
                                 leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
                                 onClick = {
                                     showCreateMenu = false
@@ -516,7 +516,7 @@ fun AidenWorkspaceDirectoryScreen(
                                 icon = if (selectedTab == 0) Icons.Default.FolderOpen else Icons.Default.Archive,
                                 title = if (selectedTab == 0) "No active workspaces" else "No archived workspaces",
                                 body = if (selectedTab == 0)
-                                    "Create a workspace or add an approved folder from your Mac."
+                                    "Create a workspace or add an approved folder from your desktop."
                                 else
                                     "Workspaces archived on this device will appear here."
                             )
@@ -751,7 +751,7 @@ fun AidenWorkspaceDirectoryScreen(
             onDismissRequest = { showScratchConfirmDialog = false },
             title = { Text("Create Managed Scratch?", fontWeight = FontWeight.Bold) },
             text = {
-                Text("Aiden will create an isolated scratch workspace in an ephemeral location on your Mac.")
+                Text("Aiden will create an isolated scratch workspace in an ephemeral location on your paired desktop.")
             },
             confirmButton = {
                 Button(
@@ -827,7 +827,7 @@ fun AidenWorkspaceDirectoryScreen(
             onDismissRequest = { showArchiveDisclosureDialog = false },
             title = { Text("Archive on this Device", fontWeight = FontWeight.Bold) },
             text = {
-                Text("Archiving a workspace hides it only on this device. Your Mac, files, and other devices remain completely unaffected.")
+                Text("Archiving a workspace hides it only on this device. Your paired desktop, files, and other devices remain completely unaffected.")
             },
             confirmButton = {
                 Button(
@@ -856,7 +856,7 @@ fun AidenWorkspaceDirectoryScreen(
             onDismissRequest = { showRemoveDialog = false },
             title = { Text("Remove Workspace?", fontWeight = FontWeight.Bold) },
             text = {
-                Text("Are you sure you want to remove \"${target.name}\" from Aiden? Local files on your Mac are preserved.")
+                Text("Are you sure you want to remove \"${target.name}\" from Aiden? Local files on your paired desktop are preserved.")
             },
             confirmButton = {
                 Button(
@@ -888,7 +888,7 @@ fun AidenWorkspaceDirectoryScreen(
             onDismissRequest = { showDeleteWorktreeDialog = false },
             title = { Text("Delete Managed Worktree?", fontWeight = FontWeight.Bold) },
             text = {
-                Text("This will permanently remove the managed worktree folder and git worktree on your Mac.")
+                Text("This will permanently remove the managed worktree folder and git worktree on your paired desktop.")
             },
             confirmButton = {
                 Button(
@@ -1014,7 +1014,7 @@ fun AidenFolderBrowserSheet(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = "Browse Mac Folders",
+                text = "Browse Desktop Folders",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = palette.foreground,
@@ -1345,8 +1345,8 @@ fun AidenWorkspaceSettingsSheet(
             title = { Text(if (workspace.isManagedWorktree) "Delete Worktree?" else "Remove Workspace?", fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    if (workspace.isManagedWorktree) "This will permanently remove the managed worktree folder and git worktree on your Mac."
-                    else "Are you sure you want to remove \"${workspace.name}\" from Aiden? Local files on your Mac are preserved."
+                    if (workspace.isManagedWorktree) "This will permanently remove the managed worktree folder and git worktree on your paired desktop."
+                    else "Are you sure you want to remove \"${workspace.name}\" from Aiden? Local files on your paired desktop are preserved."
                 )
             },
             confirmButton = {

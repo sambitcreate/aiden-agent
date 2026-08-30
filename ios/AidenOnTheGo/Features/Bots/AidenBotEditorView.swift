@@ -562,7 +562,7 @@ struct AidenBotEditorView: View {
                 .disabled(draft?.usesFullAccess == true)
             optionSection(
                 title: "Other Capabilities",
-                description: "Additional capabilities available on this Mac.",
+                description: "Additional capabilities available on the paired desktop.",
                 options: catalog.otherCapabilities,
                 keyPath: \.otherCapabilityIDs
             )
@@ -685,14 +685,14 @@ struct AidenBotEditorView: View {
             .accessibilityHint("Custom Access can reduce the capabilities this Bot may use.")
 
             if draft?.usesFullAccess == true {
-                Label("Uses everything Aiden and your Mac currently allow.", systemImage: "checkmark.shield")
+                Label("Uses everything Aiden and the paired desktop currently allow.", systemImage: "checkmark.shield")
                     .foregroundStyle(palette.secondary)
             }
         } header: {
             Text("Access")
         } footer: {
             if !AidenBotEditorDraft.fullAccessAccepted(in: catalog) {
-                Text("Full Access is unavailable because Customize First was selected for this Mac.")
+                Text("Full Access is unavailable because Customize First was selected for this desktop.")
             } else {
                 Text("Connections and Skills are the most important controls when using Custom Access.")
             }
@@ -730,7 +730,7 @@ struct AidenBotEditorView: View {
 
                 if visionProviders(in: catalog).isEmpty {
                     Label(
-                        "No image-capable model is connected. Add one in Aiden Agent on your Mac, then refresh this Bot.",
+                        "No image-capable model is connected. Add one in Aiden Agent on your paired desktop, then refresh this Bot.",
                         systemImage: "exclamationmark.triangle"
                     )
                     .foregroundStyle(palette.secondary)
@@ -759,7 +759,7 @@ struct AidenBotEditorView: View {
         } header: {
             Text("AI Provider and Model")
         } footer: {
-            Text("This Bot uses this Provider and Model in every chat. Credentials stay on your Mac.")
+            Text("This Bot uses this Provider and Model in every chat. Credentials stay on the paired desktop.")
         }
     }
 
@@ -781,7 +781,7 @@ struct AidenBotEditorView: View {
         } header: {
             Text("Files and Commands")
         } footer: {
-            Text("Choose which files the Bot may work with and whether it may run commands on the paired Mac.")
+            Text("Choose which files the Bot may work with and whether it may run commands on the paired desktop.")
         }
     }
 
@@ -793,7 +793,7 @@ struct AidenBotEditorView: View {
     ) -> some View {
         Section {
             if options.isEmpty {
-                Text("None configured on this Mac")
+                Text("None configured on the paired desktop")
                     .foregroundStyle(palette.secondary)
             } else {
                 ForEach(options) { option in
@@ -823,7 +823,7 @@ struct AidenBotEditorView: View {
             )
             if draft?.usesFullAccess == true {
                 Label(
-                    "Full Access: files, commands, Connections, and Skills allowed by the paired Mac",
+                    "Full Access: files, commands, Connections, and Skills allowed by the paired desktop",
                     systemImage: "checkmark.shield"
                 )
             } else if let access = draft?.customAccess {
@@ -1051,7 +1051,7 @@ struct AidenBotEditorView: View {
 
     private var readOnlyMessage: String {
         if baselineBot?.health == .archived { return "Archived Bots are read-only until restored." }
-        if coordinator.connectionState != .connected { return "Reconnect to your Mac to save this Bot." }
+        if coordinator.connectionState != .connected { return "Reconnect to your paired desktop to save this Bot." }
         return "This phone can view Bots but is not approved to change them."
     }
 
@@ -1354,7 +1354,7 @@ struct AidenBotEditorView: View {
                     onSaved(authoritative)
                     dismiss()
                 } else {
-                    saveError = "Aiden checked the Bot on your Mac. Review any remaining changes, then save again."
+                    saveError = "Aiden checked the Bot on your paired desktop. Review any remaining changes, then save again."
                 }
             } catch is CancellationError {
                 return
@@ -1365,7 +1365,7 @@ struct AidenBotEditorView: View {
                 ) { return }
                 guard isCurrent(attempt) else { return }
                 capturedContext = nil
-                saveError = "Aiden couldn’t verify which changes reached your Mac. Close and reopen this Bot before editing again."
+                saveError = "Aiden couldn’t verify which changes reached your paired desktop. Close and reopen this Bot before editing again."
             }
         }
     }

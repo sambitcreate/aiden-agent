@@ -52,6 +52,7 @@ import {
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
 import {
@@ -214,6 +215,9 @@ export function registerChatHistoryHandlers(): void {
       }
       const runCopy = async () => {
         if (source.botId) {
+          if (!hostPlatformCapabilities().bots) {
+            throw new Error("Bot chats are not available on this platform.");
+          }
           const assertCurrent = () => {
             if (owner.isDestroyed()) {
               throw new Error("The application changed before the Bot chat was copied.");
@@ -465,6 +469,9 @@ export function registerChatHistoryHandlers(): void {
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
     if (chat?.botId) {
+      if (!hostPlatformCapabilities().bots) {
+        return chatApplicationService.remove(chatId);
+      }
       return botApplicationService.deleteChat({ botId: chat.botId, chatId });
     }
     return chatApplicationService.remove(chatId);

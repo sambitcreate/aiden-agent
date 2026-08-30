@@ -591,7 +591,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(AidenVoiceInputMode.defaultsKey, "aiden.voiceInput.mode")
         XCTAssertEqual(AidenVoiceInputMode.allCases, [.onDevice, .pairedMac])
         XCTAssertEqual(AidenVoiceInputMode.onDevice.title, "On this device")
-        XCTAssertEqual(AidenVoiceInputMode.pairedMac.title, "Paired Mac")
+        XCTAssertEqual(AidenVoiceInputMode.pairedMac.title, "Paired desktop")
     }
 
     func testVoiceSessionFenceRejectsCallbacksFromAnInvalidatedSession() {

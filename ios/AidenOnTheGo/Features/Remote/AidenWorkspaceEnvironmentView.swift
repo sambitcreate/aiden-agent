@@ -64,7 +64,7 @@ actor AidenWorkspaceEnvironmentCache {
         try? FileManager.default.removeItem(at: instanceDirectory)
         // The legacy flat format encoded instance + workspace identity in its
         // filename but not its payload. Delete only names attributable from a
-        // known workspace snapshot; never erase another Mac's unknown cache.
+        // known workspace snapshot; never erase another desktop's unknown cache.
         for workspaceId in knownWorkspaceIds {
             try? FileManager.default.removeItem(
                 at: legacyFile(instanceId: instanceId, workspaceId: workspaceId)
@@ -240,7 +240,7 @@ final class AidenWorkspaceFilesModel {
             guard coordinator.isCurrent(context) else { return false }
             if case AidenRemoteClientError.server(_, let body) = error,
                body.code.rawValue == "revision_conflict" {
-                errorMessage = "This file changed on the Mac. Reload it before saving again."
+                errorMessage = "This file changed on the paired desktop. Reload it before saving again."
                 coordinator.haptics.play(.warning, scope: hapticScope)
             } else {
                 errorMessage = error.localizedDescription
@@ -357,8 +357,8 @@ private struct AidenWorkspaceFileEditorView: View {
                     if let message = model.errorMessage {
                         VStack(spacing: 8) {
                             Text(message).font(.footnote).foregroundStyle(.secondary)
-                            if message.contains("changed on the Mac") {
-                                Button("Reload from Mac") {
+                            if message.contains("changed on the desktop") {
+                                Button("Reload from desktop") {
                                     Task { await model.reloadDocument(coordinator: coordinator) }
                                 }
                             }
