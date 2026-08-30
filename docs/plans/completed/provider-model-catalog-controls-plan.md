@@ -1,10 +1,14 @@
 # Provider Model Visibility and Catalog Refresh
 
-Status: Planned
+Status: Complete
 
 Date: 2026-08-30  
 Source: provider setup screenshot and repository audit by three parallel subagents  
 Related: `docs/plans/dynamic-model-catalog-plan.md`, `docs/plans/pi-provider-integration-plan.md`, and `docs/plans/onboarding-auth-and-provider-validation-plan.md`
+
+## Completion
+
+Completed on 2026-08-30. Aiden now supports provider-wide **Hide all** and **Show all**, visibility-aware new-chat admission while retaining existing-chat models, a user-initiated dual-source **Update model catalogs** action, a bounded same-version models.dev display cache, and a main-branch catalog workflow with read-only verification plus credential-isolated publishing. The unchanged remote wire contract is covered on iOS and Android. Two independent edge-case and adversarial reviews were remediated, and the focused catalog suite, type check, lint, React Doctor changed-file scan, mobile checks, and full repository test matrix passed.
 
 ## Goal
 
@@ -212,11 +216,11 @@ Primary files:
 Workflow contract:
 
 1. Trigger on `push` to `main` and `workflow_dispatch`.
-2. Use pinned checkout/setup-node actions and Node `22.22.3`; grant only `contents: write`.
+2. Use pinned actions and Node `22.22.3`. Run repository code in a read-only verification job; grant `contents: write` only to a separate minimal publish job whose credential is exposed solely to the final push command.
 3. Serialize runs under one `main` catalog concurrency group; the newest main state is authoritative.
 4. Run `npm ci`, `npm run models:refresh`, and a registered focused `npm run test:model-catalog` suite.
 5. Fail if anything outside `resources/model-capabilities.json` changes.
-6. Commit only when the canonical snapshot differs, using the GitHub Actions bot identity.
+6. Transfer a hashed, verified snapshot artifact to the publish job and commit only when the canonical snapshot differs, using the GitHub Actions bot identity.
 7. Ignore a catalog-only bot commit (path and actor guard) to prevent loops.
 8. Fail safely on non-fast-forward; the run for the newer `main` revision supersedes it.
 
