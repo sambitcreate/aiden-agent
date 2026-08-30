@@ -195,10 +195,30 @@ test("workspace actions and destructive confirmations disambiguate duplicate nam
   assert.match(sidebar, /function workspaceSecondaryLabel/u);
   assert.match(
     sidebar,
-    /aria-label=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
   );
   assert.match(sidebar, /Target: \{workspaceSecondaryLabel\(deletingWorktree\)\}/u);
   assert.match(sidebar, /workspaceSecondaryLabel\(removingWorkspace\)/u);
+});
+
+test("sidebar overflow menus open beyond the sidebar's right edge", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const overflowMenu = between(
+    sidebar,
+    "function SidebarOverflowMenu",
+    "\n}\n\nfunction updateRestartError",
+  );
+
+  assert.match(overflowMenu, /closest<HTMLElement>\("\[data-sidebar\]"\)/u);
+  assert.match(overflowMenu, /Math\.ceil\(sidebarBounds\.right - triggerBounds\.right\) \+ 8/u);
+  assert.match(overflowMenu, /side="right"/u);
+  assert.match(overflowMenu, /align="start"/u);
+  assert.match(overflowMenu, /avoidCollisions=\{false\}/u);
+  assert.match(sidebar, /ariaLabel="Organize sidebar"/u);
+  assert.match(
+    sidebar,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+  );
 });
 
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {

@@ -138,6 +138,40 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
 test.describe("with a workspace", () => {
   test.use({ workspaceSeed: true });
 
+  test("sidebar overflow menus stay to the right of the sidebar", async ({ aiden }) => {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+
+    const sidebar = page.locator("[data-sidebar]");
+    const assertMenuClearsSidebar = async () => {
+      const [sidebarBounds, menuBounds] = await Promise.all([
+        sidebar.boundingBox(),
+        page.getByRole("menu").boundingBox(),
+      ]);
+      expect(sidebarBounds).not.toBeNull();
+      expect(menuBounds).not.toBeNull();
+      expect(menuBounds!.x).toBeGreaterThanOrEqual(sidebarBounds!.x + sidebarBounds!.width + 7);
+    };
+
+    await page.getByRole("button", { name: "Organize sidebar" }).click();
+    await expect(page.getByRole("menu")).toBeVisible();
+    await assertMenuClearsSidebar();
+    await page.keyboard.press("Escape");
+
+    const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
+    await sidebarResizer.focus();
+    await sidebarResizer.press("End");
+    await expect(sidebarResizer).toHaveAttribute("aria-valuenow", "340");
+
+    const workspaceActions = page.getByRole("button", {
+      name: /^Actions for Aiden E2E workspace,/u,
+    });
+    await workspaceActions.focus();
+    await workspaceActions.press("Enter");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await assertMenuClearsSidebar();
+  });
+
   test("workspace access arrows move focus and explicit keys commit", async ({ aiden }) => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);

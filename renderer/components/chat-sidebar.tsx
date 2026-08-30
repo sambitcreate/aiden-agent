@@ -102,6 +102,57 @@ function workspaceAccessibleName(workspace: Workspace): string {
   return `${workspace.name}, ${workspaceSecondaryLabel(workspace)}`;
 }
 
+function SidebarOverflowMenu({
+  ariaLabel,
+  triggerClassName,
+  contentClassName,
+  children,
+}: React.PropsWithChildren<{
+  ariaLabel: string;
+  triggerClassName?: string;
+  contentClassName: string;
+}>) {
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const [sideOffset, setSideOffset] = React.useState(8);
+
+  const positionOutsideSidebar = React.useCallback((open: boolean) => {
+    if (!open) return;
+    const trigger = triggerRef.current;
+    const sidebar = trigger?.closest<HTMLElement>("[data-sidebar]");
+    if (!trigger || !sidebar) return;
+
+    const triggerBounds = trigger.getBoundingClientRect();
+    const sidebarBounds = sidebar.getBoundingClientRect();
+    setSideOffset(Math.max(8, Math.ceil(sidebarBounds.right - triggerBounds.right) + 8));
+  }, []);
+
+  return (
+    <DropdownMenu onOpenChange={positionOutsideSidebar}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          ref={triggerRef}
+          variant="transparent"
+          size="small"
+          iconOnly
+          className={triggerClassName}
+          aria-label={ariaLabel}
+        >
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side="right"
+        align="start"
+        sideOffset={sideOffset}
+        avoidCollisions={false}
+        className={contentClassName}
+      >
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function updateRestartError(result: AppUpdateRestartResult): string | null {
   if (result.accepted) return null;
   switch (result.reason) {
@@ -985,40 +1036,31 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   };
 
   const sidebarOrganizationMenu = (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="transparent"
-          size="small"
-          iconOnly
-          className="size-7 text-tertiary"
-          aria-label="Organize sidebar"
-        >
-          <MoreHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel>Organize sidebar</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={organization === "workspace"}
-          onCheckedChange={() => setOrganization("workspace")}
-        >
-          <span className="flex items-center gap-2">
-            <ListTree className="size-4 text-secondary" aria-hidden="true" />
-            By workspace
-          </span>
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={organization === "recent"}
-          onCheckedChange={() => setOrganization("recent")}
-        >
-          <span className="flex items-center gap-2">
-            <Rows3 className="size-4 text-secondary" aria-hidden="true" />
-            Recent only
-          </span>
-        </DropdownMenuCheckboxItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <SidebarOverflowMenu
+      ariaLabel="Organize sidebar"
+      triggerClassName="size-7 text-tertiary"
+      contentClassName="w-56"
+    >
+      <DropdownMenuLabel>Organize sidebar</DropdownMenuLabel>
+      <DropdownMenuCheckboxItem
+        checked={organization === "workspace"}
+        onCheckedChange={() => setOrganization("workspace")}
+      >
+        <span className="flex items-center gap-2">
+          <ListTree className="size-4 text-secondary" aria-hidden="true" />
+          By workspace
+        </span>
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuCheckboxItem
+        checked={organization === "recent"}
+        onCheckedChange={() => setOrganization("recent")}
+      >
+        <span className="flex items-center gap-2">
+          <Rows3 className="size-4 text-secondary" aria-hidden="true" />
+          Recent only
+        </span>
+      </DropdownMenuCheckboxItem>
+    </SidebarOverflowMenu>
   );
 
   const workspaceCreationMenu = (
@@ -1181,68 +1223,59 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                           aria-expanded={expanded}
                           onClick={() => toggleWorkspace(group.workspace.id)}
                         />
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="transparent"
-                              size="small"
-                              iconOnly
-                              className="size-7 text-tertiary opacity-0 group-hover/workspace:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-                              aria-label={`Actions for ${workspaceAccessibleName(group.workspace)}`}
-                            >
-                              <MoreHorizontal />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-64">
+                        <SidebarOverflowMenu
+                          ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace)}`}
+                          triggerClassName="size-7 text-tertiary opacity-0 group-hover/workspace:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                          contentClassName="w-64"
+                        >
+                          <DropdownMenuItem
+                            disabled={
+                              Boolean(settingsBlockedReason) || appendReconciliationRequired
+                            }
+                            onSelect={() => void newAgentInWorkspace(group.workspace.id)}
+                          >
+                            New chat
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={workspaceSwitchBlocked || group.chats.length === 0}
+                            title={
+                              group.chats.length === 0
+                                ? "Choose New chat to start this workspace."
+                                : undefined
+                            }
+                            onSelect={() => void openChat(group.chats[0])}
+                          >
+                            Open latest chat
+                          </DropdownMenuItem>
+                          {group.workspace.folderPath ? (
                             <DropdownMenuItem
-                              disabled={
-                                Boolean(settingsBlockedReason) || appendReconciliationRequired
-                              }
-                              onSelect={() => void newAgentInWorkspace(group.workspace.id)}
+                              onSelect={() => void revealWorkspace(group.workspace)}
                             >
-                              New chat
+                              Show in Finder
                             </DropdownMenuItem>
+                          ) : null}
+                          {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
+                          {workspaces.length > 1 && group.workspace.managedWorktree ? (
                             <DropdownMenuItem
-                              disabled={workspaceSwitchBlocked || group.chats.length === 0}
-                              title={
-                                group.chats.length === 0
-                                  ? "Choose New chat to start this workspace."
-                                  : undefined
-                              }
-                              onSelect={() => void openChat(group.chats[0])}
+                              disabled={workspaceActionBlocked}
+                              icon="trash"
+                              color="red"
+                              onSelect={() => setDeletingWorktree(group.workspace)}
                             >
-                              Open latest chat
+                              Delete worktree…
                             </DropdownMenuItem>
-                            {group.workspace.folderPath ? (
-                              <DropdownMenuItem
-                                onSelect={() => void revealWorkspace(group.workspace)}
-                              >
-                                Show in Finder
-                              </DropdownMenuItem>
-                            ) : null}
-                            {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
-                            {workspaces.length > 1 && group.workspace.managedWorktree ? (
-                              <DropdownMenuItem
-                                disabled={workspaceActionBlocked}
-                                icon="trash"
-                                color="red"
-                                onSelect={() => setDeletingWorktree(group.workspace)}
-                              >
-                                Delete worktree…
-                              </DropdownMenuItem>
-                            ) : null}
-                            {workspaces.length > 1 && !group.workspace.managedWorktree ? (
-                              <DropdownMenuItem
-                                disabled={workspaceActionBlocked}
-                                icon="trash"
-                                color="red"
-                                onSelect={() => setRemovingWorkspace(group.workspace)}
-                              >
-                                Remove “{group.workspace.name}”
-                              </DropdownMenuItem>
-                            ) : null}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                          ) : null}
+                          {workspaces.length > 1 && !group.workspace.managedWorktree ? (
+                            <DropdownMenuItem
+                              disabled={workspaceActionBlocked}
+                              icon="trash"
+                              color="red"
+                              onSelect={() => setRemovingWorkspace(group.workspace)}
+                            >
+                              Remove “{group.workspace.name}”
+                            </DropdownMenuItem>
+                          ) : null}
+                        </SidebarOverflowMenu>
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">

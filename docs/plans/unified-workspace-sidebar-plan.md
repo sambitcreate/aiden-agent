@@ -38,6 +38,7 @@ The integrated plan therefore uses A's low-risk data path, C's iPad detail-colum
 - A pure projection whitelists chats by registered workspace ID, sorts workspace groups by newest activity, powers search, and produces the alternate recent list.
 - The active workspace opens by default, disclosure state persists in bounded local storage, and long groups expose a bounded initial slice with **Show more**.
 - Workspace actions moved onto their owning row: new chat, open latest chat, reveal folder, and safe remove/delete-worktree flows. Empty workspaces never create a chat through an open action.
+- Sidebar organization and per-workspace ellipsis menus anchor outside the sidebar's right edge, preserving the navigation beneath them at every saved sidebar width.
 - Existing route-driven selection, title reveal, keyboard chat shortcuts, working indicators, rename, and delete behavior are reused across both organizations.
 
 ### iOS and iPadOS
