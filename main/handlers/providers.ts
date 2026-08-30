@@ -41,6 +41,8 @@ import {
   providerConnectionSnapshot,
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
+import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
+import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
   ProviderKind,
@@ -56,6 +58,8 @@ import {
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { normalizeProviderArtworkInput } from "../services/provider-artwork.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js";
+import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -79,7 +83,14 @@ function optionalPositiveNumber(value: unknown): number | undefined {
 }
 
 function optionalModelType(value: unknown): ProviderModelType | undefined {
-  return value === "llm" || value === "embedding" ? value : undefined;
+  return value === "llm" ||
+    value === "embedding" ||
+    value === "reranker" ||
+    value === "image" ||
+    value === "audio" ||
+    value === "video"
+    ? value
+    : undefined;
 }
 
 function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadata> | undefined {
@@ -126,7 +137,8 @@ function parseProvider(value: unknown): StoredProvider {
   const models = Array.isArray(p.models)
     ? p.models.filter(
         (model): model is string =>
-          typeof model === "string" && modelMetadata?.[model]?.type !== "embedding",
+          typeof model === "string" &&
+          (modelMetadata?.[model]?.type === undefined || modelMetadata[model]?.type === "llm"),
       )
     : [];
   const defaultModel =
@@ -194,7 +206,7 @@ async function saveProvider(
 ) {
   if (providerRegistry.isBuiltinProvider(provider.id)) {
     throw new Error(
-      `${provider.label} is built into Pi and has no editable endpoint configuration.`,
+      `${provider.label} is built into Aiden and has no editable endpoint configuration.`,
     );
   }
   if (!isCustomProviderId(provider.id)) {
@@ -220,8 +232,10 @@ async function refreshProviderCatalogs(providerIds?: readonly string[], force = 
 }
 
 export function registerProviderHandlers(): void {
-  forwardCodexProviderStatusChanges(providerRegistry.codex, (channel, event) =>
-    ipcMain.broadcast(channel, event),
+  forwardCodexProviderStatusChanges(
+    providerRegistry.codex,
+    (channel, event) => ipcMain.broadcast(channel, event),
+    () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
   );
 
   ipcMain.handle("providers:list", listProviders);
@@ -279,7 +293,7 @@ export function registerProviderHandlers(): void {
     const owner = providerAuthOwner(event);
     const providerId = asProviderId(id);
     if (providerRegistry.isBuiltinProvider(providerId)) {
-      throw new Error("Pi built-in providers cannot be removed.");
+      throw new Error("Providers built into Aiden cannot be removed.");
     }
     if (!isCustomProviderId(providerId)) {
       throw new Error("Only Aiden custom connections can be removed.");
@@ -295,7 +309,7 @@ export function registerProviderHandlers(): void {
       // rejected state-changing request to a live document for parity with
       // logout/auth, rather than accepting queued stale renderer work.
       providerAuthOwner(event);
-      throw new Error("Pi built-in providers must be set up through their native sign-in flow.");
+      throw new Error("Providers built into Aiden must use their managed sign-in flow.");
     }
     if (!isCustomProviderId(providerId)) {
       throw new Error("Only Aiden custom connections can store an endpoint key.");
@@ -312,7 +326,7 @@ export function registerProviderHandlers(): void {
     async (_event, providerValue: unknown, keyOverride?: unknown) => {
       const provider = parseProvider(providerValue);
       if (providerRegistry.isBuiltinProvider(provider.id)) {
-        throw new Error("Pi built-in providers use Pi-native connection handling.");
+        throw new Error("Providers built into Aiden use managed connection handling.");
       }
       if (!isCustomProviderId(provider.id)) {
         throw new Error("Only Aiden custom connections support endpoint tests.");
@@ -328,7 +342,7 @@ export function registerProviderHandlers(): void {
     async (_event, providerValue: unknown, keyOverride?: unknown) => {
       const provider = parseProvider(providerValue);
       if (providerRegistry.isBuiltinProvider(provider.id)) {
-        throw new Error("Pi built-in providers use Pi-native model discovery.");
+        throw new Error("Providers built into Aiden use managed model discovery.");
       }
       if (!isCustomProviderId(provider.id)) {
         throw new Error("Only Aiden custom connections support endpoint model discovery.");
@@ -345,16 +359,34 @@ export function registerProviderHandlers(): void {
     providerAuthOwner(event);
     const providerId = providerValue === undefined ? undefined : asProviderId(providerValue);
     if (providerId !== undefined && !providerRegistry.isBuiltinProvider(providerId)) {
-      throw new Error("Only Pi built-in provider catalogs can be refreshed.");
+      throw new Error("Only provider catalogs built into Aiden can be refreshed.");
     }
-    return refreshProviderCatalogs(
-      providerId === undefined ? undefined : [providerId],
-    );
+    return refreshProviderCatalogs(providerId === undefined ? undefined : [providerId]);
   });
 
   ipcMain.handle("providers:refreshIfStale", async (event) => {
     providerAuthOwner(event);
     return refreshProviderCatalogs(undefined, false);
+  });
+
+  ipcMain.handle("providers:catalogStatus", () => ({
+    source: "bundled" as const,
+    fetchedAt: null,
+  }));
+
+  ipcMain.handle("providers:updateCatalogs", async (event) => {
+    providerAuthOwner(event);
+    const inventory = await refreshProviderCatalogs();
+    return {
+      providers: inventory.providers,
+      inventoryErrors: inventory.errors,
+      // The live application is offline-only for models.dev. Release tooling
+      // refreshes the packaged snapshot before distribution.
+      modelsDev: {
+        ok: true as const,
+        status: { source: "bundled" as const, fetchedAt: null },
+      },
+    };
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
@@ -394,12 +426,7 @@ export function registerProviderHandlers(): void {
   );
   ipcMain.handle(
     "settings:setProviderThinking",
-    async (
-      _event,
-      providerIdValue: unknown,
-      modelIdValue: unknown,
-      levelValue: unknown,
-    ) => {
+    async (_event, providerIdValue: unknown, modelIdValue: unknown, levelValue: unknown) => {
       const providerId = asProviderId(providerIdValue);
       const modelId = asString(modelIdValue, "modelId");
       if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
@@ -426,6 +453,35 @@ export function registerProviderHandlers(): void {
   ipcMain.handle("settings:showAllProviderModels", async (_event, providerIdValue: unknown) => {
     return configStore.showAllProviderModels(asProviderId(providerIdValue));
   });
+  ipcMain.handle("settings:hideAllProviderModels", async (_event, providerIdValue: unknown) => {
+    return configStore.hideAllProviderModels(asProviderId(providerIdValue));
+  });
+  ipcMain.handle(
+    "settings:setGeminiVoiceSetup",
+    async (_event, scopeValue: unknown, modelValue: unknown) => {
+      if (!isGeminiUsageScope(scopeValue) || typeof modelValue !== "string") {
+        throw new Error("Invalid Gemini voice setup.");
+      }
+      if (!isGeminiTranscriptionModel(modelValue)) {
+        throw new Error("Choose a supported Gemini transcription model.");
+      }
+      await listProvidersWithLegacyPiCredentialMigration();
+      if (!(await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID))) {
+        throw new Error("Add a Google API key in Providers before enabling Gemini voice.");
+      }
+      return configStore.setGeminiVoiceSetup(scopeValue, modelValue);
+    },
+  );
+  ipcMain.handle("settings:setGeminiUsageScope", async (_event, scopeValue: unknown) => {
+    if (!isGeminiUsageScope(scopeValue)) {
+      throw new Error("Invalid Gemini usage scope.");
+    }
+    await listProvidersWithLegacyPiCredentialMigration();
+    if (!(await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID))) {
+      throw new Error("Add a Google API key in Providers before updating Gemini access.");
+    }
+    return configStore.setGeminiUsageScope(scopeValue);
+  });
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;
@@ -440,6 +496,12 @@ export function registerProviderHandlers(): void {
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
+    if (typeof p.dictationHoldToTalk === "boolean")
+      next.dictationHoldToTalk = p.dictationHoldToTalk;
+    if (typeof p.dictationSilenceStop === "boolean")
+      next.dictationSilenceStop = p.dictationSilenceStop;
+    if (typeof p.dictationCleanup === "boolean") next.dictationCleanup = p.dictationCleanup;
+    if (typeof p.dictationSounds === "boolean") next.dictationSounds = p.dictationSounds;
     if (typeof p.showLocalModelReasoning === "boolean")
       next.showLocalModelReasoning = p.showLocalModelReasoning;
     if (typeof p.dictationAccelerator === "string")

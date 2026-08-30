@@ -39,8 +39,8 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { ProviderIcon } from "./provider-icon";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { CodexProviderSettings } from "./settings/codex-provider-settings";
-import { Button, Input, Text, toast } from "./ui";
-import { appApi, providersApi, profileApi } from "../lib/ipc";
+import { Button, Dialog, Field, Input, Switch, Text, toast } from "./ui";
+import { appApi, profileApi, providersApi, webSearchApi } from "../lib/ipc";
 import {
   clearLegacyOnboardingCompletion,
   markOnboardingComplete,
@@ -52,11 +52,20 @@ import {
   makeOnboardingProvider,
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider";
-import { getOnboardingMoreProviders } from "../lib/pi-provider-display";
-import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
+import {
+  canConfigureOnboardingBuiltinProvider,
+  getOnboardingMoreProviders,
+  isOnboardingBuiltinProviderReady,
+  onboardingBuiltinProviderSetupLabel,
+} from "../lib/pi-provider-display";
+import { queryKeys, useCodexProviderStatus, useProviders, useWebSearch } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
-import { onboardingStepIndex, type OnboardingSnapshot } from "../shared/onboarding";
+import {
+  onboardingStepIndex,
+  shouldOpenOnboarding,
+  type OnboardingSnapshot,
+} from "../shared/onboarding";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
 type Step = "profile" | "provider" | "tour";
@@ -87,6 +96,7 @@ const FEATURE_ILLUSTRATIONS = {
   skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
   mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
   assistant: new URL("../assets/onboarding/features/aiden-assistant.png", import.meta.url).href,
+  bots: new URL("../assets/onboarding/features/bots.png", import.meta.url).href,
   schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
     .href,
   voice: new URL("../assets/onboarding/features/voice-dictation.png", import.meta.url).href,
@@ -252,7 +262,8 @@ const featureBentos: FeatureBento[] = [
     id: "modelPad",
     group: "extend",
     title: "Personal Model Pad",
-    description: "Arrange favorite models on your own map of capability and response pace.",
+    description:
+      "Arrange favorite models on your own map; an optional benchmark-only OpenRouter key never imports its model catalog, while bundled model details stay offline during ordinary browsing.",
     icon: ChartScatter,
     imageUrl: FEATURE_ILLUSTRATIONS.modelPad,
     size: "tall",
@@ -270,7 +281,8 @@ const featureBentos: FeatureBento[] = [
     id: "vision",
     group: "extend",
     title: "Attachments & Vision",
-    description: "Attach text and images for vision-capable models to inspect in conversation.",
+    description:
+      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline.",
     icon: Eye,
     imageUrl: FEATURE_ILLUSTRATIONS.vision,
     size: "standard",
@@ -279,7 +291,8 @@ const featureBentos: FeatureBento[] = [
     id: "webSearch",
     group: "extend",
     title: "Web Search",
-    description: "Give the workspace agent live Exa search when you choose to connect it.",
+    description:
+      "Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings.",
     icon: Globe2,
     imageUrl: FEATURE_ILLUSTRATIONS.webSearch,
     size: "standard",
@@ -312,6 +325,16 @@ const featureBentos: FeatureBento[] = [
     size: "hero",
   },
   {
+    id: "bots",
+    group: "control",
+    title: "Reusable Bots",
+    description:
+      "Create reusable teammates with durable instructions, one persistent chat, explicit image understanding, access controls, and Telegram control.",
+    icon: Bot,
+    imageUrl: FEATURE_ILLUSTRATIONS.bots,
+    size: "standard",
+  },
+  {
     id: "schedules",
     group: "control",
     title: "Scheduled Automations",
@@ -324,7 +347,8 @@ const featureBentos: FeatureBento[] = [
     id: "voice",
     group: "control",
     title: "Voice & Dictation",
-    description: "Speak into the composer or dictate system-wide with cloud or on-device voice.",
+    description:
+      "Speak in the composer or dictate system-wide. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     imageUrl: FEATURE_ILLUSTRATIONS.voice,
     size: "standard",
@@ -422,7 +446,7 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
           data-onboarding-active="true"
           onEscapeKeyDown={(event) => event.preventDefault()}
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="fixed inset-0 z-60 grid place-items-center bg-background p-4 outline-none max-[760px]:p-0"
+          className="fixed inset-0 z-60 grid place-items-center bg-background px-4 pb-4 pt-11 outline-none max-[520px]:px-3 max-[520px]:pb-3"
         >
           <DialogPrimitive.Title className="sr-only">Set up Aiden</DialogPrimitive.Title>
           <DialogPrimitive.Description className="sr-only">
@@ -435,19 +459,6 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
   );
 }
 
-function builtinProviderSetupLabel(provider: Provider): string {
-  return provider.hasKey
-    ? "Configured; verify in Settings after onboarding"
-    : "Available in Settings after onboarding";
-}
-
-function canChooseBuiltinProvider(_provider: Provider): boolean {
-  // Pi's generic API-key login proves only that a credential was entered; it
-  // does not contact the provider. Until a provider-specific non-generation
-  // validator exists, it cannot satisfy required first-run setup.
-  return false;
-}
-
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
   const capabilities = useAppCapabilities();
@@ -455,6 +466,7 @@ export function OnboardingFlow() {
     const visible: FeatureBento[] = [];
     for (const feature of featureBentos) {
       if (!capabilities.computerUse && feature.id === "computerUse") continue;
+      if (!capabilities.bots && feature.id === "bots") continue;
       visible.push(
         feature.id === "commands" && capabilities.platform === "linux"
           ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
@@ -462,9 +474,10 @@ export function OnboardingFlow() {
       );
     }
     return visible;
-  }, [capabilities.computerUse, capabilities.platform]);
+  }, [capabilities.bots, capabilities.computerUse, capabilities.platform]);
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();
+  const webSearch = useWebSearch();
   // Main-owned state is authoritative. Block the workbench until it has been
   // checked so a stale legacy renderer marker cannot expose a bypass window.
   const [open, setOpen] = React.useState(true);
@@ -476,48 +489,58 @@ export function OnboardingFlow() {
   const [builtinChoiceId, setBuiltinChoiceId] = React.useState<string | null>(null);
   const [showMoreProviders, setShowMoreProviders] = React.useState(false);
   const [settingUpProvider, setSettingUpProvider] = React.useState<Provider | null>(null);
+  const [apiKeyDialogChoice, setApiKeyDialogChoice] = React.useState<
+    "openai-key" | "anthropic" | null
+  >(null);
   const [apiKey, setApiKey] = React.useState("");
   const [baseUrl, setBaseUrl] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [discovering, setDiscovering] = React.useState(false);
   const [providerError, setProviderError] = React.useState<string | null>(null);
+  const [providerSkipped, setProviderSkipped] = React.useState(false);
+  const [webSearchSaving, setWebSearchSaving] = React.useState(false);
   const onboardingSnapshotRef = React.useRef<OnboardingSnapshot | null>(null);
   const readyProviderIdRef = React.useRef<string | null>(null);
   const savingRef = React.useRef(false);
+  const webSearchSavingRef = React.useRef(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
   const profileInitializedRef = React.useRef(false);
   const loadGenerationRef = React.useRef(0);
 
-  const loadOnboarding = React.useCallback(async (reopen = false) => {
-    const generation = loadGenerationRef.current + 1;
-    loadGenerationRef.current = generation;
-    setStateReady(false);
-    setOnboardingLoadError(null);
-    try {
-      const snapshot = reopen
-        ? await appApi.setOnboardingOutcome("incomplete")
-        : await appApi.getOnboardingState(!shouldShowOnboarding());
-      if (loadGenerationRef.current !== generation) return;
-      onboardingSnapshotRef.current = snapshot;
-      readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
-      setIndex(onboardingStepIndex(snapshot));
-      setOpen(snapshot.outcome !== "completed");
-      if (snapshot.profileReady && !profileInitializedRef.current) {
-        const current = await profileApi.get();
-        profileInitializedRef.current = true;
-        setName(current.name);
-        queryClient.setQueryData(queryKeys.profile, current);
+  const loadOnboarding = React.useCallback(
+    async (reopen = false) => {
+      const generation = loadGenerationRef.current + 1;
+      loadGenerationRef.current = generation;
+      setStateReady(false);
+      setOnboardingLoadError(null);
+      try {
+        const snapshot = reopen
+          ? await appApi.setOnboardingOutcome("incomplete")
+          : await appApi.getOnboardingState(!shouldShowOnboarding());
+        if (loadGenerationRef.current !== generation) return;
+        onboardingSnapshotRef.current = snapshot;
+        readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
+        setProviderSkipped(false);
+        setIndex(onboardingStepIndex(snapshot));
+        setOpen(shouldOpenOnboarding(snapshot.outcome));
+        if (snapshot.profileReady && !profileInitializedRef.current) {
+          const current = await profileApi.get();
+          profileInitializedRef.current = true;
+          setName(current.name);
+          queryClient.setQueryData(queryKeys.profile, current);
+        }
+        setStateReady(true);
+        if (reopen) clearLegacyOnboardingCompletion();
+      } catch (error) {
+        if (loadGenerationRef.current !== generation) return;
+        setOnboardingLoadError(
+          error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
+        );
+        setOpen(true);
       }
-      setStateReady(true);
-      if (reopen) clearLegacyOnboardingCompletion();
-    } catch (error) {
-      if (loadGenerationRef.current !== generation) return;
-      setOnboardingLoadError(
-        error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
-      );
-      setOpen(true);
-    }
-  }, [queryClient]);
+    },
+    [queryClient],
+  );
 
   React.useEffect(() => {
     void loadOnboarding();
@@ -544,10 +567,9 @@ export function OnboardingFlow() {
     codexStatus.data?.configured === true &&
     codexStatus.data.needsAttention === false &&
     codexStatus.data.models.length > 0;
-  const canContinue =
-    !stateReady
-      ? false
-      : step === "profile"
+  const canContinue = !stateReady
+    ? false
+    : step === "profile"
       ? name.trim().length > 0
       : step === "provider"
         ? choice === "openai-signin"
@@ -563,10 +585,84 @@ export function OnboardingFlow() {
     setProviderError(null);
   };
 
+  const setWebSearchEnabled = async (enabled: boolean) => {
+    if (!webSearch.data || webSearchSavingRef.current) return;
+    const focusTarget =
+      typeof document !== "undefined" && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    webSearchSavingRef.current = true;
+    setWebSearchSaving(true);
+    try {
+      // The migration/default decision stays main-owned. Onboarding only
+      // persists an explicit user choice through the fenced generic seam.
+      const next = await webSearchApi.setEnabled(enabled);
+      queryClient.setQueryData(queryKeys.webSearch, next);
+    } catch (error) {
+      if (focusTarget?.isConnected) requestAnimationFrame(() => focusTarget.focus());
+      toast.error(error instanceof Error ? error.message : "Couldn’t update Web Search.");
+    } finally {
+      webSearchSavingRef.current = false;
+      setWebSearchSaving(false);
+    }
+  };
+
   const completeProviderStep = async (providerId: string) => {
     const snapshot = await appApi.setOnboardingProgress("provider", providerId);
     onboardingSnapshotRef.current = snapshot;
     readyProviderIdRef.current = providerId;
+    setProviderSkipped(false);
+    setIndex(2);
+  };
+
+  const validateHostedApiKey = async () => {
+    const hostedChoice = apiKeyDialogChoice;
+    if (!hostedChoice || savingRef.current) return;
+    const key = apiKey.trim();
+    if (!key) {
+      setProviderError("Paste an API key before continuing.");
+      return;
+    }
+    const providerId = hostedChoice === "openai-key" ? "openai" : "anthropic";
+    savingRef.current = true;
+    setSaving(true);
+    setDiscovering(true);
+    setProviderError(null);
+    try {
+      const validation = await providersApi.validateOnboardingApiKey(providerId, key);
+      const saved = validation.provider;
+      queryClient.setQueryData<Provider[]>(queryKeys.providers, (current) => {
+        const without = (current ?? []).filter((item) => item.id !== saved.id);
+        return [...without, saved];
+      });
+      const model = saved.defaultModel ?? saved.models[0];
+      if (!model) throw new Error("Credentials were accepted, but no chat models are available.");
+      persistModelSelection(saved.id, model);
+      setApiKeyDialogChoice(null);
+      setApiKey("");
+      setProviderSkipped(false);
+      await completeProviderStep(saved.id);
+      if (validation.catalogWarning) toast.warning(validation.catalogWarning);
+      else toast.success(`${saved.label} credentials accepted.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Couldn't validate that API key.";
+      setProviderError(message);
+      toast.error(message);
+    } finally {
+      setDiscovering(false);
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const skipProvider = () => {
+    if (!stateReady || savingRef.current) return;
+    selectProviderChoice(null);
+    setBuiltinChoiceId(null);
+    setApiKeyDialogChoice(null);
+    setShowMoreProviders(false);
+    setProviderSkipped(true);
+    readyProviderIdRef.current = null;
     setIndex(2);
   };
 
@@ -592,7 +688,7 @@ export function OnboardingFlow() {
     }
     if (step === "provider") {
       if (selectedBuiltinProvider) {
-        if (selectedBuiltinProvider.hasKey && selectedBuiltinProvider.models.length > 0) {
+        if (isOnboardingBuiltinProviderReady(selectedBuiltinProvider)) {
           const model = selectedBuiltinProvider.defaultModel ?? selectedBuiltinProvider.models[0];
           persistModelSelection(selectedBuiltinProvider.id, model);
           await completeProviderStep(selectedBuiltinProvider.id);
@@ -619,32 +715,14 @@ export function OnboardingFlow() {
         toast.error("Enter the Tailscale model server URL before continuing.");
         return;
       }
-      if (selected.requiresKey && !apiKey.trim()) {
-        toast.error("Paste an API key or choose a sign-in/local option.");
+      if (choice === "openai-key" || choice === "anthropic") {
+        setApiKeyDialogChoice(choice);
         return;
       }
       savingRef.current = true;
       setSaving(true);
       setProviderError(null);
       try {
-        if (choice === "openai-key" || choice === "anthropic") {
-          setDiscovering(true);
-          const providerId = choice === "openai-key" ? "openai" : "anthropic";
-          const validation = await providersApi.validateOnboardingApiKey(providerId, apiKey.trim());
-          const saved = validation.provider;
-          queryClient.setQueryData<Provider[]>(queryKeys.providers, (current) => {
-            const without = (current ?? []).filter((item) => item.id !== saved.id);
-            return [...without, saved];
-          });
-          const model = saved.defaultModel ?? saved.models[0];
-          if (!model)
-            throw new Error("Credentials were accepted, but no chat models are available.");
-          persistModelSelection(saved.id, model);
-          await completeProviderStep(saved.id);
-          if (validation.catalogWarning) toast.warning(validation.catalogWarning);
-          else toast.success(`${saved.label} credentials accepted.`);
-          return;
-        }
         const isLocalRuntime = choice === "lmstudio" || choice === "ollama";
         const needsEndpointDiscovery = isLocalRuntime || choice === "tailscale";
         // Resolve reserved local identities from a fresh main-process snapshot.
@@ -711,9 +789,12 @@ export function OnboardingFlow() {
     savingRef.current = true;
     setSaving(true);
     try {
+      const selectedProviderId = providerSkipped
+        ? undefined
+        : (readyProviderIdRef.current ?? onboardingSnapshotRef.current?.selectedProviderId);
       const snapshot = await appApi.setOnboardingOutcome(
-        "completed",
-        readyProviderIdRef.current ?? onboardingSnapshotRef.current?.selectedProviderId,
+        providerSkipped || !selectedProviderId ? "deferred" : "completed",
+        selectedProviderId,
       );
       onboardingSnapshotRef.current = snapshot;
       markOnboardingComplete();
@@ -731,7 +812,7 @@ export function OnboardingFlow() {
       <section
         aria-busy={saving || undefined}
         aria-label="Set up Aiden"
-        className="relative grid h-[min(600px,calc(100vh-32px))] min-h-0 w-[min(860px,calc(100vw-32px))] grid-cols-[220px_minmax(0,1fr)] overflow-hidden rounded-dialog bg-popover shadow-modal max-[760px]:h-full max-[760px]:w-full max-[760px]:grid-cols-1 max-[760px]:rounded-none max-[760px]:shadow-none"
+        className="relative grid h-[min(600px,calc(100vh-60px))] min-h-0 w-[min(860px,calc(100vw-32px))] grid-cols-[220px_minmax(0,1fr)] overflow-hidden rounded-dialog bg-popover shadow-onboarding max-[760px]:h-full max-[760px]:w-full max-[760px]:grid-cols-1"
       >
         <div className="drag-region absolute left-0 right-0 top-0 h-10" />
         <aside className="border-r border-separator bg-sidebar px-5 pb-5 pt-7 max-[760px]:hidden">
@@ -785,9 +866,21 @@ export function OnboardingFlow() {
                 Step {index + 1} of {steps.length}
               </Text>
             </div>
-            <Text variant="small" color="tertiary">
-              Profile and provider setup required
-            </Text>
+            {step === "provider" ? (
+              <Button
+                className="no-drag h-7 px-2"
+                size="small"
+                variant="transparent"
+                disabled={!stateReady || saving}
+                onClick={skipProvider}
+              >
+                Skip provider
+              </Button>
+            ) : (
+              <Text variant="small" color="tertiary">
+                Profile and provider setup required
+              </Text>
+            )}
           </header>
 
           <main
@@ -841,8 +934,7 @@ export function OnboardingFlow() {
                 <label className="mt-6 block">
                   <Text variant="small-strong">Name</Text>
                   <Input
-                    autoFocus
-                    className="mt-2 h-10"
+                    className="mt-2 h-10 border-transparent bg-input hover:border-transparent focus:border-transparent"
                     disabled={saving}
                     value={name}
                     maxLength={80}
@@ -859,6 +951,82 @@ export function OnboardingFlow() {
                     Stored privately on this device.
                   </Text>
                 </div>
+                <section
+                  data-onboarding-web-search
+                  aria-busy={webSearchSaving || webSearch.isFetching || undefined}
+                  aria-labelledby="onboarding-web-search-title"
+                  className="mt-6 rounded-card border border-separator bg-well p-4 shadow-control motion-reduce:transition-none"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-accent/10 text-accent">
+                      <Globe2 aria-hidden="true" className="size-4.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <Text id="onboarding-web-search-title" variant="small-strong">
+                            Web Search
+                          </Text>
+                          <Text
+                            as="span"
+                            variant="small"
+                            color="tertiary"
+                            className="ml-2"
+                            aria-live="polite"
+                          >
+                            {webSearch.data
+                              ? webSearch.data.settings.enabled
+                                ? "On"
+                                : "Off"
+                              : webSearch.isError
+                                ? "Unavailable"
+                                : "Checking local setting…"}
+                          </Text>
+                        </div>
+                        <Switch
+                          checked={webSearch.data?.settings.enabled === true}
+                          onCheckedChange={(enabled) => void setWebSearchEnabled(enabled)}
+                          disabled={!webSearch.data || webSearch.isFetching || webSearchSaving}
+                          aria-label="Allow Web Search in attended chats"
+                          aria-describedby="onboarding-web-search-description"
+                          className="motion-reduce:transition-none motion-reduce:[&_*]:transition-none"
+                        />
+                      </div>
+                      <Text
+                        id="onboarding-web-search-description"
+                        as="p"
+                        variant="small"
+                        color="secondary"
+                        className="mt-2 leading-5"
+                      >
+                        Fresh profiles start with Web Search on; anonymous Exa is the initial
+                        recipient. Existing opt-outs and routes stay unchanged. Aiden may derive a
+                        search query from this conversation and send that query and your network
+                        address to Exa only when the model invokes search. This screen makes no
+                        network request.
+                      </Text>
+                      <Text as="p" variant="small" color="tertiary" className="mt-2 leading-5">
+                        Turn it off here, or choose another provider later in Settings → Web Search.
+                      </Text>
+                      {webSearch.isError && !webSearch.data ? (
+                        <Text role="alert" variant="small" color="red" className="mt-2 block">
+                          The local Web Search setting could not be read. No change was made.
+                        </Text>
+                      ) : null}
+                      {webSearchSaving ? (
+                        <Text
+                          role="status"
+                          aria-live="polite"
+                          variant="small"
+                          color="tertiary"
+                          className="mt-2 block"
+                        >
+                          Saving Web Search preference…
+                        </Text>
+                      ) : null}
+                    </div>
+                  </div>
+                </section>
               </div>
             ) : null}
 
@@ -887,10 +1055,14 @@ export function OnboardingFlow() {
                       type="button"
                       disabled={saving}
                       aria-pressed={choice === item.id}
-                      className={`flex min-h-[68px] items-start gap-2.5 rounded-control border px-3 py-2.5 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "border-accent bg-accent/10" : "border-field bg-well hover:bg-control"}`}
+                      className={`flex min-h-[68px] items-start gap-2.5 rounded-control border border-transparent px-3 py-2.5 text-left outline-none transition-colors duration-150 focus-visible:bg-control-active ${choice === item.id ? "bg-list-selection" : "bg-well hover:bg-control"}`}
                       onClick={() => {
                         selectProviderChoice(item.id);
                         setBuiltinChoiceId(null);
+                        setProviderSkipped(false);
+                        if (item.id === "openai-key" || item.id === "anthropic") {
+                          setApiKeyDialogChoice(item.id);
+                        }
                       }}
                     >
                       <span className="grid size-8 shrink-0 place-items-center text-primary">
@@ -930,7 +1102,7 @@ export function OnboardingFlow() {
                   disabled={saving}
                   aria-controls="onboarding-more-providers"
                   aria-expanded={showMoreProviders}
-                  className="mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-control border border-field bg-well px-3 py-2 text-left transition-[background-color,border-color] duration-150 hover:bg-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+                  className="mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-control border border-transparent bg-well px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-control focus-visible:bg-control-active"
                   onClick={() => setShowMoreProviders((visible) => !visible)}
                 >
                   <span className="grid size-8 shrink-0 place-items-center text-secondary">
@@ -959,7 +1131,7 @@ export function OnboardingFlow() {
                     id="onboarding-more-providers"
                     data-onboarding-more-providers
                     aria-live="polite"
-                    className="mt-2 rounded-card border border-separator bg-well p-2"
+                    className="mt-2 rounded-card bg-well p-2"
                   >
                     {providers.isLoading && moreProviders.length === 0 ? (
                       <Text variant="small" color="secondary" className="block px-2 py-3">
@@ -988,7 +1160,7 @@ export function OnboardingFlow() {
                     ) : (
                       <div className="grid grid-cols-2 gap-1.5 max-[560px]:grid-cols-1">
                         {moreProviders.map((provider) => {
-                          const canChoose = canChooseBuiltinProvider(provider);
+                          const canChoose = canConfigureOnboardingBuiltinProvider(provider);
                           const isSelected = builtinChoiceId === provider.id;
                           return (
                             <button
@@ -996,10 +1168,14 @@ export function OnboardingFlow() {
                               type="button"
                               disabled={!canChoose || saving}
                               aria-pressed={isSelected}
-                              className={`flex min-h-14 items-center gap-2.5 rounded-control border px-2.5 py-2 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "border-accent bg-accent/10" : "border-transparent bg-transparent hover:border-field hover:bg-control"}`}
+                              className={`flex min-h-14 items-center gap-2.5 rounded-control border border-transparent px-2.5 py-2 text-left outline-none transition-colors duration-150 focus-visible:bg-control-active disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "bg-list-selection" : "bg-transparent hover:bg-control"}`}
                               onClick={() => {
                                 selectProviderChoice(null);
                                 setBuiltinChoiceId(provider.id);
+                                setProviderSkipped(false);
+                                if (!isOnboardingBuiltinProviderReady(provider)) {
+                                  setSettingUpProvider(provider);
+                                }
                               }}
                             >
                               <span className="grid size-8 shrink-0 place-items-center rounded-control bg-popover text-primary shadow-control">
@@ -1019,7 +1195,7 @@ export function OnboardingFlow() {
                                   truncate
                                   className="mt-0.5 block"
                                 >
-                                  {builtinProviderSetupLabel(provider)}
+                                  {onboardingBuiltinProviderSetupLabel(provider)}
                                 </Text>
                               </span>
                               <Check
@@ -1034,27 +1210,14 @@ export function OnboardingFlow() {
                   </div>
                 ) : null}
                 <div className="mt-4 grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
-                  {selected?.requiresKey ? (
-                    <label>
-                      <Text variant="small-strong">API key</Text>
-                      <Input
-                        className="mt-2"
-                        type="password"
-                        disabled={saving}
-                        value={apiKey}
-                        placeholder="Paste key"
-                        onChange={(event) => setApiKey(event.currentTarget.value)}
-                      />
-                    </label>
-                  ) : null}
                   {choice === "tailscale" ? (
                     <label>
                       <Text variant="small-strong">Model URL</Text>
                       <Input
-                        className="mt-2"
+                        className="mt-2 border-transparent bg-input hover:border-transparent focus:border-transparent"
                         disabled={saving}
                         value={baseUrl}
-                        placeholder={"https://model.tailnet.ts.net/v1"}
+                        placeholder={"http://model.tailnet.ts.net:11434/v1"}
                         onChange={(event) => setBaseUrl(event.currentTarget.value)}
                       />
                     </label>
@@ -1070,6 +1233,16 @@ export function OnboardingFlow() {
 
             {stateReady && step === "tour" ? (
               <div>
+                {providerSkipped ? (
+                  <div className="mb-4 rounded-card bg-well px-4 py-3">
+                    <Text variant="small-strong" className="block">
+                      Provider setup skipped
+                    </Text>
+                    <Text variant="small" color="secondary" className="mt-1 block">
+                      Add one anytime from Settings → Providers.
+                    </Text>
+                  </div>
+                ) : null}
                 <div className="flex items-start gap-3">
                   <Check className="mt-0.5 size-5 shrink-0 text-accent" />
                   <div>
@@ -1118,7 +1291,7 @@ export function OnboardingFlow() {
                               <article
                                 key={feature.id}
                                 aria-label={`${feature.title}. ${feature.description}`}
-                                className={`group relative overflow-hidden rounded-card border border-field bg-well shadow-control outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control-hover focus-visible:border-focus-ring focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
+                                className={`group relative overflow-hidden rounded-card bg-well shadow-control outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control-hover focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
                               >
                                 <div
                                   aria-hidden="true"
@@ -1218,8 +1391,7 @@ export function OnboardingFlow() {
               const ready = refreshed.find(
                 (provider) =>
                   provider.id === settingUpProvider.id &&
-                  provider.hasKey === true &&
-                  provider.models.length > 0,
+                  isOnboardingBuiltinProviderReady(provider),
               );
               if (!ready) {
                 setProviderError(
@@ -1239,6 +1411,54 @@ export function OnboardingFlow() {
           }}
         />
       ) : null}
+      <Dialog
+        open={apiKeyDialogChoice !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !saving) {
+            setApiKeyDialogChoice(null);
+            setApiKey("");
+            setProviderError(null);
+          }
+        }}
+        layer="onboarding"
+        title={`Connect ${apiKeyDialogChoice === "openai-key" ? "OpenAI" : "Anthropic"}`}
+        description="Paste your API key to verify the connection. Validation does not send a chat message, and the key is stored encrypted on this device."
+        confirmLabel={discovering ? "Validating…" : "Validate & continue"}
+        confirmDisabled={!apiKey.trim()}
+        dismissDisabled={saving}
+        busy={saving}
+        onConfirm={validateHostedApiKey}
+      >
+        <Field
+          label="API key"
+          description="You can replace or remove this key later in Settings → Providers."
+          orientation="vertical"
+          className="rounded-card bg-well p-4 after:hidden"
+        >
+          <Input
+            autoFocus
+            type="password"
+            autoComplete="off"
+            aria-invalid={providerError ? true : undefined}
+            className="border-transparent bg-input hover:border-transparent focus:border-transparent"
+            disabled={saving}
+            value={apiKey}
+            placeholder="Paste your API key"
+            onChange={(event) => {
+              setApiKey(event.currentTarget.value);
+              setProviderError(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void validateHostedApiKey();
+            }}
+          />
+          {providerError ? (
+            <Text role="alert" variant="small" color="red" className="block">
+              {providerError}
+            </Text>
+          ) : null}
+        </Field>
+      </Dialog>
     </OnboardingDialogShell>
   );
 }

@@ -1,5 +1,137 @@
+import CoreHaptics
 import Observation
 import SwiftUI
+import UIKit
+
+enum AidenHapticEvent: String, Equatable, Sendable {
+    case selection
+    case actionStarted
+    case actionStopped
+    case success
+    case warning
+    case error
+}
+
+@MainActor
+protocol AidenHapticEmitting: AnyObject {
+    func activate(scope: UUID)
+    func deactivate(scope: UUID)
+    func emit(_ event: AidenHapticEvent, scope: UUID?, dedupeKey: String?)
+}
+
+extension AidenHapticEmitting {
+    func play(_ event: AidenHapticEvent, scope: UUID? = nil, dedupeKey: String? = nil) {
+        emit(event, scope: scope, dedupeKey: dedupeKey)
+    }
+}
+
+func aidenIsCancellation(_ error: Error) -> Bool {
+    if error is CancellationError || Task.isCancelled { return true }
+    return (error as? URLError)?.code == .cancelled
+}
+
+struct AidenHapticPulse: Equatable, Sendable {
+    let sequence: UInt64
+    let event: AidenHapticEvent
+    let scope: UUID?
+}
+
+/// One semantic haptic lane for Aiden-owned interactions. Native controls keep
+/// their system feedback; callers emit only direct actions or authoritative
+/// outcomes so reconnects, token streaming, and background refreshes stay quiet.
+@MainActor
+@Observable
+final class AidenHapticCenter {
+    static let preferenceKey = "aiden.interactionHaptics.enabled"
+
+    private let defaults: UserDefaults
+    private let isApplicationActive: @MainActor () -> Bool
+    private let isAudioCaptureActive: @MainActor () -> Bool
+    private var sequence: UInt64 = 0
+    private var dedupeKeys: [String] = []
+    private var dedupeKeySet: Set<String> = []
+    private var activeScopes: Set<UUID> = []
+
+    private(set) var pulse = AidenHapticPulse(sequence: 0, event: .selection, scope: nil)
+    let supportsHaptics: Bool
+    var isEnabled: Bool {
+        didSet { defaults.set(isEnabled, forKey: Self.preferenceKey) }
+    }
+
+    init(
+        defaults: UserDefaults = .standard,
+        isApplicationActive: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active },
+        isAudioCaptureActive: @escaping @MainActor () -> Bool = { AidenComposerAudioCaptureState.shared.isCapturing },
+        supportsHaptics: Bool = CHHapticEngine.capabilitiesForHardware().supportsHaptics
+    ) {
+        self.defaults = defaults
+        self.isApplicationActive = isApplicationActive
+        self.isAudioCaptureActive = isAudioCaptureActive
+        self.supportsHaptics = supportsHaptics
+        isEnabled = defaults.object(forKey: Self.preferenceKey) as? Bool ?? true
+    }
+
+    func activate(scope: UUID) {
+        activeScopes.insert(scope)
+    }
+
+    func deactivate(scope: UUID) {
+        activeScopes.remove(scope)
+    }
+
+    func emit(_ event: AidenHapticEvent, scope: UUID? = nil, dedupeKey: String? = nil) {
+        if let dedupeKey {
+            let semanticKey = "\(event.rawValue):\(dedupeKey)"
+            guard dedupeKeySet.insert(semanticKey).inserted else { return }
+            dedupeKeys.append(semanticKey)
+            if dedupeKeys.count > 128 {
+                dedupeKeySet.remove(dedupeKeys.removeFirst())
+            }
+        }
+        guard supportsHaptics, isEnabled, isApplicationActive(), !isAudioCaptureActive() else { return }
+        if let scope, !activeScopes.contains(scope) { return }
+        sequence &+= 1
+        pulse = AidenHapticPulse(sequence: sequence, event: event, scope: scope)
+    }
+
+    func shouldDeliverNow(scope: UUID? = nil) -> Bool {
+        guard supportsHaptics, isEnabled, isApplicationActive(), !isAudioCaptureActive() else { return false }
+        return scope.map(activeScopes.contains) ?? true
+    }
+}
+
+extension AidenHapticCenter: AidenHapticEmitting {}
+
+private struct AidenHapticHost: ViewModifier {
+    @Bindable var haptics: AidenHapticCenter
+
+    func body(content: Content) -> some View {
+        content.sensoryFeedback(trigger: haptics.pulse) { _, pulse in
+            guard haptics.shouldDeliverNow(scope: pulse.scope) else { return nil }
+            let feedback: SensoryFeedback = switch pulse.event {
+            case .selection:
+                .selection
+            case .actionStarted:
+                .start
+            case .actionStopped:
+                .stop
+            case .success:
+                .success
+            case .warning:
+                .warning
+            case .error:
+                .error
+            }
+            return feedback
+        }
+    }
+}
+
+extension View {
+    func aidenHapticHost(_ haptics: AidenHapticCenter) -> some View {
+        modifier(AidenHapticHost(haptics: haptics))
+    }
+}
 
 enum AidenAppearanceMode: String, CaseIterable, Identifiable, Codable, Sendable {
     case system
@@ -133,6 +265,8 @@ struct AidenPalette: Equatable, Sendable {
     var foreground: Color { Color(aidenHex: foregroundHex) }
     var secondary: Color { Color(aidenHex: secondaryHex) }
     var accent: Color { Color(aidenHex: accentHex) }
+    /// Foreground for controls filled with the theme accent.
+    var onAccent: Color { canvas }
     var success: Color { Color(aidenHex: successHex) }
     var warning: Color { Color(aidenHex: warningHex) }
     var danger: Color { Color(aidenHex: dangerHex) }

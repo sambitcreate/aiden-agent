@@ -52,6 +52,12 @@ test("chat pane owns its own per-chat reset instead of relying on a remount", ()
   }
 });
 
+test("chat-scoped transcript UI remounts so previews cannot cross navigation", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /<MessageList\s+key=\{chatId\}/u);
+  assert.doesNotMatch(pane, /<ScrollArea[^>]*\bkey=\{chatId\}/u);
+});
+
 test("per-chat reset runs before paint so no frame carries the outgoing chat", () => {
   const pane = source("./chat-pane.tsx");
   const reset = between(pane, "// Reset transient state when switching chats.", "}, [chatId]);");
@@ -133,6 +139,30 @@ test("a committed append is not presented as unsent when generation start later 
   assert.ok(append >= 0 && start > append);
   assert.match(handleSend, /if \(!started\.ok && mountedRef\.current\) setError/u);
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
+});
+
+test("an unpersisted image response blocks sends, copies, and the composer until deletion", () => {
+  const pane = source("./chat-pane.tsx");
+  const handleSend = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
+  const copy = between(pane, "const copyChat = React.useCallback(", "const exportChat");
+
+  assert.match(handleSend, /if \(imageArtifactRecoveryPending\)/u);
+  assert.match(copy, /if \(imageArtifactRecoveryPending\)/u);
+  assert.match(
+    pane,
+    /hasUnpersistedResponse \|\| chat\.data\?\.imageArtifactRecoveryPending === true/u,
+  );
+  assert.match(
+    pane,
+    /ready=\{\s*ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable\s*\}/u,
+  );
+  assert.match(pane, /Delete this chat to discard it/iu);
+  assert.match(pane, /imageArtifactRecoveryUnavailable/u);
+  assert.match(pane, /Settings → About → Diagnostics and choose Reveal/iu);
 });
 
 test("terminal chat snapshots reach cache before visual stream handoff awaits", () => {
@@ -270,4 +300,14 @@ test("sidebar prefetches a chat before the click so the pane does not blank", ()
   );
   assert.match(sidebar, /onPointerEnter=\{\(\) => prefetchChat\(chat\.id\)\}/u);
   assert.match(sidebar, /onFocus=\{\(\) => prefetchChat\(chat\.id\)\}/u);
+});
+
+test("a revisited detached stream restores the responding window from its last text delta", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /detachedTextStreamingRemaining\(\s*detachedLastTextDeltaAt/u);
+  assert.match(pane, /setTextStreaming\(true\)[\s\S]{0,240}setTextStreaming\(false\)/u);
+  assert.match(
+    pane,
+    /streamingText:[\s\S]{0,180}detachedGenerationDraining[\s\S]{0,120}displayedStreamingText/u,
+  );
 });

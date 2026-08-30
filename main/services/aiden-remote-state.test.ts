@@ -9,12 +9,17 @@ import {
   AidenRemoteStateRegistry,
   createDefaultAidenRemoteState,
   defaultAidenRemoteDisplayName,
+  normalizeAidenRemoteStateForRuntimeProfile,
   parseAidenRemoteStateDocument,
   type AidenRemoteStateDocument,
   type AidenRemoteStateStorage,
 } from "./aiden-remote-state.js";
+import {
+  AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
+  AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+} from "./aiden-remote-ports.js";
 
-function fixture(initial?: unknown) {
+function fixture(initial?: unknown, botCapabilitiesSupported = true) {
   let stored = initial ?? createDefaultAidenRemoteState(() => Buffer.alloc(24, 7));
   const writes: AidenRemoteStateDocument[] = [];
   let failNextSave = false;
@@ -36,11 +41,13 @@ function fixture(initial?: unknown) {
     randomBytes: (size) => Buffer.alloc(size, ++randomCounter),
     deriveCredentialDigest: async (credential, salt) =>
       createHash("sha256").update(credential).update(salt).digest(),
+  }, {
+    botCapabilitiesSupported: () => botCapabilitiesSupported,
   });
   return {
     registry,
     writes,
-    stored: () => structuredClone(stored),
+    stored: () => structuredClone(stored) as AidenRemoteStateDocument,
     setNow: (value: number) => {
       now = value;
     },
@@ -63,18 +70,154 @@ test("remote device credentials persist only digests and authenticate with capab
   assert.equal(serialized.includes(issued.credential), false);
   assert.equal(serialized.includes("credentialDigest"), true);
   assert.equal(serialized.includes("lookupDigest"), true);
+  assert.equal(state.stored().devices[0]?.acceptsBotCapabilities, false);
   assert.equal(issued.device.lastSeenAt, 0);
 
   const authenticated = await state.registry.authenticate(issued.credential);
   assert.equal(authenticated?.id, issued.device.id);
   assert.equal(authenticated?.revoked, false);
   assert.equal(authenticated?.capabilities.has("workspace:manage"), true);
+  assert.equal(authenticated?.capabilities.has("bot:read"), false);
+  assert.equal(authenticated?.capabilities.has("bot:write"), false);
+  assert.equal(authenticated?.acceptsBotCapabilities, false);
   assert.equal((await state.registry.listDevices())[0]?.lastSeenAt, 1_000);
   assert.equal(await state.registry.authenticate("x".repeat(43)), null);
 });
 
+test("paired device display names can refresh without changing device identity", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  const issued = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1.0",
+  });
+  const writesAfterPairing = state.writes.length;
+
+  const updated = await state.registry.updateDeviceName(
+    issued.device.id,
+    "  Sambit’s   iPhone  ",
+  );
+  assert.equal(updated?.id, issued.device.id);
+  assert.equal(updated?.name, "Sambit’s iPhone");
+  assert.equal(state.stored().devices[0]?.name, "Sambit’s iPhone");
+  assert.equal(state.writes.length, writesAfterPairing + 1);
+
+  const unchanged = await state.registry.updateDeviceName(
+    issued.device.id,
+    "Sambit’s iPhone",
+  );
+  assert.equal(unchanged?.name, "Sambit’s iPhone");
+  assert.equal(state.writes.length, writesAfterPairing + 1);
+  assert.equal(
+    await state.registry.updateDeviceName("device_missing", "Other iPhone"),
+    null,
+  );
+  await assert.rejects(
+    state.registry.updateDeviceName(issued.device.id, "Bad\u0000Name"),
+    /visible characters/u,
+  );
+});
+
+test("Bot vocabulary negotiation persists independently from device authority", async () => {
+  const state = fixture();
+  const issued = await state.registry.issueDevice({
+    name: "Bot-aware iPhone",
+    type: "iphone",
+    clientVersion: "2.0",
+    capabilities: ["server:read"],
+    acceptsBotCapabilities: true,
+  });
+
+  assert.equal(state.stored().devices[0]?.acceptsBotCapabilities, true);
+  const authenticated = await state.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.acceptsBotCapabilities, true);
+  assert.deepEqual([...authenticated!.capabilities], ["server:read"]);
+  assert.equal(authenticated?.capabilities.has("bot:read"), false);
+  assert.equal(authenticated?.capabilities.has("bot:write"), false);
+});
+
+test("Bot-aware devices preserve only coherent explicitly negotiated Bot grants", async () => {
+  const state = fixture();
+  const issued = await state.registry.issueDevice({
+    name: "Bot-authorized iPhone",
+    type: "iphone",
+    clientVersion: "2.0",
+    capabilities: ["server:read", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+  });
+
+  const authenticated = await state.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.acceptsBotCapabilities, true);
+  assert.deepEqual(
+    [...authenticated!.capabilities],
+    ["server:read", "bot:read", "bot:write"],
+  );
+});
+
+test("Linux host policy removes persisted Bot negotiation and grants", async () => {
+  const darwin = fixture();
+  const issued = await darwin.registry.issueDevice({
+    name: "Previously Bot-aware iPhone",
+    type: "iphone",
+    clientVersion: "2.0",
+    capabilities: ["server:read", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+  });
+
+  const linux = fixture(darwin.stored(), false);
+  const initialized = await linux.registry.initialize();
+  assert.equal(initialized.devices[0]?.acceptsBotCapabilities, false);
+  assert.deepEqual(initialized.devices[0]?.capabilities, ["server:read"]);
+  assert.equal(linux.writes.length, 1);
+
+  const authenticated = await linux.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.acceptsBotCapabilities, false);
+  assert.deepEqual([...authenticated!.capabilities], ["server:read"]);
+
+  await assert.rejects(
+    linux.registry.issueDevice({
+      name: "New Bot-aware iPhone",
+      type: "iphone",
+      clientVersion: "2.0",
+      capabilities: ["server:read", "bot:read", "bot:write"],
+      acceptsBotCapabilities: true,
+    }),
+    /device capabilities/u,
+  );
+});
+
 test("device issuance checks pairing authorization inside the durable mutation", async () => {
   const state = fixture();
+  await assert.rejects(
+    state.registry.issueDevice({
+      name: "Invalid iPhone",
+      type: "iphone",
+      clientVersion: "1",
+      acceptsBotCapabilities: "yes" as never,
+    }),
+    /device metadata/u,
+  );
+  await assert.rejects(
+    state.registry.issueDevice({
+      name: "Write-only Bot iPhone",
+      type: "iphone",
+      clientVersion: "2",
+      capabilities: ["server:read", "bot:write"],
+      acceptsBotCapabilities: true,
+    }),
+    /device capabilities/u,
+  );
+  await assert.rejects(
+    state.registry.issueDevice({
+      name: "Non-negotiating Bot iPhone",
+      type: "iphone",
+      clientVersion: "2",
+      capabilities: ["server:read", "bot:read"],
+      acceptsBotCapabilities: false,
+    }),
+    /device capabilities/u,
+  );
   await assert.rejects(
     state.registry.issueDevice({
       name: "Cancelled iPhone",
@@ -238,6 +381,142 @@ test("legacy endpoint commitment is inferred conservatively and persisted", asyn
   assert.equal(initialized.lanPortCommitted, false);
   assert.equal((migrated.stored() as AidenRemoteStateDocument).lanPortCommitted, false);
   assert.equal(migrated.writes.length, 1);
+});
+
+test("development migrates the listener while retaining live Serve ownership", () => {
+  const legacy = createDefaultAidenRemoteState(() => Buffer.alloc(24, 4));
+  legacy.lanPortCommitted = true;
+  legacy.tailscaleOwnership = {
+    path: "/api/aiden/v1",
+    target: "http://127.0.0.1:49221/api/aiden/v1",
+  };
+
+  const migrated = normalizeAidenRemoteStateForRuntimeProfile(legacy, "development");
+  assert.equal(migrated.lanPort, AIDEN_REMOTE_DEVELOPMENT_LAN_PORT);
+  assert.equal(
+    migrated.tailscaleOwnership?.target,
+    "http://127.0.0.1:49221/api/aiden/v1",
+  );
+  assert.equal(legacy.lanPort, AIDEN_REMOTE_PRODUCTION_LAN_PORT);
+  assert.equal(
+    normalizeAidenRemoteStateForRuntimeProfile(legacy, "production").lanPort,
+    AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  );
+
+  const custom = { ...legacy, lanPort: 51_000 };
+  assert.equal(
+    normalizeAidenRemoteStateForRuntimeProfile(custom, "development").lanPort,
+    51_000,
+  );
+  const secondProductionPair = { ...legacy, lanPort: 49_222 };
+  assert.equal(
+    normalizeAidenRemoteStateForRuntimeProfile(
+      secondProductionPair,
+      "development",
+    ).lanPort,
+    50_222,
+  );
+});
+
+test("development defers port migration while a Tailscale route outcome is unresolved", () => {
+  const legacy = createDefaultAidenRemoteState(() => Buffer.alloc(24, 5));
+  legacy.tailscalePendingOutcome = {
+    operation: "connect",
+    target: "http://127.0.0.1:49221/api/aiden/v1",
+    beforeFingerprint: "a".repeat(64),
+    preservedFingerprint: "b".repeat(64),
+    normalizeListenerScaffolding: false,
+    createdAt: 1_000,
+  };
+  assert.equal(
+    normalizeAidenRemoteStateForRuntimeProfile(legacy, "development").lanPort,
+    AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  );
+});
+
+test("legacy devices default Bot vocabulary negotiation to false and persist the migration", async () => {
+  const source = fixture();
+  const issued = await source.registry.issueDevice({
+    name: "Legacy iPhone",
+    type: "iphone",
+    clientVersion: "1",
+  });
+  const legacy = source.stored();
+  legacy.devices[0]!.capabilities.push("bot:write");
+  delete (legacy.devices[0] as { acceptsBotCapabilities?: boolean })
+    .acceptsBotCapabilities;
+
+  const migrated = fixture(legacy);
+  const initialized = await migrated.registry.initialize();
+  assert.equal(initialized.devices[0]?.acceptsBotCapabilities, false);
+  assert.equal(initialized.devices[0]?.capabilities.includes("bot:write"), false);
+  assert.equal(migrated.stored().devices[0]?.acceptsBotCapabilities, false);
+  assert.equal(migrated.stored().devices[0]?.capabilities.includes("bot:write"), false);
+  assert.equal(migrated.writes.length, 1);
+  const authenticated = await migrated.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.acceptsBotCapabilities, false);
+  assert.equal(authenticated?.capabilities.has("bot:write"), false);
+
+  const explicitLegacy = source.stored();
+  explicitLegacy.devices[0]!.capabilities.push("bot:read", "bot:write");
+  explicitLegacy.devices[0]!.acceptsBotCapabilities = false;
+  const sanitized = fixture(explicitLegacy);
+  await sanitized.registry.initialize();
+  assert.equal(sanitized.writes.length, 1);
+  assert.equal(sanitized.stored().devices[0]?.capabilities.includes("bot:read"), false);
+  assert.equal(sanitized.stored().devices[0]?.capabilities.includes("bot:write"), false);
+
+  const invalid = source.stored();
+  (invalid.devices[0] as { acceptsBotCapabilities: unknown })
+    .acceptsBotCapabilities = "yes";
+  assert.throws(
+    () => parseAidenRemoteStateDocument(invalid),
+    /invalid device/u,
+  );
+
+  const writeOnly = source.stored();
+  writeOnly.devices[0]!.acceptsBotCapabilities = true;
+  writeOnly.devices[0]!.capabilities = ["server:read", "bot:write"];
+  assert.throws(
+    () => parseAidenRemoteStateDocument(writeOnly),
+    /invalid device/u,
+  );
+});
+
+test("authentication revalidates Bot negotiation and capability implication", async () => {
+  const stripped = fixture();
+  const strippedCredential = await stripped.registry.issueDevice({
+    name: "Bot iPhone",
+    type: "iphone",
+    clientVersion: "2",
+    capabilities: ["server:read", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+  });
+  const strippedDocument = (
+    stripped.registry as unknown as { document: AidenRemoteStateDocument }
+  ).document;
+  strippedDocument.devices[0]!.acceptsBotCapabilities = false;
+  const strippedAuthentication = await stripped.registry.authenticate(
+    strippedCredential.credential,
+  );
+  assert.equal(strippedAuthentication?.acceptsBotCapabilities, false);
+  assert.equal(strippedAuthentication?.capabilities.has("server:read"), true);
+  assert.equal(strippedAuthentication?.capabilities.has("bot:read"), false);
+  assert.equal(strippedAuthentication?.capabilities.has("bot:write"), false);
+
+  const rejected = fixture();
+  const rejectedCredential = await rejected.registry.issueDevice({
+    name: "Bot iPad",
+    type: "ipad",
+    clientVersion: "2",
+    capabilities: ["server:read", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+  });
+  const rejectedDocument = (
+    rejected.registry as unknown as { document: AidenRemoteStateDocument }
+  ).document;
+  rejectedDocument.devices[0]!.capabilities = ["server:read", "bot:write"];
+  assert.equal(await rejected.registry.authenticate(rejectedCredential.credential), null);
 });
 
 test("committing an endpoint is durable, idempotent, and validates complete port pairs", async () => {

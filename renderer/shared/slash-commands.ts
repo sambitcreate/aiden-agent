@@ -92,7 +92,8 @@ export type SlashCommandAction =
   | {
       kind: "session";
       action: "fork" | "clone" | "export" | "details" | "logout" | "worktree";
-    };
+    }
+  | { kind: "composer-instruction"; instruction: "visualize" };
 
 export type SlashCommandAvailability =
   | "always"
@@ -104,7 +105,8 @@ export type SlashCommandAvailability =
   | "workspace-required"
   | "workspace-terminal"
   | "workspace-environment"
-  | "workspace-worktree";
+  | "workspace-worktree"
+  | "idle-workspace";
 
 export interface SlashCommandDefinition {
   name: string;
@@ -116,7 +118,7 @@ export interface SlashCommandDefinition {
   action: SlashCommandAction;
   behavior: "immediate" | "picker" | "argument" | "navigation";
   availability: SlashCommandAvailability;
-  argument: "none" | "optional-title" | "optional-branch";
+  argument: "none" | "optional-title" | "optional-branch" | "optional-prompt";
   /** Commands such as New chat cannot silently discard meaningful composer state. */
   draftPolicy: "preserve" | "require-empty";
 }
@@ -453,6 +455,19 @@ export const SLASH_COMMANDS = Object.freeze([
     behavior: "picker",
     availability: "always",
     argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "visualize",
+    aliases: ["generative-ui", "generative_ui"],
+    title: "Visualize",
+    description: "Ask Aiden to render an interactive HTML chart, diagram, or mockup.",
+    keywords: ["chart", "plotly", "artifact", "html", "diagram"],
+    icon: "chat",
+    action: { kind: "composer-instruction", instruction: "visualize" },
+    behavior: "argument",
+    availability: "idle-workspace",
+    argument: "optional-prompt",
     draftPolicy: "preserve",
   }),
 ] satisfies readonly SlashCommandDefinition[]);

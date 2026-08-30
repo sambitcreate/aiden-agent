@@ -1,6 +1,7 @@
 // Chat history CRUD IPC handlers.
 
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
+import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -10,6 +11,13 @@ import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
+import {
+  exportStoredHtmlArtifact,
+  unresolvedGuiArtifactMessage,
+  wrapStoredHtmlArtifact,
+} from "../services/gui-artifact-recovery.js";
+import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
+import { selectedHtmlArtifactMediaIds } from "../services/chat-copy-artifacts.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import {
   commitSkillInvocationForAppend,
@@ -43,6 +51,8 @@ import {
 } from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
+import { botApplicationService } from "../services/bot-application-service-main.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -51,12 +61,20 @@ function asString(value: unknown, name: string): string {
   return value;
 }
 
+function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): string {
+  if (unresolved.includes("could not be recovered")) return recoveredMessage;
+  return unresolved.replace(
+    "Open Aiden's developer log to locate",
+    "Open Settings → About → Diagnostics and choose Reveal to locate",
+  );
+}
+
 export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
-    chatApplicationService.list(
+    chatApplicationService.listRegular(
       typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,
     ),
   );
@@ -155,60 +173,132 @@ export function registerChatHistoryHandlers(): void {
       }
       const source = await chatStore.get(parsed.chatId);
       if (!source) throw new Error("The chat is no longer available.");
-      const workspaceId = persistedChatWorkspaceId(source.workspaceId);
-      if (workspaceId === ASSISTANT_WORKSPACE_ID) {
+      const unresolved = await unresolvedGuiArtifactMessage(parsed.chatId);
+      if (unresolved) {
         throw new Error(
-          "Assistant chats cannot be copied into the main chat surface.",
+          artifactRecoveryMessage(
+            unresolved,
+            "A previous visual artifact could not be recovered. Delete this chat to discard it before copying.",
+          ),
         );
       }
-      const mutationAdmission = workspaceMutationGate.admit(workspaceId);
-      const workspaceOperation = admitRendererOwnedWorkspaceOperation(
-        workspaceOperationRegistry,
-        owner,
-        workspaceId,
-      );
-      const assertCurrent = () => {
-        if (
-          owner.isDestroyed() ||
-          mutationAdmission.signal.aborted ||
-          workspaceOperation.signal.aborted
-        ) {
-          throw new Error("The workspace changed before the chat was copied.");
+      const runCopy = async () => {
+        if (source.botId) {
+          if (!hostPlatformCapabilities().bots) {
+            throw new Error("Bot chats are not available on this platform.");
+          }
+          const assertCurrent = () => {
+            if (owner.isDestroyed()) {
+              throw new Error("The application changed before the Bot chat was copied.");
+            }
+            if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+              throw new Error(appendReconciliationFailureMessage("blocked"));
+            }
+          };
+          const copied = await botApplicationService.copyChat({
+            botId: source.botId,
+            sourceChatId: parsed.chatId,
+            throughAssistantMessageId: parsed.throughMessageId,
+            assertCurrent,
+          });
+          ipcMain.broadcast("chats:metadata-updated", {
+            chatId: copied.id,
+            title: copied.title,
+            workspaceId: persistedChatWorkspaceId(copied.workspaceId),
+            updatedAt: copied.updatedAt,
+          });
+          return chatForRenderer(copied);
         }
-        if (llmClient.requiresAppendReconciliation(owner.documentId)) {
-          throw new Error(appendReconciliationFailureMessage("blocked"));
+
+        const workspaceId = persistedChatWorkspaceId(source.workspaceId);
+        if (workspaceId === ASSISTANT_WORKSPACE_ID) {
+          throw new Error(
+            "Assistant chats cannot be copied into the main chat surface.",
+          );
+        }
+        const mutationAdmission = workspaceMutationGate.admit(workspaceId);
+        const workspaceOperation = admitRendererOwnedWorkspaceOperation(
+          workspaceOperationRegistry,
+          owner,
+          workspaceId,
+        );
+        const assertCurrent = () => {
+          if (
+            owner.isDestroyed() ||
+            mutationAdmission.signal.aborted ||
+            workspaceOperation.signal.aborted
+          ) {
+            throw new Error("The workspace changed before the chat was copied.");
+          }
+          if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+            throw new Error(appendReconciliationFailureMessage("blocked"));
+          }
+        };
+        try {
+          if (!(await configStore.getWorkspace(workspaceId))) {
+            throw new Error("The chat workspace is no longer available.");
+          }
+          const htmlMediaIds = selectedHtmlArtifactMediaIds(
+            source.messages,
+            parsed.throughMessageId,
+          );
+          const targetChatId = randomUUID();
+          let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
+          const copied = await (async () => {
+            try {
+              return await chatStore.copyVisibleHistory({
+                sourceChatId: parsed.chatId,
+                targetChatId,
+                expectedWorkspaceId: workspaceId,
+                throughAssistantMessageId: parsed.throughMessageId,
+                assertCurrent,
+                beforeInstall: async () => {
+                  if (htmlMediaIds.length === 0) return;
+                  preparedHtmlArtifacts = await generativeUiArtifactStore.prepareSelectedCopy(
+                    source.id,
+                    targetChatId,
+                    htmlMediaIds,
+                  );
+                },
+              });
+            } catch (error) {
+              if (
+                preparedHtmlArtifacts.length > 0 &&
+                !isChatCreateReconciliationRequiredError(error)
+              ) {
+                await generativeUiArtifactStore.deleteChat(targetChatId).catch(() => undefined);
+              }
+              throw error;
+            }
+          })();
+          if (preparedHtmlArtifacts.length > 0) {
+            await generativeUiArtifactStore.commit(
+              copied.id,
+              preparedHtmlArtifacts.map((artifact) => artifact.mediaId),
+            );
+          }
+          ipcMain.broadcast("chats:metadata-updated", {
+            chatId: copied.id,
+            title: copied.title,
+            workspaceId: persistedChatWorkspaceId(copied.workspaceId),
+            updatedAt: copied.updatedAt,
+          });
+          return chatForRenderer(copied);
+        } catch (error) {
+          if (isChatCreateReconciliationRequiredError(error)) {
+            llmClient.markAppendReconciliationRequired(owner.documentId);
+            owner.onInvalidated(() => {
+              llmClient.clearAppendReconciliationRequired(owner.documentId);
+            });
+            throw new Error(appendReconciliationFailureMessage("blocked"));
+          }
+          throw error;
+        } finally {
+          workspaceOperation.release();
+          mutationAdmission.release();
         }
       };
-      try {
-        if (!(await configStore.getWorkspace(workspaceId))) {
-          throw new Error("The chat workspace is no longer available.");
-        }
-        const copied = await chatStore.copyVisibleHistory({
-          sourceChatId: parsed.chatId,
-          expectedWorkspaceId: workspaceId,
-          throughAssistantMessageId: parsed.throughMessageId,
-          assertCurrent,
-        });
-        ipcMain.broadcast("chats:metadata-updated", {
-          chatId: copied.id,
-          title: copied.title,
-          workspaceId: persistedChatWorkspaceId(copied.workspaceId),
-          updatedAt: copied.updatedAt,
-        });
-        return chatForRenderer(copied);
-      } catch (error) {
-        if (isChatCreateReconciliationRequiredError(error)) {
-          llmClient.markAppendReconciliationRequired(owner.documentId);
-          owner.onInvalidated(() => {
-            llmClient.clearAppendReconciliationRequired(owner.documentId);
-          });
-          throw new Error(appendReconciliationFailureMessage("blocked"));
-        }
-        throw error;
-      } finally {
-        workspaceOperation.release();
-        mutationAdmission.release();
-      }
+      return runCopy();
     } finally {
       finishCopy?.();
       chatCopyActive = false;
@@ -235,6 +325,15 @@ export function registerChatHistoryHandlers(): void {
       }
       const chat = await chatStore.get(chatId);
       if (!chat) throw new Error("The chat is no longer available.");
+      const unresolvedExport = await unresolvedGuiArtifactMessage(chatId);
+      if (unresolvedExport) {
+        throw new Error(
+          artifactRecoveryMessage(
+            unresolvedExport,
+            "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting.",
+          ),
+        );
+      }
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -255,6 +354,15 @@ export function registerChatHistoryHandlers(): void {
       }
       const latestChat = await chatStore.get(chatId);
       if (!latestChat) throw new Error("The chat is no longer available.");
+      const unresolvedExportAfterDialog = await unresolvedGuiArtifactMessage(chatId);
+      if (unresolvedExportAfterDialog) {
+        throw new Error(
+          artifactRecoveryMessage(
+            unresolvedExportAfterDialog,
+            "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting.",
+          ),
+        );
+      }
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -326,9 +434,17 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
-  ipcMain.handle("chats:remove", async (_event, id: unknown) =>
-    chatApplicationService.remove(asString(id, "id")),
-  );
+  ipcMain.handle("chats:remove", async (_event, id: unknown) => {
+    const chatId = asString(id, "id");
+    const chat = await chatStore.get(chatId);
+    if (chat?.botId) {
+      if (!hostPlatformCapabilities().bots) {
+        return chatApplicationService.remove(chatId);
+      }
+      return botApplicationService.deleteChat({ botId: chat.botId, chatId });
+    }
+    return chatApplicationService.remove(chatId);
+  });
 
   ipcMain.handle(
     "chats:appendMessage",
@@ -376,6 +492,15 @@ export function registerChatHistoryHandlers(): void {
       return (async () => {
         let appended = false;
         try {
+          const unresolvedSend = await unresolvedGuiArtifactMessage(chatId);
+          if (unresolvedSend) {
+            throw new Error(
+              artifactRecoveryMessage(
+                unresolvedSend,
+                "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
+              ),
+            );
+          }
           const authoritativeChat = skillReference
             ? await chatStore.get(chatId)
             : undefined;
@@ -482,6 +607,55 @@ export function registerChatHistoryHandlers(): void {
           turn.settleAsyncWork();
         }
       })();
+    },
+  );
+
+  ipcMain.handle(
+    "chats:htmlArtifactSrcdoc",
+    async (event, input: unknown) => {
+      rendererDocumentOwner(
+        event,
+        () => new Error("HTML artifact preview requires the active application document."),
+      );
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("Invalid HTML artifact request.");
+      }
+      const record = input as Record<string, unknown>;
+      const chatId = asString(record.chatId, "chatId");
+      const mediaId = asString(record.mediaId, "mediaId");
+      return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
+    },
+  );
+
+  ipcMain.handle(
+    "chats:exportHtmlArtifact",
+    async (event, input: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("HTML artifact export requires the active application document."),
+      );
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("Invalid HTML artifact export request.");
+      }
+      const record = input as Record<string, unknown>;
+      const chatId = asString(record.chatId, "chatId");
+      const mediaId = asString(record.mediaId, "mediaId");
+      const unresolved = await unresolvedGuiArtifactMessage(chatId);
+      if (unresolved) {
+        throw new Error(
+          unresolved.includes("could not be recovered")
+            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
+            : unresolved,
+        );
+      }
+      if (owner.isDestroyed()) {
+        throw new Error("The renderer document is no longer active.");
+      }
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      if (!parent || parent.isDestroyed()) {
+        throw new Error("The export window is unavailable.");
+      }
+      return exportStoredHtmlArtifact({ chatId, mediaId, parent });
     },
   );
 

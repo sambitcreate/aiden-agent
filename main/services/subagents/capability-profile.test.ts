@@ -132,7 +132,7 @@ test("the child builder constructs only the four permitted tool objects", () => 
   );
 });
 
-test("production assembly resolves capability tools before ambient settings or factories", async () => {
+test("production assembly resolves capability tools before ambient services or factories", async () => {
   const source = await readFile(
     new URL("../tools.ts", import.meta.url),
     "utf-8",
@@ -142,7 +142,7 @@ test("production assembly resolves capability tools before ambient settings or f
     'if (ctx.mode === "subagent" || hasCapabilityProfile)',
     builder,
   );
-  const settingsRead = source.indexOf("configStore.getSettings()", builder);
+  const webSearchRead = source.indexOf("webSearchService.toolForGeneration()", builder);
   const normalCodingTools = source.indexOf(
     "buildCodingTools(ctx.workspaceRoot)",
     builder,
@@ -150,10 +150,10 @@ test("production assembly resolves capability tools before ambient settings or f
 
   assert.ok(builder >= 0);
   assert.ok(capabilityBranch > builder);
-  assert.ok(settingsRead > capabilityBranch);
+  assert.ok(webSearchRead > capabilityBranch);
   assert.ok(normalCodingTools > capabilityBranch);
   assert.match(
-    source.slice(capabilityBranch, settingsRead),
+    source.slice(capabilityBranch, webSearchRead),
     /return buildSubagentCapabilityTools\(/,
   );
   assert.match(
@@ -161,7 +161,7 @@ test("production assembly resolves capability tools before ambient settings or f
     /hasOwnProperty\.call\(\s*ctx,\s*"capabilityProfile",?\s*\)/,
   );
   assert.match(
-    source.slice(capabilityBranch, settingsRead),
+    source.slice(capabilityBranch, webSearchRead),
     /Subagent capabilities require the explicit subagent tool mode/,
   );
 });

@@ -239,13 +239,18 @@ test("a deliberate setsid double-fork proves the documented containment limit an
   const result = await run(t, `${fixture} ${marker}`);
   assert.equal(result.outcome, "exited");
   let pid = 0;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const markerDeadline = Date.now() + 5_000;
+  while (Date.now() < markerDeadline) {
     try {
-      pid = Number.parseInt(await readFile(marker, "utf8"), 10);
-      break;
+      const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
+      if (candidate > 1) {
+        pid = candidate;
+        break;
+      }
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      // The detached grandchild publishes the marker asynchronously.
     }
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.ok(pid > 1, "detached fixture must publish its PID");
   assert.doesNotThrow(() => process.kill(pid, 0));

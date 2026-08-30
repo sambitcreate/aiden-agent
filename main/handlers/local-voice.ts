@@ -3,7 +3,7 @@
 // services/parakeet.ts and services/local-models.ts.
 
 import { ipcMain } from "../platform.js";
-import { engineStatus, transcribePcm, releaseRecognizer } from "../services/parakeet.js";
+import { engineStatus, transcribePcmBase64, releaseRecognizer } from "../services/parakeet.js";
 import {
   listModels,
   downloadModel,
@@ -14,6 +14,20 @@ import { configStore } from "../services/config-store.js";
 import { unreportedUsageRecord } from "../services/usage-accounting.js";
 import { usageStore } from "../services/usage-store.js";
 import { asString, pcmToFloat32 } from "./voice-codec.js";
+import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+
+const activeLocalTranscriptions = new Map<
+  string,
+  { controller: AbortController; removeOwnerInvalidation: () => void }
+>();
+
+function localOperationKey(ownerId: number, documentId: string, value: unknown): string {
+  const operationId = asString(value, "operationId");
+  if (operationId.length > 128 || !/^[A-Za-z0-9._:-]+$/u.test(operationId)) {
+    throw new Error("Invalid on-device transcription operation.");
+  }
+  return `${ownerId}:${documentId}:${operationId}`;
+}
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { asString, pcmToFloat32 };
@@ -32,7 +46,7 @@ export function registerLocalVoiceHandlers(): void {
   });
   ipcMain.handle("localModels:delete", async (_event, id: unknown) => {
     const modelId = asString(id, "id");
-    releaseRecognizer(modelId);
+    await releaseRecognizer(modelId);
     await deleteModel(modelId);
     const settings = await configStore.getSettings();
     if (settings.localVoiceModel === modelId)
@@ -40,34 +54,66 @@ export function registerLocalVoiceHandlers(): void {
   });
 
   // ── Local transcription ──────────────────────────────────────────────
-  ipcMain.handle("voice:transcribeLocal", async (_event, pcmBase64: unknown, modelId: unknown) => {
-    const parsedModelId = asString(modelId, "modelId");
-    const pcm = pcmToFloat32(asString(pcmBase64, "pcmBase64"));
-    try {
-      const transcript = transcribePcm(pcm, parsedModelId);
-      await usageStore.record(
-        unreportedUsageRecord({
-          source: "voice-transcription",
-          providerId: "local-voice",
-          providerLabel: "On-device voice",
-          modelId: parsedModelId,
-          local: true,
-          status: "completed",
-        }),
+  ipcMain.handle(
+    "voice:transcribeLocal",
+    async (event, pcmBase64: unknown, modelId: unknown, operationId: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("On-device transcription must come from the active application document."),
       );
-      return transcript;
-    } catch (error) {
-      await usageStore.record(
-        unreportedUsageRecord({
-          source: "voice-transcription",
-          providerId: "local-voice",
-          providerLabel: "On-device voice",
-          modelId: parsedModelId,
-          local: true,
-          status: "failed",
-        }),
-      );
-      throw error;
-    }
+      const key = localOperationKey(owner.id, owner.documentId, operationId);
+      const previous = activeLocalTranscriptions.get(key);
+      previous?.controller.abort();
+      previous?.removeOwnerInvalidation();
+      const controller = new AbortController();
+      const removeOwnerInvalidation = owner.onInvalidated(() => {
+        controller.abort();
+      });
+      activeLocalTranscriptions.set(key, { controller, removeOwnerInvalidation });
+      const parsedModelId = asString(modelId, "modelId");
+      const encoded = asString(pcmBase64, "pcmBase64");
+      try {
+        const transcript = await transcribePcmBase64(encoded, parsedModelId, controller.signal);
+        await usageStore.record(
+          unreportedUsageRecord({
+            source: "voice-transcription",
+            providerId: "local-voice",
+            providerLabel: "On-device voice",
+            modelId: parsedModelId,
+            local: true,
+            status: "completed",
+          }),
+        );
+        return transcript;
+      } catch (error) {
+        await usageStore.record(
+          unreportedUsageRecord({
+            source: "voice-transcription",
+            providerId: "local-voice",
+            providerLabel: "On-device voice",
+            modelId: parsedModelId,
+            local: true,
+            status: "failed",
+          }),
+        );
+        throw error;
+      } finally {
+        removeOwnerInvalidation();
+        if (activeLocalTranscriptions.get(key)?.controller === controller) {
+          activeLocalTranscriptions.delete(key);
+        }
+      }
+    },
+  );
+  ipcMain.handle("voice:transcribeLocalCancel", (event, operationId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("On-device transcription must come from the active application document."),
+    );
+    const active = activeLocalTranscriptions.get(
+      localOperationKey(owner.id, owner.documentId, operationId),
+    );
+    if (!active) return;
+    active.controller.abort();
   });
 }

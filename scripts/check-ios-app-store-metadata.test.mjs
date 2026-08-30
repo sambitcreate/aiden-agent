@@ -58,6 +58,13 @@ test("public App Store identity stays aligned with shipping app links", async ()
   assert.match(appConfig, /supportURL = URL\(staticString: "https:\/\/chatwithaiden\.com\/"\)/u);
 });
 
+test("release metadata names the current processed TestFlight candidate", async () => {
+  const { metadata } = await loadFiles();
+
+  assert.match(metadata, /build `22` is the current processed internal candidate/u);
+  assert.doesNotMatch(metadata, /build `21` is the current processed internal candidate/u);
+});
+
 test("ASC owner operations are telemetry-off, strict, and credential-safe", async () => {
   const { ascRunbook, gitignore } = await loadFiles();
 
@@ -130,7 +137,11 @@ test("age and privacy drafts stay conservative and match the bundle manifest", a
   assert.match(mobilePrivacySupport, /iPhone or iPad Keychain/u);
   assert.match(mobilePrivacySupport, /local network or a Tailscale connection/u);
   assert.match(mobilePrivacySupport, /does not enable Tailscale Funnel/u);
-  assert.match(mobilePrivacySupport, /requires on-device recognition/u);
+  assert.match(
+    mobilePrivacySupport,
+    /In \*\*On this device\*\* mode, the app uses the platform speech API/u,
+  );
+  assert.match(mobilePrivacySupport, /neither endpoint stores the recording/u);
   assert.match(mobilePrivacySupport, /App Intents use a limited App Group cache/u);
   assert.match(mobilePrivacySupport, /hide assistant response excerpts by default/u);
   assert.match(mobilePrivacySupport, /hey@sambitbiswas\.com/u);

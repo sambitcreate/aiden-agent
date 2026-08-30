@@ -4,7 +4,10 @@ import test from "node:test";
 import {
   FEATURED_PI_PROVIDER_IDS,
   PROVIDER_ICON_SLUGS,
+  canConfigureOnboardingBuiltinProvider,
   getOnboardingMoreProviders,
+  isOnboardingBuiltinProviderReady,
+  onboardingBuiltinProviderSetupLabel,
   resolveProviderIconSlug,
   splitPiBuiltinProviders,
 } from "./pi-provider-display.js";
@@ -79,6 +82,55 @@ test("onboarding reveals every other Pi provider in stable product order", () =>
   assert.deepEqual(
     getOnboardingMoreProviders(providers).map((provider) => provider.id),
     ["google", "deepseek", "groq", "future-pi-provider"],
+  );
+});
+
+test("onboarding can configure every provider with an interactive credential method", () => {
+  const apiKeyProvider = {
+    hasKey: false,
+    models: ["chat-model"],
+    authMethods: [{ type: "api_key" as const, canLogin: true }],
+  };
+  const oauthProvider = {
+    ...apiKeyProvider,
+    authMethods: [{ type: "oauth" as const, canLogin: true }],
+  };
+  const flexibleProvider = {
+    ...apiKeyProvider,
+    authMethods: [
+      { type: "api_key" as const, canLogin: true },
+      { type: "oauth" as const, canLogin: true },
+    ],
+  };
+
+  assert.equal(canConfigureOnboardingBuiltinProvider(apiKeyProvider), true);
+  assert.equal(onboardingBuiltinProviderSetupLabel(apiKeyProvider), "Add your API key");
+  assert.equal(canConfigureOnboardingBuiltinProvider(oauthProvider), true);
+  assert.equal(onboardingBuiltinProviderSetupLabel(oauthProvider), "Sign in to connect");
+  assert.equal(canConfigureOnboardingBuiltinProvider(flexibleProvider), true);
+  assert.equal(onboardingBuiltinProviderSetupLabel(flexibleProvider), "Add an API key or sign in");
+});
+
+test("onboarding distinguishes ready providers from unavailable setup methods", () => {
+  const readyProvider = {
+    hasKey: true,
+    models: ["chat-model"],
+    authMethods: [{ type: "api_key" as const, canLogin: false }],
+  };
+  const unavailableProvider = {
+    hasKey: false,
+    models: ["chat-model"],
+    authMethods: [{ type: "api_key" as const, canLogin: false }],
+  };
+
+  assert.equal(isOnboardingBuiltinProviderReady(readyProvider), true);
+  assert.equal(canConfigureOnboardingBuiltinProvider(readyProvider), true);
+  assert.equal(onboardingBuiltinProviderSetupLabel(readyProvider), "Ready to use");
+  assert.equal(isOnboardingBuiltinProviderReady(unavailableProvider), false);
+  assert.equal(canConfigureOnboardingBuiltinProvider(unavailableProvider), false);
+  assert.equal(
+    onboardingBuiltinProviderSetupLabel(unavailableProvider),
+    "Available in Settings after onboarding",
   );
 });
 
@@ -178,5 +230,16 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.equal(
     occurrences(codexProviderSettingsSource, "rounded-control bg-well text-secondary"),
     1,
+  );
+  assert.match(providersSettingsSource, />Built into Aiden</u);
+  assert.doesNotMatch(providersSettingsSource, /Built into Pi|Pi model|Pi-native/u);
+  assert.match(providersSettingsSource, /className="providers-settings flex flex-col gap-6"/u);
+  assert.match(providersSettingsSource, /<ProviderInfo[\s\S]*About providers built into Aiden/u);
+  assert.match(providersSettingsSource, /<details className="group border-t border-separator">/u);
+  assert.match(providersSettingsSource, /Chat title generation/u);
+  assert.match(providersSettingsSource, /customProviders\.length > 0/u);
+  assert.equal(
+    occurrences(providersSettingsSource, "group-data-[highlighted]:text-accent-foreground"),
+    6,
   );
 });

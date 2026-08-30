@@ -5,7 +5,15 @@ import globals from "globals";
 
 export default [
   {
-    ignores: ["build/**", "release/**", "node_modules/**", ".memory/**", ".papercuts/**"],
+    ignores: [
+      "build/**",
+      "release/**",
+      "android/**/build/**",
+      "node_modules/**",
+      ".memory/**",
+      ".papercuts/**",
+      "resources/generative-ui/**",
+    ],
   },
   js.configs.recommended,
   {
@@ -13,6 +21,7 @@ export default [
       "scripts/aiden-remote-*.mjs",
       "scripts/ios-asc-monitor*.mjs",
       "scripts/ios-live-activity-process-proof*.mjs",
+      "scripts/vendor-generative-ui-libs.mjs",
     ],
     languageOptions: {
       globals: { ...globals.node },
@@ -30,6 +39,19 @@ export default [
       "no-unused-vars": "off",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
       "no-undef": "off"
+    },
+  },
+  {
+    files: ["main/**/*.{ts,tsx}"],
+    ignores: ["main/**/*.test.{ts,tsx}", "main/platform.ts"],
+    rules: {
+      "no-console": "error",
+    },
+  },
+  {
+    files: ["main/platform.ts"],
+    rules: {
+      "no-console": "off",
     },
   },
 ];

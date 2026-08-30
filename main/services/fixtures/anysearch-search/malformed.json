@@ -1,0 +1,8 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "results": { "not": "an-array" },
+    "metadata": { "total_results": 0 }
+  }
+}

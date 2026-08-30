@@ -247,6 +247,33 @@ test("inspect pins descriptor-relative content before preparing a postimage", as
   await helper.close();
 });
 
+test("read-html stays beneath the pinned root and rejects multiply-linked files", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  const root = await fixture(t, "aiden-file-mutator-html-");
+  const outside = await fixture(t, "aiden-file-mutator-html-outside-");
+  await mkdir(path.join(root, "nested"));
+  await writeFile(path.join(root, "nested", "chart.html"), "<p>workspace chart</p>");
+  await writeFile(path.join(outside, "secret.html"), "<p>outside secret</p>");
+  await symlink(outside, path.join(root, "redirect"));
+  await link(path.join(outside, "secret.html"), path.join(root, "hardlinked.html"));
+
+  const helper = startHelper(t, root);
+  const html = "<p>workspace chart</p>";
+  assert.equal(
+    await helper.request(`read-html html-read ${encoded("nested/chart.html")}`),
+    `html-read html-read ${Buffer.byteLength(html)} ${encoded(html)}`,
+  );
+  assert.equal(
+    await helper.request(`read-html html-symlink ${encoded("redirect/secret.html")}`),
+    "error conflict",
+  );
+  assert.equal(
+    await helper.request(`read-html html-hardlink ${encoded("hardlinked.html")}`),
+    "error conflict",
+  );
+  await helper.close();
+});
+
 test("inspect refuses to prepare after the pinned path is replaced", async (t) => {
   if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await fixture(t, "aiden-file-mutator-inspect-race-");

@@ -12,12 +12,44 @@ import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type {
+  BoundedNonSecretProviderConfig,
+  WebSearchProviderId,
+  WebSearchProviderRendererMetadata,
+  WebSearchRendererSnapshot,
+  WebSearchRouteEntry,
+  WebSearchSelection,
+  WebSearchSettingsV2,
+} from "../../main/services/web-search-provider-registry-core";
+import type {
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererOption,
+  WebSearchExistingAuthRendererSnapshot,
+  WebSearchExistingAuthRendererStatus,
+} from "../../main/services/web-search-auth-reuse-core";
+export type {
+  BoundedNonSecretProviderConfig,
+  WebSearchProviderId,
+  WebSearchProviderRendererMetadata,
+  WebSearchRendererSnapshot,
+  WebSearchRouteEntry,
+  WebSearchSelection,
+  WebSearchSettingsV2,
+};
+export type {
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererOption,
+  WebSearchExistingAuthRendererSnapshot,
+  WebSearchExistingAuthRendererStatus,
+};
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
+export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
 
 export type ProviderDeployment = "local" | "hosted";
 
-export type ProviderModelType = "llm" | "embedding";
+export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
 
 export interface ProviderModelMetadata {
   source: "lmstudio" | "ollama" | "provider";
@@ -64,6 +96,21 @@ export interface Provider {
 export interface ProviderCatalogRefreshResult {
   providers: Provider[];
   errors: Array<{ providerId: string; message: string }>;
+}
+
+export interface ModelsDevCatalogStatus {
+  source: "bundled" | "device-cache";
+  fetchedAt: string | null;
+}
+
+export interface ProviderCatalogUpdateResult {
+  providers: Provider[];
+  inventoryErrors: Array<{ providerId: string; message: string }>;
+  modelsDev: {
+    ok: boolean;
+    status: ModelsDevCatalogStatus;
+    message?: string;
+  };
 }
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex" as const;
@@ -421,6 +468,21 @@ export interface ModelRanking {
   measuredAt?: string;
 }
 
+export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+
+export interface ModelBenchmarkScores {
+  source: "openrouter";
+  datasetSource: "artificial-analysis";
+  sourceLabel: "Artificial Analysis via OpenRouter";
+  sourceUrl: string;
+  citation: string;
+  asOf: string;
+  license: "CC BY 4.0";
+  intelligence?: number;
+  coding?: number;
+  agentic?: number;
+}
+
 export type ModelMetadataSource =
   | "local"
   | "provider"
@@ -435,6 +497,7 @@ export interface ModelInfo {
   toolCall?: boolean;
   reasoning?: boolean;
   openWeights?: boolean;
+  /** Normalized capability classification; every value except `llm` is non-chat. */
   modelType?: ProviderModelType;
   parameterCount?: string;
   format?: string;
@@ -444,38 +507,33 @@ export interface ModelInfo {
   knowledge?: string;
   releaseDate?: string;
   ranking?: ModelRanking;
+  benchmark?: ModelBenchmarkScores;
   metadataSource: ModelMetadataSource;
   matched: boolean;
 }
 
-export type ArtificialAnalysisTier = "free" | "pro" | "commercial";
-
-export interface ArtificialAnalysisStatus {
-  state: "not_connected" | "connected" | "ready";
+export interface ModelInsightsStatus {
   hasKey: boolean;
-  cleanupNeeded: boolean;
   ready: boolean;
   cachedModelCount: number;
-  rankedModelCount: number;
   fetchedAt?: string;
-  tier?: ArtificialAnalysisTier;
-  intelligenceIndexVersion?: number;
+  asOf?: string;
+  citation?: string;
+  license?: "CC BY 4.0";
 }
 
-export type ArtificialAnalysisActionErrorCode =
+export type ModelInsightsActionErrorCode =
+  | "not_connected"
   | "invalid_key"
-  | "access_denied"
   | "rate_limited"
   | "service_unavailable"
   | "network_error"
   | "invalid_response"
-  | "invalid_input"
-  | "not_connected"
   | "local_error";
 
-export type ArtificialAnalysisActionResult =
-  | { ok: true; status: ArtificialAnalysisStatus }
-  | { ok: false; code: ArtificialAnalysisActionErrorCode; message: string };
+export type ModelInsightsActionResult =
+  | { ok: true; status: ModelInsightsStatus }
+  | { ok: false; code: ModelInsightsActionErrorCode; message: string };
 
 export interface ChatMessage {
   id: string;
@@ -486,6 +544,7 @@ export interface ChatMessage {
   reasoning?: string;
   providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
+  htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
   subagents?: SubagentMessageReferenceV1;
@@ -495,6 +554,7 @@ export interface ChatMeta {
   id: string;
   title: string;
   workspaceId?: string;
+  botId?: string;
   providerId?: string;
   model?: string;
   createdAt: number;
@@ -503,6 +563,10 @@ export interface ChatMeta {
 
 export interface Chat extends ChatMeta {
   computerUseEnabled?: boolean;
+  /** Main-owned crash stage exists and must be recovered before another chat mutation. */
+  imageArtifactRecoveryPending?: boolean;
+  /** Main-owned image staging could not be opened or quarantined automatically. */
+  imageArtifactRecoveryUnavailable?: boolean;
   messages: ChatMessage[];
 }
 
@@ -512,6 +576,8 @@ export interface Chat extends ChatMeta {
  */
 export interface ChatReadResponse {
   chat: Chat | null;
+  imageArtifactRecoveryPending: boolean;
+  imageArtifactRecoveryUnavailable: boolean;
   reconciliation: {
     chatId: string;
     workspaceId: string;
@@ -542,6 +608,8 @@ export interface ScheduledTask {
   mcpServerIds?: string[];
   /** Main-owned runtime profile, exposed read-only for truthful capability display. */
   executionProfile?: ScheduledTaskExecutionProfile;
+  /** Explicit Web Search authority; omitted legacy values are closed. */
+  webSearchEnabled?: boolean;
   chatId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
@@ -576,6 +644,8 @@ export interface ScheduledTaskInput {
   permission?: ScheduledTaskPermission;
   /** Exact configured MCP servers this task may invoke unattended. */
   mcpServerIds?: string[];
+  /** Explicit Web Search authority. New tasks default to false. */
+  webSearchEnabled?: boolean;
   notify?: boolean;
 }
 
@@ -661,6 +731,7 @@ export interface DiscoveredSkill {
 }
 
 export type VoiceProvider = "openai" | "gemini" | "local";
+export type GeminiUsageScope = "transcription_only" | "models_and_transcription";
 
 export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
 
@@ -718,15 +789,22 @@ export interface AssistantConfigSnapshot {
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
-  hiddenModelsByProvider?: Record<string, string[]>;
+  hiddenModelsByProvider?: HiddenModelsByProvider;
   exaEnabled?: boolean;
+  /** Versioned Web Search routing/preferences; credentials stay main-owned. */
+  webSearch?: WebSearchSettingsV2;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
+  geminiUsageScope?: GeminiUsageScope;
   localVoiceModel?: string;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  dictationHoldToTalk?: boolean;
+  dictationSilenceStop?: boolean;
+  dictationCleanup?: boolean;
+  dictationSounds?: boolean;
   keybindings?: KeybindingOverridesV1;
   chatTitleProviderId?: ChatTitleProviderId;
   appearance?: AppearanceConfig;
@@ -898,6 +976,8 @@ export interface ChatStartParams {
   /** Renderers may only request the attended Aiden mode. */
   mode?: "assistant";
   thinkingLevel?: GenerationThinkingLevel;
+  /** Host-owned /visualize instruction for this turn. */
+  visualize?: boolean;
 }
 
 export interface ApprovalRequest {

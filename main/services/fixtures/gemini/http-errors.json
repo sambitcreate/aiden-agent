@@ -1,0 +1,9 @@
+[
+  { "status": 302, "category": "policy", "fallbackEligible": false },
+  { "status": 401, "category": "authentication", "fallbackEligible": false },
+  { "status": 403, "category": "authentication", "fallbackEligible": false },
+  { "status": 408, "category": "timeout", "fallbackEligible": true },
+  { "status": 429, "category": "rate_limit", "fallbackEligible": true },
+  { "status": 400, "category": "invalid_request", "fallbackEligible": false },
+  { "status": 500, "category": "upstream", "fallbackEligible": true }
+]

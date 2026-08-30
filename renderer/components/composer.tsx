@@ -1,5 +1,5 @@
 // Message composer. On a new chat the top-row folder opens the workspace picker;
-// established chats reveal that folder in Finder. Git workspaces also show the
+// established chats reveal that folder in the system file manager. Git workspaces also show the
 // current branch. The input
 // row carries a new-chat button, a per-workspace permission control, the model
 // picker, voice input, and send/stop.
@@ -10,11 +10,8 @@ import {
   Button,
   Dialog,
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
   Textarea,
@@ -35,13 +32,17 @@ import {
   OctagonAlert,
   Plus,
   ShieldQuestion,
-  Sparkles,
   Square,
   X,
 } from "lucide-react";
+import { AidenIcon } from "./aiden-icon";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
+import {
+  GEMINI_RECORDED_RETRY_DESCRIPTION,
+  GEMINI_RECORDED_RETRY_TITLE,
+} from "../lib/gemini-recorded-retry";
 import { attachmentsApi } from "../lib/ipc";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
@@ -56,6 +57,8 @@ import { useCommandSystem } from "../lib/command-system";
 import {
   consumeSlashToken,
   deriveSlashSession,
+  failedSendAttachments,
+  failedSendDraft,
   moveSlashSelectionId,
   pageSlashSelectionId,
   rankSlashResults,
@@ -63,17 +66,18 @@ import {
   slashActionDraftCommitIsCurrent,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
+  type SelectedSkillInvocation,
   type SlashResult,
   type SlashSessionTracker,
   selectedSkillComposerReducer,
   selectedSkillStatus,
-  successfulSendAttachmentRemainder,
 } from "../lib/slash-command-core";
 import {
   attemptSlashCommandAction,
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
+import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import {
   COMPOSER_SLASH_PALETTE_ID,
   COMPOSER_SLASH_RETRY_ID,
@@ -115,6 +119,7 @@ interface ComposerProps {
     text: string,
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
+    options?: { visualize?: boolean },
   ) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
@@ -174,30 +179,27 @@ const PERMISSION_META: Record<
   WorkspacePermission,
   {
     label: string;
-    description: string;
     icon: React.ComponentType<{ className?: string }>;
     className: string;
   }
 > = {
   full: {
     label: "Full access",
-    description: "Read and edit files, and run commands without asking.",
     icon: OctagonAlert,
     className: "text-support-warning",
   },
   ask: {
     label: "Ask first",
-    description: "Read freely; confirm every edit and command.",
     icon: ShieldQuestion,
     className: "text-secondary",
   },
   none: {
     label: "No access",
-    description: "Keep workspace files and commands unavailable.",
     icon: Lock,
     className: "text-tertiary",
   },
 };
+const PERMISSION_ORDER: readonly WorkspacePermission[] = ["full", "ask", "none"];
 
 function skillSourceLabel(source: SkillSource): string {
   return source === "configured" ? "Configured" : source === "workspace" ? "Workspace" : "Global";
@@ -299,15 +301,27 @@ export function Composer({
     slashInteractionRevisionRef.current += 1;
   }, []);
   const setText = React.useCallback((value: React.SetStateAction<string>) => {
+    const current = draftRef.current;
+    const text = typeof value === "function" ? value(current.text) : value;
+    draftRef.current = {
+      text,
+      slashTracker: updateSlashSessionTracker(current.slashTracker, text),
+    };
     slashInteractionRevisionRef.current += 1;
     textRevisionRef.current += 1;
-    dispatchDraft({ type: "update", value });
+    dispatchDraft({ type: "update", value: text });
   }, []);
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
   }, []);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const attachmentsRef = React.useRef<Attachment[]>([]);
+  const updateAttachments = React.useCallback((value: React.SetStateAction<Attachment[]>) => {
+    const next = typeof value === "function" ? value(attachmentsRef.current) : value;
+    attachmentsRef.current = next;
+    setAttachments(next);
+  }, []);
   const [skillSelection, dispatchSkillSelection] = React.useReducer(selectedSkillComposerReducer, {
     selected: undefined,
     revision: 0,
@@ -318,9 +332,11 @@ export function Composer({
   const attachmentOperationRef = React.useRef(false);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
+  const sendPendingRef = React.useRef(false);
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
+  const permissionControlRef = React.useRef<HTMLButtonElement>(null);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTitle, setRenameTitle] = React.useState("");
   const [renaming, setRenaming] = React.useState(false);
@@ -395,12 +411,14 @@ export function Composer({
   const canSend =
     (text.trim().length > 0 || attachments.length > 0) &&
     submissionAllowed &&
+    !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
   const voice = useVoiceRecorder(
     (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
     {
       provider: settings.data?.voiceProvider ?? "openai",
       localModel: settings.data?.localVoiceModel,
+      model: settings.data?.voiceModel,
     },
   );
 
@@ -469,6 +487,7 @@ export function Composer({
       hasLatestAssistantResponse: Boolean(latestAssistantResponse),
       hasAuthenticatedProvider: authenticatedProviders.length > 0,
       hasWorkspace: Boolean(workspace),
+      hasWorkspaceArtifactAccess: workspace?.permission !== "none",
       hasManagedWorktreeFlow: Boolean(
         workspace?.folderPath && gitBranch && onCreateGitWorktree && !gitUnborn,
       ),
@@ -672,6 +691,81 @@ export function Composer({
     }
   }, [logoutProvider, onLogoutProvider, sessionCommandBusy]);
 
+  const sendComposerPayload = React.useCallback(
+    async (payload: {
+      draftText: string;
+      sendText: string;
+      attachments: Attachment[];
+      selectedSkill?: SelectedSkillInvocation;
+      skillRevision: number;
+      visualize?: boolean;
+    }): Promise<boolean> => {
+      // React state does not close the same-tick Enter + click window. Claim
+      // the send synchronously before making any optimistic UI changes.
+      if (sendPendingRef.current) return false;
+      sendPendingRef.current = true;
+      setSending(true);
+
+      setText("");
+      const optimisticTextRevision = textRevisionRef.current;
+      attachmentRevisionRef.current += 1;
+      const optimisticAttachmentRevision = attachmentRevisionRef.current;
+      updateAttachments([]);
+      const optimisticSkillRevision = payload.skillRevision + 1;
+      dispatchSkillSelection({
+        type: "send-started",
+        submittedRevision: payload.skillRevision,
+      });
+
+      try {
+        await onSend(
+          payload.sendText,
+          payload.attachments,
+          payload.selectedSkill?.invocation,
+          payload.visualize ? { visualize: true } : undefined,
+        );
+        return true;
+      } catch (error) {
+        // An unknown append result may already be durable. ChatPane blocks
+        // another send until reload, so restoring it here would invite a
+        // duplicate message with a new turn identity.
+        if (!isAppendReconciliationRequired(error)) {
+          const currentDraft = draftRef.current.text;
+          const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
+          if (
+            textRevisionRef.current === optimisticTextRevision ||
+            restoredDraft !== currentDraft
+          ) {
+            setText(restoredDraft);
+          }
+
+          const currentAttachments = attachmentsRef.current;
+          const restoredAttachments = failedSendAttachments(
+            payload.attachments,
+            currentAttachments,
+          );
+          if (
+            attachmentRevisionRef.current === optimisticAttachmentRevision ||
+            restoredAttachments.length !== currentAttachments.length
+          ) {
+            attachmentRevisionRef.current += 1;
+            updateAttachments(restoredAttachments);
+          }
+          dispatchSkillSelection({
+            type: "send-failed",
+            optimisticRevision: optimisticSkillRevision,
+            submitted: payload.selectedSkill,
+          });
+        }
+        throw error;
+      } finally {
+        sendPendingRef.current = false;
+        setSending(false);
+      }
+    },
+    [onSend, setText, updateAttachments],
+  );
+
   const selectSlashResult = React.useCallback(
     async (result: SlashResult) => {
       if (
@@ -736,7 +830,10 @@ export function Composer({
           toast.success("Latest response copied");
         },
         openReview: () => onOpenReview?.(),
-        openAccess: () => setPermissionMenuOpen(true),
+        openAccess: () => {
+          setPermissionMenuOpen(true);
+          requestAnimationFrame(() => permissionControlRef.current?.focus());
+        },
         openFork: () => {
           setForkQuery("");
           setForkDialogOpen(true);
@@ -746,6 +843,29 @@ export function Composer({
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
+        submitComposerInstruction: async (instruction, prompt) => {
+          if (instruction !== "visualize") return false;
+          const nextPrompt =
+            prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          if (!nextPrompt) {
+            toast.info("Add what to visualize after /visualize, then send.");
+            return false;
+          }
+          if (selectedSkillState && selectedSkillState.state !== "valid") {
+            toast.info(selectedSkillState.reason);
+            return false;
+          }
+          const submittedAttachments = attachments;
+          const submittedSkillRevision = skillSelection.revision;
+          return sendComposerPayload({
+            draftText: text,
+            sendText: nextPrompt,
+            attachments: submittedAttachments,
+            selectedSkill,
+            skillRevision: submittedSkillRevision,
+            visualize: true,
+          });
+        },
       });
       const asyncAction = attempted.kind === "async";
       if (asyncAction) slashActionPendingRef.current = true;
@@ -763,12 +883,17 @@ export function Composer({
         toast.info("That app action is unavailable right now.");
         return;
       }
+      // Composer instructions own their optimistic clear and guarded rollback.
+      // A generic late slash-token commit would overwrite the next-turn draft.
+      if (result.command.action.kind === "composer-instruction") return;
+      const usesDraftOnlyCommit =
+        (result.command.action.kind === "session" &&
+          (result.command.action.action === "clone" ||
+            result.command.action.action === "export" ||
+            result.command.action.action === "worktree"));
       if (
         asyncAction &&
-        !(result.command.action.kind === "session" &&
-        (result.command.action.action === "clone" ||
-          result.command.action.action === "export" ||
-          result.command.action.action === "worktree")
+        !(usesDraftOnlyCommit
           ? slashActionDraftCommitIsCurrent(expectedCommit, {
               draft: draftRef.current.text,
               epoch: draftRef.current.slashTracker.epoch,
@@ -804,6 +929,11 @@ export function Composer({
       exportChat,
       onOpenReview,
       onOpenSettings,
+      sendComposerPayload,
+      attachments,
+      selectedSkill,
+      selectedSkillState,
+      skillSelection.revision,
       requestRename,
       slashResultSelectable,
       slashSession,
@@ -858,7 +988,7 @@ export function Composer({
       return 0;
     }
     attachmentRevisionRef.current += 1;
-    setAttachments((current) => [...current, ...added]);
+    updateAttachments((current) => [...current, ...added]);
     setAttachmentStatus(
       `${added.length} ${added.length === 1 ? "attachment is" : "attachments are"} ready.`,
     );
@@ -1020,10 +1150,11 @@ export function Composer({
 
   const removeAttachment = (id: string) => {
     attachmentRevisionRef.current += 1;
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
   const submit = async () => {
+    if (sendPendingRef.current || composing) return;
     if (attachmentOperationRef.current || attaching) {
       toast.info("Wait for the selected attachments to finish loading before sending.");
       return;
@@ -1049,29 +1180,16 @@ export function Composer({
       toast.info("Switch to a vision-capable model before sending these images.");
       return;
     }
-    const submittedTextRevision = textRevisionRef.current;
-    const submittedAttachmentRevision = attachmentRevisionRef.current;
-    const submittedSkillRevision = skillSelection.revision;
-    const submittedSkill = selectedSkill?.invocation;
-    setSending(true);
     try {
-      await onSend(trimmed, attachments, submittedSkill);
-      if (textRevisionRef.current === submittedTextRevision) setText("");
-      setAttachments((current) =>
-        successfulSendAttachmentRemainder(
-          current,
-          attachments,
-          attachmentRevisionRef.current === submittedAttachmentRevision,
-        ),
-      );
-      dispatchSkillSelection({
-        type: "send-succeeded",
-        submittedRevision: submittedSkillRevision,
+      await sendComposerPayload({
+        draftText: text,
+        sendText: trimmed,
+        attachments,
+        selectedSkill,
+        skillRevision: skillSelection.revision,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
-    } finally {
-      setSending(false);
     }
   };
 
@@ -1146,8 +1264,7 @@ export function Composer({
   };
 
   const permission = workspace?.permission ?? "ask";
-  const perm = PERMISSION_META[permission];
-  const PermIcon = perm.icon;
+  const PermissionIcon = PERMISSION_META[permission].icon;
   const folderName = workspace?.folderPath
     ? workspace.folderPath.split("/").filter(Boolean).pop()
     : workspace?.name;
@@ -1194,6 +1311,7 @@ export function Composer({
       gitOperationBusy
     )
       return;
+    setPermissionMenuOpen(false);
     if (nextPermission === "full") {
       setConfirmFullAccess(true);
       return;
@@ -1273,7 +1391,7 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
-          {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
+          {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
@@ -1318,7 +1436,7 @@ export function Composer({
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
-            {/* Execution location — Pi runs locally on this Mac. */}
+            {/* Execution location — Pi runs locally on this host. */}
             <span
               className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
               title="The agent runs locally on this device"
@@ -1379,7 +1497,7 @@ export function Composer({
                   {selectedSkillState?.state === "checking" ? (
                     <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />
                   ) : (
-                    <Sparkles aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+                    <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
                   )}
                   <span className="truncate font-medium">
                     {selectedSkill.invocation.displayName}
@@ -1530,86 +1648,127 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
-                <DropdownMenu
-                  open={permissionMenuOpen}
-                  onOpenChange={(open) => {
-                    setPermissionMenuOpen(open);
-                    if (open) {
-                      dismissSlash();
+                <div
+                  className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
+                  data-open={permissionMenuOpen || undefined}
+                  onPointerEnter={dismissSlash}
+                  onPointerLeave={() => setPermissionMenuOpen(false)}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) {
+                      setPermissionMenuOpen(false);
                     }
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.preventDefault();
+                    setPermissionMenuOpen(false);
+                    inputRef?.current?.focus();
+                  }}
                 >
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="transparent"
-                      size="small"
-                      className={cn(
-                        "composer-permission-control h-7 gap-1.5 px-2 max-[520px]:size-7 max-[520px]:px-0",
-                        perm.className,
-                      )}
-                      disabled={
+                  <button
+                    type="button"
+                    aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
+                    aria-haspopup="true"
+                    onFocus={() => setPermissionMenuOpen(true)}
+                    onClick={() => setPermissionMenuOpen(true)}
+                    onKeyDown={(event) => {
+                      if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
+                      event.preventDefault();
+                      setPermissionMenuOpen(true);
+                      requestAnimationFrame(() => permissionControlRef.current?.focus());
+                    }}
+                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-hover/access:opacity-0 group-focus-within/access:opacity-0 group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
+                  >
+                    <PermissionIcon
+                      className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
+                    />
+                    <span className="truncate max-[520px]:sr-only">
+                      {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
+                    </span>
+                  </button>
+                  <div
+                    role="radiogroup"
+                    aria-label="Workspace access"
+                    aria-disabled={
+                      !workspace ||
+                      permissionSaving ||
+                      isGenerating ||
+                      sending ||
+                      gitOperationBusy ||
+                      Boolean(workspaceChangeBlockedReason) ||
+                      undefined
+                    }
+                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-[16px] bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-hover/access:visible group-hover/access:pointer-events-auto group-hover/access:translate-y-0 group-hover/access:opacity-100 group-focus-within/access:visible group-focus-within/access:pointer-events-auto group-focus-within/access:translate-y-0 group-focus-within/access:opacity-100 group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                  >
+                    {PERMISSION_ORDER.map((value, index) => {
+                      const meta = PERMISSION_META[value];
+                      const Icon = meta.icon;
+                      const selected = value === permission;
+                      const disabled =
                         !workspace ||
                         permissionSaving ||
                         isGenerating ||
                         sending ||
                         gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason)
-                      }
-                      aria-label={
-                        workspaceChangeBlockedReason
-                          ? `Workspace access: ${perm.label}. ${workspaceChangeBlockedReason}.`
-                          : isGenerating || sending
-                            ? `Workspace access: ${perm.label}. Finish or stop the current response to change access.`
-                            : `Workspace access: ${perm.label}`
-                      }
-                    >
-                      <PermIcon className="size-4 shrink-0" />
-                      <span className="composer-permission-label max-[520px]:hidden">
-                        {permissionSaving ? "Updating…" : perm.label}
-                      </span>
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuLabel>Workspace access</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuCheckboxItem
-                      checked={permission === "full"}
-                      sublabel={PERMISSION_META.full.description}
-                      disabled={
-                        permissionSaving ||
-                        gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason)
-                      }
-                      onCheckedChange={(checked) => checked && requestPermission("full")}
-                    >
-                      Full access
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={permission === "ask"}
-                      sublabel={PERMISSION_META.ask.description}
-                      disabled={
-                        permissionSaving ||
-                        gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason)
-                      }
-                      onCheckedChange={(checked) => checked && requestPermission("ask")}
-                    >
-                      Ask first
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={permission === "none"}
-                      sublabel={PERMISSION_META.none.description}
-                      disabled={
-                        permissionSaving ||
-                        gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason)
-                      }
-                      onCheckedChange={(checked) => checked && requestPermission("none")}
-                    >
-                      No access
-                    </DropdownMenuCheckboxItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                        Boolean(workspaceChangeBlockedReason);
+                      return (
+                        <button
+                          ref={selected ? permissionControlRef : undefined}
+                          key={value}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          aria-label={
+                            workspaceChangeBlockedReason
+                              ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
+                              : isGenerating || sending
+                                ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
+                                : `Workspace access: ${meta.label}`
+                          }
+                          tabIndex={selected ? 0 : -1}
+                          aria-disabled={disabled || undefined}
+                          onClick={() => {
+                            if (!disabled) requestPermission(value);
+                          }}
+                          onKeyDown={(event) => {
+                            if (disabled) return;
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              if (value !== permission) requestPermission(value);
+                              return;
+                            }
+                            let nextIndex: number | undefined;
+                            if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+                              nextIndex = (index + 1) % PERMISSION_ORDER.length;
+                            }
+                            if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+                              nextIndex =
+                                (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
+                            }
+                            if (event.key === "Home") nextIndex = 0;
+                            if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
+                            if (nextIndex === undefined) return;
+                            event.preventDefault();
+                            const radios =
+                              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                                '[role="radio"]',
+                              );
+                            radios?.[nextIndex]?.focus();
+                          }}
+                          className={cn(
+                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                            selected
+                              ? "bg-popover shadow-control"
+                              : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
+                          )}
+                        >
+                          <Icon className={cn("size-4 shrink-0", meta.className)} />
+                          <span className="truncate">{meta.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
                 {computerUse && onChangeComputerUse ? (
                   <Button
                     variant={computerUse.enabled ? "muted" : "transparent"}
@@ -1655,6 +1814,18 @@ export function Composer({
                   thinkingControl && "composer-action-row max-[520px]:w-full",
                 )}
               >
+                {voice.recording &&
+                (voice.liveTranscript.committed || voice.liveTranscript.tentative) ? (
+                  <span
+                    className="max-w-56 truncate text-small"
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Live transcription"
+                  >
+                    <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
+                    <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
+                  </span>
+                ) : null}
                 {thinkingControl}
                 {modelPicker}
                 <Button
@@ -1698,6 +1869,17 @@ export function Composer({
           </div>
         </div>
       </div>
+      <AlertDialog
+        open={voice.awaitingRecordedRetryConsent}
+        onOpenChange={(open) => {
+          if (!open) voice.resolveRecordedRetryConsent(false);
+        }}
+        title={GEMINI_RECORDED_RETRY_TITLE}
+        description={GEMINI_RECORDED_RETRY_DESCRIPTION}
+        confirmLabel="Retry with recording"
+        returnFocus={() => inputRef?.current ?? null}
+        onConfirm={() => voice.resolveRecordedRetryConsent(true)}
+      />
       <AlertDialog
         open={confirmFullAccess}
         onOpenChange={setConfirmFullAccess}

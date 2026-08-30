@@ -62,6 +62,7 @@ final class AidenRemoteLiveActivityManager {
             stateByActivityID[activity.id] = state
         } catch {
             currentActivity = nil
+            AidenDiagnostics.record(.liveActivity, event: .liveActivityFailed, outcome: .degraded, code: .unavailable)
         }
     }
 

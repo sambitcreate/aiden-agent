@@ -7,7 +7,10 @@ import type {
   BeforeToolCallContext,
   BeforeToolCallResult,
 } from "@earendil-works/pi-agent-core";
-import type { SubagentShellApprovalDetails } from "../../../renderer/shared/assistant.js";
+import type {
+  SubagentShellApprovalDetails,
+  SubagentShellApprovalShell,
+} from "../../../renderer/shared/assistant.js";
 import type { ToolApprovalPrompt } from "../tool-approval.js";
 import type { Workspace } from "../types.js";
 import {
@@ -26,7 +29,7 @@ import {
   type SubagentShellWorkspaceRoot,
 } from "./subagent-shell-runner-io.js";
 import { subagentWorkspaceRevisionV2 } from "./subagent-workspace-write.js";
-import { sanitizeSubagentText } from "./safe-text.js";
+import { normalizeSubagentModelText } from "./model-text.js";
 
 export const SUBAGENT_RUN_COMMAND_TOOL_NAME = "run_command";
 export const SUBAGENT_SHELL_MODEL_COMMAND_CHARS = 16_384;
@@ -91,6 +94,21 @@ export interface SubagentShellBrokerV2Input {
   registry?: WorkspaceOperationRegistry;
   now?: () => number;
   randomUUID?: () => string;
+  platform?: NodeJS.Platform;
+}
+
+export interface SubagentShellProfile {
+  executable: string;
+  arguments: readonly string[];
+  display: SubagentShellApprovalShell;
+}
+
+export function subagentShellProfile(
+  platform: NodeJS.Platform = process.platform,
+): SubagentShellProfile {
+  return platform === "darwin"
+    ? { executable: "/bin/zsh", arguments: ["-f", "-c"], display: "/bin/zsh -f -c" }
+    : { executable: "/bin/sh", arguments: ["-c"], display: "/bin/sh -c" };
 }
 
 function blocked(reason: string): BeforeToolCallResult {
@@ -170,6 +188,7 @@ function effectDigest(input: {
   childId: string;
   toolCallId: string;
   expiresAt: number;
+  shell: SubagentShellProfile;
 }): string {
   return fieldsDigest(
     "aiden-subagent-shell-effect-v2",
@@ -177,9 +196,8 @@ function effectDigest(input: {
     input.root.path,
     input.root.device,
     input.root.inode,
-    "/bin/zsh",
-    "-f",
-    "-c",
+    input.shell.executable,
+    ...input.shell.arguments,
     "aiden-subagent",
     "minimal-private-0700-v1",
     "stdin=/dev/null",
@@ -202,7 +220,7 @@ function terminalDigest(state: string, text: string): string {
 }
 
 function boundedStream(label: string, value: string): string {
-  const safe = sanitizeSubagentText(value);
+  const safe = normalizeSubagentModelText(value);
   const allowance = Math.floor((SUBAGENT_SHELL_MODEL_RESULT_CHARS - 512) / 2);
   if (safe.length <= allowance) return `${label}:\n${safe || "(empty)"}`;
   const half = Math.floor((allowance - 80) / 2);
@@ -267,6 +285,7 @@ export function createSubagentShellBrokerV2(
   const allocate = input.randomUUID ?? randomUUID;
   const registry = input.registry ?? workspaceOperationRegistry;
   const runShell = input.runShell ?? runSubagentShellProductionInert;
+  const shell = subagentShellProfile(input.platform);
   const pending = new Map<string, PendingShell>();
   const active = new Set<AbortController>();
   let shuttingDown = false;
@@ -338,6 +357,7 @@ export function createSubagentShellBrokerV2(
           childId: input.childId,
           toolCallId: context.toolCall.id,
           expiresAt,
+          shell,
         });
         const authorityDigest = subagentAuthorityDigestV2(authority);
         const ledgerInput: PrepareSubagentApprovalV2Input = {
@@ -395,7 +415,7 @@ export function createSubagentShellBrokerV2(
           childLabel: input.childLabel,
           command,
           initialCwd: root.path,
-          shell: "/bin/zsh -f -c",
+          shell: shell.display,
           argumentDigestPrefix: argumentDigest.slice(0, DIGEST_PREFIX),
           rootDigestPrefix: rootDigest.slice(0, DIGEST_PREFIX),
           effectDigestPrefix: calculatedEffectDigest.slice(0, DIGEST_PREFIX),

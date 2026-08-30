@@ -17,6 +17,8 @@ import * as path from "path";
 import { constants as fsConstants } from "node:fs";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
+import { projectDiagnosticError } from "./diagnostics-contract.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import type { DiscoveredSkill } from "./types.js";
 
 interface Frontmatter {
@@ -419,7 +421,15 @@ async function scanAllSkillCandidates(
     }
     return results.flat();
   } catch (error) {
-    console.warn("Skill discovery failed:", error instanceof Error ? error.message : String(error));
+    const projected = projectDiagnosticError(error);
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "skills",
+      event: "skills-discovery-failed",
+      outcome: "degraded",
+      code: projected.code,
+      fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+    });
     return [];
   }
 }

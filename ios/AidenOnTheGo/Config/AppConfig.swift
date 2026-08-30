@@ -1,6 +1,15 @@
 import Foundation
 
 enum AppConfig {
+    static var botFirstMobileEnabled: Bool {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: "AidenBotFirstEnabled") else {
+            return false
+        }
+        if let number = value as? NSNumber { return number.boolValue }
+        guard let string = value as? String else { return false }
+        return ["1", "true", "yes"].contains(string.lowercased())
+    }
+
     static var appGroupIdentifier: String {
         Bundle.main.object(forInfoDictionaryKey: "AidenAppGroupIdentifier") as? String
             ?? "group.sbtbiswas.AidenOnTheGo"

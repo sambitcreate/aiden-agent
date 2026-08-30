@@ -3,7 +3,7 @@ import Bonjour from "bonjour-service";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
-import type { Server as NetServer } from "node:net";
+import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import os from "node:os";
 import type { Duplex } from "node:stream";
 import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
@@ -40,14 +40,23 @@ import type { AidenRemoteChatService } from "./aiden-remote-chats.js";
 import type { AidenRemoteModelService } from "./aiden-remote-models.js";
 import type { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import type { AidenRemoteFileService } from "./aiden-remote-files.js";
+import type { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
 import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
+import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
+import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
+import type {
+  BotNoticeAcknowledgement,
+  BotNoticeStatus,
+} from "../../renderer/shared/bot-capabilities.js";
+import {
+  AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  aidenRemotePortCandidatesForRange,
+} from "./aiden-remote-ports.js";
 
 const MAX_CONNECTIONS = 64;
 const REQUEST_TIMEOUT_MS = 30_000;
-const PORT_PAIR_CANDIDATE_COUNT = 64;
-const FIRST_DYNAMIC_LAN_PORT = 49_220;
 
 export class AidenRemotePortInUseError extends Error {
   readonly code = "remote_port_in_use" as const;
@@ -60,24 +69,18 @@ export class AidenRemotePortInUseError extends Error {
   }
 }
 
-export function aidenRemotePortCandidates(preferredPort: number): number[] {
-  const values: number[] = [];
-  const add = (port: number) => {
-    if (
-      Number.isInteger(port)
-      && port > 0
-      && port < 65_535
-      && port % 2 === 0
-      && !values.includes(port)
-    ) {
-      values.push(port);
-    }
-  };
-  add(preferredPort);
-  for (let index = 0; index < PORT_PAIR_CANDIDATE_COUNT; index += 1) {
-    add(FIRST_DYNAMIC_LAN_PORT + index * 2);
+class AidenRemoteRelocationPreflightError extends Error {
+  constructor() {
+    super("Aiden couldn't verify existing Tailscale routes before moving this endpoint. Try again when Tailscale is available.");
+    this.name = "AidenRemoteRelocationPreflightError";
   }
-  return values.slice(0, PORT_PAIR_CANDIDATE_COUNT);
+}
+
+export function aidenRemotePortCandidates(preferredPort: number): number[] {
+  return aidenRemotePortCandidatesForRange(
+    preferredPort,
+    AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  );
 }
 
 export interface AidenRemoteBonjourPublisher {
@@ -113,11 +116,12 @@ export function aidenRemoteBonjourServiceName(
 export interface AidenRemoteServiceOptions {
   state: AidenRemoteStateRegistry;
   appVersion: string;
+  botCapabilitiesSupported?: () => boolean;
   hostname?: string;
   loadTlsIdentity(): Promise<AidenRemoteTlsIdentity>;
   resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
   tailscale: Pick<AidenRemoteTailscaleController, "status" | "connect" | "disconnect">
-    & Partial<Pick<AidenRemoteTailscaleController, "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
+    & Partial<Pick<AidenRemoteTailscaleController, "inspectRoute" | "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
   bonjour: AidenRemoteBonjourPublisher;
   notifyPairingChanged?: () => void;
   workspaceApi?: (
@@ -129,13 +133,41 @@ export interface AidenRemoteServiceOptions {
           AidenRemoteWorkspaceBrowserService,
           "listRoots" | "listChildren" | "createSelection"
         >;
-        chats?: Pick<AidenRemoteChatService, "list" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chats?: Pick<AidenRemoteChatService, "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
-        streams?: Pick<AidenRemoteStreamService, "status" | "cancel" | "respondApproval" | "openEvents">;
+        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
+        botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+        speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
+        botNotice?: {
+          status(deviceId: string): Promise<BotNoticeStatus>;
+          acknowledge(
+            deviceId: string,
+            acknowledgement: BotNoticeAcknowledgement,
+          ): Promise<BotNoticeStatus>;
+        };
+        bots?: Pick<
+          AidenRemoteBotService,
+          | "list"
+          | "get"
+          | "create"
+          | "updateIdentity"
+          | "archive"
+          | "restore"
+          | "capabilityCatalog"
+          | "updateAccess"
+          | "createChat"
+          | "getChatAccess"
+          | "updateChatAccess"
+          | "favorites"
+          | "updateFavorites"
+        > & Partial<Pick<
+          AidenRemoteBotService,
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+        >>;
         settle?: () => Promise<void>;
       }
     | Promise<{
@@ -144,13 +176,41 @@ export interface AidenRemoteServiceOptions {
           AidenRemoteWorkspaceBrowserService,
           "listRoots" | "listChildren" | "createSelection"
         >;
-        chats?: Pick<AidenRemoteChatService, "list" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chats?: Pick<AidenRemoteChatService, "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
-        streams?: Pick<AidenRemoteStreamService, "status" | "cancel" | "respondApproval" | "openEvents">;
+        streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
+        botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+        speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
+        botNotice?: {
+          status(deviceId: string): Promise<BotNoticeStatus>;
+          acknowledge(
+            deviceId: string,
+            acknowledgement: BotNoticeAcknowledgement,
+          ): Promise<BotNoticeStatus>;
+        };
+        bots?: Pick<
+          AidenRemoteBotService,
+          | "list"
+          | "get"
+          | "create"
+          | "updateIdentity"
+          | "archive"
+          | "restore"
+          | "capabilityCatalog"
+          | "updateAccess"
+          | "createChat"
+          | "getChatAccess"
+          | "updateChatAccess"
+          | "favorites"
+          | "updateFavorites"
+        > & Partial<Pick<
+          AidenRemoteBotService,
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+        >>;
         settle?: () => Promise<void>;
       }>;
   now?: () => number;
@@ -237,6 +297,19 @@ async function closeServer(server: NetServer | null): Promise<void> {
       (server as HttpServer).closeAllConnections?.();
     }
   });
+}
+
+async function ipv4LoopbackPortIsAvailable(port: number): Promise<boolean> {
+  const probe = createNetServer();
+  try {
+    await listen(probe, port, "127.0.0.1");
+    return true;
+  } catch (error) {
+    if (isAddressInUse(error)) return false;
+    throw error;
+  } finally {
+    await closeServer(probe);
+  }
 }
 
 export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublisher {
@@ -326,7 +399,11 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
       if (failed || this.generation !== generation) return;
       failed = true;
       const error = value instanceof Error ? value : new Error(String(value));
-      this.log({ level: "warn", event: "bonjour_failed", details: { message: error.message } });
+      this.log({
+        level: "warn",
+        event: "bonjour_failed",
+        details: { message: error.message },
+      });
       if (!ready) rejectStartup(error);
       else onUnexpectedFailure(error);
     };
@@ -377,8 +454,9 @@ export function aidenRemoteBonjourBackend(
 
 export function createAidenRemoteBonjourPublisher(
   log: (entry: AidenRemoteServiceLogEntry) => void = () => undefined,
+  platform: NodeJS.Platform = process.platform,
 ): AidenRemoteBonjourPublisher {
-  return aidenRemoteBonjourBackend() === "dns-sd"
+  return aidenRemoteBonjourBackend(platform) === "dns-sd"
     ? new DnsSdAidenRemoteBonjourPublisher(log)
     : new NodeAidenRemoteBonjourPublisher(log);
 }
@@ -416,7 +494,10 @@ export class AidenRemoteService {
     });
   }
 
-  private async startConfigured(state: AidenRemoteStateDocument): Promise<void> {
+  private async startConfigured(
+    state: AidenRemoteStateDocument,
+    options: { allowEndpointRelocation?: boolean } = {},
+  ): Promise<void> {
     await this.stopListeners();
     this.lastError = undefined;
     this.lastErrorCode = undefined;
@@ -428,6 +509,7 @@ export class AidenRemoteService {
         undefined,
         this.options.notifyPairingChanged,
         () => this.activeState?.displayName ?? state.displayName,
+        this.options.botCapabilitiesSupported,
       );
       const workspaceApi = await this.options.workspaceApi?.(state.instanceId);
       this.settleRemoteApi = workspaceApi?.settle;
@@ -459,6 +541,8 @@ export class AidenRemoteService {
       const mayMoveFreshProfile = !state.lanPortCommitted
         && state.devices.length === 0
         && state.tailscaleOwnership === undefined;
+      const maySelectAlternatePort = mayMoveFreshProfile
+        || options.allowEndpointRelocation === true;
       const externallyReservedPorts = new Set<number>();
       try {
         const tailscaleStatus = await this.options.tailscale.status();
@@ -470,10 +554,13 @@ export class AidenRemoteService {
           }
         }
       } catch {
+        if (options.allowEndpointRelocation) {
+          throw new AidenRemoteRelocationPreflightError();
+        }
         // A missing/unavailable local Tailscale CLI must not prevent LAN-only
         // startup. Exact route conflicts are still handled before mutation.
       }
-      const candidates = mayMoveFreshProfile
+      const candidates = maySelectAlternatePort
         ? [...(this.options.portCandidates?.(state.lanPort)
           ?? aidenRemotePortCandidates(state.lanPort))]
         : [state.lanPort];
@@ -485,7 +572,7 @@ export class AidenRemoteService {
           && candidate >= 1
           && candidate < 65_535
           && candidate % 2 === 0;
-        const validCommittedLegacy = !mayMoveFreshProfile
+        const validCommittedLegacy = !maySelectAlternatePort
           && Number.isInteger(candidate)
           && candidate >= 1
           && candidate <= 65_535;
@@ -494,6 +581,15 @@ export class AidenRemoteService {
           externallyReservedPorts.has(candidate)
           || externallyReservedPorts.has(tailscaleLoopbackPort(candidate))
         ) continue;
+        // On macOS an IPv4 loopback listener can coexist with an IPv6
+        // wildcard listener on the same numeric port. Without this probe,
+        // Aiden can report its HTTPS listener as ready while 127.0.0.1 still
+        // reaches the unrelated plaintext service. Reserve both address
+        // families as one endpoint pair before committing the port.
+        if (!(await ipv4LoopbackPortIsAvailable(candidate))) {
+          if (maySelectAlternatePort) continue;
+          throw new AidenRemotePortInUseError(state.lanPort);
+        }
         let lanServer: HttpsServer | null = null;
         let tailscaleServer: HttpServer | null = null;
         try {
@@ -562,7 +658,7 @@ export class AidenRemoteService {
             closeServer(lanServer),
             closeServer(tailscaleServer),
           ]);
-          if (isAddressInUse(error) && mayMoveFreshProfile) continue;
+          if (isAddressInUse(error) && maySelectAlternatePort) continue;
           if (isAddressInUse(error)) throw new AidenRemotePortInUseError(state.lanPort);
           throw error;
         }
@@ -606,8 +702,11 @@ export class AidenRemoteService {
         details: { mode: committedState.connectionMode, lanPort: committedState.lanPort },
       });
     } catch (error) {
-      if (error instanceof AidenRemotePortInUseError) {
-        this.lastErrorCode = error.code;
+      if (
+        error instanceof AidenRemotePortInUseError
+        || error instanceof AidenRemoteRelocationPreflightError
+      ) {
+        this.lastErrorCode = "remote_port_in_use";
         this.lastError = error.message;
       } else if (!this.lastError) {
         this.lastError = error instanceof Error ? error.message : "Aiden Remote failed to start.";
@@ -707,7 +806,41 @@ export class AidenRemoteService {
       }
       await this.stopListeners();
       await this.options.state.setEnabled(false);
+      this.lastError = undefined;
+      this.lastErrorCode = undefined;
       if (disconnectError) throw disconnectError;
+    });
+  }
+
+  /**
+   * Explicit recovery for a saved endpoint occupied by another local Aiden
+   * profile. Ordinary startup remains stable and fail-closed; only a direct
+   * user action may select and persist another available port pair.
+   */
+  async moveToAvailablePort(): Promise<void> {
+    await this.serialized(async () => {
+      const current = await this.options.state.snapshot();
+      if (current.tailscalePendingOutcome) {
+        throw new Error("Verify the pending Tailscale route update before moving this endpoint.");
+      }
+      if (current.tailscaleOwnership) {
+        throw new Error("Disconnect this profile's Tailscale Serve route before moving its endpoint.");
+      }
+      if (this.lastErrorCode !== "remote_port_in_use") {
+        throw new Error("Aiden Remote does not currently need a different port.");
+      }
+      await this.startConfigured(
+        { ...current, enabled: true },
+        { allowEndpointRelocation: true },
+      );
+      if (!current.enabled) {
+        try {
+          await this.options.state.setEnabled(true);
+        } catch (error) {
+          await this.stopListeners();
+          throw error;
+        }
+      }
     });
   }
 
@@ -898,9 +1031,15 @@ export class AidenRemoteService {
         ) {
           throw new Error("Connect the Aiden Tailscale Serve route before pairing.");
         }
-        const status = await this.options.tailscale.status();
-        if (this.options.tailscale.assessRoute) {
-          const assessment = await this.options.tailscale.assessRoute(
+        const inspection = this.options.tailscale.inspectRoute
+          ? await this.options.tailscale.inspectRoute(
+            this.loopbackTarget(state),
+            state.tailscaleOwnership,
+          )
+          : undefined;
+        const status = inspection?.connectionStatus ?? await this.options.tailscale.status();
+        if (inspection || this.options.tailscale.assessRoute) {
+          const assessment = inspection?.assessment ?? await this.options.tailscale.assessRoute!(
             this.loopbackTarget(state),
             state.tailscaleOwnership,
           );
@@ -980,7 +1119,15 @@ export class AidenRemoteService {
     await this.operationTail;
     const state = await this.options.state.snapshot();
     let tailscaleStatus: AidenTailscaleConnectionStatus = { installed: false };
-    if (state.connectionMode !== "lan" || state.tailscaleOwnership) {
+    const target = this.loopbackTarget(state);
+    const shouldAssessRoute = !state.tailscalePendingOutcome
+      && (state.connectionMode === "tailscale" || state.connectionMode === "both");
+    const inspection = shouldAssessRoute && this.options.tailscale.inspectRoute
+      ? await this.options.tailscale.inspectRoute(target, state.tailscaleOwnership)
+      : undefined;
+    if (inspection) {
+      tailscaleStatus = inspection.connectionStatus;
+    } else if (state.connectionMode !== "lan" || state.tailscaleOwnership) {
       tailscaleStatus = await this.options.tailscale.status();
     }
     const lanEndpoint = this.lanServer
@@ -990,14 +1137,14 @@ export class AidenRemoteService {
     const tailscaleEndpoint = tailscaleStatus.dnsName
       ? `https://${tailscaleStatus.dnsName}${AIDEN_REMOTE_BASE_PATH}`
       : undefined;
-    const target = this.loopbackTarget(state);
     let tailscaleConnected = false;
     let tailscaleRouteState: AidenTailscaleRouteState = "unavailable";
     let tailscaleErrorCode = tailscaleStatus.errorCode;
     if (state.tailscalePendingOutcome) {
       tailscaleRouteState = "reconciliation_required";
-    } else if (this.options.tailscale.assessRoute && (state.connectionMode === "tailscale" || state.connectionMode === "both")) {
-      const assessment = await this.options.tailscale.assessRoute(target, state.tailscaleOwnership);
+    } else if (inspection || (this.options.tailscale.assessRoute && shouldAssessRoute)) {
+      const assessment = inspection?.assessment
+        ?? await this.options.tailscale.assessRoute!(target, state.tailscaleOwnership);
       tailscaleRouteState = assessment.state;
       tailscaleErrorCode = assessment.errorCode;
       tailscaleConnected = assessment.state === "owned" && assessment.errorCode === undefined;

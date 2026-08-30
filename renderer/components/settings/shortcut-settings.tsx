@@ -306,7 +306,7 @@ export function ShortcutSettings() {
         </Text>
       </div>
 
-      <label className="flex h-9 items-center gap-2 rounded-control border border-field bg-background px-3 focus-within:border-focus-ring focus-within:bg-input">
+      <label className="flex h-9 items-center gap-2 rounded-control border border-field bg-background px-3 focus-within:bg-input">
         <Search className="size-4 text-tertiary" />
         <Input
           type="search"

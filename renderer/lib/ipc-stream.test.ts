@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { startGeneration, subagentsApi, type StreamCallbacks } from "./ipc.js";
 import {
+  detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
   subscribeDetachedTerminalChats,
 } from "./chat-terminal-sync.js";
@@ -92,10 +93,21 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
     );
     assert.equal(listenerCount(bridge), 8);
     assert.equal(bridge.listeners.has("chat:subagents"), false);
+    for (const listener of bridge.listeners.get("chat:delta") ?? []) {
+      listener({ streamId: handle.streamId, delta: "Visible before navigation" });
+    }
 
     handle.cancel("lifecycle");
     handle.cancel("lifecycle");
     assert.equal(listenerCount(bridge), 0);
+    assert.equal(
+      detachedLifecycleChatProjection("chat-1", "workspace-1")?.content,
+      "Visible before navigation",
+    );
+    assert.equal(
+      typeof detachedLifecycleChatProjection("chat-1", "workspace-1")?.lastTextDeltaAt,
+      "number",
+    );
     await Promise.resolve();
     assert.equal(
       bridge.invokes.filter(
@@ -289,6 +301,104 @@ test("live subagent notifications are subscribed only for enabled callbacks", ()
     assert.equal(bridge.listeners.get("chat:subagents")?.size, 1);
     enabled.cancel("lifecycle");
     assert.equal(bridge.listeners.get("chat:subagents")?.size, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("GUI artifact notifications are validated and scoped to their owning stream", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const disabled = startGeneration(
+      {
+        chatId: "chat-artifact-disabled",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      callbacks(),
+      "turn-artifact-disabled",
+    );
+    assert.equal(bridge.listeners.has("chat:artifact"), false);
+    disabled.cancel("lifecycle");
+
+    const enabled = startGeneration(
+      {
+        chatId: "chat-artifact-enabled",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      { ...callbacks(), onArtifactEvent: (event) => received.push(event) },
+      "turn-artifact-enabled",
+    );
+    const artifact = {
+      version: 1,
+      kind: "image",
+      attachment: {
+        id: "att-1",
+        name: "preview.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: 1,
+        data: "AA==",
+      },
+    };
+    const present = { version: 1, operation: "present", artifact };
+    const reset = { version: 1, operation: "reset" };
+    for (const handler of bridge.listeners.get("chat:artifact") ?? []) {
+      handler({ streamId: "other-stream", event: present });
+      handler({
+        streamId: enabled.streamId,
+        event: { ...present, version: 2 },
+      });
+      handler({ streamId: enabled.streamId, event: present });
+      handler({ streamId: enabled.streamId, event: reset });
+    }
+    assert.deepEqual(received, [present, reset]);
+    enabled.cancel("lifecycle");
+    assert.equal(bridge.listeners.get("chat:artifact")?.size, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("HTML GUI artifact present events are accepted without inline HTML bytes", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const enabled = startGeneration(
+      {
+        chatId: "chat-html-artifact",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      { ...callbacks(), onArtifactEvent: (event) => received.push(event) },
+      "turn-html-artifact",
+    );
+    const artifact = {
+      version: 1,
+      kind: "html",
+      id: "html-1",
+      title: "Dependencies",
+      mimeType: "text/html",
+      size: 12,
+      mediaId: "media-1",
+    };
+    const present = { version: 1, operation: "present", artifact };
+    const rejected = {
+      version: 1,
+      operation: "present",
+      artifact: { ...artifact, html: "<script>fetch('https://evil.test')</script>" },
+    };
+    for (const handler of bridge.listeners.get("chat:artifact") ?? []) {
+      handler({ streamId: enabled.streamId, event: rejected });
+      handler({ streamId: enabled.streamId, event: present });
+    }
+    assert.deepEqual(received, [present]);
+    enabled.cancel("lifecycle");
   } finally {
     restore();
   }

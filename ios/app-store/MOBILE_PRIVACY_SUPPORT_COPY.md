@@ -25,8 +25,14 @@ Chats, prompts, selected attachments, workspace operations, and approval decisio
 - **Local Network:** used only to discover or connect to an Aiden Agent installation on a network you choose.
 - **Camera:** used when you choose to scan a pairing QR code. Camera frames are processed for pairing and are not uploaded to Aiden.
 - **Photos and Files:** content is accessed only after you select it. Selected content is sent to the paired desktop and may be processed by the AI provider you chose for the request.
-- **Microphone and Speech Recognition:** requested only when you start dictation. Aiden On The Go requires on-device recognition and does not upload or retain a voice recording. If on-device recognition is unavailable or permission is denied, dictation is unavailable and the text composer remains usable.
+- **Microphone and Speech Recognition:** requested only when you start dictation. In **On this device** mode, the app uses the platform speech API. In **Paired desktop** mode, it sends a bounded microphone recording through the authenticated, encrypted Aiden connection to the selected local Parakeet model on your desktop; neither endpoint stores the recording. The text composer remains usable if recognition is unavailable or permission is denied.
 - **Notifications and Live Activities:** used for device-local status. Live Activities contain bounded last-known run state, use no Aiden cloud push relay, and hide assistant response excerpts by default.
+
+## Bot image creation
+
+Bots always include an Aiden semantic avatar that works without Apple Intelligence. On supported devices running a compatible iOS or iPadOS version, you may choose **Create with Apple Intelligence** to open Apple's system Image Playground. Apple controls image generation and may use Private Cloud Compute under Apple's privacy terms. Personalization from people or the Photos library is disabled by Aiden, and Aiden supplies only the Bot name and purpose visible in the editor as starting concepts.
+
+Aiden does not send Image Playground concepts, rejected candidates, or temporary file locations to Aiden's developer or to your paired desktop. Apple controls the system sheet and any Private Cloud Compute processing of the visible Bot name and purpose concepts. After you explicitly accept an image in Apple's sheet, Aiden copies it temporarily inside the app, removes metadata, center-crops and re-encodes it, and shows a preview. Only when you choose **Use this image** does Aiden send the normalized image directly to your paired desktop over the authenticated Remote Access connection. The desktop independently validates and stores its canonical copy. Temporary mobile candidates are deleted after use, cancellation, replacement, pairing changes, or editor dismissal. You can remove a generated Bot photo and return to the semantic avatar at any time.
 
 Opening a web link or displaying externally hosted transcript media can make a normal network request to that third-party host. Aiden credentials are not forwarded to the host; the host may receive ordinary request information such as the device's network address under its own policy.
 
@@ -39,5 +45,6 @@ Questions about privacy or support for Aiden Agent and Aiden On The Go can be se
 - Update the policy's “Last updated” date when this copy is published.
 - Preserve the existing disclosure that third-party AI providers process requests under their own policies.
 - Keep the direct statement that Aiden does not collect chats, prompts, selected files, provider keys, model responses, device identifiers, precise location, payment information, or analytics events unless the shipped product or operational services change.
+- Describe Image Playground as Apple-controlled processing that may use Private Cloud Compute; do not promise universal on-device generation. Preserve the accepted-image-only direct-to-paired-desktop boundary.
 - Make the support email visibly reachable from `https://chatwithaiden.com/`, which is the App Store support URL.
 - Recheck this copy against the final distribution candidate and App Privacy answers before every submission.

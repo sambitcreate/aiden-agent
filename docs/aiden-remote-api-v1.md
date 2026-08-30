@@ -1,6 +1,6 @@
 # Aiden Remote API v1
 
-Status: Phase 0 normative contract
+Status: Phase 4 authenticated Bot application service implemented
 Base path: `/api/aiden/v1`
 Transport: HTTPS REST plus resumable Server-Sent Events
 Schema: `protocol/aiden-remote/v1/openapi.json`
@@ -12,7 +12,7 @@ This is Aiden's native remote protocol. It is not Hermes WebUI compatibility. Ai
 
 The URL major version changes only for an incompatible wire break. Additive fields are forward compatible only where the schema marks an envelope extensible; new capability-gated endpoints/events do not require a new major version. Clients must ignore unknown fields on the extensible SSE envelope and unknown nonterminal SSE events. Known v1 payload and mutation DTOs remain allowlisted. Clients must fail closed and fetch an authoritative snapshot for an unknown terminal state, missing required identity, invalid sequence, or mutation-precondition mismatch.
 
-All timestamps are RFC 3339 UTC strings. IDs are opaque strings and must not encode filesystem paths, credentials, provider details, or user names. JSON request bodies use UTF-8 and reject duplicate keys, non-finite numbers, and unknown mutation fields.
+All timestamps are RFC 3339 UTC strings. IDs are opaque strings and must not encode filesystem paths, credentials, provider details, or user names. JSON request bodies use UTF-8 and reject duplicate keys, non-finite numbers, and unknown mutation fields. Before writing headers, the server serializes and validates every JSON response as one UTF-8 document. A document above 1 MiB is not truncated or partially emitted; the server returns a `413 payload_too_large` error envelope instead.
 
 ## 2. Authentication and capabilities
 
@@ -25,13 +25,15 @@ Aiden-Protocol-Version: 1
 
 The desktop stores only a slow/strong digest of the credential plus device metadata. Revocation closes streams and rejects later requests. Credentials are installation-specific and must never be accepted by a different Aiden instance.
 
+Server support and authenticated-device grants are separate authorities. Pairing and `GET /server` use `capabilities` for the exact grants held by that device. A Bot-aware device additionally receives `serverCapabilities`, the server-supported inventory, only after pairing with `acceptsBotCapabilities: true`. `bot:write` is invalid without `bot:read` in every grant or support projection. Bot eligibility requires `bot:read` in both values. A missing `serverCapabilities` field is an ambiguous legacy projection and fails closed for Bots; it is never interpreted as a Bot grant.
+
 Initial capability IDs:
 
 | Capability | Authority |
 | --- | --- |
-| `server:read` | Read instance/version/capability projection. |
+| `server:read` | Read instance/version/capability projection, aggregate usage, and paired-Mac speech status. |
 | `chat:read` | Read projected chats and stream status. |
-| `chat:write` | Create/rename/delete chats; start/cancel turns. |
+| `chat:write` | Create/rename/delete chats; start/cancel turns; use and set up paired-Mac speech transcription. |
 | `approval:respond` | Resolve approvals owned by this device/stream. |
 | `workspace:read` | Read workspace registry projection. |
 | `workspace:browse` | Navigate locally approved directory roots. |
@@ -42,8 +44,10 @@ Initial capability IDs:
 | `git:write` | Confirmed commit/push/checkout/branch/worktree mutations. |
 | `schedule:read` | Read scheduled tasks/settings/run history. |
 | `schedule:write` | Confirmed task/settings mutations and run-now. |
+| `bot:read` | Read Bot identity and Bot-classified chats, streams, attachments, and approvals. Granted only after explicit client negotiation. |
+| `bot:write` | Mutate Bot-classified chats and operate their turns, attachments, streams, and approvals. Requires `bot:read` as well as the existing route capability. |
 
-No capability can enable Computer Use, mint the reserved Assistant identity, select a hidden unattended mode, read provider/MCP credentials, execute a generic shell/Git command, or widen a workspace's tool authority.
+No capability can enable Computer Use, mint the reserved Assistant identity, select a hidden unattended mode, read provider/MCP credentials, accept a client-authored shell/Git command, or widen a regular Workspace chat's tool authority. This prohibits a generic remote terminal or command endpoint. It does not prohibit the existing Mac-owned agent runtime from invoking its shell tool during an authenticated Bot turn after the Bot policy, chat reduction, device grant, OS/global availability, approvals, and fresh effect lease all allow it.
 
 ## 3. Error envelope
 
@@ -69,7 +73,7 @@ Required stable codes include:
 - `authentication_required`, `credential_revoked`, `capability_denied`
 - `pairing_closed`, `pairing_expired`, `pairing_already_used`, `server_identity_changed`
 - `not_found`, `already_exists`, `revision_conflict`, `idempotency_conflict`, `idempotency_capacity`, `idempotency_in_flight`
-- `workspace_unavailable`, `workspace_changing`, `permission_confirmation_required`
+- `bot_archived`, `workspace_unavailable`, `workspace_changing`, `permission_confirmation_required`
 - `handle_invalid`, `handle_expired`, `handle_wrong_device`, `root_policy_changed`, `filesystem_identity_changed`, `path_outside_root`, `handle_capacity`
 - `turn_already_active`, `stream_gone`, `approval_already_resolved`, `approval_expired`
 - `operation_in_progress`, `operation_stale`, `git_capability_denied`
@@ -80,7 +84,7 @@ Required stable codes include:
 
 ### Server
 
-Allowed: instance ID/display name, app/protocol version, supported capabilities, selected connection mode, minimum client version, server time.
+Allowed: instance ID/display name, app/protocol version, exact authenticated-device capability grants, optional negotiated server-supported capabilities, selected connection mode, minimum client version, server time.
 
 The display name is a bounded, user-editable label persisted by the Mac and returned by `GET /server`; it is never an identity key. Clients scope credentials, caches, streams, App Intents, and navigation to `instanceId`, including when multiple installations use the same label or a label changes.
 
@@ -94,9 +98,25 @@ Forbidden: `folderPath`, repository/worktree/Git-admin paths, ownership token, d
 
 ### Chat/message
 
-Allowed: IDs, workspace ID, visible title/provider/model selections, an optional `titlePending: true` hint while first-turn background naming is active, visible user/assistant messages, bounded attachments, safe reasoning/tool/timeline milestones, timestamps, terminal provider-failure category.
+Allowed: IDs, workspace ID, optional Bot ID when the authenticated device has `bot:read`, visible title/provider/model selections, an optional `titlePending: true` hint while first-turn background naming is active, visible user/assistant messages, bounded attachments, safe parent reasoning/tool/timeline milestones, timestamps, and the parent turn's terminal provider-failure category. A Chat response carries `providerId` and `modelId` together or omits both; a partial pair is invalid.
 
-Forbidden: Pi journals, raw diagnostics, raw tool arguments/results not already safe for renderer display, subagent private history, hidden prompts, credentials, filesystem internals.
+Subagents remain a Mac-local implementation detail of the parent Pi turn. When the parent uses subagents, iOS and Android receive only the ordinary parent messages, parent timeline and outcome, and parent stream state. They never receive child/subagent IDs or counts, private histories, lifecycle snapshots, child controls, or child-specific endpoints. A child result may affect the parent's eventual visible reply through the normal parent runtime, but it is never projected as a separately addressable mobile object.
+
+Within its documented 200,000-Unicode-scalar bound, visible parent `message.text` is opaque transcript data and is preserved exactly. Privacy filtering applies to DTO fields and metadata, not to the appearance of visible text: Unicode, path-like text, URLs, UUIDs, base64- or hexadecimal-looking strings, and credential-shaped text are not rewritten, encoded, or replaced with a redaction marker. This does not authorize separate credential metadata; credentials, authorization headers, provider/MCP secrets, and API-key fields remain forbidden outside the visible transcript.
+
+Forbidden: Pi journals, raw diagnostics, raw tool arguments/results not already safe for renderer display, every child/subagent projection described above, hidden/system prompts, credentials or authorization headers outside visible parent message text, provider/MCP headers and API keys, filesystem/skill metadata, owned asset filenames, temporary asset URLs, and filesystem internals.
+
+### Bot
+
+Allowed: opaque Bot ID, bounded name and purpose, optional opening greeting, editable guidance in authenticated detail only, semantic avatar recipe, canonical raster metadata, safe health state, archive/timestamps/revision, favorite membership/order, bounded conversation previews, a plain-language access summary, and an optional audience-safe provider/model selection in authenticated detail. Capability catalogs expose only bounded labels, availability, and opaque selection IDs using the conservative `[A-Za-z0-9._:-]` grammar. A Custom policy or chat reduction exposes only the positive opaque selections needed to render and edit it.
+
+Response discriminants are coherent and fail closed: `health: archived` requires `archivedAt`, while every other health state forbids it; Full Bot access and inherited chat access forbid a Custom selection, while Custom access requires one; a pending notice forbids acceptance metadata, while an acknowledged notice requires both acceptance timestamp and decision. Clients tolerate harmless additive response display fields after recursively rejecting private wire keys, but never reinterpret unknown fields as authority.
+
+That recursive response check is context-aware. In Chat and Bot projections, clients normalize an additive field name by removing hyphens, underscores, periods, and whitespace and lowercasing it, then reject credential/secret/API-key/token, header, endpoint/path, prompt, instruction/greeting, tool argument/result, and reasoning variants enumerated by `x-aiden-context-private-response-fields`. Only the documented top-level `BotDetail.instructions` and `BotDetail.openingGreeting` properties are exceptions; similarly named additive or nested fields remain private and fail closed.
+
+Bot summaries never include instructions or opening greetings. Bot conversation pages never include reasoning, tool arguments/results, paths, attachment bytes, provider errors, or private journals. Raster metadata never includes an internal filename or path.
+
+Forbidden: managed-home/workspace paths, provider/MCP credentials or headers, endpoint URLs, environment values, resolved MCP bindings or fingerprints, skill paths/content, internal capability leases/epochs beyond the opaque public policy epoch, asset filenames, Image Playground temporary URLs, and unbounded prompt/message content.
 
 ### File
 
@@ -116,6 +136,12 @@ Allowed: task ID/revision, safe name/description, workspace/provider/model IDs, 
 
 Forbidden: provider fingerprint, resolved MCP bindings, chat ID, credentials, process environment, raw script path, unredacted stdout/stderr, internal cancellation handles.
 
+### Speech
+
+Allowed: the fixed local transcription engine identifier and readiness, a bounded allowlisted model catalog with installed/downloading state and progress, one model setup or removal command, and a final bounded transcript. Audio input is exact base64 PCM16: mono, signed 16-bit little-endian, 16 kHz, and no longer than 60 seconds.
+
+Forbidden: server filesystem paths, arbitrary model URLs or archive names, provider credentials, partial recognition events, retained recordings, raw decoder diagnostics, or transcripts above the response bound.
+
 ## 5. Endpoint inventory
 
 The OpenAPI document owns exact request/response shapes. This section owns behavior.
@@ -125,8 +151,9 @@ The OpenAPI document owns exact request/response shapes. This section owns behav
 - The locally displayed QR encodes the OpenAPI `PairingPayload` envelope as canonical JSON. Its `PairingBootstrap` contains protocol version, instance ID, HTTPS API endpoint, P-256 SPKI SHA-256 fingerprint, high-entropy single-use secret, and expiry; its trust member selects the bundled private LAN CA or system trust for Tailscale. The phone must decode and validate the complete envelope, configure hostname plus SPKI verification, and only then exchange the secret. A fingerprint learned from `/pairing/exchange` is confirmation, never the trust bootstrap.
 - `POST /pairing/manual-bootstrap`: returns that exact canonical `PairingPayload` encrypted with AES-256-GCM. A uniformly random 100-bit Crockford Base32 setup code is shown only through local Electron IPC and derives the encryption key with HKDF-SHA256. The client sends `{}` to the selected exact endpoint, validates the bounded response, derives and authenticates the envelope locally, requires the decrypted endpoint and expiry to match, and then uses the normal pinned `/pairing/exchange`. The setup code never appears in a URL, request, log, persistent state, Bonjour record, or public status projection. LAN users select a discovered Mac; Tailscale users provide its canonical private endpoint. QR and manual entry share one window and one synchronously consumed exchange secret.
 - `GET /health`: minimal readiness and protocol version.
-- `POST /pairing/exchange`: exchange a high-entropy single-use secret for device/instance IDs, bearer credential, capability list, endpoint, and P-256 SPKI SHA-256 fingerprint. A client may set `acceptsDisplayName: true` to receive the optional bounded server display name; the server omits that additive key for strict legacy v1 decoders. The display name is presentation metadata only and newer clients still verify `instanceId` as identity.
-- `GET /server`: authenticated server projection.
+- `POST /pairing/exchange`: exchange a high-entropy single-use secret for device/instance IDs, bearer credential, exact device capability grants, endpoint, and P-256 SPKI SHA-256 fingerprint. A client may set `acceptsDisplayName: true` to receive the optional bounded server display name; the server omits that additive key for strict legacy v1 decoders. A client must separately set `acceptsBotCapabilities: true` before the Mac may issue `bot:read` or `bot:write`. Absence or `false` preserves the complete legacy grant vocabulary and never upgrades an existing device. The display name is presentation metadata only and newer clients still verify `instanceId` as identity.
+- `GET /server`: authenticated server projection. Its required `capabilities` array is the authenticated device's exact grants. The additive `deviceName` field is the presentation-only label currently stored for the calling device, allowing newer clients to refresh a stale generic label without writing on every connection. `serverCapabilities` is emitted only when the paired device persistently opted into the Bot capability vocabulary with `acceptsBotCapabilities: true`; it contains the server-supported inventory independently of the device's grants. A Bot-aware device without `bot:read` may therefore learn that its Mac supports Bots but still cannot infer any Bot identity or chat. A legacy device that happens to contain a later grant never receives the additive field unless it negotiated the vocabulary.
+- `PATCH /device/identity`: authenticated device-label refresh with exact body `{ "name": string }`. It requires `server:read`, updates only the calling credential's bounded display label, and returns the normalized label. The label is presentation metadata—not an authentication or cross-Mac identity key. Older Macs may omit this additive route, so clients treat an unavailable refresh as non-fatal.
 
 Device enumeration/revocation remains desktop-local in v1 unless a later explicit capability is added.
 
@@ -159,18 +186,63 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `GET /chats/{chatId}/attachments/{attachmentId}/content`: return one authenticated, chat-scoped canonical PNG or JPEG for preview.
 - `GET /streams/{streamId}`
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
-- `POST /streams/{streamId}/cancel`
+- `POST /streams/{streamId}/cancel`: request cancellation of the authenticated parent turn stream. This is not a child/subtree control endpoint; any internal child shutdown is a Mac-owned consequence of cancelling the parent and is never separately addressable by mobile.
 - `POST /approvals/{approvalId}/respond`: `allow` or `deny` only.
+- `GET /streams/{streamId}/approval`: current bounded approval snapshot, or `null` after resolution.
 
 Turn start returns `turnId`, `streamId`, accepted state, and canonical appended message. The generation owner is the authenticated device/stream, not a socket. Disconnect never resends the prompt or cancels the turn. Restart during an active remote turn records one explicit interrupted terminal state and never retries the provider call.
 
+The ordinary `GET /chats` Workspace projection is regular-chat only, and ordinary `POST /chats` rejects `botId`. Every direct read that resolves a Bot-classified chat—including its attachment content, stream, and approval snapshot—requires both its existing route grant and `bot:read`. Every mutation, turn, attachment write, stream cancellation, or approval response for a Bot chat additionally requires `bot:write`. Missing Bot authority returns the same unavailable/expired classification as an unknown scoped resource so a legacy device cannot infer Bot identity from a retained chat, stream, attachment, or approval identifier.
+
 First-turn title generation remains off the interactive response path. While it is active, chat list/get projections include optional `titlePending: true`; the field disappears only after the title job settles. Clients may use this hint for a bounded authoritative refresh and must not treat it as a revision or mutation precondition.
+
+Bot chats are persistent identity records and are not independently deletable through the generic `DELETE /chats/{chatId}` route. Archive the Bot to make it read-only; this prevents retained legacy duplicates from being promoted into a second active conversation.
+
+### Paired-Mac speech transcription
+
+- `GET /speech`: current local engine, selected model, readiness, and allowlisted model setup state. Requires `server:read`.
+- `PATCH /speech`: select an installed allowlisted model. Requires `chat:write`.
+- `POST /speech/models/{modelId}/download`: download and install one fixed-catalog model archive on the Mac. Requires `chat:write`.
+- `DELETE /speech/models/{modelId}/download`: cancel that model's active setup. Requires `chat:write`.
+- `DELETE /speech/models/{modelId}`: remove an installed model when it is not active. Requires `chat:write`.
+- `POST /speech/transcriptions`: transcribe one exact PCM16 envelope locally and return one final transcript. Requires `chat:write`.
+
+Speech setup and use map to the frozen v1 `server:read` and `chat:write` grants so shipped strict clients can continue pairing. A future protocol revision may split speech use from model administration; v1 clients must not infer such authority from unknown capability names.
+
+The transcription request accepts only mono signed 16-bit little-endian PCM at 16 kHz, base64 encoded, with at most 60 seconds of samples. The Mac authenticates before buffering this larger body, repeats the credential mutation fence after buffering, validates the exact envelope, and admits at most one active decode plus one queued decode. A third concurrent request fails with retryable `429 rate_limited`. The local Parakeet engine emits final text only; recordings and transcripts are not persisted, included in diagnostics, or sent to Aiden's provider integrations.
+
+Mobile-triggered setup may download only the fixed release URL compiled into Aiden. The Mac enforces an 800 MiB compressed-archive download ceiling, extracts into a staging directory, requires the complete model manifest, then publishes the model. Callers cannot provide a URL or destination. Download, extraction, and recognition failures return only stable sanitized errors. A separate extracted-byte/file-count ceiling remains required before treating hostile-archive expansion as fully mitigated.
+
+### Bots, Bot conversations, access, and avatars
+
+These routes were frozen as contract in Phase 1 and implemented in Phase 4 through main-owned application and authority services: authenticated Bot identity, access, chat creation, favorite order, notice acknowledgement, bounded inbox projection, managed-home files, and canonical avatars. Each Bot operation carries `x-aiden-capabilities`; every listed capability is required conjunctively. `x-aiden-capability` remains the primary legacy annotation, not an alternative grant. A Bot mutation therefore always requires both `bot:read` and `bot:write`, plus the ordinary `chat:*` or `files:*` grant when it reuses those resource classes.
+
+- `GET /bots`: at most 256 bounded summaries, matching the authoritative Bot-store ceiling, plus the fixed maximum and authoritative revisioned favorite order. `includeArchived=true` is explicit. Summaries never contain instructions, every summary has `updatedAt >= createdAt`, and favorite IDs never refer to archived Bots even when archived summaries are included.
+- `POST /bots`: exact `BotCreateRequest`, including one required Full/Custom `access` update tied to the current catalog revision, device-scoped `Idempotency-Key`, and authoritative `BotDetail` response. Identity and initial access are created atomically. Any provider/model pair selected by the request or resolved by the Mac for creation must be currently available; unavailable selections fail closed without fallback.
+- `GET /bots/{botId}`: authenticated detail with editable guidance, a safe access view, the Bot's optional current audience-safe provider/model selection, and its optional `visionModelSelection`. The latter is a separately bound image-inspection companion; private runtime identities never cross this boundary.
+- `PATCH /bots/{botId}`: exact non-empty `BotIdentityPatch` plus `If-Match`.
+- `DELETE /bots/{botId}`: `If-Match` soft archive returning the new authoritative detail; it never hard-deletes or mutates identity, history, home, semantic avatar, or avatar assets. Archive atomically removes the Bot from favorites.
+- `POST /bots/{botId}/restore`: `If-Match` plus `Idempotency-Key`, returning the restored authoritative detail.
+- `GET /bot-favorites` and `PATCH /bot-favorites`: at most 20 unique, non-archived Bot IDs; update is whole-list replacement under `If-Match`, so membership and order change atomically. A replacement may omit archived Bots and may still edit unrelated active favorites, but adding an archived Bot returns `bot_archived`. No successful favorites response retains an archived Bot ID.
+- `GET /bot-conversations?cursor=…&query=…&botId=…&limit=…`: newest-first stable pages of at most 50 items, with a 200-scalar search query and 128-scalar cursor. Search is confined to Bot name/purpose, conversation title, and the bounded previews actually projected by the Mac. Every item has `updatedAt >= createdAt`. `canRespondToApproval: true` is valid only while `activityState` is `waiting_for_approval`; a waiting row may still be non-respondable when the paired device lacks authority.
+- `POST /bots/{botId}/chats`: open-or-create the Bot's one persistent chat. The frozen v1 response remains `201` and the operation identifier remains `createBotChat` for compatibility with shipped clients, even when the existing chat is returned. When it already exists, the Mac returns it unchanged and ignores creation-only provider/model input. When absent, an empty body inherits the Bot provider/model; otherwise one exact providerId/modelId pair is required, plus `Idempotency-Key`. Partial pairs never fall back. The creation pair must be currently available; an unavailable selection fails closed without fallback. The Mac injects the authoritative `botId` and hidden managed-home workspace; neither identifier is accepted in the body, and every successful response includes that authoritative `botId`. Concurrent calls and retries converge on the same chat. Legacy duplicate chats remain readable for recovery, but only the deterministic canonical chat is writable or projected in the Bot inbox.
+- `GET /bot-capabilities`: safe revisioned provider/model, image-input capability, file-scope, shell, connection/MCP, skill, and other-capability catalog plus the full notice status. `supportsImages` is explicit and unknown capability fails closed. The response never returns display copy that the client could mistake for authority.
+- `PATCH /bots/{botId}/capabilities`: `If-Match` Full/Custom update with the exact current `catalogRevision`. Full requires `confirmedForeground: true` and may carry one exact provider/model pair; omitting both preserves the saved choice for compatibility with older clients, while supplying only one is invalid. Custom contains exactly one currently available provider/model pair plus only exact positive opaque selections from that catalog. Optional `visionModel` uses three-state semantics: omitted preserves the companion, `null` clears it, and an exact provider/model object sets it only when the catalog marks that model image-capable. A supplied pair becomes revisioned durable authority, changing either primary or companion fences active turns, and the canonical persistent chat mirrors only the primary model. An unavailable model remains visibly blocked and is never replaced by fallback.
+- `GET /chats/{chatId}/capabilities` and `PATCH /chats/{chatId}/capabilities`: authenticated authoritative inherit/Custom view, then an `If-Match` update carrying both the exact `catalogRevision` and `expectedBotPolicyRevision`. The server rejects policy drift or any selection outside the current Bot ceiling and returns the authoritative chat subset view.
+- `GET /bot-access-notice`: Mac-owned acknowledgement status for this paired device. This v1 client recognizes only `bot-full-access-v1`; an unknown future version fails closed until matching copy ships. `POST /bot-access-notice/acknowledgement` accepts only that exact version, `continue_full` or `customize_first`, `confirmedForeground: true`, and an `Idempotency-Key`. Local dismissal never acknowledges it.
+- `GET /bot-conversations/{chatId}/files` and `GET|PUT /bot-conversations/{chatId}/files/{fileId}`: reuse `FileIndex`/`FileDocument` and expected-version writes, but authorize every operation against the device grant, authoritative Bot/chat binding, current Bot policy, chat reduction, policy epoch, and managed-home identity. Ordinary Workspace file routes reject hidden Bot homes even if their opaque workspace ID is learned.
+- `PUT /bots/{botId}/avatar`: one exact bounded PNG/JPEG source envelope under `If-Match` and `Idempotency-Key`; the Mac validates it, independently decodes it, and stores a canonical 512 × 512 PNG before returning canonical metadata. Before the first raster photo, `If-Match` is the Bot detail revision; afterward it is the current public `assetRevision`, so simultaneous photo edits conflict even though the semantic identity is unchanged. `DELETE /bots/{botId}/avatar` uses that same rule and returns the Bot to its semantic fallback.
+- `GET /bots/{botId}/avatar/{assetRevision}`: authenticated canonical 512 × 512 PNG only, with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Bot ID and asset revision must match the current main-owned record.
+
+An authorized archived Bot remains readable but read-only until restored: list/detail, conversation/history, existing attachment and managed-home file reads, access views, and the current canonical avatar remain available. Chat open-or-create, new turns, uploads, writes, approval effects, identity/access/avatar mutations, and attempts to add the archived Bot to favorites return `bot_archived`; restore remains allowed. Archiving atomically removes favorite membership. Bot reads without `bot:read`, mutations without the full conjunctive grant, cross-Bot/chat references, corrupt bindings, unavailable records, and unknown IDs retain the same non-inferential unavailable classification. Catalog or policy revision drift returns `revision_conflict` with only the current safe revision; invalid/removed opaque selections fail closed and never fall back to Full. Authoritative Custom views may retain selected catalog tombstones marked `available: false` so drift is visible, but new mutations may select only entries currently marked available.
 
 ### Attachments
 
 Uploads produce random, short-lived, single-use references bound to the authenticated device and exact chat. References expire after 10 minutes, are removed on device revocation, and are consumed atomically by a turn. A turn accepts at most 10 distinct references. The server retains at most 20 staged references per device/chat, 40 per device, 256 globally, and 64 MiB of staged representation data; capacity exhaustion fails closed.
 
 Image uploads accept only PNG or JPEG, at most 8 MiB decoded, at most 16,384 pixels on either axis, and at most 40 million decoded pixels. Text uploads accept only the documented plain-text/source MIME allowlist, at most 100,000 Unicode scalars and 400,000 UTF-8 bytes. Display names are bounded to 255 Unicode scalars and reject separators and control characters. Upload envelopes never accept a local or server path. Chat and message responses project attachment ID, display name, MIME type, kind, and size only; inline bytes and text are never returned. A client may fetch a projected raster by its opaque attachment ID through the authenticated content route. The server re-resolves it inside the requested chat, fails closed on duplicate IDs or mismatched size/MIME/signature, and returns only bounded canonical image bytes with `no-store` and `nosniff` headers. Text and filesystem content are never exposed through that route.
+
+At turn admission the Mac computes the image route from main-owned Bot authority. A vision-capable primary receives pixels natively. A text-only primary may use only its explicitly saved companion through the built-in `inspect_image` tool; the tool accepts generation-scoped attachment aliases, performs one bounded tool-free model call, and returns text to the primary. Without either route, admission fails before staged uploads are consumed. Neither the client nor the primary model can supply arbitrary paths, URLs, provider credentials, or chat identifiers to image inspection, and Aiden never silently falls back to another provider.
 
 Assistant message history also carries a closed exceptional outcome when a stored generation failed or was cancelled. Failure metadata is restricted to Aiden's fixed provider category, bounded attempt count, and retry-exhausted flag; provider-authored errors and diagnostics remain forbidden. Completed messages omit this field. This makes terminal state durable across SSE disconnects and app restarts without exposing the private generation journal.
 
@@ -227,6 +299,8 @@ Initial event types:
 
 The `terminal` bit is required. Known `done`, `error`, and `cancelled` events set it to `true`; every other known event sets it to `false`. An unknown nonterminal event is ignored for forward compatibility only after its required bounded payload object and envelope safety fields validate. An unknown terminal event fails closed and triggers authoritative reconciliation. Individual SSE frames are limited to 1 MiB before JSON decoding. Sequences are monotonically increasing and unique within a stream. Replay validates the caller's expected stream identity and includes only events after the acknowledged sequence. Duplicate/lower sequences are ignored. A stream mismatch or gap triggers snapshot/status reconciliation; it never triggers turn creation. Terminal events are immutable. Expired journals return `stream_gone` with the chat ID needed for snapshot recovery.
 
+When a stream reports `waiting_for_approval`, clients fetch its separate approval snapshot. This additive endpoint preserves the closed v1 stream-status contract while making reconnect authoritative. It returns approval, stream, and chat IDs; a safe summary; tool identity; expiry; and whether the mobile client may offer Allow. Exact privileged command, path, and external-mutation details remain host-only, so mobile renders those requests as deny-only. The snapshot becomes `null` as soon as the approval resolves, expires, is cancelled, or the stream terminates.
+
 ## 7. Idempotency, revisions, and operation ownership
 
 - Create/start/run endpoints require `Idempotency-Key` (random client value, scoped to authenticated device + route + resource). The server durably stores only a bounded scope digest/request digest/state/safe-result record plus a non-secret stable operation reference; raw keys are never persisted. Fulfilled and safely classified rejected outcomes are replayable until expiry. In-flight entries never expire or evict into duplicate work and restore after restart as a fail-closed `idempotency_in_flight` state until the authoritative operation store finalizes that exact reference. Settlement starts the replay TTL; a long-running operation does not lose its replay window. Same key and same canonical request returns the original outcome; same key with different input returns `idempotency_conflict`. Capacity exhaustion fails closed rather than evicting any unexpired or in-flight record.
@@ -236,9 +310,11 @@ The `terminal` bit is required. Known `done`, `error`, and `cancelled` events se
 
 ## 8. Limits and logging
 
-The implementation must set explicit defaults and expose safe capability metadata for request bytes, JSON depth, attachment totals, active devices, streams, replay journal events/bytes/retention, browser pages/depth, file index bounds, text read/write bytes, diff bytes, schedule output bytes, rate limits, and timeouts. Ordinary JSON requests are limited to 1 MiB. Attachment uploads have a dedicated 12 MiB JSON-envelope limit.
+The implementation must set explicit defaults and expose safe capability metadata for request bytes, JSON depth, attachment totals, active devices, streams, replay journal events/bytes/retention, browser pages/depth, file index bounds, text read/write bytes, diff bytes, schedule output bytes, rate limits, and timeouts. Ordinary JSON requests and JSON responses are limited to 1 MiB. A Chat contains at most 10,000 messages in addition to that byte ceiling. Attachment uploads have a dedicated 12 MiB JSON-envelope limit. Bot avatar uploads have a separate 6 MiB JSON-envelope limit.
 
-Logs may include request ID, route template, status, latency, instance/device ID suffix, and stable error code. Logs never include Authorization, pairing secrets, idempotency keys, opaque handles, request/response bodies, paths, prompts, message text, attachment data, tool arguments/results, provider errors, Git output, schedule output, or App Group/Keychain contents.
+Bot wire limits are: Bot ID 160 scalars; remote chat/revision/policy-epoch/cursor IDs 128; Chat title 1,024; provider/model IDs 256/512; name 80; purpose/access summary 280; opening greeting 2,000; instructions 32,000; conversation preview 500; at most 256 Bots, 20 favorites, and 50 conversations per page. Search is 200 scalars. The safe catalog permits at most 64 providers with 256 models each and 512 models total, 64 file scopes, 128 connections, 256 skills, and 128 other capability choices. File scopes use the explicit kinds `full_mac`, `bot_home`, and `approved_location`; Custom Full Mac access is never disguised as an approved folder. Opaque file-scope, connection, skill, and other-capability IDs reject slashes, backslashes, whitespace, percent-encoding, and other characters outside `[A-Za-z0-9._:-]`. A selected source raster is at most 4 MiB decoded, 4,096 pixels on either axis, and 16 million decoded pixels; its base64 field is at most 5,592,408 characters. The persisted and served canonical result is always a 512 × 512 PNG. Arrays use unique opaque IDs and reject duplicates.
+
+Diagnostics may include only a closed route category, outcome or status class, bounded latency, and a stable Aiden-owned error code. Successful production traffic is reduced to daily aggregate counts. Durable records never include request IDs, instance/device suffixes, Authorization, pairing secrets, idempotency keys, opaque handles or capability selections, request/response bodies, search queries, Bot names/purpose/greetings/instructions/previews, managed-home or other paths, avatar bytes or temporary asset references, policy records, connection/skill/provider details, prompts, message text, attachment data, tool arguments/results, provider errors, Git output, schedule output, or App Group/Keychain contents.
 
 ## 9. Transport identity
 

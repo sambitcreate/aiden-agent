@@ -133,6 +133,13 @@ test("slash availability combines the dispatcher with composer-specific state", 
     /remove draft attachments/iu,
   );
   assert.match(
+    slashCommandAvailability(command("visualize"), {
+      ...context,
+      hasWorkspaceArtifactAccess: false,
+    }).reason ?? "",
+    /allow workspace access/iu,
+  );
+  assert.match(
     slashCommandAvailability(command("clone"), {
       ...context,
       payloadAfterToken: true,
@@ -251,6 +258,35 @@ test("action attempts distinguish immediate UI dispatch from delayed clipboard w
   }
 });
 
+test("visualize only commits the slash draft after the composer accepts the send", async () => {
+  const rejected = attemptSlashCommandAction(command("visualize"), "", {
+    executeCommand: () => true,
+    openSettings: () => undefined,
+    requestRename: () => undefined,
+    copyLatestResponse: () => undefined,
+    openReview: () => undefined,
+    openAccess: () => undefined,
+    submitComposerInstruction: async () => false,
+  });
+  assert.equal(rejected.kind, "async");
+  if (rejected.kind === "async") {
+    assert.deepEqual(await rejected.completion, { handled: false });
+  }
+
+  const accepted = executeSlashCommandAction(command("visualize"), "  chart sales  ", {
+    executeCommand: () => true,
+    openSettings: () => undefined,
+    requestRename: () => undefined,
+    copyLatestResponse: () => undefined,
+    openReview: () => undefined,
+    openAccess: () => undefined,
+    submitComposerInstruction: async (instruction, prompt) =>
+      instruction === "visualize" && prompt === "chart sales",
+  });
+  assert.equal(accepted instanceof Promise, true);
+  assert.equal(await accepted, true);
+});
+
 test("failed async actions return a controlled failure before the composer commits", async () => {
   const failure = new Error("Clipboard access was denied.");
   const handlers: SlashCommandActionHandlers = {
@@ -271,4 +307,41 @@ test("failed async actions return a controlled failure before the composer commi
       error: failure,
     });
   }
+});
+
+test("visualize is idle-workspace and submits a composer instruction", () => {
+  const visualize = command("visualize");
+  assert.equal(visualize.availability, "idle-workspace");
+  assert.equal(visualize.argument, "optional-prompt");
+  assert.deepEqual(visualize.action, { kind: "composer-instruction", instruction: "visualize" });
+  assert.deepEqual(slashCommandAvailability(visualize, context), { available: true });
+  assert.match(
+    slashCommandAvailability(visualize, { ...context, hasWorkspace: false }).reason ?? "",
+    /workspace first/iu,
+  );
+  assert.match(
+    slashCommandAvailability(visualize, { ...context, idle: false }).reason ?? "",
+    /current response/iu,
+  );
+  assert.deepEqual(validateSlashCommandArgument(visualize, "draw a DAG"), {
+    valid: true,
+    value: "draw a DAG",
+  });
+  assert.equal(validateSlashCommandArgument(visualize, "bad\nprompt").valid, false);
+
+  const submitted: unknown[] = [];
+  const handlers: SlashCommandActionHandlers = {
+    executeCommand: () => true,
+    openSettings: () => undefined,
+    requestRename: () => undefined,
+    copyLatestResponse: () => undefined,
+    openReview: () => undefined,
+    openAccess: () => undefined,
+    submitComposerInstruction: (instruction, prompt) => {
+      submitted.push([instruction, prompt]);
+      return true;
+    },
+  };
+  assert.equal(executeSlashCommandAction(visualize, "  chart sales  ", handlers), true);
+  assert.deepEqual(submitted, [["visualize", "chart sales"]]);
 });

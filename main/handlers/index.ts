@@ -17,7 +17,7 @@ import { registerTitleProviderHandlers } from "./title-providers.js";
 import { registerUsageHandlers } from "./usage.js";
 import { registerProfileHandlers } from "./profile.js";
 import { registerComputerUseHandlers } from "./computer-use.js";
-import { registerArtificialAnalysisHandlers } from "./artificial-analysis.js";
+import { registerModelInsightsHandlers } from "./model-insights.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
@@ -25,10 +25,11 @@ import { registerShortcutHandlers } from "./shortcuts.js";
 import { registerTelegramHandlers } from "./telegram.js";
 import { registerSubagentHandlers } from "./subagents.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
+import { registerBotHandlers } from "./bots.js";
+import { registerDiagnosticHandlers } from "./diagnostics.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 
 import { ipcMain, logger } from "../platform.js";
-import { writeDevLog } from "../services/dev-log.js";
-import { isPackagedRuntime } from "../runtime-mode.js";
 
 export function registerHandlers(): void {
   logger.info("handlers", "Registering IPC handlers...");
@@ -38,13 +39,7 @@ export function registerHandlers(): void {
     return await appHandlers.getInfo();
   });
 
-  // Renderer error forwarding for the dev log file (see services/dev-log.ts).
-  ipcMain.handle("devlog:write", async (_event, level: unknown, message: unknown) => {
-    if (isPackagedRuntime()) return;
-    const safeLevel = level === "warn" || level === "error" ? level : "info";
-    const text = (typeof message === "string" ? message : String(message)).slice(0, 16_384);
-    writeDevLog(safeLevel, "renderer", [text]);
-  });
+  registerDiagnosticHandlers();
 
   // AI chat client handlers
   registerProviderHandlers();
@@ -59,7 +54,7 @@ export function registerHandlers(): void {
   registerUsageHandlers();
   registerProfileHandlers();
   registerComputerUseHandlers();
-  registerArtificialAnalysisHandlers();
+  registerModelInsightsHandlers();
   registerDictationHandlers();
   registerScheduledTaskHandlers();
   registerAssistantHandlers();
@@ -67,6 +62,7 @@ export function registerHandlers(): void {
   registerTelegramHandlers();
   registerSubagentHandlers();
   registerAidenRemoteHandlers();
+  if (hostPlatformCapabilities().bots) registerBotHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

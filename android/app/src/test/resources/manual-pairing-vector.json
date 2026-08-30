@@ -1,0 +1,14 @@
+{
+  "code": "0123-4567-89AB-CDEF-GHJK",
+  "payload": "{\"kind\":\"aiden-pairing-v1\",\"bootstrap\":{\"protocolVersion\":1,\"instanceId\":\"instance_fixture_01\",\"endpoint\":\"https://aiden-fixture.example.test/api/aiden/v1\",\"serverSpkiSha256\":\"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"secret\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"expiresAt\":\"2026-08-21T17:05:00.000Z\"},\"trust\":{\"mode\":\"system\"}}",
+  "bootstrap": {
+    "kind": "aiden-manual-pairing-v1",
+    "protocolVersion": 1,
+    "sessionId": "pairing_ssssssssssssssssssssssssssssssss",
+    "expiresAt": "2026-08-21T17:05:00.000Z",
+    "salt": "AAECAwQFBgcICQoLDA0ODw",
+    "nonce": "EBESExQVFhcYGRob",
+    "ciphertext": "rvjdeCbqBsel3faU24lEJ2YZUxyGXuh2qKSyWL_RUK3Hh9JiyfIoYqT3ismISu8duWMCkhKmDneYWswEOGG6l_2OADKUmsPtgdsYQ8UpAGnX_prF044mtYFBmf9-_z7DYQz0d5_uJ7RWg9JnI0K8lAuM-5nQYBV1eWgZZ0aclBLTzIGFP2N4Dd7szHapNNrJia_HoEoQ6wopSZoMAJrnkuJcxLtEVQrRla3YEWR4KAkwrGPP8HyZ5OQ6vQT9e9waInCqWCOq5Se9r8xZ-dL-l6P4XdfUHp74zUIYgNduqd2ZVs-9vIu3Y1WXlpkosTO4ulF4goF-JfiZp-QZlc_uo2299twQVTy2ZCGNuGwaOkF_yixW0i66X-H9ZmPdqDwToq0SahQ3Q8HXR2Aqx64Nz-ZBvJ0ESMz5SVlMIJfXKbuafRQR5Dy0Y42kqlt6rnh18_Jiz9N8N219M54Dqd8",
+    "tag": "P-ntrj59ZSt45orya5fSvQ"
+  }
+}

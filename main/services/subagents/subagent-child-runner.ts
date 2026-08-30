@@ -35,7 +35,7 @@ import {
   type SubagentContextCapture,
   type SubagentContextMode,
 } from "./forked-context.js";
-import { sanitizeSubagentText } from "./safe-text.js";
+import { normalizeSubagentModelText } from "./model-text.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
 import { createSubagentTool } from "./subagent-tool.js";
 import type { SubagentSupervisor } from "./subagent-supervisor.js";
@@ -175,13 +175,22 @@ export interface RunSubagentChildInput {
   };
 }
 
-function truncateSummary(text: string): string {
-  text = sanitizeSubagentText(text);
-  if (text.length <= MAX_SUBAGENT_SUMMARY_CHARS) return text;
+export function projectSubagentCompletedSummary(
+  text: string,
+): Pick<SubagentTaskResult, "summary" | "summaryTruncated"> {
+  text = normalizeSubagentModelText(text);
+  if (text.length <= MAX_SUBAGENT_SUMMARY_CHARS) return { summary: text };
   const marker = "\n\n… [middle of child summary truncated] …\n\n";
   const available = MAX_SUBAGENT_SUMMARY_CHARS - marker.length;
   const head = Math.min(2_000, Math.floor(available / 2));
-  return `${text.slice(0, head)}${marker}${text.slice(-(available - head))}`;
+  let headEnd = head;
+  if (headEnd > 0 && /[\uD800-\uDBFF]/u.test(text[headEnd - 1]!)) headEnd -= 1;
+  let tailStart = text.length - (available - head);
+  if (tailStart < text.length && /[\uDC00-\uDFFF]/u.test(text[tailStart]!)) tailStart += 1;
+  return {
+    summary: `${text.slice(0, headEnd)}${marker}${text.slice(tailStart)}`,
+    summaryTruncated: true,
+  };
 }
 
 function safeFailure(
@@ -810,7 +819,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       role: input.request.role,
       label: input.request.label,
       status: "completed",
-      summary: truncateSummary(terminalOutput.trim() || "[No textual result.]"),
+      ...projectSubagentCompletedSummary(terminalOutput.trim() || "[No textual result.]"),
     };
   } finally {
     clearTimeout(deadlineTimer);

@@ -5,10 +5,15 @@
 import { execFile } from "node:child_process";
 
 export type PasteOutcome = "pasted" | "copied";
+export interface PasteDeliveryResult {
+  outcome: PasteOutcome;
+  reason?: "accessibility-required" | "paste-unavailable";
+  message?: string;
+}
 
 export interface PasteDeps {
   writeClipboard: (text: string) => void;
-  isAccessibilityTrusted: (prompt: boolean) => boolean;
+  isAccessibilityTrusted: () => boolean;
   pasteWithPreservedClipboard: (text: string) => Promise<boolean>;
   log?: (message: string, error?: unknown) => void;
 }
@@ -45,17 +50,30 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 				set the clipboard to transcriptText
 				return "copied"
 			end if
-			set the clipboard to transcriptText
+	set the clipboard to transcriptText
 			keystroke "v" using command down
 		on error
 			set the clipboard to transcriptText
 			return "copied"
 		end try
 	end tell
-	delay 0.12
-	try
-		if (the clipboard as text) is transcriptText then set the clipboard to previousClipboard
-	end try
+	set quietWindow to 0.2
+	set elapsed to 0
+	repeat while elapsed is less than 8
+		delay 0.05
+		set elapsed to elapsed + 0.05
+		try
+			if (the clipboard as text) is not transcriptText then return "pasted"
+		on error
+			return "pasted"
+		end try
+		if elapsed is greater than or equal to quietWindow then
+			try
+				if (the clipboard as text) is transcriptText then set the clipboard to previousClipboard
+			end try
+			return "pasted"
+		end if
+	end repeat
 	return "pasted"
 end run`;
 
@@ -82,16 +100,33 @@ export async function runAtomicMacPaste(text: string): Promise<boolean> {
  * Deliver a finished transcript. Without Accessibility access or after any
  * failure, the transcript remains available on the clipboard.
  */
-export async function pasteTranscript(text: string, deps: PasteDeps): Promise<PasteOutcome> {
-  if (!deps.isAccessibilityTrusted(true)) {
+export async function pasteTranscript(
+  text: string,
+  deps: PasteDeps,
+): Promise<PasteDeliveryResult> {
+  if (!deps.isAccessibilityTrusted()) {
     deps.writeClipboard(text);
-    return "copied";
+    return {
+      outcome: "copied",
+      reason: "accessibility-required",
+      message: "Copied — allow Accessibility to paste automatically.",
+    };
   }
   try {
-    return (await deps.pasteWithPreservedClipboard(text)) ? "pasted" : "copied";
+    return (await deps.pasteWithPreservedClipboard(text))
+      ? { outcome: "pasted" }
+      : {
+          outcome: "copied",
+          reason: "paste-unavailable",
+          message: "Copied — the original text field was no longer focused.",
+        };
   } catch (error) {
     deps.writeClipboard(text);
     deps.log?.("Dictation paste failed; transcript left on the clipboard.", error);
-    return "copied";
+    return {
+      outcome: "copied",
+      reason: "paste-unavailable",
+      message: "Copied — Aiden couldn’t paste into the focused app.",
+    };
   }
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter, getEventListeners } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
@@ -955,10 +955,8 @@ test("one startup deadline aborts bridge verification and cleans up the launch l
     const broker = events.find((event) => event.event === "spawn" && event.command === "broker");
     assert.equal(typeof broker?.pid, "number");
     assertProcessExited(broker?.pid as number);
-    assert.equal(
-      events.some((event) => event.event === "broker-launch-lease-connected"),
-      true,
-    );
+    const leftovers = (await readdir(root)).filter((name) => name !== path.basename(logPath));
+    assert.deepEqual(leftovers, [], "deadline cleanup should remove the launch lease directory");
   } finally {
     await host.shutdown();
     await rm(root, { recursive: true, force: true });

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import {
   Button,
+  InlineMetadata,
   Select,
   SelectContent,
   SelectItem,
@@ -326,7 +327,7 @@ function ThemeEditor({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {UI_FONT_OPTIONS.map((font) => <SelectItem key={font.id} value={font.id}>{font.label} · {font.preview}</SelectItem>)}
+              {UI_FONT_OPTIONS.map((font) => <SelectItem key={font.id} value={font.id}>{font.label} <InlineMetadata>· {font.preview}</InlineMetadata></SelectItem>)}
             </SelectContent>
           </Select>
         </ThemeEditorRow>
@@ -336,7 +337,7 @@ function ThemeEditor({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {CODE_FONT_OPTIONS.map((font) => <SelectItem key={font.id} value={font.id}>{font.label} · {font.preview}</SelectItem>)}
+              {CODE_FONT_OPTIONS.map((font) => <SelectItem key={font.id} value={font.id}>{font.label} <InlineMetadata>· {font.preview}</InlineMetadata></SelectItem>)}
             </SelectContent>
           </Select>
         </ThemeEditorRow>

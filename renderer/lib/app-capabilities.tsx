@@ -3,6 +3,7 @@ import * as React from "react";
 export interface AppCapabilities {
   platform: "darwin" | "linux" | "other";
   subagents: boolean;
+  bots: boolean;
   computerUse: boolean;
   dockIcon: boolean;
   accessibilityPaste: boolean;
@@ -13,6 +14,7 @@ export interface AppCapabilities {
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   platform: "other",
   subagents: false,
+  bots: false,
   computerUse: false,
   dockIcon: false,
   accessibilityPaste: false,
@@ -29,6 +31,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
         ? record.platform
         : "other",
     subagents: record.subagents === true,
+    bots: record.bots === true,
     computerUse: record.computerUse === true,
     dockIcon: record.dockIcon === true,
     accessibilityPaste: record.accessibilityPaste === true,

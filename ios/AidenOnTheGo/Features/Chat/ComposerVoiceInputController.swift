@@ -1,11 +1,11 @@
 import AVFoundation
 import Foundation
 import Observation
-import OSLog
 import Speech
 import UIKit
 
-/// On-device-only speech input for the composer. Audio never leaves the device.
+/// Composer dictation using either native on-device recognition or the explicitly
+/// selected, authenticated paired-Mac local speech model.
 @MainActor
 @Observable
 final class ComposerVoiceInputController {
@@ -13,6 +13,7 @@ final class ComposerVoiceInputController {
         case idle
         case requestingPermission
         case listening
+        case transcribing
     }
 
     private(set) var state: State = .idle
@@ -30,7 +31,11 @@ final class ComposerVoiceInputController {
     private var suppressNextRecognitionError = false
     private var activatedAudioSessionForRecording = false
     private var audioTapInstalled = false
-    private let logger = Logger.aidenVoiceInput
+    private var macAccumulator: ComposerMacSpeechPCMAccumulator?
+    private var macTranscriber: ((Data) async throws -> String)?
+    private var macTranscriptionTask: Task<Void, Never>?
+    private var nativeFinalizationTask: Task<Void, Never>?
+    private var sessionFence = ComposerVoiceSessionFence()
 
     @ObservationIgnored var locale = Locale.current
 
@@ -46,31 +51,162 @@ final class ComposerVoiceInputController {
 
     var isListening: Bool { state == .listening }
     var isRequestingPermission: Bool { state == .requestingPermission }
+    var isBusy: Bool { state != .idle }
 
-    func toggle(currentDraft: String, updateDraft: @escaping (String) -> Void) async {
+    func toggle(
+        currentDraft: String,
+        updateDraft: @escaping (String) -> Void,
+        macTranscriber: @escaping (Data) async throws -> String
+    ) async {
         if isListening {
             stopKeepingTranscript()
         } else {
-            await start(currentDraft: currentDraft, updateDraft: updateDraft)
+            guard state == .idle else { return }
+            if AidenVoiceInputMode.selected == .pairedMac {
+                await startMac(
+                    currentDraft: currentDraft,
+                    updateDraft: updateDraft,
+                    transcriber: macTranscriber
+                )
+            } else {
+                await start(currentDraft: currentDraft, updateDraft: updateDraft)
+            }
         }
     }
 
     func stopKeepingTranscript() {
+        if macAccumulator != nil {
+            finishMacRecording()
+            return
+        }
         suppressNextRecognitionError = true
-        stopAcceptingDraftUpdates()
-        stopAudio(cancelTask: false)
-        state = .idle
+        let session = sessionFence.current
+        state = .transcribing
+        finishNativeAudioCapture()
+        nativeFinalizationTask?.cancel()
+        nativeFinalizationTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, isCurrent(session), state == .transcribing else { return }
+            stopAcceptingDraftUpdates()
+            stopAudio(cancelTask: true)
+            state = .idle
+        }
     }
 
     func stopBeforeSubmittingDraft() {
+        invalidateSession()
         suppressNextRecognitionError = true
         stopAcceptingDraftUpdates()
         stopAudio(cancelTask: true)
+        macAccumulator = nil
+        macTranscriber = nil
         state = .idle
+    }
+
+    func cancelDiscardingRecording() {
+        stopBeforeSubmittingDraft()
+    }
+
+    private func startMac(
+        currentDraft: String,
+        updateDraft: @escaping (String) -> Void,
+        transcriber: @escaping (Data) async throws -> String
+    ) async {
+        let session = beginSession()
+        errorMessage = nil
+        liveTranscript = ""
+        draftUpdateSession.begin(baseDraft: currentDraft)
+        self.updateDraft = updateDraft
+        macTranscriber = transcriber
+        state = .requestingPermission
+
+        let microphoneGranted = await ComposerVoiceMicrophonePermissionRequester.request()
+        guard isCurrent(session), state == .requestingPermission else { return }
+        guard microphoneGranted else {
+            fail(
+                String(localized: "Microphone access is disabled. Enable it in Settings to use voice input."),
+                logCategory: .microphonePermission
+            )
+            return
+        }
+        guard isCurrent(session), ComposerVoiceInputStartPolicy.canStart(appIsActive: UIApplication.shared.applicationState == .active) else {
+            fail(ComposerVoiceInputError.appNotActive.localizedDescription, logCategory: .appNotActive)
+            return
+        }
+        do {
+            try startMacAudioCapture()
+            state = .listening
+        } catch {
+            fail(error.localizedDescription, logCategory: Self.logCategory(for: error))
+        }
+    }
+
+    private func startMacAudioCapture() throws {
+        stopAudio(cancelTask: true)
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(
+            ComposerVoiceAudioSessionConfiguration.category,
+            mode: ComposerVoiceAudioSessionConfiguration.mode,
+            options: ComposerVoiceAudioSessionConfiguration.options
+        )
+        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+        activatedAudioSessionForRecording = true
+        try ComposerVoiceInputStartPolicy.validateAudioSessionInput(
+            isInputAvailable: audioSession.isInputAvailable,
+            sampleRate: audioSession.sampleRate,
+            inputNumberOfChannels: audioSession.inputNumberOfChannels
+        )
+
+        let engine = audioEngineFactory()
+        audioEngine = engine
+        let inputNode = engine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        try ComposerVoiceInputPreflight.validate(recordingFormat: recordingFormat)
+        let accumulator = ComposerMacSpeechPCMAccumulator()
+        macAccumulator = accumulator
+        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: recordingFormat) { buffer, _ in
+            accumulator.append(buffer)
+        }
+        audioTapInstalled = true
+        engine.prepare()
+        try engine.start()
+        AidenComposerAudioCaptureState.shared.setCapturing(true)
+    }
+
+    private func finishMacRecording() {
+        let session = sessionFence.current
+        let pcm = macAccumulator?.data ?? Data()
+        let transcriber = macTranscriber
+        macAccumulator = nil
+        macTranscriber = nil
+        stopAudio(cancelTask: true)
+        guard !pcm.isEmpty, let transcriber else {
+            fail(String(localized: "No speech was recorded."), logCategory: .audioStartup)
+            return
+        }
+        state = .transcribing
+        macTranscriptionTask?.cancel()
+        macTranscriptionTask = Task {
+            do {
+                let transcript = try await transcriber(pcm)
+                try Task.checkCancellation()
+                guard isCurrent(session), state == .transcribing else { return }
+                liveTranscript = transcript
+                if let draft = draftUpdateSession.composedDraft(for: transcript) {
+                    updateDraft?(draft)
+                }
+                stopAcceptingDraftUpdates()
+                state = .idle
+            } catch {
+                guard !Task.isCancelled, isCurrent(session), state == .transcribing else { return }
+                fail(error.localizedDescription, logCategory: .audioStartup)
+            }
+        }
     }
 
     private func start(currentDraft: String, updateDraft: @escaping (String) -> Void) async {
         guard state == .idle else { return }
+        let session = beginSession()
 
         errorMessage = nil
         liveTranscript = ""
@@ -88,14 +224,14 @@ final class ComposerVoiceInputController {
         }
 
         let speechStatus = await requestSpeechAuthorization()
-        guard state == .requestingPermission else { return }
+        guard isCurrent(session), state == .requestingPermission else { return }
         guard speechStatus == .authorized else {
             fail(Self.speechAuthorizationMessage(for: speechStatus), logCategory: .speechAuthorization)
             return
         }
 
         let microphoneGranted = await ComposerVoiceMicrophonePermissionRequester.request()
-        guard state == .requestingPermission else { return }
+        guard isCurrent(session), state == .requestingPermission else { return }
         guard microphoneGranted else {
             fail(
                 String(localized: "Microphone access is disabled. Enable it in Settings to use voice input."),
@@ -104,7 +240,7 @@ final class ComposerVoiceInputController {
             return
         }
 
-        guard ComposerVoiceInputStartPolicy.canStart(
+        guard isCurrent(session), ComposerVoiceInputStartPolicy.canStart(
             appIsActive: UIApplication.shared.applicationState == .active
         ) else {
             fail(ComposerVoiceInputError.appNotActive.localizedDescription, logCategory: .appNotActive)
@@ -112,14 +248,14 @@ final class ComposerVoiceInputController {
         }
 
         do {
-            try startRecognition(speechRecognizer: speechRecognizer)
+            try startRecognition(speechRecognizer: speechRecognizer, session: session)
             state = .listening
         } catch {
             fail(error.localizedDescription, logCategory: Self.logCategory(for: error))
         }
     }
 
-    private func startRecognition(speechRecognizer: SFSpeechRecognizer) throws {
+    private func startRecognition(speechRecognizer: SFSpeechRecognizer, session: Int) throws {
         stopAudio(cancelTask: true)
 
         let audioSession = AVAudioSession.sharedInstance()
@@ -155,13 +291,14 @@ final class ComposerVoiceInputController {
 
         engine.prepare()
         recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor in self?.handleRecognition(result: result, error: error) }
+            Task { @MainActor in self?.handleRecognition(result: result, error: error, session: session) }
         }
         try engine.start()
         AidenComposerAudioCaptureState.shared.setCapturing(true)
     }
 
-    private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
+    private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?, session: Int) {
+        guard isCurrent(session), state != .idle else { return }
         if let result {
             liveTranscript = result.bestTranscription.formattedString
             if let draft = draftUpdateSession.composedDraft(for: liveTranscript) {
@@ -170,6 +307,8 @@ final class ComposerVoiceInputController {
         }
 
         if let error {
+            nativeFinalizationTask?.cancel()
+            nativeFinalizationTask = nil
             stopAcceptingDraftUpdates()
             stopAudio(cancelTask: false)
             state = .idle
@@ -179,6 +318,8 @@ final class ComposerVoiceInputController {
                 errorMessage = error.localizedDescription
             }
         } else if result?.isFinal == true {
+            nativeFinalizationTask?.cancel()
+            nativeFinalizationTask = nil
             stopAcceptingDraftUpdates()
             stopAudio(cancelTask: false)
             state = .idle
@@ -212,6 +353,24 @@ final class ComposerVoiceInputController {
         }
     }
 
+    private func finishNativeAudioCapture() {
+        AidenComposerAudioCaptureState.shared.setCapturing(false)
+        if let audioEngine {
+            if audioEngine.isRunning { audioEngine.stop() }
+            if audioTapInstalled {
+                audioEngine.inputNode.removeTap(onBus: 0)
+                audioTapInstalled = false
+            }
+            audioEngine.reset()
+        }
+        audioEngine = nil
+        recognitionRequest?.endAudio()
+        if activatedAudioSessionForRecording {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            activatedAudioSessionForRecording = false
+        }
+    }
+
     private func onDeviceSpeechRecognizerForRecording() -> SFSpeechRecognizer? {
         if let speechRecognizer {
             return speechRecognizer.supportsOnDeviceRecognition ? speechRecognizer : nil
@@ -233,13 +392,39 @@ final class ComposerVoiceInputController {
     }
 
     private func fail(_ message: String, logCategory: VoiceInputFailureLogCategory) {
-        logger.error("Voice input failed category=\(logCategory.rawValue, privacy: .public)")
+        AidenDiagnostics.record(
+            .speech,
+            event: .speechFailed,
+            outcome: .failed,
+            code: logCategory.diagnosticCode
+        )
         suppressNextRecognitionError = false
         stopAcceptingDraftUpdates()
         stopAudio(cancelTask: true)
+        macAccumulator = nil
+        macTranscriber = nil
         state = .idle
         errorMessage = message
     }
+
+    private func beginSession() -> Int {
+        let session = sessionFence.advance()
+        macTranscriptionTask?.cancel()
+        macTranscriptionTask = nil
+        nativeFinalizationTask?.cancel()
+        nativeFinalizationTask = nil
+        return session
+    }
+
+    private func invalidateSession() {
+        sessionFence.advance()
+        macTranscriptionTask?.cancel()
+        macTranscriptionTask = nil
+        nativeFinalizationTask?.cancel()
+        nativeFinalizationTask = nil
+    }
+
+    private func isCurrent(_ session: Int) -> Bool { sessionFence.accepts(session) }
 
     private func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
         await withCheckedContinuation { continuation in
@@ -269,6 +454,62 @@ final class ComposerVoiceInputController {
         case .invalidInputFormat: return .invalidInputFormat
         case .appNotActive: return .appNotActive
         case .audioEngineAlreadyRunning: return .audioEngineAlreadyRunning
+        }
+    }
+}
+
+struct ComposerVoiceSessionFence {
+    private(set) var current = 0
+
+    mutating func advance() -> Int {
+        current += 1
+        return current
+    }
+
+    func accepts(_ session: Int) -> Bool { current == session }
+}
+
+final class ComposerMacSpeechPCMAccumulator: @unchecked Sendable {
+    private static let sampleRate = 16_000.0
+    private static let maximumSamples = 16_000 * 60
+    private let lock = NSLock()
+    private var storage = Data()
+
+    var data: Data {
+        lock.withLock { storage }
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0, buffer.format.sampleRate > 0 else { return }
+        let ratio = Self.sampleRate / buffer.format.sampleRate
+        let outputCount = max(1, Int(Double(frameCount) * ratio))
+        var samples = [Int16]()
+        samples.reserveCapacity(outputCount)
+
+        if let channels = buffer.floatChannelData {
+            let source = channels[0]
+            for index in 0..<outputCount {
+                let sourceIndex = min(frameCount - 1, Int(Double(index) / ratio))
+                let value = max(-1, min(1, source[sourceIndex]))
+                samples.append(Int16(value * Float(Int16.max)).littleEndian)
+            }
+        } else if let channels = buffer.int16ChannelData {
+            let source = channels[0]
+            for index in 0..<outputCount {
+                let sourceIndex = min(frameCount - 1, Int(Double(index) / ratio))
+                samples.append(source[sourceIndex].littleEndian)
+            }
+        } else {
+            return
+        }
+
+        lock.withLock {
+            let retainedSamples = min(samples.count, Self.maximumSamples - storage.count / 2)
+            guard retainedSamples > 0 else { return }
+            samples.withUnsafeBytes { bytes in
+                storage.append(contentsOf: bytes.bindMemory(to: UInt8.self).prefix(retainedSamples * 2))
+            }
         }
     }
 }
@@ -310,6 +551,18 @@ enum ComposerVoiceInputError: LocalizedError {
 enum VoiceInputFailureLogCategory: String {
     case speechUnavailable, speechAuthorization, microphonePermission, appNotActive
     case noAudioInput, invalidInputFormat, audioEngineAlreadyRunning, audioStartup
+}
+
+private extension VoiceInputFailureLogCategory {
+    var diagnosticCode: AidenDiagnosticCode {
+        switch self {
+        case .microphonePermission: .microphonePermission
+        case .speechAuthorization: .speechAuthorization
+        case .speechUnavailable: .unavailable
+        case .audioStartup, .noAudioInput, .invalidInputFormat, .audioEngineAlreadyRunning: .audioStartup
+        case .appNotActive: .unavailable
+        }
+    }
 }
 
 enum ComposerVoiceInputStartPolicy {
@@ -374,15 +627,8 @@ struct ComposerVoiceDraftUpdateSession {
     }
 }
 
-private extension Logger {
-    static let aidenVoiceInput = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "AidenOnTheGo",
-        category: "VoiceInput"
-    )
-}
-
 @MainActor
-private final class AidenComposerAudioCaptureState {
+final class AidenComposerAudioCaptureState {
     static let shared = AidenComposerAudioCaptureState()
     private(set) var isCapturing = false
 

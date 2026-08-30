@@ -4,15 +4,31 @@ Aiden publishes its source, signed release binaries, and updater metadata from
 `sambitcreate/aiden-agent`. The repository must be public before the first release so website
 visitors and installed apps can download GitHub Release assets without a GitHub credential.
 
+## Model catalog refreshes
+
+`resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for
+runtime limits and request admission. `npm run dist` refreshes and validates it before every
+package. A separate `Model catalog refresh` workflow runs after pushes to `main`, updates only that
+tracked file, runs `npm run test:model-catalog`, and commits a changed snapshot with the GitHub
+Actions bot. A failed fetch leaves the known-good snapshot untouched; a non-fast-forward push is
+allowed to fail so the newer `main` run remains authoritative.
+
+The live app contacts models.dev only when a user chooses **Update model catalogs** in Settings →
+Providers. That foreground request uses the fixed anonymous endpoint and writes a validated,
+same-app-version, device-local display cache. It cannot add selectable models or alter routing,
+context windows, output limits, or active turns. Provider inventory remains a separate Pi/provider
+authority. Ordinary model reads and application startup remain offline.
+
 ## Release behavior
 
 - `.github/workflows/ci.yml` verifies pull requests and pushes on GitHub's `macos-26` image.
 - `.github/workflows/release.yml` is considered enabled only when the source repository variable
   `RELEASES_ENABLED` is exactly `true`.
-- Each enabled push to `main` derives a monotonically increasing version from the workflow run
-  number. The beta line starts at `0.27.0`; the base `package.json` version supplies that release
-  line, so `0.27.0` plus run `41` produces `0.27.41` without committing a version-bump loop to
-  `main`.
+- A release uses the complete SemVer declared in `package.json` exactly. For example, `0.35.0`
+  publishes only as `v0.35.0`; workflow run numbers never become application versions.
+- If the exact declared tag already exists, an enabled push to `main` completes the release job as
+  a green no-op. Publishing another build requires an explicit reviewed version change in both
+  `package.json` and `package-lock.json`.
 - The release job runs the full TypeScript, lint, JavaScript/TypeScript, Rust, Swift, and build
   gates before preparing signing material.
 - GitHub-hosted macOS VMs do not enforce Aiden's live kernel launch constraint. CI still verifies
@@ -44,8 +60,9 @@ visitors and installed apps can download GitHub Release assets without a GitHub 
   retry, and ready states. A two-minute no-progress stall is cancelled and retried with bounded
   backoff. Installation starts only after the package and macOS updater handoff are ready, and
   never interrupts an open workspace or bypasses the existing quit barriers.
-- A failed or rerun job refuses to overwrite an existing tag. Recovery is a new `main` commit,
-  which receives a higher version.
+- A failed or rerun job refuses to overwrite an existing tag. If no tag or draft was created, rerun
+  the same declared version. If a partial draft exists, inspect and remove only that exact failed
+  draft before retrying. Never manufacture a version from a workflow run number.
 
 Local `npm run dist` builds do not embed a feed or perform automatic update checks. The release
 workflow opts in with `AIDEN_ENABLE_AUTO_UPDATES=1`.
@@ -113,7 +130,6 @@ Never place an Apple private key, certificate password, or notarization credenti
 
 ## Version-line changes
 
-For a planned minor or major release, change only the major/minor line in `package.json` and
-`package-lock.json` (for example, `0.27.0` to `0.28.0`). The next workflow run becomes
-`0.28.<run number>`, which remains greater than every `0.27.x` build. Do not lower the
-major/minor line or manually reuse a published version.
+For every planned release, change the complete version in `package.json` and `package-lock.json`
+(for example, `0.35.0` to `0.35.1`, or `0.35.0` to `0.36.0`). The next eligible workflow run uses
+that exact version. Do not lower the version or reuse a published tag.

@@ -1,8 +1,18 @@
 # Aiden On The Go Plan
 
-Status: Active — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 11 is `VALID` and `IN_BETA_TESTING` for Internal Testers; physical-iPad and external/public-release acceptance remain open
+Status: Active foundation — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 21 is `VALID` and `IN_BETA_TESTING` for Internal Testers with final-only Bot replies and expandable intermediate activity; physical-iPad and external/public-release acceptance remain open. The approved bot-first extension is now governed by `bot-first-aiden-on-the-go-plan.md`.
 Date: 2026-08-18
-Owners: Aiden Electron main process and the SwiftUI app under `ios/`
+Owners: Aiden Electron main process, the SwiftUI app under `ios/`, and the Jetpack Compose app under `android/`
+
+Android UI follow-up 2026-08-24: the Compose shell now mirrors iOS's product-area hierarchy with the shared Aiden app icon opening a native Bots/Workspaces menu, replacing the persistent two-tab bottom control. Bots, Workspaces, chat, scheduled tasks, pairing, Git, Bot editing, and appearance surfaces use borderless tonal state instead of outlined components; list density, shared gutters, and toolbar touch targets are normalized. Nested shell insets and chat IME ownership were corrected; the composer now stays fully above Gboard, offers separate Android Photo Picker and document-picker actions, and delegates dictation to Google's native speech activity. The resulting debug build passed unit tests, lint, Android-test compilation, assembly, and physical Pixel 10 Pro XL interaction/visual checks.
+
+Reasoning-presentation follow-up 2026-08-27: iOS and Android now mirror Aiden Agent's single exposed-reasoning lifecycle. The live label shimmers as `Thinking` without ellipses, settles to `Thought briefly/for …` once tool work begins, and an active `render_artifact` call uses a separate `Visualizing` shimmer. iOS removes duplicate thinking milestones from the simultaneous activity disclosure while retaining the authoritative timeline for history and reconciliation. The Remote wire contract is unchanged.
+
+## Bot-first extension authority
+
+This plan remains the source of truth for the shipped Remote API, Workspace experience, and historical phases 0–12. For new Bot behavior, `docs/plans/bot-first-aiden-on-the-go-plan.md` supersedes this document only where it explicitly changes navigation, Bot access, managed workspace behavior, shell availability, avatar creation, and delivery phases. All unrelated pairing, transport, credential, DTO, opaque-handle, streaming, privacy, and mutation-safety rules in this plan remain in force.
+
+The approved extension redesigns iPhone/iPad now and defers a Mac UX redesign. The paired Mac remains authoritative for Bot identity, policy, execution, hidden managed homes, and canonical photos. Every Bot conversation must reuse the existing Swift `AidenChatDetailView` and its existing chat feature/view-model path; implementation may add Bot presentation and Access affordances around it, but must never fork or copy the conversation engine.
 
 ## Goal
 
@@ -12,10 +22,11 @@ The desktop app remains the execution authority. The mobile app connects over th
 
 - Pairing and connection management.
 - Aiden chats: list, open, create, rename, delete, compose, stream, cancel, and approve or deny tool requests.
+- A Bot-first iPhone/iPad area with reusable bot identities and conversations alongside the existing Workspace area.
 - Aiden workspaces: list, create folderless or managed-scratch entries, explore approved folders on the paired Mac, register a selected folder, rename, change permission, and unregister.
 - The provider/model choices required to start an Aiden chat, without exposing credentials.
 - Aiden branding and the mobile-applicable Aiden appearance choices.
-- Aiden workspace files, Git workflows, scheduled tasks, App Intents, Live Activities, and local voice controls, delivered after the core chat/workspace transport is stable.
+- Aiden workspace files, Git workflows, scheduled tasks, App Intents, Live Activities, and native or paired-Mac local-model voice controls, delivered after the core chat/workspace transport is stable.
 
 Kanban and every other Hermex screen without a deliberate Aiden contract are removed rather than left disconnected or filled with placeholder behavior.
 
@@ -77,11 +88,12 @@ The imported code remains MIT-licensed upstream work. Preserve its copyright and
 6. Resumable streaming with tool activity, reasoning, terminal state, and allow/deny approvals.
 7. Aiden light/dark styling, presets, icons, naming, and iPad layouts.
 8. Offline display of previously fetched chats; mutations remain disabled while disconnected.
-9. Normal workspace turns retain Aiden's server-side chat capabilities (including configured skills, MCP tools, and subagents where the existing permission model allows them) without adding separate mobile management screens. Computer Use remains unavailable remotely in the first release.
+9. Normal Workspace turns retain Aiden's server-side chat capabilities (including configured skills, MCP tools, and subagents where the existing permission model allows them) without adding separate Workspace management screens. Bot Access separately presents safe Mac-projected Connections, Skills, shell, Files, and other capability groups under the bot-first plan. Computer Use retains its existing explicit opt-in and safety boundary.
 10. An approved-root Mac folder explorer for adding folder-backed workspaces without accepting free-form server paths.
 11. Aiden's existing workspace file list/read/write and Git workflows, adapted to the retained Hermex native views.
 12. Aiden scheduled-task list, create, edit, remove, pause, resume, run-now, preview, and run-history workflows.
-13. App Intents, Live Activities, and local voice dictation/read-aloud behavior that never grants background authority beyond the paired device and workspace permission.
+13. App Intents, Live Activities, and native/paired-Mac voice dictation plus on-device read-aloud behavior that never grants background authority beyond the paired device and workspace permission.
+14. Bot CRUD, profiles, favorites/recent threads, Full/Custom access, one hidden managed home per bot, shell-backed agent work, per-chat reductions, semantic/Image Playground avatars, and paired-Mac canonical-photo persistence under the bot-first plan.
 
 ### Remove from the mobile product
 
@@ -91,17 +103,17 @@ The imported code remains MIT-licensed upstream work. Preserve its copyright and
 - Hermes personalities/profiles and server-specific commands.
 - Hermes goals, Btw/background controls, clarification flows, and other actions without an Aiden equivalent.
 - Hermes Cloudflare onboarding, branding, URLs, copy, icons, and gold theme settings.
-- Terminal and arbitrary shell controls.
+- Generic Terminal UI and arbitrary client-authored shell controls. This does not disable the existing Mac-owned shell tool inside a Bot turn when the effective Full/Custom policy allows it.
 
 ### Defer until the core client is stable
 
 - Share extension.
 - Push notifications that require an external relay or cloud service.
-- Voice-note upload and server TTS. The planned voice surface is local dictation into the composer plus optional on-device read-aloud.
+- Voice-note upload and server TTS. The voice surface is dictation into the composer using native recognition or the explicitly selected paired-Mac local Parakeet model, plus optional on-device read-aloud.
 - Computer Use controls.
 - Subagent management UI.
 - Chat copy/export, branching, pinning, archiving, and history truncation unless Aiden first ships matching service semantics.
-- File create/rename/delete and Git/terminal actions without an existing Aiden desktop service contract.
+- File create/rename/delete and generic Git/Terminal controls without an existing Aiden desktop service contract. Bot shell remains an agent capability rather than a phone-authored command endpoint and starts in the hidden managed home.
 
 ## Target architecture
 
@@ -114,7 +126,8 @@ Aiden On The Go (SwiftUI)
 Aiden Agent (Electron main)
   -> Remote API transport (off by default)
   -> remote device/session ownership
-  -> shared chat/workspace application services
+  -> shared chat/workspace/bot application services
+  -> main-owned Full/Custom policy, managed-home, and avatar stores
   -> existing stores, mutation gates, llmClient, and Pi runtime
 ```
 
@@ -181,9 +194,13 @@ Workspace mutation must reuse Aiden's existing cancellation, schedule-restoratio
 - `DELETE /api/aiden/v1/chats/:chatId`
 - `POST /api/aiden/v1/chats/:chatId/move` only for an empty chat, matching Aiden's existing rule
 
-The mobile projection includes Aiden's renderer-safe chat fields only: IDs, workspace ID, provider/model IDs, timestamps, visible messages, safe reasoning, safe timeline/tool milestones, attachments, and closed provider-failure metadata. Private Pi journals, raw diagnostics, provider credentials, subagent private history, and filesystem internals never cross the API.
+The mobile projection includes Aiden's renderer-safe chat fields only: IDs, workspace ID, provider/model IDs, timestamps, visible messages, safe parent reasoning, parent timeline/tool milestones, attachments, and the parent turn's closed provider-failure metadata. Private Pi journals, raw diagnostics, provider credentials, subagent private history, and filesystem internals never cross the API.
 
-Ordinary remote chat creation cannot mint Aiden's reserved Assistant workspace identity or unattended modes. Remote workspace turns follow the same main-owned capability composition and permission checks as an attended desktop workspace chat; the transport cannot request hidden modes or widen tool authority.
+Subagent execution follows Pi's parent-only mobile boundary. Even when the parent turn uses subagents, iOS and Android receive only the ordinary parent messages, parent timeline and outcome, and parent stream state. Child/subagent IDs and counts, private histories, lifecycle snapshots, controls, and endpoints remain Mac-local. The parent runtime may incorporate child findings into its own visible reply, but mobile never receives a separately addressable child object.
+
+Visible parent `message.text` is opaque transcript data and remains exact within the 200,000-Unicode-scalar response bound. Filtering is structural: it excludes private fields and metadata, not strings because they resemble a path, URL, UUID, base64, hexadecimal data, or a credential. The clients must not display an encoded/redacted placeholder for such parent text. Separate credential fields, authorization headers, and provider/MCP secrets remain forbidden.
+
+Ordinary remote Workspace chat creation cannot mint Aiden's reserved Assistant workspace identity or unattended modes. Remote Workspace turns follow the same main-owned capability composition and permission checks as an attended desktop Workspace chat; the transport cannot request hidden modes or widen tool authority. Bot chats use the separate explicit, revisioned Full/Custom policy defined by the bot-first plan. Full becomes usable only after the current versioned notice; Custom and per-chat settings may narrow authority but never exceed the bot, OS permissions, global configuration, or existing safety gates.
 
 ### Provider/model discovery
 
@@ -201,6 +218,7 @@ Return only connected/configured provider identities, selectable models, capabil
 - `GET /api/aiden/v1/streams/:streamId/events`
   - SSE stream; supports `Last-Event-ID` and explicit `after` sequence.
 - `POST /api/aiden/v1/streams/:streamId/cancel`
+  - Cancels the authenticated parent turn stream only. It is not a child/subtree control API; any child shutdown is an internal consequence owned by the Mac runtime.
 - `POST /api/aiden/v1/approvals/:approvalId/respond`
   - First release accepts only `allow` or `deny`, matching Aiden's enforceable scope.
 
@@ -250,7 +268,7 @@ Match Aiden's current file-index semantics: one bounded recursive snapshot, curr
 
 Git DTOs use an explicit field allowlist for Aiden's review, bounded diff, comparison, branch, push-capability, and managed-worktree display results. They omit absolute paths, Git admin paths, credentials, remote URLs containing secrets, ownership tokens, device/inode values, head metadata, and raw command output. Managed-worktree deletion accepts only the persisted workspace ID and re-resolves server-owned metadata; it never accepts client-supplied filesystem/admin fields.
 
-Commit, push, checkout, branch creation, worktree creation, and managed-worktree deletion require an explicit foreground confirmation in the phone UI and must not be callable from App Intents. Commit and push retain Aiden's repository-root-only rule; nested workspaces surface the server's read/diff-only capability reason. Reuse Aiden's workspace operation registry, mutation gate, canonical Git-common-directory serialization, cancellation rules, worktree ownership validation, rollback, and schedule restoration. Network operations return stable `operationId`/snapshot metadata and stale-conflict errors; a TCP disconnect does not implicitly invalidate the authenticated remote operation owner. The remote transport does not expose fetch, pull, stage/unstage, discard, a generic Git command, or a shell endpoint because Aiden has no matching service contract.
+Commit, push, checkout, branch creation, worktree creation, and managed-worktree deletion require an explicit foreground confirmation in the phone UI and must not be callable from App Intents. Commit and push retain Aiden's repository-root-only rule; nested workspaces surface the server's read/diff-only capability reason. Reuse Aiden's workspace operation registry, mutation gate, canonical Git-common-directory serialization, cancellation rules, worktree ownership validation, rollback, and schedule restoration. Network operations return stable `operationId`/snapshot metadata and stale-conflict errors; a TCP disconnect does not implicitly invalidate the authenticated remote operation owner. The remote transport does not expose fetch, pull, stage/unstage, discard, a generic Git command, or a client-authored shell endpoint because Aiden has no matching service contract. This boundary does not remove the existing Mac-owned shell tool from Bot turns: when the effective Bot policy permits it, the agent invokes shell through the normal Aiden runtime, beginning in the hidden managed home and retaining ordinary approvals and safeguards.
 
 ### Scheduled tasks
 
@@ -395,16 +413,18 @@ These values were derived from `/Users/sambitbiswas/projects/contactsheet/Contac
 
 ### App navigation
 
-The root shell contains only:
+The Aiden logo switches between exactly two product areas:
 
-- Chats
-- Workspaces
-- Scheduled Tasks
-- Settings / paired Aiden installations
+- **Bots** — reusable helpers and their conversations. It becomes the default when the paired Mac supports and grants `bot:read`.
+- **Workspaces** — the retained project/folder-oriented chat experience.
 
-Files and Git are workspace-scoped destinations opened from a workspace rather than new global tabs. On iPhone, use the retained navigation-stack patterns. On iPad, preserve `NavigationSplitView` with workspace/chat selection in the sidebar and the selected conversation in detail. Empty, disconnected, loading, and reconnecting states must work in compact and regular size classes.
+Scheduled Tasks, Usage, appearance, and paired-installation Settings remain shared destinations rather than a third product area. Older, unsupported, or ungranted installations fall back honestly to Workspaces. Preserve independent navigation state for Bots and Workspaces per paired installation.
+
+Files and Git are Workspace-scoped destinations opened from a workspace rather than new global tabs. On iPhone, use the retained navigation-stack patterns. On iPad, preserve adaptive `NavigationSplitView` behavior for both product areas, with the selected conversation in detail. Empty, disconnected, loading, and reconnecting states must work in compact and regular size classes.
 
 ### Chat surface
+
+`AidenChatDetailView` and its existing chat feature/view-model dependencies are the single conversation implementation for both Workspaces and Bots. Do not fork, duplicate, or replace its transcript, composer, streaming, attachments, approvals, voice, outcome reconciliation, Live Activity handoff, or offline-history behavior. Bot work adds identity/title presentation, an effective-access summary, and Bot defaults/This chat sheets around that shared view only.
 
 Retain Hermex's native components only where the Aiden contract supports them:
 
@@ -416,13 +436,13 @@ Retain Hermex's native components only where the Aiden contract supports them:
 - Composer, send, stop, model/provider selection, thinking level, and bounded attachments.
 - Offline read cache.
 
-Add a top-right ellipsis in the conversation toolbar. Its workspace-backed menu opens `Workspace Settings` and the other workspace-scoped destinations; the permission control lives inside that settings screen beside name, folder/managed-worktree status, Files, Git, and management links. It must not appear in the composer. The composer remains limited to message/voice input, attachments, model/thinking choices, send, and stop. Use the retained Hermex toolbar, menu, form, and sheet patterns rather than inventing a custom control.
+Add a top-right ellipsis in the conversation toolbar. Its Workspace-backed menu opens `Workspace Settings` and the other Workspace-scoped destinations; the permission control lives inside that settings screen beside name, folder/managed-worktree status, Files, Git, and management links. A Bot-backed menu instead opens Bot defaults and This chat access while hiding workspace choice, Review, branch/worktree, and persistent Terminal chrome. Neither permission surface appears in the composer. The composer remains limited to message/voice input, attachments, model/thinking choices, send, and stop. Use the retained Hermex toolbar, menu, form, and sheet patterns rather than inventing a custom control.
 
 Remove Hermes goals, Btw/background mode, clarification UI, server TTS, server commands, profiles/personalities, and unsupported message actions.
 
 ### Workspace surface
 
-Show Aiden workspaces by stable ID and name. Support:
+In the Workspaces product area, show Aiden workspaces by stable ID and name. Support:
 
 - List and refresh.
 - Create folderless workspace.
@@ -438,6 +458,8 @@ Build folder exploration from the existing Hermex list/navigation vocabulary: ap
 
 Retain and adapt `FileBrowserView`, `GitWorkspaceView`, `GitDiffView`, `GitCommitView`, `GitBranchPickerView`, and their existing native supporting components only where they map to Aiden's DTOs. Files support index, read, edit, save, conflict/reload, and offline read cache. Git supports repository review, diff, compare, branch switching/creation, commit, push when capability permits, worktree creation, and confirmed deletion of Aiden-managed worktrees. Consequential actions use native confirmation sheets and show authoritative success/error results. No terminal or arbitrary Git command field is introduced.
 
+Bot conversations remain message-first and do not expose these Workspace Git/Review surfaces by default. A Bot's hidden managed home is not initialized as a repository. Shell may still be available as a Mac-owned agent capability under Full or selected Custom access, and Git may be used when an explicit task makes an existing or deliberately initialized repository relevant; neither behavior adds a phone-authored command field.
+
 ### Scheduled Tasks surface
 
 Adapt the Hermex Tasks screen structure and native forms, but replace every Cron DTO, endpoint, label, and assumption with Aiden's scheduled-task model. Support list/filter, create/edit, pause/resume, remove, run now, previewed next runs, and run history. The editor exposes only server-projected provider/model/workspace, mode, permission, selected MCP, notification, timezone, schedule, prompt, and validated script choices. It must clearly label that enabled tasks can run while the phone is disconnected.
@@ -446,7 +468,16 @@ Adapt the Hermex Tasks screen structure and native forms, but replace every Cron
 
 - Retain the imported App Intent deep-link/router idea and rename it for Aiden, but migrate away from the imported deprecated `openAppWhenRun` pattern to the current SDK's `OpenIntent`/`OpenURLIntent`/URL-representable navigation contract. Ship `New Chat`, `New Chat with Voice`, and `New Chat in Workspace` intents backed only by App Group-cached Aiden installation/workspace entities. Entity lookup is cache-only and stable-ID-only: the intent process does not read pairing credentials, call the network, create a chat, embed a path/token in a deep link, or send a prompt. A stale/revoked installation opens the connection UI. Intents otherwise open the app to the requested destination and cannot alter permissions, run Git, or mutate scheduled tasks in the first release.
 - Retain the ActivityKit target and reconciliation architecture. Start a Live Activity for a turn initiated on this device; update its sub-4 KB state from authoritative status/tool/approval/stream events; mark it stale on loss; reconcile by `streamId` after relaunch using the selected paired installation's Keychain credential and pinned transport; and end on done, error, cancellation, revocation, or server interruption. The widget extension cannot access the network. With no cloud push relay in scope, it displays the last known stale state while the app is suspended/terminated and reconciles only when Aiden On The Go next runs. Default Lock Screen content to title and safe status; make assistant excerpts an explicit local privacy preference; never include paths, tool arguments, raw approval details, credentials, or provider errors.
-- Retain only on-device voice dictation as composer input and the `New Chat with Voice` entry point. Phase 11 removes/disables the imported server-STT provider, audio upload code path, voice-note recording/attachment path, and hold-to-record gesture. Prefer `SpeechAnalyzer` where the deployment target permits; otherwise require an on-device-capable recognizer with `requiresOnDeviceRecognition`. Request Speech and Microphone access only when the user starts dictation. Add optional on-device read-aloud of assistant text with system speech APIs. Permission denial or unavailable on-device recognition must degrade to the text composer. Do not upload raw recordings to Aiden or Apple, and do not add an Aiden server TTS endpoint.
+- Composer dictation supports an explicit setting between native recognition and the paired Mac's local Parakeet model. Native mode uses the platform speech API and requests Speech/Microphone access only when dictation starts. Paired-Mac mode requests Microphone access, captures bounded 16 kHz mono PCM, sends it over the authenticated pinned-TLS Aiden Remote connection, and inserts only the final transcript after stop; neither endpoint persists the recording. Keep voice-note attachments and Aiden server TTS absent. Add optional on-device read-aloud of assistant text with system speech APIs. Permission denial or unavailable recognition must degrade to the text composer.
+
+## Approved bot-first operating contract
+
+- Bots default to an explicit **Full Access** policy only after one blocking, versioned notice. The notice explains access to OS-permitted Mac files, shell, currently enabled Connections/MCPs, Skills, and other ordinary Aiden capabilities, plus the fact that newly enabled capabilities join Full. **Customize first** opens the same editor without acting.
+- **Custom** stores exact selections and may reduce Files, shell, Connections, Skills, and other safe projected groups per bot. A chat may reduce its bot further but can never exceed the bot. Missing, corrupt, or future-version policy state blocks and repairs rather than guessing Full. OS permissions, global disables, action approvals, and Computer Use's existing explicit opt-in remain authoritative in both modes.
+- The main process provisions exactly one durable hidden home per bot and reuses it for new chats. Shell/tool work starts there and ordinary artifacts are saved there. Provisioning never creates `.git`, a branch, or a commit. Full may inspect or work in other OS-accessible Mac locations when the task needs it; files outside the home remain user-owned and existing destructive-action safeguards apply.
+- The main process injects the resolved home and operating rules after editable bot instructions. The required meaning is: start and normally save in the bot home; inspect elsewhere only as needed; minimize outside changes; do not initialize or use Git merely because the home exists; disclose the private path only when the person asks; and do not expose credentials, private paths, or unrelated content unnecessarily. Mobile, renderer, and editable bot text cannot replace this section.
+- The iPhone/iPad Bot UI uses the system Image Playground sheet on supported OS/device combinations. Private Cloud Compute is acceptable and copy must not promise universal on-device processing. Aiden uploads only the normalized candidate explicitly accepted with **Use this image**; the paired Mac validates and stores it as the canonical bot photo. The semantic Aiden avatar remains fully usable without Apple Intelligence.
+- The connected iPhone 13 Pro proves the honest Image Playground-unavailable path. Successful system-sheet generation and paired-Mac persistence still require eligible Apple Intelligence hardware.
 
 ## Aiden appearance on iOS/iPadOS
 
@@ -484,6 +515,8 @@ Remote access is a durable, setup-critical feature, so update Aiden onboarding:
 Document local-network setup, Tailscale Serve setup, no-Funnel policy, device revocation, offline behavior, and troubleshooting without adding a normal-startup network dependency.
 
 ## Delivery phases and acceptance gates
+
+The phases below remain the implementation and evidence history for the existing Aiden On The Go foundation. Do not restart or reinterpret them for Bots. Active Bot delivery follows `docs/plans/bot-first-aiden-on-the-go-plan.md` phases 0–8 in order. Between every Bot phase, a different subagent must review source and tests; fix all P0/P1 findings, rerun affected checks, and repeat review until clear before recording evidence and advancing.
 
 ### Phase 0 — Freeze decisions and prove transport
 
@@ -604,6 +637,8 @@ Acceptance: the phone exposes every supported Aiden scheduled-task operation wit
 
 Acceptance: App Intents open the correct Aiden destination using cached IDs without network or credential access; voice is on-device-only and degrades safely to text; and a Live Activity shows honest last-known/stale state while disconnected, then authenticates, reconciles, and ends correctly when the app next runs, without exposing response text by default.
 
+Historical note: the voice portion of this Phase 11 acceptance describes the 2026-08-19 build. The explicit paired-Mac local-model follow-up dated 2026-08-24 supersedes that on-device-only constraint while preserving user-started capture, bounded/no-retention audio handling, and text fallback.
+
 Completed 2026-08-19. The shipping app now has cache-only installation/workspace App Intent entities and current-SDK deep-link navigation; a signed, embedded Aiden Live Activity widget with bounded private-by-default state and authenticated relaunch reconciliation; explicit on-device-only composer dictation; and system read-aloud. Stable IDs are separated by installation, stale or revoked destinations fail closed, response excerpts default off, and neither App Intents nor the widget receive endpoints or credentials. The final shipping bundle contains generated shortcut metadata, the required privacy strings, and no production ATS exception. The full signed physical-iPhone suite passed 56 tests with four expected environment-gated skips, the focused Phase 11 suite passed 6/6 after the final reducer cleanup, and the clean app installed and launched on the iPhone 13 Pro. No simulator or iPhone 16 Pro Max was used. Evidence is in `docs/testing/aiden-on-the-go/phase-11.md`.
 
 ### Phase 12 — End-to-end hardening and release readiness
@@ -617,6 +652,16 @@ Completed 2026-08-19. The shipping app now has cache-only installation/workspace
 Acceptance: release checklist is green with no Hermes-only endpoint, brand asset, localization, or dead navigation remaining.
 
 Progress 2026-08-19: Desktop type-check, lint, canonical tests, production build, strengthened Remote Access Electron E2E, hardened package/verification, and an isolated packaged listener-off smoke pass. The final focused Remote Access run passes 119/119 production tests plus 7/7 deterministic transport tests, including production-service revoke-and-pair-again coverage, first-time Tailscale Serve setup from an empty configuration, and cleanup-only migration of the exact origin-only target persisted by pre-acceptance builds. Real-tailnet testing exposed and fixed two production blockers: HTTPS eligibility now comes from the exact certificate domain instead of a pre-existing listener, and the loopback target restores `/api/aiden/v1` after Tailscale strips the public mount prefix. A 1.611-second physical iPhone 13 Pro proof used system trust plus the live Tailscale leaf SPKI pin, paired, authenticated, browsed an approved root, completed workspace CRUD, rejected selection replay, and removed only Aiden's route back to `{}`. Phase 7's bounded-attachment requirement is implemented end to end with one-use device/chat-bound references, canonical Aiden attachment translation, native Photos/file selection, attachment-only turns, path-free metadata, and retry-safe exact-request idempotency. The complete signed iPhone suite executes 70 tests: 65 pass, five live-environment tests are expected skips, and zero fail. One opted-in physical-iPhone proof passed the attachment upload/discard/consume/replay/history flow plus streaming reconnect, approval, duplicate-approval rejection, cancellation, and cleanup over real LAN HTTPS. A second 105.983-second proof passed authenticated reconnection after same-endpoint process replacement, typed `403 credential_revoked` durable revocation, explicit local re-pair with an independent one-use secret, replay rejection, a distinct replacement credential, and another process restart where the new credential remained authoritative and the old one remained revoked. Persisted spike state contains only the active credential SHA-256 digest and a bounded set of prior revoked SHA-256 digests; restart does not reopen pairing, and the deterministic transport suite proves atomic digest replacement plus owner-only marker/state cleanup. A fresh test-free attachment build passed strict deep code-sign verification, contained no XCTest bundle, installed, and launched on the physical iPhone 13 Pro. A fresh generic-hardware attachment Release archive passed store validation, App Intent generation, strict deep code-sign verification, and no-test-bundle inspection. It is development-signed with `get-task-allow=true`, so distribution signing/export is still open. Physical iPad, sleep/wake/address-change/multi-device acceptance, Siri/dictation/direct server-streamed Live Activity system-UI acceptance, and App Store Connect owner metadata/review assets remain open. Evidence is in `docs/testing/aiden-on-the-go/phase-12.md`.
+
+Desktop Tailscale inspection repair 2026-08-25: Settings no longer combines
+two independent node/Serve command pairs for one refresh. One atomic inspection
+now supplies node identity, HTTPS eligibility, Serve state, and route
+classification, and requests `status --json --peers=false` so irrelevant peer
+inventory cannot consume the bounded status budget. A transient inspection
+still fails closed and never authorizes a route mutation. Live acceptance on
+the affected Mac returned the healthy existing route as `other_aiden_live`, the
+correct ownership-safe state because that production profile has no persisted
+Tailscale ownership record.
 
 Release-readiness follow-up 2026-08-19: the CI mobile gate no longer references the removed Hermex project or an iOS Simulator; it compiles the shipping Aiden app/test bundle for generic iOS hardware and passes locally. The active Aiden shell now includes the reused `AppConfig` foundation and exposes native Privacy Policy and Support links. The canonical live destinations are locked by the focused physical-iPhone integration suite. Contact Sheet's owner identity plus Aiden's live site/repository resolve the public metadata values. Hermex's separate internal/external export-option, manual workflow, and App Store build-selector patterns are adapted for Aiden: separate protected environments, exact confirmation gates, main-only execution, pinned checkout, closed-version-train protection, generic-hardware archive/upload, and upload-only external behavior are locked by 20 Ruby tests/42 assertions plus three deterministic policy tests registered in `npm test`. The published privacy policy still needs mobile-specific copy and the support page needs a visible working contact; no workflow was dispatched and no distribution credential, App Store record, export, upload, tester assignment, or external-review action was created implicitly.
 
@@ -693,7 +738,11 @@ Compact approval follow-up 2026-08-20: the live iOS approval card now mirrors Ai
 - Workspace-settings ellipsis routing and absence of permission controls in the composer.
 - File index/read/edit/version-conflict and Git review/diff/branch/commit/push/worktree flows.
 - Scheduled-task list/editor/preview/lifecycle/run-history flows.
-- Cache-only App Intent entities/current-SDK navigation/deep links/cold/stale launch with assertions that the intent process makes no network/Keychain access; Live Activity sub-4 KB reducer/stale/reconciliation/privacy behavior; on-device-only dictation authorization; removal of audio upload/voice-note paths; and read-aloud lifecycle.
+- Bot DTOs/capabilities, disjoint Workspace/Bot chat projection, per-installation mode/cache, versioned Full notice, Full-to-Custom changes, per-chat reductions, and effective-access summaries.
+- One durable non-Git managed home per bot, shell starting there, ordinary artifacts saved there, outside-home inspection only when needed, and resistance to editable-instruction override.
+- Shared `AidenChatDetailView` use for Workspace and Bot conversations, with no duplicate transcript/composer/stream/approval implementation.
+- Semantic avatar fallback plus Image Playground availability, cancel/failure, accepted-image upload, paired-Mac canonical persistence, and temporary-file cleanup.
+- Cache-only App Intent entities/current-SDK navigation/deep links/cold/stale launch with assertions that the intent process makes no network/Keychain access; Live Activity sub-4 KB reducer/stale/reconciliation/privacy behavior; native and explicit paired-Mac dictation authorization/lifecycle; absence of voice-note paths; bounded no-retention paired-Mac audio; and read-aloud lifecycle.
 
 Retain and adapt the useful Hermex API, auth, session, chat, SSE, cache, navigation, appearance, workspace, Git, file, Tasks, App Intents, Live Activity, and voice tests. Remove Kanban, Skills, Memory, Insights, and other deleted-feature tests from the target rather than leaving skipped suites. Hermes Cron fixtures do not survive unchanged; only the native Tasks UI/test patterns are reused against new Aiden DTOs.
 
@@ -731,11 +780,17 @@ Completed and streaming assistant replies expose a Hermex-style long-press Copy 
 2. **Remote permissions:** Mobile turns honor the workspace's saved `full`/`ask`/`none` permission and show approvals on the phone. Permission lives in `Workspace Settings` under the conversation-toolbar ellipsis, never in the composer.
 3. **Workspace creation:** The phone uses a server-controlled approved-root directory browser and a short-lived opaque selection token. New selected-folder workspaces default to `ask`.
 4. **Appearance:** Aiden On The Go appearance is independent and stored locally on the phone/iPad.
-5. **Expanded native scope:** App Intents, Live Activities, voice, Aiden Git/files, and scheduled tasks are planned after the stable chat/workspace core. Share Extension, terminal, Computer Use, and cloud push remain deferred.
+5. **Expanded native scope:** App Intents, Live Activities, voice, Aiden Git/files, and scheduled tasks are planned after the stable chat/workspace core. Share Extension, generic Terminal UI, Computer Use controls, and cloud push remain deferred; the Mac-owned shell tool inside an authorized Bot turn is separately approved.
 6. **Apple identity:** Use automatic signing with team `5WP229CBB8`, the `sbtbiswas.*` bundle namespace, `group.sbtbiswas.AidenOnTheGo`, URL scheme `aiden-otg`, and SKU `aiden-on-the-go-ios`, subject to the Phase 0 provisioning preflight.
 7. **Tailscale ownership:** Aiden provides explicit Connect/Disconnect, previews the exact non-Funnel Serve change, records ownership, and removes only the route it created without altering unrelated routes.
+8. **Bot-first platform:** Redesign iPhone/iPad now around the Aiden-logo Bots/Workspaces switcher. Defer the Mac inbox/shell/Access redesign; Mac work is limited to authoritative runtime/persistence integration and canonical-photo display in existing surfaces.
+9. **Shared chat:** Every Bot conversation reuses the existing Swift `AidenChatDetailView` and its existing chat feature/view-model path. Bot identity and Access affordances wrap it; no second chat engine or copied transcript/composer is allowed.
+10. **Bot access:** Every valid new or migrated bot defaults to explicit Full Access after one versioned notice. Custom may reduce Files, shell, Connections/MCPs, Skills, and other capabilities per bot; a chat may narrow but not exceed its bot.
+11. **Bot home and shell:** Every bot has one hidden, durable Aiden-managed home. Shell is allowed and starts there, ordinary artifacts are saved there, and Full may inspect other OS-accessible Mac locations as needed. The main-owned system instructions enforce this behavior.
+12. **Git boundary:** Bot home provisioning creates no Git repository, branch, or commit. Git is not categorically blocked when the task makes an existing or explicitly initialized repository relevant, but mobile still exposes no generic terminal or command endpoint.
+13. **Bot photo:** System Image Playground, including Private Cloud Compute where Apple uses it, is acceptable on supported phones. Only the accepted normalized image is sent to the paired Mac and stored as the canonical bot photo; semantic avatars remain the fallback.
 
-Implementation may begin with Phase 0. Later phases remain gated by the acceptance criteria above rather than unresolved product decisions.
+The foundation phases above remain historical. Bot-first implementation begins with Phase 0 of `bot-first-aiden-on-the-go-plan.md`; later Bot phases remain gated by its acceptance criteria and independent review rather than unresolved product decisions.
 
 ## First-class pairing choices follow-up — 2026-08-22
 
@@ -772,3 +827,61 @@ The inline deck now preserves the sender-side spatial anchor during interaction:
 The fitted-image mask is applied before the sender-aligned layout frame expands. Portrait and landscape images therefore keep all four continuous corners instead of allowing the frame boundary to square off the edge opposite the sender.
 
 The complete repository suite, type-check, lint, production build, generic iPhoneOS build, iOS release policy, Remote Access and attachment suites, and the full Apple Development-signed XCTest target pass. The final native run used the connected physical iPhone 13 Pro; no simulator or iPhone 16 Pro Max was used.
+
+## Client-device identity follow-up — 2026-08-24
+
+Connected iPhone and iPad clients now publish a bounded presentation identity instead of relying on UIKit's privacy-era generic `iPhone`/`iPad` value. iOS prefers a specific user-assigned device name, falls back to the cleaned local hostname, and finally uses a stable typed display suffix derived from the vendor-scoped installation identifier. The authenticated server projection returns the Mac's current label for only the calling device; a newer client refreshes it only when stale through `PATCH /device/identity`, so existing pairings heal without repeated state writes or re-pairing.
+
+This label never becomes an authentication key. Remote `deviceId` and credential identity remain Mac-pair-specific. Future iCloud sync should reconcile an account-scoped display record separately, as recorded beside the iOS identity builder, without widening or replacing Remote authentication.
+
+## Bot final-reply projection follow-up — 2026-08-24
+
+Bot chats now separate the persisted assistant transcript at the last tool activity boundary: intermediate narration is deduplicated and kept inside the collapsed activity disclosure, while only the terminal answer is rendered as a normal assistant bubble or copied from the Bot reply. Direct Bot answers without tool activity remain visible. Workspace chats preserve their existing completed and streaming presentation.
+
+The Remote stream projection can reset before sending a cumulative replacement. Bot reconciliation now clears the old ephemeral accumulator at that reset so replacement text cannot be appended to an earlier copy. Three focused projection tests cover UTF-16 boundaries, repeated progress, direct replies, and Bot-versus-Workspace copy behavior; the focused physical-device chat suite passes 63/63 and the complete physical iPhone 13 Pro suite passes 281 tests with six expected environment-gated skips and zero failures. Version `0.1.0 (21)` was archived from commit `e457df9d8`, uploaded with the internal-only policy, processed as `VALID`, and assigned only to Internal Testers as `IN_BETA_TESTING`; external testing remains `NOT_APPLICABLE`.
+
+## Android Workspace-home and cache parity follow-up — 2026-08-24
+
+The Android Workspace root now follows the shipped iOS structure with the exact Aiden app-icon product switcher, search/profile capsule, Scheduled Tasks, Usage, and Workspaces destinations, globally recent chats, and the same Existing Workspace, New Workspace, and Managed Scratch Workspace creation choices. The Active/Archived workspace browser is a nested directory rather than a peer tab. Compose spacing is normalized around a single system-inset owner, and visible borders are removed from buttons, chips, fields, and selection surfaces.
+
+Product switching keeps both Workspace and Bots roots mounted. Activity-scoped ViewModels publish cached data immediately and refresh once for each authenticated Remote client; Bot lists, conversations, and avatars are scoped by Mac installation plus paired-device identity. Workspace chat cache observations are constrained to the active workspace inventory. Chat ViewModels carry the same installation/device identity in their lifecycle key. SSE uses a cancellable `callbackFlow` on `Dispatchers.IO` and closes the underlying OkHttp call when collection ends, preventing product/navigation changes from retaining obsolete readers.
+
+The Android debug unit suite passes 77 tests, including installation/device cache isolation, warm selection fallback, relative timestamps, and cancellation of a never-ending SSE response. Lint and debug assembly pass. The APK was installed in place on the USB Pixel 10 Pro XL (`54241FDCQ00033`), preserving pairing and caches; the landing page, creation sheet, directory, and immediate cached return to Bots were visually verified on-device.
+
+## Android image showcase parity follow-up — 2026-08-24
+
+Android now shares iOS's image-media hierarchy for both Workspace and Bot conversations. Safe PNG/JPEG media is removed from text bubbles: one image becomes a transparent sender-aligned aspect-fit showcase, while two through twenty images use the selected-plus-neighbors stacked deck with mirrored sender-edge geometry, resisted edge drag, one-card flick selection, selected-only shadow, and TalkBack next/previous/open actions. Invalid, duplicate, unsupported, zero-byte, and oversized descriptors remain ordinary fallback attachment rows.
+
+The full-screen black Compose pager opens at the exact selected attachment, activates selected ±1 pages only, exposes filename or `X of N`, dots, retry, close, Save Image, and Save All Images, and retains original PNG/JPEG bytes. Inline thumbnails decode to at most 960 pixels and viewer images to at most 2,560 pixels through a content-and-resolution-keyed, 24-entry/32 MiB memory cache. Raw bytes remain under the installation/device/chat/attachment-scoped 96 MiB disk cache and now write atomically. Cache misses coalesce, use only the bound authenticated Remote client, reject stale-installation publication and MIME/size mismatch, and bound both network and picker streams before allocation.
+
+The full JVM suite passes 84 tests, including iOS-matching deck math, selected-neighbor activation, safe-image admission, resolution-aware keys, raw-cache scope, and bounded authenticated attachment responses. Lint and debug assembly pass. A Compose instrumentation test on the USB Pixel 10 Pro XL proves a three-image deck advances one page and opens `2 of 3`; a real cached single-image chat and viewer also passed visual inspection. The Gradle connected-device lifecycle removed the debug package after its test and therefore cleared the app-private pairing credential; after the final APK was installed, the user manually re-paired it and the live Connected state plus Workspace landing were verified.
+
+## Android post-pair loading and Usage parity follow-up — 2026-08-24
+
+Live USB-Pixel and Mac server evidence isolated the connected-but-empty Bots/Usage report to a missed post-pair feature-home load: the persisted installation had the correct Mac instance and Bot/server grants, the Mac held two Bots plus tracked Usage, and no feature requests were issued until a cold relaunch. The Android ViewModels now own authenticated client/CONNECTED observation, synchronously deduplicate overlapping Compose/lifecycle triggers, preserve independently successful Bot segments, request archived Bot identities like iOS, and distinguish absent/error snapshots from an authoritative empty list. Usage failures remain retryable and can fall back to a bounded installation/range-scoped local summary instead of requiring a relaunch.
+
+The bare Usage list is replaced by the shipping iOS information architecture in native Compose: a large dismissible sheet, activity/date hero, two-column overview and total-token cards, a zero-filled 10-column 30-day token heatmap with matching intensity math, token mix, completion/local/failure/cost insights, the first five model rows with provider artwork, and the privacy-safe aggregate disclosure. Semantic raised surfaces replace visible outlines. The JVM suite, Android lint, and debug assembly pass; the APK is installed in place on the exact USB Pixel so the repaired pairing remains intact, and live Workspace chats, two Bots, non-zero Usage, metric accessibility descriptions, and the dashboard sheet were verified against the active Mac profile.
+
+Long-form Android modal sheets now disable the sheet-level drag connection and let their internal scroll container own vertical gestures. This removes the expanded-boundary jitter reproduced in Usage and prevents the same nested-scroll conflict in Scheduled Tasks, Settings, pairing, folder browsing, Bot access, and the scroll-heavy Git sheets; compact action sheets remain draggable. The misleading drag handle is omitted, while scrim, Back, and explicit dismissal controls remain available. Repeated boundary pulls on the installed Pixel kept the Usage sheet bounds fixed.
+
+## Native and paired-Mac speech-input follow-up — 2026-08-24
+
+The external Android recognition activity is removed. Android now owns `android.speech.SpeechRecognizer` in process, requires an available on-device service, publishes partial results directly into the composer, and destroys the recognizer on completion, navigation, submission, lifecycle stop, or replacement. iOS retains its native on-device Speech path. Both composers snapshot one draft per generation, reject stale callbacks from earlier sessions, prevent concurrent manual edits from being overwritten, cancel capture when the app backgrounds, and keep typed input available on every failure. iOS deliberately preserves the transient inactive state used by native permission sheets.
+
+App Settings on both clients chooses **On this device** or **Paired Mac**. Paired-Mac mode can inspect, download, cancel, and select the existing Mac-local Parakeet models without desktop setup. It records at most 60 seconds of 16 kHz mono PCM, sends the closed payload over the authenticated pinned-TLS Aiden Remote connection, and inserts the final transcript after stop; raw audio is not persisted. The existing Parakeet binding is an offline/batch ASR model rather than a speech synthesizer or streaming recognizer, so native modes provide partial text while paired-Mac mode truthfully returns final text. Read-aloud remains native/on-device.
+
+The Remote contract adds authenticated status/model-management/transcription routes, a shared revision-9 fixture, a 60-second exact body bound, pre-body credential rejection, a two-job admission bound, privacy-safe errors, usage accounting, and staged full-manifest model installation with an 800 MiB compressed-archive download ceiling. Android/iOS add bounded clients, 120-second transcription timeouts, settings and lifecycle state, and route/PCM/mode tests. Two independent reviews covered backend/security and both mobile controllers; their findings drove session fencing, background cancellation, queue/body bounds, staged model validation, accessibility selection semantics, and privacy-copy reconciliation. Moving synchronous Sherpa decode out of Electron main, bounding extracted archive bytes/files, and signing model archives remain explicitly tracked follow-ups.
+
+## Mobile chrome polish follow-up — 2026-08-24
+
+- Android’s app-icon product switcher now uses text-only Bots and Workspaces menu rows. Workspace creation uses a plain plus on the accent fill, and chat history uses a 32 dp visual arrow-only jump-to-latest control inside a 48 dp touch target.
+- The Android chat transcript extends behind a foreground composer surface with soft elevation, while measured Scaffold bottom padding keeps the latest message reachable and Compose remains the sole IME/navigation-inset owner.
+- iPhone and iPad expose the same scroll-aware downward-arrow action in a 34-point circular Liquid Glass surface inside a 44-point touch target. Tapping dismisses it immediately before scrolling to the latest message.
+- The product-switcher coachmark uses a continuous rounded glass card in a transparent presentation host, and prominent accent-filled mobile actions use the palette’s semantic on-accent foreground to retain contrast across every appearance preset.
+- UI contracts cover the Android arrow-only action/menu state and the iOS scroll threshold. Android unit tests, lint, assembly, Android-test compilation, live Pixel IME/scroll inspection, and the 288-test signed physical-iPhone suite pass; the final normal apps were installed in place on both devices.
+
+## Unified mobile pull request and Android artifact — 2026-08-24
+
+iOS, Android, the shared Remote contracts, and the completed Bot companion-vision implementation are consolidated on one review branch based directly on `main`. Create Images/Banana, Gemini Live, and the Pi inline proposal remain intentionally separate so this pull request has one mobile-companion release boundary.
+
+Pull-request CI now gives Android its own Java 21/SDK 36 job. It runs the complete debug JVM tests, lint, debug assembly, and Android-test Kotlin compilation, then publishes the installable debug APK plus its SHA-256 checksum as a 14-day workflow artifact. Hosted CI continues to compile the iOS app and test bundle for generic physical hardware without using a simulator; signed XCTest acceptance remains a recorded physical-device gate.

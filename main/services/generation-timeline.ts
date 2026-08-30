@@ -123,13 +123,26 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
     case "glob":
       return { label: "Find files", detail: safeDetail(values.pattern) };
     case "grep":
-      return { label: "Search files", target: path, detail: safeDetail(values.pattern) };
+      return {
+        label: "Search files",
+        target: path,
+        detail: safeDetail(values.pattern),
+      };
     case "write_file":
       return { label: "Write file", target: path };
     case "edit_file":
       return { label: "Edit file", target: path };
+    case "display_image":
+      return { label: "Display image", target: path };
+    case "render_artifact":
+      return {
+        label: "Render artifact",
+        detail: safeDetail(values.title),
+      };
     case "run_command":
       return { label: "Run command", detail: safeDetail(values.description) };
+    case "share_image":
+      return { label: "Share image", target: path };
     case "web_search":
       return { label: "Web search", detail: safeDetail(values.query) };
     case "schedule_task":
@@ -167,7 +180,26 @@ export class GenerationTimelineProjector {
   }
 
   toolStarted(toolCallId: string, toolName: string, args: unknown): void {
-    if (this.timeline.status !== "running" || this.stepIndex.has(toolCallId)) return;
+    if (this.timeline.status !== "running") return;
+    const existingIndex = this.stepIndex.get(toolCallId);
+    if (existingIndex !== undefined) {
+      // An early pending step (opened at toolcall_start, before arguments
+      // resolve) adopts the full descriptor once execution supplies real args.
+      const step = this.timeline.steps[existingIndex];
+      if (step && isToolStep(step) && !isTerminalAgentStep(step.status)) {
+        const descriptor = safeToolDescriptor(toolName, args);
+        const timestamp = this.now();
+        step.toolName = safeToolName(toolName);
+        step.label = descriptor.label;
+        if (descriptor.target) step.target = descriptor.target;
+        else delete step.target;
+        if (descriptor.detail) step.detail = descriptor.detail;
+        else delete step.detail;
+        step.updatedAt = timestamp;
+        this.emit();
+      }
+      return;
+    }
     const timestamp = this.now();
     const descriptor = safeToolDescriptor(toolName, args);
     this.toolSequence += 1;
@@ -200,7 +232,15 @@ export class GenerationTimelineProjector {
     const timestamp = this.now();
     const last = this.timeline.steps[this.timeline.steps.length - 1];
     if (last && !isToolStep(last) && last.contentOffset === this.contentOffset) {
-      this.openThinking = { index: this.timeline.steps.length - 1, startedAt: timestamp };
+      // The stretch reopened on the merged thinking step: mark it open again so
+      // the live timeline reflects reasoning in progress.
+      delete last.finishedAt;
+      last.updatedAt = timestamp;
+      this.openThinking = {
+        index: this.timeline.steps.length - 1,
+        startedAt: timestamp,
+      };
+      this.emit();
       return;
     }
     this.thinkingSequence += 1;
@@ -213,7 +253,10 @@ export class GenerationTimelineProjector {
       durationMs: 0,
       contentOffset: this.contentOffset,
     };
-    this.openThinking = { index: this.timeline.steps.length, startedAt: timestamp };
+    this.openThinking = {
+      index: this.timeline.steps.length,
+      startedAt: timestamp,
+    };
     this.timeline.steps.push(step);
     this.emit();
   }

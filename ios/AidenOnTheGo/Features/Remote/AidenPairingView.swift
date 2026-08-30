@@ -185,7 +185,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
 
     var eyebrow: String {
         switch self {
-        case .build: return String(localized: "BUILD IN YOUR WORKSPACE")
+        case .build: return String(localized: "BOTS AND WORKSPACES")
         case .extend: return String(localized: "CHOOSE AND EXTEND")
         case .control: return String(localized: "AUTOMATE AND STAY IN CONTROL")
         }
@@ -193,7 +193,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .build: return String(localized: "Your desktop, ready to work")
+        case .build: return String(localized: "Choose how Aiden helps")
         case .extend: return String(localized: "Bring the right intelligence")
         case .control: return String(localized: "Keep Aiden moving")
         }
@@ -202,7 +202,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .build:
-            return String(localized: "Chat with a workspace agent that can read and edit files, run commands, review diffs, and work with Git.")
+            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. When Bots are available on your paired desktop, use them as reusable helpers and tap the Aiden logo to switch.")
         case .extend:
             return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and MCP connectors.")
         case .control:
@@ -254,6 +254,7 @@ struct AidenPairingView: View {
     @State private var isShowingAppearance = false
     @State private var isShowingPayloadFallback = false
     @State private var pairingTask: Task<Void, Never>?
+    @State private var hapticScope = UUID()
     @State private var step: Int
 
     private let onIntroductionComplete: (() -> Void)?
@@ -317,7 +318,7 @@ struct AidenPairingView: View {
                                 Label("Appearance", systemImage: "circle.lefthalf.filled")
                             }
                         } label: {
-                            Image(systemName: "ellipsis")
+                            Image(systemName: AidenChromeSymbols.overflowMenu)
                         }
                         .accessibilityLabel("More pairing options")
                     } else {
@@ -345,6 +346,7 @@ struct AidenPairingView: View {
                 }
             }
             .onDisappear {
+                coordinator.haptics.deactivate(scope: hapticScope)
                 pairingTask?.cancel()
                 pairingTask = nil
                 discovery.stop()
@@ -353,6 +355,7 @@ struct AidenPairingView: View {
                 manualEndpoint = ""
                 selectedAgentID = nil
             }
+            .onAppear { coordinator.haptics.activate(scope: hapticScope) }
             .sheet(isPresented: $isShowingScanner) {
                 NavigationStack {
                     AidenQRCodeScanner { payload in
@@ -552,10 +555,12 @@ struct AidenPairingView: View {
         let button = Button(action: action) {
             label()
                 .frame(maxWidth: .infinity)
+                .foregroundStyle(palette.onAccent)
         }
         .font(.headline)
         .frame(maxWidth: .infinity)
         .controlSize(.large)
+        .tint(palette.accent)
 
         if #available(iOS 26, *) {
             button.buttonStyle(.glassProminent)
@@ -875,6 +880,7 @@ struct AidenPairingView: View {
         operation: @escaping @MainActor () async -> AidenPairingAttemptResult
     ) {
         guard pairingTask == nil else { return }
+        let attemptID = UUID()
         pairingTask = Task { @MainActor in
             let result = await operation()
             guard !Task.isCancelled else {
@@ -882,11 +888,22 @@ struct AidenPairingView: View {
                 return
             }
             if result == .succeeded {
+                coordinator.haptics.play(
+                    .success,
+                    scope: hapticScope,
+                    dedupeKey: "pair:\(attemptID.uuidString)"
+                )
                 pairingPayload = ""
                 manualCode = ""
                 manualEndpoint = ""
                 selectedAgentID = nil
                 onPaired?()
+            } else if result == .failed {
+                coordinator.haptics.play(
+                    .error,
+                    scope: hapticScope,
+                    dedupeKey: "pair:\(attemptID.uuidString)"
+                )
             }
             pairingTask = nil
         }

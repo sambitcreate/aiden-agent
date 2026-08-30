@@ -1,6 +1,7 @@
 import type { Attachment, Chat } from "./types.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
+import { parseChatHtmlArtifacts } from "../../renderer/shared/chat-artifacts.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import {
   parseProviderFailureV1,
@@ -28,6 +29,7 @@ export interface VisibleChatMessage {
   createdAt: number;
   model?: string;
   attachments?: Attachment[];
+  htmlArtifacts?: import("../../renderer/shared/chat-artifacts.js").ChatHtmlArtifactV1[];
   skill?: SkillProvenanceV1;
   providerFailure?: ProviderFailureV1;
 }
@@ -72,11 +74,13 @@ function boundedString(
 export function projectVisibleChatMetadata(input: {
   title: unknown;
   workspaceId?: unknown;
+  botId?: unknown;
   providerId?: unknown;
   model?: unknown;
 }): {
   title: string;
   workspaceId?: string;
+  botId?: string;
   providerId?: string;
   model?: string;
 } {
@@ -92,6 +96,13 @@ export function projectVisibleChatMetadata(input: {
       "workspace identifier",
       MAX_WORKSPACE_ID_CHARS,
       MAX_WORKSPACE_ID_BYTES,
+      true,
+    ),
+    botId: boundedString(
+      input.botId,
+      "bot identifier",
+      MAX_CHAT_ID_CHARS,
+      MAX_CHAT_ID_BYTES,
       true,
     ),
     providerId: boundedString(
@@ -146,6 +157,10 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     createdAt: message.createdAt as number,
     model,
     attachments: safeStoredAttachments(message.attachments),
+    htmlArtifacts:
+      message.role === "assistant"
+        ? parseChatHtmlArtifacts(message.htmlArtifacts)
+        : undefined,
     skill:
       message.role === "user"
         ? parseSkillProvenanceV1(message.skill)

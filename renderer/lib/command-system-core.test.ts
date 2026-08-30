@@ -60,6 +60,10 @@ test("workspace-only commands are unavailable when their surfaces are unmounted"
     environment: true,
     terminal: true,
   });
+  assert.deepEqual(workspaceCommandVisibility("/bots/bot-1/chat/chat-1"), {
+    environment: true,
+    terminal: true,
+  });
 });
 
 test("resolves exact app commands and rejects extra modifiers", () => {

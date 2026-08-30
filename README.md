@@ -28,9 +28,11 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 - **Command palette and shortcuts** - `⌘K` searches commands, chats, models, providers, Settings, and appearance actions. One typed command system also powers native menus, visible shortcut labels, transactional global hotkeys, and the searchable Keyboard Shortcuts editor.
 - **Commands and explicit skills** - type `/` at the start of the composer to search Aiden app commands, or `$` to search the active workspace's available skills. Commands reuse canonical app workflows; an explicitly selected skill is revalidated for the active workspace, applies to one accepted message, and persists only safe display provenance.
 - **Native Subagents** - a foreground chat can delegate up to four fresh `scout`, `planner`, or `reviewer` tasks. Children are read/search-only, inherit the approved workspace and model, stop with the parent, and appear as live chips plus an inspectable **Subagents** view in Environment.
+- **Bots and Web Search** - macOS can create durable Bots with explicit capability grants, persistent conversations, image understanding, and Telegram control. Every desktop can configure explicit Web Search routes from the expanded provider catalog; Bots remain hidden on Linux until their native security bindings are supported there.
 - **Workspaces and managed worktrees** - use folders, scratch workspaces, or isolated managed worktrees with three access levels, workspace-scoped tools, Ask-mode approvals, guarded creation/deletion, and crash-aware cleanup.
-- **Models and the Model Pad** - choose from Pi's native hosted-provider catalog, local Ollama or LM Studio models, and declarative compatible endpoints. Provider-specific authentication, model capabilities, availability, and branded marks flow into the picker and Personal Model Pad.
+- **Models and the Model Pad** - choose from Pi's native hosted-provider catalog, local Ollama or LM Studio models, and declarative compatible endpoints. Arrange a personal capability-and-pace map, optionally enrich hosted models with explicitly fetched Artificial Analysis scores through a benchmark-only OpenRouter key, and keep benchmark evidence visibly separate from runtime limits and availability.
 - **Terminal, Git, and review** - keep a terminal drawer beside the conversation, inspect files and diffs in Environment, edit with dirty-file protection, compare branches, commit or push checked snapshots, and open the workspace in a discovered external editor.
+- **Rich responses and local diagnostics** - render sandboxed HTML, chart, math, and raster artifacts with recovery/export controls, and inspect or export bounded local diagnostics without an automatic upload path.
 - **Desktop integration and appearance** - native menus, encrypted system credential storage, **Parakeet**, the dictation pill, semantic themes, high contrast, reduced motion, and consistent light/dark rendering. Apple **Foundation Models**, Accessibility auto-paste, and the signed **Rust** Computer Use broker remain macOS-only.
 - **Extensibility and background work** - use skills, **MCP**, **Exa** search, scheduled tasks, voice, and attachments through typed, allowlisted boundaries.
 - **Aiden On The Go** - opt in to a pinned local-network connection or an explicit non-Funnel Tailscale Serve route, pair each iPhone or iPad separately, and revoke devices from [Remote Access settings](docs/aiden-on-the-go-remote-access.md).
@@ -93,6 +95,10 @@ npm run dev
 
 The native Aiden On The Go iPhone and iPad client lives in [`ios/`](ios/README.md). It is not part of the Electron development command; open `ios/AidenOnTheGo.xcodeproj` or use the documented physical-device `xcodebuild` commands separately.
 
+### Mobile distribution
+
+The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation builds remain separate from the macOS release and are uploaded by CI as installable APK artifacts.
+
 The development launcher prepares a platform-appropriate **Aiden Agent Dev** runtime that can run beside the installed **Aiden Agent** app. Development uses separate app-data, Chromium session, log, crash, and `~/.aiden-dev` roots; it does not copy production data, register global shortcuts, or check the production update feed by default. Set `AIDEN_DEV_GLOBAL_SHORTCUTS=1` only when a development run intentionally needs the global bindings.
 
 Native builds discover the newest compatible full Xcode without changing the machine-wide `xcode-select` setting; `DEVELOPER_DIR` remains available as a per-command override.
@@ -118,9 +124,9 @@ On Linux, use `npm run package:linux` and `npm run package:linux:verify` for an
 unpacked development package, or `npm run dist:linux` for AppImage, Debian, and
 RPM artifacts. Linux packages are built on their target architecture.
 
-Distribution builds use `npm run dist` and require Developer ID signing plus notarization. The release pipeline fails closed, verifies the app, DMG, and ZIP, checks the deployed Homebrew and website consumers, and publishes updater metadata only with the matching verified artifacts. Read [macOS releases and automatic updates](docs/releasing.md) before enabling publication.
+Distribution builds use `npm run dist`; macOS artifacts require Developer ID signing plus notarization. The release pipeline fails closed, verifies the platform artifacts, checks the deployed Homebrew and website consumers, and publishes updater metadata only with the matching verified artifacts. Read [macOS releases and automatic updates](docs/releasing.md) before enabling publication.
 
-The checked-in models.dev snapshot is refreshed only through `npm run models:refresh` or the guarded macOS distribution path; the Linux release workflow invokes that explicit refresh before packaging. Artificial Analysis credentials and data are never bundled; users explicitly fetch suggestions into an encrypted, device-local cache.
+The checked-in models.dev snapshot is refreshed only through `npm run models:refresh` or the guarded distribution path; Linux and macOS packaging invoke that explicit release step. Artificial Analysis credentials and data are never bundled. OpenRouter benchmark insights use a separate encrypted Model Pad key only after an explicit Connect & fetch or Fetch latest action, then read normalized public scores from a device-local offline cache. That key never configures an inference provider or imports OpenRouter's model catalog.
 
 ## Project status
 

@@ -1,6 +1,6 @@
 // Discover provider models and retain provider-reported metadata for local runtimes.
 
-import type { ProviderModelMetadata, StoredProvider } from "./types.js";
+import type { ProviderModelMetadata, ProviderModelType, StoredProvider } from "./types.js";
 import {
   GOOGLE_PROVIDER_ID,
   googleProviderModelMetadata,
@@ -168,6 +168,15 @@ export function normalizeProviderBaseUrl(value: string): string {
 /** First-run Tailnet setup is intentionally narrower than arbitrary custom endpoints. */
 export function assertOnboardingTailnetBaseUrl(value: string): void {
   const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Tailscale model URLs must use HTTP or HTTPS.");
+  }
+  if (url.username || url.password) {
+    throw new Error("Put credentials in the API key field, not the URL.");
+  }
+  if (url.search || url.hash) {
+    throw new Error("Provider URL cannot include a query string or fragment.");
+  }
   const hostname = url.hostname.toLowerCase().replace(/\.$/u, "");
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(hostname);
   const cgnat =
@@ -320,6 +329,10 @@ function capabilityFlags(value: unknown): {
   toolCall?: boolean;
   reasoning?: boolean;
   embedding?: boolean;
+  reranking?: boolean;
+  imageOutput?: boolean;
+  audioOutput?: boolean;
+  videoOutput?: boolean;
   completion?: boolean;
 } {
   if (Array.isArray(value)) {
@@ -333,6 +346,15 @@ function capabilityFlags(value: unknown): {
       toolCall: capabilities.has("tools") || capabilities.has("tool_use"),
       reasoning: capabilities.has("reasoning") || capabilities.has("thinking"),
       embedding: capabilities.has("embedding") || capabilities.has("embeddings"),
+      reranking: capabilities.has("rerank") || capabilities.has("reranking"),
+      imageOutput:
+        capabilities.has("image_generation") || capabilities.has("text_to_image"),
+      audioOutput:
+        capabilities.has("audio_generation") ||
+        capabilities.has("speech") ||
+        capabilities.has("tts"),
+      videoOutput:
+        capabilities.has("video_generation") || capabilities.has("text_to_video"),
       completion: capabilities.has("completion"),
     };
   }
@@ -352,12 +374,68 @@ function capabilityFlags(value: unknown): {
         : typeof capabilities.thinking === "boolean"
           ? capabilities.thinking
           : undefined,
+    embedding:
+      typeof capabilities.embedding === "boolean" ? capabilities.embedding : undefined,
+    reranking:
+      typeof capabilities.reranking === "boolean" ? capabilities.reranking : undefined,
+    imageOutput:
+      typeof capabilities.image_generation === "boolean"
+        ? capabilities.image_generation
+        : undefined,
+    audioOutput:
+      typeof capabilities.audio_generation === "boolean"
+        ? capabilities.audio_generation
+        : undefined,
+    videoOutput:
+      typeof capabilities.video_generation === "boolean"
+        ? capabilities.video_generation
+        : undefined,
   };
+}
+
+function providerModelType(
+  rawType: string | undefined,
+  flags: ReturnType<typeof capabilityFlags>,
+): ProviderModelType | undefined {
+  const type = rawType?.trim().toLocaleLowerCase().replace(/[\s_]+/gu, "-");
+  if (flags.embedding || type?.includes("embed")) return "embedding";
+  if (flags.reranking || type?.includes("rerank")) return "reranker";
+  // Explicit output capabilities are stronger than a server's generic `llm`
+  // label; otherwise media-only endpoints leak into chat model lists.
+  if (flags.videoOutput) return "video";
+  if (flags.audioOutput) return "audio";
+  if (flags.imageOutput) return "image";
+  if (
+    type === "llm" ||
+    type === "vlm" ||
+    type === "chat" ||
+    type === "chat-completion" ||
+    type === "text-generation" ||
+    type === "text-to-text" ||
+    type === "image-text-to-text"
+  ) {
+    return "llm";
+  }
+  if (type?.includes("video")) return "video";
+  if (
+    type?.includes("audio") ||
+    type?.includes("speech") ||
+    type === "tts" ||
+    type?.includes("transcription")
+  ) {
+    return "audio";
+  }
+  if (type?.includes("image") || type?.includes("diffusion")) return "image";
+  if (flags.completion) return "llm";
+  return undefined;
+}
+
+function isProviderNonChatType(type: ProviderModelType | undefined): boolean {
+  return type !== undefined && type !== "llm";
 }
 
 function genericMetadata(entry: GenericModelEntry): ProviderModelMetadata {
   const flags = capabilityFlags(entry.capabilities);
-  const type = entry.type?.toLowerCase();
   const quantization =
     typeof entry.quantization === "string"
       ? entry.quantization
@@ -365,12 +443,7 @@ function genericMetadata(entry: GenericModelEntry): ProviderModelMetadata {
   return {
     source: "provider",
     name: entry.display_name ?? entry.name,
-    type:
-      type?.includes("embed") || flags.embedding
-        ? "embedding"
-        : type === "llm" || type === "vlm"
-          ? "llm"
-          : undefined,
+    type: providerModelType(entry.type, flags),
     vision: flags.vision,
     toolCall: flags.toolCall,
     reasoning: flags.reasoning,
@@ -391,7 +464,7 @@ function normalizeDiscovery(entries: GenericModelEntry[]): DiscoveredModels {
   }
   const metadata = Object.fromEntries(metadataEntries);
   const models = Object.keys(metadata)
-    .filter((id) => metadata[id]?.type !== "embedding")
+    .filter((id) => !isProviderNonChatType(metadata[id]?.type))
     .sort();
   return { models: Array.from(new Set(models)), modelMetadata: metadata };
 }
@@ -414,13 +487,15 @@ function parseLmStudioResponse(value: unknown): DiscoveredModels | null {
     const key = typeof entry.key === "string" ? entry.key : undefined;
     if (!key || key.length > MAX_DISCOVERED_MODEL_ID_LENGTH) continue;
     const capabilities = capabilityFlags(entry.capabilities);
-    const type =
-      entry.type === "embedding" ? "embedding" : entry.type === "llm" ? "llm" : undefined;
+    const type = providerModelType(
+      typeof entry.type === "string" ? entry.type : undefined,
+      capabilities,
+    );
     const quantization = object(entry.quantization);
     const loadedInstances = entry.loaded_instances;
     if (
       !recommendedModel &&
-      type !== "embedding" &&
+      !isProviderNonChatType(type) &&
       ((Array.isArray(loadedInstances) && loadedInstances.length > 0) || entry.state === "loaded")
     ) {
       recommendedModel = key;
@@ -447,7 +522,7 @@ function parseLmStudioResponse(value: unknown): DiscoveredModels | null {
   }
   const modelMetadata = Object.fromEntries(metadataEntries);
   const models = Object.keys(modelMetadata)
-    .filter((id) => modelMetadata[id]?.type !== "embedding")
+    .filter((id) => !isProviderNonChatType(modelMetadata[id]?.type))
     .sort();
   return {
     models,
@@ -528,11 +603,7 @@ export async function discoverOllamaModels(
         }
       }
       const capabilities = capabilityFlags(detail.capabilities);
-      const type = capabilities.embedding
-        ? "embedding"
-        : capabilities.completion
-          ? "llm"
-          : undefined;
+      const type = providerModelType(undefined, capabilities);
       const details = detail.details ?? tag.details;
       return {
         id,

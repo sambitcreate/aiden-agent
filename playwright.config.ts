@@ -17,8 +17,8 @@ const config: PlaywrightTestConfig = {
   fullyParallel: false,
   workers: 1,
   // A test can finish its assertions before Electron enters its bounded
-  // application-service shutdown (up to 20s in the fixture on loaded runners).
-  timeout: 60_000,
+  // application-service shutdown (up to 35s in the fixture on loaded runners).
+  timeout: 90_000,
   expect: { timeout: 10_000 },
   retries: process.env.CI ? 1 : 0,
   forbidOnly: Boolean(process.env.CI),

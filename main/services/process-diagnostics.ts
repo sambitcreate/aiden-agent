@@ -1,4 +1,5 @@
-import { writeDevLog, writeDevLogSync } from "./dev-log.js";
+import { projectDiagnosticError, type DiagnosticSafeFields } from "./diagnostics-contract.js";
+import { writeDiagnosticEvent, writeDiagnosticEventSync } from "./diagnostic-journal.js";
 
 type DiagnosticSignal = "SIGHUP" | "SIGINT" | "SIGTERM";
 
@@ -38,15 +39,23 @@ export function processDiagnosticSnapshot(target: DiagnosticProcess = process): 
   };
 }
 
-function safeProcessDiagnosticSnapshot(target: DiagnosticProcess): Record<string, unknown> {
+function journalProcessFields(target: DiagnosticProcess): DiagnosticSafeFields {
   try {
-    return processDiagnosticSnapshot(target);
-  } catch (error) {
+    const memory = target.memoryUsage();
     return {
       pid: target.pid,
       ppid: target.ppid,
-      snapshotError: error instanceof Error ? error.message : String(error),
+      platform: target.platform,
+      arch: target.arch,
+      nodeVersion: target.version,
+      electronVersion: target.versions.electron ?? null,
+      chromeVersion: target.versions.chrome ?? null,
+      uptimeSeconds: Number(target.uptime().toFixed(3)),
+      rssBytes: memory.rss,
+      heapUsedBytes: memory.heapUsed,
     };
+  } catch {
+    return { pid: target.pid, ppid: target.ppid, snapshotFailed: true };
   }
 }
 
@@ -55,34 +64,66 @@ export function installProcessDiagnostics(target: DiagnosticProcess = process): 
   if (installedProcesses.has(target)) return;
   installedProcesses.add(target);
 
-  writeDevLog("info", "process", [
-    "Process diagnostics installed",
-    safeProcessDiagnosticSnapshot(target),
-  ]);
+  writeDiagnosticEvent({
+    level: "info",
+    area: "diagnostics",
+    event: "process-monitor-installed",
+    outcome: "completed",
+    fields: journalProcessFields(target),
+  });
 
   target.on("uncaughtExceptionMonitor", (error: unknown, origin: unknown) => {
-    writeDevLogSync("error", "process", [
-      "Uncaught exception",
-      { origin, ...safeProcessDiagnosticSnapshot(target) },
-      error,
-    ]);
+    const projected = projectDiagnosticError(error);
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "uncaught-exception",
+      outcome: "failed",
+      code: projected.code,
+      fields: {
+        ...journalProcessFields(target),
+        origin: typeof origin === "string" ? origin : "unknown",
+        errorType: projected.errorType,
+        fingerprint: projected.fingerprint ?? null,
+      },
+    });
   });
   target.on("warning", (warning: unknown) => {
-    writeDevLog("warn", "process", ["Node warning", warning]);
+    const projected = projectDiagnosticError(warning);
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "app",
+      event: "node-warning",
+      outcome: "degraded",
+      code: projected.code,
+      fields: {
+        errorType: projected.errorType,
+        fingerprint: projected.fingerprint ?? null,
+      },
+    });
   });
   target.on("exit", (code: unknown) => {
-    writeDevLogSync("info", "process", [
-      "Process exit",
-      { code, ...safeProcessDiagnosticSnapshot(target) },
-    ]);
+    writeDiagnosticEventSync({
+      level: "info",
+      area: "app",
+      event: "process-exit",
+      outcome: "completed",
+      fields: {
+        ...journalProcessFields(target),
+        exitCode: typeof code === "number" ? code : null,
+      },
+    });
   });
 
   for (const signal of SIGNALS) {
     const handler = () => {
-      writeDevLogSync("warn", "process", [
-        "Process signal received",
-        { signal, ...safeProcessDiagnosticSnapshot(target) },
-      ]);
+      writeDiagnosticEventSync({
+        level: "warn",
+        area: "app",
+        event: "process-signal",
+        outcome: "cancelled",
+        fields: { ...journalProcessFields(target), signal },
+      });
       // Preserve Node/Electron's native signal semantics after recording the event.
       target.removeListener(signal, handler);
       target.kill(target.pid, signal);

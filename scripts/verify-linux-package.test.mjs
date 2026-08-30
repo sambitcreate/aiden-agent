@@ -22,6 +22,26 @@ test("Linux package targets common distro formats and includes native helpers", 
   assert.doesNotThrow(() => assertLinuxBuildConfiguration(packageJson));
 });
 
+test("Linux package requires the Bot inbox helper and shared Generative UI libraries", () => {
+  const missingHelper = JSON.parse(JSON.stringify(packageJson));
+  missingHelper.build.linux.extraFiles = missingHelper.build.linux.extraFiles.filter(
+    (entry) => !String(entry.to).includes("aiden-bot-inbox-writer"),
+  );
+  assert.throws(
+    () => assertLinuxBuildConfiguration(missingHelper),
+    /aiden-bot-inbox-writer/u,
+  );
+
+  const missingLibraries = JSON.parse(JSON.stringify(packageJson));
+  missingLibraries.build.extraResources = missingLibraries.build.extraResources.filter(
+    (entry) => entry.from !== "resources/generative-ui",
+  );
+  assert.throws(
+    () => assertLinuxBuildConfiguration(missingLibraries),
+    /Generative UI libraries/u,
+  );
+});
+
 test("Linux package configuration rejects globally bundled Computer Use resources", () => {
   const invalid = JSON.parse(JSON.stringify(packageJson));
   invalid.build.extraResources.push({
@@ -32,6 +52,24 @@ test("Linux package configuration rejects globally bundled Computer Use resource
     () => assertLinuxBuildConfiguration(invalid),
     /must not be global/u,
   );
+
+  for (const entry of [
+    {
+      from: "build/native/Aiden Foundation Models Helper.app",
+      to: "Helpers/Aiden Foundation Models Helper.app",
+    },
+    {
+      from: "build/computer-use/CuaDriver.app",
+      to: "Helpers/CuaDriver.app",
+    },
+  ]) {
+    const invalidExtraFile = JSON.parse(JSON.stringify(packageJson));
+    invalidExtraFile.build.linux.extraFiles.push(entry);
+    assert.throws(
+      () => assertLinuxBuildConfiguration(invalidExtraFile),
+      /must not include Apple Foundation Models or Computer Use/u,
+    );
+  }
 });
 
 test("Linux package configuration requires desktop association and runtime libraries", () => {
@@ -67,6 +105,12 @@ test("Linux distribution refreshes models.dev only through the explicit release 
     releaseWorkflow,
     /npm run models:refresh\s+npm run dist:linux/u,
   );
+});
+
+test("Linux releases preserve the exact declared desktop version", () => {
+  assert.doesNotMatch(releaseWorkflow, /GITHUB_RUN_NUMBER|npm version/u);
+  assert.match(releaseWorkflow, /node scripts\/prepare-ci-release\.mjs "\$base_tag_exists"/u);
+  assert.match(releaseWorkflow, /steps\.version\.outputs\.publish == 'true'/u);
 });
 
 test("Linux native binaries cannot silently raise the RHEL 9 glibc baseline", () => {

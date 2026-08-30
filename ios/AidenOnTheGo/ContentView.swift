@@ -18,7 +18,7 @@ struct ContentView: View {
                     }
                 )
             case .connecting, .connected, .offline:
-                AidenWorkspaceShellView(
+                AidenProductShellView(
                     coordinator: coordinator,
                     navigationRequest: $navigationRequest
                 )
@@ -79,8 +79,11 @@ struct ContentView: View {
 
 #Preview {
     let appearance = AidenAppearanceStore()
+    let haptics = AidenHapticCenter()
     AidenAppearanceRoot(appearance: appearance) {
-        ContentView(coordinator: AidenRemoteCoordinator())
+        ContentView(coordinator: AidenRemoteCoordinator(haptics: haptics))
     }
     .environment(appearance)
+    .environment(haptics)
+    .aidenHapticHost(haptics)
 }

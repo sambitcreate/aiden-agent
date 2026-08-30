@@ -50,7 +50,7 @@ export function registerComputerUseHandlers(): void {
     if (typeof enabled !== "boolean") throw new Error("Invalid Computer Use setting.");
     if (!computerUseSupported()) {
       requestOwner(event);
-      if (enabled) throw new Error("Computer Use is not available on Linux.");
+      if (enabled) throw new Error("Computer Use is not available on this platform.");
       return unsupportedComputerUseStatus();
     }
     return ownedStatusRequest(event, async (owner, signal) => {

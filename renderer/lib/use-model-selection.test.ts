@@ -16,14 +16,13 @@ const provider = (overrides: Partial<Provider> = {}): Provider => ({
 });
 
 test("new work resolves away from a hidden active or default model", async () => {
-  const { initialVisibleModelSelection, resolveVisibleModelSelection } = await import("./use-model-selection");
+  const {
+    initialVisibleModelSelection,
+    isModelSelectionReadyForNewWork,
+    resolveVisibleModelSelection,
+  } = await import("./use-model-selection");
   assert.equal(
-    initialVisibleModelSelection(
-      { providerId: "", model: "" },
-      [provider()],
-      undefined,
-      false,
-    ),
+    initialVisibleModelSelection({ providerId: "", model: "" }, [provider()], undefined, false),
     undefined,
   );
   assert.deepEqual(
@@ -46,6 +45,27 @@ test("new work resolves away from a hidden active or default model", async () =>
       google: ["gemini-pro", "gemini-flash"],
     }),
     undefined,
+  );
+  const allHidden = {
+    google: { defaultVisibility: "hidden" as const, exceptions: [] },
+  };
+  assert.equal(
+    isModelSelectionReadyForNewWork(
+      { providerId: "google", model: "gemini-pro" },
+      [provider()],
+      allHidden,
+      false,
+    ),
+    false,
+  );
+  assert.equal(
+    isModelSelectionReadyForNewWork(
+      { providerId: "google", model: "gemini-pro" },
+      [provider()],
+      allHidden,
+      true,
+    ),
+    true,
   );
 });
 

@@ -1,6 +1,7 @@
 import * as path from "path";
 import { app, logger } from "../platform.js";
 import { EncryptedPiCredentialStore } from "./pi-credential-store-core.js";
+import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 import { secureStorage } from "./secure-storage.js";
 
 const FILE = "pi-provider-credentials.json";
@@ -18,4 +19,6 @@ export const piCredentialStore = new EncryptedPiCredentialStore({
       error: error.message,
     });
   },
+  beforeWritePublish: () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
+  afterWritePublish: () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
 });

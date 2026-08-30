@@ -8,7 +8,7 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
 
   // Assistant is a local dock. Exercise its state without submitting a prompt
   // (and therefore without creating a provider request or an assistant thread).
-  await page.getByRole("button", { name: "Open Aiden" }).click();
+  await page.getByRole("button", { name: "Open Aiden" }).press("Enter");
   const assistantComposer = page.getByRole("textbox", { name: "Message Aiden" });
   const assistantPanel = assistantComposer.locator(
     "xpath=ancestor::div[.//button[@aria-label='New conversation']][1]",
@@ -22,7 +22,7 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await assistantComposer.fill("Unsaved assistant draft");
   await page.getByRole("button", { name: "Minimize Aiden" }).click();
   await expect(page.getByRole("button", { name: "Open Aiden" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Aiden" }).click();
+  await page.getByRole("button", { name: "Open Aiden" }).press("Enter");
   await expect(assistantComposer).toHaveValue("Unsaved assistant draft");
   await assistantComposer.fill("");
   await page.getByRole("button", { name: "Minimize Aiden" }).click();
@@ -35,7 +35,8 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await taskSearch.fill("definitely-not-a-schedule");
   await expect(taskSearch).toHaveValue("definitely-not-a-schedule");
   await expect(page.getByText("No matching tasks", { exact: true })).toBeVisible();
-  await taskSearch.fill("");
+  await taskSearch.selectText();
+  await taskSearch.press("Backspace");
   await expect(taskSearch).toHaveValue("");
   await expect(page.getByText("No matching tasks", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "Active", exact: true }).click();
@@ -68,7 +69,12 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
     exact: true,
   });
   await expect(profileName).toHaveText("E2E Local User");
-  await page.getByRole("button", { name: "Edit profile name" }).click();
+  // The editor is a normal visible action here; exercise the same pointer path
+  // a user takes after the scheduled-task dialog has fully closed.
+  const editProfileName = page.getByRole("button", { name: "Edit profile name" });
+  await expect(editProfileName).toBeVisible();
+  await expect(editProfileName).toBeEnabled();
+  await editProfileName.click();
   const profileInput = page.getByRole("textbox", { name: "Profile name" });
   await profileInput.fill("   ");
   await expect(page.getByRole("button", { name: "Save profile name" })).toBeDisabled();
@@ -82,6 +88,16 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await page.getByRole("button", { name: "About", exact: true }).click();
   await expect(page.getByRole("heading", { name: "About", exact: true })).toBeVisible();
   await expect(page.getByText(/^Version .+ Beta/u)).toBeVisible();
+  await expect(page.getByText("Diagnostics", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Nothing is uploaded automatically/u)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reveal", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export…", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Enable…", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("never uploaded automatically");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Delete…", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("does not delete chats");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await page.getByRole("button", { name: "Back to app", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();

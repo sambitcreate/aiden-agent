@@ -149,6 +149,7 @@ private final class AidenHomeModel {
     var errorMessage: String?
 
     func accept(_ chat: AidenChat) {
+        guard !chat.isBotChat else { return }
         chats.removeAll { $0.id == chat.id }
         chats.append(chat)
         chats.sort { $0.updatedAt > $1.updatedAt }
@@ -158,29 +159,99 @@ private final class AidenHomeModel {
         guard coordinator.connectionState == .connected,
               let context = try? coordinator.requestContext(),
               !isLoading else { return }
+        let plan = AidenHomeLoadPlan(
+            installation: coordinator.installationStore.activeInstallation
+        )
+        if !plan.loadsChats {
+            chats = []
+            modelCatalog = nil
+        }
+        if !plan.loadsScheduledTasks { scheduledTasks = [] }
+        if !plan.loadsUsage { usage = nil }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         do {
             let client = try coordinator.remoteClient(for: context)
-            async let chatsRequest = client.chats()
-            async let tasksRequest = client.scheduledTasks()
-            async let catalogRequest: AidenModelCatalog? = try? await client.modelCatalog()
-            let (chats, tasks, catalog) = try await (chatsRequest, tasksRequest, catalogRequest)
-            guard coordinator.isCurrent(context) else { return }
-            self.chats = chats.sorted { $0.updatedAt > $1.updatedAt }
-            scheduledTasks = tasks.sorted {
-                ($0.nextRunAt ?? .distantFuture) < ($1.nextRunAt ?? .distantFuture)
+            async let chatsRequest = aidenLoadHomeSegment(enabled: plan.loadsChats) {
+                try await client.chats()
             }
-            if let catalog { modelCatalog = catalog }
-            let loadedUsage = try? await client.usage()
+            async let tasksRequest = aidenLoadHomeSegment(enabled: plan.loadsScheduledTasks) {
+                try await client.scheduledTasks()
+            }
+            async let catalogRequest = aidenLoadHomeSegment(enabled: plan.loadsModelCatalog) {
+                try await client.modelCatalog()
+            }
+            async let usageRequest = aidenLoadHomeSegment(enabled: plan.loadsUsage) {
+                try await client.usage()
+            }
+            let (chatsResult, tasksResult, catalogResult, usageResult) = await (
+                chatsRequest,
+                tasksRequest,
+                catalogRequest,
+                usageRequest
+            )
             guard coordinator.isCurrent(context) else { return }
-            usage = loadedUsage
+            var failures: [Error] = []
+            switch chatsResult {
+            case .success(let loadedChats):
+                if let loadedChats {
+                    chats = AidenChat.regularWorkspaceChats(from: loadedChats)
+                        .sorted { $0.updatedAt > $1.updatedAt }
+                }
+            case .failure(let error): failures.append(error)
+            }
+            switch tasksResult {
+            case .success(let loadedTasks):
+                if let loadedTasks {
+                    scheduledTasks = loadedTasks.sorted {
+                        ($0.nextRunAt ?? .distantFuture) < ($1.nextRunAt ?? .distantFuture)
+                    }
+                }
+            case .failure(let error): failures.append(error)
+            }
+            switch catalogResult {
+            case .success(let catalog):
+                if let catalog { modelCatalog = catalog }
+            case .failure(let error): failures.append(error)
+            }
+            switch usageResult {
+            case .success(let loadedUsage):
+                if let loadedUsage { usage = loadedUsage }
+            case .failure(let error): failures.append(error)
+            }
+            errorMessage = failures.first?.localizedDescription
         } catch {
             if coordinator.isCurrent(context) {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+struct AidenHomeLoadPlan: Equatable {
+    let loadsChats: Bool
+    let loadsScheduledTasks: Bool
+    let loadsModelCatalog: Bool
+    let loadsUsage: Bool
+
+    init(installation: AidenInstallation?) {
+        loadsChats = installation?.hasNegotiatedAccess(to: .chatRead) == true
+        loadsScheduledTasks = installation?.hasNegotiatedAccess(to: .scheduleRead) == true
+        loadsModelCatalog = loadsChats
+        loadsUsage = installation?.hasNegotiatedAccess(to: .serverRead) == true
+    }
+}
+
+private func aidenLoadHomeSegment<Value: Sendable>(
+    enabled: Bool,
+    operation: @escaping @Sendable () async throws -> Value
+) async -> Result<Value?, Error> {
+    guard enabled else { return .success(nil) }
+    do {
+        return .success(try await operation())
+    } catch {
+        return .failure(error)
     }
 }
 
@@ -310,15 +381,22 @@ final class AidenWorkspaceArchiveStore {
     }
 }
 
+private struct AidenWorkspaceDefaultApplication {
+    let workspace: AidenWorkspace
+    let feedback: AidenHapticEvent
+}
+
 struct AidenWorkspaceShellView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Binding private var navigationRequest: AidenNavigationRequest?
+    let productArea: AidenProductArea
+    let botsAvailability: AidenBotsAvailability
+    let navigationStore: AidenProductNavigationStore
+    let onSelectProductArea: (AidenProductArea) -> Void
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.aidenPalette) private var palette
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    @State private var selectedWorkspaceId: String?
-    @State private var compactWorkspacePath: [String] = []
     @State private var isShowingPairing = false
     @State private var isShowingAppSettings = false
     @State private var isShowingScheduledTasks = false
@@ -334,16 +412,43 @@ struct AidenWorkspaceShellView: View {
     @State private var newAgentWorkspaceName = ""
     @State private var isCreatingAgent = false
     @State private var agentCreationStatus = ""
+    @State private var hapticScope = UUID()
     @FocusState private var searchFieldIsFocused: Bool
     @Namespace private var newAgentTransition
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     init(
         coordinator: AidenRemoteCoordinator,
-        navigationRequest: Binding<AidenNavigationRequest?> = .constant(nil)
+        navigationRequest: Binding<AidenNavigationRequest?> = .constant(nil),
+        productArea: AidenProductArea = .workspaces,
+        botsAvailability: AidenBotsAvailability = .unsupported,
+        navigationStore: AidenProductNavigationStore = .shared,
+        onSelectProductArea: @escaping (AidenProductArea) -> Void = { _ in }
     ) {
         self.coordinator = coordinator
         _navigationRequest = navigationRequest
+        self.productArea = productArea
+        self.botsAvailability = botsAvailability
+        self.navigationStore = navigationStore
+        self.onSelectProductArea = onSelectProductArea
+    }
+
+    private var selectedWorkspaceId: String? {
+        get { navigationStore.selectedWorkspace(for: coordinator.activeInstanceId) }
+        nonmutating set {
+            navigationStore.setSelectedWorkspace(newValue, for: coordinator.activeInstanceId)
+        }
+    }
+
+    private var compactWorkspacePath: [String] {
+        get { navigationStore.compactWorkspacePath(for: coordinator.activeInstanceId) }
+        nonmutating set {
+            navigationStore.setCompactWorkspacePath(newValue, for: coordinator.activeInstanceId)
+        }
+    }
+
+    private var compactWorkspacePathBinding: Binding<[String]> {
+        Binding(get: { compactWorkspacePath }, set: { compactWorkspacePath = $0 })
     }
 
     private var usesSplitNavigation: Bool {
@@ -379,7 +484,7 @@ struct AidenWorkspaceShellView: View {
                 }
                 .navigationSplitViewStyle(.balanced)
             } else {
-                NavigationStack(path: $compactWorkspacePath) {
+                NavigationStack(path: compactWorkspacePathBinding) {
                     compactWorkspaceSidebar
                         .navigationDestination(for: String.self) { workspaceID in
                             workspaceDetail(workspaceID: workspaceID)
@@ -511,7 +616,9 @@ struct AidenWorkspaceShellView: View {
         .onChange(of: coordinator.activeInstanceId) { _, _ in
             isShowingScheduledTasks = false
             syncArchivedWorkspaceProjection()
-            reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            if coordinator.connectionState == .connected {
+                reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            }
         }
         .onChange(of: compactWorkspacePath) { _, path in
             guard let workspaceID = path.last,
@@ -547,6 +654,8 @@ struct AidenWorkspaceShellView: View {
         .task(id: coordinator.connectionState) {
             await homeModel.load(coordinator: coordinator)
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
     }
 
     private var regularWorkspaceSidebar: some View {
@@ -590,7 +699,9 @@ struct AidenWorkspaceShellView: View {
 
     private var filteredChats: [AidenChat] {
         let activeWorkspaceIDSet = Set(activeWorkspaceIDs)
-        let visibleChats = homeModel.chats.filter { activeWorkspaceIDSet.contains($0.workspaceId) }
+        let visibleChats = homeModel.chats.filter {
+            !$0.isBotChat && activeWorkspaceIDSet.contains($0.workspaceId)
+        }
         guard !searchText.isEmpty else { return visibleChats }
         return visibleChats.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
     }
@@ -629,7 +740,7 @@ struct AidenWorkspaceShellView: View {
                     searchText.isEmpty ? "No Chats Yet" : "No Matching Chats",
                     systemImage: searchText.isEmpty ? "bubble.left" : "magnifyingglass",
                     description: Text(searchText.isEmpty
-                        ? "Start a new agent to create your first chat."
+                        ? "Start a new Workspace chat to begin."
                         : "Try a different search term.")
                 )
                 .listRowInsets(EdgeInsets())
@@ -659,14 +770,14 @@ struct AidenWorkspaceShellView: View {
 
     private var homeHeader: some View {
         HStack(spacing: isSearching ? 0 : 16) {
-            Image("AidenAppIcon")
-                .resizable()
-                .scaledToFit()
+            AidenProductSwitcherButton(
+                area: productArea,
+                botsAvailability: botsAvailability,
+                onSelect: onSelectProductArea
+            )
                 .frame(width: isSearching ? 0 : 68, height: 68, alignment: .leading)
                 .opacity(isSearching ? 0 : 1)
                 .clipped()
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Aiden")
 
             searchChrome
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -852,8 +963,8 @@ struct AidenWorkspaceShellView: View {
         }
         .aidenProminentGlassButton()
         .disabled(coordinator.connectionState != .connected || coordinator.isMutating || isCreatingAgent)
-        .accessibilityLabel("New Agent")
-        .accessibilityHint("Choose where the new agent should work.")
+        .accessibilityLabel("New Workspace Chat")
+        .accessibilityHint("Choose the workspace for a new chat.")
         .matchedTransitionSource(id: "AidenNewAgentOptions", in: newAgentTransition)
         .popover(isPresented: $isShowingNewAgentChoices, arrowEdge: .bottom) {
             AidenNewAgentPopover(
@@ -885,7 +996,7 @@ struct AidenWorkspaceShellView: View {
 
     @MainActor
     private func createNewAgent(in workspace: AidenWorkspace) async {
-        await createNewAgent(workspace: workspace, status: "Opening agent…")
+        await createNewAgent(workspace: workspace, status: "Opening chat…")
     }
 
     @MainActor
@@ -912,16 +1023,28 @@ struct AidenWorkspaceShellView: View {
             agentCreationStatus = ""
         }
 
-        guard let created = await coordinator.createWorkspace(workspaceCreate) else { return }
-        let workspace = await applyGlobalDefaults(to: created)
-        await createNewAgent(workspace: workspace, status: "Opening agent…", managesProgress: false)
+        let creationOutcome = await coordinator.createWorkspaceOutcome(workspaceCreate)
+        guard case .success(let created) = creationOutcome else {
+            if creationOutcome.isDefinitiveFailure {
+                coordinator.haptics.play(.error, scope: hapticScope)
+            }
+            return
+        }
+        let application = await applyGlobalDefaults(to: created)
+        await createNewAgent(
+            workspace: application.workspace,
+            status: "Opening chat…",
+            managesProgress: false,
+            completionFeedback: application.feedback
+        )
     }
 
     @MainActor
     private func createNewAgent(
         workspace: AidenWorkspace,
         status: String,
-        managesProgress: Bool = true
+        managesProgress: Bool = true,
+        completionFeedback: AidenHapticEvent = .success
     ) async {
         guard !isCreatingAgent || !managesProgress else { return }
         if managesProgress {
@@ -948,13 +1071,25 @@ struct AidenWorkspaceShellView: View {
         do {
             let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspace.id)
             guard coordinator.isCurrent(context) else { return }
+            guard !chat.isBotChat else {
+                coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
+                return
+            }
             await homeModel.load(coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return }
             navigate(to: workspace.id)
             intentChat = chat
+            coordinator.haptics.play(
+                completionFeedback,
+                scope: hapticScope,
+                dedupeKey: "new-agent:\(workspace.id):\(chat.id):\(chat.revision)"
+            )
+        } catch let error where aidenIsCancellation(error) {
+            return
         } catch {
             guard coordinator.isCurrent(context) else { return }
             coordinator.presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             await coordinator.refreshWorkspaces()
             guard coordinator.isCurrent(context) else { return }
             await homeModel.load(coordinator: coordinator)
@@ -962,10 +1097,15 @@ struct AidenWorkspaceShellView: View {
     }
 
     @MainActor
-    private func applyGlobalDefaults(to workspace: AidenWorkspace) async -> AidenWorkspace {
+    private func applyGlobalDefaults(to workspace: AidenWorkspace) async -> AidenWorkspaceDefaultApplication {
         let permission = AidenWorkspacePermission(rawValue: defaultWorkspacePermissionRaw) ?? .ask
-        guard permission != workspace.permission else { return workspace }
-        return await coordinator.updateWorkspace(workspace, permission: permission) ?? workspace
+        guard permission != workspace.permission else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
+        }
+        guard let updated = await coordinator.updateWorkspace(workspace, permission: permission) else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
+        }
+        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
     }
 
     @ViewBuilder
@@ -1004,6 +1144,7 @@ struct AidenWorkspaceShellView: View {
     }
 
     private func reconcileNavigation(workspaceIDs: [String]) {
+        if coordinator.connectionState == .connecting, workspaceIDs.isEmpty { return }
         selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
             current: selectedWorkspaceId,
             workspaceIDs: workspaceIDs
@@ -1055,10 +1196,18 @@ struct AidenWorkspaceShellView: View {
                 }
                 chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspaceId)
                 guard coordinator.isCurrent(context) else { return }
+                guard !chat.isBotChat else {
+                    coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
+                    return
+                }
                 navigate(to: workspaceId)
             case .chat(let chatId):
                 chat = try await coordinator.remoteClient(for: context).chat(id: chatId)
                 guard coordinator.isCurrent(context) else { return }
+                guard !chat.isBotChat else {
+                    coordinator.presentedError = String(localized: "This conversation belongs in Bots and cannot be opened from Workspaces yet.")
+                    return
+                }
                 guard activeWorkspaceIDs.contains(chat.workspaceId) else {
                     if archivedWorkspaceIDs.contains(chat.workspaceId) {
                         coordinator.presentedError = String(localized: "That chat belongs to a workspace archived on this device. Unarchive it from Workspaces to open the chat.")
@@ -1088,11 +1237,11 @@ private struct AidenNewAgentPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("New Agent")
+                Text("New Workspace Chat")
                     .font(.title3.bold())
                     .foregroundStyle(palette.foreground)
 
-                Text("Choose where Aiden should work.")
+                Text("Choose the workspace for this chat.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
             }
@@ -1171,6 +1320,7 @@ private struct AidenWorkspacesDirectoryView: View {
     @State private var workspacePendingRemoval: AidenWorkspace?
     @State private var renameText = ""
     @State private var retainedRenameDraftWorkspaceID: String?
+    @State private var hapticScope = UUID()
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     private var archivedWorkspaceIDs: Set<String> {
@@ -1234,6 +1384,8 @@ private struct AidenWorkspacesDirectoryView: View {
         .refreshable {
             await coordinator.refreshWorkspaces()
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -1260,7 +1412,12 @@ private struct AidenWorkspacesDirectoryView: View {
         .sheet(isPresented: $isShowingFolderBrowser) {
             AidenFolderBrowserView(coordinator: coordinator) { workspace in
                 Task {
-                    _ = await applyGlobalDefault(to: workspace)
+                    let application = await applyGlobalDefault(to: workspace)
+                    coordinator.haptics.play(
+                        application.feedback,
+                        scope: hapticScope,
+                        dedupeKey: "workspace-folder-add:\(workspace.id):\(workspace.revision)"
+                    )
                     isShowingFolderBrowser = false
                 }
             }
@@ -1271,8 +1428,12 @@ private struct AidenWorkspacesDirectoryView: View {
             Button("Create") {
                 let name = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
                 Task {
-                    if let workspace = await coordinator.createWorkspace(.folderless(name: name)) {
-                        _ = await applyGlobalDefault(to: workspace)
+                    let outcome = await coordinator.createWorkspaceOutcome(.folderless(name: name))
+                    if case .success(let workspace) = outcome {
+                        let application = await applyGlobalDefault(to: workspace)
+                        coordinator.haptics.play(application.feedback, scope: hapticScope, dedupeKey: "workspace-create:\(workspace.id):\(workspace.revision)")
+                    } else if outcome.isDefinitiveFailure {
+                        coordinator.haptics.play(.error, scope: hapticScope)
                     }
                 }
             }
@@ -1287,8 +1448,12 @@ private struct AidenWorkspacesDirectoryView: View {
         ) {
             Button("Create Managed Scratch") {
                 Task {
-                    if let workspace = await coordinator.createWorkspace(.scratch) {
-                        _ = await applyGlobalDefault(to: workspace)
+                    let outcome = await coordinator.createWorkspaceOutcome(.scratch)
+                    if case .success(let workspace) = outcome {
+                        let application = await applyGlobalDefault(to: workspace)
+                        coordinator.haptics.play(application.feedback, scope: hapticScope, dedupeKey: "workspace-create:\(workspace.id):\(workspace.revision)")
+                    } else if outcome.isDefinitiveFailure {
+                        coordinator.haptics.play(.error, scope: hapticScope)
                     }
                 }
             }
@@ -1312,8 +1477,12 @@ private struct AidenWorkspacesDirectoryView: View {
                 guard let workspace = workspacePendingRename else { return }
                 let trimmedName = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                 Task {
-                    if await coordinator.updateWorkspace(workspace, name: trimmedName) != nil {
+                    let outcome = await coordinator.updateWorkspaceOutcome(workspace, name: trimmedName)
+                    if case .success = outcome {
                         retainedRenameDraftWorkspaceID = nil
+                        coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-rename:\(workspace.id):\(trimmedName)")
+                    } else if outcome.isDefinitiveFailure {
+                        coordinator.haptics.play(.error, scope: hapticScope)
                     }
                     workspacePendingRename = nil
                 }
@@ -1359,11 +1528,15 @@ private struct AidenWorkspacesDirectoryView: View {
                 guard let workspace = workspacePendingRemoval else { return }
                 workspacePendingRemoval = nil
                 Task {
-                    if await coordinator.removeWorkspace(workspace) {
+                    let outcome = await coordinator.removeWorkspaceOutcome(workspace)
+                    if case .success = outcome {
                         archiveStore.forget(
                             workspaceID: workspace.id,
                             instanceID: coordinator.activeInstanceId
                         )
+                        coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)")
+                    } else if outcome.isDefinitiveFailure {
+                        coordinator.haptics.play(.error, scope: hapticScope)
                     }
                 }
             }
@@ -1411,10 +1584,15 @@ private struct AidenWorkspacesDirectoryView: View {
     }
 
     @MainActor
-    private func applyGlobalDefault(to workspace: AidenWorkspace) async -> AidenWorkspace {
+    private func applyGlobalDefault(to workspace: AidenWorkspace) async -> AidenWorkspaceDefaultApplication {
         let permission = AidenWorkspacePermission(rawValue: defaultWorkspacePermissionRaw) ?? .ask
-        guard permission != workspace.permission else { return workspace }
-        return await coordinator.updateWorkspace(workspace, permission: permission) ?? workspace
+        guard permission != workspace.permission else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
+        }
+        guard let updated = await coordinator.updateWorkspace(workspace, permission: permission) else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
+        }
+        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
     }
 }
 
@@ -1606,7 +1784,7 @@ private struct AidenWorkspaceDetailView: View {
                         Label("Workspace Settings", systemImage: "gearshape")
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: AidenChromeSymbols.overflowMenu)
                 }
                 .accessibilityLabel("Workspace menu")
             }
@@ -1633,6 +1811,7 @@ private struct AidenWorkspaceSettingsView: View {
     @State private var name: String
     @State private var permission: AidenWorkspacePermission
     @State private var isConfirmingRemoval = false
+    @State private var hapticScope = UUID()
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -1719,12 +1898,20 @@ private struct AidenWorkspaceSettingsView: View {
                     Button("Save") {
                         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         Task {
-                            if await coordinator.updateWorkspace(
+                            let outcome = await coordinator.updateWorkspaceOutcome(
                                 workspace,
                                 name: trimmedName == workspace.name ? nil : trimmedName,
                                 permission: permission == workspace.permission ? nil : permission
-                            ) != nil {
+                            )
+                            if case .success = outcome {
+                                coordinator.haptics.play(
+                                    .success,
+                                    scope: hapticScope,
+                                    dedupeKey: "workspace-settings:\(workspace.id):\(workspace.revision)"
+                                )
                                 dismiss()
+                            } else if outcome.isDefinitiveFailure {
+                                coordinator.haptics.play(.error, scope: hapticScope)
                             }
                         }
                     }
@@ -1738,11 +1925,18 @@ private struct AidenWorkspaceSettingsView: View {
             ) {
                 Button(workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent", role: .destructive) {
                     Task {
-                        let removed = workspace.isManagedWorktree
-                            ? await coordinator.removeManagedWorktree(workspace)
-                            : await coordinator.removeWorkspace(workspace)
-                        if removed {
+                        let outcome = workspace.isManagedWorktree
+                            ? await coordinator.removeManagedWorktreeOutcome(workspace)
+                            : await coordinator.removeWorkspaceOutcome(workspace)
+                        if case .success = outcome {
+                            coordinator.haptics.play(
+                                .success,
+                                scope: hapticScope,
+                                dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)"
+                            )
                             onRemoved()
+                        } else if outcome.isDefinitiveFailure {
+                            coordinator.haptics.play(.error, scope: hapticScope)
                         }
                     }
                 }
@@ -1753,6 +1947,8 @@ private struct AidenWorkspaceSettingsView: View {
                      : "The folder, its files, and chats remain on your desktop, but the chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
             }
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
     }
 }
 
@@ -2193,6 +2389,7 @@ private extension View {
 
 private struct AidenAppSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AidenHapticCenter.self) private var haptics
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var appearance: AidenAppearanceStore
     let addInstallation: () -> Void
@@ -2200,6 +2397,7 @@ private struct AidenAppSettingsView: View {
     @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
+    @AppStorage(AidenVoiceInputMode.defaultsKey) private var voiceInputModeRaw = AidenVoiceInputMode.onDevice.rawValue
 
     var body: some View {
         NavigationStack {
@@ -2233,6 +2431,43 @@ private struct AidenAppSettingsView: View {
                     Text("These are app-wide defaults. Permission, files, Git, and other workspace-specific options remain in each workspace’s ••• menu.")
                 }
 
+                Section {
+                    Picker("Transcription", selection: $voiceInputModeRaw) {
+                        ForEach(AidenVoiceInputMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    if voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue {
+                        NavigationLink {
+                            AidenMacTranscriptionSettingsView(coordinator: coordinator)
+                        } label: {
+                            Label("Desktop speech model", systemImage: "desktopcomputer")
+                        }
+                    }
+                } header: {
+                    Text("Voice Input")
+                } footer: {
+                    Text(
+                        voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
+                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed by Parakeet on your paired desktop, and not retained. Text appears after you stop recording."
+                            : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
+                    )
+                }
+
+                Section {
+                    Toggle("Interaction haptics", isOn: Binding(
+                        get: { haptics.isEnabled },
+                        set: { haptics.isEnabled = $0 }
+                    ))
+                    .disabled(!haptics.supportsHaptics)
+                } header: {
+                    Text("Feedback")
+                } footer: {
+                    Text(haptics.supportsHaptics
+                        ? "Adds subtle feedback to important actions and confirmed outcomes. Standard controls keep their system feedback."
+                        : "Interaction haptics are not available on this device.")
+                }
+
                 Section("About") {
                     Link(destination: AppConfig.privacyPolicyURL) {
                         Label("Privacy Policy", systemImage: "hand.raised")
@@ -2263,6 +2498,119 @@ private struct AidenAppSettingsView: View {
         .sheet(isPresented: $isShowingAppearance) {
             AidenAppearanceSettingsView(appearance: appearance)
         }
+    }
+}
+
+private struct AidenMacTranscriptionSettingsView: View {
+    @Bindable var coordinator: AidenRemoteCoordinator
+    @State private var status: AidenSpeechStatus?
+    @State private var errorMessage: String?
+    @State private var isLoading = false
+
+    private var downloadPollKey: String {
+        status?.models.compactMap { model in
+            model.download?.status == "downloading" ? "\(model.id):\(model.download?.percentage ?? 0)" : nil
+        }.joined(separator: ",") ?? ""
+    }
+
+    var body: some View {
+        List {
+            if let status {
+                Section {
+                    LabeledContent("Engine", value: status.engine.ready ? "Ready" : "Unavailable")
+                    if let engineError = status.engine.error {
+                        Text(engineError).font(.caption).foregroundStyle(.red)
+                    }
+                }
+                Section("Models") {
+                    ForEach(status.models) { model in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(model.name).font(.body.weight(.semibold))
+                                    Text("\(model.sizeLabel) · \(model.languagesLabel)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                modelAction(model, status: status)
+                            }
+                            if let download = model.download, download.status == "downloading" {
+                                ProgressView(value: Double(download.percentage), total: 100)
+                                Text(download.phase == "extract" ? "Installing…" : "Downloading… \(download.percentage)%")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(model.description).font(.caption).foregroundStyle(.secondary)
+                            if let failure = model.download?.error {
+                                Text(failure).font(.caption).foregroundStyle(.red)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            } else if isLoading {
+                ProgressView("Loading desktop speech models…")
+            }
+            if let errorMessage {
+                Section { Text(errorMessage).foregroundStyle(.red) }
+            }
+        }
+        .navigationTitle("Desktop Transcription")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await refresh() }
+        .task(id: downloadPollKey) {
+            guard !downloadPollKey.isEmpty else { return }
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            await refresh()
+        }
+        .refreshable { await refresh() }
+    }
+
+    @ViewBuilder
+    private func modelAction(_ model: AidenSpeechModel, status: AidenSpeechStatus) -> some View {
+        if model.download?.status == "downloading" {
+            Button("Cancel") { Task { await cancel(model.id) } }
+        } else if model.installed && status.selectedModelId == model.id {
+            Text("Selected").font(.caption.weight(.semibold)).foregroundStyle(.tint)
+        } else if model.installed {
+            Button("Use") { Task { await select(model.id) } }
+        } else {
+            Button("Download") { Task { await download(model.id) } }
+        }
+    }
+
+    private func client() throws -> AidenRemoteClient {
+        let context = try coordinator.requestContext()
+        return try coordinator.remoteClient(for: context)
+    }
+
+    @MainActor
+    private func refresh() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            status = try await client().speechStatus()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor private func download(_ id: String) async {
+        do { status = try await client().downloadSpeechModel(id); errorMessage = nil }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func cancel(_ id: String) async {
+        do { status = try await client().cancelSpeechModelDownload(id); errorMessage = nil }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func select(_ id: String) async {
+        do { status = try await client().selectSpeechModel(id); errorMessage = nil }
+        catch { errorMessage = error.localizedDescription }
     }
 }
 
@@ -2330,6 +2678,7 @@ private struct AidenInstallationsView: View {
     let addInstallation: () -> Void
 
     @State private var installationToRemove: AidenInstallation?
+    @State private var hapticScope = UUID()
 
     var body: some View {
         NavigationStack {
@@ -2341,8 +2690,29 @@ private struct AidenInstallationsView: View {
                         }.count > 1
                         Button {
                             Task {
-                                await coordinator.switchInstallation(to: installation.id)
-                                dismiss()
+                                guard coordinator.activeInstanceId != installation.id else {
+                                    dismiss()
+                                    return
+                                }
+                                let operationID = UUID()
+                                let outcome = await coordinator.switchInstallationOutcome(to: installation.id)
+                                switch outcome {
+                                case .success:
+                                    coordinator.haptics.play(
+                                        .success,
+                                        scope: hapticScope,
+                                        dedupeKey: "installation-switch:\(operationID.uuidString)"
+                                    )
+                                    dismiss()
+                                case .failure:
+                                    coordinator.haptics.play(
+                                        .error,
+                                        scope: hapticScope,
+                                        dedupeKey: "installation-switch:\(operationID.uuidString)"
+                                    )
+                                case .cancelled, .stale, .busy:
+                                    break
+                                }
                             }
                         } label: {
                             HStack {
@@ -2409,7 +2779,24 @@ private struct AidenInstallationsView: View {
                 Button("Forget Installation", role: .destructive) {
                     guard let installationToRemove else { return }
                     Task {
-                        await coordinator.removeInstallation(installationToRemove.id)
+                        let operationID = UUID()
+                        let outcome = await coordinator.removeInstallationOutcome(installationToRemove.id)
+                        switch outcome {
+                        case .success:
+                            coordinator.haptics.play(
+                                .success,
+                                scope: hapticScope,
+                                dedupeKey: "installation-forget:\(operationID.uuidString)"
+                            )
+                        case .failure:
+                            coordinator.haptics.play(
+                                .error,
+                                scope: hapticScope,
+                                dedupeKey: "installation-forget:\(operationID.uuidString)"
+                            )
+                        case .cancelled, .stale, .busy:
+                            break
+                        }
                         self.installationToRemove = nil
                     }
                 }
@@ -2418,6 +2805,8 @@ private struct AidenInstallationsView: View {
                 Text("Its credential will be removed from this device. You can pair again from Aiden Agent settings.")
             }
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
     }
 }
 
@@ -2564,6 +2953,7 @@ private struct AidenFolderPageView: View {
     @State private var isLoading = true
     @State private var isLoadingMore = false
     @State private var errorMessage: String?
+    @State private var hapticScope = UUID()
 
     var body: some View {
         Group {
@@ -2608,20 +2998,24 @@ private struct AidenFolderPageView: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Add This Folder") {
                     Task {
-                        if let workspace = await coordinator.createSelectedFolderWorkspace(
+                        let outcome = await coordinator.createSelectedFolderWorkspaceOutcome(
                             context: location.context,
                             location: location.location,
                             name: nil
-                        ) {
+                        )
+                        if case .success(let workspace) = outcome {
                             onCreated(workspace)
-                        } else if coordinator.isCurrent(location.context) {
+                        } else if outcome.isDefinitiveFailure, coordinator.isCurrent(location.context) {
                             errorMessage = coordinator.presentedError
+                            coordinator.haptics.play(.error, scope: hapticScope)
                         }
                     }
                 }
                 .disabled(coordinator.isMutating || !coordinator.isCurrent(location.context))
             }
         }
+        .onAppear { coordinator.haptics.activate(scope: hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
         .task(id: location.location) { await load() }
         .alert("Couldn’t Add Folder", isPresented: Binding(
             get: { errorMessage != nil },

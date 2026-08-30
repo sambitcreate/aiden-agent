@@ -18,7 +18,6 @@ import {
   ChartScatter,
   Info,
   Clock3,
-  Sparkles,
   Send,
   Smartphone,
 } from "lucide-react";
@@ -36,10 +35,38 @@ import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
-import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
+import {
+  availableSettingsDestinations,
+  SETTINGS_DESTINATIONS,
+  type SettingsSection,
+} from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
 type NavGroup = "Agent" | "App";
+
+const AIDEN_SIDEBAR_LOGO_URL = new URL(
+  "../../resources/aiden-sidebar-logo.png",
+  import.meta.url,
+).href;
+
+function AidenSidebarLogo() {
+  return (
+    <span
+      aria-hidden="true"
+      className="block size-5 shrink-0 bg-current"
+      style={{
+        WebkitMaskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
+        maskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+      }}
+    />
+  );
+}
 
 type NavItem = {
   id: SettingsSection;
@@ -58,7 +85,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
-  assistant: <Sparkles className="size-5" />,
+  assistant: <AidenSidebarLogo />,
   computerUse: <MousePointer2 className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
@@ -102,9 +129,10 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const [search, setSearch] = React.useState("");
 
   const query = search.trim().toLocaleLowerCase();
-  const availableNav = capabilities.computerUse
-    ? NAV
-    : NAV.filter((item) => item.id !== "computerUse");
+  const availableDestinationIds = new Set(
+    availableSettingsDestinations(capabilities).map((destination) => destination.id),
+  );
+  const availableNav = NAV.filter((item) => availableDestinationIds.has(item.id));
   const filteredNav = query
     ? availableNav.filter((item) =>
         `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query),
@@ -133,7 +161,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
               <span className="text-[16px] font-medium">All settings</span>
             </div>
 
-            <label className="mb-6 flex h-10 items-center gap-2 rounded-control border border-field bg-background px-3 shadow-control transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:border-focus-ring focus-within:bg-input">
+            <label className="mb-6 flex h-10 items-center gap-2 rounded-control border border-field bg-background px-3 shadow-control transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:bg-input">
               <Search className="size-5 shrink-0 text-tertiary" />
               <input
                 type="search"

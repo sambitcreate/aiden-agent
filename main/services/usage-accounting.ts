@@ -1,9 +1,4 @@
-import type {
-  Api,
-  AssistantMessage,
-  Model,
-  Usage,
-} from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
 import type {
@@ -13,14 +8,10 @@ import type {
 } from "./usage-store-core.js";
 
 function positiveInteger(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
-export function openAITranscriptionTokens(
-  value: unknown,
-): UsageTokenBreakdown | null {
+export function openAITranscriptionTokens(value: unknown): UsageTokenBreakdown | null {
   if (!value || typeof value !== "object") return null;
   const usage = value as Record<string, unknown>;
   if (usage.type === "duration") return null;
@@ -31,21 +22,23 @@ export function openAITranscriptionTokens(
   return { input, output, cacheRead: 0, cacheWrite: 0, reasoning: 0, total };
 }
 
-export function geminiTranscriptionTokens(
-  value: unknown,
-): UsageTokenBreakdown | null {
+export function geminiTranscriptionTokens(value: unknown): UsageTokenBreakdown | null {
   if (!value || typeof value !== "object") return null;
   const usage = value as Record<string, unknown>;
+  const count = (camelCase: string, snakeCase: string) =>
+    positiveInteger(usage[camelCase]) || positiveInteger(usage[snakeCase]);
   // Gemini's prompt count already includes cached content. Keep the same
   // mutually-exclusive input/cache buckets as Pi's chat usage accounting.
-  const prompt = positiveInteger(usage.promptTokenCount);
-  const cacheRead = positiveInteger(usage.cachedContentTokenCount);
+  const prompt = count("promptTokenCount", "total_input_tokens");
+  const cacheRead = count("cachedContentTokenCount", "total_cached_tokens");
   const input = Math.max(0, prompt - cacheRead);
-  const reasoning = positiveInteger(usage.thoughtsTokenCount);
-  const output = positiveInteger(usage.candidatesTokenCount) + reasoning;
-  const total = positiveInteger(usage.totalTokenCount) || prompt + output;
-  if (total === 0 && prompt === 0 && output === 0 && cacheRead === 0)
-    return null;
+  const reasoning = count("thoughtsTokenCount", "total_thought_tokens");
+  const output =
+    (positiveInteger(usage.candidatesTokenCount) ||
+      positiveInteger(usage.responseTokenCount) ||
+      positiveInteger(usage.total_output_tokens)) + reasoning;
+  const total = count("totalTokenCount", "total_tokens") || prompt + output;
+  if (total === 0 && prompt === 0 && output === 0 && cacheRead === 0) return null;
   return { input, output, cacheRead, cacheWrite: 0, reasoning, total };
 }
 
@@ -72,17 +65,13 @@ export function reportedTokens(
     tokens.reasoning > 0;
   if (!reported) return null;
   if (tokens.total === 0) {
-    tokens.total =
-      tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
+    tokens.total = tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
   }
   return tokens;
 }
 
 export function isLocalModelProvider(
-  provider: Pick<
-    StoredProvider,
-    "id" | "label" | "baseUrl" | "needsKey" | "deployment"
-  >,
+  provider: Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment">,
 ): boolean {
   return isLocalProviderDeployment(provider);
 }
@@ -90,16 +79,14 @@ export function isLocalModelProvider(
 function modelHasPricing(model: Model<Api>): boolean {
   return [model.cost, ...(model.cost.tiers ?? [])].some((rates) =>
     [rates.input, rates.output, rates.cacheRead, rates.cacheWrite].some(
-      (value) =>
-        typeof value === "number" && Number.isFinite(value) && value > 0,
+      (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
     ),
   );
 }
 
 function statusFor(message: AssistantMessage): UsageRequestStatus {
   if (message.stopReason === "aborted") return "cancelled";
-  if (message.stopReason === "error" || message.stopReason === "length")
-    return "failed";
+  if (message.stopReason === "error" || message.stopReason === "length") return "failed";
   return "completed";
 }
 

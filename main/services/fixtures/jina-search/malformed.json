@@ -1,0 +1,5 @@
+{
+  "code": 200,
+  "status": 20000,
+  "data": { "not": "an-array" }
+}

@@ -9,7 +9,7 @@ export const computerUseSettings = new ComputerUseSettingsCoordinator({
     computerUseSupported() && (await configStore.getSettings()).computerUseEnabled === true,
   persist: async (enabled, isCurrent) => {
     if (enabled && !computerUseSupported()) {
-      throw new Error("Computer Use is not available on Linux.");
+      throw new Error("Computer Use is not available on this platform.");
     }
     await configStore.setSettings({ computerUseEnabled: enabled }, isCurrent);
   },

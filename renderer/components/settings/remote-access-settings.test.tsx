@@ -63,6 +63,9 @@ test("Tailscale setup failures retain typed actionable remediation", () => {
   assert.match(source, /Enable HTTPS for this Tailscale device name/u);
   assert.match(source, /tailscale_permission_denied[\s\S]*?sudo tailscale set --operator=\$USER/u);
   assert.match(source, /<Badge color=\{status\.tailscaleConnected \? "green"/u);
+  assert.match(source, /transportAllowsTailscale[\s\S]*!status\.tailscaleConnected/u);
+  assert.match(source, /Local ready · \$\{tailscalePresentation\.badge\}/u);
+  assert.match(source, /Local service ready/u);
 });
 
 test("uncertain Tailscale mutations require an explicit verification action", () => {
@@ -92,6 +95,9 @@ test("the persisted desktop label is editable without presenting it as identity"
 test("paired endpoint collisions use typed remediation without exposing socket errors", () => {
   assert.match(source, /status\.errorCode === "remote_port_in_use"/u);
   assert.match(source, /Another local Aiden profile is using this saved endpoint/u);
-  assert.match(source, /Aiden will not silently move a saved mobile connection to a new port/u);
+  assert.match(source, /Aiden will never move a saved mobile connection silently/u);
+  assert.match(source, /aidenRemoteApi\.moveToAvailablePort/u);
+  assert.match(source, /Use another port/u);
+  assert.match(source, /Previously paired devices may need to discover this desktop again/u);
   assert.doesNotMatch(source, /EADDRINUSE/u);
 });

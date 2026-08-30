@@ -20,6 +20,7 @@ import {
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { MAX_PROVIDER_KEY_LENGTH } from "./types.js";
 import { assertProviderCredentialLength } from "./provider-credential-rotation-core.js";
+import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 
 const FILE = "provider-keys.json";
 const PROVIDER_BINDING_PREFIX = "__aiden_internal_provider_binding_v1__:";
@@ -70,7 +71,9 @@ async function writeMap(map: KeyMap, isCurrent: MutationGuard = () => true): Pro
       await stagedHandle.close();
     }
     assertMutationCurrent(isCurrent);
+    invalidateBotRuntimeInventoryAuthority("provider_credential");
     await fs.rename(staged, destination);
+    invalidateBotRuntimeInventoryAuthority("provider_credential");
     const directoryHandle = await fs.open(path.dirname(destination), "r");
     try {
       await directoryHandle.sync();

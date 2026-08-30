@@ -8,8 +8,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { listPackage } from "@electron/asar";
-
 import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
+import {
+  verifyPackagedModelCatalogResources,
+  verifyPackagedParakeetWorker,
+  verifyPackagedSubagentInferenceWorker,
+} from "./verify-macos-package.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
@@ -17,9 +21,16 @@ const execFileAsync = promisify(execFile);
 const MAXIMUM_GLIBC_VERSION = Object.freeze([2, 34]);
 const REQUIRED_HELPERS = Object.freeze([
   "aiden-worktree-remover",
+  "aiden-bot-inbox-writer",
   "aiden-subagent-run-store",
   "aiden-subagent-file-mutator",
   "aiden-subagent-shell-runner",
+]);
+const REQUIRED_GENERATIVE_UI_LIBRARY_FILES = Object.freeze([
+  "chart.umd.min.js",
+  "plotly.min.js",
+  "katex.min.js",
+  "katex.min.css",
 ]);
 
 async function assertRegularFile(file, { executable = false } = {}) {
@@ -194,6 +205,13 @@ export function assertLinuxBuildConfiguration(packageJson) {
     }
   }
   if (
+    (linux.extraFiles ?? []).some((entry) =>
+      /(?:Foundation Models|CuaDriver|computer-use)/u.test(`${entry.from} ${entry.to}`),
+    )
+  ) {
+    throw new Error("Linux extraFiles must not include Apple Foundation Models or Computer Use.");
+  }
+  if (
     !(build.asarUnpack ?? []).some((pattern) =>
       pattern.includes("sherpa-onnx-linux-"),
     )
@@ -213,6 +231,13 @@ export function assertLinuxBuildConfiguration(packageJson) {
     )
   ) {
     throw new Error("Computer Use resources must remain in the macOS package.");
+  }
+  if (
+    !(build.extraResources ?? []).some(
+      (entry) => entry.from === "resources/generative-ui" && entry.to === "generative-ui",
+    )
+  ) {
+    throw new Error("Generative UI libraries must be shared by desktop packages.");
   }
 }
 
@@ -254,22 +279,22 @@ export async function verifyLinuxPackage(appDirectory) {
   ]) {
     await assertAbsent(forbidden);
   }
-
-  const entries = new Set(
-    listPackage(asar, { isPack: false }).map((entry) =>
-      entry.replaceAll("\\", "/"),
-    ),
-  );
-  for (const required of [
-    "/build/main/index.js",
-    "/build/main/subagent-inference-worker.js",
-    "/build/main/subagent-inference-worker-runtime.js",
-    "/resources/model-capabilities.json",
-  ]) {
-    if (!entries.has(required)) {
-      throw new Error(`Packaged app.asar is missing ${required}.`);
+  for (const library of REQUIRED_GENERATIVE_UI_LIBRARY_FILES) {
+    const info = await assertRegularFile(path.join(resources, "generative-ui", library));
+    if (info.size === 0) {
+      throw new Error(`Packaged Generative UI library is empty: ${library}`);
     }
   }
+
+  const entries = new Set(
+    listPackage(asar, { isPack: false }).map((entry) => entry.replaceAll("\\", "/")),
+  );
+  if (!entries.has("/build/main/index.js")) {
+    throw new Error("Packaged app.asar is missing /build/main/index.js.");
+  }
+  await verifyPackagedModelCatalogResources(asar);
+  await verifyPackagedSubagentInferenceWorker(asar);
+  await verifyPackagedParakeetWorker(asar);
 
   const architecture = process.arch === "arm64" ? "arm64" : "x64";
   const unpackedModules = path.join(resources, "app.asar.unpacked", "node_modules");

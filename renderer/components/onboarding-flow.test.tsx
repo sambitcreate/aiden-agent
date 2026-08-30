@@ -14,6 +14,7 @@ const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.u
 const featureAssetPaths = [
   "aiden-workspace.png",
   "features/aiden-assistant.png",
+  "features/bots.png",
   "features/attachments-vision.png",
   "features/command-palette.png",
   "features/computer-use.png",
@@ -37,14 +38,17 @@ const featureAssetPaths = [
   "features/web-search.png",
   "features/workspaces-worktrees.png",
 ] as const;
-const providerPresentation = source.slice(
-  source.indexOf("const providerChoices"),
-  source.indexOf("function builtinProviderSetupLabel"),
-);
-const featurePresentation = source.slice(
-  source.indexOf("const featureBentos"),
-  source.indexOf("function builtinProviderSetupLabel"),
-);
+
+function sourceSection(startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0, `Missing source section start: ${startMarker}`);
+  assert.ok(end > start, `Missing source section end: ${endMarker}`);
+  return source.slice(start, end);
+}
+
+const providerPresentation = sourceSection("const providerChoices", "type FeatureGroupId");
+const featurePresentation = sourceSection("const featureBentos", "const FEATURE_LAYOUTS");
 
 test("onboarding uses the Aiden mark and the existing provider icon system", () => {
   assert.match(source, /resources\/app-icon\.png/u);
@@ -177,7 +181,7 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
     source,
     /data-onboarding-footer[\s\S]*?className="[^"]*shrink-0[^"]*border-t[^"]*"/u,
   );
-  assert.match(source, /h-\[min\(600px,calc\(100vh-32px\)\)\]/u);
+  assert.match(source, /h-\[min\(600px,calc\(100vh-60px\)\)\]/u);
   assert.match(source, /ref=\{scrollContainerRef\}[\s\S]*?data-onboarding-scroll/u);
   assert.match(
     source,
@@ -185,7 +189,7 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
   );
 });
 
-test("provider setup progressively reveals Pi and uses the dedicated Codex surface", () => {
+test("provider setup progressively reveals configurable Pi providers and uses the dedicated Codex surface", () => {
   assert.match(source, />\s*Choose from more\s*</u);
   assert.match(source, /aria-controls="onboarding-more-providers"/u);
   assert.match(source, /aria-expanded=\{showMoreProviders\}/u);
@@ -195,8 +199,12 @@ test("provider setup progressively reveals Pi and uses the dedicated Codex surfa
   assert.match(source, /providers\.isError/u);
   assert.match(source, /providers\.refetch\(\)/u);
   assert.match(source, /disabled=\{!canChoose \|\| saving\}/u);
-  assert.match(source, /generic API-key login proves only that a credential was entered/u);
-  assert.match(source, /function canChooseBuiltinProvider\(_provider: Provider\): boolean \{[\s\S]*?return false;/u);
+  assert.match(source, /canConfigureOnboardingBuiltinProvider\(provider\)/u);
+  assert.match(source, /onboardingBuiltinProviderSetupLabel\(provider\)/u);
+  assert.match(
+    source,
+    /if \(!isOnboardingBuiltinProviderReady\(provider\)\)[\s\S]*?setSettingUpProvider\(provider\)/u,
+  );
   assert.match(source, /<BuiltinProviderEditor[\s\S]*?layer="onboarding"/u);
   assert.match(source, /<CodexProviderSettings/u);
   assert.match(source, /<CodexProviderSettings layer="onboarding"/u);
@@ -206,7 +214,11 @@ test("provider setup progressively reveals Pi and uses the dedicated Codex surfa
   assert.doesNotMatch(source, /providersApi\.authStart/u);
 });
 
-test("onboarding is an application modal and required setup cannot be skipped", () => {
+test("Tailscale model setup advertises its supported HTTP transport", () => {
+  assert.match(source, /http:\/\/model\.tailnet\.ts\.net:11434\/v1/u);
+});
+
+test("onboarding is an application modal with an explicit provider deferral", () => {
   assert.match(source, /<DialogPrimitive\.Root open>/u);
   assert.match(source, /const \[open, setOpen\] = React\.useState\(true\)/u);
   assert.match(source, /data-onboarding-active="true"/u);
@@ -217,22 +229,54 @@ test("onboarding is an application modal and required setup cannot be skipped", 
   assert.match(source, /aria-busy=\{saving \|\| undefined\}/u);
   assert.match(source, /Profile and provider setup required/u);
   assert.match(source, /aria-current=\{itemIndex === index \? "step" : undefined\}/u);
-  assert.doesNotMatch(source, />\s*Skip\s*</u);
+  assert.match(source, />\s*Skip provider\s*</u);
+  assert.match(source, /setProviderSkipped\(true\)/u);
+  assert.match(source, /providerSkipped \|\| !selectedProviderId \? "deferred" : "completed"/u);
+  assert.match(source, /Provider setup skipped/u);
   assert.doesNotMatch(source, />\s*Set up later\s*</u);
-  assert.doesNotMatch(source, /setOnboardingOutcome\("deferred"/u);
-  assert.match(source, /setOpen\(snapshot\.outcome !== "completed"\)/u);
+  assert.match(source, /setOpen\(shouldOpenOnboarding\(snapshot\.outcome\)\)/u);
   assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
 });
 
+test("pre-workspace Web Search disclosure is default-aware, explicit, and request-free", () => {
+  assert.match(source, /data-onboarding-web-search/u);
+  assert.match(source, /const webSearch = useWebSearch\(\)/u);
+  assert.match(source, /const next = await webSearchApi\.setEnabled\(enabled\)/u);
+  assert.match(source, /queryClient\.setQueryData\(queryKeys\.webSearch, next\)/u);
+  assert.match(
+    source,
+    /Fresh profiles start with Web Search on; anonymous Exa is the initial\s+recipient/u,
+  );
+  assert.match(
+    source,
+    /send\s+that query and your network\s+address to Exa only when the model\s+invokes search/u,
+  );
+  assert.match(source, /This screen makes no\s+network\s+request/u);
+  assert.match(source, /Existing opt-outs and routes stay unchanged/u);
+  assert.match(
+    source,
+    /disabled=\{!webSearch\.data \|\| webSearch\.isFetching \|\| webSearchSaving\}/u,
+  );
+  assert.match(source, /aria-label="Allow Web Search in attended chats"/u);
+  assert.match(source, /aria-describedby="onboarding-web-search-description"/u);
+  assert.match(source, /motion-reduce:transition-none/u);
+  assert.doesNotMatch(source, /exaApi\.(setEnabled|setKey)/u);
+  assert.doesNotMatch(source, /setWebSearchEnabled\(true\)/u);
+});
+
 test("hosted keys validate before selection and endpoint routes require discovered models", () => {
+  const hostedKeyFlow = source.slice(
+    source.indexOf("const validateHostedApiKey"),
+    source.indexOf("const skipProvider"),
+  );
+  const validate = hostedKeyFlow.indexOf("providersApi.validateOnboardingApiKey");
+  const publish = hostedKeyFlow.indexOf("queryClient.setQueryData<Provider[]>", validate);
+  const select = hostedKeyFlow.indexOf("persistModelSelection(saved.id", validate);
+  assert.ok(validate >= 0 && validate < publish && publish < select);
   const providerStep = source.slice(
     source.indexOf('if (step === "provider")'),
     source.indexOf("  return (", source.indexOf('if (step === "provider")')),
   );
-  const validate = providerStep.indexOf("providersApi.validateOnboardingApiKey");
-  const publish = providerStep.indexOf("queryClient.setQueryData<Provider[]>", validate);
-  const select = providerStep.indexOf("persistModelSelection(saved.id", validate);
-  assert.ok(validate >= 0 && validate < publish && publish < select);
   assert.match(
     providerStep,
     /needsEndpointDiscovery = isLocalRuntime \|\| choice === "tailscale"/u,
@@ -240,8 +284,11 @@ test("hosted keys validate before selection and endpoint routes require discover
   assert.match(providerStep, /if \(!defaultModel\)[\s\S]*?no chat models were found/u);
   assert.match(
     source,
-    /choice === "openai-key" \|\| choice === "anthropic"[\s\S]*?Validating key…/u,
+    /title=\{`Connect \$\{apiKeyDialogChoice === "openai-key" \? "OpenAI" : "Anthropic"\}`\}/u,
   );
+  assert.match(source, /confirmLabel=\{discovering \? "Validating…" : "Validate & continue"\}/u);
+  assert.match(source, /type="password"[\s\S]*?Paste your API key/u);
+  assert.doesNotMatch(source, /<Text variant="small-strong">API key<\/Text>/u);
 });
 
 test("onboarding presentation stays compact and free of decorative gradients", () => {
@@ -251,6 +298,10 @@ test("onboarding presentation stays compact and free of decorative gradients", (
     providerPresentation,
     /The key stays on this Mac and can be rotated later in Settings\./u,
   );
+  assert.match(source, /shadow-onboarding/u);
+  assert.match(source, /px-4 pb-4 pt-11/u);
+  assert.doesNotMatch(source, /max-\[760px\]:rounded-none|max-\[760px\]:shadow-none/u);
+  assert.match(source, /border-transparent bg-input[\s\S]*?focus:border-transparent/u);
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
@@ -273,6 +324,11 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     source,
     /Create reusable instructions, then type \$ to attach one to your next message\./u,
   );
+  assert.match(
+    featurePresentation,
+    /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
+  );
+  assert.doesNotMatch(featurePresentation, /choose to connect it/u);
   assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
   assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings →\s*Remote\s+Access/u);
   for (const group of [
@@ -299,6 +355,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Reusable Skills",
     "MCP Connectors",
     "Aiden Assistant",
+    "Reusable Bots",
     "Scheduled Automations",
     "Voice & Dictation",
     "Command Palette",
@@ -311,14 +368,25 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 24);
+  assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
+  assert.match(featurePresentation, /workspace agent show raster images inline/u);
+  assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
+  assert.match(
+    featurePresentation,
+    /benchmark-only OpenRouter key never imports its model catalog/u,
+  );
+  assert.match(featurePresentation, /bundled model details stay offline during ordinary browsing/u);
+  assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
+  assert.match(featurePresentation, /explicitly connect cloud transcription/u);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 25);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 24);
+  assert.equal(featureAssetPaths.length, 25);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
   assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
+  assert.ok(featureAssetPaths.includes("features/bots.png"));
   assert.equal(new Set(featureAssetPaths).size, featureAssetPaths.length);
   for (const assetPath of featureAssetPaths) {
     const illustration = readFileSync(

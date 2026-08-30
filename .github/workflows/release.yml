@@ -35,54 +35,89 @@ jobs:
           node-version: 22.22.3
           cache: npm
 
-      - name: Install locked dependencies
-        run: npm ci
-
-      - name: Assign the main-push version
+      - name: Resolve the declared release version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          release_version="$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER")"
-          npm version "$release_version" --no-git-tag-version
+          base_version="$(node -p "require('./package.json').version")"
+          base_tag_match="$(git ls-remote --tags origin "refs/tags/v${base_version}")"
+          base_tag_exists=false
+          if [[ -n "$base_tag_match" ]]; then
+            base_tag_exists=true
+          fi
+          selection="$(node scripts/prepare-ci-release.mjs "$base_tag_exists")"
+          release_version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$selection")"
+          release_tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag)' "$selection")"
+          should_publish="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).publish))' "$selection")"
           echo "version=$release_version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$release_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
+          if [[ "$should_publish" != true ]]; then
+            echo "$release_tag already exists; skipping release without changing its version."
+          fi
+
+      - name: Install locked dependencies
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm ci
+
+      - name: Install Playwright Chromium for Generative UI containment
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npx playwright install chromium
 
       - name: Verify Homebrew and website release consumers
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run release:check-consumers
 
       - name: Verify TypeScript
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run type-check
 
       - name: Verify lint
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run lint
 
+      - name: Verify diagnostics privacy and storage contracts
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run test:diagnostics
+
       - name: Verify branding, updater, and release policy
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:branding
 
       - name: Run JavaScript, TypeScript, and Computer Use tests
+        if: ${{ steps.version.outputs.publish == 'true' }}
         env:
           AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"
         run: npm test
 
       - name: Run Apple Foundation Models tests
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:native
 
       - name: Run deterministic Electron E2E gate
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e
 
-      - name: Upload Playwright failure artifacts
-        if: ${{ failure() }}
+      - name: Verify production-profile diagnostics support workflow
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run test:e2e:diagnostics:production
+
+      - name: Build sanitized E2E failure receipt
+        if: ${{ failure() && steps.version.outputs.publish == 'true' }}
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+
+      - name: Upload sanitized E2E failure receipt
+        if: ${{ failure() && steps.version.outputs.publish == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: playwright-e2e-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            test-results/e2e
-            playwright-report/e2e
-          if-no-files-found: warn
-          retention-days: 14
+          path: test-results/e2e-safe-receipt.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Prepare App Store Connect key
+        if: ${{ steps.version.outputs.publish == 'true' }}
         shell: bash
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -97,6 +132,7 @@ jobs:
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize, and verify distribution
+        if: ${{ steps.version.outputs.publish == 'true' }}
         env:
           AIDEN_ENABLE_AUTO_UPDATES: "1"
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -105,7 +141,12 @@ jobs:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
         run: npm run dist
 
+      - name: Verify diagnostics in the signed packaged app
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run test:e2e:diagnostics:packaged
+
       - name: Stage verified macOS release assets
+        if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-macos
@@ -137,19 +178,39 @@ jobs:
           node-version: 22.22.3
           cache: npm
 
+      - name: Resolve the declared release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="$(node -p "require('./package.json').version")"
+          base_tag_match="$(git ls-remote --tags origin "refs/tags/v${base_version}")"
+          base_tag_exists=false
+          if [[ -n "$base_tag_match" ]]; then
+            base_tag_exists=true
+          fi
+          selection="$(node scripts/prepare-ci-release.mjs "$base_tag_exists")"
+          release_version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$selection")"
+          release_tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag)' "$selection")"
+          should_publish="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).publish))' "$selection")"
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
+
       - name: Install Linux package dependencies
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb
 
       - name: Install locked dependencies
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm ci
 
-      - name: Assign the matching main-push version
-        run: npm version "$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER")" --no-git-tag-version
-
-      - name: Verify Linux contracts and native helpers
-        run: npm run type-check && npm run lint && npm run test:linux-contracts && npm run test:linux-native
+      - name: Verify Linux contracts, diagnostics, and native helpers
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run type-check && npm run lint && npm run test:diagnostics && npm run test:linux-contracts && npm run test:linux-native
 
       - name: Build and verify Linux distributions
+        if: ${{ steps.version.outputs.publish == 'true' }}
         run: |
           set -euo pipefail
           npm run models:refresh
@@ -165,6 +226,7 @@ jobs:
           grep -F "$expected_version" <<<"$appimage_output"
 
       - name: Smoke the exact release GUI without a keyring session
+        if: ${{ steps.version.outputs.publish == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -189,6 +251,7 @@ jobs:
           fi
 
       - name: Stage verified Linux release assets
+        if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-linux-${{ matrix.arch }}
@@ -217,23 +280,35 @@ jobs:
         with:
           node-version: 22.22.3
 
+      - name: Resolve release identity
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="$(node -p "require('./package.json').version")"
+          base_tag_match="$(git ls-remote --tags origin "refs/tags/v${base_version}")"
+          base_tag_exists=false
+          if [[ -n "$base_tag_match" ]]; then
+            base_tag_exists=true
+          fi
+          selection="$(node scripts/prepare-ci-release.mjs "$base_tag_exists")"
+          release_version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$selection")"
+          release_tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag)' "$selection")"
+          should_publish="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).publish))' "$selection")"
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
+
       - name: Download verified desktop assets
+        if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
           pattern: release-*
           path: release/distribution
           merge-multiple: true
 
-      - name: Resolve release identity
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_version="$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER")"
-          echo "version=$release_version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$release_version" >> "$GITHUB_OUTPUT"
-
       - name: Publish verified release assets
+        if: ${{ steps.version.outputs.publish == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

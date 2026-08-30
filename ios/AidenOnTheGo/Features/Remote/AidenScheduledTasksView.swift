@@ -87,6 +87,7 @@ final class AidenScheduledTasksModel {
     private let cache: AidenScheduledTaskCache
     private let activationContext: AidenRemoteRequestContext?
     private var pendingRunKeys: [String: UUID] = [:]
+    private let hapticScope = UUID()
     private(set) var tasks: [AidenScheduledTask] = []
     private(set) var settings: AidenScheduledSettings?
     private(set) var catalog: AidenModelCatalog?
@@ -113,6 +114,14 @@ final class AidenScheduledTasksModel {
     var workspaces: [AidenWorkspace] {
         guard activationContext.map(coordinator.isCurrent) == true else { return [] }
         return coordinator.workspaces.filter { $0.permission != .none }
+    }
+
+    func setHapticsActive(_ active: Bool) {
+        if active {
+            coordinator.haptics.activate(scope: hapticScope)
+        } else {
+            coordinator.haptics.deactivate(scope: hapticScope)
+        }
     }
 
     private func requestContext() throws -> AidenRemoteRequestContext {
@@ -194,17 +203,25 @@ final class AidenScheduledTasksModel {
             guard coordinator.isCurrent(context) else { return false }
             upsert(saved)
             outcomeMessage = task == nil ? String(localized: "Scheduled task created.") : String(localized: "Scheduled task updated.")
+            coordinator.haptics.play(
+                .success,
+                scope: hapticScope,
+                dedupeKey: "scheduled-save:\(saved.id):\(saved.revision)"
+            )
             return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
         } catch {
             guard coordinator.isCurrent(context) else { return false }
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             await load()
             return false
         }
     }
 
     func pauseOrResume(_ task: AidenScheduledTask) async {
-        await mutate {
+        await mutate(successEvent: .selection) {
             task.enabled
                 ? try await $0.pauseScheduledTask(id: task.id, revision: task.revision)
                 : try await $0.resumeScheduledTask(id: task.id, revision: task.revision)
@@ -221,10 +238,18 @@ final class AidenScheduledTasksModel {
             guard coordinator.isCurrent(context) else { return false }
             tasks.removeAll { $0.id == task.id }
             try? await cache.store(instanceId: context.instanceId, tasks: tasks, settings: settings)
+            coordinator.haptics.play(
+                .success,
+                scope: hapticScope,
+                dedupeKey: "scheduled-remove:\(task.id):\(task.revision)"
+            )
             return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
         } catch {
             guard coordinator.isCurrent(context) else { return false }
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             await load()
             return false
         }
@@ -241,12 +266,20 @@ final class AidenScheduledTasksModel {
             let accepted = try await coordinator.remoteClient(for: context).runScheduledTask(id: task.id, idempotencyKey: key)
             guard coordinator.isCurrent(context) else { return }
             pendingRunKeys[task.id] = nil
-            outcomeMessage = String(localized: "Run accepted (\(accepted.runId.prefix(12))…). It continues on your desktop if this phone disconnects.")
+            outcomeMessage = String(localized: "Run accepted (\(accepted.runId.prefix(12))…). It continues on your paired desktop if this phone disconnects.")
+            coordinator.haptics.play(
+                .actionStarted,
+                scope: hapticScope,
+                dedupeKey: "scheduled-run:\(task.id):\(key.uuidString)"
+            )
             await load()
+        } catch let error where aidenIsCancellation(error) {
+            return
         } catch {
             guard coordinator.isCurrent(context) else { return }
             if !Self.isAmbiguous(error) { pendingRunKeys[task.id] = nil }
             presentedError = error.localizedDescription
+            coordinator.haptics.play(Self.isAmbiguous(error) ? .warning : .error, scope: hapticScope)
         }
     }
 
@@ -287,16 +320,27 @@ final class AidenScheduledTasksModel {
             guard coordinator.isCurrent(context) else { return false }
             self.settings = updated
             try? await cache.store(instanceId: context.instanceId, tasks: tasks, settings: updated)
+            coordinator.haptics.play(
+                .success,
+                scope: hapticScope,
+                dedupeKey: "scheduled-settings:\(updated.revision)"
+            )
             return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
         } catch {
             guard coordinator.isCurrent(context) else { return false }
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             await load()
             return false
         }
     }
 
-    private func mutate(_ operation: (AidenRemoteClient) async throws -> AidenScheduledTask) async {
+    private func mutate(
+        successEvent: AidenHapticEvent = .success,
+        _ operation: (AidenRemoteClient) async throws -> AidenScheduledTask
+    ) async {
         guard !isMutating, isConnected, let context = try? requestContext() else { return }
         isMutating = true
         defer { isMutating = false }
@@ -304,10 +348,18 @@ final class AidenScheduledTasksModel {
             let updated = try await operation(coordinator.remoteClient(for: context))
             guard coordinator.isCurrent(context) else { return }
             upsert(updated)
+            coordinator.haptics.play(
+                successEvent,
+                scope: hapticScope,
+                dedupeKey: "scheduled-mutate:\(updated.id):\(updated.revision)"
+            )
+        } catch let error where aidenIsCancellation(error) {
+            return
         }
         catch {
             guard coordinator.isCurrent(context) else { return }
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             await load()
         }
     }
@@ -469,6 +521,8 @@ struct AidenScheduledTasksView: View {
                 Text(model.presentedError ?? "")
             }
             .task { await model.load() }
+            .onAppear { model.setHapticsActive(true) }
+            .onDisappear { model.setHapticsActive(false) }
         }
     }
 }

@@ -27,6 +27,7 @@ import {
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
 
 export function RootView() {
   useTheme();
@@ -192,7 +193,23 @@ function RootContent() {
 
   React.useEffect(() => {
     return onNotification("chats:changed", () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("bots:changed", () => {
+      invalidateBotCanonicalPhotos();
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
+        queryClient.invalidateQueries({ queryKey: ["bot"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
+      ]);
     });
   }, [queryClient]);
 
@@ -202,7 +219,7 @@ function RootContent() {
         onNotification,
         (chat) => {
           if (isChatCacheDeleted(chat.id)) return;
-          void (async () => {
+          return (async () => {
             if (isChatCacheDeleted(chat.id)) return;
             const chatKey = queryKeys.chat(chat.id);
             // A rapid A → B → A revisit can have a stale read in flight when the

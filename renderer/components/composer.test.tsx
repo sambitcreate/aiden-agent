@@ -28,13 +28,22 @@ test("composer context controls stay compact without exposing provider copy", ()
   const composer = source("./composer.tsx");
   const modelPicker = source("./model-picker.tsx");
 
-  assert.match(composer, /h-7 gap-1\.5 px-2 max-\[520px\]:size-7 max-\[520px\]:px-0/u);
-  assert.match(
-    composer,
-    /<span className="composer-permission-label max-\[520px\]:hidden">\s*\{permissionSaving \? "Updating…" : perm\.label\}/u,
-  );
+  assert.match(composer, /group\/access relative h-8 w-34/u);
+  assert.match(composer, /role="radiogroup"\s*aria-label="Workspace access"/u);
+  assert.match(composer, /absolute bottom-full left-0/u);
+  assert.match(composer, /group-hover\/access:visible/u);
+  assert.match(composer, /group-focus-within\/access:visible/u);
+  assert.match(composer, /group-data-\[open=true\]\/access:visible/u);
+  assert.match(composer, /bg-control\/80/u);
+  assert.match(composer, /selected\s*\? "bg-popover shadow-control"/u);
+  assert.doesNotMatch(composer, /group-hover\/access:max-h/u);
+  assert.match(composer, /aria-disabled=\{disabled \|\| undefined\}/u);
+  assert.doesNotMatch(composer, /group\/access[^\n]*disabled:opacity-45/u);
+  assert.doesNotMatch(composer, /DropdownMenuCheckboxItem/u);
+  assert.doesNotMatch(composer, /<DropdownMenuLabel>Workspace access/u);
   assert.match(modelPicker, /\? selected\.label\s*: hasUnavailableSelection/u);
   assert.match(modelPicker, /`Selected model: \$\{selected\.label\}\. Choose a model\.`/u);
+  assert.doesNotMatch(modelPicker, /ChevronsUpDown/u);
   assert.doesNotMatch(modelPicker, /Selected model: \$\{selected\.label\} from/u);
   assert.doesNotMatch(modelPicker, /\$\{selected\.label\} · \$\{selected\.providerLabel\}/u);
 });
@@ -102,6 +111,15 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(palette, /onPointerDown=\{\(event\) => event\.preventDefault\(\)\}/u);
   assert.match(palette, /motion-reduce:animate-none/u);
   assert.match(palette, /max-\[520px\]:hidden/u);
+  assert.match(palette, /flex min-h-10/u);
+  assert.match(palette, /selected && available && "bg-control"/u);
+  assert.match(palette, /result\.command\.title/u);
+  assert.doesNotMatch(palette, /`\/\$\{result\.command\.name\}`/u);
+  assert.doesNotMatch(palette, /`\/\$\{alias\}`/u);
+  assert.match(palette, /const detail = unavailableReason \?\? description/u);
+  assert.match(palette, /rounded-dialog border border-separator/u);
+  assert.doesNotMatch(palette, /block truncate text-small text-secondary/u);
+  assert.doesNotMatch(palette, /selected && available && "bg-list-selection"/u);
   assert.doesNotMatch(palette, /Commands and skills/u);
   assert.doesNotMatch(palette, /composer-slash-shortcuts/u);
   assert.doesNotMatch(palette, /rounded-md bg-control\/65 text-secondary/u);
@@ -141,10 +159,18 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /slashTabAcceptsSelection\([\s\S]*slashActionPendingRef\.current/u);
   assert.match(composer, /skillSelectionEnabled/u);
   assert.match(composer, /Remove \$\{selectedSkill\.invocation\.displayName\} skill from message/u);
-  assert.match(composer, /textRevisionRef\.current === submittedTextRevision/u);
-  assert.match(composer, /attachmentRevisionRef\.current === submittedAttachmentRevision/u);
-  assert.match(composer, /type: "send-succeeded",\s*submittedRevision: submittedSkillRevision/u);
-  assert.match(composer, /await onSend\(trimmed, attachments, submittedSkill\)/u);
+  const optimisticClear = composer.indexOf('setText("");');
+  const sendAwait = composer.indexOf("await onSend(");
+  assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
+  assert.match(composer, /if \(sendPendingRef\.current\) return false;/u);
+  assert.match(composer, /type: "send-started"/u);
+  assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
+  assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
+  assert.match(composer, /!isAppendReconciliationRequired\(error\)/u);
+  assert.match(
+    composer,
+    /if \(result\.command\.action\.kind === "composer-instruction"\) return;/u,
+  );
 });
 
 test("selected session slash commands dispatch through explicit Aiden-owned workflows", () => {
@@ -184,6 +210,20 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(branchPicker, /programmaticOriginRef\.current = false/u);
 });
 
+test("visualize preserves the slash draft when validation rejects the send", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /if \(!nextPrompt\) \{[\s\S]{0,180}return false;/u);
+  assert.match(
+    composer,
+    /selectedSkillState && selectedSkillState\.state !== "valid"[\s\S]{0,180}return false;/u,
+  );
+  assert.match(
+    composer,
+    /return sendComposerPayload\(\{[\s\S]{0,260}draftText: text,[\s\S]{0,260}visualize: true/u,
+  );
+  assert.match(composer, /hasWorkspaceArtifactAccess: workspace\?\.permission !== "none"/u);
+});
+
 test("workspace picker closes and exposes a persistent reason when workspace changes are blocked", () => {
   const composer = source("./composer.tsx");
   const picker = source("./workspace-picker.tsx");
@@ -195,4 +235,14 @@ test("workspace picker closes and exposes a persistent reason when workspace cha
   assert.match(picker, /className="sr-only" role="status"/u);
   assert.match(picker, /disabled=\{pending !== null \|\| Boolean\(blockedReason\)\}/u);
   assert.match(picker, /!pending && !blockedReason && setOpen\(nextOpen\)/u);
+});
+
+test("workspace access keyboard navigation moves focus without changing permission", () => {
+  const composer = source("./composer.tsx");
+  assert.match(
+    composer,
+    /event\.key === "Enter" \|\| event\.key === " "\) \{\s*event\.preventDefault\(\);\s*if \(value !== permission\) requestPermission\(value\);/u,
+  );
+  assert.match(composer, /radios\?\.\[nextIndex\]\?\.focus\(\)/u);
+  assert.doesNotMatch(composer, /requestPermission\(nextPermission\)/u);
 });

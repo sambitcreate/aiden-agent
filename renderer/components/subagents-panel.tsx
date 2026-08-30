@@ -2,8 +2,10 @@ import * as React from "react";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
+  deriveSubagentRunPresentation,
   resolveSubagentSelection as resolveRunViewSelection,
   splitSubagentRunViews,
+  type SubagentRunPresentation,
   type SubagentRunView,
 } from "../lib/subagent-view-state";
 import {
@@ -20,10 +22,7 @@ import {
   type SubagentPanelFocusSurface,
   type SubagentDetailAnnouncementState,
 } from "../lib/subagent-panel-state";
-import type {
-  SubagentEffectActivityV1,
-  SubagentRunSnapshot,
-} from "../shared/subagent-runs";
+import type { SubagentEffectActivityV1, SubagentRunSnapshot } from "../shared/subagent-runs";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
 import { SubagentDetail } from "./subagent-detail";
 import {
@@ -44,6 +43,7 @@ export interface SubagentsPanelProps {
   chatId: string | null;
   workspaceId: string | null;
   runs: readonly SubagentRunView[];
+  handoffSnapshots?: readonly SubagentRunSnapshot[];
   selectedRunSnapshot?: SubagentRunSnapshot | null;
   detailLoading?: boolean;
   detailError?: string | null;
@@ -53,6 +53,8 @@ export interface SubagentsPanelProps {
   onSelectedRunChange?: (runId: string) => void;
   onRetryDetail?: (runId: string) => void;
   onStopRun?: (run: SubagentRunSnapshot) => Promise<void> | void;
+  stopPendingRunIds?: readonly string[];
+  stopErrorsByRunId?: Readonly<Record<string, string>>;
   onDetailAnnouncement?: (ownerKey: string, message: string) => void;
   detailRequestVersion?: number;
   active?: boolean;
@@ -85,10 +87,7 @@ const SubagentDetailPending = React.forwardRef<
     unavailable: boolean;
     onRetry?: () => void;
   }
->(function SubagentDetailPending(
-  { run, loading, unavailable, onRetry },
-  headingRef,
-) {
+>(function SubagentDetailPending({ run, loading, unavailable, onRetry }, headingRef) {
   const state = subagentStateLabel(run.state);
   return (
     <article
@@ -145,6 +144,7 @@ function OwnedSubagentsPanel({
   chatId,
   workspaceId,
   runs,
+  handoffSnapshots = [],
   selectedRunSnapshot,
   detailLoading = false,
   detailError = null,
@@ -154,6 +154,8 @@ function OwnedSubagentsPanel({
   onSelectedRunChange,
   onRetryDetail,
   onStopRun,
+  stopPendingRunIds = [],
+  stopErrorsByRunId = {},
   onDetailAnnouncement,
   detailRequestVersion = 0,
   active = true,
@@ -162,38 +164,45 @@ function OwnedSubagentsPanel({
 }: SubagentsPanelProps) {
   const ownerKey = subagentPanelOwnerKey(chatId, workspaceId);
   const controlled = selectedRunId !== undefined;
-  const [internalSelection, setInternalSelection] = React.useState<
-    string | null
-  >(resolveSubagentSelection(runs, defaultSelectedRunId));
-  const [compactView, setCompactView] = React.useState<"roster" | "detail">(
-    "roster",
+  const [internalSelection, setInternalSelection] = React.useState<string | null>(
+    resolveSubagentSelection(runs, defaultSelectedRunId),
   );
+  const [compactView, setCompactView] = React.useState<"roster" | "detail">("roster");
   const [now, setNow] = React.useState(() => Date.now());
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const detailHeadingRef = React.useRef<HTMLHeadingElement | null>(null);
   const detailRegionOwnsFocusRef = React.useRef(false);
   const previousDetailFocusFrameRef = React.useRef<string | null>(null);
-  const previousAnnouncementStateRef =
-    React.useRef<SubagentDetailAnnouncementState | null>(null);
+  const previousAnnouncementStateRef = React.useRef<SubagentDetailAnnouncementState | null>(null);
   const restoreRunIdRef = React.useRef<string | null>(null);
   const handledDetailRequestVersionRef = React.useRef(detailRequestVersion);
   const previousCompactRef = React.useRef(compact);
   const focusedSurfaceRef = React.useRef<SubagentPanelFocusSurface>(null);
-  const pendingBreakpointFocusRef =
-    React.useRef<SubagentPanelBreakpointFocusTarget>(null);
+  const pendingBreakpointFocusRef = React.useRef<SubagentPanelBreakpointFocusTarget>(null);
   const requestedSelection = controlled ? selectedRunId : internalSelection;
   const selection = resolveSubagentSelection(runs, requestedSelection);
   const selectedRun = runs.find((run) => run.runId === selection) ?? null;
-  useSubagentSelectionRestoreRunRepair(
-    restoreRunIdRef,
-    selectedRun?.runId ?? null,
-    runs,
-  );
-  const detailSnapshot = matchingDetailSnapshot(
-    selectedRun,
-    selectedRunSnapshot,
-  );
+  useSubagentSelectionRestoreRunRepair(restoreRunIdRef, selectedRun?.runId ?? null, runs);
+  const detailSnapshot = matchingDetailSnapshot(selectedRun, selectedRunSnapshot);
   const hasActiveRuns = splitSubagentRunViews(runs).active.length > 0;
+  const stopPendingRunIdSet = React.useMemo(() => new Set(stopPendingRunIds), [stopPendingRunIds]);
+  const presentationByRunId = React.useMemo(
+    () =>
+      new Map<string, SubagentRunPresentation>(
+        runs.map((run) => [
+          run.runId,
+          stopPendingRunIdSet.has(run.runId)
+            ? { state: "stopping", label: "Stopping…" }
+            : deriveSubagentRunPresentation(run, handoffSnapshots, now, 120_000),
+        ]),
+      ),
+    [handoffSnapshots, now, runs, stopPendingRunIdSet],
+  );
+  const selectedPresentation = selectedRun ? presentationByRunId.get(selectedRun.runId) : undefined;
+  const hasUndelayedHandoff = React.useMemo(
+    () => [...presentationByRunId.values()].some(({ state }) => state === "saving"),
+    [presentationByRunId],
+  );
   const pendingDetailLoading = subagentDetailPendingLoading(
     selectedRun !== null,
     detailSnapshot !== null,
@@ -208,35 +217,49 @@ function OwnedSubagentsPanel({
         detailRequestVersion,
       )}`
     : null;
-  const detailPresentation =
+  const detailLifecyclePresentation =
     subagentDetailPresentation(
       selectedRun !== null,
       detailSnapshot !== null,
       pendingDetailLoading,
     ) ?? "unavailable";
-  const detailVisible = Boolean(
-    selectedRun && (!compact || compactView === "detail"),
-  );
+  const savedDetail = Boolean(selectedRun?.referenceMessageId);
+  const savedDetailRefreshing = savedDetail && detailSnapshot !== null && detailLoading;
+  const savedDetailRefreshError = savedDetail && detailSnapshot !== null ? detailError : null;
+  const selectedStopPending = Boolean(selectedRun && stopPendingRunIdSet.has(selectedRun.runId));
+  const selectedStopError = selectedRun ? (stopErrorsByRunId[selectedRun.runId] ?? null) : null;
+  const detailAnnouncementPresentation: SubagentDetailAnnouncementState["presentation"] =
+    selectedStopPending
+      ? "stopping"
+      : selectedStopError
+        ? "stop_failed"
+        : selectedPresentation?.state === "saving" || selectedPresentation?.state === "save_delayed"
+          ? selectedPresentation.state
+          : savedDetailRefreshing
+            ? "refreshing"
+            : savedDetailRefreshError
+              ? "refresh_failed"
+              : detailLifecyclePresentation;
+  const detailVisible = Boolean(selectedRun && (!compact || compactView === "detail"));
   const detailAnnouncementState: SubagentDetailAnnouncementState | null =
     selectedRun && detailVisible
       ? {
           ownerKey,
           runId: selectedRun.runId,
           label: selectedRun.label,
-          saved: Boolean(selectedRun.referenceMessageId),
-          presentation: detailPresentation,
-          ...(detailSnapshot?.activity
-            ? { activity: detailSnapshot.activity }
-            : {}),
+          saved: savedDetail,
+          presentation: detailAnnouncementPresentation,
+          ...(selectedPresentation?.label ? { statusLabel: selectedPresentation.label } : {}),
+          ...(detailSnapshot?.activity ? { activity: detailSnapshot.activity } : {}),
         }
       : null;
 
   React.useEffect(() => {
-    if (!active || !hasActiveRuns) return;
+    if (!active || (!hasActiveRuns && !hasUndelayedHandoff)) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [active, hasActiveRuns]);
+  }, [active, hasActiveRuns, hasUndelayedHandoff]);
 
   React.useLayoutEffect(() => {
     if (detailRequestVersion <= handledDetailRequestVersionRef.current) return;
@@ -262,8 +285,7 @@ function OwnedSubagentsPanel({
     );
     if (!target) return;
     pendingBreakpointFocusRef.current = target;
-    if (compact)
-      setCompactView(target === "detail" && selectedRun ? "detail" : "roster");
+    if (compact) setCompactView(target === "detail" && selectedRun ? "detail" : "roster");
   }, [active, compact, selectedRun]);
 
   React.useLayoutEffect(() => {
@@ -274,13 +296,9 @@ function OwnedSubagentsPanel({
       detailHeadingRef.current?.focus();
     } else {
       if (compact && compactView !== "roster") return;
-      const buttons = panelRef.current?.querySelectorAll<HTMLButtonElement>(
-        "[data-subagent-run-id]",
-      );
-      focusSubagentRosterRun(
-        buttons ?? [],
-        restoreRunIdRef.current ?? selection,
-      );
+      const buttons =
+        panelRef.current?.querySelectorAll<HTMLButtonElement>("[data-subagent-run-id]");
+      focusSubagentRosterRun(buttons ?? [], restoreRunIdRef.current ?? selection);
     }
     pendingBreakpointFocusRef.current = null;
   }, [active, compact, compactView, selection]);
@@ -301,13 +319,10 @@ function OwnedSubagentsPanel({
   }, [active, detailFocusFrame]);
 
   React.useEffect(() => {
+    if (!active) return;
     const previous = previousAnnouncementStateRef.current;
     previousAnnouncementStateRef.current = detailAnnouncementState;
-    if (!active) return;
-    const message = subagentDetailAnnouncement(
-      previous,
-      detailAnnouncementState,
-    );
+    const message = subagentDetailAnnouncement(previous, detailAnnouncementState);
     if (message) onDetailAnnouncement?.(ownerKey, message);
   }, [
     active,
@@ -317,6 +332,7 @@ function OwnedSubagentsPanel({
     detailAnnouncementState?.presentation,
     detailAnnouncementState?.runId,
     detailAnnouncementState?.saved,
+    detailAnnouncementState?.statusLabel,
     onDetailAnnouncement,
     ownerKey,
   ]);
@@ -333,9 +349,8 @@ function OwnedSubagentsPanel({
     setCompactView("roster");
     if (typeof window === "undefined") return;
     window.requestAnimationFrame(() => {
-      const buttons = panelRef.current?.querySelectorAll<HTMLButtonElement>(
-        "[data-subagent-run-id]",
-      );
+      const buttons =
+        panelRef.current?.querySelectorAll<HTMLButtonElement>("[data-subagent-run-id]");
       focusSubagentRosterRun(buttons ?? [], restoreRunIdRef.current);
     });
   };
@@ -350,8 +365,7 @@ function OwnedSubagentsPanel({
       onBlurCapture={(event) => {
         const nextTarget = event.relatedTarget;
         detailRegionOwnsFocusRef.current =
-          nextTarget instanceof Node &&
-          event.currentTarget.contains(nextTarget);
+          nextTarget instanceof Node && event.currentTarget.contains(nextTarget);
       }}
     >
       {detailSnapshot ? (
@@ -361,6 +375,12 @@ function OwnedSubagentsPanel({
           run={detailSnapshot}
           effectActivity={effectActivity}
           onStop={onStopRun}
+          stopPending={selectedStopPending}
+          stopError={selectedStopError}
+          presentation={selectedPresentation}
+          refreshing={savedDetailRefreshing}
+          refreshError={savedDetailRefreshError}
+          onRetryRefresh={onRetryDetail ? () => onRetryDetail(selectedRun.runId) : undefined}
           now={now}
         />
       ) : (
@@ -369,9 +389,7 @@ function OwnedSubagentsPanel({
           run={selectedRun}
           loading={pendingDetailLoading}
           unavailable={!pendingDetailLoading}
-          onRetry={
-            onRetryDetail ? () => onRetryDetail(selectedRun.runId) : undefined
-          }
+          onRetry={onRetryDetail ? () => onRetryDetail(selectedRun.runId) : undefined}
         />
       )}
     </div>
@@ -380,10 +398,7 @@ function OwnedSubagentsPanel({
   return (
     <div
       ref={panelRef}
-      className={cn(
-        "flex h-full min-h-0 flex-col bg-popover text-primary",
-        className,
-      )}
+      className={cn("flex h-full min-h-0 flex-col bg-popover text-primary", className)}
       data-subagents-layout={compact ? "compact" : "wide"}
       data-subagents-owner={ownerKey}
       onFocusCapture={(event) => {
@@ -399,10 +414,7 @@ function OwnedSubagentsPanel({
       }}
       onBlurCapture={(event) => {
         const nextTarget = event.relatedTarget;
-        if (
-          !(nextTarget instanceof Node) ||
-          !event.currentTarget.contains(nextTarget)
-        ) {
+        if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
           focusedSurfaceRef.current = null;
         }
       }}
@@ -445,6 +457,7 @@ function OwnedSubagentsPanel({
             runs={runs}
             selectedRunId={selection}
             onSelect={selectRun}
+            presentationByRunId={presentationByRunId}
             className="flex-1"
           />
         )
@@ -454,6 +467,7 @@ function OwnedSubagentsPanel({
             runs={runs}
             selectedRunId={selection}
             onSelect={selectRun}
+            presentationByRunId={presentationByRunId}
             className="border-r border-separator"
           />
           {detailRegion}

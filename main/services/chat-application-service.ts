@@ -4,6 +4,8 @@ import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.j
 import type { ParsedPublicChatCreate } from "../handlers/chat-create-params.js";
 import type { chatStore } from "./chat-store.js";
 import type { configStore } from "./config-store.js";
+import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
+import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
 import type { Chat } from "./types.js";
@@ -24,17 +26,24 @@ export interface ChatApplicationOwner extends WorkspaceOperationDocumentOwner {
 
 export interface ChatApplicationMutationOptions {
   assertCurrent?: (chat: Chat) => void | Promise<void>;
+  /**
+   * Main-owned notification that cross-store deletion has durably installed its
+   * subagent tombstone. From this point restart reconciliation can only roll the
+   * deletion forward, even if a later private-store or chat-store step fails.
+   */
+  onDeletionRollForward?: () => void;
 }
 
 export interface ChatApplicationDependencies {
   chatStore: Pick<
     typeof chatStore,
-    "list" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
+    "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
   >;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
     typeof llmClient,
     | "isChatOwnedByInactiveRenderer"
+    | "isChatBusy"
     | "waitForChatIdle"
     | "requiresAppendReconciliation"
     | "markAppendReconciliationRequired"
@@ -42,6 +51,14 @@ export interface ChatApplicationDependencies {
     | "beginChatWorkspaceChange"
     | "beginChatDeletion"
     | "cancelChat"
+  >;
+  displayImageArtifactStore: Pick<
+    typeof displayImageArtifactStore,
+    "availability" | "hasPending" | "deleteChat"
+  >;
+  generativeUiArtifactStore: Pick<
+    typeof generativeUiArtifactStore,
+    "availability" | "hasPending" | "deleteChat"
   >;
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "admit">;
   workspaceOperationRegistry: typeof workspaceOperationRegistry;
@@ -68,15 +85,43 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       return deps.chatStore.list(workspaceId);
     },
 
+    listRegular(workspaceId?: string) {
+      return deps.chatStore.listRegular(workspaceId);
+    },
+
     async get(chatId: string) {
       let reconciliationRequired = false;
       if (deps.llmClient.isChatOwnedByInactiveRenderer(chatId)) {
         reconciliationRequired = !(await deps.llmClient.waitForChatIdle(chatId));
       }
-      const chat = await deps.chatStore.get(chatId);
+      const imageArtifactAvailability = deps.displayImageArtifactStore.availability();
+      const htmlArtifactAvailability = deps.generativeUiArtifactStore.availability();
+      const imageArtifactRecoveryUnavailable =
+        !imageArtifactAvailability.available || !htmlArtifactAvailability.available;
+      const [chat, stagedImageArtifact, stagedHtmlArtifact] = await Promise.all([
+        deps.chatStore.get(chatId),
+        !imageArtifactAvailability.available
+          ? Promise.resolve(false)
+          : deps.displayImageArtifactStore.hasPending(chatId),
+        !htmlArtifactAvailability.available
+          ? Promise.resolve(false)
+          : deps.generativeUiArtifactStore.hasPending(chatId),
+      ]);
       reconciliationRequired ||= deps.llmClient.isChatOwnedByInactiveRenderer(chatId);
+      const imageArtifactRecoveryPending =
+        (stagedImageArtifact || stagedHtmlArtifact) && !deps.llmClient.isChatBusy(chatId)
+          ? ((stagedImageArtifact
+              ? await deps.displayImageArtifactStore.hasPending(chatId)
+              : false) ||
+              (stagedHtmlArtifact
+                ? await deps.generativeUiArtifactStore.hasPending(chatId)
+                : false)) &&
+            !deps.llmClient.isChatBusy(chatId)
+          : false;
       return {
         chat: chatForRenderer(chat),
+        imageArtifactRecoveryPending,
+        imageArtifactRecoveryUnavailable,
         reconciliation: reconciliationRequired
           ? {
               chatId,
@@ -148,6 +193,11 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         throw new Error("Finish or stop the current response before changing workspaces.");
       }
       try {
+        const current = await deps.chatStore.get(chatId);
+        if (!current) throw new Error(`Chat ${chatId} not found`);
+        if (current.botId) {
+          throw new Error("Bot conversations stay in their Aiden-managed folder.");
+        }
         if (!(await deps.configStore.getWorkspace(workspaceId))) {
           throw new Error(`Workspace ${workspaceId} not found.`);
         }
@@ -155,7 +205,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           await deps.chatStore.moveEmptyChatToWorkspace(
             chatId,
             workspaceId,
-            async (chat) => options.assertCurrent?.(chat),
+            async (chat) => {
+              if (chat.botId) {
+                throw new Error("Bot conversations stay in their Aiden-managed folder.");
+              }
+              await options.assertCurrent?.(chat);
+            },
           ),
         );
       } finally {
@@ -169,6 +224,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
     ): Promise<void> {
       const finishDeletion = deps.llmClient.beginChatDeletion(chatId);
       let releaseAdmission = false;
+      let rollForwardPublished = false;
+      const publishRollForward = () => {
+        if (rollForwardPublished) return;
+        rollForwardPublished = true;
+        options.onDeletionRollForward?.();
+      };
       try {
         const current = await deps.chatStore.get(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
@@ -177,8 +238,35 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         try {
           await deps.subagentRunStore.deleteChat(chatId);
         } catch (error) {
+          // The V1/V2 dispatcher can fail after one durable tombstone commits.
+          // If its status is unreadable, conservatively retain roll-forward:
+          // startup may still observe that tombstone and delete the chat.
+          let deletionIsPending = true;
+          try {
+            deletionIsPending = (await deps.subagentRunStore.pendingChatDeletions()).includes(chatId);
+          } catch (pendingError) {
+            deps.logError(
+              "subagents",
+              "Could not inspect a failed chat deletion's durable state.",
+              pendingError,
+            );
+          }
+          if (deletionIsPending) publishRollForward();
           deps.logError("subagents", "Could not delete private subagent history.", error);
           throw new Error("Aiden could not delete this chat's subagent history.");
+        }
+        publishRollForward();
+        try {
+          await deps.displayImageArtifactStore.deleteChat(chatId);
+        } catch (error) {
+          deps.logError("pi", "Could not delete staged image artifacts.", error);
+          throw new Error("Aiden could not delete this chat's staged image artifacts.");
+        }
+        try {
+          await deps.generativeUiArtifactStore.deleteChat(chatId);
+        } catch (error) {
+          deps.logError("pi", "Could not delete staged HTML artifacts.", error);
+          throw new Error("Aiden could not delete this chat's staged HTML artifacts.");
         }
         try {
           await deps.piRuntimeEffectStore.deleteChat(chatId);

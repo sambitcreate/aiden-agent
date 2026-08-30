@@ -4,14 +4,22 @@ import {
   scrypt,
   timingSafeEqual,
 } from "node:crypto";
+import type { RuntimeProfileId } from "../runtime-profile-core.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
-import { AIDEN_REMOTE_CAPABILITIES } from "./aiden-remote-protocol.js";
+import {
+  AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_LEGACY_CAPABILITIES,
+} from "./aiden-remote-protocol.js";
+import {
+  AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
+  AIDEN_REMOTE_PRODUCTION_LAN_PORT,
+  isAidenRemoteReservedLanPort,
+} from "./aiden-remote-ports.js";
 import type { AidenTailscaleOwnership } from "./aiden-remote-tailscale-route.js";
 import type { AidenTailscalePendingRouteOutcome } from "./aiden-remote-tailscale.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 
 const STATE_VERSION = 1 as const;
-const DEFAULT_LAN_PORT = 49_220;
 const MAX_DEVICES = 32;
 const MAX_RETAINED_DEVICES = 128;
 const MAX_APPROVED_ROOTS = 32;
@@ -31,6 +39,7 @@ interface StoredAidenRemoteDevice {
   credentialSalt: string;
   credentialDigest: string;
   capabilities: AidenRemoteCapability[];
+  acceptsBotCapabilities: boolean;
   createdAt: number;
   lastSeenAt: number;
   revokedAt?: number;
@@ -79,7 +88,9 @@ export interface AidenRemoteDeviceProjection {
 
 export interface AidenRemoteAuthenticatedDevice {
   id: string;
+  name: string;
   capabilities: ReadonlySet<AidenRemoteCapability>;
+  acceptsBotCapabilities: boolean;
   revoked: boolean;
 }
 
@@ -92,6 +103,10 @@ export interface AidenRemoteStateDependencies {
   now(): number;
   randomBytes(size: number): Buffer;
   deriveCredentialDigest(credential: string, salt: Buffer): Promise<Buffer>;
+}
+
+export interface AidenRemoteStateHostPolicy {
+  botCapabilitiesSupported(): boolean;
 }
 
 function ownRecord(value: unknown): Record<string, unknown> | null {
@@ -167,7 +182,27 @@ function parseCapabilities(value: unknown): AidenRemoteCapability[] | null {
     }
     capabilities.add(capability as AidenRemoteCapability);
   }
-  return [...capabilities];
+  const parsed = [...capabilities];
+  if (parsed.includes("bot:write") && !parsed.includes("bot:read")) {
+    return null;
+  }
+  return parsed;
+}
+
+function isBotCapability(value: unknown): value is "bot:read" | "bot:write" {
+  return value === "bot:read" || value === "bot:write";
+}
+
+function parsePersistedCapabilities(
+  value: unknown,
+  acceptsBotCapabilities: boolean,
+): AidenRemoteCapability[] | null {
+  // Bot vocabulary is opt-in. Strip grants that an older or corrupt persisted
+  // record could not have negotiated before validating the remaining list.
+  const negotiatedValue = !acceptsBotCapabilities && Array.isArray(value)
+    ? value.filter((capability) => !isBotCapability(capability))
+    : value;
+  return parseCapabilities(negotiatedValue);
 }
 
 function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
@@ -184,8 +219,15 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
     "createdAt",
     "lastSeenAt",
   ] as const;
-  if (!record || !exactKeys(record, required, ["revokedAt"])) return null;
-  const capabilities = parseCapabilities(record.capabilities);
+  if (
+    !record ||
+    !exactKeys(record, required, ["acceptsBotCapabilities", "revokedAt"])
+  ) return null;
+  const acceptsBotCapabilities = record.acceptsBotCapabilities === true;
+  const capabilities = parsePersistedCapabilities(
+    record.capabilities,
+    acceptsBotCapabilities,
+  );
   if (
     !boundedString(record.id, 128) ||
     !boundedString(record.name, 80) ||
@@ -195,6 +237,8 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
     !digestString(record.credentialSalt) ||
     !digestString(record.credentialDigest) ||
     !capabilities ||
+    (record.acceptsBotCapabilities !== undefined &&
+      typeof record.acceptsBotCapabilities !== "boolean") ||
     !safeTimestamp(record.createdAt) ||
     !safeTimestamp(record.lastSeenAt) ||
     (record.revokedAt !== undefined && !safeTimestamp(record.revokedAt))
@@ -210,6 +254,7 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
     credentialSalt: record.credentialSalt,
     credentialDigest: record.credentialDigest,
     capabilities,
+    acceptsBotCapabilities,
     createdAt: record.createdAt,
     lastSeenAt: record.lastSeenAt,
     ...(record.revokedAt === undefined ? {} : { revokedAt: record.revokedAt }),
@@ -291,18 +336,46 @@ function parsePendingOutcome(value: unknown): AidenTailscalePendingRouteOutcome 
 export function createDefaultAidenRemoteState(
   random: (size: number) => Buffer = randomBytes,
   displayName = FALLBACK_AIDEN_REMOTE_DISPLAY_NAME,
+  lanPort = AIDEN_REMOTE_PRODUCTION_LAN_PORT,
 ): AidenRemoteStateDocument {
+  if (!Number.isInteger(lanPort) || lanPort < 1 || lanPort >= 65_535 || lanPort % 2 !== 0) {
+    throw new Error("Invalid default Aiden Remote listener port.");
+  }
   return {
     version: STATE_VERSION,
     instanceId: `instance_${random(24).toString("base64url")}`,
     displayName: normalizeAidenRemoteDisplayName(displayName),
     enabled: false,
     connectionMode: "lan",
-    lanPort: DEFAULT_LAN_PORT,
+    lanPort,
     lanPortCommitted: false,
     devices: [],
     approvedRoots: [],
   };
+}
+
+/**
+ * Development historically inherited production's listener range. Migrate
+ * only ports in that reserved range, and never rewrite custom ports or an
+ * unresolved route mutation whose persisted fingerprints must remain intact.
+ * Retain any previous Serve ownership target so connect/disconnect can first
+ * reconcile the exact route that may still be live in the Tailscale daemon.
+ */
+export function normalizeAidenRemoteStateForRuntimeProfile(
+  document: AidenRemoteStateDocument,
+  profile: RuntimeProfileId,
+): AidenRemoteStateDocument {
+  if (
+    profile !== "development"
+    || !isAidenRemoteReservedLanPort(document.lanPort, "production")
+    || document.tailscalePendingOutcome !== undefined
+  ) {
+    return document;
+  }
+  const migrated = structuredClone(document);
+  migrated.lanPort = AIDEN_REMOTE_DEVELOPMENT_LAN_PORT
+    + (document.lanPort - AIDEN_REMOTE_PRODUCTION_LAN_PORT);
+  return migrated;
 }
 
 export function parseAidenRemoteStateDocument(
@@ -432,6 +505,9 @@ export class AidenRemoteStateRegistry {
     private readonly storage: AidenRemoteStateStorage,
     private readonly dependencies: AidenRemoteStateDependencies =
       defaultAidenRemoteStateDependencies(),
+    private readonly hostPolicy: AidenRemoteStateHostPolicy = {
+      botCapabilitiesSupported: () => true,
+    },
   ) {}
 
   private serialized<T>(operation: () => Promise<T>): Promise<T> {
@@ -448,11 +524,42 @@ export class AidenRemoteStateRegistry {
       if (this.document) return structuredClone(this.document);
       const raw = await this.storage.load();
       const loaded = parseAidenRemoteStateDocument(raw);
+      const botCapabilitiesSupported = this.hostPolicy.botCapabilitiesSupported();
+      const devicesNeedHostPolicyMigration = !botCapabilitiesSupported
+        && loaded.devices.some(
+          (device) =>
+            device.acceptsBotCapabilities || device.capabilities.some(isBotCapability),
+        );
+      if (devicesNeedHostPolicyMigration) {
+        for (const device of loaded.devices) {
+          device.acceptsBotCapabilities = false;
+          device.capabilities = device.capabilities.filter(
+            (capability) => !isBotCapability(capability),
+          );
+        }
+      }
       const rawRecord = ownRecord(raw);
-      const needsSave = this.storage.needsSaveAfterLoad
+      const storageNeedsSave = this.storage.needsSaveAfterLoad
         ? await this.storage.needsSaveAfterLoad()
         : rawRecord?.displayName === undefined || rawRecord?.lanPortCommitted === undefined;
-      if (needsSave) {
+      const devicesNeedVocabularyMigration = Array.isArray(rawRecord?.devices)
+        && rawRecord.devices.some((device) => {
+          const record = ownRecord(device);
+          return record !== null
+            && (
+              !Object.prototype.hasOwnProperty.call(record, "acceptsBotCapabilities") ||
+              (
+                record.acceptsBotCapabilities !== true &&
+                Array.isArray(record.capabilities) &&
+                record.capabilities.some(isBotCapability)
+              )
+            );
+        });
+      if (
+        storageNeedsSave ||
+        devicesNeedVocabularyMigration ||
+        devicesNeedHostPolicyMigration
+      ) {
         await this.storage.save(loaded);
       }
       this.document = loaded;
@@ -548,24 +655,53 @@ export class AidenRemoteStateRegistry {
     return document.devices.map(projectDevice);
   }
 
+  async updateDeviceName(
+    deviceId: string,
+    name: string,
+  ): Promise<AidenRemoteDeviceProjection | null> {
+    if (!boundedString(deviceId, 128)) return null;
+    const normalizedName = normalizeAidenRemoteDisplayName(name);
+    return this.mutateIfChanged((draft) => {
+      const device = draft.devices.find((candidate) => candidate.id === deviceId);
+      if (!device || device.revokedAt !== undefined) {
+        return { changed: false, value: null };
+      }
+      if (device.name === normalizedName) {
+        return { changed: false, value: projectDevice(device) };
+      }
+      device.name = normalizedName;
+      return { changed: true, value: projectDevice(device) };
+    });
+  }
+
   async issueDevice(input: {
     name: string;
     type: AidenRemoteDeviceType;
     clientVersion: string;
     capabilities?: readonly AidenRemoteCapability[];
+    acceptsBotCapabilities?: boolean;
     authorizeCommit?: () => boolean;
   }): Promise<AidenRemoteIssuedCredential> {
     if (
       !boundedString(input.name, 80) ||
       (input.type !== "iphone" && input.type !== "ipad") ||
-      !boundedString(input.clientVersion, 40)
+      !boundedString(input.clientVersion, 40) ||
+      (input.acceptsBotCapabilities !== undefined &&
+        typeof input.acceptsBotCapabilities !== "boolean")
     ) {
       throw new Error("Invalid pairing device metadata.");
     }
     const capabilities = parseCapabilities(
-      input.capabilities ?? AIDEN_REMOTE_CAPABILITIES,
+      input.capabilities ?? AIDEN_REMOTE_LEGACY_CAPABILITIES,
     );
-    if (!capabilities) throw new Error("Invalid device capabilities.");
+    if (
+      !capabilities ||
+      (input.acceptsBotCapabilities !== true && capabilities.some(isBotCapability)) ||
+      (!this.hostPolicy.botCapabilitiesSupported() &&
+        (input.acceptsBotCapabilities === true || capabilities.some(isBotCapability)))
+    ) {
+      throw new Error("Invalid device capabilities.");
+    }
     const credential = this.dependencies.randomBytes(32).toString("base64url");
     const salt = this.dependencies.randomBytes(32);
     const credentialDigest = await this.dependencies.deriveCredentialDigest(
@@ -585,6 +721,7 @@ export class AidenRemoteStateRegistry {
       credentialSalt: salt.toString("base64url"),
       credentialDigest: credentialDigest.toString("base64url"),
       capabilities,
+      acceptsBotCapabilities: input.acceptsBotCapabilities === true,
       createdAt: now,
       // Credential issuance is not proof that the client persisted the
       // credential and successfully authenticated back to this Mac.
@@ -634,9 +771,19 @@ export class AidenRemoteStateRegistry {
       // changed while the expensive credential digest was being derived.
       const current = draft.devices.find((candidate) => candidate.id === device.id);
       if (!current) return { changed: false, value: null };
+      const acceptsBotCapabilities =
+        this.hostPolicy.botCapabilitiesSupported() &&
+        current.acceptsBotCapabilities === true;
+      const capabilities = parsePersistedCapabilities(
+        current.capabilities,
+        acceptsBotCapabilities,
+      );
+      if (!capabilities) return { changed: false, value: null };
       const authenticated: AidenRemoteAuthenticatedDevice = {
         id: current.id,
-        capabilities: new Set(current.capabilities),
+        name: current.name,
+        capabilities: new Set(capabilities),
+        acceptsBotCapabilities,
         revoked: current.revokedAt !== undefined,
       };
       const shouldPersistLastSeen =

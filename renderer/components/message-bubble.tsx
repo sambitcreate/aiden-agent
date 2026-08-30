@@ -2,12 +2,13 @@
 // messages render markdown full-width, native-transcript style.
 
 import { Callout, ErrorBoundary, Text } from "./ui";
-import { FileText, Sparkles } from "lucide-react";
+import { AidenIcon } from "./aiden-icon";
 import { Markdown } from "./markdown";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
 import { CopyButton } from "./copy-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
+import { MessageAttachments } from "./message-attachments";
 
 export interface MessageBubbleProps {
   role: ChatMessage["role"];
@@ -55,32 +56,13 @@ export function MessageBubble({
               className="flex max-w-full items-center gap-1.5 rounded-lg border border-accent/20 bg-accent/[0.08] px-2 py-1 text-small text-secondary"
               aria-label={`${skill.name}, ${skill.source} skill`}
             >
-              <Sparkles aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+              <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
               <span className="truncate font-medium text-primary">{skill.name}</span>
               <span className="text-mini capitalize text-tertiary">{skill.source}</span>
             </div>
           ) : null}
           {attachments && attachments.length > 0 ? (
-            <div className="flex flex-wrap justify-end gap-2">
-              {attachments.map((a) =>
-                a.kind === "image" && a.data ? (
-                  <img
-                    key={a.id}
-                    src={`data:${a.mimeType};base64,${a.data}`}
-                    alt={a.name}
-                    className="max-h-40 max-w-full rounded-xl border border-separator object-contain"
-                  />
-                ) : (
-                  <div
-                    key={a.id}
-                    className="flex items-center gap-1.5 rounded-lg border border-separator bg-control px-2.5 py-1.5"
-                  >
-                    <FileText className="size-4 shrink-0 text-tertiary" />
-                    <span className="max-w-[12rem] truncate text-small">{a.name}</span>
-                  </div>
-                ),
-              )}
-            </div>
+            <MessageAttachments attachments={attachments} role="user" />
           ) : null}
           {content ? (
             <div className="rounded-2xl bg-control px-4 py-2.5">
@@ -101,7 +83,10 @@ export function MessageBubble({
 
   return (
     <div className="group flex w-full">
-      <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        {attachments && attachments.length > 0 ? (
+          <MessageAttachments attachments={attachments} role="assistant" />
+        ) : null}
         {streaming ? (
           <StreamingMarkdownReveal
             content={content}

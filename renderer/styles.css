@@ -46,6 +46,7 @@
   --shadow-toast: var(--elevation-toast);
   --shadow-dialog: var(--elevation-dialog);
   --shadow-modal: var(--elevation-modal);
+  --shadow-onboarding: var(--elevation-onboarding);
   --shadow-composer: var(--elevation-composer);
   --font-sans: var(--font-ui-family);
   --font-mono: var(--font-code-family);
@@ -103,6 +104,18 @@
   --support-green-foreground: #ffffff;
   --support-warning: #9a6006;
   --support-warning-foreground: #ffffff;
+  --bot-avatar-lilac: #c6a9ff;
+  --bot-avatar-sky: #83d8ff;
+  --bot-avatar-mint: #88e8b1;
+  --bot-avatar-sun: #ffda7b;
+  --bot-avatar-periwinkle: #b2bcff;
+  --bot-avatar-coral: #ff9f9b;
+  --bot-avatar-peach: #ffc294;
+  --bot-avatar-aqua: #78e8df;
+  --bot-avatar-face: #292735;
+  --bot-avatar-eye-highlight: #ffffff;
+  --bot-avatar-sheen: #ffffff;
+  --bot-avatar-marker: #2f7eea;
   --window-gradient-start: rgb(246 247 249 / 0.98);
   --window-gradient-end: rgb(242 243 246 / 0.94);
   --glass-fill: rgb(238 240 243 / 0.68);
@@ -112,14 +125,15 @@
   --syntax-number: #235eb1;
   --syntax-title: #674aae;
   --syntax-variable: #af5216;
-  --elevation-control: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.08);
-  --elevation-control-hover: 0 0 0 0.5px rgb(0 0 0 / 0.11), 0 2px 4px -1px rgb(0 0 0 / 0.1);
-  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14), 0 0 0 0.5px rgb(0 0 0 / 0.08);
+  --elevation-control: 0 1px 2px -1px rgb(0 0 0 / 0.1), 0 4px 10px -8px rgb(0 0 0 / 0.16);
+  --elevation-control-hover: 0 2px 5px -2px rgb(0 0 0 / 0.16), 0 7px 14px -10px rgb(0 0 0 / 0.2);
+  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14);
   --elevation-popover:
     0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
   --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.1);
   --elevation-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
   --elevation-modal: 0 0 0 0.5px rgb(0 0 0 / 0.16), 0 20px 44px -10px rgb(0 0 0 / 0.38);
+  --elevation-onboarding: 0 20px 44px -10px rgb(0 0 0 / 0.38);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.12);
 }
 
@@ -154,6 +168,18 @@
   --support-green-foreground: #000000;
   --support-warning: #ffb020;
   --support-warning-foreground: #000000;
+  --bot-avatar-lilac: #c6a9ff;
+  --bot-avatar-sky: #83d8ff;
+  --bot-avatar-mint: #88e8b1;
+  --bot-avatar-sun: #ffda7b;
+  --bot-avatar-periwinkle: #b2bcff;
+  --bot-avatar-coral: #ff9f9b;
+  --bot-avatar-peach: #ffc294;
+  --bot-avatar-aqua: #78e8df;
+  --bot-avatar-face: #292735;
+  --bot-avatar-eye-highlight: #ffffff;
+  --bot-avatar-sheen: #ffffff;
+  --bot-avatar-marker: #2f7eea;
   --window-gradient-start: rgb(24 27 33 / 0.98);
   --window-gradient-end: rgb(28 32 39 / 0.94);
   --glass-fill: rgb(32 36 44 / 0.68);
@@ -163,15 +189,15 @@
   --syntax-number: #7eb5fd;
   --syntax-title: #c2a6fe;
   --syntax-variable: #ffb06b;
-  --elevation-control: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 1px 2px -1px rgb(0 0 0 / 0.5);
-  --elevation-control-hover: 0 0 0 0.5px rgb(255 255 255 / 0.15), 0 2px 4px -1px rgb(0 0 0 / 0.62);
-  --elevation-control-pressed:
-    inset 0 1px 2px rgb(0 0 0 / 0.65), 0 0 0 0.5px rgb(255 255 255 / 0.1);
+  --elevation-control: 0 1px 3px -1px rgb(0 0 0 / 0.58), 0 5px 12px -9px rgb(0 0 0 / 0.78);
+  --elevation-control-hover: 0 2px 6px -2px rgb(0 0 0 / 0.7), 0 8px 16px -11px rgb(0 0 0 / 0.88);
+  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.68);
   --elevation-popover:
     0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
   --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.54);
   --elevation-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
   --elevation-modal: 0 0 0 0.5px rgb(255 255 255 / 0.16), 0 22px 48px -10px rgb(0 0 0 / 0.78);
+  --elevation-onboarding: 0 22px 48px -10px rgb(0 0 0 / 0.78);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.45);
 }
 
@@ -291,6 +317,11 @@ textarea {
   scrollbar-color: color-mix(in srgb, var(--text-primary), transparent 60%) transparent;
 }
 
+/* Keep classic vertical scrollbars from changing any scrolling box's width. */
+:where(.overflow-y-auto, .overflow-auto, .overflow-y-scroll, .overflow-scroll) {
+  scrollbar-gutter: stable;
+}
+
 .scroll-edge-mask {
   --scroll-fade-size: 14px;
   transition: mask-image 120ms ease-out;
@@ -312,6 +343,30 @@ textarea {
 
 .scroll-edge-mask[data-scroll-top="true"][data-scroll-bottom="false"] {
   mask-image: linear-gradient(to bottom, black calc(100% - var(--scroll-fade-size)), transparent);
+}
+
+/* Promote the same live artifact iframe into Chromium's top layer. Keeping the
+   node mounted preserves interactive state while escaping transcript masks. */
+.aiden-html-artifact-popover:not(:popover-open) {
+  display: block !important;
+  position: static;
+  inset: auto;
+  width: auto;
+  height: auto;
+  margin: 0;
+}
+
+.aiden-html-artifact-popover:popover-open {
+  inset: clamp(0.75rem, 3vw, 2.5rem);
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+}
+
+.aiden-html-artifact-popover::backdrop {
+  background: transparent;
 }
 
 .reasoning-surface {
@@ -346,6 +401,78 @@ textarea {
  * lattice is structural: its highlighted row and column expose both axes at
  * the current model instead of turning the map into an unlabeled mood field.
  */
+.model-pad-fieldset {
+  --model-pad-fieldset-width: max(100%, min(64rem, calc(100vw - 19rem)));
+  width: var(--model-pad-fieldset-width);
+  margin-inline: calc((100% - var(--model-pad-fieldset-width)) / 2);
+  container: model-pad-fieldset / inline-size;
+}
+
+.model-pad-field {
+  padding: 1.5rem;
+}
+
+.model-pad-field::after {
+  inset-inline: 1.5rem;
+}
+
+.settings-model-pad-grid {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  justify-content: center;
+  margin-top: 1.25rem;
+}
+
+.settings-model-pad-grid[data-panel-open="true"] {
+  grid-template-columns: minmax(28rem, 40rem) minmax(16rem, 18rem);
+}
+
+.model-pad-canvas {
+  width: min(100%, 40rem);
+  margin-inline: auto;
+  view-transition-name: model-pad-canvas;
+}
+
+.settings-model-pad-grid[data-panel-open="true"] .model-pad-canvas {
+  width: min(100%, 40rem);
+}
+
+.model-pad-browser {
+  position: sticky;
+  top: 1rem;
+  border: 1px solid var(--border-separator);
+  box-shadow: var(--elevation-control);
+  view-transition-name: model-pad-browser;
+}
+
+.model-pad-browser-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.model-pad-browser-count {
+  padding-top: 0.125rem;
+  color: var(--text-tertiary);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25rem;
+  white-space: nowrap;
+}
+
+.model-pad-panel-below {
+  display: none;
+}
+
+.model-pad-axis-label {
+  color: var(--text-secondary);
+  font-size: var(--text-strong);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: var(--text-strong--line-height);
+}
+
 .model-pad {
   cursor: crosshair;
   contain: layout paint;
@@ -372,6 +499,303 @@ textarea {
 
 .model-pad[data-dragging="true"] {
   cursor: grabbing;
+}
+
+.model-pad[data-dragging="true"] .model-pad-chip {
+  transition-duration: 0ms;
+}
+
+.model-pad-marker {
+  box-shadow: none;
+}
+
+.model-pad-marker-visual {
+  border: 0;
+  box-shadow: var(--elevation-control);
+  transition:
+    transform 150ms cubic-bezier(0, 0, 0.2, 1),
+    box-shadow 120ms ease-out;
+}
+
+.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual {
+  background: var(--accent);
+}
+
+.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual {
+  background: color-mix(in srgb, var(--accent) 38%, var(--surface-popover));
+}
+
+.model-pad-marker:hover,
+.model-pad-marker:focus-visible,
+.model-pad-marker[data-selected="true"] {
+  z-index: 30;
+}
+
+.model-pad-marker:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 22%, transparent);
+}
+
+.model-pad-marker:hover .model-pad-marker-visual,
+.model-pad-marker:focus-visible .model-pad-marker-visual,
+.model-pad-marker[data-selected="true"] .model-pad-marker-visual {
+  box-shadow: var(--elevation-control-hover);
+  transform: scale(1.08);
+}
+
+.model-pad-marker:active .model-pad-marker-visual {
+  box-shadow: var(--elevation-control-pressed);
+  transform: scale(1);
+}
+
+.model-pad-marker-label {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 40;
+  width: max-content;
+  max-width: 12rem;
+  padding: 0.375rem 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border-separator);
+  border-radius: var(--radius-popover);
+  background: color-mix(in srgb, var(--surface-popover) 96%, transparent);
+  box-shadow: var(--elevation-popover);
+  opacity: 0;
+  transform: translate(-50%, 3px) scale(0.98);
+  transition:
+    opacity 120ms ease-out,
+    transform 150ms cubic-bezier(0, 0, 0.2, 1);
+  pointer-events: none;
+  text-align: left;
+  white-space: nowrap;
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
+}
+
+.model-pad-marker:hover .model-pad-marker-label,
+.model-pad-marker:focus-visible .model-pad-marker-label,
+.model-pad-marker[data-selected="true"] .model-pad-marker-label {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+
+.model-pad-marker[data-label-side="bottom"] .model-pad-marker-label {
+  top: calc(100% + 8px);
+  bottom: auto;
+  transform: translate(-50%, -3px) scale(0.98);
+}
+
+.model-pad-marker[data-label-side="bottom"]:hover .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"]:focus-visible .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-selected="true"] .model-pad-marker-label {
+  transform: translate(-50%, 0) scale(1);
+}
+
+.model-pad-marker[data-label-align="start"] .model-pad-marker-label {
+  left: -0.25rem;
+  transform: translate(0, 3px) scale(0.98);
+  transform-origin: left bottom;
+}
+
+.model-pad-marker[data-label-align="start"]:hover .model-pad-marker-label,
+.model-pad-marker[data-label-align="start"]:focus-visible .model-pad-marker-label,
+.model-pad-marker[data-label-align="start"][data-selected="true"] .model-pad-marker-label {
+  transform: translate(0, 0) scale(1);
+}
+
+.model-pad-marker[data-label-align="end"] .model-pad-marker-label {
+  right: -0.25rem;
+  left: auto;
+  transform: translate(0, 3px) scale(0.98);
+  transform-origin: right bottom;
+}
+
+.model-pad-marker[data-label-align="end"]:hover .model-pad-marker-label,
+.model-pad-marker[data-label-align="end"]:focus-visible .model-pad-marker-label,
+.model-pad-marker[data-label-align="end"][data-selected="true"] .model-pad-marker-label {
+  transform: translate(0, 0) scale(1);
+}
+
+.model-pad-marker[data-label-side="bottom"][data-label-align="start"] .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="end"] .model-pad-marker-label {
+  transform: translate(0, -3px) scale(0.98);
+  transform-origin: top;
+}
+
+.model-pad-marker[data-label-side="bottom"][data-label-align="start"]:hover .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="start"]:focus-visible
+  .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="start"][data-selected="true"]
+  .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="end"]:hover .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="end"]:focus-visible
+  .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-selected="true"]
+  .model-pad-marker-label {
+  transform: translate(0, 0) scale(1);
+}
+
+.model-pad-legend-marker {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 0;
+  border-radius: 9999px;
+  box-shadow: var(--elevation-control);
+}
+
+.model-pad-legend-marker[data-source="benchmark"] {
+  background: var(--accent);
+}
+
+.model-pad-legend-marker[data-source="personal"] {
+  background: color-mix(in srgb, var(--accent) 38%, var(--surface-popover));
+}
+
+.model-pad-catalog {
+  max-height: min(48rem, calc(100vh - 12rem));
+}
+
+.model-pad-catalog-shell {
+  position: relative;
+}
+
+.model-pad-catalog-shell[data-more-below="true"]::after {
+  position: absolute;
+  z-index: 10;
+  inset-inline: 0;
+  bottom: 0;
+  height: 4rem;
+  border-radius: 0 0 var(--radius-control) var(--radius-control);
+  background: linear-gradient(to bottom, transparent, var(--surface-background) 78%);
+  content: "";
+  pointer-events: none;
+}
+
+.model-pad-catalog-more {
+  position: absolute;
+  z-index: 20;
+  bottom: 0.5rem;
+  left: 50%;
+  min-width: max-content;
+  border: 1px solid var(--border-separator);
+  background: color-mix(in srgb, var(--surface-popover) 94%, transparent);
+  box-shadow: var(--elevation-popover);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
+}
+
+.model-pad-catalog-more:hover {
+  background: var(--surface-popover);
+}
+
+.model-pad-disclosure {
+  margin-top: 1.5rem;
+  border: 0;
+  box-shadow: none;
+  view-transition-name: model-pad-insights;
+}
+
+/*
+ * Supporting-panel switches use document snapshots so the Pad can move and
+ * resize on the compositor instead of transitioning grid width. The root is
+ * kept stable; only the named Pad and disclosed panel participate.
+ */
+::view-transition-group(root) {
+  animation: none;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-group(model-pad-canvas) {
+  z-index: 2;
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+::view-transition-old(model-pad-canvas) {
+  animation: none;
+  opacity: 0;
+}
+
+::view-transition-new(model-pad-canvas) {
+  animation: none;
+  opacity: 1;
+}
+
+::view-transition-group(model-pad-browser),
+::view-transition-group(model-pad-insights) {
+  z-index: 3;
+}
+
+::view-transition-new(model-pad-browser) {
+  animation: model-pad-browser-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+::view-transition-old(model-pad-browser) {
+  animation: model-pad-browser-out 110ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+::view-transition-new(model-pad-insights) {
+  animation: model-pad-insights-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+::view-transition-old(model-pad-insights) {
+  animation: model-pad-insights-out 110ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes model-pad-browser-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px) scale(0.985);
+  }
+}
+
+@keyframes model-pad-browser-out {
+  to {
+    opacity: 0;
+    transform: translateX(4px) scale(0.99);
+  }
+}
+
+@keyframes model-pad-insights-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+}
+
+@keyframes model-pad-insights-out {
+  to {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.995);
+  }
+}
+
+.model-pad-management {
+  margin-top: 1.5rem;
+}
+
+.model-pad-management > summary::-webkit-details-marker {
+  display: none;
+}
+
+.model-pad-management > summary::after {
+  float: right;
+  color: var(--text-tertiary);
+  content: "›";
+  transform: rotate(90deg);
+  transition: transform 150ms ease-out;
+}
+
+.model-pad-management[open] > summary::after {
+  transform: rotate(-90deg);
 }
 
 .model-pad-model {
@@ -454,6 +878,32 @@ textarea {
 @container settings-content (max-width: 620px) {
   .settings-model-pad-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container model-pad-fieldset (max-width: 760px) {
+  .settings-model-pad-grid[data-panel-open="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-pad-browser {
+    position: static;
+    scroll-margin-top: 1rem;
+  }
+
+  .model-pad-panel-below {
+    display: flex;
+    justify-content: center;
+    margin-block: -0.125rem -0.375rem;
+  }
+
+  .model-pad-catalog {
+    max-height: 18rem;
+  }
+
+  .model-pad-legend > :last-child {
+    width: 100%;
+    margin-left: 0;
   }
 }
 
@@ -1431,7 +1881,6 @@ textarea {
 }
 
 .appearance-color-control:focus-within {
-  border-color: var(--focus-ring);
   background: var(--surface-input);
 }
 
@@ -1608,7 +2057,6 @@ textarea {
 }
 
 .appearance-number-control input:focus-visible {
-  border-color: var(--focus-ring);
   background: var(--surface-input);
 }
 
@@ -1796,7 +2244,33 @@ textarea {
   animation: aiden-pill-enter 200ms cubic-bezier(0.19, 1, 0.22, 1);
 }
 
+/* Bot editor wizard: one quiet page swap per Next/Back, mirroring the
+   specimen's small-distance enter motion. */
+.aiden-bot-wizard-page {
+  animation: aiden-bot-wizard-page-in 220ms cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+@keyframes aiden-bot-wizard-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .model-pad-chip,
+  .model-pad-knob,
+  .model-pad-marker-label,
+  .model-pad-marker-visual,
+  .model-pad-model,
+  .model-pad-node {
+    transition: none;
+  }
+
   .terminal-drawer {
     animation: none;
   }
@@ -1804,4 +2278,15 @@ textarea {
   .aiden-pill {
     animation: none;
   }
+
+  .aiden-bot-wizard-page {
+    animation: none;
+  }
+}
+
+:root[data-reduce-motion="true"] .model-pad-chip,
+:root[data-reduce-motion="true"] .model-pad-marker-label,
+:root[data-reduce-motion="true"] .model-pad-marker-visual,
+:root[data-reduce-motion="true"] .model-pad-node {
+  transition: none;
 }

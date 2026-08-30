@@ -46,17 +46,24 @@ import {
   mergeAnthropicThinkingPreference,
   type AnthropicThinkingLevel,
 } from "../../renderer/shared/anthropic-thinking.js";
-import {
-  mergeProviderThinkingPreference,
-} from "../../renderer/shared/provider-thinking.js";
+import { mergeProviderThinkingPreference } from "../../renderer/shared/provider-thinking.js";
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import {
+  hideAllProviderModels,
   remapHiddenModelProvider,
   withModelVisibility,
   withoutProviderVisibility,
 } from "../../renderer/shared/model-visibility.js";
+import { hiddenModelsForGeminiScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import {
+  freshWebSearchSettings,
+  migrateWebSearchSettingsWithReport,
+  parseWebSearchSettings,
+  normalizeWebSearchSettings,
+  type WebSearchSettingsV2,
+} from "./web-search-provider-registry-core.js";
 import type {
   AppSettings,
   McpServer,
@@ -307,6 +314,50 @@ export function createConfigStore(
   }
 
   /**
+   * Materialize the v2 Web Search preference exactly once during config
+   * seeding. This is deliberately a local JSON/keychain operation: no
+   * provider adapter or network path is reachable from startup migration.
+   */
+  async function ensureWebSearchSettings(): Promise<void> {
+    const document = await settingsStore.load();
+    // A malformed settings file is user-owned. Existing config-store behavior
+    // is to expose safe defaults while refusing every write until the file is
+    // repaired; Web Search migration must preserve that invariant.
+    if (await settingsStore.loadedFromCorruptFile()) return;
+    const hasWebSearch = Object.prototype.hasOwnProperty.call(document.settings, "webSearch");
+    if (hasWebSearch) {
+      // The settings normalizer canonicalizes supported v2 documents and keeps
+      // unsupported/future values verbatim. Do not reinterpret a present value
+      // as legacy absence: an older build must never overwrite preferences it
+      // cannot understand during startup.
+      return;
+    }
+
+    const local = await localStore.load();
+    const profileKind =
+      local.webSearchProfileKind ??
+      (typeof local.aidenDirMigratedAt === "number"
+        ? "upgrade"
+        : local.seeded === false
+          ? "fresh"
+          : "upgrade");
+    const migration = migrateWebSearchSettingsWithReport({
+      exaEnabled: document.settings.exaEnabled,
+      hasExaKey: await secrets.hasKey("exa"),
+      evidence: {
+        profileKind,
+        seeded: local.seeded,
+        hasPersistedProfile: profileKind === "upgrade",
+        settingsFileExists: (await settingsStore.loadedDiskContents()) !== null,
+        onboarding: document.settings.onboarding,
+      },
+    });
+    await settingsStore.update((next) => {
+      next.settings.webSearch = migration.settings;
+    });
+  }
+
+  /**
    * Migrate onto the split layout, then backfill anything a newer release added.
    *
    * `migratePiProviderConfig` straddles the split: it rewrites providers and
@@ -474,6 +525,7 @@ export function createConfigStore(
             config.workspaces = [defaultWorkspace()];
           }
         });
+        await ensureWebSearchSettings();
         return true;
       })().catch((error: unknown) => {
         seedPromise = null;
@@ -669,6 +721,38 @@ export function createConfigStore(
       return runtimeSettingsFrom((await settingsStore.load()).settings);
     },
 
+    /** Read the normalized Web Search document after startup migration. */
+    async getWebSearchSettings(): Promise<WebSearchSettingsV2> {
+      await ensureSeeded();
+      const settings = runtimeSettingsFrom((await settingsStore.load()).settings);
+      // A present but unsupported/future document is projected closed. The
+      // raw value remains durable for a newer build, while runtime callers get
+      // a supported shape that cannot authorize a request.
+      return settings.webSearch ?? { ...freshWebSearchSettings(), enabled: false };
+    },
+
+    /** Atomically update only Web Search settings; credentials stay elsewhere. */
+    async updateWebSearchSettings(
+      mutation: (current: WebSearchSettingsV2) => WebSearchSettingsV2,
+      isCurrent: () => boolean = () => true,
+    ): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        const hasWebSearch = Object.prototype.hasOwnProperty.call(config.settings, "webSearch");
+        const current = parseWebSearchSettings(config.settings.webSearch);
+        if (!current && hasWebSearch) {
+          throw new Error(
+            "Web Search settings are invalid or from a newer version; repair settings.json before changing them.",
+          );
+        }
+        const next = normalizeWebSearchSettings(
+          mutation(structuredClone(current ?? freshWebSearchSettings())),
+        );
+        config.settings.webSearch = next;
+        return structuredClone(config.settings);
+      }, isCurrent);
+      return runtimeSettingsFrom(saved);
+    },
+
     async setSettings(
       patch: Partial<AppSettings>,
       isCurrent: () => boolean = () => true,
@@ -679,6 +763,24 @@ export function createConfigStore(
       // not "fix" this by folding settings back into the portable file.
       const providerIdAliases = (await readPortable()).providerIdAliases;
       const saved = await mutateSettings((config) => {
+        // Web Search has its own versioned mutation seam. A generic settings
+        // write may preserve an unsupported raw document, but it must not use
+        // this broad patch API to replace that document (or introduce a new
+        // unvalidated one) while an older build cannot interpret it.
+        if (Object.prototype.hasOwnProperty.call(patch, "webSearch")) {
+          const currentHasWebSearch = Object.prototype.hasOwnProperty.call(
+            config.settings,
+            "webSearch",
+          );
+          if (currentHasWebSearch && !parseWebSearchSettings(config.settings.webSearch)) {
+            throw new Error(
+              "Web Search settings are invalid or from a newer version; repair settings.json before changing them.",
+            );
+          }
+          if (!parseWebSearchSettings(patch.webSearch)) {
+            throw new Error("Web Search settings must be a supported version 2 document.");
+          }
+        }
         const lastProviderId =
           typeof patch.lastProviderId === "string"
             ? (resolveProviderAlias(providerIdAliases, patch.lastProviderId) ??
@@ -697,6 +799,47 @@ export function createConfigStore(
       return runtimeSettingsFrom(saved);
     },
 
+    /**
+     * Commit Gemini's purpose and Voice selection together. The visibility
+     * sentinel hides future Google chat models too, without making a model
+     * pinned by an existing chat unexecutable.
+     */
+    async setGeminiVoiceSetup(
+      scope: import("./types.js").GeminiUsageScope,
+      voiceModel: string,
+    ): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.geminiUsageScope = scope;
+        config.settings.voiceProvider = "gemini";
+        config.settings.voiceModel = voiceModel;
+        config.settings.hiddenModelsByProvider = hiddenModelsForGeminiScope(
+          config.settings.hiddenModelsByProvider,
+          GOOGLE_PROVIDER_ID,
+          scope,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /**
+     * Update Gemini's allowed purpose without changing the active Voice
+     * provider. Provider credential management uses this path so rotating a
+     * Google key cannot silently move transcription away from local or OpenAI.
+     */
+    async setGeminiUsageScope(scope: import("./types.js").GeminiUsageScope): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.geminiUsageScope = scope;
+        config.settings.hiddenModelsByProvider = hiddenModelsForGeminiScope(
+          config.settings.hiddenModelsByProvider,
+          GOOGLE_PROVIDER_ID,
+          scope,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
     /** Atomically update one presentation-only model visibility preference. */
     async setModelVisibility(
       providerId: string,
@@ -704,6 +847,13 @@ export function createConfigStore(
       hidden: boolean,
     ): Promise<AppSettings> {
       const saved = await mutateSettings((config) => {
+        if (
+          providerId === GOOGLE_PROVIDER_ID &&
+          config.settings.geminiUsageScope === "transcription_only" &&
+          !hidden
+        ) {
+          return structuredClone(config.settings);
+        }
         config.settings.hiddenModelsByProvider = withModelVisibility(
           config.settings.hiddenModelsByProvider,
           providerId,
@@ -718,7 +868,25 @@ export function createConfigStore(
     /** Atomically restore every model for one provider to picker visibility. */
     async showAllProviderModels(providerId: string): Promise<AppSettings> {
       const saved = await mutateSettings((config) => {
+        if (
+          providerId === GOOGLE_PROVIDER_ID &&
+          config.settings.geminiUsageScope === "transcription_only"
+        ) {
+          return structuredClone(config.settings);
+        }
         config.settings.hiddenModelsByProvider = withoutProviderVisibility(
+          config.settings.hiddenModelsByProvider,
+          providerId,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /** Atomically hide current and future models for one provider. */
+    async hideAllProviderModels(providerId: string): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.hiddenModelsByProvider = hideAllProviderModels(
           config.settings.hiddenModelsByProvider,
           providerId,
         );

@@ -29,7 +29,7 @@ export interface SubagentOwnerFocusBoundaryProps
 const OWNER_REPLACEMENT_FOCUS_SELECTORS = [
   "[data-subagent-empty-heading]",
   "[data-subagent-detail-heading]",
-  '[data-subagent-run-id][aria-current="true"]',
+  '[data-subagent-run-id][aria-selected="true"]',
   "[data-subagent-run-id]",
 ] as const;
 

@@ -20,8 +20,9 @@ platform-specific behavior explicit, secure, tested, and maintainable.
 - Desktop integration: native Linux window frame/menu, desktop notifications,
   default file manager, common installed editors, and Secret Service/KWallet
   credential encryption.
-- Computer Use and Apple Foundation Models remain macOS-only. Linux omits their
-  helpers, settings actions, onboarding promises, and runtime tool exposure.
+- Computer Use, Apple Foundation Models, and Bots remain macOS-only. Linux omits
+  their helpers, settings/navigation actions, onboarding promises, and runtime
+  tool exposure while retaining the shared implementations for capable hosts.
 
 ## Research-backed tradeoffs
 
@@ -123,6 +124,14 @@ review, and archive this plan only when the complete acceptance matrix passes.
   editors/file manager, Tailscale, nearby mobile discovery, and Aiden On The
   Go copy follow the advertised platform capabilities. Review additionally
   fixed Linux safe-save recovery ownership and Remote Access publisher races.
+- Latest-main parity reconciliation retains Web Search, diagnostics, Gemini
+  voice transcription, Model Pad, companion projections, raster and sandboxed
+  generative UI artifacts, and response/accessibility improvements on Linux.
+  The shared capability projection now also hides Bots and all Bot entry points
+  until Linux receives equivalent native security bindings. Settings and
+  Command-K share the same availability filter, dictation never invokes macOS
+  Accessibility on Linux, and model metadata remains a release-bundled offline
+  snapshot with no live models.dev UI action.
 - Phase 4 implementation complete: CI builds x64 and arm64 artifacts, installs
   and verifies DEB on Ubuntu 24.04 and RPM on Fedora 44, and runs Electron E2E
   under Xvfb. Release publication requires both Linux architectures alongside

@@ -1,0 +1,19 @@
+{
+  "type": "search",
+  "query": { "original": "current Brave docs" },
+  "web": {
+    "type": "search",
+    "results": [
+      {
+        "title": "Brave Search API",
+        "url": "https://api.search.brave.com/app/documentation/web-search",
+        "description": "The Brave Search API returns web results with titles, URLs, and descriptions."
+      },
+      {
+        "title": "Second Brave source",
+        "url": "https://example.test/brave-second",
+        "description": "A second untrusted search result."
+      }
+    ]
+  }
+}

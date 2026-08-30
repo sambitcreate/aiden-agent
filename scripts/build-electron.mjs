@@ -33,6 +33,13 @@ await Promise.all([
   }),
   build({
     ...common,
+    entryPoints: ["main/services/parakeet-worker.ts"],
+    outfile: "build/main/parakeet-worker.js",
+    format: "esm",
+    packages: "external",
+  }),
+  build({
+    ...common,
     entryPoints: ["renderer/preload.ts"],
     outfile: "build/preload/preload.cjs",
     format: "cjs",

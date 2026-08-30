@@ -39,11 +39,13 @@ import {
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { subagentsApi } from "../lib/ipc";
-import type { SubagentEffectActivityV1, SubagentRunSnapshot } from "../shared/subagent-runs";
+import { type SubagentEffectActivityV1, type SubagentRunSnapshot } from "../shared/subagent-runs";
 import {
   buildSubagentRunViews,
   captureSubagentDetailRequest,
+  isSubagentRunSnapshotTerminal,
   isSubagentSelectionValid,
+  mergeSubagentHistorySnapshot,
   mergeSubagentSnapshots,
   reconcileSubagentPersistenceHandoff,
   resolveSubagentDetailResult,
@@ -54,7 +56,11 @@ import {
   type SubagentRunView,
   type SubagentRunViewCounts,
 } from "../lib/subagent-view-state";
-import { subagentPanelOwnerKey, subagentPanelSelectionState } from "../lib/subagent-panel-state";
+import {
+  subagentOverviewSummary,
+  subagentPanelOwnerKey,
+  subagentPanelSelectionState,
+} from "../lib/subagent-panel-state";
 import {
   SubagentLiveAnnouncer,
   type SubagentDetailAnnouncementRequest,
@@ -70,6 +76,14 @@ import {
   type EnvironmentSurfaceMode,
   type EnvironmentPanelTab,
 } from "../lib/environment-panel-state";
+import {
+  EMPTY_SUBAGENT_STOP_PENDING_STATE,
+  beginSubagentStopPending,
+  clearSubagentStopPending,
+  failSubagentStopPending,
+  replaceSubagentStopPendingOwner,
+  type SubagentStopPendingState,
+} from "../lib/subagent-stop-pending";
 
 export type { EnvironmentPanelTab } from "../lib/environment-panel-state";
 export type EnvironmentReviewMode = "changes" | "compare";
@@ -111,6 +125,8 @@ interface EnvironmentPanelContextValue {
   subagentDetailLoading: boolean;
   subagentDetailError: string | null;
   subagentDetailEffects: SubagentEffectActivityV1[];
+  subagentStopPendingRunIds: readonly string[];
+  subagentStopErrorsByRunId: Readonly<Record<string, string>>;
   announceSubagentDetail: (ownerKey: string, message: string) => void;
   setSubagentAnnouncerHost: (host: HTMLElement | null) => void;
   syncSubagents: (
@@ -178,15 +194,36 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const [fileRequest, setFileRequest] = React.useState<EnvironmentFileRequest | null>(null);
   const [editorState, setEditorState] = React.useState<FilesEditorState>(EMPTY_EDITOR_STATE);
   const [agentBusy, setAgentBusy] = React.useState(false);
-  const [subagents, setSubagents] =
+  const [subagents, setRenderedSubagents] =
     React.useState<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
+  const subagentsRef = React.useRef<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
+  const commitSubagents = React.useCallback(
+    (
+      update:
+        | EnvironmentSubagentContext
+        | ((current: EnvironmentSubagentContext) => EnvironmentSubagentContext | undefined),
+    ): boolean => {
+      const current = subagentsRef.current;
+      const next = typeof update === "function" ? update(current) : update;
+      if (!next) return false;
+      subagentsRef.current = next;
+      setRenderedSubagents(next);
+      return true;
+    },
+    [],
+  );
   const [selectedSubagentRunId, setSelectedSubagentRunId] = React.useState<string | null>(null);
   const [subagentFocusDetailVersion, setSubagentFocusDetailVersion] = React.useState(0);
   const [subagentDetailLoading, setSubagentDetailLoading] = React.useState(false);
   const [subagentDetailError, setSubagentDetailError] = React.useState<string | null>(null);
+  const [subagentStopPending, setSubagentStopPending] = React.useState<SubagentStopPendingState>(
+    EMPTY_SUBAGENT_STOP_PENDING_STATE,
+  );
   const [subagentEffectDetail, setSubagentEffectDetail] = React.useState<{
     ownerKey: string;
     runId: string;
+    generationId: string;
+    revision: number;
     effects: SubagentEffectActivityV1[];
   } | null>(null);
   const [subagentDetailRequestVersion, setSubagentDetailRequestVersion] = React.useState(0);
@@ -208,6 +245,14 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const subagentWorkspaceIdRef = React.useRef<string | null>(null);
   const subagentDetailRequestRef = React.useRef<SubagentDetailRequest | undefined>(undefined);
   const subagentDetailAnnouncementIdRef = React.useRef(0);
+  const subagentStopPendingRef = React.useRef<SubagentStopPendingState>(
+    EMPTY_SUBAGENT_STOP_PENDING_STATE,
+  );
+  const commitSubagentStopPending = React.useCallback((next: SubagentStopPendingState) => {
+    if (next === subagentStopPendingRef.current) return;
+    subagentStopPendingRef.current = next;
+    setSubagentStopPending(next);
+  }, []);
   const subagentViews = React.useMemo(
     () =>
       subagentsEnabled && subagents.chatId && subagents.workspaceId
@@ -238,7 +283,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
   const selectedSubagentView = subagentViews.find((entry) => entry.runId === selectedSubagentRunId);
   const selectedSubagentGenerationId = selectedSubagentView?.generationId;
-  const selectedSubagentSnapshotRevision = selectedSubagentView?.snapshot?.revision;
+  const selectedSubagentReferenceMessageId = selectedSubagentView?.referenceMessageId;
 
   const rememberFocus = React.useCallback(() => {
     if (document.activeElement instanceof HTMLElement)
@@ -333,13 +378,24 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
         subagentChatIdRef.current !== chatId || subagentWorkspaceIdRef.current !== workspaceId;
       subagentChatIdRef.current = chatId;
       subagentWorkspaceIdRef.current = workspaceId;
+      const ownerKey = subagentPanelOwnerKey(chatId, workspaceId);
       if (changedOwner) {
+        commitSubagentStopPending(
+          replaceSubagentStopPendingOwner(subagentStopPendingRef.current, ownerKey),
+        );
         subagentDetailRequestRef.current = undefined;
+        setSubagentEffectDetail(null);
         setSelectedSubagentRunId(null);
         setSubagentDetailLoading(false);
         setSubagentDetailError(null);
       }
-      setSubagents((current) => {
+      const terminalRunIds = new Set(
+        ownedLiveSnapshots.filter(isSubagentRunSnapshotTerminal).map((snapshot) => snapshot.runId),
+      );
+      commitSubagentStopPending(
+        clearSubagentStopPending(subagentStopPendingRef.current, ownerKey, terminalRunIds),
+      );
+      commitSubagents((current) => {
         const handoff = reconcileSubagentPersistenceHandoff(
           changedOwner ? [] : current.loadedSnapshots,
           changedOwner ? [] : current.handoffSnapshots,
@@ -356,22 +412,29 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
         };
       });
     },
-    [subagentsEnabled],
+    [commitSubagentStopPending, commitSubagents, subagentsEnabled],
   );
 
-  const releaseSubagents = React.useCallback((chatId: string, workspaceId: string) => {
-    if (subagentChatIdRef.current !== chatId || subagentWorkspaceIdRef.current !== workspaceId) {
-      return;
-    }
-    subagentChatIdRef.current = null;
-    subagentWorkspaceIdRef.current = null;
-    subagentDetailRequestRef.current = undefined;
-    returnSubagentRunIdRef.current = null;
-    setSubagents(EMPTY_SUBAGENT_CONTEXT);
-    setSelectedSubagentRunId(null);
-    setSubagentDetailLoading(false);
-    setSubagentDetailError(null);
-  }, []);
+  const releaseSubagents = React.useCallback(
+    (chatId: string, workspaceId: string) => {
+      if (subagentChatIdRef.current !== chatId || subagentWorkspaceIdRef.current !== workspaceId) {
+        return;
+      }
+      subagentChatIdRef.current = null;
+      subagentWorkspaceIdRef.current = null;
+      subagentDetailRequestRef.current = undefined;
+      setSubagentEffectDetail(null);
+      commitSubagentStopPending(
+        replaceSubagentStopPendingOwner(subagentStopPendingRef.current, null),
+      );
+      returnSubagentRunIdRef.current = null;
+      commitSubagents(EMPTY_SUBAGENT_CONTEXT);
+      setSelectedSubagentRunId(null);
+      setSubagentDetailLoading(false);
+      setSubagentDetailError(null);
+    },
+    [commitSubagentStopPending, commitSubagents],
+  );
 
   const openSubagent = React.useCallback(
     (runId: string, returnTarget?: HTMLElement | null) => {
@@ -381,7 +444,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentDetailRequestRef.current = undefined;
       setSelectedSubagentRunId(runId);
       setSubagentDetailLoading(
-        Boolean(subagentViews.find((entry) => entry.runId === runId && !entry.snapshot)),
+        Boolean(
+          subagentViews.find(
+            (entry) => entry.runId === runId && entry.referenceMessageId && !entry.snapshot,
+          ),
+        ),
       );
       setSubagentFocusDetailVersion((version) => version + 1);
       setSubagentDetailRequestVersion((version) => version + 1);
@@ -397,7 +464,12 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentDetailRequestRef.current = undefined;
       setSelectedSubagentRunId(runId);
       setSubagentDetailLoading(
-        Boolean(runId && subagentViews.find((entry) => entry.runId === runId && !entry.snapshot)),
+        Boolean(
+          runId &&
+          subagentViews.find(
+            (entry) => entry.runId === runId && entry.referenceMessageId && !entry.snapshot,
+          ),
+        ),
       );
       setSubagentDetailRequestVersion((version) => version + 1);
       setSubagentDetailError(null);
@@ -406,12 +478,12 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
 
   const retrySubagentDetail = React.useCallback(() => {
-    if (!subagentsEnabled || !selectedSubagentRunId) return;
+    if (!subagentsEnabled || !selectedSubagentRunId || !selectedSubagentReferenceMessageId) return;
     subagentDetailRequestRef.current = undefined;
     setSubagentDetailLoading(true);
     setSubagentDetailError(null);
     setSubagentDetailRequestVersion((version) => version + 1);
-  }, [selectedSubagentRunId, subagentsEnabled]);
+  }, [selectedSubagentReferenceMessageId, selectedSubagentRunId, subagentsEnabled]);
 
   const stopSubagent = React.useCallback(
     async (run: SubagentRunSnapshot) => {
@@ -428,23 +500,68 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       ) {
         throw new Error("This subagent is no longer available to stop.");
       }
-      const result = await subagentsApi.stop(chatId, run.runId);
-      if (result.action !== "stop") {
-        throw new Error("Aiden returned an invalid Stop result.");
+      const ownerKey = subagentPanelOwnerKey(chatId, workspaceId);
+      const pending = beginSubagentStopPending(subagentStopPendingRef.current, ownerKey, run.runId);
+      commitSubagentStopPending(pending.state);
+      if (!pending.accepted) return;
+      try {
+        const result = await subagentsApi.stop(chatId, run.runId);
+        if (result.action !== "stop") {
+          throw new Error("Aiden returned an invalid Stop result.");
+        }
+        if (isSubagentRunSnapshotTerminal(result.snapshot)) {
+          commitSubagentStopPending(
+            clearSubagentStopPending(
+              subagentStopPendingRef.current,
+              ownerKey,
+              new Set([run.runId]),
+            ),
+          );
+        }
+        commitSubagents((current) => {
+          if (current.chatId !== chatId || current.workspaceId !== workspaceId) return undefined;
+          return {
+            ...current,
+            liveSnapshots: mergeSubagentSnapshots(current.liveSnapshots, [result.snapshot], {
+              chatId,
+              workspaceId,
+            }),
+          };
+        });
+      } catch (error) {
+        const failure = failSubagentStopPending(
+          subagentStopPendingRef.current,
+          ownerKey,
+          run.runId,
+          error instanceof Error ? error.message : "Aiden could not stop this subagent.",
+        );
+        if (failure.accepted) commitSubagentStopPending(failure.state);
       }
-      setSubagents((current) => {
-        if (current.chatId !== chatId || current.workspaceId !== workspaceId) return current;
-        return {
-          ...current,
-          liveSnapshots: mergeSubagentSnapshots(current.liveSnapshots, [result.snapshot], {
-            chatId,
-            workspaceId,
-          }),
-        };
-      });
     },
-    [subagentsEnabled],
+    [commitSubagentStopPending, commitSubagents, subagentsEnabled],
   );
+
+  React.useEffect(() => {
+    if (!subagents.chatId || !subagents.workspaceId) return;
+    const ownerKey = subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId);
+    const terminalRunIds = new Set<string>();
+    for (const view of subagentViews) {
+      const state = view.snapshot?.state;
+      if (
+        state === "completed" ||
+        state === "failed" ||
+        state === "timed_out" ||
+        state === "interrupted" ||
+        state === "stopped" ||
+        state === "unknown"
+      ) {
+        terminalRunIds.add(view.runId);
+      }
+    }
+    commitSubagentStopPending(
+      clearSubagentStopPending(subagentStopPendingRef.current, ownerKey, terminalRunIds),
+    );
+  }, [commitSubagentStopPending, subagentViews, subagents.chatId, subagents.workspaceId]);
 
   const announceSubagentDetail = React.useCallback(
     (ownerKey: string, message: string) => {
@@ -476,7 +593,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     if (open && tab === "subagents" && !selectedSubagentRunId && resolved) {
       setSelectedSubagentRunId(resolved);
       setSubagentDetailLoading(
-        Boolean(subagentViews.find((entry) => entry.runId === resolved && !entry.snapshot)),
+        Boolean(
+          subagentViews.find(
+            (entry) => entry.runId === resolved && entry.referenceMessageId && !entry.snapshot,
+          ),
+        ),
       );
     }
   }, [open, selectedSubagentRunId, subagentViews, subagentsEnabled, tab]);
@@ -487,9 +608,16 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     const workspaceId = subagents.workspaceId;
     const runId = selectedSubagentRunId;
     subagentDetailRequestRef.current = undefined;
-    if (!chatId || !workspaceId || !runId || !selectedSubagentGenerationId) return;
-    if (selectedSubagentSnapshotRevision !== undefined) {
+    if (
+      !chatId ||
+      !workspaceId ||
+      !runId ||
+      !selectedSubagentGenerationId ||
+      !selectedSubagentReferenceMessageId
+    ) {
       setSubagentDetailLoading(false);
+      setSubagentDetailError(null);
+      return;
     }
     const request = captureSubagentDetailRequest(
       chatId,
@@ -499,8 +627,20 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       },
       workspaceId,
     );
+    const requestBaselineSnapshot = mergeSubagentSnapshots(
+      [],
+      [
+        ...subagentsRef.current.loadedSnapshots,
+        ...subagentsRef.current.handoffSnapshots,
+        ...subagentsRef.current.liveSnapshots,
+      ],
+      { chatId, workspaceId },
+    ).find(
+      (snapshot) =>
+        snapshot.runId === runId && snapshot.generationId === selectedSubagentGenerationId,
+    );
     subagentDetailRequestRef.current = request;
-    setSubagentDetailLoading(selectedSubagentSnapshotRevision === undefined);
+    setSubagentDetailLoading(true);
     setSubagentDetailError(null);
     void subagentsApi
       .get(chatId, runId)
@@ -511,24 +651,43 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           subagentChatIdRef.current ?? "",
           selectedSubagentRunId ?? undefined,
           detail?.snapshot,
+          requestBaselineSnapshot,
         );
-        if (!safeSnapshot) return;
+        const requestIsCurrent =
+          request === subagentDetailRequestRef.current &&
+          subagentChatIdRef.current === chatId &&
+          subagentWorkspaceIdRef.current === workspaceId &&
+          selectedSubagentRunId === runId;
+        if (!requestIsCurrent) return;
+        if (!safeSnapshot) {
+          setSubagentDetailError("Aiden could not refresh this saved subagent.");
+          return;
+        }
+        const accepted = commitSubagents((current) => {
+          if (current.chatId !== chatId || current.workspaceId !== workspaceId) return undefined;
+          const merged = mergeSubagentHistorySnapshot(
+            current.loadedSnapshots,
+            current.handoffSnapshots,
+            current.liveSnapshots,
+            safeSnapshot,
+            { chatId, workspaceId },
+          );
+          if (!merged.accepted) return undefined;
+          return {
+            ...current,
+            loadedSnapshots: merged.loadedSnapshots,
+          };
+        });
+        if (!accepted) {
+          setSubagentDetailError("Aiden could not refresh this saved subagent.");
+          return;
+        }
         setSubagentEffectDetail({
           ownerKey: subagentPanelOwnerKey(chatId, workspaceId),
           runId,
+          generationId: safeSnapshot.generationId,
+          revision: safeSnapshot.revision,
           effects: detail?.effects ?? [],
-        });
-        setSubagents((current) => {
-          if (current.chatId !== chatId || current.workspaceId !== workspaceId) return current;
-          const existing = current.loadedSnapshots.find((entry) => entry.runId === runId);
-          if (existing && existing.revision >= safeSnapshot.revision) return current;
-          return {
-            ...current,
-            loadedSnapshots: [
-              ...current.loadedSnapshots.filter((entry) => entry.runId !== runId),
-              safeSnapshot,
-            ],
-          };
         });
       })
       .catch((error: unknown) => {
@@ -554,11 +713,12 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   }, [
     selectedSubagentRunId,
     selectedSubagentGenerationId,
-    selectedSubagentSnapshotRevision,
+    selectedSubagentReferenceMessageId,
     subagents.chatId,
     subagents.workspaceId,
     subagentDetailRequestVersion,
     subagentsEnabled,
+    commitSubagents,
   ]);
 
   React.useEffect(() => {
@@ -621,6 +781,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     subagentDetailLoading,
     subagentDetailError,
   );
+  const displayedSubagentView = subagentViews.find(
+    (view) => view.runId === displayedSubagentSelection.runId,
+  );
   const gitMutationBlockedReason = gitOperationBusy
     ? "Wait for the current Git operation to finish."
     : agentBusy
@@ -656,9 +819,21 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentDetailEffects:
         subagentEffectDetail?.ownerKey ===
           subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId) &&
-        subagentEffectDetail.runId === displayedSubagentSelection.runId
+        subagentEffectDetail.runId === displayedSubagentSelection.runId &&
+        subagentEffectDetail.generationId === displayedSubagentView?.generationId &&
+        subagentEffectDetail.revision === displayedSubagentView?.snapshot?.revision
           ? subagentEffectDetail.effects
           : [],
+      subagentStopPendingRunIds:
+        subagentStopPending.ownerKey ===
+        subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)
+          ? subagentStopPending.runIds
+          : [],
+      subagentStopErrorsByRunId:
+        subagentStopPending.ownerKey ===
+        subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)
+          ? subagentStopPending.errors
+          : {},
       announceSubagentDetail,
       setSubagentAnnouncerHost,
       syncSubagents,
@@ -703,6 +878,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       selectedSubagentRunId,
       displayedSubagentSelection.loading,
       displayedSubagentSelection.runId,
+      displayedSubagentView?.generationId,
+      displayedSubagentView?.snapshot?.revision,
       subagentFocusDetailVersion,
       setCancelAgentHandler,
       setCompactModalOpen,
@@ -711,6 +888,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       show,
       subagentDetailError,
       subagentEffectDetail,
+      subagentStopPending,
       subagentDetailLoading,
       subagents,
       subagentCounts,
@@ -1052,6 +1230,7 @@ function EnvironmentPanelSurface({
               chatId={panel.subagents.chatId}
               workspaceId={panel.subagents.workspaceId}
               runs={panel.subagentViews}
+              handoffSnapshots={panel.subagents.handoffSnapshots}
               selectedRunId={panel.selectedSubagentRunId}
               selectedRunSnapshot={
                 panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
@@ -1063,6 +1242,8 @@ function EnvironmentPanelSurface({
               onSelectedRunChange={panel.selectSubagent}
               onRetryDetail={panel.retrySubagentDetail}
               onStopRun={panel.stopSubagent}
+              stopPendingRunIds={panel.subagentStopPendingRunIds}
+              stopErrorsByRunId={panel.subagentStopErrorsByRunId}
               onDetailAnnouncement={panel.announceSubagentDetail}
               detailRequestVersion={panel.subagentFocusDetailVersion}
               compact={width < 620}
@@ -1105,6 +1286,7 @@ function EnvironmentSummaryCard() {
   const hasSubagents = panel.subagentsEnabled && subagentCounts.active + subagentCounts.done > 0;
   const representativeSubagent =
     panel.subagentViews.find((view) => !view.terminal) ?? panel.subagentViews[0];
+  const subagentSummary = subagentOverviewSummary(panel.subagentViews);
 
   React.useLayoutEffect(() => {
     if (open) {
@@ -1192,7 +1374,7 @@ function EnvironmentSummaryCard() {
                 <button
                   type="button"
                   onClick={() => panel.show("subagents")}
-                  aria-label={`Open Subagents, ${subagentCounts.active} working, ${subagentCounts.done} done`}
+                  aria-label={`Open Subagents, ${subagentSummary.ariaLabel}`}
                   className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                 >
                   <SubagentOrb
@@ -1201,11 +1383,11 @@ function EnvironmentSummaryCard() {
                     activity={representativeSubagent?.snapshot?.activity}
                     size={20}
                   />
-                  <span className="min-w-0 text-regular text-primary">
-                    {subagentCounts.active} working
+                  <span className="min-w-0 truncate text-regular text-primary">
+                    {subagentSummary.primary}
                   </span>
-                  <span className="text-small tabular-nums text-tertiary">
-                    {subagentCounts.done} done
+                  <span className="max-w-44 min-w-0 truncate text-small tabular-nums text-tertiary">
+                    {subagentSummary.secondary}
                   </span>
                 </button>
               </div>

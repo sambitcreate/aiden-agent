@@ -48,6 +48,7 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
   let finishDeletionCalls = 0;
   const deps = {
     chatStore: {
+      listRegular: async () => [],
       list: async () => [chat()],
       get: async (id: string) => chat(id),
       create: async (input: { assertCurrent?: () => void; workspaceId?: string }) => {
@@ -63,6 +64,7 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
     configStore: { getWorkspace: async (id: string) => id === workspace.id ? workspace : null },
     llmClient: {
       isChatOwnedByInactiveRenderer: () => false,
+      isChatBusy: () => false,
       waitForChatIdle: async () => true,
       requiresAppendReconciliation: () => false,
       markAppendReconciliationRequired: () => undefined,
@@ -70,6 +72,16 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
       beginChatWorkspaceChange: () => () => undefined,
       beginChatDeletion: () => () => { finishDeletionCalls += 1; },
       cancelChat: async () => undefined,
+    },
+    displayImageArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => false,
+      deleteChat: async () => undefined,
+    },
+    generativeUiArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => false,
+      deleteChat: async () => undefined,
     },
     workspaceMutationGate: {
       admit: () => ({ signal: new AbortController().signal, release: () => undefined }),
@@ -117,6 +129,7 @@ test("shared chat reads retain inactive-renderer reconciliation semantics", asyn
   const application = fixture({
     llmClient: {
       isChatOwnedByInactiveRenderer: () => ++checks <= 2,
+      isChatBusy: () => false,
       waitForChatIdle: async () => false,
       requiresAppendReconciliation: () => false,
       markAppendReconciliationRequired: () => undefined,
@@ -132,10 +145,76 @@ test("shared chat reads retain inactive-renderer reconciliation semantics", asyn
   });
 });
 
+test("shared chat reads expose stable staged-image recovery gates", async () => {
+  let pendingChecks = 0;
+  const pending = fixture({
+    displayImageArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => {
+        pendingChecks += 1;
+        return true;
+      },
+      deleteChat: async () => undefined,
+    },
+  });
+  const pendingRead = await pending.service.get("chat-1");
+  assert.equal(pendingRead.imageArtifactRecoveryPending, true);
+  assert.equal(pendingRead.imageArtifactRecoveryUnavailable, false);
+  assert.equal(pendingChecks, 2);
+
+  const unavailable = fixture({
+    displayImageArtifactStore: {
+      availability: () => ({ available: false, reason: "store unavailable" }),
+      hasPending: async () => {
+        throw new Error("must not inspect an unavailable store");
+      },
+      deleteChat: async () => undefined,
+    },
+  });
+  const unavailableRead = await unavailable.service.get("chat-1");
+  assert.equal(unavailableRead.imageArtifactRecoveryPending, false);
+  assert.equal(unavailableRead.imageArtifactRecoveryUnavailable, true);
+});
+
+test("shared chat deletion removes staged artifacts after the durable tombstone", async () => {
+  const events: string[] = [];
+  const application = fixture({
+    subagentRunStore: {
+      deleteChat: async () => { events.push("tombstone"); },
+      completeChatDeletion: async () => { events.push("complete"); },
+      pendingChatDeletions: async () => [],
+    },
+    displayImageArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => false,
+      deleteChat: async () => { events.push("artifacts"); },
+    },
+    generativeUiArtifactStore: {
+      availability: () => ({ available: true }),
+      hasPending: async () => false,
+      deleteChat: async () => { events.push("html-artifacts"); },
+    },
+    piRuntimeEffectStore: { deleteChat: async () => { events.push("effects"); } },
+    piCompactionSessionStore: { deleteChat: async () => { events.push("compaction"); } },
+    chatStore: {
+      listRegular: async () => [],
+      list: async () => [],
+      get: async () => chat(),
+      create: async () => chat(),
+      rename: async () => chat(),
+      moveEmptyChatToWorkspace: async () => chat(),
+      remove: async () => { events.push("chat"); },
+    },
+  });
+  await application.service.remove("chat-1");
+  assert.deepEqual(events, ["tombstone", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
+});
+
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {
   const events: string[] = [];
   const application = fixture({
     chatStore: {
+      listRegular: async () => [],
       list: async () => [],
       get: async () => chat(),
       create: async () => chat(),
@@ -157,11 +236,61 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
   assert.equal(application.finishDeletionCalls(), 0);
 });
 
+test("shared chat deletion publishes its roll-forward boundary before later cleanup can fail", async () => {
+  const events: string[] = [];
+  const application = fixture({
+    subagentRunStore: {
+      deleteChat: async () => { events.push("tombstone"); },
+      completeChatDeletion: async () => { events.push("complete"); },
+      pendingChatDeletions: async () => ["chat-1"],
+    } as ChatApplicationDependencies["subagentRunStore"],
+    piRuntimeEffectStore: {
+      deleteChat: async () => {
+        events.push("effects");
+        throw new Error("effects disk failed");
+      },
+    },
+  });
+
+  await assert.rejects(
+    application.service.remove("chat-1", {
+      onDeletionRollForward: () => { events.push("roll-forward"); },
+    }),
+    /tool-effect history/u,
+  );
+  assert.deepEqual(events, ["tombstone", "roll-forward", "effects"]);
+  assert.equal(application.finishDeletionCalls(), 0);
+});
+
+test("a partial subagent tombstone failure still publishes the roll-forward boundary", async () => {
+  const events: string[] = [];
+  const application = fixture({
+    subagentRunStore: {
+      deleteChat: async () => {
+        events.push("v1-tombstone");
+        throw new Error("V2 tombstone failed");
+      },
+      completeChatDeletion: async () => undefined,
+      pendingChatDeletions: async () => ["chat-1"],
+    } as ChatApplicationDependencies["subagentRunStore"],
+  });
+
+  await assert.rejects(
+    application.service.remove("chat-1", {
+      onDeletionRollForward: () => { events.push("roll-forward"); },
+    }),
+    /subagent history/u,
+  );
+  assert.deepEqual(events, ["v1-tombstone", "roll-forward"]);
+  assert.equal(application.finishDeletionCalls(), 0);
+});
+
 test("chat deletion checks a remote revision before cancellation or private-history changes", async () => {
   const effects: string[] = [];
   const application = fixture({
     llmClient: {
       isChatOwnedByInactiveRenderer: () => false,
+      isChatBusy: () => false,
       waitForChatIdle: async () => true,
       requiresAppendReconciliation: () => false,
       markAppendReconciliationRequired: () => undefined,

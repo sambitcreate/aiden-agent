@@ -38,10 +38,23 @@ export interface LocalModel {
   installed: boolean;
 }
 
+export interface LocalModelDownloadState {
+  id: string;
+  percentage: number;
+  phase: "download" | "extract";
+  status: "downloading" | "failed";
+  error?: string;
+}
+
 const RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
 
-// The file every extracted model must contain to count as installed.
-const REQUIRED_FILE = "encoder.int8.onnx";
+const REQUIRED_FILES = [
+  "encoder.int8.onnx",
+  "decoder.int8.onnx",
+  "joiner.int8.onnx",
+  "tokens.txt",
+] as const;
+const MAXIMUM_ARCHIVE_BYTES = 800 * 1024 * 1024;
 
 const CATALOG: CatalogModel[] = [
   {
@@ -83,7 +96,7 @@ export function modelDir(id: string): string | null {
 
 export function isModelInstalled(id: string): boolean {
   const dir = modelDir(id);
-  return Boolean(dir && fs.existsSync(path.join(dir, REQUIRED_FILE)));
+  return Boolean(dir && REQUIRED_FILES.every((file) => fs.existsSync(path.join(dir, file))));
 }
 
 export function listModels(): LocalModel[] {
@@ -102,6 +115,11 @@ export function listModels(): LocalModel[] {
 }
 
 const downloads = new Map<string, AbortController>();
+const downloadStates = new Map<string, LocalModelDownloadState>();
+
+export function localModelDownloadStates(): LocalModelDownloadState[] {
+  return [...downloadStates.values()].map((state) => ({ ...state }));
+}
 
 /**
  * Download a model's tar.bz2, then extract it into its model directory. Streams
@@ -114,25 +132,45 @@ export async function downloadModel(id: string): Promise<void> {
 
   const controller = new AbortController();
   downloads.set(id, controller);
+  downloadStates.set(id, {
+    id,
+    percentage: 0,
+    phase: "download",
+    status: "downloading",
+  });
 
   const dir = path.join(modelsRoot(), id);
+  const stagingDir = path.join(modelsRoot(), `.${id}.staging-${Date.now()}`);
   const tmpTar = path.join(os.tmpdir(), `nh-parakeet-${id}-${Date.now()}.tar.bz2`);
 
-  const emit = (downloaded: number, total: number, phase: "download" | "extract") =>
-    ipcMain.broadcast("localModels:progress", {
+  const emit = (downloaded: number, total: number, phase: "download" | "extract") => {
+    const progress = {
       id,
       downloaded,
       total,
       // Reserve the last 10% for extraction so the bar keeps moving.
       percentage:
-        phase === "extract" ? 90 + Math.round((downloaded / Math.max(total, 1)) * 10) : total ? Math.round((downloaded / total) * 90) : 0,
+        phase === "extract"
+          ? 90 + Math.round((downloaded / Math.max(total, 1)) * 10)
+          : total
+            ? Math.min(90, Math.round((downloaded / total) * 90))
+            : 0,
       phase,
+    };
+    downloadStates.set(id, {
+      id,
+      percentage: progress.percentage,
+      phase,
+      status: "downloading",
     });
+    ipcMain.broadcast("localModels:progress", progress);
+  };
 
   try {
     const res = await fetch(entry.url, { signal: controller.signal, redirect: "follow" });
     if (!res.ok || !res.body) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
     const total = Number(res.headers.get("content-length") ?? 0);
+    if (total > MAXIMUM_ARCHIVE_BYTES) throw new Error("The model archive is larger than the supported limit.");
 
     const fileStream = fs.createWriteStream(tmpTar);
     const reader = res.body.getReader();
@@ -147,6 +185,10 @@ export async function downloadModel(id: string): Promise<void> {
           await new Promise<void>((resolve) => fileStream.once("drain", resolve));
         }
         downloaded += chunk.length;
+        if (downloaded > MAXIMUM_ARCHIVE_BYTES) {
+          controller.abort();
+          throw new Error("The model archive is larger than the supported limit.");
+        }
         const now = Date.now();
         if (now - lastEmit > 200) {
           lastEmit = now;
@@ -157,24 +199,41 @@ export async function downloadModel(id: string): Promise<void> {
       await new Promise<void>((resolve) => fileStream.end(resolve));
     }
 
-    // Fresh extract dir.
-    await fs.promises.rm(dir, { recursive: true, force: true });
-    await fs.promises.mkdir(dir, { recursive: true });
+    // Extract and validate away from the active model. Cancellation or a failed
+    // archive therefore cannot turn a working model into a partial install.
+    await fs.promises.rm(stagingDir, { recursive: true, force: true });
+    await fs.promises.mkdir(stagingDir, { recursive: true });
     emit(0, 1, "extract");
-    // The system tar handles bz2; --strip-components=1 drops the archive's top folder.
-    await execFileAsync("/usr/bin/tar", ["-xjf", tmpTar, "-C", dir, "--strip-components=1"], {
+    // macOS tar (libarchive) handles bz2; --strip-components=1 drops the archive's top folder.
+    await execFileAsync("/usr/bin/tar", ["-xjf", tmpTar, "-C", stagingDir, "--strip-components=1"], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 5 * 60_000,
+      signal: controller.signal,
     });
-    if (!isModelInstalled(id)) {
+    if (controller.signal.aborted) throw new Error("Download cancelled.");
+    if (!REQUIRED_FILES.every((file) => fs.existsSync(path.join(stagingDir, file)))) {
       throw new Error("Extracted model is missing expected files.");
     }
+    await fs.promises.rm(dir, { recursive: true, force: true });
+    await fs.promises.rename(stagingDir, dir);
     emit(1, 1, "extract");
+    downloadStates.delete(id);
     logger.info("local-models", `Installed Parakeet model "${id}"`);
   } catch (error) {
-    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
-    if (controller.signal.aborted) throw new Error("Download cancelled.");
-    throw error instanceof Error ? error : new Error(String(error));
+    await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+    if (controller.signal.aborted) {
+      downloadStates.delete(id);
+      throw new Error("Download cancelled.");
+    }
+    const resolved = error instanceof Error ? error : new Error(String(error));
+    downloadStates.set(id, {
+      id,
+      percentage: downloadStates.get(id)?.percentage ?? 0,
+      phase: downloadStates.get(id)?.phase ?? "download",
+      status: "failed",
+      error: resolved.message,
+    });
+    throw resolved;
   } finally {
     await fs.promises.rm(tmpTar, { force: true }).catch(() => {});
     downloads.delete(id);
@@ -185,11 +244,13 @@ export function cancelDownload(id: string): boolean {
   const controller = downloads.get(id);
   if (!controller) return false;
   controller.abort();
+  downloadStates.delete(id);
   return true;
 }
 
 export async function deleteModel(id: string): Promise<void> {
   const dir = modelDir(id);
   if (!dir) throw new Error(`Unknown model "${id}".`);
+  if (downloads.has(id)) throw new Error("Cancel the model download before deleting it.");
   await fs.promises.rm(dir, { recursive: true, force: true });
 }

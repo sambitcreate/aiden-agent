@@ -1,12 +1,24 @@
 import type { Chat, ChatReadResponse } from "./types";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
-import { isSafeSubagentIdentifier } from "../shared/subagent-runs";
+import {
+  isSafeSubagentIdentifier,
+  parseSubagentRunSnapshot,
+  type SubagentRunSnapshot,
+} from "../shared/subagent-runs";
+import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
+import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import { mergeSubagentSnapshots } from "./subagent-view-state";
 
 const MAX_DETACHED_STREAMS = 64;
+const MAX_DETACHED_CONTENT_CHARS = 1_000_000;
+const MAX_DETACHED_REASONING_CHARS = 250_000;
+const MAX_DETACHED_ARTIFACTS = 8;
 const FALLBACK_RETRY_DELAY_MS = 100;
 const detachedLifecycleStreams = new Map<string, DetachedLifecycleStreamOwner>();
 const fallbackLifecycleStreams = new Map<string, DetachedLifecycleStreamOwner>();
+const detachedLifecycleProjections = new Map<string, DetachedLifecycleProjection>();
 const fallbackSettlementInFlight = new Set<string>();
+const terminalSettlementInFlight = new Set<string>();
 const chatReadReconciliations = new Map<string, ChatReadReconciliation>();
 const chatReadReconciliationInFlight = new Set<string>();
 const registryListeners = new Set<() => void>();
@@ -20,6 +32,22 @@ export interface DetachedLifecycleStreamOwner {
   chatId: string;
   workspaceId: string;
 }
+
+/** Renderer-safe state retained while a route-detached generation remains main-owned. */
+export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwner {
+  content: string;
+  /** Wall-clock time of the most recent prose delta, retained across route handoff. */
+  lastTextDeltaAt: number | null;
+  reasoning: string;
+  timeline: GenerationTimeline | null;
+  artifacts: readonly ChatArtifactV1[];
+  subagents: readonly SubagentRunSnapshot[];
+}
+
+export type DetachedLifecycleProjectionSeed = Omit<
+  DetachedLifecycleProjection,
+  keyof DetachedLifecycleStreamOwner | "lastTextDeltaAt"
+> & { lastTextDeltaAt?: number | null };
 
 interface TerminalChatNotification {
   streamId: string;
@@ -37,7 +65,14 @@ export interface ChatReadReconciliation {
 }
 
 type Subscribe = (
-  channel: "chat:done" | "chat:error",
+  channel:
+    | "chat:delta"
+    | "chat:reasoning-delta"
+    | "chat:timeline"
+    | "chat:artifact"
+    | "chat:subagents"
+    | "chat:done"
+    | "chat:error",
   handler: (payload: unknown) => void,
 ) => () => void;
 type SettlementSubscribe = (
@@ -47,6 +82,42 @@ type SettlementSubscribe = (
 
 function emitRegistryChange(): void {
   for (const listener of registryListeners) listener();
+}
+
+function deleteDetachedProjection(streamId: string): void {
+  detachedLifecycleProjections.delete(streamId);
+}
+
+function appendBounded(current: string, delta: string, maximum: number): string {
+  if (current.length >= maximum) return current;
+  return (current + delta).slice(0, maximum);
+}
+
+export function detachedTextStreamingRemaining(
+  lastTextDeltaAt: number | null,
+  now: number,
+  idleMs: number,
+): number {
+  if (
+    lastTextDeltaAt === null ||
+    !Number.isFinite(lastTextDeltaAt) ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(idleMs) ||
+    idleMs <= 0
+  ) {
+    return 0;
+  }
+  return Math.max(0, idleMs - Math.max(0, now - lastTextDeltaAt));
+}
+
+function updateDetachedProjection(
+  streamId: string,
+  update: (current: DetachedLifecycleProjection) => DetachedLifecycleProjection,
+): void {
+  const current = detachedLifecycleProjections.get(streamId);
+  if (!current || !detachedLifecycleStreams.has(streamId)) return;
+  detachedLifecycleProjections.set(streamId, update(current));
+  emitRegistryChange();
 }
 
 function chatReadReconciliationKey(owner: ChatReadReconciliation): string {
@@ -70,6 +141,7 @@ function requestFallback(owner: DetachedLifecycleStreamOwner): void {
   if (settlements.length === 0) {
     fallbackSettlementInFlight.delete(owner.streamId);
     fallbackLifecycleStreams.delete(owner.streamId);
+    deleteDetachedProjection(owner.streamId);
     emitRegistryChange();
     return;
   }
@@ -85,6 +157,7 @@ function requestFallback(owner: DetachedLifecycleStreamOwner): void {
       return;
     }
     fallbackLifecycleStreams.delete(owner.streamId);
+    deleteDetachedProjection(owner.streamId);
     emitRegistryChange();
   });
 }
@@ -127,9 +200,20 @@ function parseTerminalChatNotification(payload: unknown): TerminalChatNotificati
 export function parseChatReadResponse(payload: unknown): ChatReadResponse | null {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
   const candidate = payload as Record<string, unknown>;
-  if (candidate.chat !== null && !isChatSnapshot(candidate.chat)) return null;
+  if (
+    (candidate.chat !== null && !isChatSnapshot(candidate.chat)) ||
+    typeof candidate.imageArtifactRecoveryPending !== "boolean" ||
+    typeof candidate.imageArtifactRecoveryUnavailable !== "boolean"
+  ) {
+    return null;
+  }
   if (candidate.reconciliation === null) {
-    return { chat: candidate.chat as Chat | null, reconciliation: null };
+    return {
+      chat: candidate.chat as Chat | null,
+      imageArtifactRecoveryPending: candidate.imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable: candidate.imageArtifactRecoveryUnavailable,
+      reconciliation: null,
+    };
   }
   if (
     typeof candidate.reconciliation !== "object" ||
@@ -148,6 +232,8 @@ export function parseChatReadResponse(payload: unknown): ChatReadResponse | null
   }
   return {
     chat: candidate.chat as Chat | null,
+    imageArtifactRecoveryPending: candidate.imageArtifactRecoveryPending,
+    imageArtifactRecoveryUnavailable: candidate.imageArtifactRecoveryUnavailable,
     reconciliation: {
       chatId: reconciliation.chatId,
       workspaceId: persistedChatWorkspaceId(reconciliation.workspaceId),
@@ -175,11 +261,14 @@ export function parseChatSettlementNotification(
 }
 
 /**
- * A route transition deliberately releases every per-generation listener. Keep
- * only the bounded stream identity so the shell's two shared terminal listeners
- * can reconcile a response that becomes durable after its chat was left.
+ * A route transition deliberately releases every owner-bound interaction
+ * listener. Keep bounded renderer-safe presentation state so a revisit stays
+ * continuous while the shell reconciles the eventual durable transcript.
  */
-export function rememberDetachedLifecycleStream(owner: DetachedLifecycleStreamOwner): void {
+export function rememberDetachedLifecycleStream(
+  owner: DetachedLifecycleStreamOwner,
+  seed?: DetachedLifecycleProjectionSeed,
+): void {
   if (
     !isSafeSubagentIdentifier(owner.streamId) ||
     !isSafeSubagentIdentifier(owner.chatId) ||
@@ -189,10 +278,27 @@ export function rememberDetachedLifecycleStream(owner: DetachedLifecycleStreamOw
   }
   detachedLifecycleStreams.delete(owner.streamId);
   detachedLifecycleStreams.set(owner.streamId, owner);
+  const content = (seed?.content ?? "").slice(0, MAX_DETACHED_CONTENT_CHARS);
+  const timeline = seed?.timeline
+    ? parseGenerationTimeline(seed.timeline, content.length)
+    : undefined;
+  detachedLifecycleProjections.set(owner.streamId, {
+    ...owner,
+    content,
+    lastTextDeltaAt:
+      typeof seed?.lastTextDeltaAt === "number" && Number.isFinite(seed.lastTextDeltaAt)
+        ? seed.lastTextDeltaAt
+        : null,
+    reasoning: (seed?.reasoning ?? "").slice(0, MAX_DETACHED_REASONING_CHARS),
+    timeline: timeline?.generationId === owner.streamId ? timeline : null,
+    artifacts: (seed?.artifacts ?? []).slice(0, MAX_DETACHED_ARTIFACTS),
+    subagents: mergeSubagentSnapshots([], seed?.subagents ?? [], owner),
+  });
   while (detachedLifecycleStreams.size > MAX_DETACHED_STREAMS) {
     const oldest = detachedLifecycleStreams.values().next().value;
     if (!oldest) break;
     detachedLifecycleStreams.delete(oldest.streamId);
+    deleteDetachedProjection(oldest.streamId);
     // Capacity is a resilience boundary, not permission to silently lose a
     // durable terminal handoff. Ask the shell to discard/refetch that chat.
     requestFallback(oldest);
@@ -213,6 +319,19 @@ export function fallbackDetachedLifecycleStream(streamId: string): boolean {
 export function subscribeDetachedLifecycleStreams(listener: () => void): () => void {
   registryListeners.add(listener);
   return () => registryListeners.delete(listener);
+}
+
+export function detachedLifecycleChatProjection(
+  chatId: string,
+  workspaceId: string | undefined,
+): DetachedLifecycleProjection | null {
+  const expectedWorkspaceId = persistedChatWorkspaceId(workspaceId);
+  for (const projection of detachedLifecycleProjections.values()) {
+    if (projection.chatId === chatId && projection.workspaceId === expectedWorkspaceId) {
+      return projection;
+    }
+  }
+  return null;
 }
 
 export function isDetachedLifecycleChatDraining(
@@ -379,13 +498,91 @@ export function subscribeChatSettlements(
 
 /**
  * Subscribe once at the app shell. Ordinary visible generations remain owned by
- * ChatPane; only terminal payloads for lifecycle-detached streams update cache.
+ * ChatPane; detached streams update only their bounded presentation projection
+ * until a terminal payload has reached the authoritative chat cache.
  */
 export function subscribeDetachedTerminalChats(
   subscribe: Subscribe,
-  onChat: (chat: Chat) => void,
+  onChat: (chat: Chat) => unknown,
   onFallback?: (owner: DetachedLifecycleStreamOwner) => void | Promise<void>,
 ): () => void {
+  const streamPayload = (payload: unknown) => {
+    const streamId = parseTerminalStreamId(payload);
+    if (!streamId || typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+      return null;
+    }
+    return { streamId, payload: payload as Record<string, unknown> };
+  };
+  const unsubscribeDelta = subscribe("chat:delta", (payload) => {
+    const parsed = streamPayload(payload);
+    if (!parsed) return;
+    const delta = parsed.payload.delta;
+    const reset = parsed.payload.reset === true;
+    if (!reset && typeof delta !== "string") return;
+    updateDetachedProjection(parsed.streamId, (current) => ({
+      ...current,
+      content: reset
+        ? ""
+        : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
+      lastTextDeltaAt:
+        reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
+    }));
+  });
+  const unsubscribeReasoning = subscribe("chat:reasoning-delta", (payload) => {
+    const parsed = streamPayload(payload);
+    if (!parsed || typeof parsed.payload.delta !== "string") return;
+    updateDetachedProjection(parsed.streamId, (current) => ({
+      ...current,
+      reasoning: appendBounded(
+        current.reasoning,
+        parsed.payload.delta as string,
+        MAX_DETACHED_REASONING_CHARS,
+      ),
+    }));
+  });
+  const unsubscribeTimeline = subscribe("chat:timeline", (payload) => {
+    const parsed = streamPayload(payload);
+    if (!parsed) return;
+    const timeline = parseGenerationTimeline(parsed.payload.timeline);
+    if (!timeline || timeline.generationId !== parsed.streamId) return;
+    updateDetachedProjection(parsed.streamId, (current) => ({ ...current, timeline }));
+  });
+  const unsubscribeArtifact = subscribe("chat:artifact", (payload) => {
+    const parsed = streamPayload(payload);
+    if (!parsed) return;
+    const event = parseChatArtifactEventV1(parsed.payload.event);
+    if (!event) return;
+    updateDetachedProjection(parsed.streamId, (current) => {
+      if (event.operation === "reset") return { ...current, artifacts: [] };
+      const identity = chatArtifactIdentity(event.artifact);
+      const index = current.artifacts.findIndex(
+        (candidate) => chatArtifactIdentity(candidate) === identity,
+      );
+      if (index >= 0) {
+        return {
+          ...current,
+          artifacts: current.artifacts.map((candidate, i) =>
+            i === index ? event.artifact : candidate,
+          ),
+        };
+      }
+      if (current.artifacts.length >= MAX_DETACHED_ARTIFACTS) return current;
+      return { ...current, artifacts: [...current.artifacts, event.artifact] };
+    });
+  });
+  const unsubscribeSubagents = subscribe("chat:subagents", (payload) => {
+    const parsed = streamPayload(payload);
+    if (!parsed) return;
+    const snapshot = parseSubagentRunSnapshot(parsed.payload.snapshot);
+    if (!snapshot || snapshot.generationId !== parsed.streamId) return;
+    updateDetachedProjection(parsed.streamId, (current) => ({
+      ...current,
+      subagents: mergeSubagentSnapshots(current.subagents, [snapshot], {
+        chatId: current.chatId,
+        workspaceId: current.workspaceId,
+      }),
+    }));
+  });
   const handle = (payload: unknown) => {
     const terminal = parseTerminalChatNotification(payload);
     if (!terminal) {
@@ -394,18 +591,52 @@ export function subscribeDetachedTerminalChats(
       return;
     }
     const owner = detachedLifecycleStreams.get(terminal.streamId);
-    if (!owner) return;
-    detachedLifecycleStreams.delete(terminal.streamId);
-    emitRegistryChange();
+    if (!owner || terminalSettlementInFlight.has(terminal.streamId)) return;
     if (
       !terminal.chat ||
       terminal.chat.id !== owner.chatId ||
       persistedChatWorkspaceId(terminal.chat.workspaceId) !== owner.workspaceId
     ) {
+      detachedLifecycleStreams.delete(terminal.streamId);
+      emitRegistryChange();
       requestFallback(owner);
       return;
     }
-    onChat(terminal.chat);
+    terminalSettlementInFlight.add(terminal.streamId);
+    const complete = () => {
+      terminalSettlementInFlight.delete(terminal.streamId);
+      if (detachedLifecycleStreams.get(terminal.streamId) === owner) {
+        detachedLifecycleStreams.delete(terminal.streamId);
+        deleteDetachedProjection(terminal.streamId);
+        emitRegistryChange();
+      }
+    };
+    try {
+      const settlement = onChat(terminal.chat);
+      if (
+        !settlement ||
+        typeof settlement !== "object" ||
+        typeof (settlement as PromiseLike<unknown>).then !== "function"
+      ) {
+        complete();
+        return;
+      }
+      void Promise.resolve(settlement).then(complete, () => {
+        terminalSettlementInFlight.delete(terminal.streamId);
+        if (detachedLifecycleStreams.get(terminal.streamId) === owner) {
+          detachedLifecycleStreams.delete(terminal.streamId);
+          emitRegistryChange();
+          requestFallback(owner);
+        }
+      });
+    } catch {
+      terminalSettlementInFlight.delete(terminal.streamId);
+      if (detachedLifecycleStreams.get(terminal.streamId) === owner) {
+        detachedLifecycleStreams.delete(terminal.streamId);
+        emitRegistryChange();
+        requestFallback(owner);
+      }
+    }
   };
   if (onFallback) {
     fallbackListeners.add(onFallback);
@@ -417,5 +648,10 @@ export function subscribeDetachedTerminalChats(
     if (onFallback) fallbackListeners.delete(onFallback);
     unsubscribeDone();
     unsubscribeError();
+    unsubscribeDelta();
+    unsubscribeReasoning();
+    unsubscribeTimeline();
+    unsubscribeArtifact();
+    unsubscribeSubagents();
   };
 }

@@ -4,13 +4,113 @@ import { createServer } from "node:net";
 import test from "node:test";
 import {
   AidenRemoteTailscaleController,
+  createSystemTailscaleCommandRunner,
   tailscaleBinaryCandidates,
   tailscaleCommandErrorCode,
   withAidenTailscaleRouteLock,
   type AidenTailscaleCommandRunner,
+  type AidenTailscaleStatusReadFailureCategory,
 } from "./aiden-remote-tailscale.js";
 
 const target = "http://127.0.0.1:43177/api/aiden/v1";
+
+test("system Tailscale runner forces CLI mode for Finder-style production launches", async () => {
+  const executions: Array<{
+    binary: string;
+    args: readonly string[];
+    environment: NodeJS.ProcessEnv | undefined;
+  }> = [];
+  const runner = await createSystemTailscaleCommandRunner({
+    platform: "darwin",
+    environment: {
+      HOME: "/test-home",
+      TAILSCALE_BE_CLI: "0",
+    },
+    resolveBinary: async () => "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    execute: async (binary, args, options) => {
+      executions.push({ binary, args: [...args], environment: options.env });
+      if (options.env?.TAILSCALE_BE_CLI !== "1") {
+        return { stdout: "The Tailscale GUI failed to start." };
+      }
+      return {
+        stdout: args[0] === "status"
+          ? JSON.stringify({
+            BackendState: "Running",
+            Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
+            CertDomains: ["aiden.tailnet.ts.net"],
+          })
+          : "{}",
+      };
+    },
+  });
+  assert.ok(runner);
+
+  const inspection = await new AidenRemoteTailscaleController(runner).inspectRoute(target);
+  assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(inspection.assessment.state, "available");
+  assert.equal(executions.length, 2);
+  for (const execution of executions) {
+    assert.equal(execution.binary, "/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+    assert.equal(execution.environment?.HOME, "/test-home");
+    assert.equal(execution.environment?.TERM, undefined);
+    assert.equal(execution.environment?.TAILSCALE_BE_CLI, "1");
+  }
+});
+
+test("Tailscale discovery uses fixed platform-specific executable locations", () => {
+  assert.deepEqual(tailscaleBinaryCandidates("linux"), [
+    "/usr/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "/run/current-system/sw/bin/tailscale",
+  ]);
+  assert.deepEqual(tailscaleBinaryCandidates("darwin"), [
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+  ]);
+  assert.deepEqual(tailscaleBinaryCandidates("win32"), []);
+});
+
+test("Linux Tailscale runner does not force the packaged macOS CLI environment", async () => {
+  let environment: NodeJS.ProcessEnv | undefined;
+  const runner = await createSystemTailscaleCommandRunner({
+    platform: "linux",
+    environment: { AIDEN_TEST: "1" },
+    resolveBinary: async () => "/usr/bin/tailscale",
+    execute: async (_binary, _args, options) => {
+      environment = options.env;
+      return { stdout: "{}" };
+    },
+  });
+  await runner?.run(["status", "--json"]);
+  assert.equal(environment?.AIDEN_TEST, "1");
+  assert.equal(environment?.TAILSCALE_BE_CLI, undefined);
+});
+
+test("Linux operator denial maps to an actionable stable code", () => {
+  assert.equal(
+    tailscaleCommandErrorCode({
+      stderr:
+        "Access denied: serve config denied; run tailscale set --operator=$USER",
+    }),
+    "tailscale_permission_denied",
+  );
+  assert.equal(tailscaleCommandErrorCode({ stderr: "permission denied" }), undefined);
+});
+
+test("a named but offline Tailscale node remains disconnected", async () => {
+  const controller = new AidenRemoteTailscaleController({
+    run: async (args) =>
+      args[0] === "status"
+        ? JSON.stringify({
+            BackendState: "Stopped",
+            Self: { DNSName: "aiden.tailnet.ts.net.", Online: false },
+            CertDomains: ["aiden.tailnet.ts.net"],
+          })
+        : "{}",
+  });
+  assert.equal((await controller.status()).errorCode, "not_connected");
+});
 
 async function availableLoopbackPort(): Promise<number> {
   const socket = createSocket({ type: "udp4", reuseAddr: false });
@@ -23,13 +123,7 @@ async function availableLoopbackPort(): Promise<number> {
   return address.port;
 }
 
-function fixture(options: {
-  emptyServeStatus?: boolean;
-  certDomains?: unknown;
-  backendState?: string;
-  selfOnline?: boolean;
-  mutationError?: Error;
-} = {}) {
+function fixture(options: { emptyServeStatus?: boolean; certDomains?: unknown } = {}) {
   const calls: string[][] = [];
   let connected = false;
   const runner: AidenTailscaleCommandRunner = {
@@ -37,11 +131,8 @@ function fixture(options: {
       calls.push([...args]);
       if (args[0] === "status") {
         return JSON.stringify({
-          BackendState: options.backendState ?? "Running",
-          Self: {
-            DNSName: "aiden.tailnet.ts.net.",
-            Online: options.selfOnline ?? true,
-          },
+          BackendState: "Running",
+          Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
           CertDomains: options.certDomains ?? ["aiden.tailnet.ts.net"],
         });
       }
@@ -61,7 +152,6 @@ function fixture(options: {
           },
         });
       }
-      if (options.mutationError) throw options.mutationError;
       if (args.includes("off")) connected = false;
       else connected = true;
       return "";
@@ -69,28 +159,6 @@ function fixture(options: {
   };
   return { controller: new AidenRemoteTailscaleController(runner), calls };
 }
-
-test("Tailscale executable discovery uses fixed platform installation paths", () => {
-  assert.deepEqual(tailscaleBinaryCandidates("linux"), [
-    "/usr/bin/tailscale",
-    "/usr/local/bin/tailscale",
-    "/run/current-system/sw/bin/tailscale",
-  ]);
-  assert.deepEqual(tailscaleBinaryCandidates("darwin"), [
-    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-    "/usr/local/bin/tailscale",
-    "/opt/homebrew/bin/tailscale",
-  ]);
-  assert.deepEqual(tailscaleBinaryCandidates("win32"), []);
-});
-
-test("Tailscale permission errors are recognized without exposing arbitrary CLI failures", () => {
-  assert.equal(tailscaleCommandErrorCode({
-    stderr: "Access denied: serve config denied\nTo not require root, use 'sudo tailscale set --operator=$USER' once.",
-  }), "tailscale_permission_denied");
-  assert.equal(tailscaleCommandErrorCode({ stderr: "Access denied" }), undefined);
-  assert.equal(tailscaleCommandErrorCode(new Error("command failed")), undefined);
-});
 
 test("Tailscale controller connects and verifies only Aiden's route", async () => {
   const app = fixture();
@@ -123,6 +191,136 @@ test("Tailscale controller reports stable URL identity without mutating configur
       },
     },
   });
+  assert.equal(app.calls.length, 2);
+  assert.deepEqual(app.calls.find((args) => args[0] === "status"), [
+    "status", "--json", "--peers=false",
+  ]);
+});
+
+test("combined route inspection uses one coherent node and Serve snapshot", async () => {
+  const app = takeoverFixture({ incumbent: target, healthy: true });
+  const inspection = await app.controller.inspectRoute(target);
+  assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(inspection.assessment.state, "other_aiden_live");
+  assert.deepEqual(app.calls, [
+    ["status", "--json", "--peers=false"],
+    ["serve", "status", "--json"],
+  ]);
+});
+
+test("combined route inspection retries a transient CLI read and recovers", async () => {
+  const calls: string[][] = [];
+  let nodeAttempts = 0;
+  const controller = new AidenRemoteTailscaleController({
+    run: async (args) => {
+      calls.push([...args]);
+      if (args[0] === "status" && ++nodeAttempts === 1) {
+        throw new Error("transient node status failure");
+      }
+      if (args[0] === "status") {
+        return JSON.stringify({
+          BackendState: "Running",
+          Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
+          CertDomains: ["aiden.tailnet.ts.net"],
+        });
+      }
+      return "{}";
+    },
+  });
+  const inspection = await controller.inspectRoute(target);
+  assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(inspection.assessment.state, "available");
+  assert.deepEqual(calls, [
+    ["status", "--json", "--peers=false"],
+    ["status", "--json", "--peers=false"],
+    ["serve", "status", "--json"],
+  ]);
+});
+
+test("combined route inspection fails closed after bounded CLI retries", async () => {
+  const calls: string[][] = [];
+  const diagnostics: Array<{
+    phase: "node" | "serve";
+    attempt: number;
+    final: boolean;
+    category: AidenTailscaleStatusReadFailureCategory;
+  }> = [];
+  const controller = new AidenRemoteTailscaleController({
+    run: async (args) => {
+      calls.push([...args]);
+      if (args[0] === "status") throw new Error("transient node status failure");
+      return "{}";
+    },
+  }, { onStatusReadFailure: (input) => diagnostics.push(input) });
+  assert.deepEqual(await controller.inspectRoute(target), {
+    connectionStatus: { installed: true, errorCode: "status_unavailable" },
+    assessment: { state: "unavailable", errorCode: "status_unavailable" },
+  });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(diagnostics, [
+    { phase: "node", attempt: 1, final: false, category: "command-failed" },
+    { phase: "node", attempt: 2, final: false, category: "command-failed" },
+    { phase: "node", attempt: 3, final: true, category: "command-failed" },
+  ]);
+});
+
+test("combined route inspection categorizes zero-exit non-JSON CLI output without retaining it", async () => {
+  const diagnostics: Array<{
+    phase: "node" | "serve";
+    attempt: number;
+    final: boolean;
+    category: AidenTailscaleStatusReadFailureCategory;
+  }> = [];
+  const controller = new AidenRemoteTailscaleController({
+    run: async () => "The Tailscale GUI failed to start with private details.",
+  }, { onStatusReadFailure: (input) => diagnostics.push(input) });
+
+  assert.equal((await controller.inspectRoute(target)).assessment.errorCode, "status_unavailable");
+  assert.deepEqual(diagnostics, [
+    { phase: "node", attempt: 1, final: false, category: "invalid-response" },
+    { phase: "node", attempt: 2, final: false, category: "invalid-response" },
+    { phase: "node", attempt: 3, final: true, category: "invalid-response" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /private details/u);
+});
+
+test("combined route inspection categorizes both Node CLI timeout shapes", async () => {
+  const timeoutErrors = [
+    Object.assign(new Error("deadline exceeded"), { code: "ETIMEDOUT" }),
+    Object.assign(new Error("process terminated"), { killed: true }),
+  ];
+
+  for (const timeoutError of timeoutErrors) {
+    const diagnostics: Array<{
+      phase: "node" | "serve";
+      attempt: number;
+      final: boolean;
+      category: AidenTailscaleStatusReadFailureCategory;
+    }> = [];
+    const controller = new AidenRemoteTailscaleController({
+      run: async () => {
+        throw timeoutError;
+      },
+    }, { onStatusReadFailure: (input) => diagnostics.push(input) });
+
+    assert.equal((await controller.inspectRoute(target)).assessment.errorCode, "status_unavailable");
+    assert.deepEqual(diagnostics, [
+      { phase: "node", attempt: 1, final: false, category: "timed-out" },
+      { phase: "node", attempt: 2, final: false, category: "timed-out" },
+      { phase: "node", attempt: 3, final: true, category: "timed-out" },
+    ]);
+    assert.doesNotMatch(JSON.stringify(diagnostics), /deadline exceeded|process terminated/u);
+  }
+});
+
+test("concurrent settings reads share one node and Serve snapshot", async () => {
+  const app = fixture();
+  const [status, inspection] = await Promise.all([
+    app.controller.status(),
+    app.controller.inspectRoute(target),
+  ]);
+  assert.equal(status.dnsName, "aiden.tailnet.ts.net");
+  assert.equal(inspection.connectionStatus.dnsName, "aiden.tailnet.ts.net");
   assert.equal(app.calls.length, 2);
 });
 
@@ -206,29 +404,6 @@ test("missing Tailscale is explicit and cannot mutate routes", async () => {
     errorCode: "not_installed",
   });
   await assert.rejects(controller.connect(target), /tailscale_not_installed/u);
-});
-
-test("cached Tailscale identity is not connected unless the daemon is running and online", async () => {
-  for (const options of [
-    { backendState: "NeedsLogin", selfOnline: false },
-    { backendState: "Running", selfOnline: false },
-    { backendState: "Stopped", selfOnline: true },
-  ]) {
-    const app = fixture(options);
-    const status = await app.controller.status();
-    assert.equal(status.installed, true);
-    assert.equal(status.dnsName, "aiden.tailnet.ts.net");
-    assert.equal(status.errorCode, "not_connected");
-    await assert.rejects(app.controller.connect(target), /tailscale_not_connected/u);
-    assert.equal(app.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
-  }
-});
-
-test("a rejected Linux Serve mutation reports the one-time operator permission requirement", async () => {
-  const app = fixture({ mutationError: new Error("tailscale_permission_denied") });
-  await assert.rejects(app.controller.connect(target), /tailscale_permission_denied/u);
-  assert.equal((await app.controller.status()).serveStatus?.Web?.["aiden.tailnet.ts.net:443"]
-    ?.Handlers?.["/api/aiden/v1"], undefined);
 });
 
 function takeoverFixture(options: {

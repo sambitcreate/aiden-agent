@@ -7,6 +7,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
@@ -14,6 +15,7 @@ import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import {
@@ -27,6 +29,7 @@ import {
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
 import {
   chatsApi,
+  aidenRemoteApi,
   createChatTurnId,
   settingsApi,
   startGeneration,
@@ -40,13 +43,18 @@ import {
   logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
+  useBot,
   useComputerUseStatus,
   useGitInfo,
   useModelInfo,
   useProviders,
   useSettings,
 } from "../lib/queries";
-import { resolveVisibleModelSelection, useModelSelection } from "../lib/use-model-selection";
+import {
+  isModelSelectionReadyForNewWork,
+  resolveVisibleModelSelection,
+  useModelSelection,
+} from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
@@ -60,9 +68,19 @@ import {
   type WorkspacePermission,
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
-import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
+import {
+  resolveAgentActivity,
+  resolveVisibleAgentActivity,
+  type ToolActivity,
+} from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
-import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
+import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
+import {
+  hasActiveToolStep,
+  latestActiveAgentStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
 import {
   CODEX_THINKING_LEVELS,
@@ -79,9 +97,7 @@ import {
   normalizeAnthropicThinkingLevel,
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
-import {
-  normalizeProviderThinkingLevel,
-} from "../shared/provider-thinking";
+import { normalizeProviderThinkingLevel } from "../shared/provider-thinking";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -92,6 +108,8 @@ import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
+  detachedTextStreamingRemaining,
+  detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
 } from "../lib/chat-terminal-sync";
@@ -103,9 +121,18 @@ import {
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
+import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
+
+/**
+ * How long after the last text delta the activity row may keep saying
+ * "Responding…". Beyond this the model is reasoning or writing tool-call
+ * arguments, and the row should shimmer instead of going static; wide enough
+ * that bursty providers do not flap the label mid-prose.
+ */
+const TEXT_STREAMING_IDLE_MS = 2_000;
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -125,6 +152,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
   const chat = useChat(chatId);
+  const bot = useBot(chat.data?.botId);
   const settings = useSettings();
   const computerUseGloballyEnabled =
     capabilities.computerUse && settings.data?.computerUseEnabled === true;
@@ -141,6 +169,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
     () => false,
   );
+  const detachedProjection = React.useSyncExternalStore(
+    subscribeDetachedLifecycleStreams,
+    () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
+    () => null,
+  );
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -156,11 +189,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
+  const hasMessages = (chat.data?.messages.length ?? 0) > 0;
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&
-    model &&
-    selectedProvider.models.includes(model) &&
+    isModelSelectionReadyForNewWork(
+      { providerId, model },
+      providers.data,
+      settings.data?.hiddenModelsByProvider,
+      hasMessages,
+    ) &&
     (selectedProvider.hasKey || !selectedProvider.needsKey),
   );
   const modelReadinessMessage = React.useMemo(() => {
@@ -181,8 +219,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     if (!model || !selectedProvider.models.includes(model))
       return `Choose a model from ${selectedProvider.label}.`;
+    if (
+      !hasMessages &&
+      settings.data !== undefined &&
+      isModelHidden(settings.data.hiddenModelsByProvider, providerId, model)
+    ) {
+      return "This model is hidden from new chats. Show a model in Settings → Providers before sending.";
+    }
     return undefined;
-  }, [model, providerId, providers.isLoading, selectedProvider]);
+  }, [hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
   const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
   const computerUseReady = computerUseReadinessReady(
     computerUseStatus.data?.ready === true,
@@ -204,11 +249,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
         ? "Message save status is unknown. Reload Aiden before sending another message."
         : detachedGenerationDraining
-          ? "Finishing the previous response…"
+          ? "Response continues in the background…"
           : undefined;
-  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
+  const botReadinessMessage = chat.data?.botId
+    ? bot.isLoading
+      ? "Loading bot…"
+      : !bot.data
+        ? "This bot is no longer available."
+        : bot.data.archivedAt
+          ? "Restore this bot before continuing the conversation."
+          : undefined
+    : undefined;
+  const ready =
+    modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
   const readinessMessage =
-    chatReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
+    chatReadinessMessage ??
+    botReadinessMessage ??
+    modelReadinessMessage ??
+    computerUseReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -304,6 +362,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
+  const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
@@ -323,6 +382,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
+  const visualizeTurnRef = React.useRef(false);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -331,15 +391,75 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
   const approvalCardRef = React.useRef<HTMLElement | null>(null);
+  const remoteApprovalRefreshRef = React.useRef(0);
   const pendingDeltaRef = React.useRef("");
   const pendingReasoningDeltaRef = React.useRef("");
   const streamedTextRef = React.useRef("");
   const streamedReasoningRef = React.useRef("");
+  const streamingArtifactsRef = React.useRef<ChatArtifactV1[]>([]);
   const deltaFrameRef = React.useRef<number | null>(null);
   const streamHandoffRef = React.useRef<(() => void) | null>(null);
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
+  // Prose from an earlier turn must not pin the activity row to a static
+  // "Responding…" while the model reasons or writes tool arguments, so the
+  // row keys "responding" off deltas that are still arriving.
+  const [textStreaming, setTextStreaming] = React.useState(false);
+  const textStreamingTimerRef = React.useRef<number | null>(null);
+  const markTextStreaming = React.useCallback(() => {
+    setTextStreaming(true);
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+    }
+    textStreamingTimerRef.current = window.setTimeout(() => {
+      textStreamingTimerRef.current = null;
+      setTextStreaming(false);
+    }, TEXT_STREAMING_IDLE_MS);
+  }, []);
+  const clearTextStreaming = React.useCallback(() => {
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+      textStreamingTimerRef.current = null;
+    }
+    setTextStreaming(false);
+  }, []);
+  React.useEffect(
+    () => () => {
+      if (textStreamingTimerRef.current !== null) {
+        window.clearTimeout(textStreamingTimerRef.current);
+      }
+    },
+    [],
+  );
 
   chatIdRef.current = chatId;
+
+  React.useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      const requestId = ++remoteApprovalRefreshRef.current;
+      try {
+        const remote = await aidenRemoteApi.pendingApproval(chatId);
+        if (
+          !active ||
+          chatIdRef.current !== chatId ||
+          !isLatestRemoteApprovalRefresh(requestId, remoteApprovalRefreshRef.current)
+        )
+          return;
+        setApprovals((current) => mergeRemoteApproval(current, remote));
+      } catch {
+        // Remote chat infrastructure is lazy; absence before first pairing is expected.
+      }
+    };
+    void refresh();
+    const unsubscribe = aidenRemoteApi.onApprovalChanged(({ chatId: changedChatId }) => {
+      if (changedChatId === chatId) void refresh();
+    });
+    return () => {
+      active = false;
+      remoteApprovalRefreshRef.current += 1;
+      unsubscribe();
+    };
+  }, [chatId]);
 
   // Detach only the generation owned by the departing chat. The main process
   // keeps that operation alive and reconciles its durable terminal state.
@@ -360,6 +480,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       pendingReasoningDeltaRef.current = "";
       streamedTextRef.current = "";
       streamedReasoningRef.current = "";
+      streamingArtifactsRef.current = [];
       streamHandoffRef.current?.();
       streamHandoffRef.current = null;
     };
@@ -371,6 +492,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useLayoutEffect(() => {
     setStreamingText(null);
     setStreamingReasoning(null);
+    clearTextStreaming();
+    setStreamingArtifacts([]);
+    streamingArtifactsRef.current = [];
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -387,6 +511,58 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [chatId]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
+  const visibleDetachedProjection =
+    messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
+  const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
+  const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
+  React.useEffect(() => {
+    if (!visibleDetachedStreamId) return;
+    const remaining = detachedTextStreamingRemaining(
+      detachedLastTextDeltaAt,
+      Date.now(),
+      TEXT_STREAMING_IDLE_MS,
+    );
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+      textStreamingTimerRef.current = null;
+    }
+    if (remaining === 0) {
+      setTextStreaming(false);
+      return;
+    }
+    setTextStreaming(true);
+    const timer = window.setTimeout(() => {
+      if (textStreamingTimerRef.current === timer) {
+        textStreamingTimerRef.current = null;
+        setTextStreaming(false);
+      }
+    }, remaining);
+    textStreamingTimerRef.current = timer;
+    return () => {
+      if (textStreamingTimerRef.current === timer) {
+        window.clearTimeout(timer);
+        textStreamingTimerRef.current = null;
+      }
+    };
+  }, [detachedLastTextDeltaAt, visibleDetachedStreamId]);
+  const displayedStreamingText = streamingText ?? visibleDetachedProjection?.content ?? null;
+  const displayedStreamingReasoning =
+    streamingReasoning ??
+    (visibleDetachedProjection?.reasoning.trim() ? visibleDetachedProjection.reasoning : null);
+  const displayedStreamingArtifacts =
+    streamingArtifacts.length > 0
+      ? streamingArtifacts
+      : (visibleDetachedProjection?.artifacts ?? []);
+  const displayedGenerationTimeline =
+    generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
+  const displayedLiveSubagents = React.useMemo(
+    () =>
+      mergeSubagentSnapshots(liveSubagents, visibleDetachedProjection?.subagents ?? [], {
+        chatId,
+        workspaceId: effectiveWorkspaceId,
+      }),
+    [chatId, effectiveWorkspaceId, liveSubagents, visibleDetachedProjection?.subagents],
+  );
   const latestAssistantResponse = React.useMemo(
     () =>
       [...messages]
@@ -398,9 +574,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
-  const hasMessages = messages.length > 0;
+  const imageArtifactRecoveryPending =
+    hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
+  const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
-  const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
+  const isNewChat = !chat.isLoading && !hasMessages && displayedStreamingText === null;
 
   React.useEffect(() => {
     if (!isNewChat || settings.data === undefined) return;
@@ -429,6 +607,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (throughAssistantMessageId?: string) => {
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before copying this chat.");
+      }
+      if (imageArtifactRecoveryUnavailable) {
+        throw new Error(
+          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
+        );
+      }
+      if (imageArtifactRecoveryPending) {
+        throw new Error(
+          "A previous visual artifact could not be recovered. Delete this chat to discard it before copying.",
+        );
       }
       if (isGenerating || isStartingGeneration || approvals.length > 0) {
         throw new Error("Finish the current response or approval before copying this chat.");
@@ -465,6 +653,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       approvals.length,
       chatId,
       documentAppendReconciliationRequired,
+      imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable,
       isGenerating,
       isStartingGeneration,
       navigate,
@@ -512,20 +702,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   React.useLayoutEffect(() => {
     if (!environmentPanel.subagentsEnabled || !effectiveWorkspaceId) return;
-    environmentPanel.syncSubagents(chatId, effectiveWorkspaceId, subagentReferences, liveSubagents);
+    environmentPanel.syncSubagents(
+      chatId,
+      effectiveWorkspaceId,
+      subagentReferences,
+      displayedLiveSubagents,
+    );
   }, [
     chatId,
     effectiveWorkspaceId,
     environmentPanel.subagentsEnabled,
     environmentPanel.syncSubagents,
-    liveSubagents,
+    displayedLiveSubagents,
     subagentReferences,
   ]);
 
   React.useLayoutEffect(() => {
-    environmentPanel.setAgentBusy(isGenerating || isStartingGeneration);
+    environmentPanel.setAgentBusy(
+      isGenerating || isStartingGeneration || detachedGenerationDraining,
+    );
     return () => environmentPanel.setAgentBusy(false);
-  }, [environmentPanel.setAgentBusy, isGenerating, isStartingGeneration]);
+  }, [
+    detachedGenerationDraining,
+    environmentPanel.setAgentBusy,
+    isGenerating,
+    isStartingGeneration,
+  ]);
 
   const waitForStreamHandoff = React.useCallback(async (hasContent: boolean) => {
     const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
@@ -554,6 +756,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setHasUnpersistedResponse(false);
       setStreamingText("");
       setStreamingReasoning(null);
+      clearTextStreaming();
+      setStreamingArtifacts([]);
+      streamingArtifactsRef.current = [];
       setStreamComplete(false);
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
@@ -577,6 +782,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           if (pendingDelta) {
             streamedTextRef.current += pendingDelta;
             setStreamingText(streamedTextRef.current);
+            markTextStreaming();
           }
           if (pendingReasoningDelta) {
             streamedReasoningRef.current += pendingReasoningDelta;
@@ -584,12 +790,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
         });
       };
+      const visualize = visualizeTurnRef.current === true;
+      visualizeTurnRef.current = false;
       const handle = startGeneration(
         {
           chatId,
           workspaceId: effectiveWorkspaceId,
           providerId,
           model,
+          ...(visualize ? { visualize: true as const } : {}),
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
@@ -620,7 +829,42 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = "";
             setStreamingText("");
             setStreamingReasoning(null);
+            clearTextStreaming();
             setStreamComplete(false);
+          },
+          onArtifactEvent: (event) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            if (event.operation === "reset") {
+              setStreamingArtifacts([]);
+              streamingArtifactsRef.current = [];
+              return;
+            }
+            const { artifact } = event;
+            setIsModelLoading(false);
+            if (artifact.kind === "html") {
+              const index = streamingArtifactsRef.current.findIndex(
+                (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
+              );
+              if (index >= 0) {
+                streamingArtifactsRef.current = streamingArtifactsRef.current.map((candidate, i) =>
+                  i === index ? artifact : candidate,
+                );
+              } else {
+                streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+              }
+              setStreamingArtifacts(streamingArtifactsRef.current);
+              return;
+            }
+            if (
+              streamingArtifactsRef.current.some(
+                (candidate) =>
+                  candidate.kind === "image" && candidate.attachment.id === artifact.attachment.id,
+              )
+            ) {
+              return;
+            }
+            streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+            setStreamingArtifacts(streamingArtifactsRef.current);
           },
           onReasoningDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
@@ -679,6 +923,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = finalReasoning ?? "";
             setStreamingText(full);
             setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
+            clearTextStreaming();
             setStreamComplete(true);
             if (finalTimeline) {
               generationTimelineRef.current = finalTimeline;
@@ -694,6 +939,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setLiveSubagents([]);
               setStreamingText(null);
               setStreamingReasoning(null);
+              setStreamingArtifacts([]);
+              streamingArtifactsRef.current = [];
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
               setStreamComplete(false);
@@ -724,6 +971,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedTextRef.current = resolvedPartialContent;
               streamedReasoningRef.current = resolvedReasoning;
               setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
+              clearTextStreaming();
               setStreamComplete(true);
               if (finalTimeline) {
                 generationTimelineRef.current = finalTimeline;
@@ -752,7 +1000,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   streamedReasoningRef.current = "";
                   setStreamComplete(false);
                 }
-                setHasUnpersistedResponse(Boolean(partial && !updatedChat));
+                const hasUnpersistedArtifact = streamingArtifactsRef.current.length > 0;
+                setHasUnpersistedResponse(
+                  Boolean((partial || hasUnpersistedArtifact) && !updatedChat),
+                );
+                if (updatedChat) {
+                  setStreamingArtifacts([]);
+                  streamingArtifactsRef.current = [];
+                }
                 setIsStoppingGeneration(false);
                 setIsModelLoading(false);
                 if (!partial || updatedChat) {
@@ -784,12 +1039,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
       chatId,
       anthropicThinkingLevel,
       anthropicThinkingSupported,
+      clearTextStreaming,
       codexThinkingLevel,
       codexThinkingSupported,
       effectiveWorkspaceId,
       environmentPanel.subagentsEnabled,
       googleThinkingLevel,
       googleThinkingSupported,
+      markTextStreaming,
       providerId,
       providerThinkingLevel,
       providerThinkingSupported,
@@ -800,7 +1057,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleSend = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+    async (
+      text: string,
+      attachments: Attachment[],
+      skillInvocation?: SkillInvocationV1,
+      options?: { visualize?: boolean },
+    ) => {
+      visualizeTurnRef.current = options?.visualize === true;
+      if (imageArtifactRecoveryUnavailable) {
+        throw new Error(
+          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
+        );
+      }
+      if (imageArtifactRecoveryPending) {
+        throw new Error(
+          "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
+        );
+      }
       if (computerUseSaving) {
         throw new Error("Wait for the Computer Use setting to finish saving before sending.");
       }
@@ -863,7 +1136,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       }
     },
-    [chatId, computerUseSaving, detachedGenerationDraining, providerId, model, qc, runGeneration],
+    [
+      chatId,
+      computerUseSaving,
+      detachedGenerationDraining,
+      imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable,
+      providerId,
+      model,
+      qc,
+      runGeneration,
+    ],
   );
 
   const handleStop = React.useCallback(() => {
@@ -884,10 +1167,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     pendingReasoningDeltaRef.current = "";
     streamedTextRef.current = "";
     streamedReasoningRef.current = "";
+    streamingArtifactsRef.current = [];
     streamHandoffRef.current?.();
     streamHandoffRef.current = null;
     setStreamingText(null);
     setStreamingReasoning(null);
+    setStreamingArtifacts([]);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -913,13 +1198,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
       decidingApprovalRef.current = prompt.approvalId;
       setDecidingApprovalId(prompt.approvalId);
       try {
-        await chatsApi.approve(prompt.approvalId, decision);
+        if (prompt.source === "remote") {
+          await aidenRemoteApi.respondApproval(chatId, prompt.approvalId, decision);
+        } else {
+          await chatsApi.approve(prompt.approvalId, decision);
+        }
         if (chatIdRef.current !== decisionChatId) return;
         setApprovals((prev) =>
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
+        if (prompt.source === "remote") {
+          setApprovals((prev) =>
+            prev.filter((approval) => approval.approvalId !== prompt.approvalId),
+          );
+        }
         toast.error(
           approvalError instanceof Error
             ? approvalError.message
@@ -1078,8 +1372,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const changeProviderThinking = React.useCallback(
     async (level: GenerationThinkingLevel) => {
-      if (!model || !providerThinkingSupported || thinkingSaving ||
-        isStartingGeneration || isGenerating) return;
+      if (
+        !model ||
+        !providerThinkingSupported ||
+        thinkingSaving ||
+        isStartingGeneration ||
+        isGenerating
+      )
+        return;
       setThinkingSaving(true);
       try {
         const updated = await settingsApi.setProviderThinking(providerId, model, level);
@@ -1117,7 +1417,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       setThinkingSaving(true);
       try {
-        const updated = await settingsApi.set({ showLocalModelReasoning: visible });
+        const updated = await settingsApi.set({
+          showLocalModelReasoning: visible,
+        });
         qc.setQueryData(queryKeys.settings, updated);
       } catch (changeError) {
         toast.error(
@@ -1322,7 +1624,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
-  const activeStep = latestActiveAgentStep(generationTimeline);
+  const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
+  const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
         state: "running",
@@ -1334,15 +1637,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
     isStarting: isStartingGeneration,
     isStopping: isStoppingGeneration,
     isModelLoading,
-    streamingText: canStopGeneration || isStoppingGeneration ? streamingText : null,
+    streamingText:
+      canStopGeneration || isStoppingGeneration || detachedGenerationDraining
+        ? displayedStreamingText
+        : null,
+    textStreaming,
     pendingApproval: Boolean(pending),
     toolActivity,
   });
-  const visibleAgentActivity =
-    streamingReasoning &&
-    (agentActivity?.phase === "thinking" || agentActivity?.phase === "loading")
-      ? null
-      : agentActivity;
+  // The reasoning disclosure owns exposed reasoning for the whole turn, even
+  // after its timeline step settles. Visualizing owns only the live artifact
+  // render window; detached projections hide that block and keep narration.
+  const visualizingBlockVisible =
+    hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
+    !streamComplete &&
+    !visibleDetachedProjection;
+  const visibleAgentActivity = resolveVisibleAgentActivity(agentActivity, {
+    reasoningVisible: Boolean(displayedStreamingReasoning),
+    visualizingVisible: visualizingBlockVisible,
+  });
 
   React.useEffect(() => {
     if (!pending) return;
@@ -1366,7 +1679,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <ScrollArea
       className="h-full min-h-0"
-      title={chat.data?.title ?? "New agent"}
+      title={
+        bot.data ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <BotAvatar
+              botId={bot.data.id}
+              avatar={bot.data.avatar}
+              name={bot.data.name}
+              photoLoading="immediate"
+              size="small"
+            />
+            <span className="min-w-0">
+              <span className="flex items-center gap-2">
+                <span className="truncate">{bot.data.name}</span>
+                <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
+                  Bot
+                </span>
+              </span>
+              <span className="block truncate text-small font-normal text-secondary">
+                {chat.data?.title ?? "New conversation"}
+              </span>
+            </span>
+          </span>
+        ) : (
+          (chat.data?.title ?? "New agent")
+        )
+      }
       actions={
         <>
           <OpenInEditorPicker
@@ -1393,11 +1731,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       autoScrollToBottom
       autoScrollDeps={[
         messages.length,
-        streamingText,
-        streamingReasoning,
-        generationTimeline,
+        displayedStreamingText,
+        displayedStreamingReasoning,
+        displayedGenerationTimeline,
         agentActivity?.phase,
         approvals.length,
+        displayedStreamingArtifacts.length,
       ]}
       showScrollToBottomButton
       footer={
@@ -1454,15 +1793,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       </Text>
                     </div>
                   </div>
-                  {invalidPendingPrivilegedApproval ? (
+                  {!pendingCanAllow ? (
                     <Text
                       variant="small"
                       as="p"
                       id={`approval-summary-${pending.approvalId}`}
                       className="mt-2.5 rounded-control bg-well px-3 py-2"
                     >
-                      Aiden could not verify the exact target, arguments, or safety profile for this
-                      request.
+                      Aiden cannot safely authorize this action from this view. Deny it here or
+                      review the exact action on the device that owns this chat.
                     </Text>
                   ) : pendingWorkspaceWrite ? (
                     <SubagentWorkspaceWriteApproval
@@ -1499,7 +1838,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     >
                       Deny
                     </Button>
-                    {invalidPendingPrivilegedApproval ? null : (
+                    {pendingCanAllow ? (
                       <Button
                         variant="accent"
                         size="small"
@@ -1512,7 +1851,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                             ? subagentMcpMutationAllowLabel(pendingMcpMutation)
                             : "Allow once"}
                       </Button>
-                    )}
+                    ) : null}
                   </div>
                 </section>
               </div>
@@ -1523,8 +1862,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
             // route no longer remounts the pane, and Composer owns that text
             // without a chatId reset of its own.
             key={chatId}
-            ready={ready}
-            readinessMessage={readinessMessage}
+            ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
+            readinessMessage={
+              imageArtifactRecoveryUnavailable
+                ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                : imageArtifactRecoveryPending
+                  ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
+                  : readinessMessage
+            }
             hasMessages={hasMessages}
             chatId={chatId}
             onSend={handleSend}
@@ -1576,7 +1921,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             slashSessionBlockedReason={
               documentAppendReconciliationRequired
                 ? "Reload Aiden before copying this chat."
-                : undefined
+                : imageArtifactRecoveryUnavailable
+                  ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
+                  : imageArtifactRecoveryPending
+                    ? "Delete this chat to discard the unrecovered visual artifact before copying."
+                    : undefined
             }
             slashPaletteBlocked={Boolean(pending)}
             slashActionBusy={isGenerating || isStartingGeneration}
@@ -1639,7 +1988,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             modelPicker={
               <ModelPicker
-                providers={settings.data ? providers.data ?? [] : []}
+                providers={settings.data ? (providers.data ?? []) : []}
                 providerId={providerId}
                 model={model}
                 onChange={select}
@@ -1661,7 +2010,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             Loading…
           </Text>
         </div>
-      ) : messages.length === 0 && streamingText === null ? (
+      ) : messages.length === 0 && displayedStreamingText === null ? (
         <div className="flex min-h-full items-center justify-center">
           <EmptyState
             title="What would you like to work on?"
@@ -1674,17 +2023,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
         </div>
       ) : (
         <MessageList
+          key={chatId}
+          chatId={chatId}
           messages={messages}
-          streamingText={streamingText}
-          streamingReasoning={streamingReasoning}
-          streamComplete={streamComplete}
+          streamingText={displayedStreamingText}
+          streamingReasoning={displayedStreamingReasoning}
+          streamingArtifacts={displayedStreamingArtifacts}
+          streamComplete={streamComplete || visibleDetachedProjection !== null}
           onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-          timeline={generationTimeline}
-          liveSubagents={liveSubagents}
+          timeline={displayedGenerationTimeline}
+          liveSubagents={displayedLiveSubagents}
           subagentsEnabled={environmentPanel.subagentsEnabled}
           onOpenSubagent={environmentPanel.openSubagent}
           agentActivity={visibleAgentActivity}
-          error={error}
+          error={
+            error ??
+            (imageArtifactRecoveryUnavailable
+              ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+              : imageArtifactRecoveryPending
+                ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
+                : null)
+          }
         />
       )}
     </ScrollArea>

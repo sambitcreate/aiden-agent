@@ -1,5 +1,10 @@
 # Gemini Native Upgrade Plan
 
+> Post-plan update (August 2026): the separately scoped Gemini 3.5 Voice
+> Transcription plan shipped voice-only Live transcription. Realtime multimodal
+> screen sharing remains deferred; historical statements below describe this plan's
+> original boundary.
+
 Status: Phases 0, 1, and 3 implemented on 2026-07-23–24; deferred tracks remain planned
 Date: 2026-07-22
 Depends on: `docs/plans/pi-provider-integration-plan.md` (broader registry migration)

@@ -10,10 +10,11 @@ import test from "node:test";
 import {
   AidenRemotePortInUseError,
   AidenRemoteService,
-  aidenRemoteBonjourServiceName,
   aidenRemoteBonjourBackend,
+  aidenRemoteBonjourServiceName,
   aidenRemotePortCandidates,
 } from "./aiden-remote-service.js";
+
 import {
   AidenRemoteStateRegistry,
   createDefaultAidenRemoteState,
@@ -23,17 +24,19 @@ import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.
 import type { AidenTailscaleStatus } from "./aiden-remote-tailscale-route.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 
-test("remote discovery uses the system daemon on macOS and bundled mDNS elsewhere", () => {
+test("Remote discovery selects the Node Bonjour backend on Linux", () => {
   assert.equal(aidenRemoteBonjourBackend("darwin"), "dns-sd");
   assert.equal(aidenRemoteBonjourBackend("linux"), "node");
-  assert.equal(aidenRemoteBonjourBackend("win32"), "node");
 });
 
-async function canBind(port: number): Promise<boolean> {
+async function canBind(
+  port: number,
+  host: "::" | "127.0.0.1" = "127.0.0.1",
+): Promise<boolean> {
   const server = createServer();
   return new Promise((resolve) => {
     server.once("error", () => resolve(false));
-    server.listen(port, "127.0.0.1", () => {
+    server.listen(port, host, () => {
       server.close(() => resolve(true));
     });
   });
@@ -115,10 +118,21 @@ interface FixtureOptions {
   failSaveWhen?: (document: AidenRemoteStateDocument) => boolean;
   failBonjourStart?: boolean;
   tailscaleServeStatus?: AidenTailscaleStatus;
+  tailscaleStatusFailureAtCall?: number;
   enableTailscaleTakeover?: boolean;
   tailscaleAssessment?: {
     state: "available" | "owned" | "other_aiden_live" | "other_aiden_stale" | "unrelated_conflict" | "funnel_conflict" | "unavailable";
     errorCode?: "not_installed" | "not_connected" | "https_unavailable" | "status_unavailable";
+  };
+  tailscaleInspection?: {
+    connectionStatus: {
+      installed: boolean;
+      dnsName?: string;
+      httpsAvailable?: boolean;
+      serveStatus?: AidenTailscaleStatus;
+      errorCode?: "not_installed" | "not_connected" | "https_unavailable" | "status_unavailable";
+    };
+    assessment: NonNullable<FixtureOptions["tailscaleAssessment"]>;
   };
   afterListenerBound?: (input: {
     transport: "lan" | "tailscale";
@@ -174,15 +188,27 @@ async function fixture(
     connects: 0,
     disconnects: 0,
     reconciles: 0,
+    statusCalls: 0,
+    assessmentCalls: 0,
+    inspectionCalls: 0,
     targets: [] as string[],
     disconnectTargets: [] as string[],
-    status: async () => ({
-      installed: true,
-      dnsName: "aiden.tailnet.ts.net",
-      ...(options.tailscaleServeStatus
-        ? { serveStatus: options.tailscaleServeStatus }
-        : {}),
-    }),
+    status: async () => {
+      tailscale.statusCalls += 1;
+      if (
+        options.tailscaleStatusFailureAtCall !== undefined
+        && tailscale.statusCalls === options.tailscaleStatusFailureAtCall
+      ) {
+        throw new Error("tailscale status unavailable");
+      }
+      return {
+        installed: true,
+        dnsName: "aiden.tailnet.ts.net",
+        ...(options.tailscaleServeStatus
+          ? { serveStatus: options.tailscaleServeStatus }
+          : {}),
+      };
+    },
     connect: async (
       target: string,
       _ownership?: { path: "/api/aiden/v1"; target: string },
@@ -216,7 +242,10 @@ async function fixture(
     },
     ...(options.enableTailscaleTakeover
       ? {
-          assessRoute: async () => ({ state: "other_aiden_stale" as const }),
+          assessRoute: async () => {
+            tailscale.assessmentCalls += 1;
+            return { state: "other_aiden_stale" as const };
+          },
           reviewTakeover: async () => ({ token: "A".repeat(32), expiresAt: Date.now() + 30_000 }),
           takeOver: async (
             target: string,
@@ -231,7 +260,16 @@ async function fixture(
         }
       : {}),
     ...(options.tailscaleAssessment
-      ? { assessRoute: async () => options.tailscaleAssessment! }
+      ? { assessRoute: async () => {
+          tailscale.assessmentCalls += 1;
+          return options.tailscaleAssessment!;
+        } }
+      : {}),
+    ...(options.tailscaleInspection
+      ? { inspectRoute: async () => {
+          tailscale.inspectionCalls += 1;
+          return options.tailscaleInspection!;
+        } }
       : {}),
   };
   let identityLoads = 0;
@@ -390,6 +428,29 @@ test("fresh endpoint candidates are bounded, unique, and reserve a loopback comp
 test("a fresh profile moves to the next complete port pair and advertises only the committed port", async () => {
   const [blockedPort, fallbackPort] = await availablePortPairs(2);
   const blocker = await reservePort(blockedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: blockedPort,
+    portCandidates: [blockedPort, fallbackPort],
+  });
+  try {
+    await app.service.setEnabled(true);
+    assert.equal(app.persisted().lanPort, fallbackPort);
+    assert.equal(app.persisted().lanPortCommitted, true);
+    assert.deepEqual(app.bonjour.inputs.map((input) => input.port), [fallbackPort]);
+    assert.deepEqual(await insecureHealth(fallbackPort), {
+      status: 200,
+      body: { ok: true, protocolVersion: 1 },
+    });
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("a fresh profile skips a LAN candidate occupied only on IPv4 loopback", async () => {
+  const [blockedPort, fallbackPort] = await availablePortPairs(2);
+  const blocker = await reservePort(blockedPort, "127.0.0.1");
   const app = await fixture({
     mode: "both",
     lanPort: blockedPort,
@@ -685,7 +746,10 @@ test("a committed endpoint remains stable across restart even when alternatives 
 });
 
 test("committed legacy port 65535 remains restart-compatible in every connection mode", async (context) => {
-  if (!await canBind(65_535) || !await canBind(49_221)) {
+  // LAN binds the IPv6 wildcard (dual stack on supported hosts), while the
+  // companion Tailscale listener is IPv4 loopback. Probe the same addresses
+  // as production so a host-owned IPv6 endpoint skips instead of racing us.
+  if (!await canBind(65_535, "::") || !await canBind(49_221)) {
     context.skip("legacy endpoint ports are occupied on this host");
     return;
   }
@@ -783,6 +847,120 @@ test("a paired profile fails closed with typed remediation instead of moving its
     assert.equal(app.persisted().lanPort, pairedPort);
     assert.equal(app.persisted().lanPortCommitted, false);
     assert.equal(app.bonjour.starts, 0);
+    assert.equal(await canBind(alternatePort), true);
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("a paired profile moves only after explicit endpoint repair", async () => {
+  const [pairedPort, alternatePort] = await availablePortPairs(2);
+  const blocker = await reservePort(pairedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: pairedPort,
+    portCandidates: [pairedPort, alternatePort],
+  });
+  try {
+    await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
+    await assert.rejects(app.service.setEnabled(true), AidenRemotePortInUseError);
+
+    await app.service.moveToAvailablePort();
+
+    const status = await app.service.status();
+    assert.equal(status.running, true);
+    assert.equal(status.enabled, true);
+    assert.equal(status.errorCode, undefined);
+    assert.equal(app.persisted().lanPort, alternatePort);
+    assert.equal(app.persisted().lanPortCommitted, true);
+    assert.deepEqual(await insecureHealth(alternatePort), {
+      status: 200,
+      body: { ok: true, protocolVersion: 1 },
+    });
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("explicit endpoint repair fails closed when Tailscale routes cannot be inventoried", async () => {
+  const [pairedPort, alternatePort] = await availablePortPairs(2);
+  const blocker = await reservePort(pairedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: pairedPort,
+    portCandidates: [pairedPort, alternatePort],
+    tailscaleStatusFailureAtCall: 2,
+  });
+  try {
+    await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
+    await assert.rejects(app.service.setEnabled(true), AidenRemotePortInUseError);
+
+    await assert.rejects(
+      app.service.moveToAvailablePort(),
+      /verify existing Tailscale routes/u,
+    );
+
+    const status = await app.service.status();
+    assert.equal(status.errorCode, "remote_port_in_use");
+    assert.equal(app.persisted().lanPort, pairedPort);
+    assert.equal(await canBind(alternatePort), true);
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("explicitly disabling Remote Access clears stale port remediation", async () => {
+  const [pairedPort, alternatePort] = await availablePortPairs(2);
+  const blocker = await reservePort(pairedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: pairedPort,
+    portCandidates: [pairedPort, alternatePort],
+  });
+  try {
+    await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
+    await assert.rejects(app.service.setEnabled(true), AidenRemotePortInUseError);
+    await app.service.setEnabled(false);
+
+    const status = await app.service.status();
+    assert.equal(status.errorCode, undefined);
+    await assert.rejects(
+      app.service.moveToAvailablePort(),
+      /does not currently need a different port/u,
+    );
+    assert.equal(app.persisted().enabled, false);
+    assert.equal(app.persisted().lanPort, pairedPort);
+    assert.equal(await canBind(alternatePort), true);
+  } finally {
+    await app.cleanup();
+    await closeReservedPort(blocker);
+  }
+});
+
+test("explicit endpoint repair refuses to orphan an owned Tailscale route", async () => {
+  const [pairedPort, alternatePort] = await availablePortPairs(2);
+  const blocker = await reservePort(pairedPort, "::");
+  const app = await fixture({
+    mode: "both",
+    lanPort: pairedPort,
+    portCandidates: [pairedPort, alternatePort],
+    initial: (state) => {
+      state.tailscaleOwnership = {
+        path: "/api/aiden/v1",
+        target: `http://127.0.0.1:${pairedPort + 1}/api/aiden/v1`,
+      };
+    },
+  });
+  try {
+    await assert.rejects(app.service.setEnabled(true), AidenRemotePortInUseError);
+    await assert.rejects(
+      app.service.moveToAvailablePort(),
+      /Disconnect this profile's Tailscale Serve route/u,
+    );
+    assert.equal(app.persisted().lanPort, pairedPort);
     assert.equal(await canBind(alternatePort), true);
   } finally {
     await app.cleanup();
@@ -1016,6 +1194,66 @@ test("Tailscale connect removes only a persisted origin-only route before canoni
   }
 });
 
+test("Tailscale connect repoints an exactly owned pre-migration development route", async () => {
+  const [legacyPort, migratedPort] = await availablePortPairs(2);
+  const legacyTarget = `http://127.0.0.1:${legacyPort + 1}/api/aiden/v1`;
+  const migratedTarget = `http://127.0.0.1:${migratedPort + 1}/api/aiden/v1`;
+  const app = await fixture({
+    mode: "both",
+    lanPort: migratedPort,
+    initial: (state) => {
+      state.lanPortCommitted = true;
+      state.tailscaleOwnership = { path: "/api/aiden/v1", target: legacyTarget };
+    },
+    tailscaleServeStatus: {
+      TCP: { "443": { HTTPS: true } },
+      Web: {
+        "aiden.tailnet.ts.net:443": {
+          Handlers: { "/api/aiden/v1": { Proxy: legacyTarget } },
+        },
+      },
+    },
+  });
+  try {
+    await app.service.setEnabled(true);
+    await app.service.connectTailscale();
+    assert.deepEqual(app.tailscale.disconnectTargets, [legacyTarget]);
+    assert.deepEqual(app.tailscale.targets, [migratedTarget]);
+    assert.equal(app.persisted().tailscaleOwnership?.target, migratedTarget);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Tailscale disconnect clears an exactly owned pre-migration development route", async () => {
+  const [legacyPort, migratedPort] = await availablePortPairs(2);
+  const legacyTarget = `http://127.0.0.1:${legacyPort + 1}/api/aiden/v1`;
+  const app = await fixture({
+    mode: "both",
+    lanPort: migratedPort,
+    initial: (state) => {
+      state.lanPortCommitted = true;
+      state.tailscaleOwnership = { path: "/api/aiden/v1", target: legacyTarget };
+    },
+    tailscaleServeStatus: {
+      TCP: { "443": { HTTPS: true } },
+      Web: {
+        "aiden.tailnet.ts.net:443": {
+          Handlers: { "/api/aiden/v1": { Proxy: legacyTarget } },
+        },
+      },
+    },
+  });
+  try {
+    await app.service.setEnabled(true);
+    await app.service.disconnectTailscale();
+    assert.deepEqual(app.tailscale.disconnectTargets, [legacyTarget]);
+    assert.equal(app.persisted().tailscaleOwnership, undefined);
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("Tailscale takeover review stays main-owned and persists only after confirmed takeover", async () => {
   const app = await fixture({ mode: "both", enableTailscaleTakeover: true });
   try {
@@ -1029,6 +1267,48 @@ test("Tailscale takeover review stays main-owned and persists only after confirm
       app.persisted().tailscaleOwnership?.target,
       `http://127.0.0.1:${app.persisted().lanPort + 1}/api/aiden/v1`,
     );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("service status consumes one atomic Tailscale route inspection", async () => {
+  const serveStatus: AidenTailscaleStatus = {
+    TCP: { "443": { HTTPS: true } },
+    Web: {
+      "aiden.tailnet.ts.net:443": {
+        Handlers: {
+          "/api/aiden/v1": {
+            Proxy: "http://127.0.0.1:49221/api/aiden/v1",
+          },
+        },
+      },
+    },
+  };
+  const app = await fixture({
+    mode: "both",
+    tailscaleInspection: {
+      connectionStatus: {
+        installed: true,
+        dnsName: "aiden.tailnet.ts.net",
+        httpsAvailable: true,
+        serveStatus,
+      },
+      assessment: { state: "other_aiden_live" },
+    },
+  });
+  try {
+    await app.service.setEnabled(true);
+    app.tailscale.statusCalls = 0;
+    app.tailscale.assessmentCalls = 0;
+    app.tailscale.inspectionCalls = 0;
+    const status = await app.service.status();
+    assert.equal(status.tailscaleRouteState, "other_aiden_live");
+    assert.equal(status.tailscaleInstalled, true);
+    assert.equal(status.tailscaleEndpoint, "https://aiden.tailnet.ts.net/api/aiden/v1");
+    assert.equal(app.tailscale.inspectionCalls, 1);
+    assert.equal(app.tailscale.statusCalls, 0);
+    assert.equal(app.tailscale.assessmentCalls, 0);
   } finally {
     await app.cleanup();
   }

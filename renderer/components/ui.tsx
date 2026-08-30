@@ -18,6 +18,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
 import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
+import { reportRendererDiagnostic } from "../lib/dev-log";
 import { cn } from "../lib/ui-utils";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import {
@@ -67,8 +68,9 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     <Component
       ref={ref}
       type={asChild ? undefined : type}
+      data-slot="button"
       className={cn(
-        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border border-transparent text-strong outline-none transition-[background-color,border-color,color,box-shadow,opacity] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 [&_svg:not([class*='size-'])]:size-4",
+        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform] duration-150 ease-out active:scale-[0.985] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
         radius === "full" ? "rounded-pill" : "rounded-control",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
@@ -105,7 +107,7 @@ export const Input = React.forwardRef<
     <input
       ref={ref}
       className={cn(
-        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
         className,
       )}
       {...props}
@@ -125,7 +127,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
     <textarea
       ref={ref}
       className={cn(
-        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
         density === "compact" ? "min-h-7" : "min-h-16",
         className,
       )}
@@ -169,6 +171,10 @@ export function Text({
       {...props}
     />
   );
+}
+
+export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cn("text-mini text-tertiary", className)} {...props} />;
 }
 
 export function Badge({
@@ -694,7 +700,7 @@ export function Sidebar({
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
       {searchable ? (
         <div className="px-3 pb-3">
-          <label className="flex h-8 items-center gap-2 rounded-pill border border-transparent bg-input px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-control/70 focus-within:border-focus-ring focus-within:bg-control">
+          <label className="flex h-8 items-center gap-2 rounded-pill border border-transparent bg-input px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-control/70 focus-within:bg-control">
             <Search className="size-4 shrink-0 text-tertiary" />
             <input
               type="search"
@@ -1017,8 +1023,8 @@ export function Dialog({
           onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           className={cn(
-            "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
-            layer === "onboarding" ? "z-[70]" : "z-50",
+            "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
+            layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
             size === "large" && "w-[min(92vw,680px)]",
           )}
         >
@@ -1101,10 +1107,7 @@ export function AlertDialog({
       <AlertDialogPrimitive.Portal>
         <AlertDialogPrimitive.Overlay
           data-slot="dialog-overlay"
-          className={cn(
-            "fixed inset-0 bg-transparent",
-            layer === "onboarding" ? "z-[70]" : "z-50",
-          )}
+          className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <AlertDialogPrimitive.Content
           data-slot="dialog-content"
@@ -1119,8 +1122,8 @@ export function AlertDialog({
           }}
           onEscapeKeyDown={(event) => busy && event.preventDefault()}
           className={cn(
-            "fixed left-1/2 top-1/2 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
-            layer === "onboarding" ? "z-[70]" : "z-50",
+            "fixed left-1/2 top-1/2 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 outline-none",
+            layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
           )}
         >
           <AlertDialogPrimitive.Title className="text-heading2 font-semibold">
@@ -1461,10 +1464,19 @@ export const Command = React.forwardRef<
 });
 export const CommandInput = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Input>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
->(function CommandInput({ className, ...props }, ref) {
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input> & {
+    containerClassName?: string;
+    showSeparator?: boolean;
+  }
+>(function CommandInput({ className, containerClassName, showSeparator = true, ...props }, ref) {
   return (
-    <div className="flex h-9 items-center gap-2 border-b border-separator px-3">
+    <div
+      className={cn(
+        "flex h-9 items-center gap-2 px-3",
+        showSeparator && "border-b border-separator",
+        containerClassName,
+      )}
+    >
       <Search className="size-4 shrink-0 text-tertiary" />
       <CommandPrimitive.Input
         ref={ref}
@@ -1546,19 +1558,29 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       ? null
       : { failed: false, resetKey: props.resetKey };
   }
+  componentDidCatch(error: unknown) {
+    reportRendererDiagnostic("react-caught", error, "subtree");
+  }
   render() {
     return this.state.failed ? this.props.fallback : this.props.children;
   }
 }
 
 export function ErrorBoundaryView({ error, reset }: { error?: unknown; reset?: () => void }) {
+  const [referenceId, setReferenceId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setReferenceId(reportRendererDiagnostic("route-error", error, "router"));
+  }, [error]);
   return (
     <div className="flex h-screen flex-col items-center justify-center gap-3 p-8 text-center">
       <Text variant="heading1">Something went wrong</Text>
       <Text color="secondary">
-        {error instanceof Error ? error.message : "Aiden Agent could not render this screen."}
+        Aiden Agent could not render this screen. Try again or open Diagnostics in Settings.
       </Text>
+      {referenceId ? <Text color="secondary">Reference {referenceId}</Text> : null}
       {reset ? <Button onClick={reset}>Try again</Button> : null}
     </div>
   );
 }
+
+export { AidenIcon, type AidenIconProps } from "./aiden-icon";

@@ -5,6 +5,177 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testJumpToLatestThresholdOnlyAppearsWhenTranscriptIsMeaningfullyAboveBottom() {
+        XCTAssertFalse(
+            aidenChatIsScrolledAwayFromLatest(
+                contentOffsetY: 0,
+                containerHeight: 700,
+                contentHeight: 650,
+                bottomInset: 0
+            )
+        )
+        XCTAssertFalse(
+            aidenChatIsScrolledAwayFromLatest(
+                contentOffsetY: 220,
+                containerHeight: 700,
+                contentHeight: 980,
+                bottomInset: 0
+            )
+        )
+        XCTAssertTrue(
+            aidenChatIsScrolledAwayFromLatest(
+                contentOffsetY: 100,
+                containerHeight: 700,
+                contentHeight: 980,
+                bottomInset: 0
+            )
+        )
+        XCTAssertTrue(
+            aidenChatIsScrolledAwayFromLatest(
+                contentOffsetY: 180,
+                containerHeight: 700,
+                contentHeight: 980,
+                bottomInset: 24
+            )
+        )
+    }
+
+    func testBotBubbleIsRoundedWithoutATail() {
+        let rect = CGRect(x: 0, y: 0, width: 100, height: 50)
+        let bubble = AidenBotMessageBubbleShape().path(in: rect)
+
+        XCTAssertEqual(bubble.boundingRect, rect)
+        XCTAssertTrue(bubble.contains(CGPoint(x: 50, y: 25)))
+        XCTAssertFalse(bubble.contains(CGPoint(x: 1, y: 1)))
+        XCTAssertFalse(bubble.contains(CGPoint(x: 99, y: 49)))
+    }
+
+    func testBotMessageGroupingOnlyJoinsNearbyMessagesFromTheSameSpeaker() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let first = AidenChatMessage(
+            id: "first",
+            role: .assistant,
+            text: "First",
+            createdAt: start
+        )
+        let nearby = AidenChatMessage(
+            id: "nearby",
+            role: .assistant,
+            text: "Second",
+            createdAt: start.addingTimeInterval(30)
+        )
+        let later = AidenChatMessage(
+            id: "later",
+            role: .assistant,
+            text: "Later",
+            createdAt: start.addingTimeInterval(61)
+        )
+        let reply = AidenChatMessage(
+            id: "reply",
+            role: .user,
+            text: "Reply",
+            createdAt: start.addingTimeInterval(15)
+        )
+
+        XCTAssertTrue(aidenMessagesJoin(first, nearby))
+        XCTAssertFalse(aidenMessagesJoin(first, later))
+        XCTAssertFalse(aidenMessagesJoin(first, reply))
+        XCTAssertFalse(aidenMessagesJoin(nil, nearby))
+    }
+
+    func testFailedSendRestoresSubmittedTextWithoutClobberingTheNextDraft() {
+        XCTAssertEqual(
+            AidenDraftSendReconciliation.failedDraft(submitted: "First message", current: ""),
+            "First message"
+        )
+        XCTAssertEqual(
+            AidenDraftSendReconciliation.failedDraft(
+                submitted: "First message",
+                current: "Next message"
+            ),
+            "First message\n\nNext message"
+        )
+    }
+
+    @MainActor
+    func testLiveChatMutationAuthorizationCanBeRevokedAndRestored() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-bot","workspaceId":"managed-home","botId":"bot-1","title":"Bot","messages":[],"createdAt":"2026-08-23T12:00:00Z","updatedAt":"2026-08-23T12:00:01Z","revision":"rev-1"}"#.utf8
+            )
+        )
+        let model = AidenChatViewModel(
+            coordinator: AidenRemoteCoordinator(),
+            chat: chat,
+            allowsMutations: true
+        )
+
+        XCTAssertFalse(model.isReadOnlyPresentation)
+        model.setAllowsMutations(false)
+        XCTAssertTrue(model.isReadOnlyPresentation)
+        model.setAllowsMutations(true)
+        XCTAssertFalse(model.isReadOnlyPresentation)
+    }
+
+    func testRemoteChatDecodesOptionalBotIdentityAndWorkspaceProjectionStaysDisjoint() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chats = try decoder.decode(
+            [AidenChat].self,
+            from: Data(
+                """
+                [{"id":"chat-workspace","workspaceId":"workspace-1","title":"Workspace",
+                "messages":[],"createdAt":"2026-08-20T12:00:00Z",
+                "updatedAt":"2026-08-20T12:00:01Z","revision":"rev-workspace"},
+                {"id":"chat-bot","workspaceId":"managed-bot-home","botId":"bot-1",
+                "title":"Bot","messages":[],"createdAt":"2026-08-20T12:00:00Z",
+                "updatedAt":"2026-08-20T12:00:01Z","revision":"rev-bot",
+                "futurePresentation":{"safe":true}}]
+                """.utf8
+            )
+        )
+
+        XCTAssertNil(chats[0].botId)
+        XCTAssertEqual(chats[1].botId, "bot-1")
+        XCTAssertFalse(chats[0].isBotChat)
+        XCTAssertTrue(chats[1].isBotChat)
+        XCTAssertEqual(
+            AidenChat.regularWorkspaceChats(from: chats).map(\.id),
+            ["chat-workspace"]
+        )
+    }
+
+    func testRemoteChatRejectsMalformedPresentBotIdentity() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        for botMember in ["\"botId\":null", "\"botId\":\"\""] {
+            let data = Data(
+                """
+                {"id":"chat-1","workspaceId":"workspace-1",\(botMember),"title":"Bot",
+                "messages":[],"createdAt":"2026-08-20T12:00:00Z",
+                "updatedAt":"2026-08-20T12:00:01Z","revision":"rev-1"}
+                """.utf8
+            )
+            XCTAssertThrowsError(try decoder.decode(AidenChat.self, from: data))
+        }
+
+        let oversizedBotID = String(
+            repeating: "b",
+            count: AidenRemoteProtocol.maxBotIdentifierLength + 1
+        )
+        let oversized = Data(
+            """
+            {"id":"chat-1","workspaceId":"workspace-1","botId":"\(oversizedBotID)",
+            "title":"Bot","messages":[],"createdAt":"2026-08-20T12:00:00Z",
+            "updatedAt":"2026-08-20T12:00:01Z","revision":"rev-1"}
+            """.utf8
+        )
+        XCTAssertThrowsError(try decoder.decode(AidenChat.self, from: oversized))
+    }
+
     func testRemoteChatDecodesPendingBackgroundTitleAndUsesABoundedRetryWindow() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -20,6 +191,214 @@ final class AidenChatTests: XCTestCase {
         XCTAssertLessThanOrEqual(
             AidenChatTitleReconciliation.retryMilliseconds.reduce(0, +),
             15_000
+        )
+    }
+
+    func testRemoteChatDecodesAssistantImageAttachmentsForTheSharedGallery() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Image","messages":[{"id":"message-1","role":"assistant","text":"Here it is.","createdAt":"2026-08-20T12:00:00Z","attachments":[{"id":"attachment-1","name":"Result.png","mimeType":"image/png","kind":"image","size":70}]}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(chat.messages.first?.role, .assistant)
+        XCTAssertEqual(chat.messages.first?.attachments?.first?.name, "Result.png")
+        XCTAssertEqual(AidenMessageMediaEdge.forRole(chat.messages.first?.role ?? .user), .leading)
+    }
+
+    func testRemoteChatDecodesHtmlArtifactsWithoutRenderingThem() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Viz","messages":[{"id":"message-1","role":"assistant","text":"Chart.","createdAt":"2026-08-20T12:00:00Z","htmlArtifacts":[{"id":"html-1","title":"Dependencies"}]}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.id, "html-1")
+        XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.title, "Dependencies")
+        XCTAssertTrue(chat.messages.first?.htmlArtifacts?.first?.isWireSafe ?? false)
+    }
+
+    func testRemoteChatDecodesDurableMacActivityAndUsesMacPresentationLanguage() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Activity","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"target":"README.md"},{"id":"think-1","order":1,"kind":"thinking","startedAt":1500,"updatedAt":2500,"finishedAt":2500,"contentOffset":0,"durationMs":1000},{"id":"tool-2","order":2,"kind":"tool","toolCallId":"call-2","toolName":"run_command","label":"Run command","status":"completed","startedAt":2500,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"detail":"Run tests"}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+            )
+        )
+
+        let timeline = try XCTUnwrap(chat.messages.first?.timeline)
+        XCTAssertTrue(timeline.isRendererSafe)
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[0]), "Read README.md")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Thought briefly")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[2]), "Ran Run tests")
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, ran 1 command")
+    }
+
+    func testReasoningActivityUsesOneDisclosureAndSurfacesVisualizationPhase() throws {
+        let activeThinking = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-thinking",
+            status: .running,
+            startedAt: 1_000,
+            finishedAt: nil,
+            steps: [
+                AidenAgentStep(
+                    id: "think-1",
+                    order: 0,
+                    kind: .thinking,
+                    toolName: nil,
+                    label: nil,
+                    status: nil,
+                    startedAt: 1_000,
+                    updatedAt: 1_500,
+                    finishedAt: nil,
+                    contentOffset: 0,
+                    durationMs: nil,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                )
+            ]
+        )
+        XCTAssertTrue(AidenAgentActivityPresentation.hasActiveThinkingStep(activeThinking))
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.reasoningLabel(activeThinking, active: true),
+            "Thinking"
+        )
+
+        let visualizing = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-visualizing",
+            status: .running,
+            startedAt: 1_000,
+            finishedAt: nil,
+            steps: [
+                AidenAgentStep(
+                    id: "think-1",
+                    order: 0,
+                    kind: .thinking,
+                    toolName: nil,
+                    label: nil,
+                    status: nil,
+                    startedAt: 1_000,
+                    updatedAt: 2_000,
+                    finishedAt: 2_000,
+                    contentOffset: 0,
+                    durationMs: 1_000,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                ),
+                AidenAgentStep(
+                    id: "tool-1",
+                    order: 1,
+                    kind: .tool,
+                    toolCallId: "call-1",
+                    toolName: AidenAgentActivityPresentation.renderArtifactToolName,
+                    label: "Render artifact",
+                    status: .running,
+                    startedAt: 2_000,
+                    updatedAt: 2_500,
+                    finishedAt: nil,
+                    contentOffset: 0,
+                    durationMs: nil,
+                    target: nil,
+                    detail: nil,
+                    lineChanges: nil
+                )
+            ]
+        )
+        XCTAssertFalse(AidenAgentActivityPresentation.hasActiveThinkingStep(visualizing))
+        XCTAssertTrue(
+            AidenAgentActivityPresentation.hasActiveToolStep(
+                visualizing,
+                named: AidenAgentActivityPresentation.renderArtifactToolName
+            )
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.visualizingLabel(visualizing), "Visualizing")
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.reasoningLabel(visualizing, active: false),
+            "Thought briefly"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.activitySteps(visualizing, reasoningVisible: true).map(\.kind),
+            [.tool]
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.activitySteps(visualizing, reasoningVisible: false).map(\.kind),
+            [.thinking, .tool]
+        )
+        XCTAssertNil(AidenAgentActivityPresentation.visualizingLabel(activeThinking))
+    }
+
+    func testActivityTimelineRejectsAbsoluteTargetsBeforePresentation() throws {
+        let timeline = try JSONDecoder().decode(
+            AidenGenerationTimeline.self,
+            from: Data(
+                #"{"version":3,"generationId":"stream-1","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolName":"read_file","label":"Read file","status":"running","startedAt":1000,"updatedAt":1000,"contentOffset":0,"target":"/Users/private/secret"}]}"#.utf8
+            )
+        )
+        XCTAssertFalse(timeline.isRendererSafe)
+    }
+
+    func testActivityTimelineRejectsWindowsAbsoluteAndTraversalTargets() throws {
+        for target in [#"C:\Users\private\secret"#, #"folder\..\secret"#, #"\\server\share\secret"#] {
+            let timeline = AidenGenerationTimeline(
+                version: 3,
+                generationId: "stream-1",
+                status: .running,
+                startedAt: 1_000,
+                finishedAt: nil,
+                steps: [
+                    AidenAgentStep(
+                        id: "tool-1",
+                        order: 0,
+                        kind: .tool,
+                        toolName: "read_file",
+                        label: "Read file",
+                        status: .running,
+                        startedAt: 1_000,
+                        updatedAt: 1_000,
+                        finishedAt: nil,
+                        contentOffset: 0,
+                        durationMs: nil,
+                        target: target,
+                        detail: nil,
+                        lineChanges: nil
+                    )
+                ]
+            )
+            XCTAssertFalse(timeline.isRendererSafe, "Expected to reject unsafe target: \(target)")
+        }
+    }
+
+    func testActivitySummaryMatchesMacCategories() throws {
+        let timeline = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-1",
+            status: .completed,
+            startedAt: 1_000,
+            finishedAt: 2_000,
+            steps: ["web_search", "computer_use", "compact_context", "custom_tool"].enumerated().map { index, name in
+                AidenAgentStep(
+                    id: "tool-\(index)", order: index, kind: .tool, toolName: name,
+                    label: "Tool", status: .completed, startedAt: 1_000, updatedAt: 2_000,
+                    finishedAt: 2_000, contentOffset: 0, durationMs: 1_000,
+                    target: nil, detail: nil, lineChanges: nil
+                )
+            }
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline),
+            "1 web search, 1 Computer Use action, compacted context, 1 tool call"
         )
     }
 
@@ -40,14 +419,138 @@ final class AidenChatTests: XCTestCase {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
             from: Data(
-                #"{"providers":[{"id":"opencode-go","label":"OpenCode Go","models":[{"id":"ox-alpha-free","label":"Ox Alpha","thinkingLevels":["low","high","max"],"defaultThinkingLevel":"high","thinkingCanDisable":false},{"id":"legacy","label":"Legacy","thinkingLevels":["low","high"]}]}],"defaults":{}}"#.utf8
+                #"{"providers":[{"id":"opencode-go","label":"OpenCode Go","models":[{"id":"ox-alpha-free","label":"Ox Alpha","supportsImages":false,"thinkingLevels":["low","high","max"],"defaultThinkingLevel":"high","thinkingCanDisable":false},{"id":"legacy","label":"Legacy","supportsImages":true,"thinkingLevels":["low","high"]}]}],"defaults":{}}"#.utf8
             )
         )
 
         let models = try XCTUnwrap(catalog.providers.first?.models)
         XCTAssertEqual(models[0].effectiveThinkingLevel, "high")
         XCTAssertEqual(models[0].thinkingLabel(for: "off"), "Hide")
+        XCTAssertFalse(models[0].acceptsImageInput)
+        XCTAssertTrue(models[1].acceptsImageInput)
         XCTAssertEqual(models[1].effectiveThinkingLevel, "high")
+    }
+
+    func testBotChatModelAuthorityPinsEachChatsPersistedPairInsteadOfCatalogDefaults() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","max"],"defaultThinkingLevel":"max"}]},{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = "bot-life-manager"
+
+        let resolved = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "google",
+            selectedModelId: "gemini-flash",
+            selectedThinkingLevel: "low"
+        )
+        let turn = AidenChatModelAuthority.turnSelection(
+            chat: chat,
+            selectedProviderId: "google",
+            selectedModelId: "gemini-flash",
+            selectedThinkingLevel: resolved.thinkingLevel
+        )
+
+        XCTAssertEqual(resolved.providerId, "openai")
+        XCTAssertEqual(resolved.modelId, "gpt-5.6")
+        XCTAssertEqual(resolved.thinkingLevel, "max")
+        XCTAssertEqual(turn.providerId, "openai")
+        XCTAssertEqual(turn.modelId, "gpt-5.6")
+    }
+
+    func testBotChatModelAuthorityNeverFallsBackWhenPersistedPairIsUnavailable() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = "bot-life-manager"
+        chat.providerId = "saved-provider"
+        chat.modelId = "saved-model"
+
+        let resolved = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "google",
+            selectedModelId: "gemini-flash",
+            selectedThinkingLevel: "high"
+        )
+
+        XCTAssertEqual(resolved.providerId, "saved-provider")
+        XCTAssertEqual(resolved.modelId, "saved-model")
+        XCTAssertNil(resolved.thinkingLevel)
+    }
+
+    func testBotChatModelAuthorityRemainsScopedToEachBotsSingleChat() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6"}]},{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var firstChat = sampleChat()
+        firstChat.botId = "bot-life-manager"
+        firstChat.providerId = "openai"
+        firstChat.modelId = "gpt-5.6"
+        var secondChat = sampleChat()
+        secondChat.botId = "bot-travel"
+        secondChat.providerId = "google"
+        secondChat.modelId = "gemini-flash"
+
+        let firstSelection = AidenChatModelAuthority.resolvedSelection(
+            chat: firstChat,
+            catalog: catalog,
+            selectedProviderId: secondChat.providerId,
+            selectedModelId: secondChat.modelId,
+            selectedThinkingLevel: nil
+        )
+        let secondSelection = AidenChatModelAuthority.resolvedSelection(
+            chat: secondChat,
+            catalog: catalog,
+            selectedProviderId: firstChat.providerId,
+            selectedModelId: firstChat.modelId,
+            selectedThinkingLevel: nil
+        )
+
+        XCTAssertEqual(firstSelection.providerId, "openai")
+        XCTAssertEqual(firstSelection.modelId, "gpt-5.6")
+        XCTAssertEqual(secondSelection.providerId, "google")
+        XCTAssertEqual(secondSelection.modelId, "gemini-flash")
+    }
+
+    func testWorkspaceChatModelAuthorityRetainsExistingCatalogFallbackBehavior() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        let chat = sampleChat()
+
+        let resolved = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "missing-provider",
+            selectedModelId: "missing-model",
+            selectedThinkingLevel: nil
+        )
+        let turn = AidenChatModelAuthority.turnSelection(
+            chat: chat,
+            selectedProviderId: resolved.providerId,
+            selectedModelId: resolved.modelId,
+            selectedThinkingLevel: resolved.thinkingLevel
+        )
+
+        XCTAssertEqual(resolved.providerId, "google")
+        XCTAssertEqual(resolved.modelId, "gemini-flash")
+        XCTAssertEqual(turn.providerId, "google")
+        XCTAssertEqual(turn.modelId, "gemini-flash")
     }
 
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {
@@ -148,6 +651,90 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertNil(AidenMessageActionContent.copyText(for: user))
         XCTAssertNil(AidenMessageActionContent.copyText(for: emptyAssistant))
+    }
+
+    func testBotReplyKeepsOnlyPostToolFinalTextVisible() {
+        let progress = "Checking the workspace 🍎\n\nI found the destination.\n\n"
+        let final = "## Done\n\nThe repository is ready."
+        let timeline = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-1",
+            status: .completed,
+            startedAt: 1_000,
+            finishedAt: 2_000,
+            steps: [
+                AidenAgentStep(
+                    id: "tool-1", order: 0, kind: .tool, toolName: "list_dir",
+                    label: "List directory", status: .completed,
+                    startedAt: 1_000, updatedAt: 1_500, finishedAt: 1_500,
+                    contentOffset: 0, durationMs: nil, target: nil,
+                    detail: nil, lineChanges: nil
+                ),
+                AidenAgentStep(
+                    id: "tool-2", order: 1, kind: .tool, toolName: "run_command",
+                    label: "Run command", status: .completed,
+                    startedAt: 1_500, updatedAt: 2_000, finishedAt: 2_000,
+                    contentOffset: progress.utf16.count, durationMs: nil, target: nil,
+                    detail: "Clone repository", lineChanges: nil
+                )
+            ]
+        )
+
+        let projection = AidenBotReplyProjection.resolve(
+            text: progress + final,
+            timeline: timeline,
+            isActive: false
+        )
+
+        XCTAssertEqual(projection.progressText, progress.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertEqual(projection.finalText, final)
+
+        let message = AidenChatMessage(
+            id: "assistant-bot",
+            role: .assistant,
+            text: progress + final,
+            timeline: timeline,
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertEqual(
+            AidenMessageActionContent.copyText(for: message, presentationStyle: .botMessages),
+            final
+        )
+        XCTAssertEqual(
+            AidenMessageActionContent.copyText(for: message, presentationStyle: .workspace),
+            progress + final
+        )
+    }
+
+    func testActiveBotReplyCollapsesAndDeduplicatesProgressUntilTerminal() {
+        let repeated = "Locating the workspace.\n\nLocating   the workspace.\n\nRunning the clone."
+        let projection = AidenBotReplyProjection.resolve(
+            text: repeated,
+            timeline: nil,
+            isActive: true
+        )
+
+        XCTAssertEqual(projection.finalText, "")
+        XCTAssertEqual(projection.progressText, "Locating the workspace.\n\nRunning the clone.")
+    }
+
+    func testBotReplyWithoutToolActivityRemainsAVisibleFinalAnswer() {
+        let timeline = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-plain",
+            status: .completed,
+            startedAt: 1_000,
+            finishedAt: 1_100,
+            steps: []
+        )
+        let projection = AidenBotReplyProjection.resolve(
+            text: "A direct answer.",
+            timeline: timeline,
+            isActive: false
+        )
+
+        XCTAssertEqual(projection.finalText, "A direct answer.")
+        XCTAssertEqual(projection.progressText, "")
     }
 
     func testMarkdownDocumentParsesHeadingsListsAndInlineEmphasis() {
@@ -362,6 +949,167 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyStreamURL.path))
     }
 
+    func testInstallationPurgeClearsV1AndV2CachesWithoutTouchingAnotherInstallation() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-versioned-chat-cache-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let legacyRoot = base.appending(path: "RemoteChatCache-v1", directoryHint: .isDirectory)
+        let currentRoot = base.appending(path: "RemoteChatCache-v2", directoryHint: .isDirectory)
+        let legacyCache = AidenChatCache(root: legacyRoot)
+        let currentCache = AidenChatCache(root: currentRoot, legacyRoots: [legacyRoot])
+        let chat = sampleChat()
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8))
+        let png = renderer.pngData { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        let attachment = AidenMessageAttachment(
+            id: "attachment-versioned-cache",
+            name: "Versioned.png",
+            mimeType: "image/png",
+            kind: .image,
+            size: png.count
+        )
+
+        for cache in [legacyCache, currentCache] {
+            try await cache.saveChats([chat], instanceId: "instance-a", workspaceId: chat.workspaceId)
+            try await cache.saveChat(chat, instanceId: "instance-a")
+            try await cache.saveActiveStream(
+                .init(deviceId: "device-a", streamId: "stream-a", turnId: "turn-a", lastSequence: 1),
+                instanceId: "instance-a",
+                chatId: chat.id
+            )
+            try await cache.saveAttachmentImage(
+                png,
+                instanceId: "instance-a",
+                deviceId: "device-a",
+                chatId: chat.id,
+                attachment: attachment
+            )
+
+            try await cache.saveChats([chat], instanceId: "instance-b", workspaceId: chat.workspaceId)
+            try await cache.saveChat(chat, instanceId: "instance-b")
+            try await cache.saveActiveStream(
+                .init(deviceId: "device-b", streamId: "stream-b", turnId: "turn-b", lastSequence: 2),
+                instanceId: "instance-b",
+                chatId: chat.id
+            )
+            try await cache.saveAttachmentImage(
+                png,
+                instanceId: "instance-b",
+                deviceId: "device-b",
+                chatId: chat.id,
+                attachment: attachment
+            )
+        }
+
+        await currentCache.purge(instanceId: "instance-a")
+
+        for cache in [legacyCache, currentCache] {
+            let removedList = await cache.loadChats(instanceId: "instance-a", workspaceId: chat.workspaceId)
+            let removedChat = await cache.loadChat(instanceId: "instance-a", chatId: chat.id)
+            let removedStream = await cache.loadActiveStream(instanceId: "instance-a", chatId: chat.id)
+            let removedAttachment = await cache.attachmentImage(
+                instanceId: "instance-a",
+                deviceId: "device-a",
+                chatId: chat.id,
+                attachment: attachment
+            )
+            XCTAssertNil(removedList)
+            XCTAssertNil(removedChat)
+            XCTAssertNil(removedStream)
+            XCTAssertNil(removedAttachment)
+
+            let retainedList = await cache.loadChats(instanceId: "instance-b", workspaceId: chat.workspaceId)
+            let retainedChat = await cache.loadChat(instanceId: "instance-b", chatId: chat.id)
+            let retainedStream = await cache.loadActiveStream(instanceId: "instance-b", chatId: chat.id)
+            let retainedAttachment = await cache.attachmentImage(
+                instanceId: "instance-b",
+                deviceId: "device-b",
+                chatId: chat.id,
+                attachment: attachment
+            )
+            XCTAssertEqual(retainedList, [chat])
+            XCTAssertEqual(retainedChat, chat)
+            XCTAssertEqual(retainedStream?.streamId, "stream-b")
+            XCTAssertEqual(retainedAttachment, png)
+        }
+    }
+
+    func testTerminalCleanupCannotDeleteANewerActiveStream() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-stream-generation-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-a", streamId: "stream-new", turnId: "turn-new", lastSequence: 0),
+            instanceId: "instance-a",
+            chatId: "chat-1"
+        )
+
+        let staleRemoval = await cache.removeActiveStream(
+            instanceId: "instance-a",
+            chatId: "chat-1",
+            ifStreamId: "stream-old"
+        )
+        XCTAssertFalse(staleRemoval)
+        let retained = await cache.loadActiveStream(instanceId: "instance-a", chatId: "chat-1")
+        XCTAssertEqual(retained?.streamId, "stream-new")
+        let currentRemoval = await cache.removeActiveStream(
+            instanceId: "instance-a",
+            chatId: "chat-1",
+            ifStreamId: "stream-new"
+        )
+        XCTAssertTrue(currentRemoval)
+    }
+
+    func testApprovalSnapshotMustBeLiveAndBoundToTheExactStreamAndChat() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let valid = AidenStreamPendingApproval(
+            approvalId: "approval-1",
+            streamId: "stream-1",
+            chatId: "chat-1",
+            summary: "Review",
+            toolCallId: "tool-1",
+            toolName: "run",
+            expiresAt: now.addingTimeInterval(60),
+            canAllow: false
+        )
+        XCTAssertEqual(
+            AidenPendingApprovalResolution.resolve(valid, streamId: "stream-1", chatId: "chat-1", now: now)?.canAllow,
+            false
+        )
+        XCTAssertNil(AidenPendingApprovalResolution.resolve(nil, streamId: "stream-1", chatId: "chat-1", now: now))
+        XCTAssertNil(AidenPendingApprovalResolution.resolve(valid, streamId: "stream-2", chatId: "chat-1", now: now))
+        XCTAssertNil(AidenPendingApprovalResolution.resolve(valid, streamId: "stream-1", chatId: "chat-2", now: now))
+        XCTAssertNil(
+            AidenPendingApprovalResolution.resolve(
+                .init(
+                    approvalId: valid.approvalId,
+                    streamId: valid.streamId,
+                    chatId: valid.chatId,
+                    summary: valid.summary,
+                    toolCallId: valid.toolCallId,
+                    toolName: valid.toolName,
+                    expiresAt: now,
+                    canAllow: true
+                ),
+                streamId: "stream-1",
+                chatId: "chat-1",
+                now: now
+            )
+        )
+    }
+
+    func testApprovalSummaryCollapsesWhitespaceForCompactDisclosure() {
+        XCTAssertEqual(
+            AidenApprovalPresentation.oneLineSummary("Run command:\n  find ~/Downloads   -type f"),
+            "Run command: find ~/Downloads -type f"
+        )
+        XCTAssertEqual(AidenApprovalPresentation.oneLineSummary(" \n\t "), "Review requested action")
+    }
+
     func testAttachmentImageValidationAndProtectedCacheFailClosed() async throws {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 16))
         let png = renderer.pngData { context in
@@ -458,6 +1206,15 @@ final class AidenChatTests: XCTestCase {
                 symbol: "exclamationmark.triangle",
                 isFailure: true
             )
+        )
+        XCTAssertEqual(
+            AidenMessageOutcomePresentation.make(.init(
+                status: .failed,
+                category: "invalid_request",
+                attempts: 1,
+                retryExhausted: false
+            )).detail,
+            "The model provider could not accept this request. For a Bot, change its model in Edit Bot; for a Workspace chat, use the composer."
         )
         XCTAssertEqual(
             AidenMessageOutcomePresentation.make(.init(
@@ -932,6 +1689,82 @@ final class AidenChatTests: XCTestCase {
         ).attachmentIds)
     }
 
+#if DEBUG
+    @MainActor
+    func testBotChatViewModelRejectsProviderAndModelPickerMutations() {
+        var chat = sampleChat()
+        chat.botId = "bot-life-manager"
+        let model = AidenChatViewModel(readOnlyFixture: chat)
+
+        model.selectProvider("google")
+        model.selectModel("gemini-flash")
+
+        XCTAssertTrue(model.usesPersistedBotModelAuthority)
+        XCTAssertFalse(model.showsComposerModelControl)
+        XCTAssertEqual(model.selectedProviderId, "openai")
+        XCTAssertEqual(model.selectedModelId, "gpt-5.6")
+
+        var workspaceChat = sampleChat()
+        workspaceChat.botId = nil
+        let workspaceModel = AidenChatViewModel(readOnlyFixture: workspaceChat)
+        XCTAssertFalse(workspaceModel.usesPersistedBotModelAuthority)
+        XCTAssertTrue(workspaceModel.showsComposerModelControl)
+    }
+
+    @MainActor
+    func testBotImageAuthorityFailsClosedAndUsesSetupRecoveryForPendingImages() {
+        var chat = sampleChat()
+        chat.botId = "bot-life-manager"
+        let model = AidenChatViewModel(readOnlyFixture: chat)
+
+        XCTAssertFalse(model.acceptsImageAttachments)
+        XCTAssertEqual(
+            aidenImageSendRecovery(
+                isBotChat: true,
+                acceptsImages: model.acceptsImageAttachments,
+                hasPendingImage: true
+            ),
+            .configureBotVision
+        )
+
+        model.setBotVisionModelSelection(AidenBotModelSelection(
+            providerId: "provider-vision",
+            modelId: "model-vision"
+        ))
+        XCTAssertTrue(model.acceptsImageAttachments)
+        model.setBotVisionModelSelection(nil)
+        model.setBotPrimarySupportsImages(true)
+        XCTAssertTrue(model.acceptsImageAttachments)
+    }
+
+    @MainActor
+    func testReadOnlyFixtureChatRejectsEveryLiveEntryPointWithoutMutatingItsChat() async {
+        let chat = sampleChat()
+        let model = AidenChatViewModel(readOnlyFixture: chat)
+
+        XCTAssertFalse(model.isConnected)
+        XCTAssertFalse(model.canSend)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertFalse(model.isStreaming)
+        XCTAssertTrue(model.isReadOnlyPresentation)
+
+        model.draft = "This must stay local"
+        await model.load()
+        await model.send()
+        let rejectedUploads = await model.upload([
+            .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
+        ])
+        await model.stop()
+        await model.respondToApproval(.allow)
+
+        XCTAssertEqual(rejectedUploads, 1)
+        XCTAssertEqual(model.chat, chat)
+        XCTAssertEqual(model.draft, "This must stay local")
+        XCTAssertTrue(model.pendingAttachments.isEmpty)
+        XCTAssertNil(model.presentedError)
+    }
+#endif
+
     private func eventJSON(sequence: Int, type: String, payload: String) -> String {
         """
         {"protocolVersion":1,"streamId":"stream-1","sequence":\(sequence),
@@ -958,6 +1791,234 @@ final class AidenChatTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 1_787_100_001),
             revision: "revision-1"
         )
+    }
+}
+
+final class AidenHapticTests: XCTestCase {
+    @MainActor
+    private final class RecordingEmitter: AidenHapticEmitting {
+        private(set) var events: [AidenHapticEvent] = []
+
+        func activate(scope: UUID) {}
+        func deactivate(scope: UUID) {}
+
+        func emit(_ event: AidenHapticEvent, scope: UUID?, dedupeKey: String?) {
+            events.append(event)
+        }
+    }
+
+    @MainActor
+    func testPreferenceDefaultsOnAndPersistsDeviceLocally() throws {
+        let suiteName = "AidenHapticTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let initial = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { true },
+            isAudioCaptureActive: { false },
+            supportsHaptics: true
+        )
+        XCTAssertTrue(initial.isEnabled)
+        initial.isEnabled = false
+
+        let restored = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { true },
+            isAudioCaptureActive: { false },
+            supportsHaptics: true
+        )
+        XCTAssertFalse(restored.isEnabled)
+    }
+
+    @MainActor
+    func testDeliveryRequiresHardwareForegroundPreferenceAudioSilenceAndActiveScope() throws {
+        let suiteName = "AidenHapticGateTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var isActive = false
+        var isCapturing = false
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { isActive },
+            isAudioCaptureActive: { isCapturing },
+            supportsHaptics: true
+        )
+        let scope = UUID()
+
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 0)
+        isActive = true
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 0)
+        center.activate(scope: scope)
+        isCapturing = true
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 0)
+        isCapturing = false
+        center.isEnabled = false
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 0)
+        center.isEnabled = true
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 1)
+        center.deactivate(scope: scope)
+        center.play(.error, scope: scope)
+        XCTAssertEqual(center.pulse.sequence, 1)
+    }
+
+    @MainActor
+    func testUnsupportedHardwareNeverAdvancesPulse() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "AidenHapticUnsupportedTests.\(UUID().uuidString)"))
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { true },
+            isAudioCaptureActive: { false },
+            supportsHaptics: false
+        )
+        center.play(.success)
+        XCTAssertEqual(center.pulse.sequence, 0)
+    }
+
+    @MainActor
+    func testDedupeIsConsumedBeforeDeliveryGatesAndIncludesSemanticEvent() throws {
+        let suiteName = "AidenHapticDedupeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var isActive = false
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { isActive },
+            isAudioCaptureActive: { false },
+            supportsHaptics: true
+        )
+
+        center.play(.warning, dedupeKey: "operation-1")
+        isActive = true
+        center.play(.warning, dedupeKey: "operation-1")
+        XCTAssertEqual(center.pulse.sequence, 0, "A background observation must never replay later")
+        center.play(.success, dedupeKey: "operation-1")
+        XCTAssertEqual(center.pulse.sequence, 1, "A different semantic outcome may share a caller key")
+        center.play(.success, dedupeKey: "operation-1")
+        XCTAssertEqual(center.pulse.sequence, 1)
+    }
+
+    @MainActor
+    func testProtocolConveniencePlayDelegatesOnceWithoutRecursion() {
+        let emitter = RecordingEmitter()
+        emitter.play(.warning, dedupeKey: "approval-1")
+        XCTAssertEqual(emitter.events, [.warning])
+    }
+
+    @MainActor
+    func testDeliveryTimeGateRechecksForegroundAudioCaptureAndOriginatingScope() throws {
+        let suiteName = "AidenHapticDeliveryRaceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var isActive = true
+        var isCapturing = false
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { isActive },
+            isAudioCaptureActive: { isCapturing },
+            supportsHaptics: true
+        )
+        let scope = UUID()
+
+        center.activate(scope: scope)
+        center.play(.success, scope: scope)
+        XCTAssertEqual(center.pulse.scope, scope)
+        XCTAssertTrue(center.shouldDeliverNow(scope: center.pulse.scope))
+        center.deactivate(scope: scope)
+        XCTAssertFalse(
+            center.shouldDeliverNow(scope: center.pulse.scope),
+            "A queued pulse must not survive its view being dismissed in the same render batch"
+        )
+        center.activate(scope: scope)
+        isActive = false
+        XCTAssertFalse(center.shouldDeliverNow(scope: center.pulse.scope))
+        isActive = true
+        isCapturing = true
+        XCTAssertFalse(center.shouldDeliverNow(scope: center.pulse.scope))
+    }
+
+    func testCancellationRecognitionIncludesURLSessionCancellation() {
+        XCTAssertTrue(aidenIsCancellation(CancellationError()))
+        XCTAssertTrue(aidenIsCancellation(URLError(.cancelled)))
+        XCTAssertFalse(aidenIsCancellation(URLError(.timedOut)))
+    }
+
+    func testOnlyLocallyStartedStreamsMayAnnounceFeedback() {
+        XCTAssertTrue(AidenStreamFeedbackPolicy.localTurn.allowsFeedback)
+        XCTAssertFalse(AidenStreamFeedbackPolicy.restoredStream.allowsFeedback)
+        XCTAssertTrue(AidenStreamFeedbackDecision.announcesApproval(.localTurn))
+        XCTAssertFalse(AidenStreamFeedbackDecision.announcesApproval(.restoredStream))
+        XCTAssertEqual(
+            AidenStreamFeedbackDecision.terminalEvent(for: .failed, policy: .localTurn),
+            .error
+        )
+        XCTAssertEqual(
+            AidenStreamFeedbackDecision.terminalEvent(for: .interrupted, policy: .localTurn),
+            .error
+        )
+        XCTAssertNil(AidenStreamFeedbackDecision.terminalEvent(for: .failed, policy: .restoredStream))
+        XCTAssertNil(AidenStreamFeedbackDecision.terminalEvent(for: .cancelled, policy: .localTurn))
+        XCTAssertNil(AidenStreamFeedbackDecision.terminalEvent(for: .complete, policy: .localTurn))
+    }
+
+    @MainActor
+    func testLocalStreamFeedbackIsExactlyOnceWhileRestoredAndDismissedFlowsStaySilent() throws {
+        let suiteName = "AidenHapticStreamRaceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let center = AidenHapticCenter(
+            defaults: defaults,
+            isApplicationActive: { true },
+            isAudioCaptureActive: { false },
+            supportsHaptics: true
+        )
+        let scope = UUID()
+        center.activate(scope: scope)
+
+        if AidenStreamFeedbackDecision.announcesApproval(.localTurn) {
+            center.play(.warning, scope: scope, dedupeKey: "approval:approval-1")
+        }
+        if AidenStreamFeedbackDecision.announcesApproval(.restoredStream) {
+            center.play(.warning, scope: scope, dedupeKey: "approval:approval-1")
+        }
+        XCTAssertEqual(center.pulse.sequence, 1)
+
+        if let event = AidenStreamFeedbackDecision.terminalEvent(for: .failed, policy: .localTurn) {
+            center.play(event, scope: scope, dedupeKey: "terminal:stream-1")
+            center.play(event, scope: scope, dedupeKey: "terminal:stream-1")
+        }
+        XCTAssertEqual(center.pulse.sequence, 2, "Response and SSE convergence must announce one terminal outcome")
+
+        if let event = AidenStreamFeedbackDecision.terminalEvent(for: .failed, policy: .restoredStream) {
+            center.play(event, scope: scope, dedupeKey: "terminal:restored-stream")
+        }
+        center.play(.actionStopped, scope: scope, dedupeKey: "turn-stop:stream-1")
+        center.play(.actionStopped, scope: scope, dedupeKey: "turn-stop:stream-1")
+        XCTAssertEqual(center.pulse.sequence, 3, "Stop response and SSE convergence must announce once")
+
+        center.play(.success, scope: scope, dedupeKey: "pairing:pair-1")
+        center.deactivate(scope: scope)
+        XCTAssertFalse(center.shouldDeliverNow(scope: center.pulse.scope), "Dismissed pairing must not vibrate")
+    }
+
+    func testMutationOutcomesSeparateDefinitiveFailureFromSilentNonOutcomes() {
+        let success = AidenRemoteMutationOutcome.success("workspace-1")
+        let failure = AidenRemoteMutationOutcome<String>.failure
+        let cancelled = AidenRemoteMutationOutcome<String>.cancelled
+        let stale = AidenRemoteMutationOutcome<String>.stale
+        let busy = AidenRemoteMutationOutcome<String>.busy
+
+        XCTAssertEqual(success.value, "workspace-1")
+        XCTAssertFalse(success.isDefinitiveFailure)
+        XCTAssertTrue(failure.isDefinitiveFailure)
+        XCTAssertFalse(cancelled.isDefinitiveFailure)
+        XCTAssertFalse(stale.isDefinitiveFailure)
+        XCTAssertFalse(busy.isDefinitiveFailure)
     }
 }
 

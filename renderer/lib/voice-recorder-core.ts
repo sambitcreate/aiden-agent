@@ -6,11 +6,20 @@
 
 import { voiceApi } from "./ipc";
 import type { VoiceProvider } from "./types";
+import { bytesToBase64 } from "./live-pcm-capture";
+import { encodeMonoPcm16Wav } from "./wav-audio";
+import { GEMINI_TRANSCRIPTION_MODEL } from "../shared/voice-models";
 
 export interface TranscribeOptions {
   provider: VoiceProvider;
   /** Selected on-device model id — required when provider === "local". */
   localModel?: string;
+  /** Selected cloud transcription model. */
+  model?: string;
+  /** Renderer-generated identity used to cancel/fence a cloud request. */
+  operationId?: string;
+  /** Invalidates expensive conversion before an IPC request begins. */
+  signal?: AbortSignal;
 }
 
 export const MICROPHONE_PERMISSION_OFF_MESSAGE =
@@ -20,9 +29,7 @@ export function microphoneCaptureErrorMessage(error: unknown): string {
   let name = "";
   try {
     const candidate =
-      typeof error === "object" && error !== null
-        ? (error as { name?: unknown }).name
-        : undefined;
+      typeof error === "object" && error !== null ? (error as { name?: unknown }).name : undefined;
     if (typeof candidate === "string") name = candidate;
   } catch {
     // A hostile or cross-realm error object must not break recovery messaging.
@@ -55,11 +62,7 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 function float32ToBase64(samples: Float32Array): string {
-  const bytes = new Uint8Array(
-    samples.buffer,
-    samples.byteOffset,
-    samples.byteLength,
-  );
+  const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
   let binary = "";
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
@@ -69,7 +72,7 @@ function float32ToBase64(samples: Float32Array): string {
 }
 
 /** Decode recorded audio and resample to 16 kHz mono Float32 PCM (base64) for the on-device engine. */
-async function blobToPcm16k(blob: Blob): Promise<string> {
+async function blobToMono16k(blob: Blob): Promise<Float32Array> {
   const arrayBuf = await blob.arrayBuffer();
   const decodeCtx = new AudioContext();
   let decoded: AudioBuffer;
@@ -87,13 +90,12 @@ async function blobToPcm16k(blob: Blob): Promise<string> {
   source.start();
   const rendered = await offline.startRendering();
   // Copy into a standalone Float32Array so the base64 covers exactly the samples.
-  return float32ToBase64(Float32Array.from(rendered.getChannelData(0)));
+  return Float32Array.from(rendered.getChannelData(0));
 }
 
 /** Native mic-permission gate; resolves true when capture may start. */
 export async function ensureMicrophoneAccess(): Promise<boolean> {
-  const status =
-    await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
+  const status = await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
   if (status === "denied" || status === "restricted") return false;
   if (status === "not-determined") {
     return window.aidenAPI.systemPreferences.askForMediaAccess("microphone");
@@ -105,19 +107,33 @@ export async function ensureMicrophoneAccess(): Promise<boolean> {
  * Transcribe a recorded blob through the selected provider.
  * Resolves the trimmed transcript ("" when no speech was detected).
  */
-export async function transcribeBlob(
-  blob: Blob,
-  options: TranscribeOptions,
-): Promise<string> {
+export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Promise<string> {
+  const operationId = options.operationId;
+  if (!operationId) throw new Error("Voice transcription operation identity is missing.");
+  options.signal?.throwIfAborted();
   if (options.provider === "local") {
     if (!options.localModel) {
-      throw new Error(
-        "Download and select an on-device model in Settings → Voice.",
-      );
+      throw new Error("Download and select an on-device model in Settings → Voice.");
     }
-    const pcm = await blobToPcm16k(blob);
-    return (await voiceApi.transcribeLocal(pcm, options.localModel)).trim();
+    const pcm = float32ToBase64(await blobToMono16k(blob));
+    options.signal?.throwIfAborted();
+    return (await voiceApi.transcribeLocal(pcm, options.localModel, operationId)).trim();
+  }
+  if (options.provider === "gemini") {
+    const samples = await blobToMono16k(blob);
+    options.signal?.throwIfAborted();
+    const wav = bytesToBase64(encodeMonoPcm16Wav(samples, 16_000));
+    return (
+      await voiceApi.transcribe(wav, "audio/wav", GEMINI_TRANSCRIPTION_MODEL, operationId)
+    ).trim();
   }
   const base64 = await blobToBase64(blob);
-  return (await voiceApi.transcribe(base64, blob.type)).trim();
+  options.signal?.throwIfAborted();
+  return (await voiceApi.transcribe(base64, blob.type, options.model, operationId)).trim();
+}
+
+export function cancelTranscription(provider: VoiceProvider, operationId: string): Promise<void> {
+  return provider === "local"
+    ? voiceApi.cancelLocalTranscription(operationId)
+    : voiceApi.cancelTranscription(operationId);
 }

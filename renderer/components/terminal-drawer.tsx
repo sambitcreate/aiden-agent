@@ -551,7 +551,7 @@ export function TerminalDrawer() {
                       event.stopPropagation();
                       close(session.id);
                     }}
-                    className="rounded-md p-0.5 text-tertiary opacity-70 outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-control-active hover:text-primary active:bg-list-selection group-hover:opacity-100 focus-visible:opacity-100 focus-visible:bg-list-selection focus-visible:outline-none"
+                    className="rounded-full p-0.5 text-tertiary opacity-70 outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-control-active hover:text-primary active:bg-list-selection group-hover:opacity-100 focus-visible:opacity-100 focus-visible:bg-list-selection focus-visible:outline-none"
                     aria-label={`Close Terminal ${index + 1}`}
                   >
                     <X className="size-3" />

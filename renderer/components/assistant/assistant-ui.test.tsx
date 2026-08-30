@@ -33,7 +33,10 @@ test("Aiden replies use the main chat Markdown renderer", () => {
     <AssistantThread
       messages={[
         { role: "user", content: "Show me a list" },
-        { role: "assistant", content: "**Key directories**\n\n- `src`\n- `tests`" },
+        {
+          role: "assistant",
+          content: "A short paragraph.\n\n**Key directories**\n\n- `src`\n- `tests`\n\n1. Inspect\n2. Verify",
+        },
       ]}
       streaming={false}
       streamComplete={false}
@@ -42,8 +45,14 @@ test("Aiden replies use the main chat Markdown renderer", () => {
     />,
   );
   assert.match(html, /<strong>Key directories<\/strong>/u);
+  assert.match(html, /<p>A short paragraph\.<\/p>/u);
   assert.match(html, /<ul>/u);
+  assert.match(html, /<ol>/u);
   assert.match(html, /<code[^>]*>src<\/code>/u);
+  assert.match(html, /text-\[calc\(var\(--ui-font-size\)\+1px\)\]/u);
+  assert.match(html, /leading-\[1\.56\]/u);
+  assert.match(html, /\[&amp;_p\]:max-w-\[72ch\]/u);
+  assert.match(html, /\[&amp;_li\]:my-1\.5/u);
   assert.doesNotMatch(html, /\*\*Key directories\*\*/u);
 });
 

@@ -37,12 +37,34 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "speed",
       "pace",
       "artificial analysis",
+      "openrouter",
+      "benchmark insights",
     ],
   },
   { id: "skills", title: "Skills", group: "Agent", keywords: ["instructions", "tools"] },
   { id: "mcp", title: "MCP Servers", group: "Agent", keywords: ["connections", "protocol"] },
-  { id: "websearch", title: "Web Search", group: "Agent", keywords: ["internet", "exa"] },
-  { id: "telegram", title: "Telegram", group: "Agent", keywords: ["remote", "bot", "phone", "control"] },
+  {
+    id: "websearch",
+    title: "Web Search",
+    group: "Agent",
+    keywords: [
+      "web access",
+      "search",
+      "internet",
+      "providers",
+      "route",
+      "automatic",
+      "fixed",
+      "privacy",
+      "exa",
+    ],
+  },
+  {
+    id: "telegram",
+    title: "Telegram",
+    group: "Agent",
+    keywords: ["remote", "bot", "phone", "control"],
+  },
   {
     id: "remoteAccess",
     title: "Remote Access",
@@ -101,6 +123,14 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["version", "build", "github", "repository", "app information"],
   },
 ];
+
+export function availableSettingsDestinations(capabilities: {
+  computerUse: boolean;
+}): typeof SETTINGS_DESTINATIONS {
+  return capabilities.computerUse
+    ? SETTINGS_DESTINATIONS
+    : SETTINGS_DESTINATIONS.filter((destination) => destination.id !== "computerUse");
+}
 
 export function parseSettingsSection(value: unknown): SettingsSection | undefined {
   return typeof value === "string" && SETTINGS_SECTIONS.some((section) => section === value)

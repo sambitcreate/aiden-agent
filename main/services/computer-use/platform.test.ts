@@ -13,7 +13,7 @@ test("the Linux fallback fails closed without suggesting macOS permissions", () 
     enabled: false,
     beta: true,
     state: "unsupported",
-    detail: "Computer Use is not included in the Linux version of Aiden yet.",
+    detail: "Computer Use is not included on this platform.",
     ready: false,
     available: false,
     retryable: false,

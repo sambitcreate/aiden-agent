@@ -10,14 +10,17 @@ import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
+import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
+import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
 export type ProviderDeployment = "local" | "hosted";
 
-export type ProviderModelType = "llm" | "embedding";
+export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
 
 /** Metadata reported by the configured provider during explicit model discovery. */
 export interface ProviderModelMetadata {
@@ -171,7 +174,7 @@ export type ChatRole = "user" | "assistant" | "system";
 
 export type AttachmentKind = "image" | "text";
 
-/** A file attached to a user message. Images carry base64 `data`; text files carry inlined `text`. */
+/** A durable file attached to a chat message. Images carry base64 `data`; text files carry inlined `text`. */
 export interface Attachment {
   id: string;
   name: string;
@@ -197,8 +200,10 @@ export interface ChatMessage {
   pi?: Omit<AssistantMessage, "diagnostics" | "errorMessage">;
   /** Closed, renderer-safe terminal provider outcome. */
   providerFailure?: ProviderFailureV1;
-  /** Files attached to a user message. */
+  /** Files presented with this user or assistant message. */
   attachments?: Attachment[];
+  /** Interactive HTML artifacts; bytes remain in the generative-ui store. */
+  htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
@@ -215,6 +220,22 @@ export interface ModelRanking {
   source: string;
   sourceUrl?: string;
   measuredAt?: string;
+}
+
+export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+
+/** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
+export interface ModelBenchmarkScores {
+  source: "openrouter";
+  datasetSource: "artificial-analysis";
+  sourceLabel: "Artificial Analysis via OpenRouter";
+  sourceUrl: string;
+  citation: string;
+  asOf: string;
+  license: "CC BY 4.0";
+  intelligence?: number;
+  coding?: number;
+  agentic?: number;
 }
 
 export type ModelMetadataSource =
@@ -236,6 +257,7 @@ export interface ModelInfo {
   reasoning?: boolean;
   /** Open-weight / open-source model. */
   openWeights?: boolean;
+  /** Normalized capability classification; every value except `llm` is non-chat. */
   modelType?: ProviderModelType;
   parameterCount?: string;
   format?: string;
@@ -246,18 +268,46 @@ export interface ModelInfo {
   knowledge?: string;
   releaseDate?: string;
   ranking?: ModelRanking;
+  benchmark?: ModelBenchmarkScores;
   metadataSource: ModelMetadataSource;
   /** True when any trusted metadata source identified the model. */
   matched: boolean;
 }
+
+export interface ModelInsightsStatus {
+  hasKey: boolean;
+  ready: boolean;
+  cachedModelCount: number;
+  fetchedAt?: string;
+  asOf?: string;
+  citation?: string;
+  license?: "CC BY 4.0";
+}
+
+export type ModelInsightsActionErrorCode =
+  | "not_connected"
+  | "invalid_key"
+  | "rate_limited"
+  | "service_unavailable"
+  | "network_error"
+  | "invalid_response"
+  | "local_error";
+
+export type ModelInsightsActionResult =
+  | { ok: true; status: ModelInsightsStatus }
+  | { ok: false; code: ModelInsightsActionErrorCode; message: string };
 
 export interface ChatMeta {
   id: string;
   title: string;
   /** Workspace this chat belongs to. */
   workspaceId?: string;
+  /** Main-owned reusable bot identity; absent for ordinary and Assistant chats. */
+  botId?: string;
   providerId?: string;
   model?: string;
+  /** Bounded last visible message text for list projections; never a full history. */
+  preview?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -305,6 +355,8 @@ export interface ScheduledTask {
   mcpServerBindings?: ScheduledMcpServerBinding[];
   /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
   executionProfile?: ScheduledTaskExecutionProfile;
+  /** Explicit Web Search authority. Missing legacy values are always treated as false. */
+  webSearchEnabled?: boolean;
   chatId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
@@ -345,6 +397,8 @@ export interface ScheduledTaskInput {
   mcpServerBindings?: ScheduledMcpServerBinding[];
   /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
   executionProfile?: ScheduledTaskExecutionProfile;
+  /** Explicit Web Search authority. New tasks default to false. */
+  webSearchEnabled?: boolean;
   notify?: boolean;
 }
 
@@ -400,6 +454,7 @@ export interface DiscoveredSkill {
 }
 
 export type VoiceProvider = "openai" | "gemini" | "local";
+export type GeminiUsageScope = "transcription_only" | "models_and_transcription";
 
 export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
 
@@ -465,17 +520,29 @@ export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
-  hiddenModelsByProvider?: Record<string, string[]>;
+  hiddenModelsByProvider?: HiddenModelsByProvider;
   exaEnabled?: boolean;
+  /** Versioned Web Search routing/preferences; credentials stay main-owned. */
+  webSearch?: WebSearchSettingsV2;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
-  /** Selected on-device Whisper model id (see local-models catalog). */
+  /** Whether Google is exposed for voice only or for both chat models and voice. */
+  geminiUsageScope?: GeminiUsageScope;
+  /** Selected on-device speech model id (see local-models catalog). */
   localVoiceModel?: string;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  /** Hold the dictation shortcut to record; release to transcribe. */
+  dictationHoldToTalk?: boolean;
+  /** End dictation shortly after silence. */
+  dictationSilenceStop?: boolean;
+  /** Polish the transcript with the current chat model before paste. */
+  dictationCleanup?: boolean;
+  /** Play start/stop/done cues from the dictation pill. */
+  dictationSounds?: boolean;
   /** Versioned command overrides. Legacy global fields remain migration fallbacks. */
   keybindings?: KeybindingOverridesV1;
   /** Background chat-title generation policy. Defaults to automatic. */
@@ -658,6 +725,8 @@ export interface ChatStartParams {
   mode?: "assistant" | "assistant-unattended" | "assistant-automation";
   /** Small main-validated enum; provider/model support is enforced at runtime. */
   thinkingLevel?: GenerationThinkingLevel;
+  /** Host-owned /visualize instruction for this attended turn. */
+  visualize?: boolean;
   messages: Array<{
     role: ChatRole;
     content: string;

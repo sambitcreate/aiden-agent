@@ -15,14 +15,21 @@ export interface CodexProviderStatusChangedEvent {
   needsAttention: boolean;
 }
 
+/** Stable product copy for upstream provider names that are unclear in Aiden's UI. */
+export function providerDisplayLabel(providerId: string, upstreamLabel: string): string {
+  return providerId === "opencode-go" ? "OpenCode Zen" : upstreamLabel;
+}
+
 /** Electron-free bridge contract: every service notification becomes one global renderer event. */
 export function forwardCodexProviderStatusChanges(
   source: {
     onStatusChange(listener: (needsAttention: boolean) => void): () => void;
   },
   broadcast: (channel: NotificationChannel, event: CodexProviderStatusChangedEvent) => void,
+  onAuthorityChanged: () => void = () => undefined,
 ): () => void {
   return source.onStatusChange((needsAttention) => {
+    onAuthorityChanged();
     broadcast(CODEX_PROVIDER_STATUS_CHANGED_CHANNEL, {
       providerId: OPENAI_CODEX_PROVIDER_ID,
       needsAttention,
@@ -78,6 +85,7 @@ export function mergeCodexProvider(
       defaultModel,
       needsKey: true,
       isPreset: true,
+      isBuiltin: true,
       hasKey: true,
       canLogout: true,
     },

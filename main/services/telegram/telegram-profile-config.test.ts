@@ -5,6 +5,7 @@ import {
   listTelegramProfileNames,
   normalizeTelegramProfileName,
   projectTelegramProfile,
+  telegramBotNoticeAudienceId,
   telegramProfilePatch,
   telegramProfileRuntimeFile,
   telegramProfileTokenKey,
@@ -25,6 +26,10 @@ test("named Telegram profiles project isolated settings and storage identities",
   assert.equal(work.telegramWorkspaceId, "workspace-1");
   assert.equal(telegramProfileTokenKey("work"), "telegram:work");
   assert.equal(telegramProfileRuntimeFile("work"), "telegram-runtime-work.json");
+  assert.equal(
+    telegramBotNoticeAudienceId(" Work ", 12345),
+    "telegram:work:owner:12345",
+  );
   assert.deepEqual(listTelegramProfileNames(settings), ["default", "work"]);
 });
 
@@ -40,4 +45,5 @@ test("profile names are bounded and reserve routing aliases", () => {
   assert.throws(() => normalizeTelegramProfileName("main"));
   assert.throws(() => normalizeTelegramProfileName("bad-name"));
   assert.throws(() => normalizeTelegramProfileName("x".repeat(33)));
+  assert.throws(() => telegramBotNoticeAudienceId("work", 0));
 });

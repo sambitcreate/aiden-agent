@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import ImageIO
 
 enum AidenDeviceType: String, Codable, Sendable {
     case iphone
@@ -12,15 +13,183 @@ enum AidenConnectionMode: String, Codable, Sendable {
     case both
 }
 
+struct AidenSpeechEngine: Codable, Equatable, Sendable {
+    let ready: Bool
+    let error: String?
+}
+
+struct AidenSpeechDownload: Codable, Equatable, Sendable {
+    let id: String
+    let percentage: Int
+    let phase: String
+    let status: String
+    let error: String?
+}
+
+struct AidenSpeechModel: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let description: String
+    let sizeLabel: String
+    let languagesLabel: String
+    let recommended: Bool
+    let installed: Bool
+    let download: AidenSpeechDownload?
+}
+
+struct AidenSpeechInputContract: Codable, Equatable, Sendable {
+    let encoding: String
+    let sampleRate: Int
+    let channels: Int
+    let maximumSeconds: Int
+    let partialResults: Bool
+}
+
+struct AidenSpeechStatus: Codable, Equatable, Sendable {
+    let engine: AidenSpeechEngine
+    let selectedModelId: String?
+    let models: [AidenSpeechModel]
+    let input: AidenSpeechInputContract
+}
+
+struct AidenSpeechTranscription: Codable, Equatable, Sendable {
+    let text: String
+    let modelId: String
+}
+
+private struct AidenSpeechSelectionRequest: Encodable {
+    let modelId: String
+}
+
+private struct AidenSpeechTranscriptionRequest: Encodable {
+    let encoding = "pcm_s16le"
+    let sampleRate = 16_000
+    let channels = 1
+    let pcmBase64: String
+    let modelId: String
+}
+
 struct AidenServer: Codable, Equatable, Sendable {
     let protocolVersion: Int
     let instanceId: String
     let name: String
     let appVersion: String
+    /// Capabilities granted to the authenticated device.
     let capabilities: [AidenRemoteCapability]
+    /// Full server support inventory. Its absence identifies a legacy,
+    /// capability-ambiguous response and must fail closed for Bots.
+    let serverCapabilities: [AidenRemoteCapability]?
+    /// Presentation-only label the Mac currently stores for this client.
+    let deviceName: String?
     let connectionMode: AidenConnectionMode
     let minimumClientVersion: String?
     let serverTime: Date
+
+    init(
+        protocolVersion: Int,
+        instanceId: String,
+        name: String,
+        appVersion: String,
+        capabilities: [AidenRemoteCapability],
+        serverCapabilities: [AidenRemoteCapability]? = nil,
+        deviceName: String? = nil,
+        connectionMode: AidenConnectionMode,
+        minimumClientVersion: String?,
+        serverTime: Date
+    ) {
+        self.protocolVersion = protocolVersion
+        self.instanceId = instanceId
+        self.name = name
+        self.appVersion = appVersion
+        self.capabilities = capabilities
+        self.serverCapabilities = serverCapabilities
+        self.deviceName = deviceName
+        self.connectionMode = connectionMode
+        self.minimumClientVersion = minimumClientVersion
+        self.serverTime = serverTime
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)
+        instanceId = try values.decode(String.self, forKey: .instanceId)
+        name = try values.decode(String.self, forKey: .name)
+        appVersion = try values.decode(String.self, forKey: .appVersion)
+        capabilities = try values.decode([AidenRemoteCapability].self, forKey: .capabilities)
+        if values.contains(.serverCapabilities) {
+            serverCapabilities = try values.decode(
+                [AidenRemoteCapability].self,
+                forKey: .serverCapabilities
+            )
+        } else {
+            serverCapabilities = nil
+        }
+        deviceName = try values.decodeIfPresent(String.self, forKey: .deviceName)
+        connectionMode = try values.decode(AidenConnectionMode.self, forKey: .connectionMode)
+        minimumClientVersion = try values.decodeIfPresent(
+            String.self,
+            forKey: .minimumClientVersion
+        )
+        serverTime = try values.decode(Date.self, forKey: .serverTime)
+
+        guard !instanceId.isEmpty,
+              instanceId.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .instanceId,
+                in: values,
+                debugDescription: "Expected a non-empty bounded server identity."
+            )
+        }
+        try Self.requireUniqueCapabilities(capabilities, forKey: .capabilities, in: values)
+        if let serverCapabilities {
+            try Self.requireUniqueCapabilities(
+                serverCapabilities,
+                forKey: .serverCapabilities,
+                in: values
+            )
+            guard Set(capabilities).isSubset(of: Set(serverCapabilities)) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .serverCapabilities,
+                    in: values,
+                    debugDescription: "Device grants must be a subset of server-supported capabilities."
+                )
+            }
+        }
+        if let deviceName {
+            guard !deviceName.isEmpty,
+                  deviceName.count <= 80,
+                  !deviceName.unicodeScalars.contains(where: { scalar in
+                      scalar.properties.generalCategory == .control
+                          || scalar.properties.generalCategory == .format
+                  }) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .deviceName,
+                    in: values,
+                    debugDescription: "Expected a bounded visible client-device label."
+                )
+            }
+        }
+    }
+
+    private static func requireUniqueCapabilities(
+        _ capabilities: [AidenRemoteCapability],
+        forKey key: CodingKeys,
+        in values: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        guard Set(capabilities).count == capabilities.count,
+              !capabilities.contains(.botWrite) || capabilities.contains(.botRead) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: values,
+                debugDescription: "Capability grants must be unique and bot:write requires bot:read."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion, instanceId, name, appVersion, capabilities, serverCapabilities, deviceName
+        case connectionMode, minimumClientVersion, serverTime
+    }
 }
 
 enum AidenWorkspacePermission: String, Codable, CaseIterable, Sendable {
@@ -165,6 +334,15 @@ final class AidenRemoteClient: @unchecked Sendable {
         let deviceType: AidenDeviceType
         let clientVersion: String
         let acceptsDisplayName: Bool?
+        let acceptsBotCapabilities: Bool?
+    }
+
+    private struct DeviceIdentityRequest: Encodable {
+        let name: String
+    }
+
+    private struct DeviceIdentityResponse: Decodable {
+        let name: String
     }
 
     private struct WorkspaceList: Decodable {
@@ -247,6 +425,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         deviceName: String,
         deviceType: AidenDeviceType,
         clientVersion: String,
+        acceptsBotCapabilities: Bool = AppConfig.botFirstMobileEnabled,
         session injectedSession: URLSession? = nil,
         now: Date = Date()
     ) async throws -> AidenRemoteContractFixture.PairingExchange {
@@ -268,7 +447,8 @@ final class AidenRemoteClient: @unchecked Sendable {
             deviceName: deviceName,
             deviceType: deviceType,
             clientVersion: clientVersion,
-            acceptsDisplayName: true
+            acceptsDisplayName: true,
+            acceptsBotCapabilities: acceptsBotCapabilities
         )
         let exchange: AidenRemoteContractFixture.PairingExchange
         do {
@@ -291,7 +471,8 @@ final class AidenRemoteClient: @unchecked Sendable {
                     deviceName: deviceName,
                     deviceType: deviceType,
                     clientVersion: clientVersion,
-                    acceptsDisplayName: nil
+                    acceptsDisplayName: nil,
+                    acceptsBotCapabilities: nil
                 ),
                 authenticated: false,
                 acceptedStatus: [200]
@@ -306,6 +487,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         deviceName: String,
         deviceType: AidenDeviceType,
         clientVersion: String,
+        acceptsBotCapabilities: Bool = AppConfig.botFirstMobileEnabled,
         bootstrapSession injectedBootstrapSession: URLSession? = nil,
         pairingSession injectedPairingSession: URLSession? = nil,
         now: Date = Date()
@@ -321,6 +503,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             deviceName: deviceName,
             deviceType: deviceType,
             clientVersion: clientVersion,
+            acceptsBotCapabilities: acceptsBotCapabilities,
             session: injectedPairingSession,
             now: now
         )
@@ -420,6 +603,17 @@ final class AidenRemoteClient: @unchecked Sendable {
         return value
     }
 
+    func updateDeviceIdentity(name: String) async throws {
+        let response: DeviceIdentityResponse = try await send(
+            method: "PATCH",
+            path: ["device", "identity"],
+            body: DeviceIdentityRequest(name: name)
+        )
+        guard response.name == name else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
     func workspaces() async throws -> [AidenWorkspace] {
         let value: WorkspaceList = try await send(method: "GET", path: ["workspaces"])
         return value.workspaces
@@ -512,7 +706,9 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     func chat(id: String) async throws -> AidenChat {
-        try await send(method: "GET", path: ["chats", id])
+        let value: AidenChat = try await send(method: "GET", path: ["chats", id])
+        guard value.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return value
     }
 
     func createChat(
@@ -594,7 +790,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased(),
               contentType == "image/jpeg" || contentType == "image/png"
-        else { throw AidenRemoteClientError.invalidResponse }
+        else { try rejectContractResponse() }
         return AidenAttachmentContent(data: data, mimeType: contentType)
     }
 
@@ -617,6 +813,324 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     func modelCatalog() async throws -> AidenModelCatalog {
         try await send(method: "GET", path: ["models"])
+    }
+
+    // MARK: - Bots
+
+    func bots(includeArchived: Bool = false) async throws -> AidenBotList {
+        try await send(
+            method: "GET",
+            path: ["bots"],
+            query: [URLQueryItem(name: "includeArchived", value: includeArchived ? "true" : "false")]
+        )
+    }
+
+    func bot(id: String) async throws -> AidenBotDetail {
+        try validateBotIdentifier(id)
+        let detail: AidenBotDetail = try await send(method: "GET", path: ["bots", id])
+        return try validatedBotDetail(detail, expectedID: id)
+    }
+
+    func createBot(
+        _ create: AidenBotCreateRequest,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenBotDetail {
+        try await send(
+            method: "POST",
+            path: ["bots"],
+            body: create,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [201]
+        )
+    }
+
+    func updateBotIdentity(
+        id: String,
+        revision: String,
+        patch: AidenBotIdentityPatch
+    ) async throws -> AidenBotDetail {
+        try validateBotIdentifier(id)
+        try validateRevision(revision)
+        let detail: AidenBotDetail = try await send(
+            method: "PATCH",
+            path: ["bots", id],
+            body: patch,
+            headers: ["If-Match": revision]
+        )
+        return try validatedBotDetail(detail, expectedID: id)
+    }
+
+    func archiveBot(id: String, revision: String) async throws -> AidenBotDetail {
+        try validateBotIdentifier(id)
+        try validateRevision(revision)
+        let response: AidenBotArchiveResponse = try await send(
+            method: "DELETE",
+            path: ["bots", id],
+            headers: ["If-Match": revision]
+        )
+        return try validatedBotDetail(response.bot, expectedID: id)
+    }
+
+    func restoreBot(
+        id: String,
+        revision: String,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenBotDetail {
+        try validateBotIdentifier(id)
+        try validateRevision(revision)
+        let response: AidenBotRestoreResponse = try await send(
+            method: "POST",
+            path: ["bots", id, "restore"],
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ]
+        )
+        return try validatedBotDetail(response.bot, expectedID: id)
+    }
+
+    func botConversations(
+        query: AidenBotConversationQuery
+    ) async throws -> AidenBotConversationPage {
+        var queryItems: [URLQueryItem] = []
+        if let cursor = query.cursor {
+            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        if let search = query.query {
+            queryItems.append(URLQueryItem(name: "query", value: search))
+        }
+        if let botId = query.botId {
+            queryItems.append(URLQueryItem(name: "botId", value: botId))
+        }
+        if let limit = query.limit {
+            queryItems.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        let page: AidenBotConversationPage = try await send(
+            method: "GET",
+            path: ["bot-conversations"],
+            query: queryItems
+        )
+        if let botId = query.botId,
+           !page.conversations.allSatisfy({ $0.botId == botId }) {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return page
+    }
+
+    func botConversations() async throws -> AidenBotConversationPage {
+        try await botConversations(query: AidenBotConversationQuery())
+    }
+
+    func createBotChat(
+        botId: String,
+        request: AidenBotChatCreateRequest,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChat {
+        try validateBotIdentifier(botId)
+        let response: AidenBotChatCreateResponse = try await send(
+            method: "POST",
+            path: ["bots", botId, "chats"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [201]
+        )
+        guard response.chat.botId == botId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return response.chat
+    }
+
+    func botCapabilityCatalog() async throws -> AidenBotCapabilityCatalog {
+        try await send(method: "GET", path: ["bot-capabilities"])
+    }
+
+    func updateBotAccess(
+        botId: String,
+        revision: String,
+        update: AidenBotAccessUpdate
+    ) async throws -> AidenBotAccessView {
+        try validateBotIdentifier(botId)
+        try validateRevision(revision)
+        let response: AidenBotAccessView = try await send(
+            method: "PATCH",
+            path: ["bots", botId, "capabilities"],
+            body: update,
+            headers: ["If-Match": revision]
+        )
+        guard response.botId == botId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return response
+    }
+
+    func botChatAccess(chatId: String) async throws -> AidenBotChatAccessView {
+        try validateRemoteIdentifier(chatId)
+        let response: AidenBotChatAccessView = try await send(
+            method: "GET",
+            path: ["chats", chatId, "capabilities"]
+        )
+        guard response.chatId == chatId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return response
+    }
+
+    func updateBotChatAccess(
+        chatId: String,
+        revision: String,
+        update: AidenBotChatAccessUpdate
+    ) async throws -> AidenBotChatAccessView {
+        try validateRemoteIdentifier(chatId)
+        try validateRevision(revision)
+        let response: AidenBotChatAccessView = try await send(
+            method: "PATCH",
+            path: ["chats", chatId, "capabilities"],
+            body: update,
+            headers: ["If-Match": revision]
+        )
+        guard response.chatId == chatId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return response
+    }
+
+    func botFavorites() async throws -> AidenBotFavorites {
+        try await send(method: "GET", path: ["bot-favorites"])
+    }
+
+    func updateBotFavorites(
+        _ update: AidenBotFavoritesUpdateRequest,
+        revision: String
+    ) async throws -> AidenBotFavorites {
+        try validateRevision(revision)
+        return try await send(
+            method: "PATCH",
+            path: ["bot-favorites"],
+            body: update,
+            headers: ["If-Match": revision]
+        )
+    }
+
+    func botAccessNotice() async throws -> AidenBotNoticeStatus {
+        try await send(method: "GET", path: ["bot-access-notice"])
+    }
+
+    func acknowledgeBotAccessNotice(
+        _ acknowledgement: AidenBotNoticeAcknowledgement,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenBotNoticeStatus {
+        try await send(
+            method: "POST",
+            path: ["bot-access-notice", "acknowledgement"],
+            body: acknowledgement,
+            headers: idempotencyHeaders(idempotencyKey)
+        )
+    }
+
+    func botConversationFiles(chatId: String) async throws -> AidenWorkspaceFileIndex {
+        try validateRemoteIdentifier(chatId)
+        let value: AidenWorkspaceFileIndex = try await send(
+            method: "GET",
+            path: ["bot-conversations", chatId, "files"],
+            maximumResponseBytes: AidenRemoteProtocol.maxFileJSONBodyBytes
+        )
+        return try AidenWorkspaceEnvironmentValidation.validated(value)
+    }
+
+    func botConversationFile(
+        chatId: String,
+        fileId: String
+    ) async throws -> AidenWorkspaceFileDocument {
+        try validateRemoteIdentifier(chatId)
+        try validateOpaqueFileIdentifier(fileId)
+        let value: AidenWorkspaceFileDocument = try await send(
+            method: "GET",
+            path: ["bot-conversations", chatId, "files", fileId],
+            maximumResponseBytes: AidenRemoteProtocol.maxFileJSONBodyBytes
+        )
+        return try AidenWorkspaceEnvironmentValidation.validated(value, expectedID: fileId)
+    }
+
+    func writeBotConversationFile(
+        chatId: String,
+        fileId: String,
+        content: String,
+        expectedVersion: String
+    ) async throws -> AidenWorkspaceFileDocument {
+        try validateRemoteIdentifier(chatId)
+        try validateOpaqueFileIdentifier(fileId)
+        try validateRevision(expectedVersion)
+        let value: AidenWorkspaceFileDocument = try await send(
+            method: "PUT",
+            path: ["bot-conversations", chatId, "files", fileId],
+            body: AidenWorkspaceFileWriteRequest(content: content, expectedVersion: expectedVersion),
+            maximumResponseBytes: AidenRemoteProtocol.maxFileJSONBodyBytes
+        )
+        return try AidenWorkspaceEnvironmentValidation.validated(value, expectedID: fileId)
+    }
+
+    func putBotAvatar(
+        botId: String,
+        revision: String,
+        upload: AidenBotAvatarUpload,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenBotAvatarAsset {
+        try validateBotIdentifier(botId)
+        try validateRevision(revision)
+        return try await send(
+            method: "PUT",
+            path: ["bots", botId, "avatar"],
+            body: upload,
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ],
+            maximumResponseBytes: AidenRemoteProtocol.maxJSONBodyBytes
+        )
+    }
+
+    func deleteBotAvatar(botId: String, revision: String) async throws -> AidenBotDetail {
+        try validateBotIdentifier(botId)
+        try validateRevision(revision)
+        let detail: AidenBotDetail = try await send(
+            method: "DELETE",
+            path: ["bots", botId, "avatar"],
+            headers: ["If-Match": revision]
+        )
+        return try validatedBotDetail(detail, expectedID: botId)
+    }
+
+    func botAvatar(
+        botId: String,
+        assetRevision: String
+    ) async throws -> AidenBotAvatarContent {
+        try validateBotIdentifier(botId)
+        try validateAvatarRevision(assetRevision)
+        var request = try makeRequest(
+            method: "GET",
+            path: ["bots", botId, "avatar", assetRevision],
+            query: [],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        request.setValue("image/png", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: 4 * 1_048_576
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.value(forHTTPHeaderField: "Content-Type")?
+                .split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() == "image/png",
+              httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased() == "no-store",
+              httpResponse.value(forHTTPHeaderField: "X-Content-Type-Options")?.lowercased() == "nosniff",
+              Self.isCanonicalBotPNG(data) else {
+            try rejectContractResponse()
+        }
+        return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
     }
 
     func scheduledTasks() async throws -> [AidenScheduledTask] {
@@ -740,6 +1254,47 @@ final class AidenRemoteClient: @unchecked Sendable {
         try await send(
             method: "PATCH", path: ["scheduled-tasks", "settings"], body: mutation,
             headers: ["If-Match": revision]
+        )
+    }
+
+    func speechStatus() async throws -> AidenSpeechStatus {
+        try await send(method: "GET", path: ["speech"])
+    }
+
+    func selectSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus {
+        try await send(
+            method: "PATCH",
+            path: ["speech"],
+            body: AidenSpeechSelectionRequest(modelId: modelId)
+        )
+    }
+
+    func downloadSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus {
+        try await send(
+            method: "POST",
+            path: ["speech", "models", modelId, "download"],
+            acceptedStatus: [202]
+        )
+    }
+
+    func cancelSpeechModelDownload(_ modelId: String) async throws -> AidenSpeechStatus {
+        try await send(method: "DELETE", path: ["speech", "models", modelId, "download"])
+    }
+
+    func deleteSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus {
+        try await send(method: "DELETE", path: ["speech", "models", modelId])
+    }
+
+    func transcribeSpeech(pcm16: Data, modelId: String) async throws -> AidenSpeechTranscription {
+        try await send(
+            method: "POST",
+            path: ["speech", "transcriptions"],
+            body: AidenSpeechTranscriptionRequest(
+                pcmBase64: pcm16.base64EncodedString(),
+                modelId: modelId
+            ),
+            timeoutInterval: 120,
+            maximumResponseBytes: 64 * 1_024
         )
     }
 
@@ -937,6 +1492,10 @@ final class AidenRemoteClient: @unchecked Sendable {
         try await send(method: "GET", path: ["streams", id])
     }
 
+    func streamApproval(id: String) async throws -> AidenStreamApprovalSnapshot {
+        try await send(method: "GET", path: ["streams", id, "approval"])
+    }
+
     func cancelStream(id: String, idempotencyKey: UUID = UUID()) async throws -> AidenStreamStatus {
         try await send(
             method: "POST",
@@ -1030,7 +1589,25 @@ final class AidenRemoteClient: @unchecked Sendable {
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish()
+                } catch let clientError as AidenRemoteClientError {
+                    switch clientError {
+                    case .missingCredential, .server, .unexpectedStatus:
+                        // The request/HTTP boundary already emitted the single auth or network category.
+                        break
+                    case .invalidEndpoint, .missingTrustConfiguration, .installationChanged:
+                        AidenDiagnostics.record(.connection, event: .streamInterrupted, outcome: .failed, code: .network)
+                    case .invalidResponse:
+                        AidenDiagnostics.record(.stream, event: .streamInterrupted, outcome: .failed, code: .invalidResponse)
+                    }
+                    continuation.finish(throwing: clientError)
+                } catch let contractError as AidenRemoteContractError {
+                    AidenDiagnostics.record(.stream, event: .streamInterrupted, outcome: .failed, code: .invalidResponse)
+                    continuation.finish(throwing: contractError)
+                } catch let parserError as AidenSSEParserError {
+                    AidenDiagnostics.record(.stream, event: .streamInterrupted, outcome: .failed, code: .invalidResponse)
+                    continuation.finish(throwing: parserError)
                 } catch {
+                    AidenDiagnostics.record(.connection, event: .streamInterrupted, outcome: .failed, code: .network)
                     continuation.finish(throwing: error)
                 }
             }
@@ -1099,6 +1676,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         do {
             return try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
         } catch {
+            AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
             throw AidenRemoteClientError.invalidResponse
         }
     }
@@ -1111,10 +1689,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         headers: [String: String] = [:],
         authenticated: Bool = true,
         acceptedStatus: Set<Int> = [200],
+        timeoutInterval: TimeInterval? = nil,
         maximumResponseBytes: Int = AidenRemoteProtocol.maxJSONBodyBytes
     ) async throws -> Response {
         let encodedBody = try JSONEncoder().encode(body)
-        let request = try makeRequest(
+        var request = try makeRequest(
             method: method,
             path: path,
             query: query,
@@ -1122,6 +1701,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: headers,
             authenticated: authenticated
         )
+        if let timeoutInterval { request.timeoutInterval = timeoutInterval }
         let (data, response) = try await boundedData(
             for: request,
             maximumBytes: maximumResponseBytes
@@ -1130,6 +1710,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         do {
             return try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
         } catch {
+            AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
             throw AidenRemoteClientError.invalidResponse
         }
     }
@@ -1186,6 +1767,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         }
         if authenticated {
             guard let credential, !credential.isEmpty else {
+                AidenDiagnostics.record(.authentication, event: .requestFailed, outcome: .failed, code: .unauthorized)
                 throw AidenRemoteClientError.missingCredential
             }
             request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
@@ -1200,25 +1782,154 @@ final class AidenRemoteClient: @unchecked Sendable {
         for request: URLRequest,
         maximumBytes: Int
     ) async throws -> (Data, URLResponse) {
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: request)
+        } catch is CancellationError {
+            AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .cancelled, code: .network)
+            throw CancellationError()
+        } catch {
+            AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .failed, code: .network)
+            throw error
+        }
         if response.expectedContentLength > Int64(maximumBytes) {
+            AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
             throw AidenRemoteContractError.payloadTooLarge
         }
         var data = Data()
         if response.expectedContentLength > 0 {
             data.reserveCapacity(min(Int(response.expectedContentLength), maximumBytes))
         }
-        for try await byte in bytes {
-            guard data.count < maximumBytes else {
-                throw AidenRemoteContractError.payloadTooLarge
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
+                    throw AidenRemoteContractError.payloadTooLarge
+                }
+                data.append(byte)
             }
-            data.append(byte)
+        } catch is CancellationError {
+            AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .cancelled, code: .network)
+            throw CancellationError()
+        } catch let contractError as AidenRemoteContractError {
+            throw contractError
+        } catch {
+            AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .failed, code: .network)
+            throw error
         }
         return (data, response)
     }
 
+    private func rejectContractResponse() throws -> Never {
+        AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
+        throw AidenRemoteClientError.invalidResponse
+    }
+
     private func idempotencyHeaders(_ key: UUID) -> [String: String] {
         ["Idempotency-Key": key.uuidString.lowercased()]
+    }
+
+    private func validateBotIdentifier(_ value: String) throws {
+        try validateSafeIdentifier(value, maximumScalars: AidenRemoteProtocol.maxBotIdentifierLength)
+    }
+
+    private func validateRemoteIdentifier(_ value: String) throws {
+        try validateSafeIdentifier(value, maximumScalars: AidenRemoteProtocol.maxIdentifierLength)
+    }
+
+    private func validateRevision(_ value: String) throws {
+        guard !value.isEmpty,
+              value.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength,
+              value.unicodeScalars.allSatisfy({ $0.value >= 0x21 && $0.value <= 0x7e }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    private func validateSafeIdentifier(_ value: String, maximumScalars: Int) throws {
+        guard !value.isEmpty,
+              value.unicodeScalars.count <= maximumScalars,
+              value.unicodeScalars.allSatisfy({ scalar in
+                  switch scalar.value {
+                  case 48...57, 65...90, 97...122, 45, 46, 58, 95:
+                      return true
+                  default:
+                      return false
+                  }
+              }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    private func validateOpaqueFileIdentifier(_ value: String) throws {
+        let suffix = value.dropFirst(5)
+        guard value.hasPrefix("file_"), suffix.count == 43,
+              suffix.unicodeScalars.allSatisfy({ scalar in
+                  switch scalar.value {
+                  case 48...57, 65...90, 97...122, 45, 95:
+                      return true
+                  default:
+                      return false
+                  }
+              }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    private func validateAvatarRevision(_ value: String) throws {
+        let suffix = value.dropFirst("avatar_revision_".count)
+        guard value.hasPrefix("avatar_revision_"), suffix.count == 32,
+              suffix.unicodeScalars.allSatisfy({ scalar in
+                  (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+              }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    private func validatedBotDetail(
+        _ detail: AidenBotDetail,
+        expectedID: String
+    ) throws -> AidenBotDetail {
+        guard detail.id == expectedID else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return detail
+    }
+
+    private static func isCanonicalBotPNG(_ data: Data) -> Bool {
+        guard data.count >= 24,
+              data.prefix(8).elementsEqual([137, 80, 78, 71, 13, 10, 26, 10]),
+              data[12..<16].elementsEqual([73, 72, 68, 82]),
+              [UInt8](data.suffix(12)) == [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130],
+              let source = CGImageSourceCreateWithData(
+                  data as CFData,
+                  [kCGImageSourceShouldCache: false] as CFDictionary
+              ),
+              CGImageSourceGetType(source) as String? == "public.png",
+              CGImageSourceGetStatus(source) == .statusComplete,
+              CGImageSourceGetCount(source) == 1,
+              CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+              width.intValue == 512,
+              height.intValue == 512,
+              let pngProperties = properties[kCGImagePropertyPNGDictionary]
+                as? [CFString: Any],
+              pngProperties[kCGImagePropertyAPNGLoopCount] == nil,
+              pngProperties[kCGImagePropertyAPNGDelayTime] == nil,
+              pngProperties[kCGImagePropertyAPNGUnclampedDelayTime] == nil,
+              let image = CGImageSourceCreateImageAtIndex(
+                  source,
+                  0,
+                  [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+              ),
+              image.width == 512,
+              image.height == 512 else {
+            return false
+        }
+        return true
     }
 
     private func validatedGit(_ result: AidenGitResult) throws -> AidenGitResult {
@@ -1234,6 +1945,12 @@ final class AidenRemoteClient: @unchecked Sendable {
             throw AidenRemoteClientError.invalidResponse
         }
         guard acceptedStatus.contains(response.statusCode) else {
+            AidenDiagnostics.record(
+                response.statusCode == 401 || response.statusCode == 403 ? .authentication : .connection,
+                event: .requestFailed,
+                outcome: .failed,
+                code: response.statusCode == 401 || response.statusCode == 403 ? .unauthorized : .network
+            )
             if let envelope = try? AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: data) {
                 throw AidenRemoteClientError.server(statusCode: response.statusCode, body: envelope.error)
             }

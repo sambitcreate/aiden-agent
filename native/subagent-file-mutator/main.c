@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #define MAX_CONTENT_BYTES 200000
+#define MAX_HTML_CONTENT_BYTES (512 * 1024)
 #define MAX_PATH_BYTES 4096
 #define MAX_PATH_COMPONENTS 64
 #define MAX_REQUEST_ID_BYTES 64
@@ -74,6 +75,27 @@ static int same_timestamp(struct timespec left, struct timespec right) {
 
 static int exclusive_regular(const struct stat *identity) {
   return S_ISREG(identity->st_mode) && identity->st_nlink == 1;
+}
+
+static int same_read_identity(const struct stat *left,
+                              const struct stat *right) {
+#ifdef __APPLE__
+  return exclusive_regular(left) && exclusive_regular(right) &&
+         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
+         left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
+         left->st_size == right->st_size &&
+         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
+         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+#else
+  return exclusive_regular(left) && exclusive_regular(right) &&
+         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
+         left->st_gid == right->st_gid && left->st_size == right->st_size &&
+         same_timestamp(left->st_mtim, right->st_mtim) &&
+         same_timestamp(left->st_ctim, right->st_ctim);
+#endif
 }
 
 static int same_identity(const struct stat *left, const struct stat *right) {
@@ -670,9 +692,12 @@ static void clear_transaction(struct Transaction *transaction) {
   transaction->expected_fd = -1;
 }
 
+static int test_pause(const char *environment_name);
+
 static int open_parent(int root_fd, unsigned char *relative_path,
                        size_t path_length, int *parent_fd,
-                       char leaf[NAME_MAX + 1]) {
+                       char leaf[NAME_MAX + 1],
+                       const char *pause_after_first_component) {
   if (path_length == 0 || path_length > MAX_PATH_BYTES ||
       relative_path[0] == '/' || memchr(relative_path, '\0', path_length) != NULL)
     return RESULT_INVALID;
@@ -738,6 +763,12 @@ static int open_parent(int root_fd, unsigned char *relative_path,
       return errno == ELOOP || errno == ENOTDIR || errno == ENOENT
                  ? RESULT_CONFLICT
                  : RESULT_IO;
+    }
+    if (components == 1 && pause_after_first_component != NULL &&
+        test_pause(pause_after_first_component) != 0) {
+      close(next);
+      close(current);
+      return RESULT_IO;
     }
     close(current);
     current = next;
@@ -824,7 +855,7 @@ static int revalidate_parent(int root_fd, const char *root_path,
   char current_leaf[NAME_MAX + 1];
   int result = open_parent(root_fd, (unsigned char *)transaction->relative_path,
                            transaction->path_length, &current_parent,
-                           current_leaf);
+                           current_leaf, NULL);
   if (result != RESULT_OK)
     return result;
   struct stat retained;
@@ -1000,7 +1031,7 @@ static int prepare_transaction(int root_fd, const char *root_path,
   candidate.parent_fd = -1;
   candidate.expected_fd = -1;
   int path_result = open_parent(root_fd, relative_path, path_length,
-                                &candidate.parent_fd, candidate.leaf);
+                                &candidate.parent_fd, candidate.leaf, NULL);
   if (path_result == RESULT_OK) {
     memcpy(candidate.relative_path, relative_path, path_length);
     candidate.relative_path[path_length] = '\0';
@@ -1086,7 +1117,7 @@ static int inspect_transaction(int root_fd, const char *root_path,
   candidate.parent_fd = -1;
   candidate.expected_fd = -1;
   int path_result = open_parent(root_fd, relative_path, path_length,
-                                &candidate.parent_fd, candidate.leaf);
+                                &candidate.parent_fd, candidate.leaf, NULL);
   if (path_result == RESULT_OK) {
     memcpy(candidate.relative_path, relative_path, path_length);
     candidate.relative_path[path_length] = '\0';
@@ -1144,6 +1175,60 @@ static int inspect_transaction(int root_fd, const char *root_path,
   memcpy(candidate.request_id, request_id, strlen(request_id) + 1);
   *transaction = candidate;
   return RESULT_OK;
+}
+
+static int read_html_file(int root_fd, const char *root_path,
+                          const char *request_id, const char *encoded_path) {
+  if (!valid_request_id(request_id))
+    return RESULT_INVALID;
+  int root_result = revalidate_root(root_fd, root_path);
+  if (root_result != RESULT_OK)
+    return root_result;
+  unsigned char *relative_path = NULL;
+  size_t path_length = 0;
+  if (decode_base64(encoded_path, MAX_PATH_BYTES, &relative_path,
+                    &path_length) != 0)
+    return RESULT_INVALID;
+  int parent_fd = -1;
+  char leaf[NAME_MAX + 1];
+  int path_result = open_parent(
+      root_fd, relative_path, path_length, &parent_fd, leaf,
+      "AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_DURING_HTML_READ");
+  free(relative_path);
+  if (path_result != RESULT_OK)
+    return path_result;
+  int descriptor = openat(parent_fd, leaf, UNTRUSTED_READ_FLAGS);
+  close(parent_fd);
+  if (descriptor < 0)
+    return errno == ELOOP || errno == ENOTDIR || errno == ENOENT
+               ? RESULT_CONFLICT
+               : RESULT_IO;
+  struct stat before;
+  struct stat after;
+  unsigned char *contents = NULL;
+  int result = RESULT_CONFLICT;
+  if (fstat(descriptor, &before) != 0 || !S_ISREG(before.st_mode) ||
+      before.st_size < 1 || before.st_size > MAX_HTML_CONTENT_BYTES)
+    goto cleanup;
+  contents = calloc((size_t)before.st_size + 1, sizeof(unsigned char));
+  if (contents == NULL ||
+      read_all_at(descriptor, contents, (size_t)before.st_size) != 0 ||
+      fstat(descriptor, &after) != 0 || !same_read_identity(&before, &after))
+    goto cleanup;
+  root_result = revalidate_root(root_fd, root_path);
+  if (root_result != RESULT_OK) {
+    result = root_result;
+    goto cleanup;
+  }
+  printf("html-read %s %lld ", request_id, (long long)before.st_size);
+  print_base64(contents, (size_t)before.st_size);
+  putchar('\n');
+  result = RESULT_OK;
+
+cleanup:
+  free(contents);
+  close(descriptor);
+  return result;
 }
 
 static int prepare_inspected_transaction(
@@ -1543,6 +1628,16 @@ static int serve(int root_fd, const char *root_path) {
     char *command = strtok_r(line, " ", &save);
     if (command == NULL) {
       print_error(RESULT_INVALID);
+    } else if (strcmp(command, "read-html") == 0) {
+      char *request_id = strtok_r(NULL, " ", &save);
+      char *encoded_path = strtok_r(NULL, " ", &save);
+      char *extra = strtok_r(NULL, " ", &save);
+      enum Result result =
+          request_id != NULL && encoded_path != NULL && extra == NULL
+              ? read_html_file(root_fd, root_path, request_id, encoded_path)
+              : RESULT_INVALID;
+      if (result != RESULT_OK)
+        print_error(result);
     } else if (strcmp(command, "inspect") == 0) {
       char *request_id = strtok_r(NULL, " ", &save);
       char *encoded_path = strtok_r(NULL, " ", &save);

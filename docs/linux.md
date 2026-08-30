@@ -73,9 +73,10 @@ uncertain connection.
 
 ## Platform behavior
 
-The workspace agent, providers, local models, MCP, skills, schedules, terminal,
-Git, file editor, remote access, notifications, profile, themes, and native
-subagents use the same contracts as macOS. Linux-specific integrations include:
+The workspace agent, providers, local models, MCP, skills, Web Search,
+schedules, terminal, Git, file editor, generative UI artifacts, diagnostics,
+Gemini voice transcription, remote access, notifications, profile, themes, and
+native subagents use the same contracts as macOS. Linux-specific integrations include:
 
 - native distro window chrome and conventional File/Edit/View/Window/Help menus;
 - Ctrl-based app and global shortcuts, including the Wayland Global Shortcuts
@@ -87,12 +88,16 @@ subagents use the same contracts as macOS. Linux-specific integrations include:
 - bundled Node mDNS publication for nearby Aiden On The Go discovery, without
   requiring Apple's `dns-sd` utility.
 
-Computer Use and Apple Foundation Models are not included in the Linux build.
-Their settings, onboarding promises, helper bundles, and chat controls are
-omitted. Global dictation remains available when the desktop can register its
+Computer Use, Apple Foundation Models, and Bots are not included in the Linux
+build. Their settings, navigation, onboarding promises, helper bundles, and
+chat controls are omitted. Global dictation remains available when the desktop can register its
 shortcut, but the transcript is copied to the clipboard instead of using the
 macOS Accessibility auto-paste transaction. Wayland compositors own final
 placement of the dictation pill, so exact bottom-center positioning may vary.
+
+Provider inventories may refresh only from the provider services the user has
+configured. Descriptive model metadata comes from Aiden's bundled release
+snapshot; ordinary app reads expose no live models.dev refresh action.
 
 ## Updates and troubleshooting
 

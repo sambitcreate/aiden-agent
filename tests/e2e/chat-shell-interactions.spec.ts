@@ -41,7 +41,7 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await composer.fill("/");
   const slashCommands = page.getByRole("listbox", { name: "Slash commands" });
   await expect(slashCommands).toBeVisible();
-  await expect(slashCommands.getByRole("option").filter({ hasText: "/model" })).toBeVisible();
+  await expect(slashCommands.getByRole("option", { name: /^Choose model/u })).toBeVisible();
   await composer.press("Escape");
   await expect(slashCommands).toBeHidden();
   await expect(composer).toHaveValue("/");
@@ -83,12 +83,15 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
     name: /^Workspace access: Ask first/u,
   });
   await permission.click();
-  const noAccess = page.getByRole("menuitemcheckbox", { name: "No access" });
+  const accessOptions = page.getByRole("radiogroup", { name: "Workspace access" });
+  const askFirst = accessOptions.getByRole("radio", { name: /^Workspace access: Ask first/u });
+  const noAccess = accessOptions.getByRole("radio", { name: /^Workspace access: No access/u });
+  await expect(askFirst).toHaveAttribute("aria-checked", "true");
   await expect(noAccess).toHaveAttribute("aria-checked", "false");
   await noAccess.click();
+  await expect(noAccess).toHaveAttribute("aria-checked", "true");
   await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
-  await page.getByRole("button", { name: /^Workspace access: No access/u }).click();
-  await page.getByRole("menuitemcheckbox", { name: "Ask first" }).click();
+  await askFirst.click();
   await expect(permission).toBeVisible();
 
   await composer.fill("Draft and attachment stay with this chat only.");
@@ -134,4 +137,48 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(palette.getByText("Toggle sidebar", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(palette).toBeHidden();
+});
+
+test.describe("with a workspace", () => {
+  test.use({ workspaceSeed: true });
+
+  test("workspace access arrows move focus and explicit keys commit", async ({ aiden }) => {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+
+    const permission = page.getByRole("button", { name: /^Workspace access: Full access/u });
+    await permission.click();
+    const accessOptions = page.getByRole("radiogroup", { name: "Workspace access" });
+    const fullAccess = accessOptions.getByRole("radio", {
+      name: /^Workspace access: Full access/u,
+    });
+    const askFirst = accessOptions.getByRole("radio", { name: /^Workspace access: Ask first/u });
+    const noAccess = accessOptions.getByRole("radio", { name: /^Workspace access: No access/u });
+    await fullAccess.focus();
+    await expect(fullAccess).toBeFocused();
+
+    await fullAccess.press("ArrowDown");
+    await expect(askFirst).toBeFocused();
+    await expect(fullAccess).toHaveAttribute("aria-checked", "true");
+    await askFirst.press("Enter");
+    await expect(askFirst).toHaveAttribute("aria-checked", "true");
+
+    await askFirst.press("ArrowUp");
+    await expect(fullAccess).toBeFocused();
+    await expect(page.getByRole("dialog", { name: "Enable Full Access?" })).toHaveCount(0);
+    await expect(askFirst).toHaveAttribute("aria-checked", "true");
+
+    await fullAccess.press("ArrowDown");
+    await askFirst.press("ArrowDown");
+    await expect(noAccess).toBeFocused();
+    await expect(askFirst).toHaveAttribute("aria-checked", "true");
+    await noAccess.press(" ");
+    await expect(noAccess).toHaveAttribute("aria-checked", "true");
+
+    await noAccess.press("ArrowUp");
+    await expect(askFirst).toBeFocused();
+    await expect(noAccess).toHaveAttribute("aria-checked", "true");
+    await askFirst.press("Enter");
+    await expect(askFirst).toHaveAttribute("aria-checked", "true");
+  });
 });

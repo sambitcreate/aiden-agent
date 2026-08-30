@@ -136,12 +136,17 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 4)
+        XCTAssertEqual(fixture.contractRevision, 9)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertEqual(Set(fixture.capabilities), Set(AidenRemoteCapability.v1Known))
         XCTAssertEqual(Set(fixture.events.map(\.type)), Set(AidenRemoteEventType.v1Known))
+        XCTAssertTrue(fixture.botCapabilityCatalog.fileScopes.contains { $0.kind == .fullMac })
+        XCTAssertEqual(fixture.speechStatus.selectedModelId, "parakeet-v3")
+        XCTAssertEqual(fixture.speechStatus.input.sampleRate, 16_000)
+        XCTAssertFalse(fixture.speechStatus.input.partialResults)
+        XCTAssertEqual(fixture.speechTranscription.modelId, "parakeet-v3")
         XCTAssertEqual(fixture.pairingBootstrap.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertEqual(fixture.pairingBootstrap.endpoint.scheme, "https")
         XCTAssertGreaterThanOrEqual(fixture.pairingBootstrap.secret.count, 32)
@@ -152,6 +157,16 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertNoThrow(try fixture.pairingBootstrap.validated(at: fixtureReferenceDate))
         XCTAssertNoThrow(try fixture.pairingExchange.validated(against: fixture.pairingBootstrap))
         XCTAssertEqual(fixture.pairingExchange.displayName, "Fixture Aiden")
+        XCTAssertEqual(fixture.chat.botId, "bot_fixture_01")
+        XCTAssertTrue(fixture.server.capabilities.contains(.botRead))
+        XCTAssertEqual(
+            Set(try XCTUnwrap(fixture.server.serverCapabilities)),
+            Set(fixture.capabilities)
+        )
+        XCTAssertEqual(fixture.streamStatus.state, .waitingForApproval)
+        XCTAssertNil(Mirror(reflecting: fixture.streamStatus).children.first { $0.label == "approval" })
+        XCTAssertEqual(fixture.streamApproval.approval?.approvalId, "approval_fixture_01")
+        XCTAssertEqual(fixture.streamApproval.approval?.canAllow, true)
 
         var lastSequence: [String: Int] = [:]
         var terminalStreams = Set<String>()
@@ -160,6 +175,190 @@ final class AidenRemotePhase0Tests: XCTestCase {
             XCTAssertEqual(event.sequence, (lastSequence[event.streamId] ?? 0) + 1)
             lastSequence[event.streamId] = event.sequence
             if event.terminal { terminalStreams.insert(event.streamId) }
+        }
+    }
+
+    func testParentVisibleMessageTextPreservesExactSemanticContent() throws {
+        let samples = [
+            "NFC café | NFD cafe\u{301} | हिन्दी | 日本語 | العربية",
+            "Emoji 👩🏽‍💻 👨‍👩‍👧‍👦 🇺🇳 1️⃣ 🚀",
+            "/Users/example/Aiden Projects/π.swift | C:\\Users\\example\\Aiden Projects\\pi.swift",
+            "/api/aiden/v1/chats/chat_01?after=42 | https://example.test/a%2Fb?q=hello%20world#résumé",
+            "UUID 123e4567-e89b-12d3-a456-426614174000 | base64 SGVsbG8sIFdvcmxkIQ== | hex deadbeef0123456789ABCDEF",
+            "Benign prose: token=session_token, secret=example-secret, api_key=example_api_key, Authorization: Bearer visible-placeholder",
+        ]
+
+        for (index, expected) in samples.enumerated() {
+            let wireObject: [String: Any] = [
+                "id": "message-\(index)",
+                "role": "assistant",
+                "text": expected,
+                "createdAt": "2026-08-25T18:00:00.000Z",
+            ]
+            let wireData = try JSONSerialization.data(withJSONObject: wireObject)
+            let decoded = try AidenRemoteJSONDecoder.decode(AidenChatMessage.self, from: wireData)
+
+            XCTAssertEqual(Array(decoded.text.utf8), Array(expected.utf8), "UTF-8 changed for sample \(index)")
+            XCTAssertEqual(Array(decoded.text.utf16), Array(expected.utf16), "UTF-16 changed for sample \(index)")
+            XCTAssertEqual(
+                decoded.text.unicodeScalars.map(\.value),
+                expected.unicodeScalars.map(\.value),
+                "Unicode scalars changed for sample \(index)"
+            )
+
+            let projectedData = try JSONEncoder().encode(decoded)
+            let projectedObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: projectedData) as? [String: Any]
+            )
+            let projectedText = try XCTUnwrap(projectedObject["text"] as? String)
+            XCTAssertEqual(
+                Array(projectedText.utf8),
+                Array(expected.utf8),
+                "Encoded UTF-8 changed for sample \(index)"
+            )
+            XCTAssertEqual(
+                projectedText.unicodeScalars.map(\.value),
+                expected.unicodeScalars.map(\.value),
+                "Encoded Unicode scalars changed for sample \(index)"
+            )
+        }
+    }
+
+    func testEncodedMessageAndModelCatalogExposeOnlyPublicProjectionKeys() throws {
+        let message = AidenChatMessage(
+            id: "message-public",
+            role: .assistant,
+            text: "Parent-visible result and report back",
+            createdAt: Date(timeIntervalSince1970: 1_777_000_000)
+        )
+        let messageObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? [String: Any]
+        )
+        XCTAssertEqual(Set(messageObject.keys), Set(["id", "role", "text", "createdAt"]))
+
+        let catalog = AidenModelCatalog(
+            providers: [
+                AidenProvider(
+                    id: "provider-public",
+                    label: "Public provider",
+                    models: [
+                        AidenModel(
+                            id: "model-public",
+                            label: "Public model",
+                            supportsImages: nil,
+                            thinkingLevels: nil,
+                            defaultThinkingLevel: nil,
+                            thinkingCanDisable: nil,
+                            hidden: nil
+                        ),
+                    ]
+                ),
+            ],
+            defaults: ["providerId": "provider-public", "modelId": "model-public"]
+        )
+        let catalogObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(catalog)) as? [String: Any]
+        )
+        XCTAssertEqual(Set(catalogObject.keys), Set(["providers", "defaults"]))
+        let defaults = try XCTUnwrap(catalogObject["defaults"] as? [String: Any])
+        XCTAssertEqual(Set(defaults.keys), Set(["providerId", "modelId"]))
+        let provider = try XCTUnwrap((catalogObject["providers"] as? [[String: Any]])?.first)
+        XCTAssertEqual(Set(provider.keys), Set(["id", "label", "models"]))
+        let model = try XCTUnwrap((provider["models"] as? [[String: Any]])?.first)
+        XCTAssertEqual(Set(model.keys), Set(["id", "label"]))
+
+        let forbiddenChildOrPrivateKeys = Set([
+            "childId", "childRunId", "task", "result", "privateHistory", "systemPrompt",
+            "absolutePath", "providerCredential", "authorizationHeader", "providerApiKey",
+        ])
+        func assertNoPrivateKeys(_ value: Any) {
+            if let dictionary = value as? [String: Any] {
+                XCTAssertTrue(forbiddenChildOrPrivateKeys.isDisjoint(with: dictionary.keys))
+                dictionary.values.forEach(assertNoPrivateKeys)
+            } else if let array = value as? [Any] {
+                array.forEach(assertNoPrivateKeys)
+            }
+        }
+        assertNoPrivateKeys(messageObject)
+        assertNoPrivateKeys(catalogObject)
+    }
+
+    func testAdditiveChildFieldsDecodeButDoNotEnterTheParentProjection() throws {
+        let input: [String: Any] = [
+            "id": "message-parent",
+            "role": "assistant",
+            "text": "Visible parent answer.",
+            "createdAt": "2026-08-25T18:00:00.000Z",
+            "outcome": [
+                "status": "failed",
+                "category": "interrupted",
+                "attempts": 1,
+                "retryExhausted": false,
+            ],
+            "timeline": [
+                "version": 3,
+                "generationId": "parent-generation",
+                "status": "failed",
+                "startedAt": 1_000,
+                "finishedAt": 2_000,
+                "steps": [],
+            ],
+            "subagents": [
+                "version": 1,
+                "generationId": "parent-generation",
+                "runIds": ["private-child-run-1", "private-child-run-2"],
+                "items": [[
+                    "runId": "private-child-run-1",
+                    "label": "Private scout",
+                    "role": "scout",
+                    "state": "completed",
+                ], [
+                    "runId": "private-child-run-2",
+                    "label": "Private reviewer",
+                    "role": "reviewer",
+                    "state": "failed",
+                ]],
+                "total": 2,
+                "completed": 1,
+                "failed": 1,
+                "timedOut": 0,
+                "interrupted": 0,
+            ],
+            "subagentLifecycle": ["state": "completed"],
+            "subagentControl": ["canStop": false],
+        ]
+        let decoded = try AidenRemoteJSONDecoder.decode(
+            AidenChatMessage.self,
+            from: JSONSerialization.data(withJSONObject: input)
+        )
+
+        XCTAssertEqual(decoded.text, "Visible parent answer.")
+        XCTAssertEqual(decoded.outcome?.status, .failed)
+        XCTAssertEqual(decoded.outcome?.category, "interrupted")
+        XCTAssertEqual(decoded.timeline?.generationId, "parent-generation")
+        XCTAssertEqual(decoded.timeline?.status, .failed)
+
+        let encoded = try JSONEncoder().encode(decoded)
+        let output = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(output.keys),
+            Set(["id", "role", "text", "createdAt", "outcome", "timeline"])
+        )
+        XCTAssertNil(output["subagents"])
+        let serialized = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        for privateValue in [
+            "private-child-run-1", "private-child-run-2", "Private scout",
+            "Private reviewer", "scout", "reviewer",
+        ] {
+            XCTAssertFalse(serialized.contains(privateValue), privateValue)
+        }
+        for privateKey in [
+            "subagents", "runIds", "items", "total", "completed", "failed",
+            "timedOut", "interrupted", "subagentLifecycle", "subagentControl",
+        ] {
+            XCTAssertFalse(serialized.contains("\"\(privateKey)\":"), privateKey)
         }
     }
 
@@ -191,20 +390,54 @@ final class AidenRemotePhase0Tests: XCTestCase {
             "worktreeGitDir", "ownershipToken", "worktreeDevice", "worktreeInode",
             "createdFromHead", "canonicalPath", "absolutePath", "scriptPath",
             "environment", "stdout", "stderr",
+            "subagents", "subagentId", "subagentIds", "childId", "childIds",
+            "childRunId", "childRunIds", "privateHistory",
         ])
 
-        func inspect(_ value: Any) throws {
+        func isVisibleMessageText(_ path: [String]) -> Bool {
+            path == ["chat", "messages", "[]", "text"]
+                || path == ["botChatCreate", "response", "messages", "[]", "text"]
+        }
+        func hasForbiddenAppearance(_ string: String, at path: [String]) -> Bool {
+            !isVisibleMessageText(path)
+                && (string.contains("/Users/") || string.contains("BEGIN PRIVATE KEY"))
+        }
+        func inspect(_ value: Any, path: [String] = []) throws {
             if let dictionary = value as? [String: Any] {
                 XCTAssertTrue(forbidden.isDisjoint(with: dictionary.keys))
-                for child in dictionary.values { try inspect(child) }
+                for (key, child) in dictionary { try inspect(child, path: path + [key]) }
             } else if let array = value as? [Any] {
-                for child in array { try inspect(child) }
+                for child in array { try inspect(child, path: path + ["[]"]) }
             } else if let string = value as? String {
-                XCTAssertFalse(string.contains("/Users/"))
-                XCTAssertFalse(string.contains("BEGIN PRIVATE KEY"))
+                XCTAssertFalse(hasForbiddenAppearance(string, at: path), path.joined(separator: "."))
             }
         }
         try inspect(object)
+        XCTAssertFalse(
+            hasForbiddenAppearance(
+                "/Users/example/visible prose mentioning BEGIN PRIVATE KEY",
+                at: ["chat", "messages", "[]", "text"]
+            )
+        )
+        XCTAssertFalse(
+            hasForbiddenAppearance(
+                "/Users/example/visible Bot prose mentioning BEGIN PRIVATE KEY",
+                at: ["botChatCreate", "response", "messages", "[]", "text"]
+            )
+        )
+        XCTAssertTrue(
+            hasForbiddenAppearance(
+                "/Users/example/private metadata",
+                at: ["chat", "messages", "[]", "timeline", "target"]
+            )
+        )
+        XCTAssertTrue(
+            hasForbiddenAppearance(
+                "/Users/example/private nested transcript lookalike",
+                at: ["chat", "privateHistory", "messages", "[]", "text"]
+            )
+        )
+        XCTAssertTrue(forbidden.contains("privateHistory"))
     }
 
     func testP256SPKIFingerprintMatchesIndependentFixture() throws {
@@ -602,6 +835,13 @@ final class AidenRemotePhase0Tests: XCTestCase {
         )
         XCTAssertEqual(capability.rawValue, "future:read")
         XCTAssertEqual(event.rawValue, "future_event")
+        XCTAssertEqual(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorCode.self,
+                from: Data("\"bot_archived\"".utf8)
+            ).rawValue,
+            "bot_archived"
+        )
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
             AidenRemoteErrorCode.self,
             from: Data("\"future_error\"".utf8)

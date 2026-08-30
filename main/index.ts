@@ -6,6 +6,7 @@ import {
   logger,
   powerMonitor,
   registerNativeHandlers,
+  screen,
   shell,
 } from "./platform.js";
 import { Menu, nativeImage, nativeTheme } from "electron";
@@ -47,6 +48,7 @@ import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
 import { disposeDictation, toggleDictation } from "./services/dictation.js";
+import { disposeParakeet } from "./services/parakeet.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
 import { appUpdateService } from "./services/app-updater.js";
@@ -55,6 +57,10 @@ import type {
   AppUpdateRestartResult,
 } from "../renderer/shared/app-update.js";
 import { devLogPath } from "./services/dev-log.js";
+import { flushDiagnosticJournal, writeDiagnosticEvent } from "./services/diagnostic-journal.js";
+import { projectDiagnosticError } from "./services/diagnostics-contract.js";
+import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
+import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
@@ -64,7 +70,7 @@ import {
 } from "../renderer/shared/keybindings.js";
 import { applicationMenuTemplate } from "./services/application-menu-core.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
-import type { AppSettings } from "./services/types.js";
+import type { AppSettings, Chat } from "./services/types.js";
 import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
 import { createRendererReadinessGate } from "./services/renderer-readiness-core.js";
 import { createSupersedingTaskGate } from "./services/superseding-task-core.js";
@@ -82,7 +88,14 @@ import {
 } from "./services/subagents/subagent-packaged-soak-core.js";
 import { subagentsEnabled } from "./services/subagents/feature-flag.js";
 import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
+import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
+import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
+import {
+  registerGenerativeUiProtocol,
+  registerGenerativeUiScheme,
+} from "./services/generative-ui-protocol.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
+import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
 import {
   gitDeleteManagedWorktree,
@@ -109,13 +122,19 @@ import {
   setOnboardingProgress,
 } from "./services/onboarding-state.js";
 import { rendererDocumentOwner } from "./services/renderer-document-owner.js";
+import { decideRendererRecovery } from "./services/renderer-crash-recovery.js";
 import {
   aidenRemoteServiceKeepsApplicationAlive,
   initializeAidenRemoteService,
   stopAidenRemoteServiceAndSettle,
 } from "./services/aiden-remote-service-main.js";
+import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
+import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
+import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
+import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
 import { shouldQuitAfterAllWindowsClose } from "./application-lifecycle-core.js";
+import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 
 if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
   process.stdout.write(`${app.getVersion()}\n`);
@@ -123,10 +142,12 @@ if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
 }
 
 if (process.platform === "linux") {
-  // Chromium's portal path lets global shortcuts work under supporting
-  // Wayland desktop environments instead of relying on X11 key grabs.
+  // Supporting Wayland compositors can register Electron global shortcuts
+  // through the desktop portal instead of relying on X11 key grabs.
   app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 }
+
+registerGenerativeUiScheme();
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -271,12 +292,15 @@ function cleanupApplication(): void {
   appUpdateService.dispose();
   disposeShortcut();
   disposeDictation();
+  disposeParakeet();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
+  botSkillContentWatcher.dispose();
+  geminiLiveTranscription.dispose();
   void mcpManager.closeAll();
 }
 
@@ -363,6 +387,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     );
     // Do not let later asynchronous cleanup give a timed-out receipt writer
     // time to publish evidence after its lifecycle has already failed closed.
+    await flushSubagentRuntimeDiagnostics(1_000);
     app.exit(1);
     return;
   }
@@ -391,6 +416,9 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       error,
     );
   }
+  await flushSubagentRuntimeDiagnostics(1_000);
+  await flushDiagnosticJournal(1_000);
+  await flushDiagnosticHealth(1_000);
   forceAppQuit = true;
   if (installUpdateOnQuit) {
     installUpdateOnQuit = false;
@@ -497,11 +525,22 @@ async function authorizeProtectedAction(
   return false;
 }
 
+async function persistMainWindowState(window: BrowserWindow): Promise<void> {
+  try {
+    await mainWindowState.save(window);
+  } catch (error) {
+    // Window placement is a convenience preference. A transient persistence
+    // failure must never trap the user in the app during Close or Quit.
+    logger.warn("main-window", "Could not save the main window state", error);
+  }
+}
+
 async function requestWindowClose(window: BrowserWindow): Promise<void> {
   if (lifecycleCheckInFlight || window.isDestroyed()) return;
   lifecycleCheckInFlight = true;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return;
+    await persistMainWindowState(window);
     protectedAction = "close";
     window.close();
   } finally {
@@ -536,6 +575,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   lifecycleCheckInFlight = true;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return false;
+    await persistMainWindowState(window);
     try {
       await computerUseSettings.shutdown();
     } catch (error) {
@@ -663,6 +703,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
 
     const onboardingWasComplete =
       await clearRendererOnboardingCompletion(window);
+    await persistMainWindowState(window);
     protectedAction = "onboarding-reset";
     if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
@@ -781,7 +822,7 @@ ipcMain.handle(
     ) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
-    if (outcome !== "incomplete" && outcome !== "completed") {
+    if (outcome !== "incomplete" && outcome !== "deferred" && outcome !== "completed") {
       throw new Error("Invalid onboarding outcome.");
     }
     if (
@@ -967,11 +1008,34 @@ function openExternalUrl(value: string): void {
   }
 }
 
+function refreshFoundationModelsStatus(force = false): void {
+  if (!hostPlatformCapabilities().appleFoundationModels) return;
+  void foundationModelsConnection.status(force ? { force: true } : undefined);
+}
+
 async function createMainWindow(): Promise<void> {
+  let rendererCrashTimes: number[] = [];
   // macOS activate, a second-instance event, or a newly registered global
   // shortcut can all arrive while whenReady is still initializing. Never let
   // those alternate paths expose a renderer to a partial shortcut snapshot.
   await shortcutInitializationPromise;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const existingWindow = mainWindow;
+    await mainWindowLoads.wait();
+    if (existingWindow.isDestroyed() || mainWindow !== existingWindow) return;
+    existingWindow.show();
+    existingWindow.focus();
+    return;
+  }
+
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const displays = [
+    primaryDisplay,
+    ...screen.getAllDisplays().filter((display) => display.id !== primaryDisplay.id),
+  ];
+  const restoredWindowState = await mainWindowState.restore(
+    displays.map((display) => display.workArea),
+  );
   if (mainWindow && !mainWindow.isDestroyed()) {
     const existingWindow = mainWindow;
     await mainWindowLoads.wait();
@@ -987,6 +1051,7 @@ async function createMainWindow(): Promise<void> {
       process.platform,
       nativeTheme.shouldUseDarkColors,
     ),
+    ...restoredWindowState.bounds,
     title: app.getName(),
     ...(process.platform === "linux"
       ? { icon: nativeImage.createFromPath(applicationIconPath()) }
@@ -995,6 +1060,12 @@ async function createMainWindow(): Promise<void> {
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  writeDiagnosticEvent({
+    level: "info",
+    area: "renderer",
+    event: "main-window-created",
+    outcome: "completed",
+  });
   const createdWebContentsId = createdWindow.webContents.id;
   const mainWindowUrl = getWindowUrl("main-window.html");
   createdWindow.webContents.on("did-start-loading", () => {
@@ -1002,6 +1073,15 @@ async function createMainWindow(): Promise<void> {
     terminalService.closeForWebContents(createdWebContentsId);
   });
   createdWindow.webContents.on("render-process-gone", (_event, details) => {
+    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
+    writeDiagnosticEvent({
+      level: "error",
+      area: "renderer",
+      event: "renderer-process-gone",
+      outcome: "failed",
+      code: "renderer-crashed",
+      fields: { reason: details.reason, exitCode: details.exitCode },
+    });
     logger.error("renderer-lifecycle", "Main renderer process exited", {
       webContentsId: createdWebContentsId,
       reason: details.reason,
@@ -1018,11 +1098,69 @@ async function createMainWindow(): Promise<void> {
       mainWindow !== createdWindow
     )
       return;
+    const recoveryDecision = decideRendererRecovery(rendererCrashTimes, Date.now());
+    rendererCrashTimes = recoveryDecision.recentCrashTimes;
+    if (!recoveryDecision.retry) {
+      writeDiagnosticEvent({
+        level: "fatal",
+        area: "renderer",
+        event: "renderer-crash-loop",
+        outcome: "failed",
+        code: "crash-loop",
+        fields: { crashCount: recoveryDecision.attempt },
+      });
+      createdWindow.destroy();
+      return;
+    }
     const recovery = mainWindowLoads.replace(
-      createdWindow.loadURL(mainWindowUrl),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, recoveryDecision.backoffMs);
+      }).then(async () => {
+        if (
+          cleanupStarted ||
+          shutdownStarted ||
+          createdWindow.isDestroyed() ||
+          mainWindow !== createdWindow
+        ) return;
+        await createdWindow.loadURL(mainWindowUrl);
+      }),
     );
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "renderer",
+      event: "renderer-recovery",
+      outcome: "started",
+      fields: {
+        attempt: recoveryDecision.attempt,
+        backoffMs: recoveryDecision.backoffMs,
+      },
+    });
+    void recovery.promise.then(() => {
+      if (!mainWindowLoads.isCurrent(recovery)) return;
+      if (
+        cleanupStarted ||
+        shutdownStarted ||
+        createdWindow.isDestroyed() ||
+        mainWindow !== createdWindow
+      ) return;
+      writeDiagnosticEvent({
+        level: "info",
+        area: "renderer",
+        event: "renderer-recovery",
+        outcome: "recovered",
+      });
+    });
     void recovery.promise.catch((error: unknown) => {
       if (!mainWindowLoads.isCurrent(recovery)) return;
+      const projected = projectDiagnosticError(error);
+      writeDiagnosticEvent({
+        level: "error",
+        area: "renderer",
+        event: "renderer-recovery",
+        outcome: "failed",
+        code: projected.code,
+        fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+      });
       logger.error(
         "main",
         "Could not recover the main renderer after it exited.",
@@ -1032,12 +1170,25 @@ async function createMainWindow(): Promise<void> {
     });
   });
   createdWindow.webContents.on("unresponsive", () => {
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "renderer",
+      event: "renderer-unresponsive",
+      outcome: "degraded",
+      code: "unresponsive",
+    });
     logger.warn("renderer-lifecycle", "Main renderer became unresponsive", {
       webContentsId: createdWebContentsId,
       url: createdWindow.webContents.getURL(),
     });
   });
   createdWindow.webContents.on("responsive", () => {
+    writeDiagnosticEvent({
+      level: "info",
+      area: "renderer",
+      event: "renderer-responsive",
+      outcome: "recovered",
+    });
     logger.info("renderer-lifecycle", "Main renderer became responsive", {
       webContentsId: createdWebContentsId,
     });
@@ -1045,6 +1196,14 @@ async function createMainWindow(): Promise<void> {
   createdWindow.webContents.on(
     "did-fail-load",
     (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      writeDiagnosticEvent({
+        level: "error",
+        area: "renderer",
+        event: "renderer-load-failed",
+        outcome: "failed",
+        code: "launch-failed",
+        fields: { loadErrorCode: errorCode, isMainFrame },
+      });
       logger.error("renderer-lifecycle", "Renderer load failed", {
         webContentsId: createdWebContentsId,
         errorCode,
@@ -1054,15 +1213,37 @@ async function createMainWindow(): Promise<void> {
       });
     },
   );
-  createdWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
-    logger.error(
-      "renderer-lifecycle",
-      "Renderer preload failed",
-      { webContentsId: createdWebContentsId, preloadPath },
-      error,
-    );
+  createdWindow.webContents.on(
+    "preload-error",
+    (_event, preloadPath, error) => {
+      const projected = projectDiagnosticError(error);
+      writeDiagnosticEvent({
+        level: "error",
+        area: "renderer",
+        event: "renderer-preload-failed",
+        outcome: "failed",
+        code: projected.code,
+        fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+      });
+      logger.error(
+        "renderer-lifecycle",
+        "Renderer preload failed",
+        { webContentsId: createdWebContentsId, preloadPath },
+        error,
+      );
+    },
+  );
+  createdWindow.once("ready-to-show", () => {
+    writeDiagnosticEvent({
+      level: "info",
+      area: "renderer",
+      event: "renderer-ready",
+      outcome: "completed",
+    });
+    if (restoredWindowState.maximized) createdWindow.maximize();
+    if (restoredWindowState.fullScreen) createdWindow.setFullScreen(true);
+    createdWindow.show();
   });
-  createdWindow.once("ready-to-show", () => createdWindow.show());
   createdWindow.on("close", (event) => {
     if (
       protectedAction === "close" ||
@@ -1350,7 +1531,20 @@ if (!ownsSingleInstanceLock) {
   registerHandlers();
 
   app.on("child-process-gone", (_event, details) => {
-    logger.error("electron-lifecycle", "Electron child process exited unexpectedly", details);
+    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
+    writeDiagnosticEvent({
+      level: "error",
+      area: "electron",
+      event: "child-process-gone",
+      outcome: "failed",
+      code: "internal-error",
+      fields: { processType: details.type, reason: details.reason, exitCode: details.exitCode },
+    });
+    logger.error(
+      "electron-lifecycle",
+      "Electron child process exited unexpectedly",
+      details,
+    );
   });
 
   app.on("second-instance", () => showMainWindow());
@@ -1360,11 +1554,18 @@ if (!ownsSingleInstanceLock) {
       platform: process.platform,
       backgroundServiceRunning,
     });
-    if (shouldQuitAfterAllWindowsClose(process.platform, backgroundServiceRunning)) app.quit();
+    if (
+      shouldQuitAfterAllWindowsClose(
+        process.platform,
+        backgroundServiceRunning,
+      )
+    ) {
+      app.quit();
+    }
   });
 
   app.on("activate", () => {
-    void foundationModelsConnection.status({ force: true });
+    refreshFoundationModelsStatus(true);
     showMainWindow();
   });
 
@@ -1441,6 +1642,17 @@ if (!ownsSingleInstanceLock) {
     .whenReady()
     .then(async () => {
       const runtimeProfile = currentRuntimeProfile();
+      writeDiagnosticEvent({
+        level: "info",
+        area: "app",
+        event: "electron-ready",
+        outcome: "completed",
+        fields: {
+          runtimeProfile: runtimeProfile.id,
+          appVersion: app.getVersion(),
+          electronVersion: process.versions.electron,
+        },
+      });
       if (
         runtimeProfile.id === "development" &&
         process.platform === "darwin"
@@ -1456,7 +1668,10 @@ if (!ownsSingleInstanceLock) {
         );
       }
       if (!isPackagedRuntime()) {
-        logger.info("dev-log", `Writing dev log to ${devLogPath() ?? "unknown"}`);
+        logger.info(
+          "dev-log",
+          `Writing dev log to ${devLogPath() ?? "unknown"}`,
+        );
         logger.info("electron-lifecycle", "Electron application ready", {
           appName: app.getName(),
           appVersion: app.getVersion(),
@@ -1481,12 +1696,125 @@ if (!ownsSingleInstanceLock) {
       // Reconcile every persisted active child at the actual restart boundary,
       // before a renderer can read or append run history.
       await piRuntimeEffectStore.initialize();
+      await displayImageArtifactStore.initialize();
+      await generativeUiArtifactStore.initialize();
+      registerGenerativeUiProtocol();
+      const quarantinedImageArtifactPath = displayImageArtifactStore.quarantinedPath();
+      if (quarantinedImageArtifactPath) {
+        logger.warn(
+          "pi",
+          `Invalid image artifact staging was preserved at ${quarantinedImageArtifactPath}; Aiden opened a clean staging store.`,
+        );
+      }
+      const displayImageArtifactAvailability = displayImageArtifactStore.availability();
+      if (!displayImageArtifactAvailability.available) {
+        logger.warn(
+          "pi",
+          "Image artifact recovery is unavailable; chat mutations will remain blocked.",
+          new Error(displayImageArtifactAvailability.reason),
+        );
+      }
+      const generativeUiArtifactAvailability = generativeUiArtifactStore.availability();
+      if (!generativeUiArtifactAvailability.available) {
+        logger.warn(
+          "pi",
+          "Generative UI artifact recovery is unavailable; chat mutations will remain blocked.",
+          new Error(generativeUiArtifactAvailability.reason),
+        );
+      }
       await subagentRunStore.initialize();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
+        if (displayImageArtifactAvailability.available) {
+          await displayImageArtifactStore.deleteChat(chatId);
+        }
+        if (generativeUiArtifactAvailability.available) {
+          await generativeUiArtifactStore.deleteChat(chatId);
+        }
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
+      if (displayImageArtifactAvailability.available) {
+        try {
+          const startupChats = (
+            await Promise.all(
+              (await displayImageArtifactStore.pendingChatIds()).map((chatId) =>
+                chatStore.get(chatId),
+              ),
+            )
+          ).filter((chat): chat is Chat => chat !== null);
+          await displayImageArtifactStore.recover(
+            startupChats,
+            async ({ chatId, attachments, createdAt, model }) => {
+              await chatStore.appendMessage(chatId, {
+                role: "assistant",
+                content: "",
+                attachments,
+                createdAt,
+                model,
+                providerFailure: {
+                  version: 1,
+                  category: "interrupted",
+                  attempts: 1,
+                  retryExhausted: false,
+                },
+              });
+            },
+          );
+        } catch (error) {
+          logger.warn(
+            "pi",
+            "Could not recover staged image artifacts; affected chats remain blocked.",
+            error,
+          );
+        }
+      }
+      if (generativeUiArtifactAvailability.available) {
+        try {
+          const startupHtmlChats = (
+            await Promise.all(
+              (await generativeUiArtifactStore.pendingChatIds()).map((chatId) =>
+                chatStore.get(chatId),
+              ),
+            )
+          ).filter((chat): chat is Chat => chat !== null);
+          await generativeUiArtifactStore.recover(
+            startupHtmlChats,
+            async ({ chatId, htmlArtifacts, createdAt, model }) => {
+              await chatStore.appendMessage(chatId, {
+                role: "assistant",
+                content: "",
+                htmlArtifacts,
+                createdAt,
+                model,
+                providerFailure: {
+                  version: 1,
+                  category: "interrupted",
+                  attempts: 1,
+                  retryExhausted: false,
+                },
+              });
+            },
+          );
+        } catch (error) {
+          logger.warn(
+            "pi",
+            "Could not recover staged HTML artifacts; affected chats remain blocked.",
+            error,
+          );
+        }
+      }
+      if (hostPlatformCapabilities().bots) {
+        try {
+          await initializeBotApplicationService();
+        } catch (error) {
+          logger.error(
+            "bots",
+            "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
+            error,
+          );
+        }
+      }
       const visibleChatIds = new Set(
         (await chatStore.list()).map((chat) => chat.id),
       );
@@ -1612,7 +1940,7 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
-      void foundationModelsConnection.status();
+      refreshFoundationModelsStatus();
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
 
@@ -1640,8 +1968,27 @@ if (!ownsSingleInstanceLock) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;
       }
-      await scheduleService.start();
-      await telegramService.start();
+      try {
+        await scheduleService.start();
+      } catch (error) {
+        logger.error(
+          "scheduled-tasks",
+          "Scheduled tasks could not restore their saved state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
+      // Telegram restoration is optional to desktop availability. Bot-bound
+      // routes independently revalidate their exact managed home and access
+      // policy before queue admission whenever the binding store is healthy.
+      try {
+        await telegramService.start();
+      } catch (error) {
+        logger.error(
+          "telegram",
+          "Telegram could not restore its saved state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
       appUpdateService.start();
     })
     .catch((error: unknown) => {

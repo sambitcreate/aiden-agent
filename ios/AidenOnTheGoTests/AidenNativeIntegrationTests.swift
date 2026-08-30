@@ -1,9 +1,81 @@
 import ActivityKit
+import AVFoundation
 import Foundation
 import XCTest
 @testable import AidenOnTheGo
 
 final class AidenNativeIntegrationTests: XCTestCase {
+    func testDiagnosticVocabularyIsClosedAndContentFree() {
+        XCTAssertEqual(
+            Set(AidenDiagnosticArea.allCases.map(\.rawValue)),
+            Set(["connection", "authentication", "contract", "cache", "stream", "speech", "notification", "liveActivity", "priorTermination", "app"])
+        )
+        XCTAssertTrue(AidenDiagnosticEvent.allCases.contains(.contractRejected))
+        XCTAssertTrue(AidenDiagnosticCode.allCases.contains(.metricDiagnostic))
+        let vocabulary = [
+            AidenDiagnosticArea.allCases.map(\.rawValue),
+            AidenDiagnosticEvent.allCases.map(\.rawValue),
+            AidenDiagnosticOutcome.allCases.map(\.rawValue),
+            AidenDiagnosticCode.allCases.map(\.rawValue),
+        ].flatMap { $0 }.joined(separator: " ").lowercased()
+        for forbidden in ["prompt", "credential", "endpoint", "path", "token", "message"] {
+            XCTAssertFalse(vocabulary.contains(forbidden))
+        }
+    }
+
+    func testBinaryContractRejectionsEmitExactlyOneDiagnosticEach() async throws {
+        var records: [(AidenDiagnosticArea, AidenDiagnosticEvent, AidenDiagnosticOutcome, AidenDiagnosticCode)] = []
+        AidenDiagnostics.testSink = { records.append(($0, $1, $2, $3)) }
+        defer {
+            AidenDiagnostics.testSink = nil
+            AidenNativeActivityURLProtocol.handler = nil
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AidenNativeActivityURLProtocol.self]
+        let client = AidenRemoteClient(
+            endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,
+            credential: "proof-credential",
+            session: URLSession(configuration: configuration)
+        )
+
+        AidenNativeActivityURLProtocol.handler = { request in
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "image/gif"]
+            ))
+            return (response, Data("GIF89a".utf8))
+        }
+        do {
+            _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
+            XCTFail("Expected the attachment MIME contract to be rejected.")
+        } catch AidenRemoteClientError.invalidResponse {}
+
+        AidenNativeActivityURLProtocol.handler = { request in
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "image/png",
+                    "Cache-Control": "public",
+                    "X-Content-Type-Options": "nosniff",
+                ]
+            ))
+            return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
+        }
+        do {
+            _ = try await client.botAvatar(botId: "bot-1", assetRevision: "revision-1")
+            XCTFail("Expected the avatar cache/security contract to be rejected.")
+        } catch AidenRemoteClientError.invalidResponse {}
+
+        XCTAssertEqual(records.count, 2)
+        XCTAssertTrue(records.allSatisfy {
+            $0.0 == .contract && $0.1 == .contractRejected && $0.2 == .failed && $0.3 == .invalidResponse
+        })
+    }
+
     @MainActor
     func testLiveActivityLookupScopesIdenticalStreamIDsToInstallation() {
         let attributes = AgentRunActivityAttributes(
@@ -487,13 +559,16 @@ final class AidenNativeIntegrationTests: XCTestCase {
             AidenMobileOnboardingPhase.allCases.map(\.imageName),
             ["OnboardingBuild", "OnboardingExtend", "OnboardingControl"]
         )
-        XCTAssertEqual(AidenMobileOnboardingPhase.build.eyebrow, "BUILD IN YOUR WORKSPACE")
+        XCTAssertEqual(AidenMobileOnboardingPhase.build.eyebrow, "BOTS AND WORKSPACES")
         XCTAssertEqual(AidenMobileOnboardingPhase.extend.eyebrow, "CHOOSE AND EXTEND")
         XCTAssertEqual(
             AidenMobileOnboardingPhase.control.eyebrow,
             "AUTOMATE AND STAY IN CONTROL"
         )
         XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Git"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Bots"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Workspaces"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Aiden logo"))
         XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("MCP"))
         XCTAssertTrue(AidenMobileOnboardingPhase.control.detail.contains("scheduled"))
     }
@@ -510,6 +585,63 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(AidenMobileOnboardingLayout.actionHorizontalPadding, 24)
         XCTAssertEqual(AidenMobileOnboardingLayout.actionBottomPadding, 12)
+    }
+
+    func testVoiceInputModeDefaultsAndLabelsRemainStable() {
+        XCTAssertEqual(AidenVoiceInputMode.defaultsKey, "aiden.voiceInput.mode")
+        XCTAssertEqual(AidenVoiceInputMode.allCases, [.onDevice, .pairedMac])
+        XCTAssertEqual(AidenVoiceInputMode.onDevice.title, "On this device")
+        XCTAssertEqual(AidenVoiceInputMode.pairedMac.title, "Paired desktop")
+    }
+
+    func testVoiceSessionFenceRejectsCallbacksFromAnInvalidatedSession() {
+        var fence = ComposerVoiceSessionFence()
+        let first = fence.advance()
+        XCTAssertTrue(fence.accepts(first))
+
+        let second = fence.advance()
+        XCTAssertFalse(fence.accepts(first))
+        XCTAssertTrue(fence.accepts(second))
+    }
+
+    func testVoiceDraftSessionStopsAcceptingResultsAfterCancellation() {
+        var session = ComposerVoiceDraftUpdateSession()
+        session.begin(baseDraft: "Keep")
+        XCTAssertEqual(session.composedDraft(for: "this"), "Keep this")
+
+        session.stopAcceptingUpdates()
+        XCTAssertNil(session.composedDraft(for: "stale result"))
+    }
+
+    func testVoiceCaptureLifecycleAllowsPermissionPromptsButStopsInBackground() {
+        XCTAssertFalse(AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: .active))
+        XCTAssertFalse(AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: .inactive))
+        XCTAssertTrue(AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: .background))
+    }
+
+    func testMacSpeechAccumulatorProducesBoundedLittleEndian16kPCM() throws {
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4))
+        buffer.frameLength = 4
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        channel[0] = -1
+        channel[1] = 0
+        channel[2] = 0.5
+        channel[3] = 1
+
+        let accumulator = ComposerMacSpeechPCMAccumulator()
+        accumulator.append(buffer)
+        let pcm = accumulator.data
+        XCTAssertEqual(pcm.count, 8)
+        XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: Int16.self) }, -32_767)
+        XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: Int16.self) }, 0)
+        XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: Int16.self) }, 16_383)
+        XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: Int16.self) }, 32_767)
     }
 }
 

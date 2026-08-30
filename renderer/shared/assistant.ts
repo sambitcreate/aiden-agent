@@ -104,12 +104,14 @@ export interface SubagentMcpMutationApprovalDetails {
 }
 
 /** Renderer-safe exact facts for one attended full-host child command. */
+export type SubagentShellApprovalShell = "/bin/zsh -f -c" | "/bin/sh -c";
+
 export interface SubagentShellApprovalDetails {
   kind: "subagent-shell";
   childLabel: string;
   command: string;
   initialCwd: string;
-  shell: "/bin/zsh -f -c";
+  shell: SubagentShellApprovalShell;
   argumentDigestPrefix: string;
   rootDigestPrefix: string;
   effectDigestPrefix: string;
@@ -125,6 +127,10 @@ export interface SubagentShellApprovalDetails {
   outputSentToModel: true;
   arbitraryNetworkAvailable: true;
   detachedProcessesMaySurvive: true;
+}
+
+export function isSubagentShellApprovalShell(value: unknown): value is SubagentShellApprovalShell {
+  return value === "/bin/zsh -f -c" || value === "/bin/sh -c";
 }
 
 export type ToolApprovalDetails =
@@ -404,7 +410,7 @@ export function isSubagentShellApprovalDetails(
     safeShellCommand(details.command) &&
     safeApprovalText(details.initialCwd, 1024) &&
     details.initialCwd.startsWith("/") &&
-    details.shell === "/bin/zsh -f -c" &&
+    isSubagentShellApprovalShell(details.shell) &&
     safeMutationDigestPrefix(details.argumentDigestPrefix) &&
     safeMutationDigestPrefix(details.rootDigestPrefix) &&
     safeMutationDigestPrefix(details.effectDigestPrefix) &&

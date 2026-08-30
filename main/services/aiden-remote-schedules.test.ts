@@ -74,7 +74,14 @@ function fixture() {
   };
   const service = new AidenRemoteScheduleService({
     application,
-    models: { resolve: async () => ({ providerId: "provider-1", modelId: "model-1", thinkingLevels: [] }) },
+    models: {
+      resolve: async () => ({
+        providerId: "provider-1",
+        modelId: "model-1",
+        thinkingLevels: [],
+        supportsImages: true,
+      }),
+    },
   });
   return { service, tasks, histories, application, runStarts: () => runStarts };
 }

@@ -91,6 +91,25 @@ test("distribution promotion happens only after build and verification", async (
   assert.deepEqual(events, ["prepare", "build", "verify", "promote"]);
 });
 
+test("development and release packaging vendor Generative UI libraries before building", async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.match(
+    packageJson.scripts.package,
+    /computer-use:vendor.+generative-ui:vendor.+build:native.+npm run build/u,
+  );
+
+  const distributionSource = await readFile(
+    new URL("./run-macos-distribution.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    distributionSource,
+    /npm\("computer-use:vendor"\);[\s\S]{0,100}npm\("generative-ui:vendor"\);[\s\S]{0,100}npm\("build:native"\);/u,
+  );
+});
+
 test("distribution archive discovery requires exactly one current DMG and ZIP", async () => {
   const staging = await mkdtemp(path.join(os.tmpdir(), "aiden-distribution-artifacts-"));
   try {
@@ -134,6 +153,23 @@ test("release artifact configuration uses stable GitHub-safe names", async () =>
   assert.equal(packageJson.build.mac.artifactName, "Aiden-Agent-${version}-${arch}-mac.${ext}");
   assert.equal(packageJson.build.dmg.artifactName, "Aiden-Agent-Beta-${version}-${arch}.${ext}");
   assert.equal(packageJson.build.linux.artifactName, "Aiden-Agent-${version}-${arch}-linux.${ext}");
+
+  const macFiles = new Set(packageJson.build.mac.extraFiles.map((entry) => entry.to));
+  const macBinaries = new Set(packageJson.build.mac.binaries);
+  for (const helper of [
+    "Aiden Foundation Models Helper.app",
+    "aiden-worktree-remover",
+    "aiden-bot-inbox-writer",
+    "aiden-subagent-run-store",
+    "aiden-subagent-file-mutator",
+    "aiden-subagent-shell-runner",
+  ]) {
+    assert.ok(macFiles.has(`Helpers/${helper}`), `macOS package is missing ${helper}`);
+    assert.ok(
+      macBinaries.has(`Contents/Helpers/${helper}`),
+      `macOS signing configuration is missing ${helper}`,
+    );
+  }
 });
 
 test("release assets stay draft-only until the complete update set is uploaded", async () => {
@@ -198,7 +234,29 @@ test("release publication checks deployed consumers before building", async () =
   );
   const consumerCheck = workflow.indexOf("npm run release:check-consumers");
   const distributionBuild = workflow.indexOf("npm run dist");
+  const versionResolution = workflow.indexOf("Resolve the declared release version");
+  const dependencyInstall = workflow.indexOf("Install locked dependencies");
 
+  assert.match(workflow, /git ls-remote --tags origin/u);
+  assert.doesNotMatch(workflow, /GITHUB_RUN_NUMBER|--allow-same-version/u);
+  assert.match(workflow, /node scripts\/prepare-ci-release\.mjs "\$base_tag_exists"/u);
+  assert.match(workflow, /steps\.version\.outputs\.publish == 'true'/u);
+  assert.ok(versionResolution >= 0 && versionResolution < dependencyInstall);
+  for (const stepName of [
+    "Install locked dependencies",
+    "Build, sign, notarize, and verify distribution",
+    "Verify diagnostics in the signed packaged app",
+    "Publish verified release assets",
+  ]) {
+    assert.match(
+      workflow,
+      new RegExp(
+        `- name: ${stepName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\n` +
+          " {8}if: \\$\\{\\{ steps\\.version\\.outputs\\.publish == 'true' \\}\\}",
+        "u",
+      ),
+    );
+  }
   assert.ok(consumerCheck >= 0, "the release workflow must check Homebrew and the website");
   assert.ok(
     distributionBuild > consumerCheck,

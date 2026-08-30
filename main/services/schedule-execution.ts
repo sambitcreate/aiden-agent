@@ -9,10 +9,12 @@ import { providerRegistry } from "./provider-registry.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleStore, type ScheduleStore } from "./schedule-store.js";
 import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
+import { webSearchService } from "./web-search-main.js";
 import {
   assertAssistantScheduleExecutionBoundary,
   isSilentAssistantScheduleResponse,
   scheduledTaskGenerationMode,
+  scheduledTaskAllowsWebSearch,
 } from "./schedule-guard.js";
 import { showScheduledNotification } from "./schedule-notification.js";
 import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.js";
@@ -21,6 +23,7 @@ import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import { createScheduledChatClaim } from "./scheduled-chat-creation.js";
 import { firstVisibleModelForProvider } from "../../renderer/shared/model-visibility.js";
+import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -227,6 +230,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       (await providerRegistry.selectionProvider(providerId)) ??
       (await configStore.getProvider(providerId));
     if (!provider) throw new Error("The task provider no longer exists.");
+    if (!canUseGeminiChatModel(settings.geminiUsageScope, providerId)) {
+      throw new Error(
+        "Google chat models are off while Gemini is configured for transcription only.",
+      );
+    }
     const model =
       task.model ??
       firstVisibleModelForProvider(settings.hiddenModelsByProvider, providerId, provider.models, [
@@ -238,6 +246,17 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     if (!prompt) throw new Error("The scheduled task prompt is empty.");
     if (signal.aborted) throw new Error("Scheduled task was cancelled.");
     const excluded = new Set<string>([SCHEDULE_TOOL_NAME]);
+    let webSearchReady = false;
+    if (scheduledTaskAllowsWebSearch(task)) {
+      try {
+        webSearchReady = (await webSearchService.availability()).ready === true;
+      } catch {
+        // Availability is categorical and fail-closed; a storage/provider
+        // read failure must never turn an explicit task grant into access.
+        webSearchReady = false;
+      }
+    }
+    if (!webSearchReady) excluded.add("web_search");
     if (task.permission === "read-only") {
       for (const name of APPROVAL_TOOL_NAMES) excluded.add(name);
     }
