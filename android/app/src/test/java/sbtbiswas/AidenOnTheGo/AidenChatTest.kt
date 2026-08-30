@@ -20,6 +20,30 @@ class AidenChatTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
+    fun testHiddenAndAllHiddenProviderModelsStayOutOfNewSelections() {
+        val wire = """
+            {
+              "providers":[
+                {"id":"google","label":"Google","models":[
+                  {"id":"gemini-pro","label":"Gemini Pro","hidden":true},
+                  {"id":"gemini-flash","label":"Gemini Flash"}
+                ]},
+                {"id":"all-hidden","label":"Hidden","models":[
+                  {"id":"legacy","label":"Legacy","hidden":true}
+                ]}
+              ],
+              "defaults":{"providerId":"google","modelId":"gemini-flash"}
+            }
+        """.trimIndent()
+
+        val catalog = json.decodeFromString<AidenModelCatalog>(wire)
+
+        assertEquals(listOf("gemini-pro", "gemini-flash"), catalog.providers.first().models.map { it.id })
+        assertEquals(listOf("google"), catalog.visibleProviders.map { it.id })
+        assertEquals(listOf("gemini-flash"), catalog.visibleProviders.first().models.map { it.id })
+    }
+
+    @Test
     fun testParentVisibleMessageTextPreservesExactSemanticContent() {
         val samples = listOf(
             "NFC café | NFD cafe\u0301 | हिन्दी | 日本語 | العربية",

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  ALL_PROVIDER_MODELS,
   canUseGeminiChatModel,
   defaultGeminiUsageScope,
   hiddenModelsForGeminiScope,
@@ -25,16 +24,20 @@ test("transcription-only hides current and future Google models without losing e
     "transcription_only",
   );
   assert.deepEqual(hidden, {
-    anthropic: ["claude-old"],
-    google: [ALL_PROVIDER_MODELS, "gemini-legacy"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-old"] },
+    google: {
+      defaultVisibility: "shown",
+      exceptions: ["gemini-legacy"],
+      policyHidden: true,
+    },
   });
   assert.equal(isModelHidden(hidden, "google", "gemini-future"), true);
   assert.equal(isModelHidden(hidden, "anthropic", "claude-new"), false);
 
   const restored = hiddenModelsForGeminiScope(hidden, "google", "models_and_transcription");
   assert.deepEqual(restored, {
-    anthropic: ["claude-old"],
-    google: ["gemini-legacy"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-old"] },
+    google: { defaultVisibility: "shown", exceptions: ["gemini-legacy"] },
   });
 });
 

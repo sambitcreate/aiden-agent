@@ -46,12 +46,11 @@ import {
   mergeAnthropicThinkingPreference,
   type AnthropicThinkingLevel,
 } from "../../renderer/shared/anthropic-thinking.js";
-import {
-  mergeProviderThinkingPreference,
-} from "../../renderer/shared/provider-thinking.js";
+import { mergeProviderThinkingPreference } from "../../renderer/shared/provider-thinking.js";
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import {
+  hideAllProviderModels,
   remapHiddenModelProvider,
   withModelVisibility,
   withoutProviderVisibility,
@@ -726,9 +725,7 @@ export function createConfigStore(
      * provider. Provider credential management uses this path so rotating a
      * Google key cannot silently move transcription away from local or OpenAI.
      */
-    async setGeminiUsageScope(
-      scope: import("./types.js").GeminiUsageScope,
-    ): Promise<AppSettings> {
+    async setGeminiUsageScope(scope: import("./types.js").GeminiUsageScope): Promise<AppSettings> {
       const saved = await mutateSettings((config) => {
         config.settings.geminiUsageScope = scope;
         config.settings.hiddenModelsByProvider = hiddenModelsForGeminiScope(
@@ -776,6 +773,18 @@ export function createConfigStore(
           return structuredClone(config.settings);
         }
         config.settings.hiddenModelsByProvider = withoutProviderVisibility(
+          config.settings.hiddenModelsByProvider,
+          providerId,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /** Atomically hide current and future models for one provider. */
+    async hideAllProviderModels(providerId: string): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.hiddenModelsByProvider = hideAllProviderModels(
           config.settings.hiddenModelsByProvider,
           providerId,
         );

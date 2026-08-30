@@ -20,6 +20,7 @@ import {
 import type { Provider } from "./types";
 import {
   firstVisibleModelForProvider,
+  hideAllProviderModels,
   isModelHidden,
   normalizeHiddenModelsByProvider,
   remapHiddenModelProvider,
@@ -71,7 +72,7 @@ test("model visibility normalizes invalid, duplicate, and empty entries", () => 
       empty: [],
       "": ["model"],
     }),
-    { google: ["gemini-pro"] },
+    { google: { defaultVisibility: "shown", exceptions: ["gemini-pro"] } },
   );
   assert.equal(normalizeHiddenModelsByProvider({}), undefined);
 });
@@ -87,15 +88,27 @@ test("model visibility toggles one model without dropping other preferences", ()
   assert.equal(isModelHidden(hidden, "anthropic", "claude-sonnet"), true);
 });
 
+test("hide all covers future models while explicit shown exceptions remain reversible", () => {
+  let hidden = hideAllProviderModels(undefined, "google");
+  assert.equal(isModelHidden(hidden, "google", "future-model"), true);
+  hidden = withModelVisibility(hidden, "google", "gemini-pro", false);
+  assert.equal(isModelHidden(hidden, "google", "gemini-pro"), false);
+  assert.equal(isModelHidden(hidden, "google", "future-model"), true);
+  hidden = withModelVisibility(hidden, "google", "gemini-pro", true);
+  assert.deepEqual(hidden, {
+    google: { defaultVisibility: "hidden", exceptions: [] },
+  });
+});
+
 test("provider removal and identity migration keep visibility scoped correctly", () => {
   const hidden = { old: ["alpha", "beta"], target: ["beta", "gamma"], keep: ["delta"] };
   assert.deepEqual(remapHiddenModelProvider(hidden, "old", "target"), {
-    keep: ["delta"],
-    target: ["alpha", "beta", "gamma"],
+    keep: { defaultVisibility: "shown", exceptions: ["delta"] },
+    target: { defaultVisibility: "shown", exceptions: ["alpha", "beta", "gamma"] },
   });
   assert.deepEqual(withoutProviderVisibility(hidden, "old"), {
-    keep: ["delta"],
-    target: ["beta", "gamma"],
+    keep: { defaultVisibility: "shown", exceptions: ["delta"] },
+    target: { defaultVisibility: "shown", exceptions: ["beta", "gamma"] },
   });
 });
 

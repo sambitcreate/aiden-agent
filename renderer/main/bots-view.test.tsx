@@ -152,10 +152,10 @@ test("Bot editor retries preserve only deliberate identity and access edits", ()
     shellEnabled: true,
     skillIds: ["skill:mac"],
   };
-  assert.deepEqual(
-    rebaseBotEditorAccessDraft(userAccess, baselineAccess, authoritativeAccess),
-    { ...authoritativeAccess, modelId: "model:user" },
-  );
+  assert.deepEqual(rebaseBotEditorAccessDraft(userAccess, baselineAccess, authoritativeAccess), {
+    ...authoritativeAccess,
+    modelId: "model:user",
+  });
 
   const userVisionAccess = {
     ...baselineAccess,
@@ -203,35 +203,38 @@ test("bot editor is a five-page wizard with gated Next, Back, and a review Confi
   assert.match(view, /title: "Capabilities"/u);
   assert.match(view, /title: "Review"/u);
   // The dialog's primary action advances pages and only confirms on the last.
-  assert.match(view, /confirmLabel=\{isLastStep \? \(bot \? "Save changes" : "Create bot"\) : "Next"\}/u);
+  assert.match(
+    view,
+    /confirmLabel=\{isLastStep \? \(bot \? "Save changes" : "Create bot"\) : "Next"\}/u,
+  );
   assert.match(view, /onConfirm=\{isLastStep \? save : goNext\}/u);
   assert.match(view, /confirmDisabled=\{saving \|\| !stepValid\[step\]\}/u);
   // Per-page gating, including the review page re-checking every prior page.
   assert.match(view, /const stepValid = \[/u);
-  assert.match(
-    view,
-    /identityReady && settingsReady,\s*\];/u,
-  );
+  assert.match(view, /identityReady && settingsReady,\s*\];/u);
   assert.match(view, /if \(!stepValid\[step\]\) return;/u);
   // Back navigation and an announced step counter.
   assert.match(view, /<ArrowLeft \/> Back/u);
   assert.match(view, /setStep\(\(current\) => Math\.max\(0, current - 1\)\)/u);
-  assert.match(view, /aria-live="polite"[\s\S]*Step \{step \+ 1\} of \{BOT_EDITOR_STEPS\.length\}/u);
+  assert.match(
+    view,
+    /aria-live="polite"[\s\S]*Step \{step \+ 1\} of \{BOT_EDITOR_STEPS\.length\}/u,
+  );
   // Focus moves to the page heading after Next for keyboard users.
   assert.match(view, /pageTopRef\.current\?\.focus\(\)/u);
   // Review page summarizes every choice before Confirm.
   assert.match(view, /summaryRow\("Name", draft\.name\.trim\(\)\)/u);
-  assert.match(view, /summaryRow\(\s*"Access",\s*accessDraft\.usesFullAccess \? "Full Access" : "Custom Access",/u);
+  assert.match(
+    view,
+    /summaryRow\(\s*"Access",\s*accessDraft\.usesFullAccess \? "Full Access" : "Custom Access",/u,
+  );
   assert.match(view, /Everything Aiden and this Mac allow/u);
   assert.match(view, /Credentials stay on your Mac/u);
   // Page swap motion is quiet and disabled under reduced motion.
   assert.match(view, /aiden-bot-wizard-page/u);
   assert.match(styles, /\.aiden-bot-wizard-page \{/u);
   assert.match(styles, /aiden-bot-wizard-page-in 220ms/u);
-  assert.match(
-    styles,
-    /\.aiden-bot-wizard-page \{\s*animation: none;\s*\}/u,
-  );
+  assert.match(styles, /\.aiden-bot-wizard-page \{\s*animation: none;\s*\}/u);
 });
 
 test("bot wizard pages stay visually aligned and hide dead capability rows", () => {
@@ -248,14 +251,8 @@ test("bot wizard pages stay visually aligned and hide dead capability rows", () 
   assert.match(view, /<div className="grid gap-3">/u);
   // Capability lists are vertical and hide unavailable, unselected tombstones
   // (e.g. "Invalid skill" rows) the same way iOS does.
-  assert.match(
-    view,
-    /option\.available \|\| accessDraft\[key\]\.includes\(option\.id\)/u,
-  );
-  assert.match(
-    view,
-    /option\.available \|\| accessDraft\.fileScopeIds\.includes\(option\.id\)/u,
-  );
+  assert.match(view, /option\.available \|\| accessDraft\[key\]\.includes\(option\.id\)/u);
+  assert.match(view, /option\.available \|\| accessDraft\.fileScopeIds\.includes\(option\.id\)/u);
   assert.match(view, /orientation="vertical"\s*\n?\s*label="Files and commands"/u);
   assert.match(view, /orientation="vertical" label=\{title\} description=\{description\}/u);
   // Rows get contained hover-target styling instead of floating bare rows.
@@ -296,7 +293,10 @@ test("existing Mac Bot surfaces overlay canonical photos and retain semantic fal
   assert.match(avatar, /<AvatarFace avatar=\{avatar\} \/>/u);
   assert.match(avatar, /new IntersectionObserver/u);
   assert.match(avatar, /rootMargin: "160px"/u);
-  assert.match(avatar, /setNearViewport\(entries\.some\(\(\{ isIntersecting \}\) => isIntersecting\)\)/u);
+  assert.match(
+    avatar,
+    /setNearViewport\(entries\.some\(\(\{ isIntersecting \}\) => isIntersecting\)\)/u,
+  );
   assert.match(avatar, /photoLoading === "immediate" \? "selected" : "visible"/u);
   assert.match(avatar, /src=\{photo\.dataUrl\}/u);
   assert.match(avatar, /onError=\{\(\) => setFailedRevision\(photo\.assetRevision\)\}/u);
@@ -319,13 +319,16 @@ function canonicalPhoto(id: number, bytes = 12) {
 test("a maximum Bot roster has bounded parallel reads and retained canonical-photo bytes", async () => {
   let running = 0;
   let maxRunning = 0;
-  const cache = new BotCanonicalPhotoCache(async (botId) => {
-    running += 1;
-    maxRunning = Math.max(maxRunning, running);
-    await Promise.resolve();
-    running -= 1;
-    return canonicalPhoto(Number(botId.slice(4)), 12);
-  }, { maxConcurrent: 4, maxBytes: 48, maxEntries: 4 });
+  const cache = new BotCanonicalPhotoCache(
+    async (botId) => {
+      running += 1;
+      maxRunning = Math.max(maxRunning, running);
+      await Promise.resolve();
+      running -= 1;
+      return canonicalPhoto(Number(botId.slice(4)), 12);
+    },
+    { maxConcurrent: 4, maxBytes: 48, maxEntries: 4 },
+  );
   for (let index = 0; index < 256; index += 1) cache.request(`bot${index}`, "visible");
   assert.deepEqual(cache.stats(), { active: 4, queued: 252, entries: 0, bytes: 0 });
   await cache.settle();
@@ -338,12 +341,17 @@ test("a maximum Bot roster has bounded parallel reads and retained canonical-pho
 test("rapidly offscreen roster rows cancel queued canonical-photo reads", async () => {
   const calls: string[] = [];
   let releaseActive: (() => void) | undefined;
-  const active = new Promise<void>((resolve) => { releaseActive = resolve; });
-  const cache = new BotCanonicalPhotoCache(async (botId) => {
-    calls.push(botId);
-    await active;
-    return canonicalPhoto(calls.length);
-  }, { maxConcurrent: 4, maxBytes: 1_024, maxEntries: 8 });
+  const active = new Promise<void>((resolve) => {
+    releaseActive = resolve;
+  });
+  const cache = new BotCanonicalPhotoCache(
+    async (botId) => {
+      calls.push(botId);
+      await active;
+      return canonicalPhoto(calls.length);
+    },
+    { maxConcurrent: 4, maxBytes: 1_024, maxEntries: 8 },
+  );
 
   for (let index = 0; index < 256; index += 1) {
     const leaveViewport = cache.subscribe(`bot${index}`, "visible", () => undefined);
@@ -369,12 +377,17 @@ test("rapidly offscreen roster rows cancel queued canonical-photo reads", async 
 test("a selected Bot photo jumps ahead of queued roster work", async () => {
   const calls: string[] = [];
   let releaseFirst: (() => void) | undefined;
-  const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
-  const cache = new BotCanonicalPhotoCache(async (botId) => {
-    calls.push(botId);
-    if (botId === "roster-first") await first;
-    return canonicalPhoto(calls.length);
-  }, { maxConcurrent: 1, maxBytes: 1_024, maxEntries: 8 });
+  const first = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const cache = new BotCanonicalPhotoCache(
+    async (botId) => {
+      calls.push(botId);
+      if (botId === "roster-first") await first;
+      return canonicalPhoto(calls.length);
+    },
+    { maxConcurrent: 1, maxBytes: 1_024, maxEntries: 8 },
+  );
   cache.request("roster-first", "visible");
   cache.request("roster-second", "visible");
   cache.request("selected", "selected");
@@ -387,10 +400,13 @@ test("a selected Bot photo jumps ahead of queued roster work", async () => {
 
 test("an evicted roster photo reloads after leaving and re-entering the viewport", async () => {
   const calls: string[] = [];
-  const cache = new BotCanonicalPhotoCache(async (botId) => {
-    calls.push(botId);
-    return canonicalPhoto(calls.length);
-  }, { maxConcurrent: 1, maxBytes: 1_024, maxEntries: 1 });
+  const cache = new BotCanonicalPhotoCache(
+    async (botId) => {
+      calls.push(botId);
+      return canonicalPhoto(calls.length);
+    },
+    { maxConcurrent: 1, maxBytes: 1_024, maxEntries: 1 },
+  );
 
   const leaveViewport = cache.subscribe("first", "visible", () => undefined);
   cache.request("first", "visible");
@@ -414,12 +430,17 @@ test("an evicted roster photo reloads after leaving and re-entering the viewport
 test("visible and selected subscribers share one active canonical-photo read", async () => {
   let calls = 0;
   let release: (() => void) | undefined;
-  const loading = new Promise<void>((resolve) => { release = resolve; });
-  const cache = new BotCanonicalPhotoCache(async () => {
-    calls += 1;
-    await loading;
-    return canonicalPhoto(calls);
-  }, { maxConcurrent: 2, maxBytes: 1_024, maxEntries: 2 });
+  const loading = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const cache = new BotCanonicalPhotoCache(
+    async () => {
+      calls += 1;
+      await loading;
+      return canonicalPhoto(calls);
+    },
+    { maxConcurrent: 2, maxBytes: 1_024, maxEntries: 2 },
+  );
 
   cache.request("shared", "visible");
   cache.request("shared", "selected");
@@ -472,7 +493,10 @@ test("bot chats show authoritative bot identity and fence archived conversations
   const pane = source("./chat-pane.tsx");
   assert.match(pane, /const bot = useBot\(chat\.data\?\.botId\)/u);
   assert.match(pane, /Restore this bot before continuing the conversation/u);
-  assert.match(pane, /<BotAvatar botId=\{bot\.data\.id\} avatar=\{bot\.data\.avatar\}[\s\S]{0,160}photoLoading="immediate"/u);
+  assert.match(
+    pane,
+    /<BotAvatar[\s\S]{0,80}botId=\{bot\.data\.id\}[\s\S]{0,80}avatar=\{bot\.data\.avatar\}[\s\S]{0,160}photoLoading="immediate"/u,
+  );
   assert.match(pane, /!botReadinessMessage/u);
   assert.match(pane, /chat\.data\?\.title \?\? "New conversation"/u);
 });

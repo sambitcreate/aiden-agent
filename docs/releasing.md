@@ -4,6 +4,21 @@ Aiden publishes its source, signed release binaries, and updater metadata from
 `sambitcreate/aiden-agent`. The repository must be public before the first release so website
 visitors and installed apps can download GitHub Release assets without a GitHub credential.
 
+## Model catalog refreshes
+
+`resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for
+runtime limits and request admission. `npm run dist` refreshes and validates it before every
+package. A separate `Model catalog refresh` workflow runs after pushes to `main`, updates only that
+tracked file, runs `npm run test:model-catalog`, and commits a changed snapshot with the GitHub
+Actions bot. A failed fetch leaves the known-good snapshot untouched; a non-fast-forward push is
+allowed to fail so the newer `main` run remains authoritative.
+
+The live app contacts models.dev only when a user chooses **Update model catalogs** in Settings →
+Providers. That foreground request uses the fixed anonymous endpoint and writes a validated,
+same-app-version, device-local display cache. It cannot add selectable models or alter routing,
+context windows, output limits, or active turns. Provider inventory remains a separate Pi/provider
+authority. Ordinary model reads and application startup remain offline.
+
 ## Release behavior
 
 - `.github/workflows/ci.yml` verifies pull requests and pushes on GitHub's `macos-26` image.

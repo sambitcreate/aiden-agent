@@ -62,6 +62,11 @@ export interface RuntimeModelLimits {
   forceAdaptiveThinking?: boolean;
 }
 
+export const MAX_MODELS_DEV_PROVIDERS = 1_024;
+export const MAX_MODELS_DEV_MODELS = 100_000;
+export const MAX_MODELS_DEV_ID_LENGTH = 512;
+export const MAX_MODELS_DEV_NUMERIC_VALUE = 1_000_000_000;
+
 export const CONSERVATIVE_RUNTIME_LIMITS: RuntimeModelLimits = {
   contextWindow: 128_000,
   maxTokens: 8_192,
@@ -117,7 +122,13 @@ function assertOptionalStringArray(value: unknown, field: string): void {
 }
 
 function assertOptionalLimit(value: unknown, field: string): void {
-  if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+  if (
+    value !== undefined &&
+    (typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      value < 0 ||
+      value > MAX_MODELS_DEV_NUMERIC_VALUE)
+  ) {
     throw new Error(`Bundled model catalog ${field} must be a non-negative number when present.`);
   }
 }
@@ -168,18 +179,30 @@ export function parseModelCatalog(value: unknown): ModelCatalog {
     throw new Error("Bundled model catalog must be an object.");
   }
   let modelCount = 0;
-  for (const [providerId, providerValue] of Object.entries(catalog)) {
+  const providers = Object.entries(catalog);
+  if (providers.length > MAX_MODELS_DEV_PROVIDERS) {
+    throw new Error("Bundled model catalog contains too many providers.");
+  }
+  for (const [providerId, providerValue] of providers) {
+    if (providerId.length === 0 || providerId.length > MAX_MODELS_DEV_ID_LENGTH) {
+      throw new Error("Bundled model catalog contains an invalid provider identity.");
+    }
     const provider = rawRecord(providerValue);
     const models = rawRecord(provider?.models);
     if (!provider || !models) {
       throw new Error(`Bundled model catalog provider ${providerId} must contain models.`);
     }
     for (const [modelId, model] of Object.entries(models)) {
-      if (modelId.length === 0) {
-        throw new Error(`Bundled model catalog provider ${providerId} contains an empty model id.`);
+      if (modelId.length === 0 || modelId.length > MAX_MODELS_DEV_ID_LENGTH) {
+        throw new Error(
+          `Bundled model catalog provider ${providerId} contains an invalid model id.`,
+        );
       }
       validateRawModel(model, providerId, modelId);
       modelCount += 1;
+      if (modelCount > MAX_MODELS_DEV_MODELS) {
+        throw new Error("Bundled model catalog contains too many models.");
+      }
     }
   }
   if (modelCount === 0) {

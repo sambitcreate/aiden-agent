@@ -12,6 +12,7 @@ import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -65,6 +66,21 @@ export interface Provider {
 export interface ProviderCatalogRefreshResult {
   providers: Provider[];
   errors: Array<{ providerId: string; message: string }>;
+}
+
+export interface ModelsDevCatalogStatus {
+  source: "bundled" | "device-cache";
+  fetchedAt: string | null;
+}
+
+export interface ProviderCatalogUpdateResult {
+  providers: Provider[];
+  inventoryErrors: Array<{ providerId: string; message: string }>;
+  modelsDev: {
+    ok: boolean;
+    status: ModelsDevCatalogStatus;
+    message?: string;
+  };
 }
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex" as const;
@@ -739,7 +755,7 @@ export interface AssistantConfigSnapshot {
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
-  hiddenModelsByProvider?: Record<string, string[]>;
+  hiddenModelsByProvider?: HiddenModelsByProvider;
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
