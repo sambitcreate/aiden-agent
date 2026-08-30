@@ -61,7 +61,16 @@ import type {
   WorkspacePermission,
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
+import type {
+  AdvisorConfigurationV1,
+  AdvisorSelectionV1,
+} from "../shared/advisor";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import {
+  parseAskUserQuestionPrompt,
+  type AskUserQuestionPromptV1,
+  type AskUserQuestionResponseV1,
+} from "../shared/ask-user-question";
 import type {
   DiagnosticSupportStatusView,
   RendererDiagnosticPolicy,
@@ -147,6 +156,15 @@ import {
   type ChatArtifactV1,
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
+import {
+  parseTodoSnapshotView,
+  type TodoSnapshotViewV1,
+} from "../shared/todo";
+import {
+  parseBtwEvent,
+  type BtwEventV1,
+  type BtwStartReceiptV1,
+} from "../shared/btw";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -299,6 +317,12 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setModelVisibility", providerId, modelId, hidden),
   showAllProviderModels: (providerId: string) =>
     invoke<AppSettings>("settings:showAllProviderModels", providerId),
+};
+
+export const advisorApi = {
+  get: () => invoke<AdvisorConfigurationV1>("advisor:get"),
+  set: (selection: AdvisorSelectionV1 | null) =>
+    invoke<AdvisorConfigurationV1>("advisor:set", selection),
 };
 
 export const assistantApi = {
@@ -773,6 +797,23 @@ export const chatsApi = {
       : null;
   },
   waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
+  todoSnapshot: async (id: string): Promise<TodoSnapshotViewV1 | null> => {
+    const value = await invoke<unknown>("chats:todoSnapshot", id);
+    if (value === null) return null;
+    const snapshot = parseTodoSnapshotView(value);
+    if (!snapshot || snapshot.chatId !== id) throw new Error("The todo snapshot response was invalid.");
+    return snapshot;
+  },
+  btwStart: (chatId: string, question: string) =>
+    invoke<BtwStartReceiptV1>("chats:btwStart", { chatId, question }),
+  btwCancel: (chatId: string, requestId: string) =>
+    invoke<boolean>("chats:btwCancel", { chatId, requestId }),
+  btwClear: (chatId: string) => invoke<void>("chats:btwClear", { chatId }),
+  onBtwEvent: (handler: (event: BtwEventV1) => void) =>
+    onNotification<unknown>("chats:btw-event", (payload) => {
+      const event = parseBtwEvent(payload);
+      if (event) handler(event);
+    }),
   create: (input: {
     title?: string;
     workspaceId: string;
@@ -838,6 +879,8 @@ export const chatsApi = {
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>
     invoke<void>("chat:approve", approvalId, decision),
+  answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
+    invoke<void>("chat:answerQuestionnaire", promptId, response),
 };
 
 export const botsApi = {
@@ -1010,7 +1053,12 @@ export interface RemoteApprovalPrompt {
 interface ChatApproval extends ApprovalPrompt {
   streamId: string;
 }
+type ChatQuestionnaire = AskUserQuestionPromptV1;
 interface ChatSubagents {
+  streamId: string;
+  snapshot: unknown;
+}
+interface ChatTodo {
   streamId: string;
   snapshot: unknown;
 }
@@ -1045,6 +1093,8 @@ export interface StreamCallbacks {
   onSubagents?: (snapshot: SubagentRunSnapshot) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
+  onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
+  onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
 }
 
@@ -1186,6 +1236,22 @@ export function startGeneration(
         });
     }),
   );
+  unsubs.push(
+    onNotification<ChatQuestionnaire>("chat:questionnaire", (payload) => {
+      if (payload.streamId !== streamId) return;
+      const prompt = parseAskUserQuestionPrompt(payload);
+      if (prompt) callbacks.onQuestionnaire?.(prompt);
+    }),
+  );
+  if (callbacks.onTodo) {
+    unsubs.push(
+      onNotification<ChatTodo>("chat:todo", (payload) => {
+        if (payload.streamId !== streamId) return;
+        const snapshot = parseTodoSnapshotView(payload.snapshot);
+        if (snapshot?.chatId === params.chatId) callbacks.onTodo?.(snapshot);
+      }),
+    );
+  }
 
   const started: Promise<GenerationStartResult> = invoke<{
     streamId: string;

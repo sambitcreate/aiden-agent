@@ -91,7 +91,7 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
       callbacks(),
       "turn-1",
     );
-    assert.equal(listenerCount(bridge), 8);
+    assert.equal(listenerCount(bridge), 9);
     assert.equal(bridge.listeners.has("chat:subagents"), false);
     for (const listener of bridge.listeners.get("chat:delta") ?? []) {
       listener({ streamId: handle.streamId, delta: "Visible before navigation" });
@@ -221,7 +221,7 @@ test("user Stop retains terminal delivery before releasing subscriptions", () =>
     );
 
     handle.cancel("user_stop");
-    assert.equal(listenerCount(bridge), 8);
+    assert.equal(listenerCount(bridge), 9);
     assert.equal(bridge.listeners.has("chat:subagents"), false);
     for (const handler of bridge.listeners.get("chat:error") ?? []) {
       handler({ streamId: handle.streamId, message: "Stopped" });
@@ -301,6 +301,56 @@ test("live subagent notifications are subscribed only for enabled callbacks", ()
     assert.equal(bridge.listeners.get("chat:subagents")?.size, 1);
     enabled.cancel("lifecycle");
     assert.equal(bridge.listeners.get("chat:subagents")?.size, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("todo notifications are validated and scoped to their owning stream and chat", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const disabled = startGeneration(
+      {
+        chatId: "chat-todo-disabled",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      callbacks(),
+      "turn-todo-disabled",
+    );
+    assert.equal(bridge.listeners.has("chat:todo"), false);
+    disabled.cancel("lifecycle");
+
+    const enabled = startGeneration(
+      {
+        chatId: "chat-todo-enabled",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      { ...callbacks(), onTodo: (snapshot) => received.push(snapshot) },
+      "turn-todo-enabled",
+    );
+    const snapshot = {
+      version: 1,
+      chatId: "chat-todo-enabled",
+      availability: "ready",
+      tasks: [{ id: 1, subject: "Verify IPC", status: "in_progress" }],
+    };
+    for (const handler of bridge.listeners.get("chat:todo") ?? []) {
+      handler({ streamId: "other-stream", snapshot });
+      handler({ streamId: enabled.streamId, snapshot: { ...snapshot, version: 2 } });
+      handler({
+        streamId: enabled.streamId,
+        snapshot: { ...snapshot, chatId: "another-chat" },
+      });
+      handler({ streamId: enabled.streamId, snapshot });
+    }
+    assert.deepEqual(received, [snapshot]);
+    enabled.cancel("lifecycle");
+    assert.equal(bridge.listeners.get("chat:todo")?.size, 0);
   } finally {
     restore();
   }

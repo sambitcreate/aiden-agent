@@ -17,6 +17,7 @@ export interface SlashCommandActionContext {
   composerControlBlockedReason?: string;
   environmentBlockedReason?: string;
   sessionActionBlockedReason?: string;
+  sideQuestionBlockedReason?: string;
   chatCloneBlockedReason?: string;
   worktreeBlockedReason?: string;
   payloadAfterToken: boolean;
@@ -48,7 +49,7 @@ export interface SlashCommandActionHandlers {
   openLogout?: () => void;
   openWorktree?: (branchName?: string) => void | Promise<void>;
   submitComposerInstruction?: (
-    instruction: "visualize",
+    instruction: "visualize" | "btw",
     prompt: string,
   ) => boolean | Promise<boolean>;
 }
@@ -83,6 +84,13 @@ export function slashCommandAvailability(
       break;
     case "idle-chat-session":
       if (!context.hasChat) return unavailable("Open a chat first.");
+      if (
+        command.action.kind === "composer-instruction" &&
+        command.action.instruction === "btw" &&
+        !context.hasCompletedTurn
+      ) {
+        return unavailable("Complete an assistant turn before asking a side question.");
+      }
       if (
         command.action.kind === "session" &&
         command.action.action === "fork" &&
@@ -137,6 +145,20 @@ export function slashCommandAvailability(
     return unavailable("Allow workspace access before creating an interactive artifact.");
   }
   if (
+    command.action.kind === "composer-instruction" &&
+    command.action.instruction === "btw" &&
+    context.sideQuestionBlockedReason
+  ) {
+    return unavailable(context.sideQuestionBlockedReason);
+  }
+  if (
+    command.action.kind === "composer-instruction" &&
+    command.action.instruction === "btw" &&
+    context.hasAttachmentsOrSelectedSkill
+  ) {
+    return unavailable("Remove attachments and the selected skill before asking a side question.");
+  }
+  if (
     (command.action.kind === "environment" ||
       (command.action.kind === "command" && command.action.commandId === "environment.toggle")) &&
     context.environmentBlockedReason
@@ -181,7 +203,7 @@ export function validateSlashCommandArgument(
     if (value.length > 4000 || /[\p{Cc}\p{Cf}]/u.test(value)) {
       return {
         valid: false,
-        reason: "Enter a short visualization prompt on one line.",
+        reason: "Enter a short prompt without control characters.",
       };
     }
     return { valid: true, value };

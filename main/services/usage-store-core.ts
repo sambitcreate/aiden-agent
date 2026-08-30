@@ -14,6 +14,8 @@ export type UsageRequestSource =
   | "scheduled"
   | "subagent"
   | "telegram"
+  | "btw"
+  | "advisor"
   | "compaction";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
@@ -82,6 +84,8 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "scheduled",
   "subagent",
   "telegram",
+  "btw",
+  "advisor",
   "compaction",
 ]);
 
