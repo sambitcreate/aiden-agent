@@ -22,6 +22,7 @@ import {
   Field,
   FieldSet,
   Input,
+  InlineMetadata,
   Select,
   SelectContent,
   SelectItem,
@@ -770,8 +771,7 @@ function BotEditor({
                   <SelectContent>
                     {(selectedProvider?.models ?? []).map((model) => (
                       <SelectItem key={model.id} value={model.id} disabled={!model.available}>
-                        {model.label} · {model.supportsImages ? "Vision" : "Text only"}
-                        {model.available ? "" : " (unavailable)"}
+                        {model.label} <InlineMetadata>· {model.supportsImages ? "Vision" : "Text only"}{model.available ? "" : " (unavailable)"}</InlineMetadata>
                       </SelectItem>
                     ))}
                   </SelectContent>

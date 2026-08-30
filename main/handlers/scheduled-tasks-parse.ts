@@ -49,6 +49,8 @@ export function parseScheduledTaskInput(value: unknown): ScheduledTaskInput {
     script: optionalString(input.script),
     permission,
     mcpServerIds: validateScheduledMcpServerIds(input.mcpServerIds),
+    webSearchEnabled:
+      typeof input.webSearchEnabled === "boolean" ? input.webSearchEnabled : undefined,
     notify: typeof input.notify === "boolean" ? input.notify : undefined,
   };
 }

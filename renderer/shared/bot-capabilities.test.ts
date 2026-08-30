@@ -81,6 +81,26 @@ test("Full Bot access accepts only an exact optional provider/model pair", () =>
     confirmedForeground: true,
     visionModel: { providerId: "provider:vision" },
   }), /foreground confirmation/u);
+
+  const defaultFull = parseBotAccessUpdate({
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+  });
+  assert.equal(defaultFull.accessMode === "full" ? defaultFull.webSearchEnabled : undefined, undefined);
+  const enabledFull = parseBotAccessUpdate({
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+    webSearchEnabled: true,
+  });
+  assert.equal(enabledFull.accessMode === "full" ? enabledFull.webSearchEnabled : undefined, true);
+  assert.throws(() => parseBotAccessUpdate({
+    accessMode: "full",
+    catalogRevision: "catalog:1",
+    confirmedForeground: true,
+    webSearchEnabled: "true",
+  }), /Full Access/u);
 });
 
 test("Custom file-scope toggles stay binder-coherent", () => {

@@ -283,17 +283,22 @@ test("sidebar list items use a fill focus state instead of a focus ring", () => 
   assert.doesNotMatch(item, /focus-visible:ring/u);
 });
 
-test("shared controls use theme fill or border focus instead of focus rings", () => {
+test("shared controls use theme fills for text entry and focus states", () => {
   const ui = source("./ui.tsx");
   const button = between(ui, "export const Button =", "});");
   const input = between(ui, "export const Input =", "});");
+  const textarea = between(ui, "export const Textarea =", "type TextProps");
   assert.match(button, /focus-visible:bg-list-selection/u);
   assert.match(button, /focus-visible:bg-control-active/u);
   assert.match(button, /focus-visible:bg-accent-hover/u);
   assert.doesNotMatch(button, /focus-visible:ring/u);
-  assert.match(input, /focus:border-focus-ring/u);
-  assert.match(input, /focus:bg-input/u);
-  assert.doesNotMatch(input, /focus:ring-/u);
+  for (const control of [input, textarea]) {
+    assert.match(control, /focus:bg-input/u);
+    assert.doesNotMatch(control, /focus:border-focus-ring/u);
+    assert.doesNotMatch(control, /focus:ring-/u);
+  }
+  assert.match(ui, /focus-within:bg-control/u);
+  assert.doesNotMatch(ui, /focus-within:border-focus-ring/u);
   assert.doesNotMatch(ui, /focus-visible:ring-focus-ring/u);
   assert.doesNotMatch(ui, /focus:ring-focus-ring/u);
 });

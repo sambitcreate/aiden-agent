@@ -39,6 +39,8 @@ import type {
   Profile,
   Provider,
   ProviderCatalogRefreshResult,
+  ProviderCatalogUpdateResult,
+  ModelsDevCatalogStatus,
   OnboardingProviderValidationResult,
   ProviderModelMetadata,
   CodexProviderSnapshot,
@@ -59,6 +61,13 @@ import type {
   WorkspaceFileIndex,
   WorkspaceFileWriteResult,
   WorkspacePermission,
+  BoundedNonSecretProviderConfig,
+  WebSearchProviderId,
+  WebSearchRendererSnapshot,
+  WebSearchRouteEntry,
+  WebSearchSelection,
+  WebSearchExistingAuthConsentRequest,
+  WebSearchExistingAuthRendererSnapshot,
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
@@ -98,10 +107,7 @@ export interface BotAccessState {
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
-import type {
-  ChatTimelineNotification,
-  GenerationTimeline,
-} from "../shared/generation-timeline";
+import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 import type { ToolApprovalDetails } from "../shared/assistant";
 import {
   parseSubagentHistoryDetailV1,
@@ -114,10 +120,7 @@ import {
   type SubagentManagementRequestV2,
   type SubagentManagementResultV2,
 } from "../shared/subagent-management-v2";
-import type {
-  KeybindingMutation,
-  KeybindingSnapshot,
-} from "../shared/keybindings";
+import type { KeybindingMutation, KeybindingSnapshot } from "../shared/keybindings";
 import {
   parseAppUpdateSnapshot,
   type AppUpdateCheckResult,
@@ -131,14 +134,8 @@ import {
   rememberDetachedLifecycleStream,
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
-import type {
-  AppearanceConfig,
-  AppearancePreviewSnapshot,
-} from "../shared/appearance";
-import {
-  parseSkillCatalog,
-  type SkillCatalogEntry,
-} from "../shared/slash-commands";
+import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
+import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
 import type {
   AidenRemoteConnectionMode,
@@ -177,10 +174,7 @@ export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return bridge().invoke(channel, ...args) as Promise<T>;
 }
 
-export function onNotification<T>(
-  method: string,
-  handler: (payload: T) => void,
-): () => void {
+export function onNotification<T>(method: string, handler: (payload: T) => void): () => void {
   return bridge().onNotification(method, handler as (params: unknown) => void);
 }
 
@@ -189,19 +183,13 @@ export const appApi = {
   resetOnboarding: () => invoke<boolean>("app:resetOnboarding"),
   getOnboardingState: (legacyComplete: boolean) =>
     invoke<OnboardingSnapshot>("app:getOnboardingState", legacyComplete),
-  setOnboardingOutcome: (
-    outcome: OnboardingOutcome,
-    selectedProviderId?: string,
-  ) => invoke<OnboardingSnapshot>("app:setOnboardingOutcome", outcome, selectedProviderId),
+  setOnboardingOutcome: (outcome: OnboardingOutcome, selectedProviderId?: string) =>
+    invoke<OnboardingSnapshot>("app:setOnboardingOutcome", outcome, selectedProviderId),
   setOnboardingProgress: (step: "profile" | "provider", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
-  setCloseGuard: (guard: {
-    dirty: boolean;
-    gitBusy: boolean;
-    path?: string;
-    saving: boolean;
-  }) => invoke<boolean>("app:setCloseGuard", guard),
+  setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
+    invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
 };
@@ -226,15 +214,12 @@ export const providersApi = {
     invoke<NonNullable<Provider["artwork"]>>("providers:normalizeArtwork", input),
   remove: (id: string) => invoke<void>("providers:remove", id),
   setKey: (id: string, key: string) =>
-    invoke<{ hasKey: boolean; provider: Provider | null }>(
-      "providers:setKey",
-      id,
-      key,
-    ),
+    invoke<{ hasKey: boolean; provider: Provider | null }>("providers:setKey", id, key),
   refresh: (providerId?: string) =>
     invoke<ProviderCatalogRefreshResult>("providers:refresh", providerId),
-  refreshIfStale: () =>
-    invoke<ProviderCatalogRefreshResult>("providers:refreshIfStale"),
+  refreshIfStale: () => invoke<ProviderCatalogRefreshResult>("providers:refreshIfStale"),
+  catalogStatus: () => invoke<ModelsDevCatalogStatus>("providers:catalogStatus"),
+  updateCatalogs: () => invoke<ProviderCatalogUpdateResult>("providers:updateCatalogs"),
   validateOnboardingApiKey: (providerId: "openai" | "anthropic", key: string) =>
     invoke<OnboardingProviderValidationResult>(
       "providers:validateOnboardingApiKey",
@@ -253,24 +238,16 @@ export const providersApi = {
     invoke<string[]>("providers:listModels", provider, keyOverride),
   authStatus: (providerId: "openai-codex") =>
     invoke<CodexProviderSnapshot>("providers:auth:status", providerId),
-  authStart: (request: {
-    flowId: string;
-    providerId: string;
-    authType?: "api_key" | "oauth";
-  }) => invoke<{ started: true }>("providers:auth:start", request),
-  authRespond: (request: {
-    flowId: string;
-    providerId: string;
-    promptId: string;
-    value: string;
-  }) => invoke<{ accepted: true }>("providers:auth:respond", request),
+  authStart: (request: { flowId: string; providerId: string; authType?: "api_key" | "oauth" }) =>
+    invoke<{ started: true }>("providers:auth:start", request),
+  authRespond: (request: { flowId: string; providerId: string; promptId: string; value: string }) =>
+    invoke<{ accepted: true }>("providers:auth:respond", request),
   authCancel: (request: { flowId: string; providerId: string }) =>
     invoke<{ cancelled: true } | { cancelled: false; reason: "finishing" }>(
       "providers:auth:cancel",
       request,
     ),
-  logout: (providerId: string) =>
-    invoke<unknown>("providers:logout", providerId),
+  logout: (providerId: string) => invoke<unknown>("providers:logout", providerId),
   onAuthPrompt: (handler: (prompt: ProviderAuthPrompt) => void) =>
     onNotification("providers:auth:prompt", handler),
   onAuthEvent: (handler: (event: ProviderAuthEvent) => void) =>
@@ -286,16 +263,12 @@ export const providersApi = {
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
   getAppearance: () => invoke<AppearanceConfig>("settings:getAppearance"),
-  getAppearanceState: () =>
-    invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
+  getAppearanceState: () => invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
   previewAppearance: (appearance: AppearanceConfig) =>
     invoke<AppearanceConfig>("settings:previewAppearance", appearance),
-  set: (patch: Partial<AppSettings>) =>
-    invoke<AppSettings>("settings:set", patch),
-  setGeminiVoiceSetup: (
-    scope: NonNullable<AppSettings["geminiUsageScope"]>,
-    model: string,
-  ) => invoke<AppSettings>("settings:setGeminiVoiceSetup", scope, model),
+  set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
+  setGeminiVoiceSetup: (scope: NonNullable<AppSettings["geminiUsageScope"]>, model: string) =>
+    invoke<AppSettings>("settings:setGeminiVoiceSetup", scope, model),
   setGeminiUsageScope: (scope: NonNullable<AppSettings["geminiUsageScope"]>) =>
     invoke<AppSettings>("settings:setGeminiUsageScope", scope),
   setGoogleThinking: (modelId: string, level: GoogleThinkingLevel) =>
@@ -313,6 +286,8 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setModelVisibility", providerId, modelId, hidden),
   showAllProviderModels: (providerId: string) =>
     invoke<AppSettings>("settings:showAllProviderModels", providerId),
+  hideAllProviderModels: (providerId: string) =>
+    invoke<AppSettings>("settings:hideAllProviderModels", providerId),
 };
 
 export const assistantApi = {
@@ -323,37 +298,29 @@ export const assistantApi = {
 
 export const modelInsightsApi = {
   status: () => invoke<ModelInsightsStatus>("modelInsights:status"),
-  connect: (apiKey: string) =>
-    invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
+  connect: (apiKey: string) => invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
   refresh: () => invoke<ModelInsightsActionResult>("modelInsights:refresh"),
   disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
 };
 
 export const computerUseApi = {
-  status: (force = false) =>
-    invoke<ComputerUseStatus>("computerUse:status", force),
-  setEnabled: (enabled: boolean) =>
-    invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
-  requestPermissions: () =>
-    invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+  status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
+  setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
+  requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
 };
 
 export const titleProvidersApi = {
-  status: () =>
-    invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
-  refresh: () =>
-    invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
+  status: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
+  refresh: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
 };
 
 export const usageApi = {
-  summary: (range: UsageDateRange = "1y") =>
-    invoke<UsageSummary>("usage:summary", range),
+  summary: (range: UsageDateRange = "1y") => invoke<UsageSummary>("usage:summary", range),
 };
 
 export const scheduleApi = {
   list: () => invoke<ScheduledTask[]>("schedule:list"),
-  save: (task: ScheduledTaskInput) =>
-    invoke<ScheduledTask>("schedule:save", task),
+  save: (task: ScheduledTaskInput) => invoke<ScheduledTask>("schedule:save", task),
   remove: (id: string) => invoke<void>("schedule:remove", id),
   pause: (id: string) => invoke<ScheduledTask>("schedule:pause", id),
   resume: (id: string) => invoke<ScheduledTask>("schedule:resume", id),
@@ -361,8 +328,7 @@ export const scheduleApi = {
   runs: (id: string) => invoke<ScheduledRun[]>("schedule:runs", id),
   preview: (cron: string, timezone: string, count = 3) =>
     invoke<number[]>("schedule:preview", cron, timezone, count),
-  scripts: (workspaceId?: string) =>
-    invoke<string[]>("schedule:scripts", workspaceId),
+  scripts: (workspaceId?: string) => invoke<string[]>("schedule:scripts", workspaceId),
   settings: (patch?: Partial<ScheduledTaskSettings>) =>
     invoke<ScheduledTaskSettings>("schedule:settings", patch),
 };
@@ -397,10 +363,8 @@ export const mcpApi = {
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
-  authorize: (server: McpServer) =>
-    invoke<{ authorized: boolean }>("mcp:authorize", server),
-  oauthStatus: (id: string) =>
-    invoke<{ authorized: boolean }>("mcp:oauthStatus", id),
+  authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
+  oauthStatus: (id: string) => invoke<{ authorized: boolean }>("mcp:oauthStatus", id),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
 };
@@ -416,15 +380,40 @@ export const diagnosticsApi = {
     invoke<{ exported: boolean; manifest?: unknown }>("diagnostics:export", includeCrashDumps),
   delete: () => invoke<boolean>("diagnostics:delete"),
   enableMode: () =>
-    invoke<{ enabled: boolean; expiresAt: null; disablesOnRestart: true }>("diagnostics:mode-enable"),
+    invoke<{ enabled: boolean; expiresAt: null; disablesOnRestart: true }>(
+      "diagnostics:mode-enable",
+    ),
 };
 
 // ── Exa web search ────────────────────────────────────────────────────
 export const exaApi = {
   get: () => invoke<{ enabled: boolean; hasKey: boolean }>("exa:get"),
   setKey: (key: string) => invoke<{ hasKey: boolean }>("exa:setKey", key),
+  setEnabled: (enabled: boolean) => invoke<AppSettings>("exa:setEnabled", enabled),
+};
+
+// ── Web Search provider registry ─────────────────────────────────────
+export const webSearchApi = {
+  get: () => invoke<WebSearchRendererSnapshot>("webSearch:get"),
+  getExistingAuth: () =>
+    invoke<WebSearchExistingAuthRendererSnapshot>("webSearch:existingAuth:get"),
+  consentExistingAuth: (request: WebSearchExistingAuthConsentRequest) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:existingAuth:consent", request),
+  revokeExistingAuth: () => invoke<WebSearchRendererSnapshot>("webSearch:existingAuth:revoke"),
   setEnabled: (enabled: boolean) =>
-    invoke<AppSettings>("exa:setEnabled", enabled),
+    invoke<WebSearchRendererSnapshot>("webSearch:setEnabled", enabled),
+  setSelection: (selection: WebSearchSelection) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:setSelection", selection),
+  setAutomaticRoute: (route: WebSearchRouteEntry[]) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:setAutomaticRoute", route),
+  setProviderConfig: (
+    providerId: WebSearchProviderId,
+    providerConfig: BoundedNonSecretProviderConfig | null,
+  ) => invoke<WebSearchRendererSnapshot>("webSearch:setProviderConfig", providerId, providerConfig),
+  setCredential: (providerId: WebSearchProviderId, key: string) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:setCredential", providerId, key),
+  removeCredential: (providerId: WebSearchProviderId) =>
+    invoke<WebSearchRendererSnapshot>("webSearch:removeCredential", providerId),
 };
 
 // ── Telegram remote control ──────────────────────────────────────────
@@ -460,17 +449,12 @@ export interface TelegramStatus {
 export const telegramApi = {
   get: () => invoke<TelegramStatus>("telegram:get"),
   setKey: (key: string) => invoke<{ hasKey: boolean }>("telegram:setKey", key),
-  setEnabled: (enabled: boolean) =>
-    invoke<boolean>("telegram:setEnabled", enabled),
+  setEnabled: (enabled: boolean) => invoke<boolean>("telegram:setEnabled", enabled),
   connect: () => invoke<{ connected: boolean }>("telegram:connect"),
   disconnect: () => invoke<{ connected: boolean }>("telegram:disconnect"),
   resetPairing: () => invoke<{ reset: boolean }>("telegram:resetPairing"),
   setProvider: (providerId: string, model: string) =>
-    invoke<{ providerId: string; model: string }>(
-      "telegram:setProvider",
-      providerId,
-      model,
-    ),
+    invoke<{ providerId: string; model: string }>("telegram:setProvider", providerId, model),
   setWorkspace: (workspaceId?: string) =>
     invoke<{ workspaceId?: string }>("telegram:setWorkspace", workspaceId),
   setExperience: (input: {
@@ -487,9 +471,8 @@ export const telegramApi = {
     invoke<{ profile: string }>("telegram:createProfile", profile),
   deleteProfile: (profile: string) =>
     invoke<{ deleted: boolean }>("telegram:deleteProfile", profile),
-  onModelSelectionChanged: (
-    handler: (selection: { providerId: string; model: string }) => void,
-  ) => onNotification("telegram:model-selection-changed", handler),
+  onModelSelectionChanged: (handler: (selection: { providerId: string; model: string }) => void) =>
+    onNotification("telegram:model-selection-changed", handler),
 };
 
 export const aidenRemoteApi = {
@@ -500,16 +483,14 @@ export const aidenRemoteApi = {
     invoke<AidenRemoteSettingsSnapshot>("remote:setConnectionMode", mode),
   setDisplayName: (displayName: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setDisplayName", displayName),
-  moveToAvailablePort: () =>
-    invoke<AidenRemoteSettingsSnapshot>("remote:moveToAvailablePort"),
-  connectTailscale: () =>
-    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleConnect"),
-  disconnectTailscale: () =>
-    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleDisconnect"),
-  reconcileTailscale: () =>
-    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleReconcile"),
+  moveToAvailablePort: () => invoke<AidenRemoteSettingsSnapshot>("remote:moveToAvailablePort"),
+  connectTailscale: () => invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleConnect"),
+  disconnectTailscale: () => invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleDisconnect"),
+  reconcileTailscale: () => invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleReconcile"),
   reviewTailscaleTakeover: () =>
-    invoke<import("../shared/aiden-remote").AidenRemoteTailscaleTakeoverReviewView>("remote:tailscaleReviewTakeover"),
+    invoke<import("../shared/aiden-remote").AidenRemoteTailscaleTakeoverReviewView>(
+      "remote:tailscaleReviewTakeover",
+    ),
   takeOverTailscale: (token: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleTakeOver", token),
   beginPairing: (transport: "lan" | "tailscale") =>
@@ -518,16 +499,14 @@ export const aidenRemoteApi = {
     invoke<{ closed: boolean }>("remote:closePairing", pairingSessionId),
   revokeDevice: (deviceId: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:revokeDevice", deviceId),
-  addApprovedRoot: () =>
-    invoke<AidenRemoteSettingsSnapshot>("remote:addApprovedRoot"),
+  addApprovedRoot: () => invoke<AidenRemoteSettingsSnapshot>("remote:addApprovedRoot"),
   removeApprovedRoot: (rootId: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
   pendingApproval: (chatId: string) =>
     invoke<RemoteApprovalPrompt | null>("remote:getPendingApproval", chatId),
   respondApproval: (chatId: string, approvalId: string, decision: "allow" | "deny") =>
     invoke<{ resolved: true }>("remote:respondApprovalFromHost", chatId, approvalId, decision),
-  onChanged: (handler: () => void) =>
-    onNotification("remote:changed", handler),
+  onChanged: (handler: () => void) => onNotification("remote:changed", handler),
   onApprovalChanged: (handler: (payload: { chatId: string }) => void) =>
     onNotification("remote:approval-changed", handler),
 };
@@ -536,8 +515,7 @@ export const aidenRemoteApi = {
 export const voiceApi = {
   transcribe: (audioBase64: string, mimeType: string, model?: string, operationId?: string) =>
     invoke<string>("voice:transcribe", audioBase64, mimeType, model, operationId),
-  cancelTranscription: (operationId: string) =>
-    invoke<void>("voice:transcribeCancel", operationId),
+  cancelTranscription: (operationId: string) => invoke<void>("voice:transcribeCancel", operationId),
   /** On-device transcription: base64 raw 16 kHz mono Float32 PCM + downloaded model id. */
   transcribeLocal: (pcmBase64: string, modelId: string, operationId: string) =>
     invoke<string>("voice:transcribeLocal", pcmBase64, modelId, operationId),
@@ -574,8 +552,7 @@ export const shortcutApi = {
   get: () => invoke<KeybindingSnapshot>("shortcut:get"),
   setRecording: (recording: boolean) =>
     invoke<KeybindingSnapshot>("shortcut:set-recording", recording),
-  set: (mutation: KeybindingMutation) =>
-    invoke<KeybindingSnapshot>("shortcut:set", mutation),
+  set: (mutation: KeybindingMutation) => invoke<KeybindingSnapshot>("shortcut:set", mutation),
   onChanged: (handler: (snapshot: KeybindingSnapshot) => void) =>
     onNotification("shortcut:changed", handler),
 };
@@ -589,10 +566,7 @@ export const dictationApi = {
   reportError: (operationId: string, message: string) =>
     invoke<void>("dictation:error", operationId, message),
   /** Pill reports finalization/consent/fallback progress for accurate UI and diagnostics. */
-  reportProgress: (
-    operationId: string,
-    progress: "finalizing" | "fallback-consent" | "fallback",
-  ) =>
+  reportProgress: (operationId: string, progress: "finalizing" | "fallback-consent" | "fallback") =>
     invoke<void>("dictation:progress", operationId, progress),
   /** Pill cancel button: discard the in-flight recording/transcription. */
   cancel: () => invoke<void>("dictation:cancel"),
@@ -613,11 +587,7 @@ export async function pickFolder(): Promise<string | null> {
 
 // ── Attachments & model catalog ───────────────────────────────────────
 export const attachmentsApi = {
-  pickAndRead: (
-    remainingSlots: number,
-    includeImages: boolean,
-    remainingInlineBytes: number,
-  ) =>
+  pickAndRead: (remainingSlots: number, includeImages: boolean, remainingInlineBytes: number) =>
     invoke<{ attachments: Attachment[]; skipped: number }>(
       "attachments:pickAndRead",
       remainingSlots,
@@ -641,11 +611,7 @@ export const attachmentsApi = {
     remainingSlots: number,
     remainingInlineBytes: number,
   ) =>
-    window.aidenAPI.attachments.readClipboardImages(
-      images,
-      remainingSlots,
-      remainingInlineBytes,
-    ),
+    window.aidenAPI.attachments.readClipboardImages(images, remainingSlots, remainingInlineBytes),
 };
 
 export const modelsApi = {
@@ -659,32 +625,21 @@ export const workspacesApi = {
   get: (id: string) => invoke<Workspace | null>("workspaces:get", id),
   create: (input: { name?: string; permission?: WorkspacePermission }) =>
     invoke<Workspace>("workspaces:create", input),
-  createFromFolder: () =>
-    invoke<Workspace | null>("workspaces:createFromFolder"),
+  createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
-  update: (
-    id: string,
-    patch: { name?: string; permission?: WorkspacePermission },
-  ) => invoke<Workspace>("workspaces:update", id, patch),
+  update: (id: string, patch: { name?: string; permission?: WorkspacePermission }) =>
+    invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
-  gitInfo: (workspaceId: string) =>
-    invoke<GitInfo>("workspaces:gitInfo", workspaceId),
-  openFolder: (workspaceId: string) =>
-    invoke<void>("workspaces:openFolder", workspaceId),
+  gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
+  openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
   openInEditor: (workspaceId: string, editorId: string) =>
     invoke<void>("workspaces:openInEditor", workspaceId, editorId),
-  files: (workspaceId: string) =>
-    invoke<WorkspaceFileIndex>("workspaces:files", workspaceId),
+  files: (workspaceId: string) => invoke<WorkspaceFileIndex>("workspaces:files", workspaceId),
   readFile: (workspaceId: string, path: string) =>
     invoke<WorkspaceFileDocument>("workspaces:readFile", workspaceId, path),
-  writeFile: (
-    workspaceId: string,
-    path: string,
-    content: string,
-    expectedVersion: string,
-  ) =>
+  writeFile: (workspaceId: string, path: string, content: string, expectedVersion: string) =>
     invoke<WorkspaceFileWriteResult>(
       "workspaces:writeFile",
       workspaceId,
@@ -711,12 +666,9 @@ export interface TerminalSnapshot {
 }
 
 export const terminalApi = {
-  create: (workspaceId: string) =>
-    invoke<TerminalSession>("terminal:create", workspaceId),
-  snapshot: (sessionId: string) =>
-    invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
-  write: (sessionId: string, data: string) =>
-    invoke<void>("terminal:write", sessionId, data),
+  create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
+  snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
+  write: (sessionId: string, data: string) => invoke<void>("terminal:write", sessionId, data),
   resize: (sessionId: string, cols: number, rows: number) =>
     invoke<void>("terminal:resize", sessionId, cols, rows),
   close: (sessionId: string) => invoke<void>("terminal:close", sessionId),
@@ -737,28 +689,19 @@ export const gitApi = {
     invoke<GitComparison>("git:compare", workspaceId, targetRef),
   comparisonDiff: (workspaceId: string, input: GitComparisonDiffInput) =>
     invoke<GitFileDiff>("git:comparisonDiff", workspaceId, input),
-  branches: (workspaceId: string) =>
-    invoke<GitBranches>("git:branches", workspaceId),
-  checkout: (workspaceId: string, name: string) =>
-    invoke<void>("git:checkout", workspaceId, name),
+  branches: (workspaceId: string) => invoke<GitBranches>("git:branches", workspaceId),
+  checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
   createBranch: (workspaceId: string, name: string) =>
     invoke<void>("git:createBranch", workspaceId, name),
-  worktrees: (workspaceId: string) =>
-    invoke<GitWorktree[]>("git:worktrees", workspaceId),
+  worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
   deleteManagedWorktree: (workspaceId: string) =>
-    invoke<{ branchDeleted: boolean }>(
-      "git:deleteManagedWorktree",
-      workspaceId,
-    ),
+    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────
-async function invokeChatMutation<T>(
-  channel: string,
-  ...args: unknown[]
-): Promise<T> {
+async function invokeChatMutation<T>(channel: string, ...args: unknown[]): Promise<T> {
   try {
     return await invoke<T>(channel, ...args);
   } catch (error) {
@@ -771,9 +714,7 @@ export const chatsApi = {
   activitySnapshot: () => invoke<unknown>("chats:activitySnapshot"),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
-    const response = parseChatReadResponse(
-      await invoke<ChatReadResponse>("chats:get", id),
-    );
+    const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));
     if (!response) throw new Error("The chat read response was invalid.");
     if (response.reconciliation) {
       rememberChatReadReconciliation(response.reconciliation);
@@ -812,8 +753,7 @@ export const chatsApi = {
   }) => invokeChatMutation<Chat>("chats:create", input),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
-  rename: (id: string, title: string) =>
-    invoke<void>("chats:rename", id, title),
+  rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
   copyVisibleHistory: (chatId: string, throughMessageId?: string) =>
@@ -821,15 +761,13 @@ export const chatsApi = {
       chatId,
       ...(throughMessageId ? { throughMessageId } : {}),
     }),
-  export: (chatId: string) =>
-    invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
+  export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   setComputerUse: (id: string, enabled: boolean) =>
     invoke<Chat>("chats:setComputerUse", id, enabled),
   remove: (id: string) => invoke<void>("chats:remove", id),
-  abandonTurn: (id: string, turnId: string) =>
-    invoke<boolean>("chats:abandonTurn", id, turnId),
+  abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,
@@ -874,21 +812,17 @@ export const chatsApi = {
 };
 
 export const botsApi = {
-  getAccessNotice: () =>
-    invoke<BotNoticeStatus>("bots:getAccessNotice"),
+  getAccessNotice: () => invoke<BotNoticeStatus>("bots:getAccessNotice"),
   acknowledgeAccessNotice: (acknowledgement: BotNoticeAcknowledgement) =>
     invoke<BotNoticeStatus>("bots:acknowledgeAccessNotice", acknowledgement),
   getTelegramAccessNotice: (profile: string) =>
     invoke<BotNoticeStatus>("bots:getTelegramAccessNotice", profile),
-  acknowledgeTelegramAccessNotice: (
-    profile: string,
-    acknowledgement: BotNoticeAcknowledgement,
-  ) => invoke<BotNoticeStatus>("bots:acknowledgeTelegramAccessNotice", {
-    profile,
-    acknowledgement,
-  }),
-  list: (includeArchived = false) =>
-    invoke<BotDefinition[]>("bots:list", includeArchived),
+  acknowledgeTelegramAccessNotice: (profile: string, acknowledgement: BotNoticeAcknowledgement) =>
+    invoke<BotNoticeStatus>("bots:acknowledgeTelegramAccessNotice", {
+      profile,
+      acknowledgement,
+    }),
+  list: (includeArchived = false) => invoke<BotDefinition[]>("bots:list", includeArchived),
   get: (id: string) => invoke<BotDefinition | null>("bots:get", id),
   getCanonicalPhoto: (id: string) =>
     invoke<BotRendererCanonicalPhoto | null>("bots:getCanonicalPhoto", id),
@@ -904,15 +838,10 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
-  getCapabilityCatalog: () =>
-    invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog"),
-  getBotAccess: (id: string) =>
-    invoke<BotAccessState | null>("bots:getBotAccess", id),
-  updateBotAccess: (input: {
-    botId: string;
-    expectedRevision: string;
-    access: BotAccessUpdate;
-  }) => invoke<BotAccessView>("bots:updateBotAccess", input),
+  getCapabilityCatalog: () => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog"),
+  getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
+  updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
+    invoke<BotAccessView>("bots:updateBotAccess", input),
   archive: (input: { id: string; expectedRevision: string }) =>
     invoke<BotDefinition>("bots:archive", input),
   restore: (input: { id: string; expectedRevision: string }) =>
@@ -935,13 +864,8 @@ export const botsApi = {
 };
 
 export const subagentsApi = {
-  get: async (
-    chatId: string,
-    runId: string,
-  ): Promise<SubagentHistoryDetailV1 | null> =>
-    parseSubagentHistoryDetailV1(
-      await invoke<unknown>("subagents:get", chatId, runId),
-    ) ?? null,
+  get: async (chatId: string, runId: string): Promise<SubagentHistoryDetailV1 | null> =>
+    parseSubagentHistoryDetailV1(await invoke<unknown>("subagents:get", chatId, runId)) ?? null,
   manage: async (
     chatId: string,
     request: SubagentManagementRequestV2,
@@ -1146,13 +1070,9 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
-      void Promise.resolve(
-        callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning),
-      )
+      void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
         .catch((error: unknown) =>
-          callbacks.onError(
-            error instanceof Error ? error.message : String(error),
-          ),
+          callbacks.onError(error instanceof Error ? error.message : String(error)),
         )
         .finally(dispose);
     }),
@@ -1259,14 +1179,11 @@ export function startGeneration(
       }
       return {
         ok: false as const,
-        error: new Error(
-          "Generation was rejected before it accepted this message.",
-        ),
+        error: new Error("Generation was rejected before it accepted this message."),
       };
     },
     (error: unknown) => {
-      const resolved =
-        error instanceof Error ? error : new Error(String(error));
+      const resolved = error instanceof Error ? error : new Error(String(error));
       if (fallbackDetachedLifecycleStream(streamId)) {
         dispose();
         return { ok: false as const, error: resolved };
@@ -1313,9 +1230,7 @@ export function startGeneration(
       }
       void invoke("chat:cancel", streamId, origin).catch((error: unknown) => {
         if (origin === "user_stop") {
-          callbacks.onError(
-            error instanceof Error ? error.message : String(error),
-          );
+          callbacks.onError(error instanceof Error ? error.message : String(error));
           dispose();
         }
       });

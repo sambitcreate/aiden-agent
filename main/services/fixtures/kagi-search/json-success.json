@@ -1,0 +1,25 @@
+{
+  "meta": { "trace": "fixture-trace" },
+  "data": {
+    "search": [
+      {
+        "url": "https://help.kagi.com/kagi/api/search.html",
+        "title": "Kagi Search API",
+        "snippet": "The Search API provides programmable access to Kagi search results."
+      },
+      {
+        "url": "https://example.test/kagi-second",
+        "title": "Second Kagi source",
+        "snippet": "A second untrusted Kagi result."
+      },
+      {
+        "url": "https://example.test/kagi-second",
+        "title": "Duplicate Kagi source",
+        "snippet": "This duplicate is discarded."
+      }
+    ],
+    "related_search": [
+      { "title": "Related query", "url": "https://example.test/related" }
+    ]
+  }
+}

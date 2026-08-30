@@ -55,3 +55,18 @@ test("scheduled task parser normalizes a bounded exact MCP server scope", () => 
     );
   }
 });
+
+test("scheduled task parser carries only an explicit boolean Web Search grant", () => {
+  assert.equal(
+    parseScheduledTaskInput({ ...valid, webSearchEnabled: true }).webSearchEnabled,
+    true,
+  );
+  assert.equal(
+    parseScheduledTaskInput({ ...valid, webSearchEnabled: false }).webSearchEnabled,
+    false,
+  );
+  assert.equal(
+    parseScheduledTaskInput({ ...valid, webSearchEnabled: "true" }).webSearchEnabled,
+    undefined,
+  );
+});

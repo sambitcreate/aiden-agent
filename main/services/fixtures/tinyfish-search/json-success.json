@@ -1,0 +1,23 @@
+{
+  "query": "current TinyFish docs",
+  "total_results": 2,
+  "page": 0,
+  "results": [
+    {
+      "position": 1,
+      "site_name": "docs.tinyfish.ai",
+      "title": "TinyFish Search API",
+      "snippet": "TinyFish Search returns structured ranked web results.",
+      "url": "https://docs.tinyfish.ai/search-api/reference",
+      "date": null,
+      "publisher": null
+    },
+    {
+      "position": 2,
+      "site_name": "example.test",
+      "title": "Second TinyFish source",
+      "snippet": "A second untrusted TinyFish result.",
+      "url": "https://example.test/tinyfish-second"
+    }
+  ]
+}

@@ -18,6 +18,7 @@ import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import {
@@ -52,7 +53,11 @@ import {
   useProviders,
   useSettings,
 } from "../lib/queries";
-import { resolveVisibleModelSelection, useModelSelection } from "../lib/use-model-selection";
+import {
+  isModelSelectionReadyForNewWork,
+  resolveVisibleModelSelection,
+  useModelSelection,
+} from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
@@ -95,9 +100,7 @@ import {
   normalizeAnthropicThinkingLevel,
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
-import {
-  normalizeProviderThinkingLevel,
-} from "../shared/provider-thinking";
+import { normalizeProviderThinkingLevel } from "../shared/provider-thinking";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -198,11 +201,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
+  const hasMessages = (chat.data?.messages.length ?? 0) > 0;
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&
-    model &&
-    selectedProvider.models.includes(model) &&
+    isModelSelectionReadyForNewWork(
+      { providerId, model },
+      providers.data,
+      settings.data?.hiddenModelsByProvider,
+      hasMessages,
+    ) &&
     (selectedProvider.hasKey || !selectedProvider.needsKey),
   );
   const modelReadinessMessage = React.useMemo(() => {
@@ -223,8 +231,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     if (!model || !selectedProvider.models.includes(model))
       return `Choose a model from ${selectedProvider.label}.`;
+    if (
+      !hasMessages &&
+      settings.data !== undefined &&
+      isModelHidden(settings.data.hiddenModelsByProvider, providerId, model)
+    ) {
+      return "This model is hidden from new chats. Show a model in Settings → Providers before sending.";
+    }
     return undefined;
-  }, [model, providerId, providers.isLoading, selectedProvider]);
+  }, [hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
   const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
   const computerUseReady = computerUseReadinessReady(
     computerUseStatus.data?.ready === true,
@@ -260,7 +275,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const ready =
     modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
   const readinessMessage =
-    chatReadinessMessage ?? botReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
+    chatReadinessMessage ??
+    botReadinessMessage ??
+    modelReadinessMessage ??
+    computerUseReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -454,10 +472,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const remote = await aidenRemoteApi.pendingApproval(chatId);
         if (
-          !active
-          || chatIdRef.current !== chatId
-          || !isLatestRemoteApprovalRefresh(requestId, remoteApprovalRefreshRef.current)
-        ) return;
+          !active ||
+          chatIdRef.current !== chatId ||
+          !isLatestRemoteApprovalRefresh(requestId, remoteApprovalRefreshRef.current)
+        )
+          return;
         setApprovals((current) => mergeRemoteApproval(current, remote));
       } catch {
         // Remote chat infrastructure is lazy; absence before first pairing is expected.
@@ -623,11 +642,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
-  const hasMessages = messages.length > 0;
   const imageArtifactRecoveryPending =
     hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
-  const imageArtifactRecoveryUnavailable =
-    chat.data?.imageArtifactRecoveryUnavailable === true;
+  const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const isNewChat = !chat.isLoading && !hasMessages && displayedStreamingText === null;
 
@@ -659,9 +676,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before copying this chat.");
       }
-        if (imageArtifactRecoveryUnavailable) {
-          throw new Error(
-            "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
+      if (imageArtifactRecoveryUnavailable) {
+        throw new Error(
+          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
         );
       }
       if (imageArtifactRecoveryPending) {
@@ -1493,8 +1510,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const changeProviderThinking = React.useCallback(
     async (level: GenerationThinkingLevel) => {
-      if (!model || !providerThinkingSupported || thinkingSaving ||
-        isStartingGeneration || isGenerating) return;
+      if (
+        !model ||
+        !providerThinkingSupported ||
+        thinkingSaving ||
+        isStartingGeneration ||
+        isGenerating
+      )
+        return;
       setThinkingSaving(true);
       try {
         const updated = await settingsApi.setProviderThinking(providerId, model, level);
@@ -1797,16 +1820,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
       title={
         bot.data ? (
           <span className="flex min-w-0 items-center gap-2">
-            <BotAvatar botId={bot.data.id} avatar={bot.data.avatar} name={bot.data.name} photoLoading="immediate" size="small" />
+            <BotAvatar
+              botId={bot.data.id}
+              avatar={bot.data.avatar}
+              name={bot.data.name}
+              photoLoading="immediate"
+              size="small"
+            />
             <span className="min-w-0">
               <span className="flex items-center gap-2">
                 <span className="truncate">{bot.data.name}</span>
-                <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">Bot</span>
+                <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
+                  Bot
+                </span>
               </span>
-              <span className="block truncate text-small font-normal text-secondary">{chat.data?.title ?? "New conversation"}</span>
+              <span className="block truncate text-small font-normal text-secondary">
+                {chat.data?.title ?? "New conversation"}
+              </span>
             </span>
           </span>
-        ) : (chat.data?.title ?? "New agent")
+        ) : (
+          (chat.data?.title ?? "New agent")
+        )
       }
       actions={
         <>
@@ -2007,15 +2042,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             // route no longer remounts the pane, and Composer owns that text
             // without a chatId reset of its own.
             key={chatId}
-            ready={
-              ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable
-            }
-              readinessMessage={
-                imageArtifactRecoveryUnavailable
+            ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
+            readinessMessage={
+              imageArtifactRecoveryUnavailable
                 ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
                 : imageArtifactRecoveryPending
-                ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
-                : readinessMessage
+                  ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
+                  : readinessMessage
             }
             hasMessages={hasMessages}
             chatId={chatId}
@@ -2071,9 +2104,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 ? "Reload Aiden before copying this chat."
                 : imageArtifactRecoveryUnavailable
                   ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
-                : imageArtifactRecoveryPending
-                  ? "Delete this chat to discard the unrecovered visual artifact before copying."
-                  : undefined
+                  : imageArtifactRecoveryPending
+                    ? "Delete this chat to discard the unrecovered visual artifact before copying."
+                    : undefined
             }
             slashPaletteBlocked={Boolean(pending)}
             slashActionBusy={isGenerating || isStartingGeneration}
@@ -2136,7 +2169,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             modelPicker={
               <ModelPicker
-                providers={settings.data ? providers.data ?? [] : []}
+                providers={settings.data ? (providers.data ?? []) : []}
                 providerId={providerId}
                 model={model}
                 onChange={select}
@@ -2185,9 +2218,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           subagentsEnabled={environmentPanel.subagentsEnabled}
           onOpenSubagent={environmentPanel.openSubagent}
           agentActivity={visibleAgentActivity}
-            error={
-              error ??
-              (imageArtifactRecoveryUnavailable
+          error={
+            error ??
+            (imageArtifactRecoveryUnavailable
               ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
               : imageArtifactRecoveryPending
                 ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."

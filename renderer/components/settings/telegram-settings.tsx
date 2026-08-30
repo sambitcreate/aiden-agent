@@ -10,6 +10,7 @@ import {
   Field,
   FieldSet,
   Input,
+  InlineMetadata,
   Select,
   SelectContent,
   SelectItem,
@@ -225,7 +226,12 @@ export function TelegramSettings() {
                 {profiles.map((profile) => (
                   <SelectItem key={profile.name} value={profile.name}>
                     {profile.name}
-                    {profile.status.status === "polling" ? " · connected" : ""}
+                    {profile.status.status === "polling" ? (
+                      <>
+                        {" "}
+                        <InlineMetadata>· connected</InlineMetadata>
+                      </>
+                    ) : null}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -365,7 +371,11 @@ export function TelegramSettings() {
                 >
                   <SelectTrigger size="small" aria-label="Telegram model">
                     <SelectValue placeholder="Choose a model…">
-                      {currentHiddenModel ? `${currentHiddenModel} · Hidden` : undefined}
+                      {currentHiddenModel ? (
+                        <>
+                          {currentHiddenModel} <InlineMetadata>· Hidden</InlineMetadata>
+                        </>
+                      ) : undefined}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>

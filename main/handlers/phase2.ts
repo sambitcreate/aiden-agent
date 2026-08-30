@@ -39,6 +39,35 @@ import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { mutatePortableConfigAndSync } from "../services/portable-credential-snapshot.js";
 import { withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
+import { webSearchCredentials } from "../services/web-search-credentials.js";
+import { webSearchExistingAuthReuse } from "../services/web-search-auth-reuse-main.js";
+import {
+  DEFAULT_WEB_SEARCH_FALLBACK_ON,
+  WEB_SEARCH_PROVIDER_REGISTRY,
+  getWebSearchProviderDefinition,
+  isWebSearchProviderId,
+  normalizeWebSearchSettings,
+  projectWebSearchProviderRegistry,
+  webSearchRouteReadiness,
+  type WebSearchProviderStatus,
+  type WebSearchProviderId,
+  type WebSearchProviderReadiness,
+  type WebSearchRendererSnapshot,
+  type WebSearchRouteReadiness,
+  type WebSearchSettingsV2,
+} from "../services/web-search-provider-registry-core.js";
+import { webSearchAdapterAvailable } from "../services/web-search-provider-registry.js";
+import {
+  webSearchExistingAuthRendererStatus,
+  type WebSearchExistingAuthRendererOption,
+  type WebSearchExistingAuthRendererStatus,
+} from "../services/web-search-auth-reuse-core.js";
+import {
+  assertWebSearchRolloutMutationAllowed,
+  webSearchProviderVisible,
+  webSearchRollout,
+  webSearchSettingsForRollout,
+} from "../services/web-search-rollout.js";
 
 interface ActiveVoiceTranscription {
   controller: AbortController;
@@ -46,6 +75,173 @@ interface ActiveVoiceTranscription {
 }
 
 const activeVoiceTranscriptions = new Map<string, ActiveVoiceTranscription>();
+
+function webSearchMutationOwner(event: Electron.IpcMainInvokeEvent): RendererDocumentOwner {
+  return rendererDocumentOwner(
+    event,
+    () => new Error("Web Search changes must come from the active application document."),
+  );
+}
+
+function webSearchSettingsSnapshot(
+  settings: WebSearchSettingsV2,
+  statuses: Partial<Record<WebSearchProviderId, WebSearchProviderStatus>>,
+  existingAuth: {
+    options: readonly WebSearchExistingAuthRendererOption[];
+    status: WebSearchExistingAuthRendererStatus;
+  },
+): WebSearchRendererSnapshot {
+  const selection = structuredClone(settings.selection);
+  const route =
+    selection.mode === "fixed"
+      ? [
+          {
+            providerId: selection.providerId,
+            credentialMode: selection.credentialMode ?? "anonymous",
+          },
+        ]
+      : structuredClone(selection.route);
+  return {
+    settings: structuredClone(settings),
+    // This helper receives only categorical statuses. The registry projection
+    // removes fixed origins and all credential details.
+    providers: projectWebSearchProviderRegistry(statuses).filter((provider) =>
+      webSearchProviderVisible(provider.id, webSearchRollout),
+    ),
+    selection,
+    route,
+    routeReadiness: webSearchRouteReadiness(
+      settings,
+      Object.fromEntries(
+        Object.entries(statuses).map(([providerId, status]) => [
+          providerId,
+          {
+            hasCredential: status?.hasCredential === true,
+            hasExistingProviderAuth: status?.hasExistingProviderAuth === true,
+          },
+        ]),
+      ) as Partial<Record<WebSearchProviderId, WebSearchProviderReadiness>>,
+    ).map((readiness) => ({
+      ...readiness,
+      // Credential readiness alone cannot make a provider available when its
+      // reviewed main-process adapter is absent (for example, a rollback
+      // build with Exa intentionally disabled).
+      ready: readiness.ready && statuses[readiness.providerId]?.ready === true,
+    })) as WebSearchRouteReadiness[],
+    existingAuth,
+  };
+}
+
+function supportsApiKeyCredential(
+  definition: ReturnType<typeof getWebSearchProviderDefinition>,
+): boolean {
+  return (
+    definition?.credentialKind === "optional-api-key" ||
+    definition?.credentialKind === "api-key" ||
+    definition?.credentialKind === "endpoint-and-api-key" ||
+    definition?.credentialKind === "api-key-and-zone"
+  );
+}
+
+async function readWebSearchSnapshot(): Promise<WebSearchRendererSnapshot> {
+  // The rollout is an immutable main-process projection. The durable settings
+  // document remains untouched so re-enabling the zoo restores the user's
+  // route, provider configuration, and credentials exactly as saved.
+  const settings = webSearchSettingsForRollout(
+    await configStore.getWebSearchSettings(),
+    webSearchRollout,
+  );
+  const statuses: Partial<Record<WebSearchProviderId, WebSearchProviderStatus>> = {};
+  let existingAuthOptions: readonly WebSearchExistingAuthRendererOption[] = [];
+  let existingAuthStatus = webSearchExistingAuthRendererStatus("not-consented");
+  try {
+    [existingAuthOptions, existingAuthStatus] = await Promise.all([
+      webSearchExistingAuthReuse.options(),
+      webSearchExistingAuthReuse.status(),
+    ]);
+  } catch {
+    // A missing/corrupt local binding or unavailable Pi catalog is a redacted
+    // setup state, never a reason to expose details or ask the network.
+    existingAuthOptions = [];
+    existingAuthStatus = webSearchExistingAuthRendererStatus("invalid");
+  }
+  await Promise.all(
+    WEB_SEARCH_PROVIDER_REGISTRY.filter((definition) =>
+      webSearchProviderVisible(definition.id, webSearchRollout),
+    ).map(async (definition) => {
+      const config = settings.providerConfig[definition.id];
+      if (supportsApiKeyCredential(definition)) {
+        let hasCredential = false;
+        try {
+          hasCredential = await webSearchCredentials.has(
+            webSearchCredentials.reference(definition.id, config),
+          );
+        } catch {
+          hasCredential = false;
+        }
+        const hasExistingProviderAuth =
+          definition.id === "openai" && existingAuthStatus.state === "ready";
+        statuses[definition.id] = {
+          configurationStatus:
+            hasCredential ||
+            hasExistingProviderAuth ||
+            definition.credentialKind === "optional-api-key"
+              ? hasCredential || hasExistingProviderAuth
+                ? "configured"
+                : "not-required"
+              : "needs-setup",
+          ready:
+            webSearchAdapterAvailable(definition.id) &&
+            definition.releaseState === "shipped" &&
+            (hasCredential ||
+              hasExistingProviderAuth ||
+              definition.credentialKind === "optional-api-key"),
+          hasCredential,
+          ...(definition.id === "openai" ? { hasExistingProviderAuth } : {}),
+        };
+        return;
+      }
+      if (definition.credentialKind === "endpoint") {
+        const configured = typeof config?.endpoint === "string";
+        statuses[definition.id] = {
+          configurationStatus: configured ? "configured" : "needs-setup",
+          ready:
+            webSearchAdapterAvailable(definition.id) &&
+            definition.releaseState === "shipped" &&
+            configured,
+        };
+        return;
+      }
+      if (definition.credentialKind === "none") {
+        statuses[definition.id] = {
+          configurationStatus: "not-required",
+          ready: webSearchAdapterAvailable(definition.id) && definition.releaseState === "shipped",
+        };
+        return;
+      }
+      // Existing-provider-auth and future auth combinations stay explicit
+      // until their provider-specific binding is implemented.
+      statuses[definition.id] = {
+        configurationStatus: "needs-setup",
+        ready: false,
+      };
+    }),
+  );
+  return webSearchSettingsSnapshot(settings, statuses, {
+    options: existingAuthOptions,
+    status: existingAuthStatus,
+  });
+}
+
+async function updateWebSearchSnapshot(
+  event: Electron.IpcMainInvokeEvent,
+  mutation: (current: WebSearchSettingsV2) => WebSearchSettingsV2,
+): Promise<WebSearchRendererSnapshot> {
+  const owner = webSearchMutationOwner(event);
+  await configStore.updateWebSearchSettings(mutation, () => !owner.isDestroyed());
+  if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+  return readWebSearchSnapshot();
+}
 
 function voiceOperationKey(owner: RendererDocumentOwner, value: unknown): string {
   const operationId = asString(value, "operationId");
@@ -262,22 +458,132 @@ export function registerPhase2Handlers(): void {
     await mcpManager.closeAll();
   });
 
-  // ── Exa web search ───────────────────────────────────────────────────
-  ipcMain.handle("exa:get", async () => {
-    const settings = await configStore.getSettings();
-    return { enabled: settings.exaEnabled ?? false, hasKey: await secrets.hasKey("exa") };
+  // ── Web Search settings and credentials ─────────────────────────────
+  ipcMain.handle("webSearch:get", async (event) => {
+    const owner = webSearchMutationOwner(event);
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return readWebSearchSnapshot();
   });
-  ipcMain.handle("exa:setKey", async (_event, key: unknown) => {
+  ipcMain.handle("webSearch:existingAuth:get", async (event) => {
+    const owner = webSearchMutationOwner(event);
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const snapshot = await readWebSearchSnapshot();
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return snapshot.existingAuth;
+  });
+  ipcMain.handle("webSearch:existingAuth:consent", async (event, value: unknown) => {
+    const owner = webSearchMutationOwner(event);
+    assertWebSearchRolloutMutationAllowed("existing-auth", undefined, webSearchRollout);
+    await webSearchExistingAuthReuse.consent(value, () => !owner.isDestroyed());
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return readWebSearchSnapshot();
+  });
+  ipcMain.handle("webSearch:existingAuth:revoke", async (event) => {
+    const owner = webSearchMutationOwner(event);
+    assertWebSearchRolloutMutationAllowed("existing-auth", undefined, webSearchRollout);
+    await webSearchExistingAuthReuse.revoke(() => !owner.isDestroyed());
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return readWebSearchSnapshot();
+  });
+  ipcMain.handle("webSearch:setEnabled", async (event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Web Search enabled must be a boolean.");
+    assertWebSearchRolloutMutationAllowed("set-enabled", undefined, webSearchRollout);
+    return updateWebSearchSnapshot(event, (current) =>
+      normalizeWebSearchSettings({ ...current, enabled }),
+    );
+  });
+  ipcMain.handle("webSearch:setSelection", async (event, selection: unknown) => {
+    assertWebSearchRolloutMutationAllowed("set-selection", undefined, webSearchRollout);
+    return updateWebSearchSnapshot(event, (current) =>
+      normalizeWebSearchSettings({ ...current, selection }),
+    );
+  });
+  ipcMain.handle("webSearch:setAutomaticRoute", async (event, route: unknown) => {
+    assertWebSearchRolloutMutationAllowed("set-automatic-route", undefined, webSearchRollout);
+    return updateWebSearchSnapshot(event, (current) => {
+      const fallbackOn =
+        current.selection.mode === "automatic"
+          ? current.selection.fallbackOn
+          : [...DEFAULT_WEB_SEARCH_FALLBACK_ON];
+      return normalizeWebSearchSettings({
+        ...current,
+        selection: { mode: "automatic", route, fallbackOn },
+      });
+    });
+  });
+  ipcMain.handle(
+    "webSearch:setProviderConfig",
+    async (event, providerId: unknown, providerConfig: unknown) => {
+      if (!isWebSearchProviderId(providerId)) {
+        throw new Error("Unknown Web Search provider.");
+      }
+      assertWebSearchRolloutMutationAllowed("set-provider-config", providerId, webSearchRollout);
+      return updateWebSearchSnapshot(event, (current) => {
+        const nextProviderConfig: Record<string, unknown> = { ...current.providerConfig };
+        if (providerConfig === null) delete nextProviderConfig[providerId];
+        else nextProviderConfig[providerId] = providerConfig;
+        return normalizeWebSearchSettings({ ...current, providerConfig: nextProviderConfig });
+      });
+    },
+  );
+  ipcMain.handle("webSearch:setCredential", async (event, providerId: unknown, key: unknown) => {
+    const owner = webSearchMutationOwner(event);
+    if (!isWebSearchProviderId(providerId)) throw new Error("Unknown Web Search provider.");
+    assertWebSearchRolloutMutationAllowed("set-credential", providerId, webSearchRollout);
+    const settings = await configStore.getWebSearchSettings();
+    const reference = webSearchCredentials.reference(
+      providerId,
+      settings.providerConfig[providerId],
+    );
+    await webSearchCredentials.set(reference, key, () => !owner.isDestroyed());
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return readWebSearchSnapshot();
+  });
+  ipcMain.handle("webSearch:removeCredential", async (event, providerId: unknown) => {
+    const owner = webSearchMutationOwner(event);
+    if (!isWebSearchProviderId(providerId)) throw new Error("Unknown Web Search provider.");
+    assertWebSearchRolloutMutationAllowed("set-credential", providerId, webSearchRollout);
+    const settings = await configStore.getWebSearchSettings();
+    const reference = webSearchCredentials.reference(
+      providerId,
+      settings.providerConfig[providerId],
+    );
+    await webSearchCredentials.remove(reference, () => !owner.isDestroyed());
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return readWebSearchSnapshot();
+  });
+
+  // Legacy Exa aliases remain for one rollback window. They use the same
+  // fenced v2 credential path and never expose the plaintext key.
+  ipcMain.handle("exa:get", async (event) => {
+    const owner = webSearchMutationOwner(event);
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const settings = await configStore.getWebSearchSettings();
+    const reference = webSearchCredentials.reference("exa", settings.providerConfig.exa);
+    return { enabled: settings.enabled, hasKey: await webSearchCredentials.has(reference) };
+  });
+  ipcMain.handle("exa:setKey", async (event, key: unknown) => {
+    const owner = webSearchMutationOwner(event);
+    assertWebSearchRolloutMutationAllowed("set-credential", "exa", webSearchRollout);
+    const settings = await configStore.getWebSearchSettings();
+    const reference = webSearchCredentials.reference("exa", settings.providerConfig.exa);
     const value = typeof key === "string" ? key.trim() : "";
-    if (value) await secrets.setKey("exa", value);
+    if (value) await webSearchCredentials.set(reference, value, () => !owner.isDestroyed());
     else {
-      await secrets.deleteKey("exa");
-      await configStore.setSettings({ exaEnabled: false });
+      await webSearchCredentials.remove(reference, () => !owner.isDestroyed());
+      await configStore.updateWebSearchSettings(
+        (current) => ({ ...current, enabled: false }),
+        () => !owner.isDestroyed(),
+      );
     }
-    return { hasKey: Boolean(value) };
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return { hasKey: await webSearchCredentials.has(reference) };
   });
-  ipcMain.handle("exa:setEnabled", async (_event, enabled: unknown) => {
-    return configStore.setSettings({ exaEnabled: enabled === true });
+  ipcMain.handle("exa:setEnabled", async (event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Web Search enabled must be a boolean.");
+    assertWebSearchRolloutMutationAllowed("set-enabled", undefined, webSearchRollout);
+    await updateWebSearchSnapshot(event, (current) => ({ ...current, enabled }));
+    return configStore.getSettings();
   });
 
   // ── Voice transcription ──────────────────────────────────────────────

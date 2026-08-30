@@ -488,6 +488,82 @@ test("companion replacement fences an active Bot lease before durable publicatio
   await update;
 });
 
+test("Web Search authority changes fence an active Bot lease before durable publication", async (t) => {
+  const root = await temporaryRoot(t);
+  const staged = stagedCapabilityPersistence(root);
+  let timestamp = 30_000;
+  let incarnation = 0;
+  const leases = new BotCapabilityLeaseRegistry();
+  const store = createBotCapabilityStore({
+    persistence: staged.persistence,
+    leases,
+    now: () => ++timestamp,
+    mintRevision: (kind, sequence) => `revision:${kind}:${sequence}`,
+    mintIncarnation: () => Buffer.alloc(32, ++incarnation).toString("base64url"),
+  });
+  await store.initialize();
+  await store.acknowledgeNotice("device:a", acknowledgement());
+  const policy = await store.createBotPolicy({
+    botId: "bot:web-fence",
+    catalog: catalog(),
+    access: { accessMode: "full", catalogRevision, confirmedForeground: true },
+  });
+  await store.createChatPolicy({
+    chatId: "chat:web-fence",
+    botId: policy.botId,
+    expectedBotPolicyRevision: policy.revision,
+    catalog: catalog(),
+  });
+  const admitted = await store.admit({
+    audienceId: "device:a",
+    botId: policy.botId,
+    chatId: "chat:web-fence",
+    snapshot,
+  });
+
+  const publication = staged.arm();
+  const update = store.updateBotPolicy({
+    botId: policy.botId,
+    expectedRevision: policy.revision,
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      webSearchEnabled: true,
+    },
+  });
+  await publication.entered;
+  assert.equal(admitted.lease.signal.aborted, true);
+  assert.throws(() => admitted.lease.assertCurrent(), /access changed/u);
+  publication.release();
+  const enabled = await update;
+
+  const reAdmitted = await store.admit({
+    audienceId: "device:a",
+    botId: policy.botId,
+    chatId: "chat:web-fence",
+    snapshot,
+  });
+  const revocationPublication = staged.arm();
+  const revocation = store.updateBotPolicy({
+    botId: policy.botId,
+    expectedRevision: enabled.revision,
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      webSearchEnabled: false,
+    },
+  });
+  await revocationPublication.entered;
+  assert.equal(reAdmitted.lease.signal.aborted, true);
+  assert.throws(() => reAdmitted.lease.assertCurrent(), /access changed/u);
+  revocationPublication.release();
+  await revocation;
+});
+
 test("Custom bindings survive restart, stay out of public views, and gate drift before leasing", async (t) => {
   const root = await temporaryRoot(t);
   const first = storeAt(root);

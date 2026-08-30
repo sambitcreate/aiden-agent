@@ -18,7 +18,12 @@ import {
   isProviderAliasMap,
   splitStoredProvider,
 } from "./portable-config-core.js";
+import { freshWebSearchSettings } from "./web-search-provider-registry-core.js";
 import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
+
+function expectedWebSearchSettings(enabled: boolean) {
+  return { ...freshWebSearchSettings(), enabled };
+}
 
 function fakeSecrets(initial: Record<string, unknown> = {}) {
   const keys = { ...initial };
@@ -241,18 +246,29 @@ test("model visibility updates are atomic and provider-scoped", async (t) => {
   ]);
 
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    anthropic: ["claude-sonnet"],
-    google: ["gemini-flash", "gemini-pro"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-sonnet"] },
+    google: { defaultVisibility: "shown", exceptions: ["gemini-flash", "gemini-pro"] },
   });
 
   await h.store.setModelVisibility("google", "gemini-pro", false);
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    anthropic: ["claude-sonnet"],
-    google: ["gemini-flash"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-sonnet"] },
+    google: { defaultVisibility: "shown", exceptions: ["gemini-flash"] },
   });
   await h.store.showAllProviderModels("google");
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    anthropic: ["claude-sonnet"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-sonnet"] },
+  });
+
+  await h.store.hideAllProviderModels("google");
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "hidden",
+    exceptions: [],
+  });
+  await h.store.setModelVisibility("google", "gemini-pro", false);
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "hidden",
+    exceptions: ["gemini-pro"],
   });
 });
 
@@ -269,16 +285,21 @@ test("Gemini voice setup atomically selects voice and gates every Google chat mo
   assert.equal(voiceOnly.voiceModel, "gemini-3.5-transcribe-live");
   assert.equal(voiceOnly.geminiUsageScope, "transcription_only");
   assert.deepEqual(voiceOnly.hiddenModelsByProvider, {
-    anthropic: ["claude-private"],
-    google: ["*", "gemini-private"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-private"] },
+    google: {
+      defaultVisibility: "shown",
+      exceptions: ["gemini-private"],
+      policyHidden: true,
+    },
   });
 
   await h.store.setModelVisibility("google", "future-gemini", false);
   await h.store.showAllProviderModels("google");
-  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, [
-    "*",
-    "gemini-private",
-  ]);
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "shown",
+    exceptions: ["gemini-private"],
+    policyHidden: true,
+  });
 
   const full = await h.store.setGeminiVoiceSetup(
     "models_and_transcription",
@@ -286,8 +307,8 @@ test("Gemini voice setup atomically selects voice and gates every Google chat mo
   );
   assert.equal(full.geminiUsageScope, "models_and_transcription");
   assert.deepEqual(full.hiddenModelsByProvider, {
-    anthropic: ["claude-private"],
-    google: ["gemini-private"],
+    anthropic: { defaultVisibility: "shown", exceptions: ["claude-private"] },
+    google: { defaultVisibility: "shown", exceptions: ["gemini-private"] },
   });
 });
 
@@ -302,7 +323,11 @@ test("Gemini usage scope gates Google models without changing local or OpenAI vo
   assert.equal(local.voiceProvider, "local");
   assert.equal(local.voiceModel, "local-voice-selection");
   assert.equal(local.geminiUsageScope, "transcription_only");
-  assert.deepEqual(local.hiddenModelsByProvider?.google, ["*"]);
+  assert.deepEqual(local.hiddenModelsByProvider?.google, {
+    defaultVisibility: "shown",
+    exceptions: [],
+    policyHidden: true,
+  });
 
   await h.store.setSettings({
     voiceProvider: "openai",
@@ -315,6 +340,53 @@ test("Gemini usage scope gates Google models without changing local or OpenAI vo
   assert.equal(openai.hiddenModelsByProvider?.google, undefined);
 });
 
+test("Gemini usage scope repairs divergent imported Google policy state", async (t) => {
+  const full = await harness(t);
+  await fs.writeFile(
+    full.settingsFile,
+    JSON.stringify({
+      settings: {
+        geminiUsageScope: "models_and_transcription",
+        hiddenModelsByProvider: { google: ["*", "gemini-private"] },
+      },
+    }),
+    "utf-8",
+  );
+
+  assert.deepEqual((await full.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "shown",
+    exceptions: ["gemini-private"],
+  });
+  await full.store.setSettings({ profileName: "Repaired" });
+  assert.deepEqual(
+    (await readJson<{ settings: { hiddenModelsByProvider?: unknown } }>(full.settingsFile)).settings
+      .hiddenModelsByProvider,
+    { google: { defaultVisibility: "shown", exceptions: ["gemini-private"] } },
+  );
+
+  const transcriptionOnly = await harness(t);
+  await fs.writeFile(
+    transcriptionOnly.settingsFile,
+    JSON.stringify({
+      settings: {
+        geminiUsageScope: "transcription_only",
+        hiddenModelsByProvider: {
+          google: { defaultVisibility: "shown", exceptions: ["gemini-private"] },
+        },
+      },
+    }),
+    "utf-8",
+  );
+  assert.deepEqual(
+    (await transcriptionOnly.store.getSettings()).hiddenModelsByProvider?.google,
+    {
+      defaultVisibility: "shown",
+      exceptions: ["gemini-private"],
+      policyHidden: true,
+    },
+  );
+});
+
 test("removing a provider clears its model visibility preferences", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
@@ -324,7 +396,7 @@ test("removing a provider clears its model visibility preferences", async (t) =>
   await h.store.removeProvider(provider.id);
 
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    other: ["other-model"],
+    other: { defaultVisibility: "shown", exceptions: ["other-model"] },
   });
 });
 
@@ -391,6 +463,7 @@ test("MCP servers and skills are portable; workspaces and settings are not", asy
   assert.deepEqual((await readJson<{ settings: unknown }>(h.settingsFile)).settings, {
     exaEnabled: true,
     showLocalModelReasoning: false,
+    webSearch: expectedWebSearchSettings(true),
   });
 });
 
@@ -484,6 +557,7 @@ test("reads and writes survive a restart of the whole store", async (t) => {
   assert.deepEqual(await next.getSettings(), {
     exaEnabled: true,
     assistant: assistantConfig,
+    webSearch: expectedWebSearchSettings(true),
   });
 });
 
@@ -559,7 +633,7 @@ test("released onboarding local identity migration re-homes cache and remembered
   assert.deepEqual(listed.modelMetadata, provider.modelMetadata);
   assert.equal((await h.store.getSettings()).lastProviderId, "custom:lmstudio");
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
-    "custom:lmstudio": ["qwen3-8b"],
+    "custom:lmstudio": { defaultVisibility: "shown", exceptions: ["qwen3-8b"] },
   });
   const cache = await readJson<{ byProvider: Record<string, unknown> }>(h.cacheFile);
   assert.equal(cache.byProvider[releasedId], undefined);
@@ -1219,7 +1293,7 @@ test("seeding runs once even under concurrent first reads", async (t) => {
   assert.deepEqual(providers, []);
   assert.deepEqual(skills, []);
   assert.deepEqual(servers, []);
-  assert.deepEqual(settings, {});
+  assert.deepEqual(settings, { webSearch: expectedWebSearchSettings(false) });
   const local = await readJson<{ aidenDirMigratedAt: number }>(h.localFile);
   assert.equal(typeof local.aidenDirMigratedAt, "number");
 });
@@ -1230,6 +1304,185 @@ test("a first-ever launch has no providers and records that it seeded", async (t
 
   const local = await readJson<{ seeded: boolean }>(h.localFile);
   assert.equal(local.seeded, true);
+});
+
+test("fresh config-store startup materializes the enabled anonymous Exa route", async (t) => {
+  const h = await harness(t);
+
+  assert.deepEqual(await h.store.getWebSearchSettings(), expectedWebSearchSettings(true));
+  const persisted = await readJson<{ settings: { webSearch: unknown } }>(h.settingsFile);
+  assert.deepEqual(persisted.settings.webSearch, expectedWebSearchSettings(true));
+  const local = await readJson<{ webSearchProfileKind?: string }>(h.localFile);
+  assert.equal(local.webSearchProfileKind, "fresh");
+});
+
+test("config-store migration follows every legacy Exa flag/key combination", async (t) => {
+  const cases: Array<{
+    name: string;
+    legacySettings: Record<string, unknown>;
+    hasKey: boolean;
+    enabled: boolean;
+    mode: "automatic" | "fixed";
+    credentialMode: "anonymous" | "api-key";
+  }> = [
+    {
+      name: "explicit false with key",
+      legacySettings: { exaEnabled: false },
+      hasKey: true,
+      enabled: false,
+      mode: "automatic",
+      credentialMode: "anonymous",
+    },
+    {
+      name: "explicit true with key",
+      legacySettings: { exaEnabled: true },
+      hasKey: true,
+      enabled: true,
+      mode: "fixed",
+      credentialMode: "api-key",
+    },
+    {
+      name: "explicit true without key",
+      legacySettings: { exaEnabled: true },
+      hasKey: false,
+      enabled: true,
+      mode: "automatic",
+      credentialMode: "anonymous",
+    },
+    {
+      name: "undefined flag with dormant key",
+      legacySettings: {},
+      hasKey: true,
+      enabled: false,
+      mode: "automatic",
+      credentialMode: "anonymous",
+    },
+  ];
+  for (const entry of cases) {
+    await t.test(entry.name, async (caseContext) => {
+      const h = await harness(caseContext, {
+        providers: [],
+        settings: entry.legacySettings,
+        seeded: true,
+      });
+      if (entry.hasKey) h.secrets.keys.exa = "legacy-exa-key";
+      const settings = await h.store.getWebSearchSettings();
+      assert.equal(settings.enabled, entry.enabled);
+      assert.equal(settings.selection.mode, entry.mode);
+      if (settings.selection.mode === "fixed") {
+        assert.equal(settings.selection.providerId, "exa");
+        assert.equal(settings.selection.credentialMode, entry.credentialMode);
+      } else {
+        assert.deepEqual(settings.selection.route, [
+          { providerId: "exa", credentialMode: entry.credentialMode },
+        ]);
+      }
+      assert.equal(h.secrets.keys.exa, entry.hasKey ? "legacy-exa-key" : undefined);
+    });
+  }
+});
+
+test("Web Search config updates are durable and do not touch provider transport", async (t) => {
+  const h = await harness(t);
+  const selected = await h.store.updateWebSearchSettings((current) => ({
+    ...current,
+    selection: {
+      mode: "fixed",
+      providerId: "exa",
+      credentialMode: "anonymous",
+    },
+  }));
+  assert.deepEqual(selected.webSearch?.selection, {
+    mode: "fixed",
+    providerId: "exa",
+    credentialMode: "anonymous",
+  });
+  const restarted = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    h.secrets.port,
+  );
+  assert.deepEqual(
+    (await restarted.getWebSearchSettings()).selection,
+    selected.webSearch?.selection,
+  );
+  assert.equal(h.secrets.keys.exa, undefined, "settings persistence must not create a credential");
+});
+
+test("future Web Search settings survive unrelated writes and project closed across restart", async (t) => {
+  const h = await harness(t);
+  const futureWebSearch = {
+    version: 99,
+    enabled: true,
+    selection: {
+      mode: "automatic",
+      route: [{ providerId: "future-search", credentialMode: "anonymous" }],
+      fallbackOn: ["timeout"],
+    },
+    providerConfig: {
+      "future-search": { endpoint: "https://search.future.example/v2" },
+    },
+  };
+  await fs.writeFile(
+    h.settingsFile,
+    JSON.stringify({ settings: { webSearch: futureWebSearch, profileName: "Before" } }),
+    "utf-8",
+  );
+
+  const firstRead = await h.store.getSettings();
+  assert.equal(
+    firstRead.webSearch,
+    undefined,
+    "unsupported Web Search state is hidden from runtime",
+  );
+  assert.equal(firstRead.profileName, "Before");
+  assert.deepEqual(await h.store.getWebSearchSettings(), {
+    ...freshWebSearchSettings(),
+    enabled: false,
+  });
+
+  let mutationCalled = false;
+  await assert.rejects(
+    () =>
+      h.store.updateWebSearchSettings((current) => {
+        mutationCalled = true;
+        return current;
+      }),
+    /invalid or from a newer version/u,
+  );
+  assert.equal(mutationCalled, false, "unsupported state is not handed to a mutator");
+  await assert.rejects(
+    () => h.store.setSettings({ webSearch: freshWebSearchSettings() }),
+    /invalid or from a newer version/u,
+  );
+
+  // A normal settings write remains allowed, but it must carry the unknown
+  // provider/version document through byte-for-byte as a value.
+  await h.store.setSettings({ profileName: "After" });
+  const saved = await readJson<{
+    settings: { webSearch: typeof futureWebSearch; profileName: string };
+  }>(h.settingsFile);
+  assert.deepEqual(saved.settings.webSearch, futureWebSearch);
+  assert.equal(saved.settings.profileName, "After");
+
+  const restarted = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    h.secrets.port,
+  );
+  assert.equal((await restarted.getSettings()).webSearch, undefined);
+  assert.deepEqual(await restarted.getWebSearchSettings(), {
+    ...freshWebSearchSettings(),
+    enabled: false,
+  });
+  const afterRestart = await readJson<{
+    settings: { webSearch: typeof futureWebSearch };
+  }>(h.settingsFile);
+  assert.deepEqual(afterRestart.settings.webSearch, futureWebSearch);
 });
 
 test("a copied portable provider survives first launch on a fresh local root", async (t) => {
@@ -1556,7 +1809,9 @@ test("valid-JSON malformed local roots are normalized before startup reads", asy
 
     assert.deepEqual(await h.store.listProviders(), []);
     assert.equal((await h.store.listWorkspaces()).length, 1);
-    assert.deepEqual(await h.store.getSettings(), {});
+    assert.deepEqual(await h.store.getSettings(), {
+      webSearch: expectedWebSearchSettings(false),
+    });
   }
 });
 
@@ -1675,7 +1930,9 @@ test("valid-JSON malformed settings roots are normalized before reads and writes
     });
     await fs.writeFile(h.settingsFile, JSON.stringify(malformed), "utf-8");
 
-    assert.deepEqual(await h.store.getSettings(), {});
+    assert.deepEqual(await h.store.getSettings(), {
+      webSearch: expectedWebSearchSettings(false),
+    });
     assert.equal(
       (await h.store.setSettings({ lastProviderId: "custom:test" })).lastProviderId,
       "custom:test",
@@ -1705,9 +1962,12 @@ test("malformed legacy settings are normalized before same-process consumers run
     seeded: true,
   });
 
-  assert.deepEqual(await h.store.getSettings(), {});
+  assert.deepEqual(await h.store.getSettings(), {
+    webSearch: expectedWebSearchSettings(false),
+  });
   assert.deepEqual(await h.store.setGoogleThinkingLevel("gemini-test", "high"), {
     googleThinkingByModel: { "gemini-test": "high" },
+    webSearch: expectedWebSearchSettings(false),
   });
 });
 
@@ -2137,6 +2397,7 @@ test("malformed known settings fields are dropped before type-assuming consumers
 
   assert.deepEqual(await h.store.getSettings(), {
     futureSetting: { retained: true },
+    webSearch: expectedWebSearchSettings(false),
   });
 });
 
@@ -2236,10 +2497,9 @@ test("future nested settings versions survive unrelated writes", async (t) => {
     (edited.anthropicThinkingByModel as Record<string, unknown>)["future-anthropic"],
     "ultra",
   );
-  assert.deepEqual(
-    (edited.providerThinkingByModel as Record<string, unknown>)["future-provider"],
-    { "future-model": "ultra" },
-  );
+  assert.deepEqual((edited.providerThinkingByModel as Record<string, unknown>)["future-provider"], {
+    "future-model": "ultra",
+  });
   const editedRuntime = await h.store.getSettings();
   assert.equal(editedRuntime.googleThinkingByModel?.["known-google"], "high");
   assert.equal(editedRuntime.codexThinkingByModel?.["known-codex"], "xhigh");

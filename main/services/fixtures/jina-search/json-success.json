@@ -1,0 +1,17 @@
+{
+  "code": 200,
+  "status": 20000,
+  "data": [
+    {
+      "title": "Jina Search API",
+      "url": "https://jina.ai/api-dashboard/",
+      "description": "Jina Search returns JSON search grounding results.",
+      "content": "Full content is disabled for this bounded search request."
+    },
+    {
+      "title": "Second Jina source",
+      "url": "https://example.test/jina-second",
+      "description": "A second untrusted Jina result."
+    }
+  ]
+}

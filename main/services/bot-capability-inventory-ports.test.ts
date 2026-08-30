@@ -37,23 +37,32 @@ test("inventory ports project safe exact facts and conservative unavailable conn
       },
     ],
     listSkills: async () => [
-      { sourceId: "skill:resolved", label: "Skill", description: "Does work", instructions: "Private", available: true },
+      {
+        sourceId: "skill:resolved",
+        label: "Skill",
+        description: "Does work",
+        instructions: "Private",
+        available: true,
+      },
     ],
-    listApprovedLocations: async () => [{
-      sourceId: "root_approved",
-      label: "Documents",
-      available: true,
-      scopeFingerprint: HASH,
-    }],
+    listApprovedLocations: async () => [
+      {
+        sourceId: "root_approved",
+        label: "Documents",
+        available: true,
+        scopeFingerprint: HASH,
+      },
+    ],
     incarnations: {
-      reconcileNamespace: async (_namespace, resources) => resources.map(({ sourceId }) => ({
-        sourceId,
-        resourceIncarnation: "a".repeat(43),
-        credentialIncarnation: "b".repeat(43),
-      })),
+      reconcileNamespace: async (_namespace, resources) =>
+        resources.map(({ sourceId }) => ({
+          sourceId,
+          resourceIncarnation: "a".repeat(43),
+          credentialIncarnation: "b".repeat(43),
+        })),
     },
     getSettings: async () => ({ exaEnabled: true, computerUseEnabled: false }),
-    hasWebCredential: async () => true,
+    webSearchAvailability: async () => ({ ready: true }),
     subagentsAvailable: () => true,
     shellFingerprint: HASH,
     fullMacScopeFingerprint: HASH,
@@ -174,40 +183,63 @@ test("inventory ports use configured chat providers within Bot wire limits", asy
     listSkills: async () => [],
     listApprovedLocations: async () => [],
     incarnations: {
-      reconcileNamespace: async (_namespace, resources) => resources.map(({ sourceId }) => ({
-        sourceId,
-        resourceIncarnation: "a".repeat(43),
-        credentialIncarnation: "b".repeat(43),
-      })),
+      reconcileNamespace: async (_namespace, resources) =>
+        resources.map(({ sourceId }) => ({
+          sourceId,
+          resourceIncarnation: "a".repeat(43),
+          credentialIncarnation: "b".repeat(43),
+        })),
     },
     getSettings: async () => ({ hiddenModelsByProvider }),
-    hasWebCredential: async () => false,
+    webSearchAvailability: async () => ({ ready: false }),
     subagentsAvailable: () => false,
   });
 
   const providers = await ports.listProviders(new AbortController().signal);
   assert.deepEqual(signed, ["ambient-only", "local", "large-a", "large-b"]);
-  assert.deepEqual(providers.map(({ sourceId }) => sourceId), ["local", "large-a", "large-b"]);
-  assert.deepEqual(providers.map(({ models }) => models.length), [1, 256, 255]);
-  assert.equal(providers.reduce((total, provider) => total + provider.models.length, 0), 512);
-  assert.deepEqual(providers[0]?.models.map(({ sourceId }) => sourceId), ["chat"]);
+  assert.deepEqual(
+    providers.map(({ sourceId }) => sourceId),
+    ["local", "large-a", "large-b"],
+  );
+  assert.deepEqual(
+    providers.map(({ models }) => models.length),
+    [1, 256, 255],
+  );
+  assert.equal(
+    providers.reduce((total, provider) => total + provider.models.length, 0),
+    512,
+  );
+  assert.deepEqual(
+    providers[0]?.models.map(({ sourceId }) => sourceId),
+    ["chat"],
+  );
 
   signed.length = 0;
   hiddenModelsByProvider = { "large-b": ["b-299"] };
-  const retained = await ports.listProviders(new AbortController().signal, [{
-    sourceProviderId: "large-b",
-    sourceModelId: "b-299",
-  }]);
+  const retained = await ports.listProviders(new AbortController().signal, [
+    {
+      sourceProviderId: "large-b",
+      sourceModelId: "b-299",
+    },
+  ]);
   assert.deepEqual(signed, ["ambient-only", "local", "large-a", "large-b"]);
-  assert.deepEqual(retained.map(({ sourceId }) => sourceId), ["large-b", "local", "large-a"]);
+  assert.deepEqual(
+    retained.map(({ sourceId }) => sourceId),
+    ["large-b", "local", "large-a"],
+  );
   assert.equal(retained[0]?.models[0]?.sourceId, "b-299");
   assert.equal(retained[0]?.models.length, 256);
-  assert.equal(retained.reduce((total, provider) => total + provider.models.length, 0), 512);
+  assert.equal(
+    retained.reduce((total, provider) => total + provider.models.length, 0),
+    512,
+  );
 
-  const removed = await ports.listProviders(new AbortController().signal, [{
-    sourceProviderId: "large-b",
-    sourceModelId: "removed-model",
-  }]);
+  const removed = await ports.listProviders(new AbortController().signal, [
+    {
+      sourceProviderId: "large-b",
+      sourceModelId: "removed-model",
+    },
+  ]);
   assert.equal(
     removed.some(({ models }) => models.some(({ sourceId }) => sourceId === "removed-model")),
     false,
@@ -216,7 +248,10 @@ test("inventory ports use configured chat providers within Bot wire limits", asy
 
   hiddenModelsByProvider = { local: ["chat"] };
   const withoutHidden = await ports.listProviders(new AbortController().signal);
-  assert.equal(withoutHidden.some(({ sourceId }) => sourceId === "local"), false);
+  assert.equal(
+    withoutHidden.some(({ sourceId }) => sourceId === "local"),
+    false,
+  );
 });
 
 test("inventory ports honor aborts", async () => {
@@ -238,7 +273,7 @@ test("inventory ports honor aborts", async () => {
       reconcileNamespace: async () => [],
     },
     getSettings: async () => ({}),
-    hasWebCredential: async () => false,
+    webSearchAvailability: async () => ({ ready: false }),
     subagentsAvailable: () => false,
   });
   await assert.rejects(ports.listProviders(controller.signal), /stopped/u);

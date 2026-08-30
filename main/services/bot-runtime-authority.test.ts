@@ -255,7 +255,10 @@ function chat(providerId = "provider-a", model = "model-a"): Chat {
   };
 }
 
-function policy(binding?: BoundBotCustomSelection): StoredBotCapabilityPolicy {
+function policy(
+  binding?: BoundBotCustomSelection,
+  webSearchEnabled = false,
+): StoredBotCapabilityPolicy {
   const base = {
     botId: "bot-a",
     authorityStatus: "active" as const,
@@ -268,7 +271,7 @@ function policy(binding?: BoundBotCustomSelection): StoredBotCapabilityPolicy {
   };
   return binding
     ? { ...base, accessMode: "custom", custom: binding.selection, binding }
-    : { ...base, accessMode: "full" };
+    : { ...base, accessMode: "full", webSearchEnabled };
 }
 
 function chatPolicy(custom?: BotCustomSelection): StoredBotChatCapabilityPolicy {
@@ -302,6 +305,7 @@ function fixture(input: {
   currentSnapshot?: BotCapabilityCatalogSnapshot;
   chatWorkspaceId?: string;
   omitModelAuthority?: boolean;
+  fullWebSearchEnabled?: boolean;
 } = {}) {
   const inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
   let currentSnapshot = input.currentSnapshot ?? snapshot();
@@ -336,7 +340,7 @@ function fixture(input: {
     ...chat(),
     ...(input.chatWorkspaceId ? { workspaceId: input.chatWorkspaceId } : {}),
   };
-  let currentPolicy = policy(botBinding);
+  let currentPolicy = policy(botBinding, input.fullWebSearchEnabled);
   let currentChatPolicy = chatPolicy(input.chatCustom);
   let leaseValid = true;
   let revalidateHomeError: Error | undefined;
@@ -454,7 +458,7 @@ async function expectFailure(
   });
 }
 
-test("Full authority contains only currently available exact resources", async () => {
+test("Full authority excludes available Web Search without an explicit grant", async () => {
   const app = fixture();
   const admitted = await app.resolver.admit({
     audienceId: "device-a",
@@ -469,7 +473,7 @@ test("Full authority contains only currently available exact resources", async (
   assert.deepEqual(authority.connections.map(({ sourceId }) => sourceId), ["mcp-a"]);
   assert.deepEqual(authority.connections[0]!.tools.map(({ effect }) => effect), ["read", "mutating"]);
   assert.deepEqual(authority.skills.map(({ sourceId }) => sourceId), ["skill-a"]);
-  assert.deepEqual(authority.otherCapabilities.map(({ kind }) => kind), ["web"]);
+  assert.deepEqual(authority.otherCapabilities.map(({ kind }) => kind), []);
   assert.ok(Object.isFrozen(authority));
   assert.ok(Object.isFrozen(authority.connections));
   assert.ok(Object.isFrozen(authority.connections[0]!.tools));
@@ -477,6 +481,16 @@ test("Full authority contains only currently available exact resources", async (
     sourceProviderId: "provider-a",
     sourceModelId: "model-a",
   }]);
+});
+
+test("Full authority includes Web Search only after its explicit durable grant", async () => {
+  const app = fixture({ fullWebSearchEnabled: true });
+  const { authority } = await app.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
+  assert.deepEqual(authority.otherCapabilities.map(({ kind }) => kind), ["web"]);
 });
 
 test("legacy chats retain visible workspace identity but receive the managed home", async () => {
@@ -533,6 +547,20 @@ test("a Full Bot with a Custom chat reduction keeps Custom access while using Bo
   assert.deepEqual(authority.skills, []);
   assert.deepEqual(authority.otherCapabilities, []);
   assert.deepEqual(authority.connections.map(({ sourceId }) => sourceId), ["mcp-a"]);
+});
+
+test("a Custom chat cannot retain Web Search after its Full Bot ceiling is closed", async () => {
+  const current = snapshot();
+  const app = fixture({
+    chatCustom: selection(current, { other: true }),
+    currentSnapshot: current,
+  });
+  const { authority } = await app.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
+  assert.deepEqual(authority.otherCapabilities, []);
 });
 
 test("Custom shell remains independently enabled when Files is narrower than Full Mac", async () => {

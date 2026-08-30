@@ -24,7 +24,10 @@ test("project automations receive only folder-scoped coding tools and reject MCP
   assert.match(tools, /ctx\.allowMcpTools === true/u);
   assert.match(tools, /cannot use MCP connectors/u);
   assert.doesNotMatch(tools, /configuredMcpTools\(ctx\)/u);
-  assert.doesNotMatch(tools, /buildSchedulingTools|makeExaTool|skillToolKey/u);
+  assert.doesNotMatch(
+    tools,
+    /buildSchedulingTools|makeExaTool|skillToolKey|webSearchService|web_search/u,
+  );
 
   const execution = source("../schedule-execution.ts");
   const client = source("../llm-client.ts");
@@ -37,6 +40,9 @@ test("project automations receive only folder-scoped coding tools and reject MCP
   );
   assert.match(execution, /allowComputerUse: false/u);
   assert.match(execution, /allowSubagents: false/u);
+  assert.match(execution, /scheduledTaskAllowsWebSearch\(task\)/u);
+  assert.match(execution, /await webSearchService\.availability\(\)/u);
+  assert.match(execution, /if \(!webSearchReady\) excluded\.add\("web_search"\)/u);
 });
 
 test("attended Assistant sees MCP identities but never ambient connector tools", () => {
@@ -49,6 +55,7 @@ test("attended Assistant sees MCP identities but never ambient connector tools",
   assert.match(tools, /ctx\.allowMcpTools === true/u);
   assert.match(tools, /configuredMcpTools\(ctx\)/u);
   assert.match(tools, /ctx\.allowScheduling === false/u);
+  assert.doesNotMatch(tools, /makeExaTool|webSearchService|web_search/u);
 
   const client = source("../llm-client.ts");
   assert.match(client, /assistantMcpServerInventory/u);

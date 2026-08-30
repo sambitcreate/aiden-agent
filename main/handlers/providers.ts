@@ -42,6 +42,7 @@ import {
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
+import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
@@ -361,14 +362,38 @@ export function registerProviderHandlers(): void {
     if (providerId !== undefined && !providerRegistry.isBuiltinProvider(providerId)) {
       throw new Error("Only provider catalogs built into Aiden can be refreshed.");
     }
-    return refreshProviderCatalogs(
-      providerId === undefined ? undefined : [providerId],
-    );
+    return refreshProviderCatalogs(providerId === undefined ? undefined : [providerId]);
   });
 
   ipcMain.handle("providers:refreshIfStale", async (event) => {
     providerAuthOwner(event);
     return refreshProviderCatalogs(undefined, false);
+  });
+
+  ipcMain.handle("providers:catalogStatus", () => modelsDevCacheStatus());
+
+  ipcMain.handle("providers:updateCatalogs", async (event) => {
+    providerAuthOwner(event);
+    const inventory = await refreshProviderCatalogs();
+    let modelsDev;
+    try {
+      const refreshed = await modelsDevCacheRuntime.refresh();
+      modelsDev = { ok: true as const, status: refreshed.status };
+    } catch (error) {
+      modelsDev = {
+        ok: false as const,
+        status: await modelsDevCacheStatus(),
+        message:
+          error instanceof Error
+            ? error.message.slice(0, 240)
+            : "The models.dev catalog could not be updated.",
+      };
+    }
+    return {
+      providers: inventory.providers,
+      inventoryErrors: inventory.errors,
+      modelsDev,
+    };
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
@@ -408,12 +433,7 @@ export function registerProviderHandlers(): void {
   );
   ipcMain.handle(
     "settings:setProviderThinking",
-    async (
-      _event,
-      providerIdValue: unknown,
-      modelIdValue: unknown,
-      levelValue: unknown,
-    ) => {
+    async (_event, providerIdValue: unknown, modelIdValue: unknown, levelValue: unknown) => {
       const providerId = asProviderId(providerIdValue);
       const modelId = asString(modelIdValue, "modelId");
       if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
@@ -439,6 +459,9 @@ export function registerProviderHandlers(): void {
   );
   ipcMain.handle("settings:showAllProviderModels", async (_event, providerIdValue: unknown) => {
     return configStore.showAllProviderModels(asProviderId(providerIdValue));
+  });
+  ipcMain.handle("settings:hideAllProviderModels", async (_event, providerIdValue: unknown) => {
+    return configStore.hideAllProviderModels(asProviderId(providerIdValue));
   });
   ipcMain.handle(
     "settings:setGeminiVoiceSetup",
@@ -480,7 +503,8 @@ export function registerProviderHandlers(): void {
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
-    if (typeof p.dictationHoldToTalk === "boolean") next.dictationHoldToTalk = p.dictationHoldToTalk;
+    if (typeof p.dictationHoldToTalk === "boolean")
+      next.dictationHoldToTalk = p.dictationHoldToTalk;
     if (typeof p.dictationSilenceStop === "boolean")
       next.dictationSilenceStop = p.dictationSilenceStop;
     if (typeof p.dictationCleanup === "boolean") next.dictationCleanup = p.dictationCleanup;

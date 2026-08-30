@@ -38,9 +38,14 @@ import type {
 import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "./types.js";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 import { isConfiguredSkill, isConfiguredSkillList } from "./skill-config-limits.js";
-import { normalizeHiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
+import {
+  normalizeHiddenModelsByProvider,
+  withProviderPolicyHidden,
+} from "../../renderer/shared/model-visibility.js";
+import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
+import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -65,6 +70,8 @@ export interface LocalConfigShape {
   seeded: boolean;
   /** Set once the ~/.aiden split has run. Deliberately not `seeded`. */
   aidenDirMigratedAt?: number;
+  /** Durable discriminator for the first Web Search migration. */
+  webSearchProfileKind?: "fresh" | "upgrade";
 }
 
 export interface ProviderModelCacheEntry {
@@ -302,7 +309,10 @@ export function isSkillList(value: unknown): value is Skill[] {
 
 function normalizePortableSkillBounds(value: unknown): PortableConfigShape {
   const normalized = isRecord(value) ? structuredClone(value) : {};
-  if (Object.prototype.hasOwnProperty.call(normalized, "skills") && !isSkillList(normalized.skills)) {
+  if (
+    Object.prototype.hasOwnProperty.call(normalized, "skills") &&
+    !isSkillList(normalized.skills)
+  ) {
     normalized.skills = [];
   }
   return normalized as unknown as PortableConfigShape;
@@ -473,22 +483,44 @@ function normalizeTelegramProfiles(value: unknown): AppSettings["telegramProfile
   if (!isRecord(value)) return undefined;
   const result: NonNullable<AppSettings["telegramProfiles"]> = {};
   for (const [name, raw] of Object.entries(value).slice(0, 16)) {
-    if (!/^[a-z0-9]{1,32}$/u.test(name) || ["default", "main", "active"].includes(name) || !isRecord(raw)) continue;
+    if (
+      !/^[a-z0-9]{1,32}$/u.test(name) ||
+      ["default", "main", "active"].includes(name) ||
+      !isRecord(raw)
+    )
+      continue;
     const profile: NonNullable<AppSettings["telegramProfiles"]>[string] = {};
     if (typeof raw.enabled === "boolean") profile.enabled = raw.enabled;
-    if (Number.isSafeInteger(raw.allowedUserId)) profile.allowedUserId = raw.allowedUserId as number;
-    if (typeof raw.providerId === "string" && raw.providerId.length <= 256) profile.providerId = raw.providerId;
+    if (Number.isSafeInteger(raw.allowedUserId))
+      profile.allowedUserId = raw.allowedUserId as number;
+    if (typeof raw.providerId === "string" && raw.providerId.length <= 256)
+      profile.providerId = raw.providerId;
     if (typeof raw.model === "string" && raw.model.length <= 256) profile.model = raw.model;
     if (isGenerationThinkingLevel(raw.thinkingLevel)) profile.thinkingLevel = raw.thinkingLevel;
     if (typeof raw.draftPreviews === "boolean") profile.draftPreviews = raw.draftPreviews;
-    if (["quiet", "thinking", "tools", "verbose"].includes(String(raw.activity))) profile.activity = raw.activity as NonNullable<typeof profile.activity>;
+    if (["quiet", "thinking", "tools", "verbose"].includes(String(raw.activity)))
+      profile.activity = raw.activity as NonNullable<typeof profile.activity>;
     if (raw.rendering === "rich" || raw.rendering === "html") profile.rendering = raw.rendering;
-    if (["hidden", "mirror", "always"].includes(String(raw.voiceMode))) profile.voiceMode = raw.voiceMode as NonNullable<typeof profile.voiceMode>;
-    if (typeof raw.workspaceId === "string" && raw.workspaceId.length <= 256) profile.workspaceId = raw.workspaceId;
+    if (["hidden", "mirror", "always"].includes(String(raw.voiceMode)))
+      profile.voiceMode = raw.voiceMode as NonNullable<typeof profile.voiceMode>;
+    if (typeof raw.workspaceId === "string" && raw.workspaceId.length <= 256)
+      profile.workspaceId = raw.workspaceId;
     if (typeof raw.threadedMode === "boolean") profile.threadedMode = raw.threadedMode;
     result[name] = profile;
   }
   return result;
+}
+
+/** Gemini usage scope is the sole authority for the Google policy gate. */
+function normalizedSettingsVisibility(settings: {
+  hiddenModelsByProvider?: unknown;
+  geminiUsageScope?: unknown;
+}) {
+  return withProviderPolicyHidden(
+    normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider),
+    GOOGLE_PROVIDER_ID,
+    settings.geminiUsageScope === "transcription_only",
+  );
 }
 
 function normalizeSettingsShape(value: unknown): SettingsShape {
@@ -538,11 +570,16 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   ] as const) {
     keepBoolean(key);
   }
-  if (!Number.isSafeInteger(settings.telegramAllowedUserId)) delete normalized.telegramAllowedUserId;
-  if (!isGenerationThinkingLevel(settings.telegramThinkingLevel)) delete normalized.telegramThinkingLevel;
-  if (!["quiet", "thinking", "tools", "verbose"].includes(String(settings.telegramActivity))) delete normalized.telegramActivity;
-  if (settings.telegramRendering !== "rich" && settings.telegramRendering !== "html") delete normalized.telegramRendering;
-  if (!["hidden", "mirror", "always"].includes(String(settings.telegramVoiceMode))) delete normalized.telegramVoiceMode;
+  if (!Number.isSafeInteger(settings.telegramAllowedUserId))
+    delete normalized.telegramAllowedUserId;
+  if (!isGenerationThinkingLevel(settings.telegramThinkingLevel))
+    delete normalized.telegramThinkingLevel;
+  if (!["quiet", "thinking", "tools", "verbose"].includes(String(settings.telegramActivity)))
+    delete normalized.telegramActivity;
+  if (settings.telegramRendering !== "rich" && settings.telegramRendering !== "html")
+    delete normalized.telegramRendering;
+  if (!["hidden", "mirror", "always"].includes(String(settings.telegramVoiceMode)))
+    delete normalized.telegramVoiceMode;
   const telegramProfiles = normalizeTelegramProfiles(settings.telegramProfiles);
   if (telegramProfiles) normalized.telegramProfiles = telegramProfiles;
   else delete normalized.telegramProfiles;
@@ -564,6 +601,15 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     if (isRecord(settings.assistant)) normalized.assistant = structuredClone(settings.assistant);
     else delete normalized.assistant;
   }
+  if (Object.prototype.hasOwnProperty.call(settings, "webSearch")) {
+    const webSearch = parseWebSearchSettings(settings.webSearch);
+    // A future Web Search document is user-owned durable state. Keep the raw
+    // value in the settings file so an older build cannot turn an unknown
+    // provider/version into a fresh default during an unrelated write. Runtime
+    // consumers project unsupported values away below and therefore never see
+    // this raw document.
+    normalized.webSearch = webSearch ?? structuredClone(settings.webSearch);
+  }
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) normalized.onboarding = onboarding;
   else delete normalized.onboarding;
@@ -575,7 +621,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   ] as const) {
     if (settings[key] !== undefined && !isRecord(settings[key])) delete normalized[key];
   }
-  const hiddenModelsByProvider = normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider);
+  const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
   return {
@@ -590,7 +636,12 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;
-  const hiddenModelsByProvider = normalizeHiddenModelsByProvider(settings.hiddenModelsByProvider);
+  if (settings.webSearch !== undefined) {
+    const webSearch = parseWebSearchSettings(settings.webSearch);
+    if (webSearch) runtime.webSearch = webSearch;
+    else delete runtime.webSearch;
+  }
+  const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete runtime.hiddenModelsByProvider;
   const retainKnownValue = (key: keyof AppSettings, allowed: readonly string[]): void => {
@@ -608,7 +659,8 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   retainKnownValue("telegramRendering", ["rich", "html"]);
   retainKnownValue("telegramVoiceMode", ["hidden", "mirror", "always"]);
   if (!Number.isSafeInteger(settings.telegramAllowedUserId)) delete runtime.telegramAllowedUserId;
-  if (!isGenerationThinkingLevel(settings.telegramThinkingLevel)) delete runtime.telegramThinkingLevel;
+  if (!isGenerationThinkingLevel(settings.telegramThinkingLevel))
+    delete runtime.telegramThinkingLevel;
   const telegramProfiles = normalizeTelegramProfiles(settings.telegramProfiles);
   if (telegramProfiles) runtime.telegramProfiles = telegramProfiles;
   else delete runtime.telegramProfiles;
@@ -648,7 +700,10 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
     } else {
       const providers: Array<[string, Record<string, GenerationThinkingLevel>]> = [];
       let retainedModels = 0;
-      for (const [providerId, rawModels] of Object.entries(settings.providerThinkingByModel).slice(0, 128)) {
+      for (const [providerId, rawModels] of Object.entries(settings.providerThinkingByModel).slice(
+        0,
+        128,
+      )) {
         if (!providerId || providerId.length > 256 || !isRecord(rawModels)) continue;
         const models: Record<string, GenerationThinkingLevel> = {};
         for (const [modelId, level] of Object.entries(rawModels).slice(0, 256)) {
@@ -668,7 +723,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
 
 function normalizeLocalConfigShape(value: unknown): LocalConfigShape {
   const root = isRecord(value) ? structuredClone(value) : {};
-  const { workspaces, seeded, aidenDirMigratedAt, ...rest } = root;
+  const { workspaces, seeded, aidenDirMigratedAt, webSearchProfileKind, ...rest } = root;
   const validWorkspaces = Array.isArray(workspaces) ? workspaces.filter(isWorkspace) : [];
   const workspaceIdCounts = new Map<string, number>();
   for (const workspace of validWorkspaces) {
@@ -679,6 +734,9 @@ function normalizeLocalConfigShape(value: unknown): LocalConfigShape {
     workspaces: validWorkspaces.filter((workspace) => workspaceIdCounts.get(workspace.id) === 1),
     seeded: seeded === true,
     ...(typeof aidenDirMigratedAt === "number" ? { aidenDirMigratedAt } : {}),
+    ...(webSearchProfileKind === "fresh" || webSearchProfileKind === "upgrade"
+      ? { webSearchProfileKind }
+      : {}),
   };
 }
 
@@ -687,7 +745,10 @@ function isLocalConfigShapeSafe(value: unknown): boolean {
   return (
     Array.isArray(value.workspaces) &&
     value.workspaces.every(isWorkspace) &&
-    hasUniqueIds(value.workspaces)
+    hasUniqueIds(value.workspaces) &&
+    (value.webSearchProfileKind === undefined ||
+      value.webSearchProfileKind === "fresh" ||
+      value.webSearchProfileKind === "upgrade")
   );
 }
 
@@ -997,14 +1058,8 @@ export function createPortableConfigStores(
       previous: SettingsShape | null,
       next: SettingsShape,
     ) => void;
-    beforeSettingsWritePublish?: (
-      previous: SettingsShape | null,
-      next: SettingsShape,
-    ) => void;
-    afterSettingsWritePublish?: (
-      previous: SettingsShape | null,
-      next: SettingsShape,
-    ) => void;
+    beforeSettingsWritePublish?: (previous: SettingsShape | null, next: SettingsShape) => void;
+    afterSettingsWritePublish?: (previous: SettingsShape | null, next: SettingsShape) => void;
     beforeProviderModelExternalCacheCommit?: (
       previous: ProviderModelCacheShape | null,
       next: ProviderModelCacheShape,
@@ -1034,8 +1089,7 @@ export function createPortableConfigStores(
       rejectCorruptWrite: true,
       rejectUnsafeWrite: true,
       rejectExternalChanges: true,
-      beforeExternalCacheCommit:
-        testHooks.beforePortableExternalCacheCommit,
+      beforeExternalCacheCommit: testHooks.beforePortableExternalCacheCommit,
       beforeWritePublish: testHooks.beforePortableWritePublish,
       afterWritePublish: testHooks.afterPortableWritePublish,
     },
@@ -1295,6 +1349,12 @@ export function createPortableConfigStores(
       nextLocal.workspaces = Array.isArray(legacy.workspaces) ? legacy.workspaces : [];
       nextLocal.seeded = legacy.seeded === true;
       nextLocal.aidenDirMigratedAt = Date.now();
+      // Preserve a durable fresh-vs-upgrade discriminator for the Web Search
+      // migration. A missing pre-split file is the only unambiguous fresh
+      // profile signal; an existing legacy file is an upgrade even when it
+      // happens to contain no provider or settings values.
+      nextLocal.webSearchProfileKind =
+        loaded.webSearchProfileKind ?? (loadedLegacyContents === null ? "fresh" : "upgrade");
       await local.save(nextLocal as unknown as LocalConfigShape);
     } catch (error) {
       if (error instanceof DataStoreExternalChangeError) return false;

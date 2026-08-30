@@ -5,6 +5,7 @@ import {
   assertSafeScheduledPrompt,
   isSilentAssistantScheduleResponse,
   recommendedScheduledPermission,
+  scheduledTaskAllowsWebSearch,
   scheduledTaskGenerationMode,
   validateScheduledMcpServerIds,
 } from "./schedule-guard.js";
@@ -65,6 +66,11 @@ test("Assistant schedule profile selects the bounded runtime for global and proj
     providerFingerprint: "b".repeat(64),
   };
   assert.doesNotThrow(() => assertAssistantScheduleExecutionBoundary(assistantTask));
+  assert.equal(scheduledTaskAllowsWebSearch(assistantTask), false);
+  assert.throws(
+    () => assertAssistantScheduleExecutionBoundary({ ...assistantTask, webSearchEnabled: true }),
+    /Aiden-created automations/iu,
+  );
   assert.equal(scheduledTaskGenerationMode(assistantTask), "assistant-unattended");
   assert.equal(
     scheduledTaskGenerationMode({ executionProfile: undefined, workspaceId: undefined }),
@@ -120,6 +126,29 @@ test("Assistant schedule profile selects the bounded runtime for global and proj
       }),
     /provider\/model-pinned LLM tasks/iu,
   );
+});
+
+test("ordinary schedules require an exact Web Search grant", () => {
+  assert.equal(scheduledTaskAllowsWebSearch({
+    mode: "llm",
+    executionProfile: undefined,
+    webSearchEnabled: undefined,
+  }), false);
+  assert.equal(scheduledTaskAllowsWebSearch({
+    mode: "llm",
+    executionProfile: undefined,
+    webSearchEnabled: false,
+  }), false);
+  assert.equal(scheduledTaskAllowsWebSearch({
+    mode: "llm",
+    executionProfile: undefined,
+    webSearchEnabled: true,
+  }), true);
+  assert.equal(scheduledTaskAllowsWebSearch({
+    mode: "script",
+    executionProfile: undefined,
+    webSearchEnabled: true,
+  }), false);
 });
 
 test("scheduled MCP identities are bounded, normalized, and deduplicated", () => {

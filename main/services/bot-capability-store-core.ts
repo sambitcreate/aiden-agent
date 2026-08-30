@@ -101,6 +101,8 @@ export type StoredBotCapabilityPolicy = StoredBotPolicyBase &
         binding?: never;
         /** Main-only durable model authority. Older Full policies may omit it. */
         model?: StoredBotModelAuthority;
+        /** Explicit authority freeze. Legacy Full policies omit this and normalize closed. */
+        webSearchEnabled?: boolean;
       }
     | {
         accessMode: "custom";
@@ -125,10 +127,7 @@ interface StoredBotChatPolicyBase extends StoredRevision {
 }
 
 export type StoredBotChatCapabilityPolicy = StoredBotChatPolicyBase &
-  (
-    | { mode: "inherit"; custom?: never }
-    | { mode: "custom"; custom: BotCustomSelection }
-  );
+  ({ mode: "inherit"; custom?: never } | { mode: "custom"; custom: BotCustomSelection });
 
 export interface BotArchivedReadAuthoritySnapshot {
   policy: StoredBotCapabilityPolicy;
@@ -246,11 +245,11 @@ function parseIncarnationToken(value: unknown): string {
   return value;
 }
 
-function parseIncarnationNamespace(
-  value: unknown,
-): StoredBotCapabilityIncarnation[] {
+function parseIncarnationNamespace(value: unknown): StoredBotCapabilityIncarnation[] {
   if (!Array.isArray(value) || value.length > MAX_INCARNATIONS_PER_NAMESPACE) {
-    throw new BotCapabilityUnavailableError("Bot capability incarnation storage exceeds its bound.");
+    throw new BotCapabilityUnavailableError(
+      "Bot capability incarnation storage exceeds its bound.",
+    );
   }
   const seen = new Set<string>();
   let previousKey: string | undefined;
@@ -297,10 +296,7 @@ function parseIncarnationNamespace(
 }
 
 function parseIncarnations(value: unknown): StoredBotCapabilityIncarnations {
-  if (
-    !isRecord(value) ||
-    !exactKeys(value, ["provider", "mcp", "skill"])
-  ) {
+  if (!isRecord(value) || !exactKeys(value, ["provider", "mcp", "skill"])) {
     throw new BotCapabilityUnavailableError("Bot capability incarnation storage is invalid.");
   }
   return {
@@ -328,7 +324,11 @@ function parseRevision(value: Record<string, unknown>, stateSequence: number): S
 }
 
 function parseStoredBotModelAuthority(value: unknown): StoredBotModelAuthority {
-  if (!isRecord(value) || !exactKeys(value, ["selection", "binding"]) || !isRecord(value.selection)) {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["selection", "binding"]) ||
+    !isRecord(value.selection)
+  ) {
     throw new BotCapabilityUnavailableError("Bot model authority storage is invalid.");
   }
   if (!exactKeys(value.selection, ["providerId", "modelId"])) {
@@ -340,10 +340,7 @@ function parseStoredBotModelAuthority(value: unknown): StoredBotModelAuthority {
     throw new BotCapabilityUnavailableError("Bot model selection storage is invalid.");
   }
   const binding = parseBoundBotProviderModel(value.binding);
-  if (
-    binding.providerOption.id !== providerId ||
-    binding.modelOption.id !== modelId
-  ) {
+  if (binding.providerOption.id !== providerId || binding.modelOption.id !== modelId) {
     throw new BotCapabilityUnavailableError(
       "Bot model selection does not match its private binding.",
     );
@@ -354,9 +351,7 @@ function parseStoredBotModelAuthority(value: unknown): StoredBotModelAuthority {
   };
 }
 
-function cloneStoredBotModelAuthority(
-  value: StoredBotModelAuthority,
-): StoredBotModelAuthority {
+function cloneStoredBotModelAuthority(value: StoredBotModelAuthority): StoredBotModelAuthority {
   return {
     selection: { ...value.selection },
     binding: cloneBoundBotProviderModel(value.binding),
@@ -404,13 +399,14 @@ function parsePolicy(value: unknown, stateSequence: number): StoredBotCapability
       common,
       value.accessMode === "custom"
         ? ["custom", "binding", "visionModel"]
-        : ["model", "visionModel"],
+        : ["model", "visionModel", "webSearchEnabled"],
     ) ||
     (value.accessMode !== "full" && value.accessMode !== "custom") ||
     !safeInteger(value.policyEpoch, 1) ||
     !safeTimestamp(value.createdAt) ||
     !safeTimestamp(value.updatedAt) ||
-    value.updatedAt < value.createdAt
+    value.updatedAt < value.createdAt ||
+    (value.webSearchEnabled !== undefined && typeof value.webSearchEnabled !== "boolean")
   ) {
     throw new BotCapabilityUnavailableError("Bot access policy storage is invalid.");
   }
@@ -431,6 +427,7 @@ function parsePolicy(value: unknown, stateSequence: number): StoredBotCapability
     return {
       ...base,
       accessMode: "full",
+      webSearchEnabled: value.webSearchEnabled === true,
       ...(value.model === undefined ? {} : { model: parseStoredBotModelAuthority(value.model) }),
     };
   }
@@ -485,10 +482,7 @@ function parseChatPolicy(value: unknown, stateSequence: number): StoredBotChatCa
     : { ...base, mode: "inherit" };
 }
 
-function parseNotice(
-  value: unknown,
-  stateSequence: number,
-): StoredBotNoticeAcceptance {
+function parseNotice(value: unknown, stateSequence: number): StoredBotNoticeAcceptance {
   if (
     !isRecord(value) ||
     !exactKeys(value, [
@@ -561,7 +555,9 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
     !Array.isArray(value.notices) ||
     value.notices.length > BOT_CAPABILITY_LIMITS.noticeAudiences
   ) {
-    throw new BotCapabilityUnavailableError("Bot access storage has an unsupported version or shape.");
+    throw new BotCapabilityUnavailableError(
+      "Bot access storage has an unsupported version or shape.",
+    );
   }
   const policies = value.policies.map((entry) => parsePolicy(entry, value.sequence as number));
   const chats = value.chats.map((entry) => parseChatPolicy(entry, value.sequence as number));
@@ -569,10 +565,14 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
   const incarnations = parseIncarnations(value.incarnations);
   const legacyMigration = parseLegacyMigration(value.legacyMigration, value.sequence as number);
   if (new Set(policies.map(({ botId }) => botId)).size !== policies.length) {
-    throw new BotCapabilityUnavailableError("Bot access storage contains duplicate Bot identities.");
+    throw new BotCapabilityUnavailableError(
+      "Bot access storage contains duplicate Bot identities.",
+    );
   }
   if (new Set(chats.map(({ chatId }) => chatId)).size !== chats.length) {
-    throw new BotCapabilityUnavailableError("Bot access storage contains duplicate chat identities.");
+    throw new BotCapabilityUnavailableError(
+      "Bot access storage contains duplicate chat identities.",
+    );
   }
   const revisions = [
     ...policies.map(({ revision }) => revision),
@@ -584,12 +584,11 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
     throw new BotCapabilityUnavailableError("Bot access storage contains duplicate revisions.");
   }
   if (new Set(notices.map(({ audienceId }) => audienceId)).size !== notices.length) {
-    throw new BotCapabilityUnavailableError("Bot access notice storage contains duplicate audiences.");
+    throw new BotCapabilityUnavailableError(
+      "Bot access notice storage contains duplicate audiences.",
+    );
   }
-  if (
-    value.sequence === 0 &&
-    Object.values(incarnations).some((entries) => entries.length > 0)
-  ) {
+  if (value.sequence === 0 && Object.values(incarnations).some((entries) => entries.length > 0)) {
     throw new BotCapabilityUnavailableError("Bot capability incarnation history is invalid.");
   }
   const policyByBot = new Map(policies.map((policy) => [policy.botId, policy] as const));
@@ -677,8 +676,7 @@ export function projectBotAccessView(
     botId,
     revision: policy.revision,
     policyEpoch: `epoch:${policy.policyEpoch}`,
-    summary:
-      policy.accessMode === "full" ? BOT_ACCESS_SUMMARIES.full : BOT_ACCESS_SUMMARIES.custom,
+    summary: policy.accessMode === "full" ? BOT_ACCESS_SUMMARIES.full : BOT_ACCESS_SUMMARIES.custom,
   };
   return policy.accessMode === "custom"
     ? { ...base, accessMode: "custom", custom: cloneBotCustomSelection(policy.custom) }
@@ -1029,7 +1027,9 @@ export class BotCapabilityStateEditor {
     confirmedExplicitFull: true;
   }): BotAccessView[] {
     if (input.confirmedExplicitFull !== true) {
-      throw new BotCapabilityUnavailableError("Legacy Bot migration must explicitly choose Full Access.");
+      throw new BotCapabilityUnavailableError(
+        "Legacy Bot migration must explicitly choose Full Access.",
+      );
     }
     const catalogRevision = assertBotRevision(input.catalogRevision, "catalog revision");
     const audit = this.auditBotInventory(input.botIds);
@@ -1059,7 +1059,9 @@ export class BotCapabilityStateEditor {
       ([chatId, botId]) => storedChats.has(chatId) && storedChats.get(chatId) !== botId,
     );
     if (orphanedChats.length > 0 || mismatchedChat) {
-      throw new BotCapabilityUnavailableError("Bot chat access inventory does not match chat storage.");
+      throw new BotCapabilityUnavailableError(
+        "Bot chat access inventory does not match chat storage.",
+      );
     }
     if (this.state.legacyMigration) {
       if (audit.missingBotIds.length > 0 || missingChats.length > 0) {
@@ -1080,6 +1082,7 @@ export class BotCapabilityStateEditor {
         botId,
         authorityStatus: archivedBots.has(botId) ? "archived" : "active",
         accessMode: "full",
+        webSearchEnabled: false,
         catalogRevision,
         policyEpoch: 1,
         ...revision,
@@ -1156,6 +1159,7 @@ export class BotCapabilityStateEditor {
         : {
             ...common,
             accessMode: "full",
+            webSearchEnabled: access.webSearchEnabled === true,
             ...(model ? { model: cloneStoredBotModelAuthority(model) } : {}),
           },
     );
@@ -1184,15 +1188,16 @@ export class BotCapabilityStateEditor {
     const previousModel = storedBotModelAuthority(policy);
     const previousVisionModel = policy.visionModel;
     const fullModel = this.modelForFullAccess(access, input.modelBinding, policy);
-    const nextModel = access.accessMode === "custom"
-      ? {
-          selection: {
-            providerId: access.custom.providerId,
-            modelId: access.custom.modelId,
-          },
-          binding: cloneBoundBotProviderModel(binding!.provider),
-        }
-      : fullModel;
+    const nextModel =
+      access.accessMode === "custom"
+        ? {
+            selection: {
+              providerId: access.custom.providerId,
+              modelId: access.custom.modelId,
+            },
+            binding: cloneBoundBotProviderModel(binding!.provider),
+          }
+        : fullModel;
     const nextVisionModel = this.visionModelForAccess(
       access,
       input.visionModelBinding,
@@ -1201,15 +1206,25 @@ export class BotCapabilityStateEditor {
     const modelChanged =
       modelAuthorityFingerprint(previousModel) !== modelAuthorityFingerprint(nextModel);
     const visionModelChanged =
-      modelAuthorityFingerprint(previousVisionModel) !==
-        modelAuthorityFingerprint(nextVisionModel);
+      modelAuthorityFingerprint(previousVisionModel) !== modelAuthorityFingerprint(nextVisionModel);
     const bindingChanged =
       policy.accessMode === "custom" &&
       access.accessMode === "custom" &&
       boundBotCustomSelectionFingerprint(policy.binding) !==
         boundBotCustomSelectionFingerprint(binding!);
-    const narrowed = botPolicyTransitionNarrows(policy, access) || bindingChanged;
-    const authorityChanged = narrowed || modelChanged || visionModelChanged;
+    const fullWebSearchEnabled =
+      access.accessMode === "full"
+        ? (access.webSearchEnabled ??
+          (policy.accessMode === "full" ? policy.webSearchEnabled === true : false))
+        : false;
+    const previousFullWebSearchEnabled =
+      policy.accessMode === "full" && policy.webSearchEnabled === true;
+    const webSearchChanged =
+      previousFullWebSearchEnabled !== (access.accessMode === "full" && fullWebSearchEnabled);
+    const webSearchNarrowed = previousFullWebSearchEnabled && !fullWebSearchEnabled;
+    const narrowed =
+      botPolicyTransitionNarrows(policy, access) || bindingChanged || webSearchNarrowed;
+    const authorityChanged = narrowed || modelChanged || visionModelChanged || webSearchChanged;
     if (authorityChanged && policy.policyEpoch >= Number.MAX_SAFE_INTEGER) {
       throw new Error("Bot capability policy epoch is exhausted.");
     }
@@ -1218,6 +1233,7 @@ export class BotCapabilityStateEditor {
       policy.catalogRevision === access.catalogRevision &&
       !modelChanged &&
       !visionModelChanged &&
+      !webSearchChanged &&
       (policy.accessMode === "full" ||
         (access.accessMode === "custom" &&
           botCustomSelectionsEqual(policy.custom, access.custom) &&
@@ -1242,9 +1258,7 @@ export class BotCapabilityStateEditor {
       ...this.issueRevision("policy"),
       createdAt: policy.createdAt,
       updatedAt: Math.max(policy.updatedAt, timestamp),
-      ...(nextVisionModel
-        ? { visionModel: cloneStoredBotModelAuthority(nextVisionModel) }
-        : {}),
+      ...(nextVisionModel ? { visionModel: cloneStoredBotModelAuthority(nextVisionModel) } : {}),
     } as StoredBotPolicyBase;
     const nextPolicy: StoredBotCapabilityPolicy =
       access.accessMode === "custom"
@@ -1257,6 +1271,7 @@ export class BotCapabilityStateEditor {
         : {
             ...common,
             accessMode: "full",
+            webSearchEnabled: fullWebSearchEnabled,
             ...(fullModel ? { model: cloneStoredBotModelAuthority(fullModel) } : {}),
           };
     this.state.policies[policyIndex] = nextPolicy;
@@ -1267,17 +1282,14 @@ export class BotCapabilityStateEditor {
         const chat = this.state.chats[index]!;
         if (chat.botId !== policy.botId || chat.mode !== "custom") continue;
         if (input.canonicalChatId !== undefined && chat.chatId !== input.canonicalChatId) continue;
-        const custom = narrowed && nextPolicy.accessMode === "custom"
-          ? intersectBotCustomSelections(
-              chat.custom,
-              nextPolicy.custom,
-              input.catalog.fileScopes,
-            )
-          : {
-              ...cloneBotCustomSelection(chat.custom),
-              providerId: nextModel!.selection.providerId,
-              modelId: nextModel!.selection.modelId,
-            };
+        const custom =
+          narrowed && nextPolicy.accessMode === "custom"
+            ? intersectBotCustomSelections(chat.custom, nextPolicy.custom, input.catalog.fileScopes)
+            : {
+                ...cloneBotCustomSelection(chat.custom),
+                providerId: nextModel!.selection.providerId,
+                modelId: nextModel!.selection.modelId,
+              };
         if (botCustomSelectionsEqual(custom, chat.custom)) continue;
         if (chat.policyEpoch >= Number.MAX_SAFE_INTEGER) {
           throw new Error("Bot chat capability policy epoch is exhausted.");
@@ -1470,10 +1482,7 @@ export class BotCapabilityStateEditor {
    * Create-journal compensation only. Once identity commits, policy deletion is
    * forbidden; archive and ordinary delete retain the explicit policy.
    */
-  rollbackUncommittedBotPolicy(input: {
-    botId: string;
-    identityCommitted: false;
-  }): boolean {
+  rollbackUncommittedBotPolicy(input: { botId: string; identityCommitted: false }): boolean {
     if (input.identityCommitted !== false) {
       throw new BotCapabilityUnavailableError(
         "A committed Bot identity cannot hard-delete its access policy.",
@@ -1497,7 +1506,9 @@ export class BotCapabilityStateEditor {
       throw new BotCapabilityUnavailableError("Bot capability incarnation namespace is invalid.");
     }
     if (resources.length > MAX_INCARNATIONS_PER_NAMESPACE) {
-      throw new BotCapabilityUnavailableError("Bot capability incarnation request exceeds its bound.");
+      throw new BotCapabilityUnavailableError(
+        "Bot capability incarnation request exceeds its bound.",
+      );
     }
     const partition = options.partition ?? "global";
     if (!INCARNATION_ID.test(partition)) {
@@ -1695,21 +1706,19 @@ export class BotCapabilityStateEditor {
    * effect lease, so its caller must serialize the complete read with Bot
    * lifecycle/policy mutations and independently fence live inventory.
    */
-  inspectArchivedReadAuthority(
-    botId: string,
-    chatId: string,
-  ): BotArchivedReadAuthoritySnapshot {
+  inspectArchivedReadAuthority(botId: string, chatId: string): BotArchivedReadAuthoritySnapshot {
     const policy = this.policy(botId);
     if (policy.authorityStatus !== "archived") {
       throw new BotCapabilityUnavailableError("This Bot is not archived.");
     }
     const chat = this.chat(chatId);
     if (chat.botId !== policy.botId) throw new BotCapabilityUnavailableError();
-    const effectiveCustom = chat.mode === "custom"
-      ? chat.custom
-      : policy.accessMode === "custom"
-        ? policy.custom
-        : undefined;
+    const effectiveCustom =
+      chat.mode === "custom"
+        ? chat.custom
+        : policy.accessMode === "custom"
+          ? policy.custom
+          : undefined;
     return {
       policy: clonePolicy(policy),
       chat: cloneChatPolicy(chat),

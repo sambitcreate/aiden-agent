@@ -248,6 +248,12 @@ test("legacy migration writes explicit Full records once and never repairs a lat
   });
   assert.deepEqual(migrated.map(({ accessMode }) => accessMode), ["full", "full"]);
   assert.equal(state.policies.every(({ accessMode }) => accessMode === "full"), true);
+  assert.equal(
+    state.policies.every(
+      (policy) => policy.accessMode !== "full" || policy.webSearchEnabled === false,
+    ),
+    true,
+  );
   assert.ok(state.legacyMigration);
   assert.deepEqual(
     editor.migrateLegacyBotsToFull({
@@ -269,6 +275,48 @@ test("legacy migration writes explicit Full records once and never repairs a lat
     /already sealed/u,
   );
   assert.equal(editor.auditBotInventory(["bot:legacy-a", "bot:legacy-b"]).complete, false);
+});
+
+test("Full Bot Web Search is a durable explicit grant and legacy omission normalizes closed", () => {
+  const { state, editor } = fixture();
+  const created = editor.createBotPolicy({
+    botId: "bot:web-authority",
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      webSearchEnabled: true,
+    },
+  });
+  const granted = state.policies.find(({ botId }) => botId === created.botId)!;
+  assert.equal(granted.accessMode === "full" && granted.webSearchEnabled, true);
+
+  const revoked = editor.updateBotPolicy({
+    botId: created.botId,
+    expectedRevision: created.revision,
+    catalog: catalog(),
+    access: {
+      accessMode: "full",
+      catalogRevision,
+      confirmedForeground: true,
+      webSearchEnabled: false,
+    },
+  });
+  assert.equal(revoked.narrowed, true);
+  assert.equal(revoked.authorityChanged, true);
+  assert.equal(state.policies[0]?.accessMode === "full" && state.policies[0].webSearchEnabled, false);
+
+  const legacy = structuredClone(state) as unknown as {
+    policies: Array<Record<string, unknown>>;
+  };
+  delete legacy.policies[0]!.webSearchEnabled;
+  const normalized = parseBotCapabilityState(legacy);
+  assert.equal(
+    normalized.policies[0]?.accessMode === "full" &&
+      normalized.policies[0].webSearchEnabled,
+    false,
+  );
 });
 
 test("legacy migration atomically seals historical chat policies and never widens a lost reduction", () => {
