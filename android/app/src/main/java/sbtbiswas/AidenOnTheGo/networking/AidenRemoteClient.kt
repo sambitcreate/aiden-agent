@@ -1190,10 +1190,12 @@ class AidenRemoteClient(
 
     suspend fun runScheduledTask(
         id: String,
+        revision: String,
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenScheduledRunAccepted = executeRequest(
         "/scheduled-tasks/$id/run",
         method = "POST",
+        ifMatchRevision = revision,
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->

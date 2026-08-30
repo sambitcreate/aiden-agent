@@ -270,7 +270,7 @@ Git mutations reuse the workspace operation registry and mutation gate plus cano
 - `GET /scheduled-tasks/scripts?workspaceId=...`
 - `GET|PATCH /scheduled-tasks/settings`
 
-Edits use `If-Match`/`expectedUpdatedAt`; settings use an equivalent revision. `run` requires an idempotency key and returns `202` with a durable `runId`. Socket loss does not cancel execution. Status is observed in run history. Cancellation follows existing remove/pause/global-disable/revocation/shutdown policy; v1 adds no bespoke remote cancel action.
+Edits and task actions (`pause`, `resume`, and `run`) use `If-Match`/`expectedUpdatedAt`; settings use an equivalent revision. `run` also requires an idempotency key and returns `202` with a durable `runId`. Older clients that omit `If-Match` fail closed with `400` and must refresh before starting a run. Socket loss does not cancel execution. Status is observed in run history. Cancellation follows existing remove/pause/global-disable/revocation/shutdown policy; v1 adds no bespoke remote cancel action.
 
 ## 6. SSE envelope and ordering
 

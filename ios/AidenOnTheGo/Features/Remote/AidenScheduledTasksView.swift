@@ -425,7 +425,11 @@ final class AidenScheduledTasksModel {
             return
         }
         do {
-            let accepted = try await coordinator.remoteClient(for: context).runScheduledTask(id: task.id, idempotencyKey: key)
+            let accepted = try await coordinator.remoteClient(for: context).runScheduledTask(
+                id: task.id,
+                revision: task.revision,
+                idempotencyKey: key
+            )
             guard access(for: context).canRead, access(for: context).canWrite else {
                 await load()
                 return

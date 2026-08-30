@@ -617,8 +617,8 @@ async function fixture(options: {
         return { id: taskId, revision: "rev-task-2" } as never;
       },
       resume: async () => ({}) as never,
-      run: async (deviceId, taskId, key) => {
-        calls.push(`schedule-run:${deviceId}:${taskId}:${key}`);
+      run: async (deviceId, taskId, revision, key) => {
+        calls.push(`schedule-run:${deviceId}:${taskId}:${revision}:${key}`);
         return { taskId, runId: "run-1", status: "accepted" as const, acceptedAt: new Date(1_000).toISOString() };
       },
       runs: async (taskId) => {
@@ -2048,9 +2048,15 @@ test("authenticated scheduled-task routes enforce capability and mutation precon
     });
     assert.equal(paused.status, 202);
 
-    const run = await fetch(`${app.base}/scheduled-tasks/task-1/run`, {
+    const missingRunRevision = await fetch(`${app.base}/scheduled-tasks/task-1/run`, {
       method: "POST",
       headers: { ...headers, "idempotency-key": key },
+    });
+    assert.equal(missingRunRevision.status, 400);
+
+    const run = await fetch(`${app.base}/scheduled-tasks/task-1/run`, {
+      method: "POST",
+      headers: { ...headers, "idempotency-key": key, "if-match": "rev-task-1" },
     });
     assert.equal(run.status, 202);
     assert.equal((await run.json()).runId, "run-1");
@@ -2062,7 +2068,7 @@ test("authenticated scheduled-task routes enforce capability and mutation precon
       "schedule-scripts:device-authorized-12345678:workspace-1",
       `schedule-create:device-authorized-12345678:${key}`,
       `schedule-pause:device-authorized-12345678:task-1:rev-task-1:${key}`,
-      `schedule-run:device-authorized-12345678:task-1:${key}`,
+      `schedule-run:device-authorized-12345678:task-1:rev-task-1:${key}`,
       "schedule-runs:task-1",
     ]);
   } finally {

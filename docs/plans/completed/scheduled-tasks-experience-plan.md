@@ -72,8 +72,9 @@ search, inspect, pause, resume, run, edit, and remove tasks across desktop, iOS,
   dropped or run with guessed authority.
 - Assistant execution profiles and exact MCP/provider fingerprints are unchanged. Ordinary UI or
   Remote edits cannot widen those protected profiles.
-- Native clients continue to consume the v1 Remote task and approval envelopes; presentation-only
-  enhancements do not add a wire migration.
+- Native clients continue to consume the v1 Remote task and approval envelopes. Remote run-now
+  now requires the existing `If-Match` precondition; current clients send it, while older clients
+  fail closed with `400` instead of running a definition newer than the one being displayed.
 - Existing chat and desktop mutations now bind the exact `updatedAt` snapshot. Legacy global Full
   LLM tasks freeze inherited enabled MCP identities on their first approved edit and cannot be
   run or resumed from chat until that migration is reviewed.

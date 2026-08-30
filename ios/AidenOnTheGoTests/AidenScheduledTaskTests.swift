@@ -494,8 +494,8 @@ final class AidenScheduledTaskTests: XCTestCase {
         _ = try await client.updateScheduledTask(id: "task-1", revision: "rev_task_1", mutation: mutation)
         _ = try await client.pauseScheduledTask(id: "task-1", revision: "rev_task_1")
         let key = UUID()
-        _ = try await client.runScheduledTask(id: "task-1", idempotencyKey: key)
-        _ = try await client.runScheduledTask(id: "task-1", idempotencyKey: key)
+        _ = try await client.runScheduledTask(id: "task-1", revision: "rev_task_1", idempotencyKey: key)
+        _ = try await client.runScheduledTask(id: "task-1", revision: "rev_task_1", idempotencyKey: key)
         _ = try await client.scheduledRuns(taskId: "task-1")
         _ = try await client.scheduledScripts(workspaceId: "workspace-1")
         let mcpServers = try await client.scheduledMcpServers()
@@ -512,8 +512,12 @@ final class AidenScheduledTaskTests: XCTestCase {
         let pause = try XCTUnwrap(requests.first { $0.url?.path.hasSuffix("/pause") == true })
         XCTAssertEqual(pause.value(forHTTPHeaderField: "If-Match"), "rev_task_1")
         XCTAssertNotNil(pause.value(forHTTPHeaderField: "Idempotency-Key"))
-        let runKeys = requests.filter { $0.url?.path.hasSuffix("/run") == true }
-            .compactMap { $0.value(forHTTPHeaderField: "Idempotency-Key") }
+        let runRequests = requests.filter { $0.url?.path.hasSuffix("/run") == true }
+        XCTAssertEqual(
+            runRequests.compactMap { $0.value(forHTTPHeaderField: "If-Match") },
+            ["rev_task_1", "rev_task_1"]
+        )
+        let runKeys = runRequests.compactMap { $0.value(forHTTPHeaderField: "Idempotency-Key") }
         XCTAssertEqual(runKeys, [key.uuidString.lowercased(), key.uuidString.lowercased()])
         let scripts = try XCTUnwrap(requests.first { $0.url?.path.hasSuffix("/scripts") == true })
         XCTAssertEqual(URLComponents(url: scripts.url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "workspace-1")

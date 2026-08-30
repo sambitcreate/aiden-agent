@@ -1623,11 +1623,11 @@ export function createAidenRemoteRequestHandler(
         const taskId = scheduledActionMatch[1]!;
         const action = scheduledActionMatch[2]!;
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         if (action === "run") {
-          writeJson(response, 202, await dependencies.schedules.run(device.id, taskId, key));
+          writeJson(response, 202, await dependencies.schedules.run(device.id, taskId, revision, key));
           return;
         }
-        const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         writeJson(response, 202, action === "pause"
           ? await dependencies.schedules.pause(device.id, taskId, revision, key)
           : await dependencies.schedules.resume(device.id, taskId, revision, key));

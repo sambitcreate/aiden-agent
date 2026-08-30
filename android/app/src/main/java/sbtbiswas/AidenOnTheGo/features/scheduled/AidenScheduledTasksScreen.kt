@@ -284,7 +284,7 @@ fun AidenScheduledTasksScreen(
                     val runKey = pendingRunKeys.keyFor(selectedTask.id)
                     scope.launch {
                         try {
-                            activeClient.runScheduledTask(selectedTask.id, runKey)
+                            activeClient.runScheduledTask(selectedTask.id, selectedTask.revision, runKey)
                             pendingRunKeys.accepted(selectedTask.id)
                             if (!isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_WRITE)) return@launch
                             refresh()

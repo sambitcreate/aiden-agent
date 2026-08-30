@@ -2780,6 +2780,9 @@
             "$ref": "#/components/parameters/TaskId"
           },
           {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
             "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],

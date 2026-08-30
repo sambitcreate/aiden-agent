@@ -343,15 +343,15 @@ export class AidenRemoteScheduleService {
     } catch (error) { mapError(error); }
   }
 
-  async run(deviceId: string, taskId: string, key: string) {
+  async run(deviceId: string, taskId: string, revision: string, key: string) {
     const id = safeTaskId(taskId);
     const runId = `run_${randomBytes(24).toString("base64url")}`;
     try {
       return await this.executeIdempotent(
         { deviceId, route: `POST /scheduled-tasks/${id}/run`, resourceId: id, key },
-        {},
+        { revision },
         async () => {
-          await this.options.application.runNow(id, runId);
+          await this.options.application.runNow(id, runId, revision);
           return { taskId: id, runId, status: "accepted" as const, acceptedAt: new Date(this.now()).toISOString() };
         },
       );
