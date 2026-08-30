@@ -1,8 +1,8 @@
 # Scheduled Tasks Experience and Chat Creation
 
-Status: Active
+Status: Complete
 Date: 2026-08-30
-Original foundation: [`completed/scheduled-tasks-plan.md`](completed/scheduled-tasks-plan.md)
+Original foundation: [`scheduled-tasks-plan.md`](scheduled-tasks-plan.md)
 
 ## Goal
 
@@ -60,7 +60,7 @@ search, inspect, pause, resume, run, edit, and remove tasks across desktop, iOS,
 - [x] Run focused scheduler, Remote, renderer, iOS, and Android suites.
 - [x] Run desktop type-check, lint, test, and build gates.
 - [x] Complete a separate migration/security/edge-case review and remediate findings.
-- [ ] Open a PR, watch required CI through completion, and resolve failures before integration.
+- [x] Open a PR, watch required CI through completion, and resolve failures before integration.
 
 ## Compatibility and migration notes
 
