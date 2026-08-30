@@ -1,6 +1,6 @@
 # Linux Desktop Support
 
-Status: Active — implementation and native x64/arm64 acceptance complete 2026-08-22; hosted CI acceptance pending
+Status: Complete — implementation, native acceptance, and hosted x64/arm64/Fedora acceptance complete 2026-08-30
 
 ## Goal
 
@@ -165,10 +165,13 @@ review, and archive this plan only when the complete acceptance matrix passes.
   `Running`/online status checks and actionable detection of Linux's required
   one-time Tailscale operator grant.
 
-The plan remains Active only until the checked-in hosted x64/arm64 Linux jobs
-repeat the completed native acceptance matrix. The local OrbStack runs exercised
-the actual target architectures and packaged artifacts; the remaining gate is
-release-infrastructure confirmation rather than an implementation gap.
+Hosted run `33338723528` completed the release-infrastructure gate: Linux x64,
+Linux arm64, the Fedora RPM artifact consumer, deterministic Electron E2E,
+Android, and the full verification job all passed. The final CI hardening uses
+SIGKILL for bounded Electron smoke teardown and hands Fedora a checksum-verified
+RPM built against the Ubuntu baseline, preserving the strict glibc 2.34 floor.
+Together with the native acceptance matrix above, this completes the plan's
+original delivery scope.
 
 ## Acceptance criteria
 
