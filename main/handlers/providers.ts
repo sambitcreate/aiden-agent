@@ -361,9 +361,7 @@ export function registerProviderHandlers(): void {
     if (providerId !== undefined && !providerRegistry.isBuiltinProvider(providerId)) {
       throw new Error("Only provider catalogs built into Aiden can be refreshed.");
     }
-    return refreshProviderCatalogs(
-      providerId === undefined ? undefined : [providerId],
-    );
+    return refreshProviderCatalogs(providerId === undefined ? undefined : [providerId]);
   });
 
   ipcMain.handle("providers:refreshIfStale", async (event) => {
@@ -408,12 +406,7 @@ export function registerProviderHandlers(): void {
   );
   ipcMain.handle(
     "settings:setProviderThinking",
-    async (
-      _event,
-      providerIdValue: unknown,
-      modelIdValue: unknown,
-      levelValue: unknown,
-    ) => {
+    async (_event, providerIdValue: unknown, modelIdValue: unknown, levelValue: unknown) => {
       const providerId = asProviderId(providerIdValue);
       const modelId = asString(modelIdValue, "modelId");
       if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
@@ -439,6 +432,9 @@ export function registerProviderHandlers(): void {
   );
   ipcMain.handle("settings:showAllProviderModels", async (_event, providerIdValue: unknown) => {
     return configStore.showAllProviderModels(asProviderId(providerIdValue));
+  });
+  ipcMain.handle("settings:hideAllProviderModels", async (_event, providerIdValue: unknown) => {
+    return configStore.hideAllProviderModels(asProviderId(providerIdValue));
   });
   ipcMain.handle(
     "settings:setGeminiVoiceSetup",
@@ -480,7 +476,8 @@ export function registerProviderHandlers(): void {
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
-    if (typeof p.dictationHoldToTalk === "boolean") next.dictationHoldToTalk = p.dictationHoldToTalk;
+    if (typeof p.dictationHoldToTalk === "boolean")
+      next.dictationHoldToTalk = p.dictationHoldToTalk;
     if (typeof p.dictationSilenceStop === "boolean")
       next.dictationSilenceStop = p.dictationSilenceStop;
     if (typeof p.dictationCleanup === "boolean") next.dictationCleanup = p.dictationCleanup;

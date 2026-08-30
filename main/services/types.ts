@@ -13,6 +13,7 @@ import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.j
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
+import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -514,7 +515,7 @@ export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
-  hiddenModelsByProvider?: Record<string, string[]>;
+  hiddenModelsByProvider?: HiddenModelsByProvider;
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;

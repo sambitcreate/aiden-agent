@@ -12,6 +12,7 @@ import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -739,7 +740,7 @@ export interface AssistantConfigSnapshot {
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
-  hiddenModelsByProvider?: Record<string, string[]>;
+  hiddenModelsByProvider?: HiddenModelsByProvider;
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
