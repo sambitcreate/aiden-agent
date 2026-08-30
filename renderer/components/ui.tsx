@@ -174,7 +174,7 @@ export function Text({
 }
 
 export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
-  return <span className={cn("text-[0.5em] opacity-30", className)} {...props} />;
+  return <span className={cn("text-mini text-tertiary", className)} {...props} />;
 }
 
 export function Badge({

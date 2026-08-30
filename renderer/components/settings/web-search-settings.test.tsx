@@ -95,6 +95,10 @@ test("provider catalog supports search, disclosure filters, and provider-safe li
 
 test("provider setup keeps credentials write-only and explains side effects", () => {
   const setup = between("function ProviderSetupDialog", "function SettingsSkeleton");
+  const connectionMethod = between(
+    'aria-label={`${provider.label} connection method`}',
+    "</RadioGroup>",
+  );
   assert.match(setup, /title=\{`Set up \$\{provider\.label\}`\}/u);
   assert.match(setup, /Setup performs no network request/u);
   assert.match(setup, /type="password"/u);
@@ -106,6 +110,8 @@ test("provider setup keeps credentials write-only and explains side effects", ()
   assert.match(setup, /privacyUrl/u);
   assert.match(setup, /termsUrl/u);
   assert.match(setup, /label="Connection method"/u);
+  assert.match(connectionMethod, /has-\[\[data-state=checked\]\]:bg-accent\/5/u);
+  assert.doesNotMatch(connectionMethod, /border-separator|border-accent/u);
   assert.match(setup, /routeMode === "api-key"/u);
   assert.doesNotMatch(setup, /Apply mode to current route|onApplyRouteMode/u);
   assert.match(setup, /role="alert" aria-live="assertive"/u);

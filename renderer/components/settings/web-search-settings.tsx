@@ -835,7 +835,7 @@ function ProviderSetupDialog({
               {provider.credentialKind === "optional-api-key" ? (
                 <label
                   htmlFor={`web-search-${provider.id}-anonymous`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-2.5 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
                 >
                   <RadioGroupItem
                     id={`web-search-${provider.id}-anonymous`}
@@ -856,7 +856,7 @@ function ProviderSetupDialog({
               {provider.credentialKind === "optional-api-key" || providerNeedsApiKey(provider) ? (
                 <label
                   htmlFor={`web-search-${provider.id}-api-key`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-2.5 transition-[background-color,border-color] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
                 >
                   <RadioGroupItem
                     id={`web-search-${provider.id}-api-key`}
@@ -876,7 +876,7 @@ function ProviderSetupDialog({
               {supportsExistingAuth ? (
                 <label
                   htmlFor={`web-search-${provider.id}-existing-auth`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control border border-separator bg-well px-3 py-2.5 transition-[background-color,border-color,opacity] duration-150 hover:bg-list-hover has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
+                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-[background-color,opacity] duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
                 >
                   <RadioGroupItem
                     id={`web-search-${provider.id}-existing-auth`}

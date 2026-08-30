@@ -14,7 +14,8 @@ test("shared inline metadata preserves the approved hierarchy", () => {
   );
 
   assert.match(primitive, /React\.HTMLAttributes<HTMLSpanElement>/u);
-  assert.match(primitive, /text-\[0\.5em\] opacity-30/u);
+  assert.match(primitive, /text-mini text-tertiary/u);
+  assert.doesNotMatch(primitive, /text-\[|opacity-/u);
   assert.doesNotMatch(primitive, /aria-hidden/u);
 });
 
