@@ -151,6 +151,10 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Use Mac", detail: safeDetail(values.action) };
     case "compact_context":
       return { label: "Compact context" };
+    case "ask_user_question":
+      return { label: "Ask a question" };
+    case "todo":
+      return { label: "Update task list" };
     default:
       return { label: titleCaseToolName(toolName) || "Use tool" };
   }

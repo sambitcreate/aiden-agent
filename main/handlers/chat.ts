@@ -97,4 +97,15 @@ export function registerChatGenerationHandlers(): void {
       throw new Error("This renderer document does not own that approval.");
     }
   });
+
+  ipcMain.handle(
+    "chat:answerQuestionnaire",
+    async (event, promptId: unknown, response: unknown) => {
+      if (typeof promptId !== "string" || !promptId) return;
+      const owner = chatGenerationOwner(event);
+      if (!llmClient.answerQuestionnaire(promptId, response, owner.documentId)) {
+        throw new Error("This renderer document does not own that questionnaire.");
+      }
+    },
+  );
 }

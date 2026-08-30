@@ -1,10 +1,9 @@
 import { ModelPadSettings } from "./model-pad-settings";
 
 /**
- * The Model Pad is the only model-data settings surface. The retired direct
- * Artificial Analysis credential flow is intentionally no longer rendered;
- * benchmark evidence is fetched only through the dedicated OpenRouter control
- * disclosed inside the Pad.
+ * The retired direct Artificial Analysis credential flow remains absent;
+ * benchmark evidence is fetched only through the Pad's dedicated OpenRouter
+ * control. Advisor selection happens at the point of consultation.
  */
 export function ModelDataSettings() {
   return <ModelPadSettings />;

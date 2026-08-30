@@ -21260,42 +21260,6 @@
           "cache_read": 0.0697
         }
       },
-      "claude-opus-4-thinking:32000": {
-        "id": "claude-opus-4-thinking:32000",
-        "name": "Claude 4 Opus Thinking (32K)",
-        "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
-        "family": "claude-opus",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2025-03-31",
-        "release_date": "2025-05-22",
-        "last_updated": "2025-05-22",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "pdf"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 200000,
-          "input": 200000,
-          "output": 32000
-        },
-        "cost": {
-          "input": 15,
-          "output": 75,
-          "cache_read": 1.5
-        }
-      },
       "doubao-1.5-vision-pro-32k": {
         "id": "doubao-1.5-vision-pro-32k",
         "name": "Doubao 1.5 Vision Pro 32k",
@@ -24428,42 +24392,6 @@
           "input": 0.12,
           "output": 0.38,
           "cache_read": 0.06
-        }
-      },
-      "claude-opus-4-1-thinking:32000": {
-        "id": "claude-opus-4-1-thinking:32000",
-        "name": "Claude 4.1 Opus Thinking (32K)",
-        "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
-        "family": "claude-opus",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2025-03-31",
-        "release_date": "2025-08-05",
-        "last_updated": "2025-08-05",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "pdf"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 200000,
-          "input": 200000,
-          "output": 32000
-        },
-        "cost": {
-          "input": 15,
-          "output": 75,
-          "cache_read": 1.5
         }
       },
       "claude-sonnet-4-thinking:64000": {
@@ -70792,12 +70720,12 @@
         "open_weights": false,
         "limit": {
           "context": 1047576,
-          "output": 942818
+          "output": 32768
         },
         "cost": {
           "input": 0.1,
           "output": 0.4,
-          "cache_read": 0.03
+          "cache_read": 0.025
         }
       },
       "openai/o1": {
@@ -75209,7 +75137,7 @@
         "cost": {
           "input": 0.03,
           "output": 0.16,
-          "cache_read": 0.01
+          "cache_read": 0.013
         }
       },
       "inclusionai/ling-3.0-flash-fin:free": {
@@ -203243,8 +203171,8 @@
     "name": "TrustedRouter",
     "doc": "https://trustedrouter.com/docs",
     "models": {
-      "cheap": {
-        "id": "cheap",
+      "trustedrouter/cheap": {
+        "id": "trustedrouter/cheap",
         "name": "Cheap",
         "description": "TrustedRouter low-cost routing alias that prefers inexpensive healthy model endpoints.",
         "attachment": true,
@@ -203281,8 +203209,8 @@
           "output": 131072
         }
       },
-      "fast": {
-        "id": "fast",
+      "trustedrouter/fast": {
+        "id": "trustedrouter/fast",
         "name": "Fast",
         "description": "TrustedRouter speed routing alias that prefers low-latency healthy model endpoints.",
         "attachment": true,
@@ -203319,8 +203247,8 @@
           "output": 131072
         }
       },
-      "auto": {
-        "id": "auto",
+      "trustedrouter/auto": {
+        "id": "trustedrouter/auto",
         "name": "Auto",
         "description": "TrustedRouter automatic routing alias that chooses a healthy supported model endpoint for the request.",
         "attachment": true,
@@ -203357,8 +203285,8 @@
           "output": 131072
         }
       },
-      "synth-code": {
-        "id": "synth-code",
+      "trustedrouter/synth-code": {
+        "id": "trustedrouter/synth-code",
         "name": "Synth Code",
         "description": "TrustedRouter code synthesis orchestration alias that combines multiple model responses into one answer.",
         "attachment": true,
@@ -203395,8 +203323,8 @@
           "output": 131072
         }
       },
-      "e2e": {
-        "id": "e2e",
+      "trustedrouter/e2e": {
+        "id": "trustedrouter/e2e",
         "name": "End-to-End Encrypted",
         "description": "TrustedRouter privacy routing alias for end-to-end encrypted provider routes where available.",
         "attachment": true,
@@ -203433,8 +203361,8 @@
           "output": 131072
         }
       },
-      "zdr": {
-        "id": "zdr",
+      "trustedrouter/zdr": {
+        "id": "trustedrouter/zdr",
         "name": "Zero Data Retention",
         "description": "TrustedRouter privacy routing alias that prefers zero data retention model endpoints.",
         "attachment": true,
@@ -203471,8 +203399,8 @@
           "output": 131072
         }
       },
-      "synth": {
-        "id": "synth",
+      "trustedrouter/synth": {
+        "id": "trustedrouter/synth",
         "name": "Synth",
         "description": "TrustedRouter synthesis orchestration alias that combines multiple model responses into one answer.",
         "attachment": true,
@@ -235839,6 +235767,31 @@
         },
         "cost": {
           "input": 0,
+          "output": 0
+        }
+      },
+      "minimax/minimax-h3-max": {
+        "id": "minimax/minimax-h3-max",
+        "name": "MiniMax H3 Max",
+        "description": "Video model for prompt-guided generation, editing, and motion workflows",
+        "family": "minimax",
+        "attachment": true,
+        "reasoning": false,
+        "tool_call": false,
+        "release_date": "2026-08-27",
+        "last_updated": "2026-08-27",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 0,
           "output": 0
         }
       },
@@ -273317,7 +273270,7 @@
         "open_weights": false,
         "limit": {
           "context": 1047576,
-          "output": 942818
+          "output": 32768
         },
         "cost": {
           "input": 0.1,
@@ -278101,7 +278054,7 @@
         "cost": {
           "input": 0.03,
           "output": 0.16,
-          "cache_read": 0.01
+          "cache_read": 0.013
         }
       },
       "inclusionai/ling-3.0-flash-fin:free": {
