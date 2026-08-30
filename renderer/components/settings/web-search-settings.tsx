@@ -35,6 +35,7 @@ import {
   Field,
   FieldSet,
   Input,
+  InlineMetadata,
   RadioGroup,
   RadioGroupItem,
   Select,
@@ -93,6 +94,21 @@ const COST_LABELS: Record<WebSearchProvider["costClass"], string> = {
   paid: "Paid usage",
   "self-hosted": "Self-hosted",
 };
+
+function ProviderOptionLabel({ provider }: { provider: WebSearchProvider }) {
+  const isUsagePriced = provider.costClass === "quota" || provider.costClass === "paid";
+
+  return (
+    <>
+      {provider.label}{" "}
+      {isUsagePriced ? (
+        <InlineMetadata>· {COST_LABELS[provider.costClass]}</InlineMetadata>
+      ) : (
+        <span>· {COST_LABELS[provider.costClass]}</span>
+      )}
+    </>
+  );
+}
 
 const CREDENTIAL_LABELS: Record<WebSearchProvider["credentialKind"], string> = {
   none: "No credentials",
@@ -1900,7 +1916,7 @@ export function WebSearchSettings() {
                     <SelectContent>
                       {routeProviderOptions.map((provider) => (
                         <SelectItem key={provider.id} value={provider.id}>
-                          {provider.label} · {COST_LABELS[provider.costClass]}
+                          <ProviderOptionLabel provider={provider} />
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -1949,7 +1965,7 @@ export function WebSearchSettings() {
                   <SelectContent>
                     {shippedProviders.map((provider) => (
                       <SelectItem key={provider.id} value={provider.id}>
-                        {provider.label} · {COST_LABELS[provider.costClass]}
+                        <ProviderOptionLabel provider={provider} />
                       </SelectItem>
                     ))}
                   </SelectContent>
