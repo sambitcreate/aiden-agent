@@ -3,20 +3,25 @@ import { afterEach, test } from "node:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   createGenerativeUiExtension,
   GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
+  shouldEnableDesignWorkspace,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import { DESIGN_ARTIFACT_MEDIA_ID_PREFIX } from "../../renderer/shared/design-workspace.js";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -58,6 +63,28 @@ test("generative UI enablement matches the display_image chat gate", () => {
     }),
     false,
   );
+  assert.equal(
+    shouldEnableDesignWorkspace({
+      usageSource: "chat",
+      assistantMode: false,
+      workspaceRoot: "/tmp/ws",
+      permission: "none",
+      excluded: false,
+      botBound: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldEnableDesignWorkspace({
+      usageSource: "chat",
+      assistantMode: false,
+      workspaceRoot: "/tmp/ws",
+      permission: "ask",
+      excluded: false,
+      botBound: true,
+    }),
+    false,
+  );
 });
 
 test("render_artifact emits metadata only and never returns HTML to the model", async () => {
@@ -76,7 +103,7 @@ test("render_artifact emits metadata only and never returns HTML to the model", 
   assert.equal(extension.id, GENERATIVE_UI_EXTENSION_ID);
   assert.equal(tool.name, GENERATIVE_UI_TOOL_NAME);
   assert.equal(piRuntimeReplayPolicy(tool), "never");
-  const html = "<h1>Chart</h1><canvas id=\"c\"></canvas>";
+  const html = '<h1>Chart</h1><canvas id="c"></canvas>';
   const result = await tool.execute("call-1", { title: "Chart", html });
   assert.equal(result.content[0]?.type, "text");
   assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /<canvas/u);
@@ -131,6 +158,164 @@ test("same-generation title replaces the previous staged artifact", async () => 
   assert.equal(artifacts[0]?.mediaId, artifacts[1]?.mediaId);
   assert.equal(artifacts[0]?.size, artifacts[1]?.size);
   assert.notEqual(artifacts[0]?.id, artifacts[1]?.id);
+});
+
+test("Design workspace renders inline-only prefixed revisions with bounded prior context", async () => {
+  const root = await workspace();
+  const artifacts: ChatHtmlArtifactV1[] = [];
+  const priorHtml =
+    '<!doctype html><html><body><main data-aiden-id="home">Old</main></body></html>';
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    designWorkspaceThisTurn: true,
+    priorDesign: { title: "Storefront", html: priorHtml },
+    onArtifact: (artifact) => {
+      artifacts.push(artifact);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  assert.match(extension.systemPrompt ?? "", /Design workspace is open/u);
+  assert.match(extension.systemPrompt ?? "", /one complete artifact per requested screen/u);
+  assert.match(extension.systemPrompt ?? "", /same title when revising/u);
+  assert.doesNotMatch(JSON.stringify(tool.parameters), /workspace-relative/u);
+  await assert.rejects(
+    tool.execute("path", { title: "Storefront", path: "index.html" }),
+    /inline HTML/iu,
+  );
+  await tool.execute("inline", {
+    title: "Storefront",
+    html: '<!doctype html><html><body><main data-aiden-id="home">New</main></body></html>',
+  });
+  assert.equal(artifacts.length, 1);
+  assert.ok(artifacts[0]?.mediaId.startsWith(DESIGN_ARTIFACT_MEDIA_ID_PREFIX));
+
+  const historicalHtmlCanary = "HISTORICAL_DESIGN_HTML_MUST_NOT_REACH_PROVIDER";
+  const historicalAssistant: AssistantMessage = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "old-render",
+        name: GENERATIVE_UI_TOOL_NAME,
+        arguments: { title: "Storefront", html: `<main>${historicalHtmlCanary}</main>` },
+      },
+    ],
+    api: "openai-responses",
+    provider: "openai",
+    model: "test-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+  const transformed = await extension.transformContext?.([
+    historicalAssistant,
+    { role: "user", content: "Make the hero quieter", timestamp: 2 },
+  ]);
+  assert.equal(transformed?.length, 3);
+  assert.doesNotMatch(JSON.stringify(transformed), new RegExp(historicalHtmlCanary, "u"));
+  assert.match(JSON.stringify(transformed?.[0]), /Previous Design HTML omitted by Aiden/u);
+  assert.equal(transformed?.[1]?.role, "user");
+  assert.match(
+    transformed?.[1]?.role === "user" && typeof transformed[1].content === "string"
+      ? transformed[1].content
+      : "",
+    /untrusted reference data/u,
+  );
+  assert.match(
+    transformed?.[1]?.role === "user" && typeof transformed[1].content === "string"
+      ? transformed[1].content
+      : "",
+    /data-aiden-id/u,
+  );
+  assert.equal(
+    transformed?.[2]?.role === "user" && typeof transformed[2].content === "string"
+      ? transformed[2].content
+      : "",
+    "Make the hero quieter",
+  );
+});
+
+test("Design context carries multiple exact artboards and a bounded element descriptor", async () => {
+  const root = await workspace();
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    designWorkspaceThisTurn: true,
+    priorDesigns: [
+      {
+        title: "Checkout",
+        html: '<main data-aiden-id="checkout">Checkout</main>',
+        selection: {
+          tagName: "button",
+          label: "Pay now",
+          selector: '[data-aiden-id="pay-now"]',
+          elementId: "pay-now",
+        },
+      },
+      {
+        title: "Receipt",
+        html: '<main data-aiden-id="receipt">Receipt</main>',
+      },
+    ],
+    onArtifact: () => undefined,
+  });
+  const transformed = await extension.transformContext?.([
+    { role: "user", content: "Unify these screens", timestamp: 3 },
+  ]);
+  assert.equal(transformed?.length, 2);
+  const context = transformed?.[0]?.role === "user" ? transformed[0].content : "";
+  assert.equal(typeof context, "string");
+  assert.match(String(context), /Checkout/u);
+  assert.match(String(context), /Receipt/u);
+  assert.match(String(context), /pay-now/u);
+  assert.match(String(context), /untrusted reference data/u);
+});
+
+test("Design context always omits historical render HTML when no stored revision is available", async () => {
+  const root = await workspace();
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    designWorkspaceThisTurn: true,
+    onArtifact: () => undefined,
+  });
+  const canary = "NO_PRIOR_DESIGN_HISTORY_CANARY";
+  const historicalAssistant: AssistantMessage = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "old-render",
+        name: GENERATIVE_UI_TOOL_NAME,
+        arguments: { title: "Dashboard", html: `<main>${canary}</main>` },
+      },
+    ],
+    api: "openai-responses",
+    provider: "openai",
+    model: "test-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+  const transformed = await extension.transformContext?.([
+    historicalAssistant,
+    { role: "user", content: "Start over", timestamp: 2 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(transformed), new RegExp(canary, "u"));
+  assert.match(JSON.stringify(transformed), /Previous Design HTML omitted by Aiden/u);
 });
 
 test("render_artifact refuses intermediate directory symlinks", async () => {

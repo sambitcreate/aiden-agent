@@ -3,7 +3,10 @@ import { afterEach, test } from "node:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import {
+  GenerativeUiArtifactStore,
+  remappedHtmlArtifactMediaId,
+} from "./generative-ui-artifact-store.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 
 const HTML = "<p>hello</p>";
@@ -11,7 +14,9 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -33,6 +38,11 @@ function artifact(id: string, title = "Chart"): ChatHtmlArtifactV1 {
   };
 }
 
+test("chat copies preserve the Design artifact namespace", () => {
+  assert.match(remappedHtmlArtifactMediaId("target", "design:source"), /^design:[a-f0-9]{64}$/u);
+  assert.match(remappedHtmlArtifactMediaId("target", "source"), /^[a-f0-9]{64}$/u);
+});
+
 test("staging, commit, recovery, and pending gates", async () => {
   const root = await storageRoot();
   const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
@@ -50,12 +60,9 @@ test("staging, commit, recovery, and pending gates", async () => {
   );
   assert.equal(await store.hasPending("chat-1"), true);
   const recovered: Array<{ chatId: string; htmlArtifacts: ChatHtmlArtifactV1[] }> = [];
-  await store.recover(
-    [{ id: "chat-1", messages: [] }],
-    async (message) => {
-      recovered.push(message);
-    },
-  );
+  await store.recover([{ id: "chat-1", messages: [] }], async (message) => {
+    recovered.push(message);
+  });
   assert.equal(recovered.length, 1);
   assert.equal(recovered[0]?.htmlArtifacts[0]?.mediaId, "media-1");
   assert.equal(await store.hasPending("chat-1"), false);
@@ -152,11 +159,7 @@ test("prepared chat copies recover to committed artifacts after chat installatio
   });
   await store.commit("source-chat", [item.mediaId]);
 
-  const [copy] = await store.prepareSelectedCopy(
-    "source-chat",
-    "target-chat",
-    [item.mediaId],
-  );
+  const [copy] = await store.prepareSelectedCopy("source-chat", "target-chat", [item.mediaId]);
   assert.ok(copy);
   assert.equal(await store.hasPending("target-chat"), true);
 
@@ -164,7 +167,8 @@ test("prepared chat copies recover to committed artifacts after chat installatio
   await restarted.initialize();
   await restarted.recover(
     [{ id: "target-chat", messages: [{ role: "assistant", htmlArtifacts: [copy] }] }],
-    async () => assert.fail("A prepared copy already referenced by chat must not append a message."),
+    async () =>
+      assert.fail("A prepared copy already referenced by chat must not append a message."),
   );
 
   assert.equal(await restarted.hasPending("target-chat"), false);
@@ -183,11 +187,7 @@ test("prepared chat copies are discarded when chat installation never happened",
     html: HTML,
   });
   await store.commit("source-chat", [item.mediaId]);
-  const [copy] = await store.prepareSelectedCopy(
-    "source-chat",
-    "target-chat",
-    [item.mediaId],
-  );
+  const [copy] = await store.prepareSelectedCopy("source-chat", "target-chat", [item.mediaId]);
   assert.ok(copy);
 
   const restarted = new GenerativeUiArtifactStore({ root: () => root });

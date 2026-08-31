@@ -9,6 +9,7 @@ import {
   MAX_HTML_ARTIFACT_BYTES_PER_CHAT,
   MAX_HTML_ARTIFACTS_PER_CHAT,
 } from "../../renderer/shared/generative-ui.js";
+import { DESIGN_ARTIFACT_MEDIA_ID_PREFIX } from "../../renderer/shared/design-workspace.js";
 import { displayedAssistantHtmlUsage } from "./generative-ui-extension.js";
 import { validateGenerativeUiHtml } from "./generative-ui-html.js";
 
@@ -408,9 +409,7 @@ export class GenerativeUiArtifactStore {
       const copies: ChatHtmlArtifactV1[] = [];
       const source = database.records.filter(
         (record) =>
-          record.chatId === sourceChatId &&
-          record.committed &&
-          wanted.has(record.artifact.mediaId),
+          record.chatId === sourceChatId && record.committed && wanted.has(record.artifact.mediaId),
       );
       if (source.length !== wanted.size) {
         throw new Error("Some HTML artifacts could not be copied.");
@@ -440,9 +439,7 @@ export class GenerativeUiArtifactStore {
         database.records.push({
           ...record,
           chatId: targetChatId,
-          generationId: committed
-            ? record.generationId
-            : copyGenerationId(sourceChatId),
+          generationId: committed ? record.generationId : copyGenerationId(sourceChatId),
           artifact,
           committed,
           stagedAt: this.now(),
@@ -473,9 +470,7 @@ export class GenerativeUiArtifactStore {
     if (persistedIds.size === 0) return;
     const pending = (await this.data.load()).records.filter(
       (record) =>
-        record.chatId === chat.id &&
-        !record.committed &&
-        persistedIds.has(record.artifact.mediaId),
+        record.chatId === chat.id && !record.committed && persistedIds.has(record.artifact.mediaId),
     );
     if (pending.length === 0) return;
     await this.commit(
@@ -554,7 +549,14 @@ export class GenerativeUiArtifactStore {
 }
 
 export function remappedHtmlArtifactMediaId(targetChatId: string, sourceMediaId: string): string {
-  return createHash("sha256").update(targetChatId).update("\0").update(sourceMediaId).digest("hex");
+  const hash = createHash("sha256")
+    .update(targetChatId)
+    .update("\0")
+    .update(sourceMediaId)
+    .digest("hex");
+  return sourceMediaId.startsWith(DESIGN_ARTIFACT_MEDIA_ID_PREFIX)
+    ? `${DESIGN_ARTIFACT_MEDIA_ID_PREFIX}${hash}`
+    : hash;
 }
 
 export const generativeUiArtifactStore = new GenerativeUiArtifactStore();

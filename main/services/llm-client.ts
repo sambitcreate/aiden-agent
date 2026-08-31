@@ -246,19 +246,25 @@ import {
   DISPLAY_IMAGE_TOOL_NAME,
   shouldEnableDisplayImageExtension,
 } from "./display-image-extension.js";
-import { CHAT_ARTIFACT_EVENT_VERSION, type ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import {
-  MAX_HTML_ARTIFACTS_PER_RESPONSE,
-} from "../../renderer/shared/generative-ui.js";
+  CHAT_ARTIFACT_EVENT_VERSION,
+  type ChatHtmlArtifactV1,
+} from "../../renderer/shared/chat-artifacts.js";
+import { MAX_HTML_ARTIFACTS_PER_RESPONSE } from "../../renderer/shared/generative-ui.js";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import {
   createGenerativeUiExtensionRuntime,
   displayedAssistantHtmlUsage,
   GENERATIVE_UI_TOOL_NAME,
+  shouldEnableDesignWorkspace,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
+import {
+  isDesignHtmlArtifact,
+  MAX_DESIGN_CONTEXT_BYTES,
+} from "../../renderer/shared/design-workspace.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -610,6 +616,7 @@ async function prepareGeneration(
     params.mode === "assistant" || params.mode === "assistant-unattended";
   const assistantAutomationMode = params.mode === "assistant-automation";
   const assistantMode = assistantPersonaMode || assistantAutomationMode;
+  const designWorkspace = params.design === true;
   // The dock persona is never folder-scoped. Project automation mode is
   // main-only and reaches this branch only after the persisted approval profile
   // has bound the scheduled run to a workspace.
@@ -621,6 +628,20 @@ async function prepareGeneration(
   if (workspace && !botBound) await assertManagedWorktreeAdmission(workspace);
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
+  if (
+    designWorkspace &&
+    !shouldEnableDesignWorkspace({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      workspaceRoot: folderPath,
+      permission,
+      excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
+      botBound: botContext !== undefined,
+    })
+  ) {
+    throw new Error("Design workspace is unavailable for this conversation.");
+  }
   const git =
     folderPath && (!botContext || botContext.admission.authority.files.botHome)
       ? await gitInfo(folderPath)
@@ -655,6 +676,7 @@ async function prepareGeneration(
   );
   let computerUse: ComputerUseController | undefined;
   if (
+    !designWorkspace &&
     options.allowComputerUse !== false &&
     (!botContext || botHasOrdinaryCapability(botContext, "computer_use")) &&
     settings.computerUseEnabled === true &&
@@ -678,6 +700,7 @@ async function prepareGeneration(
   const allowSubagents = subagentsAllowedForGeneration({
     assistantMode,
     allowSubagents:
+      !designWorkspace &&
       options.allowSubagents !== false &&
       (!botContext || botHasOrdinaryCapability(botContext, "subagents")),
     usageSource: options.usageSource,
@@ -864,7 +887,9 @@ async function prepareGeneration(
   // scheduling, while an approved automation gets only its project tools and
   // exact MCP identities. Computer Use, skills, and delegation stay out.
   let skillSnapshot =
-    !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
+    !assistantMode && !designWorkspace && workspace
+      ? await skillRegistry.snapshotResolved(workspace)
+      : undefined;
   let botSkillToolNames: ReadonlySet<string> = new Set();
   if (botContext && skillSnapshot) {
     if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
@@ -880,6 +905,7 @@ async function prepareGeneration(
     ? botContext.admission.authority.connections.map(({ sourceId }) => sourceId)
     : undefined;
   const schedulingAllowed =
+    !designWorkspace &&
     (!assistantMode || attendedAssistant) &&
     !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME) &&
     (!botContext || options.interactionSurface !== "telegram") &&
@@ -945,6 +971,7 @@ async function prepareGeneration(
           : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
+  if (designWorkspace) tools = [];
   const botMutatingToolNames = new Set<string>();
   if (botContext) {
     const authority = botContext.admission.authority;
@@ -1036,6 +1063,7 @@ async function prepareGeneration(
     });
   }
   if (
+    !designWorkspace &&
     !botContext &&
     shouldEnableDisplayImageExtension({
       usageSource: options.usageSource,
@@ -1137,12 +1165,91 @@ async function prepareGeneration(
       );
     }
     const visualize = params.visualize === true;
+    let priorDesigns:
+      | Array<{
+          title: string;
+          html: string;
+          selection?: NonNullable<
+            NonNullable<ChatStartParams["designContext"]>["targets"][number]["selection"]
+          >;
+        }>
+      | undefined;
+    if (designWorkspace) {
+      const selectedTargets = params.designContext?.targets;
+      const resolvedDesigns: Array<{
+        artifact: ChatHtmlArtifactV1;
+        selection?: NonNullable<
+          NonNullable<ChatStartParams["designContext"]>["targets"][number]["selection"]
+        >;
+      }> = [];
+      if (selectedTargets) {
+        for (const target of selectedTargets) {
+          let exactArtifact: ChatHtmlArtifactV1 | undefined;
+          for (const message of chat.messages) {
+            if (message.role !== "assistant") continue;
+            exactArtifact = message.htmlArtifacts?.find(
+              (artifact) =>
+                artifact.mediaId === target.mediaId &&
+                artifact.id === target.artifactId &&
+                isDesignHtmlArtifact(artifact),
+            );
+            if (exactArtifact) break;
+          }
+          if (!exactArtifact) {
+            throw new Error(
+              "A selected Design canvas item is stale. Select the artboard again and retry.",
+            );
+          }
+          resolvedDesigns.push({
+            artifact: exactArtifact,
+            ...(target.selection ? { selection: target.selection } : {}),
+          });
+        }
+      } else {
+        let latestDesign: ChatHtmlArtifactV1 | undefined;
+        for (let messageIndex = chat.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+          const message = chat.messages[messageIndex];
+          if (message?.role !== "assistant") continue;
+          latestDesign = [...(message.htmlArtifacts ?? [])].reverse().find(isDesignHtmlArtifact);
+          if (latestDesign) break;
+        }
+        if (latestDesign) resolvedDesigns.push({ artifact: latestDesign });
+      }
+      const totalSelectedBytes = resolvedDesigns.reduce(
+        (total, item) => total + item.artifact.size,
+        0,
+      );
+      if (totalSelectedBytes > MAX_DESIGN_CONTEXT_BYTES) {
+        throw new Error("The selected Design context is too large. Select fewer artboards.");
+      }
+      if (resolvedDesigns.length > 0) {
+        priorDesigns = [];
+        for (const item of resolvedDesigns) {
+          const html = await generativeUiArtifactStore.htmlFor(
+            params.chatId,
+            item.artifact.mediaId,
+          );
+          if (!html) {
+            throw new Error(
+              "A selected Design canvas item is no longer available. Select it again and retry.",
+            );
+          }
+          priorDesigns.push({
+            title: item.artifact.title,
+            html,
+            ...(item.selection ? { selection: item.selection } : {}),
+          });
+        }
+      }
+    }
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
       workspaceRoot: folderPath!,
       artifactNamespace: `${streamId}:html`,
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
+      designWorkspaceThisTurn: designWorkspace,
+      priorDesigns,
       onArtifact: async (artifact, html) => {
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
@@ -1176,6 +1283,7 @@ async function prepareGeneration(
   }
   let googleWorkspaceSnapshot: string | undefined;
   if (
+    !designWorkspace &&
     params.providerId === GOOGLE_PROVIDER_ID &&
     workspace?.id &&
     folderPath &&
@@ -1592,8 +1700,7 @@ export const llmClient = {
                 : undefined,
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
-            htmlArtifacts:
-              displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
+            htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
           },
           {
             providerId: params.providerId,
@@ -1625,11 +1732,7 @@ export const llmClient = {
               displayedHtmlArtifacts.map((artifact) => artifact.mediaId),
             );
           } catch (error) {
-            logger.warn(
-              "pi",
-              `Could not commit HTML artifacts for stream ${streamId}.`,
-              error,
-            );
+            logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
           }
         }
         return { chat, error: undefined, messageId };
@@ -1677,7 +1780,9 @@ export const llmClient = {
               },
             },
           ]
-        : [...runtimeExtensionSnapshot.extensions, ...generationExtensions];
+        : params.design === true
+          ? generationExtensions
+          : [...runtimeExtensionSnapshot.extensions, ...generationExtensions];
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -1702,36 +1807,38 @@ export const llmClient = {
             };
       const telegramInteractive = options.interactionSurface === "telegram";
       const baseSystemPrompt =
-        authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
-          ? buildAssistantSystemPrompt({
-              settingsSections: SETTINGS_SECTIONS,
-              settingsPermission: assistantSettingsPermission,
-              availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
-              mcpServers: assistantMcpInventory.servers,
-              mcpServerTotal: assistantMcpInventory.totalEnabledServers,
-              mcpInventoryTruncated: assistantMcpInventory.truncated,
-              mcpOmittedInvalidIdentities: assistantMcpInventory.omittedInvalidIdentities,
-              unattended: authoritativeMode === "assistant-unattended" && !telegramInteractive,
-              surface: telegramInteractive ? "telegram" : "desktop",
-            })
-          : authoritativeMode === "assistant-automation"
-            ? telegramInteractive
-              ? withTelegramAgentContract(
-                  await buildSystemPrompt(folderPath, git.branch, permission, false, false),
-                  { workspaceBound: Boolean(folderPath) },
-                )
-              : withUnattendedAssistantContract(
-                  await buildSystemPrompt(folderPath, git.branch, permission, false, false),
-                )
-            : await buildSystemPrompt(
-                folderPath,
-                git.branch,
-                permission,
-                toolsWithRuntimeContributions.some((tool) => tool.name === "subagent"),
-                true,
-                skillSnapshot,
-                new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
-              );
+        params.design === true
+          ? "You are Aiden's focused Design workspace. Use only the host-provided design tools. Never read or modify workspace files, run commands, browse the web, call connectors, or delegate work during this turn. The configured provider and model remain unchanged."
+          : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
+            ? buildAssistantSystemPrompt({
+                settingsSections: SETTINGS_SECTIONS,
+                settingsPermission: assistantSettingsPermission,
+                availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
+                mcpServers: assistantMcpInventory.servers,
+                mcpServerTotal: assistantMcpInventory.totalEnabledServers,
+                mcpInventoryTruncated: assistantMcpInventory.truncated,
+                mcpOmittedInvalidIdentities: assistantMcpInventory.omittedInvalidIdentities,
+                unattended: authoritativeMode === "assistant-unattended" && !telegramInteractive,
+                surface: telegramInteractive ? "telegram" : "desktop",
+              })
+            : authoritativeMode === "assistant-automation"
+              ? telegramInteractive
+                ? withTelegramAgentContract(
+                    await buildSystemPrompt(folderPath, git.branch, permission, false, false),
+                    { workspaceBound: Boolean(folderPath) },
+                  )
+                : withUnattendedAssistantContract(
+                    await buildSystemPrompt(folderPath, git.branch, permission, false, false),
+                  )
+              : await buildSystemPrompt(
+                  folderPath,
+                  git.branch,
+                  permission,
+                  toolsWithRuntimeContributions.some((tool) => tool.name === "subagent"),
+                  true,
+                  skillSnapshot,
+                  new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
+                );
       const botSystemPrompt = authoritativeBot
         ? preparedBotContext
           ? withBotRuntimeInstructions(

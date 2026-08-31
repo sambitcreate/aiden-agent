@@ -743,12 +743,17 @@ export const chatsApi = {
       secondary?: string;
       accent?: string;
     },
+    designStudio = false,
   ) =>
-    invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {
-      chatId,
-      mediaId,
-      theme,
-    }),
+    invoke<{ title: string; src: string; designCapability?: string } | undefined>(
+      "chats:htmlArtifactSrcdoc",
+      {
+        chatId,
+        mediaId,
+        theme,
+        ...(designStudio ? { designStudio: true } : {}),
+      },
+    ),
   exportHtmlArtifact: (chatId: string, mediaId: string) =>
     invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
       chatId,

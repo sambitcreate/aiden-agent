@@ -727,6 +727,10 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this attended turn. */
   visualize?: boolean;
+  /** Host-owned Design workspace intent for this attended turn. */
+  design?: boolean;
+  /** Ephemeral element target for one Design refinement; never persisted as chat content. */
+  designContext?: import("../../renderer/shared/design-workspace.js").DesignTurnContextV1;
   messages: Array<{
     role: ChatRole;
     content: string;

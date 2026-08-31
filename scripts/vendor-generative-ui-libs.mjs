@@ -12,6 +12,22 @@ export const GENERATIVE_UI_VENDOR_SOURCES = Object.freeze({
   "katex.min.css": ["katex", "dist", "katex.min.css"],
 });
 
+export const REACT_GRAB_PRIMITIVES_FILENAME = "react-grab-primitives.js";
+export const REACT_GRAB_PRIMITIVES_ENTRY = `
+import {
+  getElementAtPoint,
+  getElementBounds,
+  getElementSelector,
+  isElementGrabbable,
+} from "react-grab/primitives";
+globalThis.AidenReactGrabPrimitives = Object.freeze({
+  getElementAtPoint,
+  getElementBounds,
+  getElementSelector,
+  isElementGrabbable,
+});
+`;
+
 const FONT_BASENAME = /^KaTeX_[A-Za-z0-9._-]+\.(woff2|woff|ttf)$/u;
 
 export function vendorSourcePath(root, segments) {
@@ -73,6 +89,30 @@ export async function vendorGenerativeUiLibraries(root = repositoryRoot) {
     }
     await writeFile(path.join(destination, filename), contents, { mode: 0o644 });
   }
+  const { build } = await import("esbuild");
+  const bundled = await build({
+    stdin: {
+      contents: REACT_GRAB_PRIMITIVES_ENTRY,
+      resolveDir: root,
+      sourcefile: "aiden-react-grab-primitives-entry.js",
+    },
+    bundle: true,
+    platform: "browser",
+    format: "iife",
+    target: "chrome124",
+    minify: true,
+    legalComments: "inline",
+    define: { "process.env.NODE_ENV": JSON.stringify("production") },
+    banner: {
+      js: "/* React Grab primitives, Copyright (c) 2025 Aiden Bai, MIT License. */",
+    },
+    write: false,
+  });
+  const output = bundled.outputFiles?.[0]?.contents;
+  if (!output || output.byteLength === 0) {
+    throw new Error("React Grab primitives bundle is empty.");
+  }
+  await writeFile(path.join(destination, REACT_GRAB_PRIMITIVES_FILENAME), output, { mode: 0o644 });
   return destination;
 }
 

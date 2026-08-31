@@ -92,6 +92,7 @@ import {
   registerGenerativeUiProtocol,
   registerGenerativeUiScheme,
 } from "./services/generative-ui-protocol.js";
+import { shouldBlockGenerativeUiGuestNavigation } from "../renderer/shared/generative-ui.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
@@ -1290,6 +1291,18 @@ async function createMainWindow(): Promise<void> {
   createdWindow.webContents.on("will-redirect", (event, url) => {
     event.preventDefault();
     openExternalUrl(url);
+  });
+  createdWindow.webContents.on("will-frame-navigate", (event) => {
+    if (
+      shouldBlockGenerativeUiGuestNavigation({
+        isMainFrame: event.isMainFrame,
+        frameUrl: event.frame?.url,
+        initiatorUrl: event.initiator?.url,
+        targetUrl: event.url,
+      })
+    ) {
+      event.preventDefault();
+    }
   });
 
   logger.info("main", "Loading renderer", { url: mainWindowUrl });

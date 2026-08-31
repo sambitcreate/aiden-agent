@@ -21,6 +21,15 @@ export const GENERATIVE_UI_IFRAME_SANDBOX = "allow-scripts" as const;
 export const GENERATIVE_UI_GUEST_CSP =
   "default-src 'none'; script-src 'unsafe-inline' aiden-genui://chart.js aiden-genui://plotly.js aiden-genui://katex.js; style-src 'unsafe-inline' aiden-genui://katex.css; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
 
+/** Design-only CSP adds the pinned local React Grab primitives; network remains denied. */
+export const GENERATIVE_UI_DESIGN_GUEST_CSP =
+  "default-src 'none'; script-src 'unsafe-inline' aiden-genui://chart.js aiden-genui://plotly.js aiden-genui://katex.js aiden-genui://react-grab-primitives.js; style-src 'unsafe-inline' aiden-genui://katex.css; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
+
+/** Keep the response-header and document CSP in lockstep for each preview class. */
+export function generativeUiGuestCsp(designStudio: boolean): string {
+  return designStudio ? GENERATIVE_UI_DESIGN_GUEST_CSP : GENERATIVE_UI_GUEST_CSP;
+}
+
 /** The sandboxed export guest has inlined libraries, so the custom protocol is not needed. */
 export const GENERATIVE_UI_EXPORT_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
@@ -39,14 +48,26 @@ export const GENERATIVE_UI_PARENT_FRAME_SRC = "'self' aiden-genui:" as const;
 export const GENERATIVE_UI_PROTOCOL_SCHEME = "aiden-genui" as const;
 export const GENERATIVE_UI_PREVIEW_HOST = "preview" as const;
 
-
-export const GENERATIVE_UI_HOST_LIBS = ["chart.js", "plotly.js", "katex.js", "katex.css"] as const;
+export const GENERATIVE_UI_ARTIFACT_LIBS = [
+  "chart.js",
+  "plotly.js",
+  "katex.js",
+  "katex.css",
+] as const;
+export const GENERATIVE_UI_HOST_LIBS = [
+  ...GENERATIVE_UI_ARTIFACT_LIBS,
+  "react-grab-primitives.js",
+] as const;
 
 export const GENERATIVE_UI_UNSUPPORTED_DEVICE_COPY =
   "Can't view on this device. View in Aiden Agent." as const;
 
 export function isHtmlArtifactTitle(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_HTML_ARTIFACT_TITLE_CHARS) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_HTML_ARTIFACT_TITLE_CHARS
+  ) {
     return false;
   }
   if (value.trim() !== value) return false;
@@ -62,7 +83,9 @@ export function isHtmlArtifactMediaId(value: unknown): value is string {
   return /^[A-Za-z0-9._:-]+$/u.test(value);
 }
 
-export function generativeUiHostLibraryNameFromUrl(urlString: string): (typeof GENERATIVE_UI_HOST_LIBS)[number] | undefined {
+export function generativeUiHostLibraryNameFromUrl(
+  urlString: string,
+): (typeof GENERATIVE_UI_HOST_LIBS)[number] | undefined {
   let url: URL;
   try {
     url = new URL(urlString);
@@ -96,4 +119,24 @@ export function generativeUiPreviewTokenFromUrl(urlString: string): string | und
   const token = url.pathname.replace(/^\//u, "");
   if (token.includes("/")) return undefined;
   return PREVIEW_TOKEN.test(token) ? token.toLowerCase() : undefined;
+}
+
+/** Block a custom-protocol guest from replacing its own frame with remote content. */
+export function shouldBlockGenerativeUiGuestNavigation(input: {
+  isMainFrame: boolean;
+  frameUrl?: string;
+  initiatorUrl?: string;
+  targetUrl?: string;
+}): boolean {
+  if (input.isMainFrame) return false;
+  const initiatedByGuest =
+    typeof input.initiatorUrl === "string" &&
+    generativeUiPreviewTokenFromUrl(input.initiatorUrl) !== undefined;
+  if (initiatedByGuest) return true;
+  const refreshingPreview =
+    typeof input.frameUrl === "string" &&
+    generativeUiPreviewTokenFromUrl(input.frameUrl) !== undefined &&
+    typeof input.targetUrl === "string" &&
+    generativeUiPreviewTokenFromUrl(input.targetUrl) !== undefined;
+  return !refreshingPreview && generativeUiPreviewTokenFromUrl(input.frameUrl ?? "") !== undefined;
 }

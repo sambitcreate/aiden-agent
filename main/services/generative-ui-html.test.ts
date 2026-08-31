@@ -5,11 +5,16 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   GENERATIVE_UI_GUEST_CSP,
+  GENERATIVE_UI_DESIGN_GUEST_CSP,
   GENERATIVE_UI_IFRAME_SANDBOX,
   GENERATIVE_UI_EXPORT_HOST_CSP,
   GENERATIVE_UI_PARENT_FRAME_SRC,
   GENERATIVE_UI_PROTOCOL_SCHEME,
 } from "../../renderer/shared/generative-ui.js";
+import {
+  DESIGN_PICKER_COMMAND,
+  DESIGN_PICKER_SELECTION,
+} from "../../renderer/shared/design-workspace.js";
 import {
   generativeUiExportDocument,
   validateGenerativeUiHtml,
@@ -19,8 +24,11 @@ import {
 const TITLE = "Dependency map";
 
 test("wrapper injects guest CSP, sandbox contract, and host library protocol", () => {
-  const document = wrapGenerativeUiHtml("<p>hello</p><canvas id=\"c\"></canvas>", TITLE);
-  assert.match(document, new RegExp(`content="${GENERATIVE_UI_GUEST_CSP.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}"`, "u"));
+  const document = wrapGenerativeUiHtml('<p>hello</p><canvas id="c"></canvas>', TITLE);
+  assert.match(
+    document,
+    new RegExp(`content="${GENERATIVE_UI_GUEST_CSP.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}"`, "u"),
+  );
   assert.match(document, new RegExp(`${GENERATIVE_UI_PROTOCOL_SCHEME}://chart\\.js`, "u"));
   assert.match(document, /<p>hello<\/p>/u);
   assert.equal(GENERATIVE_UI_IFRAME_SANDBOX, "allow-scripts");
@@ -36,6 +44,45 @@ test("wrapper keeps inline head styles from a complete HTML document", () => {
   );
   assert.match(document, /h1\{color:red\}/u);
   assert.match(document, /<h1>Chart<\/h1>/u);
+});
+
+test("Design wrapper alone receives the local React Grab selection bridge", () => {
+  const ordinary = wrapGenerativeUiHtml("<button>Save</button>", "Ordinary");
+  const design = wrapGenerativeUiHtml(
+    '<button data-aiden-id="save">Save</button>',
+    "Design",
+    undefined,
+    {
+      designCapability: "main-owned-capability",
+    },
+  );
+  assert.doesNotMatch(ordinary, /react-grab-primitives\.js/u);
+  assert.doesNotMatch(ordinary, new RegExp(DESIGN_PICKER_SELECTION, "u"));
+  assert.match(design, /aiden-genui:\/\/react-grab-primitives\.js/u);
+  assert.match(design, new RegExp(DESIGN_PICKER_COMMAND, "u"));
+  assert.match(design, new RegExp(DESIGN_PICKER_SELECTION, "u"));
+  assert.match(design, /main-owned-capability/u);
+  assert.match(
+    design,
+    new RegExp(GENERATIVE_UI_DESIGN_GUEST_CSP.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+  );
+  assert.match(GENERATIVE_UI_DESIGN_GUEST_CSP, /connect-src 'none'/u);
+});
+
+test("Design picker keeps the exact React Grab hit instead of promoting tagged ancestors", () => {
+  const design = wrapGenerativeUiHtml(
+    '<article data-aiden-id="card"><button><span>Save</span></button></article>',
+    "Exact selection",
+    undefined,
+    { designCapability: "main-owned-capability" },
+  );
+  assert.match(design, /const target = primitives\.getElementAtPoint/u);
+  assert.match(design, /return target \|\| null/u);
+  assert.match(design, /primitives\.getElementSelector\(element\)/u);
+  assert.match(design, /show\(event\.target, false\)/u);
+  assert.match(design, /const target = document\.activeElement/u);
+  assert.doesNotMatch(design, /stableElement/u);
+  assert.doesNotMatch(design, /element\.closest\("\[data-aiden-id\]"\)/u);
 });
 
 test("html admission rejects remote scripts, frames, and javascript URLs", () => {
@@ -69,25 +116,25 @@ test("export inlines host libraries and removes the custom protocol", () => {
   });
   assert.match(exported, /window\.Chart = function Chart/u);
   assert.doesNotMatch(exported, /aiden-genui:\/\//u);
+  assert.doesNotMatch(exported, /react-grab-primitives/u);
   assert.match(exported, /script-src 'unsafe-inline'/u);
   assert.doesNotMatch(exported, /script-src 'unsafe-inline' aiden-genui:/u);
   assert.match(exported, /sandbox="allow-scripts"/u);
   assert.match(exported, /srcdoc="/u);
-  assert.match(exported, new RegExp(GENERATIVE_UI_EXPORT_HOST_CSP.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+  assert.match(
+    exported,
+    new RegExp(GENERATIVE_UI_EXPORT_HOST_CSP.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+  );
   assert.doesNotMatch(GENERATIVE_UI_EXPORT_HOST_CSP, /frame-src [^;]*https/u);
 });
 
 test("export srcdoc preserves HTML entities for the guest parser", () => {
-  const exported = generativeUiExportDocument(
-    '<p data-label="&quot;">&amp;</p>',
-    TITLE,
-    {
-      "chart.js": "window.Chart = '&quot;';",
-      "plotly.js": "window.Plotly = {};",
-      "katex.js": "window.katex = {};",
-      "katex.css": "body::before { content: '&quot;'; }",
-    },
-  );
+  const exported = generativeUiExportDocument('<p data-label="&quot;">&amp;</p>', TITLE, {
+    "chart.js": "window.Chart = '&quot;';",
+    "plotly.js": "window.Plotly = {};",
+    "katex.js": "window.katex = {};",
+    "katex.css": "body::before { content: '&quot;'; }",
+  });
   assert.match(exported, /&amp;quot;/u);
   assert.match(exported, /&amp;amp;/u);
 });
@@ -107,7 +154,10 @@ new Chart(ctx, { type: "line", data: { labels: ["A", "B"], datasets: [{ data: [1
 
 test("sandbox contract keeps guest scripts unique-origin and network-denied", () => {
   assert.equal(GENERATIVE_UI_IFRAME_SANDBOX, "allow-scripts");
-  assert.doesNotMatch(GENERATIVE_UI_IFRAME_SANDBOX, /allow-same-origin|allow-popups|allow-forms|allow-downloads/u);
+  assert.doesNotMatch(
+    GENERATIVE_UI_IFRAME_SANDBOX,
+    /allow-same-origin|allow-popups|allow-forms|allow-downloads/u,
+  );
   assert.match(GENERATIVE_UI_GUEST_CSP, /connect-src 'none'/u);
   assert.match(GENERATIVE_UI_GUEST_CSP, /frame-src 'none'/u);
   assert.match(GENERATIVE_UI_GUEST_CSP, /form-action 'none'/u);
@@ -119,7 +169,10 @@ test("sandbox contract keeps guest scripts unique-origin and network-denied", ()
 
 test("iframe preview uses aiden-genui protocol src, not inherited srcdoc", async () => {
   const frame = await fs.readFile(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/html-artifact-frame.tsx"),
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../renderer/components/html-artifact-frame.tsx",
+    ),
     "utf8",
   );
   assert.match(frame, /src=\{src\}/u);
@@ -152,7 +205,10 @@ document.getElementById("n").addEventListener("click", (event) => {
 
 test("artifact chrome promotes one interactive iframe into the modal top layer", async () => {
   const frame = await fs.readFile(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/html-artifact-frame.tsx"),
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../renderer/components/html-artifact-frame.tsx",
+    ),
     "utf8",
   );
   assert.match(frame, /max-w-\[42rem\]/u);
@@ -179,7 +235,10 @@ test("artifact chrome promotes one interactive iframe into the modal top layer",
   );
   assert.match(styles, /\.aiden-html-artifact-popover:popover-open/u);
   const messageList = await fs.readFile(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/message-list.tsx"),
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../renderer/components/message-list.tsx",
+    ),
     "utf8",
   );
   assert.match(messageList, /MINIMUM_VISUALIZING_MS = 700/u);

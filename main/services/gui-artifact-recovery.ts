@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog } from "../platform.js";
+import { randomUUID } from "node:crypto";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import {
@@ -9,6 +10,7 @@ import {
 import { loadGenerativeUiHostLibraries } from "./generative-ui-host-libraries.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-protocol.js";
 import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
+import { isDesignHtmlArtifact } from "../../renderer/shared/design-workspace.js";
 
 export async function unresolvedGuiArtifactMessage(chatId: string): Promise<string | undefined> {
   const image = displayImageArtifactStore.availability();
@@ -37,15 +39,26 @@ export async function wrapStoredHtmlArtifact(input: {
   chatId: string;
   mediaId: string;
   theme?: unknown;
-}): Promise<{ title: string; src: string } | undefined> {
+  designStudio?: boolean;
+}): Promise<{ title: string; src: string; designCapability?: string } | undefined> {
   if (!isHtmlArtifactMediaId(input.mediaId)) return undefined;
   const html = await generativeUiArtifactStore.htmlFor(input.chatId, input.mediaId);
   const artifact = await generativeUiArtifactStore.artifactFor(input.chatId, input.mediaId);
   if (html === undefined || !artifact) return undefined;
-  const srcdoc = wrapGenerativeUiHtml(html, artifact.title, parseGenerativeUiTheme(input.theme));
+  const designCapability =
+    input.designStudio === true && isDesignHtmlArtifact(artifact) ? randomUUID() : undefined;
+  const srcdoc = wrapGenerativeUiHtml(
+    html,
+    artifact.title,
+    parseGenerativeUiTheme(input.theme),
+    designCapability ? { designCapability } : undefined,
+  );
   return {
     title: artifact.title,
-    src: registerGenerativeUiPreviewDocument(srcdoc),
+    src: registerGenerativeUiPreviewDocument(srcdoc, {
+      designStudio: designCapability !== undefined,
+    }),
+    ...(designCapability ? { designCapability } : {}),
   };
 }
 

@@ -35,3 +35,19 @@ KaTeX (JavaScript, CSS, and fonts) is used in Aiden Markdown and a separate copy
 Copyright (c) 2013-2026 Khan Academy and other contributors
 
 MIT License. See https://github.com/KaTeX/KaTeX/blob/main/LICENSE.txt
+
+## React Flow
+
+`@xyflow/react` powers the spatial Design Workspace canvas.
+
+Copyright (c) 2019-2025 webkid GmbH
+
+MIT License. See https://github.com/xyflow/xyflow/blob/main/LICENSE
+
+## React Grab
+
+A minimized bundle of `react-grab/primitives` is vendored into `resources/generative-ui` for Design-only element hit testing inside sandboxed preview guests. Aiden does not initialize React Grab's full overlay or telemetry path.
+
+Copyright (c) 2025 Aiden Bai
+
+MIT License. See https://github.com/aidenybai/react-grab/blob/main/LICENSE

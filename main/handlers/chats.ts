@@ -616,7 +616,12 @@ export function registerChatHistoryHandlers(): void {
       const record = input as Record<string, unknown>;
       const chatId = asString(record.chatId, "chatId");
       const mediaId = asString(record.mediaId, "mediaId");
-      return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
+      return wrapStoredHtmlArtifact({
+        chatId,
+        mediaId,
+        theme: record.theme,
+        designStudio: record.designStudio === true,
+      });
     },
   );
 
