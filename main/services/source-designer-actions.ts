@@ -19,6 +19,8 @@ const MAX_SOURCE_BYTES = 1_500_000;
 const BINDING_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_ACTIONS = 80;
 const SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
+const SOURCE_SEARCH_SKIP = new Set([".git", ".next", "build", "dist", "node_modules"]);
+const MAX_SOURCE_SEARCH_ENTRIES = 5_000;
 
 export interface ResolvedSourceSelection extends SourceSelectionBindingV1 {
   ownerDocumentId: string;
@@ -56,8 +58,60 @@ function insideRoot(root: string, candidate: string): boolean {
 function normalizeReportedPath(root: string, supplied: string): string {
   let value = supplied.trim().split(/[?#]/u, 1)[0] ?? "";
   if (value.startsWith("file://")) value = fileURLToPath(value);
+  else if (/^https?:\/\//u.test(value)) value = new URL(value).pathname;
   if (value.startsWith("/@fs/")) value = value.slice(4);
   return path.isAbsolute(value) ? value : path.resolve(root, value);
+}
+
+async function existingSourcePath(root: string, supplied: string): Promise<string> {
+  const direct = normalizeReportedPath(root, supplied);
+  if (insideRoot(root, direct) && SOURCE_EXTENSIONS.has(path.extname(direct).toLowerCase())) {
+    try {
+      if ((await fs.stat(direct)).isFile()) return direct;
+    } catch {
+      // Sourcemaps may report a package-relative basename rather than a root-relative path.
+    }
+  }
+  let suffix = supplied.trim();
+  try {
+    if (/^(?:file|https?):\/\//u.test(suffix)) suffix = new URL(suffix).pathname;
+  } catch {
+    throw new Error("The selected source path is invalid.");
+  }
+  suffix = suffix.split(/[?#]/u, 1)[0]?.replace(/^\/@fs\//u, "/").replace(/^\/+|^\.\//gu, "") ?? "";
+  if (!suffix || !SOURCE_EXTENSIONS.has(path.extname(suffix).toLowerCase())) {
+    throw new Error("The selected element does not map to a supported workspace source file.");
+  }
+  const portableSuffix = suffix.split(path.sep).join("/");
+  const matches: string[] = [];
+  const queue: string[] = [root];
+  let visited = 0;
+  while (queue.length > 0 && visited < MAX_SOURCE_SEARCH_ENTRIES && matches.length < 2) {
+    const directory = queue.shift();
+    if (!directory) break;
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      visited += 1;
+      if (visited > MAX_SOURCE_SEARCH_ENTRIES) break;
+      if (entry.isDirectory()) {
+        if (!SOURCE_SEARCH_SKIP.has(entry.name)) queue.push(path.join(directory, entry.name));
+        continue;
+      }
+      if (!entry.isFile() || !SOURCE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+      const candidate = path.join(directory, entry.name);
+      const relative = path.relative(root, candidate).split(path.sep).join("/");
+      if (relative === portableSuffix || relative.endsWith(`/${portableSuffix}`)) {
+        matches.push(candidate);
+      }
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length > 1
+        ? "The selected source mapping is ambiguous. Select a different exact element."
+        : "The selected source file is unavailable.",
+    );
+  }
+  return matches[0]!;
 }
 
 function scriptKind(filePath: string): ts.ScriptKind {
@@ -73,6 +127,7 @@ function exactJsxRange(
   filePath: string,
   lineNumber: number,
   columnNumber: number,
+  descriptor: SourceElementDescriptorV1,
 ): { start: number; end: number } | undefined {
   const sourceFile = ts.createSourceFile(
     filePath,
@@ -85,20 +140,56 @@ function exactJsxRange(
   const column = Math.max(0, columnNumber - 1);
   if (line >= sourceFile.getLineStarts().length) return undefined;
   const position = sourceFile.getPositionOfLineAndCharacter(line, column);
-  let best: ts.JsxElement | ts.JsxSelfClosingElement | ts.JsxFragment | undefined;
+  const candidates: Array<ts.JsxElement | ts.JsxSelfClosingElement> = [];
+  let best: ts.JsxElement | ts.JsxSelfClosingElement | undefined;
   const visit = (node: ts.Node): void => {
-    if (position < node.getFullStart() || position > node.getEnd()) return;
-    if (
-      ts.isJsxElement(node) ||
-      ts.isJsxSelfClosingElement(node) ||
-      ts.isJsxFragment(node)
-    ) {
-      if (!best || node.getWidth(sourceFile) < best.getWidth(sourceFile)) best = node;
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+      candidates.push(node);
+      if (
+        position >= node.getFullStart() &&
+        position <= node.getEnd() &&
+        (!best || node.getWidth(sourceFile) < best.getWidth(sourceFile))
+      ) {
+        best = node;
+      }
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return best ? { start: best.getStart(sourceFile), end: best.getEnd() } : undefined;
+  const tagName = (node: ts.JsxElement | ts.JsxSelfClosingElement): string =>
+    (ts.isJsxElement(node) ? node.openingElement.tagName : node.tagName).getText(sourceFile);
+  if (best && tagName(best) === descriptor.selection.tagName) {
+    return { start: best.getStart(sourceFile), end: best.getEnd() };
+  }
+
+  const stableAttribute = (() => {
+    if (descriptor.selection.elementId) {
+      return { name: "id", value: descriptor.selection.elementId };
+    }
+    const match = descriptor.selection.selector.match(
+      /^\[(data-testid|data-aiden-id)="([A-Za-z0-9._:-]{1,120})"\]$/u,
+    );
+    return match?.[1] && match[2] ? { name: match[1], value: match[2] } : undefined;
+  })();
+  if (!stableAttribute) return undefined;
+  const matching = candidates.filter((node) => {
+    if (tagName(node) !== descriptor.selection.tagName) return false;
+    const attributes = ts.isJsxElement(node)
+      ? node.openingElement.attributes.properties
+      : node.attributes.properties;
+    return attributes.some((attribute) => {
+      if (!ts.isJsxAttribute(attribute) || attribute.name.getText(sourceFile) !== stableAttribute.name) {
+        return false;
+      }
+      return (
+        attribute.initializer !== undefined &&
+        ts.isStringLiteral(attribute.initializer) &&
+        attribute.initializer.text === stableAttribute.value
+      );
+    });
+  });
+  const exact = matching.length === 1 ? matching[0] : undefined;
+  return exact ? { start: exact.getStart(sourceFile), end: exact.getEnd() } : undefined;
 }
 
 function validJsxReplacement(value: string): boolean {
@@ -157,10 +248,7 @@ export class SourceDesignerActionService {
       throw new Error("React source metadata is unavailable for that exact element.");
     }
     const root = await fs.realpath(authority.root);
-    const reported = normalizeReportedPath(root, descriptor.filePath);
-    if (!insideRoot(root, reported) || !SOURCE_EXTENSIONS.has(path.extname(reported).toLowerCase())) {
-      throw new Error("The selected element does not map to a supported workspace source file.");
-    }
+    const reported = await existingSourcePath(root, descriptor.filePath);
     const canonicalPath = await fs.realpath(reported);
     if (!insideRoot(root, canonicalPath)) {
       throw new Error("The selected element resolves outside the workspace.");
@@ -175,6 +263,7 @@ export class SourceDesignerActionService {
       canonicalPath,
       descriptor.lineNumber,
       descriptor.columnNumber,
+      descriptor,
     );
     if (!range) throw new Error("Aiden could not bind that exact element to a JSX range.");
     const relative = path.relative(root, canonicalPath).split(path.sep).join("/");

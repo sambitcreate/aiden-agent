@@ -192,7 +192,7 @@ const featureBentos: FeatureBento[] = [
     group: "create",
     title: "Design Workspace",
     description:
-      "Arrange live HTML artboards and image references on an infinite canvas, then select a screen or exact element and ask Aiden to refine it.",
+      "Arrange live HTML artboards and image references on an infinite canvas, or explicitly open a local React app, select an exact element, and review every source change before apply.",
     icon: PanelsTopLeft,
     imageUrl: FEATURE_ILLUSTRATIONS.designWorkspace,
     size: "tall",

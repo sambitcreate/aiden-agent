@@ -15,6 +15,9 @@ import {
 } from "@xyflow/react";
 import {
   Download,
+  AppWindow,
+  Check,
+  Code2,
   Hand,
   ImagePlus,
   Loader2,
@@ -26,6 +29,8 @@ import {
   ScanSearch,
   Smartphone,
   Tablet,
+  Undo2,
+  X,
 } from "lucide-react";
 import type { Attachment } from "../lib/types";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
@@ -36,11 +41,21 @@ import {
   type DesignWorkspaceArtifactEntry,
   type DesignWorkspaceArtifactGroup,
 } from "../shared/design-workspace";
-import { chatsApi } from "../lib/ipc";
+import { chatsApi, designerApi } from "../lib/ipc";
 import { cn } from "../lib/ui-utils";
 import { Button, Text, toast } from "./ui";
 import { HtmlArtifactIframe } from "./html-artifact-frame";
 import { htmlArtifactThemeTokensFromDocument } from "../lib/html-artifact-preview";
+import {
+  parseSourceElementDescriptor,
+  SOURCE_DESIGN_PICKER_COMMAND,
+  SOURCE_DESIGN_PICKER_SELECTION,
+  type DesignerActionV1,
+  type SourceElementDescriptorV1,
+  type SourcePreviewStateV1,
+  type SourceSelectionBindingV1,
+} from "../shared/source-designer";
+import { GENERATIVE_UI_ESCAPE_MESSAGE } from "../shared/generative-ui";
 
 type DesignViewport = "desktop" | "tablet" | "phone";
 type CanvasMode = "select" | "inspect" | "preview" | "hand";
@@ -76,9 +91,23 @@ interface ImageNodeData extends Record<string, unknown> {
   attachment: Attachment;
 }
 
+interface SourceArtboardData extends Record<string, unknown> {
+  kind: "source";
+  title: string;
+  src: string;
+  capability: string;
+  viewport: DesignViewport;
+  mode: CanvasMode;
+  selectedSelector?: string;
+  revision: number;
+  onElementSelect: (descriptor: SourceElementDescriptorV1) => void;
+  onExitInspect: () => void;
+}
+
 type DesignArtboardNode = Node<DesignArtboardData, "designArtboard">;
 type DesignImageNode = Node<ImageNodeData, "designImage">;
-type StudioNode = DesignArtboardNode | DesignImageNode;
+type SourceArtboardNode = Node<SourceArtboardData, "sourceArtboard">;
+type StudioNode = DesignArtboardNode | DesignImageNode | SourceArtboardNode;
 
 function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode>) {
   const [preview, setPreview] = React.useState<{
@@ -240,6 +269,107 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
 
 const DesignArtboardNodeMemo = React.memo(DesignArtboardNodeView);
 
+function SourceArtboardNodeView({ data, selected }: NodeProps<SourceArtboardNode>) {
+  const frameRef = React.useRef<HTMLIFrameElement | null>(null);
+  const interactive = data.mode === "inspect" || data.mode === "preview";
+  const size = VIEWPORT_SIZE[data.viewport];
+  const syncPicker = React.useCallback(() => {
+    frameRef.current?.contentWindow?.postMessage(
+      {
+        type: SOURCE_DESIGN_PICKER_COMMAND,
+        capability: data.capability,
+        enabled: data.mode === "inspect",
+        selectedSelector: data.selectedSelector ?? "",
+      },
+      "*",
+    );
+  }, [data.capability, data.mode, data.selectedSelector]);
+
+  React.useEffect(() => {
+    const receiveMessage = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow) return;
+      if (event.data === GENERATIVE_UI_ESCAPE_MESSAGE) {
+        data.onExitInspect();
+        return;
+      }
+      if (
+        !event.data ||
+        typeof event.data !== "object" ||
+        event.data.type !== SOURCE_DESIGN_PICKER_SELECTION ||
+        event.data.capability !== data.capability
+      ) {
+        return;
+      }
+      const descriptor = parseSourceElementDescriptor(event.data.descriptor);
+      if (descriptor) data.onElementSelect(descriptor);
+    };
+    window.addEventListener("message", receiveMessage);
+    return () => window.removeEventListener("message", receiveMessage);
+  }, [data]);
+  React.useEffect(syncPicker, [syncPicker]);
+
+  const src = React.useMemo(() => {
+    const url = new URL(data.src);
+    url.searchParams.set("aidenRevision", String(data.revision));
+    return url.toString();
+  }, [data.revision, data.src]);
+
+  return (
+    <article
+      className={cn(
+        "overflow-hidden rounded-card bg-popover shadow-popover transition-shadow duration-150",
+        selected && "ring-2 ring-accent ring-offset-2 ring-offset-well",
+      )}
+      style={{ width: size.width, height: size.height + 38 }}
+      aria-label={`${data.title} source-backed artboard`}
+      data-source-design-artboard
+    >
+      <NodeToolbar
+        isVisible={selected}
+        position={Position.Top}
+        offset={12}
+        className="flex items-center gap-2 rounded-popover bg-popover px-2 py-1.5 text-primary shadow-popover"
+      >
+        <AppWindow className="size-4 text-accent" aria-hidden="true" />
+        <Text variant="small-strong" truncate className="max-w-60">
+          {data.title}
+        </Text>
+        <span className="rounded-control bg-list-selection px-2 py-1 text-mini text-secondary">
+          Live source
+        </span>
+      </NodeToolbar>
+      <header className="source-artboard-drag-handle flex h-[38px] cursor-grab items-center gap-2 border-b border-separator px-3 active:cursor-grabbing">
+        <span className="size-2 rounded-full bg-green" aria-hidden="true" />
+        <Text variant="small-strong" truncate className="min-w-0 flex-1">
+          {data.title}
+        </Text>
+        <Text variant="small" color="tertiary" className="text-mini">
+          Source-backed · {size.width} × {size.height}
+        </Text>
+      </header>
+      <div
+        className={cn(
+          "nodrag nopan nowheel relative bg-control",
+          !interactive && "pointer-events-none",
+        )}
+        style={{ width: size.width, height: size.height }}
+      >
+        <iframe
+          ref={frameRef}
+          title={`${data.title} local app preview`}
+          sandbox="allow-scripts allow-forms"
+          referrerPolicy="no-referrer"
+          src={src}
+          className="block h-full w-full border-0 bg-control"
+          onLoad={syncPicker}
+        />
+      </div>
+    </article>
+  );
+}
+
+const SourceArtboardNodeMemo = React.memo(SourceArtboardNodeView);
+
 function DesignImageNodeView({ data, selected }: NodeProps<DesignImageNode>) {
   const source = data.attachment.data
     ? `data:${data.attachment.mimeType};base64,${data.attachment.data}`
@@ -269,6 +399,7 @@ const DesignImageNodeMemo = React.memo(DesignImageNodeView);
 const NODE_TYPES: NodeTypes = {
   designArtboard: DesignArtboardNodeMemo,
   designImage: DesignImageNodeMemo,
+  sourceArtboard: SourceArtboardNodeMemo,
 };
 
 function canvasImageAttachment(file: File): Promise<Attachment> {
@@ -327,24 +458,30 @@ function CanvasToolButton({
 
 export function DesignWorkspaceCanvas({
   chatId,
+  workspaceId,
   artifacts,
   generating,
   initialMediaId,
   unavailableMessage,
   targets,
+  sourceSelection,
   selectedImages,
   onTargetsChange,
+  onSourceSelectionChange,
   onSelectedImagesChange,
   onRequestComposerFocus,
 }: {
   chatId: string;
+  workspaceId?: string;
   artifacts: readonly DesignWorkspaceArtifactEntry[];
   generating: boolean;
   initialMediaId?: string;
   unavailableMessage?: string;
   targets: readonly DesignTurnTargetV1[];
+  sourceSelection?: SourceSelectionBindingV1;
   selectedImages: readonly Attachment[];
   onTargetsChange: (targets: DesignTurnTargetV1[]) => void;
+  onSourceSelectionChange: (selection: SourceSelectionBindingV1 | undefined) => void;
   onSelectedImagesChange: (images: Attachment[]) => void;
   onRequestComposerFocus: () => void;
 }) {
@@ -352,6 +489,12 @@ export function DesignWorkspaceCanvas({
   const [mode, setMode] = React.useState<CanvasMode>("select");
   const [activeVersions, setActiveVersions] = React.useState<Record<string, string>>({});
   const [canvasImages, setCanvasImages] = React.useState<Attachment[]>([]);
+  const [sourcePreview, setSourcePreview] = React.useState<SourcePreviewStateV1>();
+  const [previewSetupOpen, setPreviewSetupOpen] = React.useState(false);
+  const [previewBusy, setPreviewBusy] = React.useState(false);
+  const [sourceRevision, setSourceRevision] = React.useState(0);
+  const [designerActions, setDesignerActions] = React.useState<DesignerActionV1[]>([]);
+  const [actionBusy, setActionBusy] = React.useState(false);
   const [nodes, setNodes] = React.useState<StudioNode[]>([]);
   const flowRef = React.useRef<ReactFlowInstance<StudioNode> | null>(null);
   const uploadRef = React.useRef<HTMLInputElement | null>(null);
@@ -360,6 +503,101 @@ export function DesignWorkspaceCanvas({
   React.useLayoutEffect(() => {
     targetsRef.current = targets;
   }, [targets]);
+
+  React.useEffect(() => {
+    if (!workspaceId || unavailableMessage) return;
+    let cancelled = false;
+    void Promise.all([
+      designerApi.previewState(workspaceId),
+      designerApi.listActions(chatId, workspaceId),
+    ])
+      .then(([preview, actions]) => {
+        if (cancelled) return;
+        setSourcePreview(preview);
+        setDesignerActions(actions);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          toast.error(cause instanceof Error ? cause.message : "Could not open local app tools.");
+        }
+      });
+    const offPreview = designerApi.onPreviewChanged((payload) => {
+      if (payload.workspaceId === workspaceId) setSourcePreview(payload.state);
+    });
+    const offAction = designerApi.onActionChanged(({ action }) => {
+      if (action.chatId !== chatId || action.workspaceId !== workspaceId) return;
+      setDesignerActions((current) => [
+        action,
+        ...current.filter((candidate) => candidate.id !== action.id),
+      ]);
+    });
+    return () => {
+      cancelled = true;
+      offPreview();
+      offAction();
+    };
+  }, [chatId, unavailableMessage, workspaceId]);
+
+  const bindSourceSelection = React.useCallback(
+    async (descriptor: SourceElementDescriptorV1) => {
+      if (!workspaceId || sourcePreview?.status !== "running") return;
+      try {
+        const binding = await designerApi.bindSelection(
+          workspaceId,
+          sourcePreview.sessionId,
+          descriptor,
+        );
+        onSourceSelectionChange(binding);
+        onTargetsChange([]);
+        onSelectedImagesChange([]);
+      } catch (cause) {
+        onSourceSelectionChange(undefined);
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : "That element does not expose exact React source metadata.",
+        );
+      }
+    }, [
+      onSelectedImagesChange,
+      onSourceSelectionChange,
+      onTargetsChange,
+      sourcePreview,
+      workspaceId,
+    ],
+  );
+
+  const startSourcePreview = React.useCallback(
+    async (scriptId: string) => {
+      if (!workspaceId || previewBusy) return;
+      setPreviewBusy(true);
+      try {
+        const state = await designerApi.startPreview(workspaceId, scriptId);
+        setSourcePreview(state);
+        setPreviewSetupOpen(false);
+        requestAnimationFrame(() => void flowRef.current?.fitView({ padding: 0.18, maxZoom: 0.9 }));
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "Could not start the local app.");
+      } finally {
+        setPreviewBusy(false);
+      }
+    },
+    [previewBusy, workspaceId],
+  );
+
+  const stopSourcePreview = React.useCallback(async () => {
+    if (!workspaceId || previewBusy) return;
+    setPreviewBusy(true);
+    try {
+      await designerApi.stopPreview(workspaceId);
+      setSourcePreview(await designerApi.previewState(workspaceId));
+      onSourceSelectionChange(undefined);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not stop the local app.");
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, [onSourceSelectionChange, previewBusy, workspaceId]);
 
   const exportArtifact = React.useCallback(
     async (artifact: ChatHtmlArtifactV1) => {
@@ -384,9 +622,12 @@ export function DesignWorkspaceCanvas({
         ? [...current.filter((item) => item.mediaId !== artifact.mediaId), target].slice(-5)
         : [target];
       onTargetsChange(next);
-      if (!additive) onSelectedImagesChange([]);
+      if (!additive) {
+        onSelectedImagesChange([]);
+        onSourceSelectionChange(undefined);
+      }
     },
-    [onSelectedImagesChange, onTargetsChange],
+    [onSelectedImagesChange, onSourceSelectionChange, onTargetsChange],
   );
 
   const changeVersion = React.useCallback(
@@ -411,6 +652,36 @@ export function DesignWorkspaceCanvas({
   React.useEffect(() => {
     setNodes((current) => {
       const positions = new Map(current.map((node) => [node.id, node.position]));
+      const sourceNode: SourceArtboardNode[] =
+        sourcePreview?.status === "running"
+          ? [
+              {
+                id: `source-artboard:${sourcePreview.sessionId}`,
+                type: "sourceArtboard",
+                position: positions.get(`source-artboard:${sourcePreview.sessionId}`) ?? {
+                  x: 0,
+                  y: 0,
+                },
+                selected: Boolean(sourceSelection),
+                draggable: mode === "select",
+                selectable: mode === "select",
+                dragHandle: ".source-artboard-drag-handle",
+                data: {
+                  kind: "source",
+                  title: sourcePreview.script.label,
+                  src: sourcePreview.src,
+                  capability: sourcePreview.capability,
+                  viewport,
+                  mode,
+                  selectedSelector: sourceSelection?.selection.selector,
+                  revision: sourceRevision,
+                  onElementSelect: (descriptor) => void bindSourceSelection(descriptor),
+                  onExitInspect: () => setMode("select"),
+                },
+              },
+            ]
+          : [];
+      const sourceOffset = sourceNode.length > 0 ? VIEWPORT_SIZE[viewport].width + 120 : 0;
       const designNodes: DesignArtboardNode[] = groups.map((group, index) => {
         const requested =
           activeVersions[group.id] ??
@@ -426,7 +697,7 @@ export function DesignWorkspaceCanvas({
           id: group.id,
           type: "designArtboard",
           position: positions.get(group.id) ?? {
-            x: index * (VIEWPORT_SIZE[viewport].width + 120),
+            x: sourceOffset + index * (VIEWPORT_SIZE[viewport].width + 120),
             y: 0,
           },
           selected: Boolean(target),
@@ -460,10 +731,11 @@ export function DesignWorkspaceCanvas({
         selectable: mode === "select",
         data: { kind: "image", attachment },
       }));
-      return [...designNodes, ...imageNodes];
+      return [...sourceNode, ...designNodes, ...imageNodes];
     });
   }, [
     activeVersions,
+    bindSourceSelection,
     canvasImages,
     changeVersion,
     chatId,
@@ -473,6 +745,9 @@ export function DesignWorkspaceCanvas({
     mode,
     selectElement,
     selectedImages,
+    sourcePreview,
+    sourceRevision,
+    sourceSelection,
     targets,
     viewport,
   ]);
@@ -504,9 +779,14 @@ export function DesignWorkspaceCanvas({
       if (mode !== "select") return;
       const nextTargets: DesignTurnTargetV1[] = [];
       const nextImages: Attachment[] = [];
+      let sourceSelected = false;
       for (const node of selectedNodes) {
         if (node.type === "designImage") {
           nextImages.push((node.data as ImageNodeData).attachment);
+          continue;
+        }
+        if (node.type === "sourceArtboard") {
+          sourceSelected = true;
           continue;
         }
         const designData = node.data as DesignArtboardData;
@@ -522,8 +802,11 @@ export function DesignWorkspaceCanvas({
       }
       onTargetsChange(nextTargets.slice(0, 5));
       onSelectedImagesChange(nextImages.slice(0, 5));
+      if (!sourceSelected || nextTargets.length > 0 || nextImages.length > 0) {
+        onSourceSelectionChange(undefined);
+      }
     },
-    [mode, onSelectedImagesChange, onTargetsChange],
+    [mode, onSelectedImagesChange, onSourceSelectionChange, onTargetsChange],
   );
 
   const addImages = React.useCallback(
@@ -542,12 +825,53 @@ export function DesignWorkspaceCanvas({
         setCanvasImages((current) => [...current, ...attachments]);
         onSelectedImagesChange(attachments);
         onTargetsChange([]);
+        onSourceSelectionChange(undefined);
       } catch (cause) {
         toast.error(cause instanceof Error ? cause.message : "Could not add those images.");
       }
     },
-    [canvasImages.length, onSelectedImagesChange, onTargetsChange],
+    [canvasImages.length, onSelectedImagesChange, onSourceSelectionChange, onTargetsChange],
   );
+
+  const updateDesignerAction = React.useCallback(
+    async (action: DesignerActionV1, operation: "apply" | "reject" | "undo") => {
+      if (actionBusy) return;
+      if (!workspaceId) return;
+      setActionBusy(true);
+      try {
+        const updated =
+          operation === "apply"
+            ? await designerApi.applyAction(workspaceId, action.id)
+            : operation === "undo"
+              ? await designerApi.undoAction(workspaceId, action.id)
+              : await designerApi.rejectAction(action.id);
+        setDesignerActions((current) => [
+          updated,
+          ...current.filter((candidate) => candidate.id !== updated.id),
+        ]);
+        if (operation === "apply" || operation === "undo") {
+          setSourceRevision((current) => current + 1);
+          onSourceSelectionChange(undefined);
+        }
+        if (updated.status === "stale") {
+          toast.error(updated.message ?? "The source changed before the action could finish.");
+        } else if (updated.status === "applied") {
+          toast.success("Designer Action applied.");
+        } else if (updated.status === "undone") {
+          toast.success("Designer Action undone.");
+        }
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "The Designer Action failed.");
+      } finally {
+        setActionBusy(false);
+      }
+    },
+    [actionBusy, onSourceSelectionChange, workspaceId],
+  );
+
+  const reviewAction =
+    designerActions.find((action) => action.status === "pending") ??
+    designerActions.find((action) => action.status === "applied");
 
   if (unavailableMessage) {
     return (
@@ -564,7 +888,11 @@ export function DesignWorkspaceCanvas({
     );
   }
 
-  if (groups.length === 0 && canvasImages.length === 0) {
+  if (
+    groups.length === 0 &&
+    canvasImages.length === 0 &&
+    sourcePreview?.status !== "running"
+  ) {
     return (
       <section
         className="relative grid h-full min-h-[32rem] place-items-center overflow-hidden bg-well px-8"
@@ -576,6 +904,14 @@ export function DesignWorkspaceCanvas({
           onModeChange={setMode}
           onNewDesign={onRequestComposerFocus}
           onUpload={() => uploadRef.current?.click()}
+        />
+        <SourcePreviewControl
+          state={sourcePreview}
+          open={previewSetupOpen}
+          busy={previewBusy}
+          onOpenChange={setPreviewSetupOpen}
+          onStart={(scriptId) => void startSourcePreview(scriptId)}
+          onStop={() => void stopSourcePreview()}
         />
         <input
           ref={uploadRef}
@@ -650,6 +986,14 @@ export function DesignWorkspaceCanvas({
         }}
         onUpload={() => uploadRef.current?.click()}
       />
+      <SourcePreviewControl
+        state={sourcePreview}
+        open={previewSetupOpen}
+        busy={previewBusy}
+        onOpenChange={setPreviewSetupOpen}
+        onStart={(scriptId) => void startSourcePreview(scriptId)}
+        onStop={() => void stopSourcePreview()}
+      />
       <input
         ref={uploadRef}
         type="file"
@@ -703,6 +1047,15 @@ export function DesignWorkspaceCanvas({
             Done
           </Button>
         </div>
+      ) : null}
+      {reviewAction ? (
+        <DesignerActionReview
+          action={reviewAction}
+          busy={actionBusy}
+          onApply={() => void updateDesignerAction(reviewAction, "apply")}
+          onReject={() => void updateDesignerAction(reviewAction, "reject")}
+          onUndo={() => void updateDesignerAction(reviewAction, "undo")}
+        />
       ) : null}
     </section>
   );
@@ -763,6 +1116,197 @@ function CanvasToolRail({
         <Hand className="size-4" aria-hidden="true" />
       </CanvasToolButton>
     </nav>
+  );
+}
+
+function SourcePreviewControl({
+  state,
+  open,
+  busy,
+  onOpenChange,
+  onStart,
+  onStop,
+}: {
+  state?: SourcePreviewStateV1;
+  open: boolean;
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onStart: (scriptId: string) => void;
+  onStop: () => void;
+}) {
+  const running = state?.status === "running";
+  return (
+    <div className="absolute right-4 top-16 z-30">
+      <Button
+        size="small"
+        variant="toolbar"
+        disabled={!state || busy}
+        onClick={() => onOpenChange(!open)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className="shadow-control"
+      >
+        {busy ? (
+          <Loader2 className="animate-spin" aria-hidden="true" />
+        ) : (
+          <AppWindow aria-hidden="true" />
+        )}
+        {running ? "Local app" : "Connect app"}
+      </Button>
+      {open ? (
+        <section
+          role="dialog"
+          aria-label="Local app preview"
+          className="mt-2 w-[22rem] rounded-popover bg-popover p-3 shadow-popover"
+        >
+          <div className="flex items-start gap-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-control bg-list-selection text-accent">
+              <Code2 className="size-4" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <Text variant="small-strong">
+                {running ? "Source-backed preview" : "Open your local app"}
+              </Text>
+              <Text as="p" variant="small" color="secondary" className="mt-1">
+                {running
+                  ? "Aiden owns this process. Visual edits bind to exact React source when metadata is available."
+                  : "Review the detected command, then start it explicitly."}
+              </Text>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="grid size-7 shrink-0 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              aria-label="Close local app controls"
+            >
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+
+          {state?.status === "ready" ? (
+            <div className="mt-3 space-y-2">
+              {state.scripts.map((script) => (
+                <div key={script.id} className="rounded-control bg-control p-2.5">
+                  <Text variant="small-strong">{script.label}</Text>
+                  <code className="mt-1 block break-all text-mini text-secondary">
+                    {script.command}
+                  </code>
+                  <Button
+                    size="small"
+                    variant="accent"
+                    className="mt-2"
+                    disabled={busy}
+                    onClick={() => onStart(script.id)}
+                  >
+                    <Play aria-hidden="true" /> Start
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : state?.status === "running" ? (
+            <div className="mt-3">
+              <code className="block break-all rounded-control bg-control p-2.5 text-mini text-secondary">
+                {state.script.command}
+              </code>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <Text variant="small" color="secondary">
+                  Running on an Aiden-owned loopback session
+                </Text>
+                <Button size="small" variant="toolbar" disabled={busy} onClick={onStop}>
+                  Stop
+                </Button>
+              </div>
+            </div>
+          ) : state?.status === "unsupported" || state?.status === "failed" ? (
+            <div className="mt-3 rounded-control bg-control p-2.5">
+              <Text variant="small" color={state.status === "failed" ? "red" : "secondary"}>
+                {state.reason}
+              </Text>
+            </div>
+          ) : (
+            <div className="mt-3 flex items-center gap-2 text-secondary">
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              <Text variant="small">Checking package scripts…</Text>
+            </div>
+          )}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function previewCode(value: string): string {
+  return value.length > 4_000 ? `${value.slice(0, 4_000)}\n…` : value;
+}
+
+function DesignerActionReview({
+  action,
+  busy,
+  onApply,
+  onReject,
+  onUndo,
+}: {
+  action: DesignerActionV1;
+  busy: boolean;
+  onApply: () => void;
+  onReject: () => void;
+  onUndo: () => void;
+}) {
+  const pending = action.status === "pending";
+  return (
+    <aside
+      aria-label="Designer Action review"
+      className="absolute bottom-16 right-4 z-30 flex max-h-[min(36rem,70%)] w-[30rem] flex-col overflow-hidden rounded-popover bg-popover shadow-popover"
+    >
+      <header className="flex items-start gap-3 border-b border-separator px-4 py-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-control bg-list-selection text-accent">
+          {pending ? <Code2 className="size-4" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <Text variant="small-strong" truncate>
+            {action.label}
+          </Text>
+          <Text as="p" variant="small" color="secondary" truncate className="mt-0.5">
+            {action.path} · {action.selectionLabel}
+          </Text>
+        </div>
+        <span className="rounded-control bg-control px-2 py-1 text-mini text-secondary">
+          {pending ? "Review required" : "Applied"}
+        </span>
+      </header>
+      <div className="min-h-0 overflow-auto px-4 py-3">
+        <Text variant="small-strong" color="secondary">
+          Before
+        </Text>
+        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-control p-2.5 font-mono text-mini text-secondary">
+          {previewCode(action.before)}
+        </pre>
+        <Text variant="small-strong" color="secondary" className="mt-3">
+          After
+        </Text>
+        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-control p-2.5 font-mono text-mini text-primary">
+          {previewCode(action.after)}
+        </pre>
+      </div>
+      <footer className="flex items-center justify-end gap-2 border-t border-separator px-4 py-3">
+        {pending ? (
+          <>
+            <Button size="small" variant="toolbar" disabled={busy} onClick={onReject}>
+              Deny
+            </Button>
+            <Button size="small" variant="accent" disabled={busy} onClick={onApply}>
+              {busy ? <Loader2 className="animate-spin" /> : <Check />}
+              Apply
+            </Button>
+          </>
+        ) : (
+          <Button size="small" variant="toolbar" disabled={busy} onClick={onUndo}>
+            {busy ? <Loader2 className="animate-spin" /> : <Undo2 />}
+            Undo exact action
+          </Button>
+        )}
+      </footer>
+    </aside>
   );
 }
 

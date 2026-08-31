@@ -131,6 +131,11 @@ import {
   type DesignTurnTargetV1,
 } from "../shared/design-workspace";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../shared/attachment-contract";
+import {
+  SOURCE_DESIGNER_VERSION,
+  type SourceDesignTurnContextV1,
+  type SourceSelectionBindingV1,
+} from "../shared/source-designer";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -409,7 +414,10 @@ export function ChatPane({
   const visualizeTurnRef = React.useRef(false);
   const designTurnRef = React.useRef(false);
   const designContextTurnRef = React.useRef<DesignTurnContextV1 | undefined>(undefined);
+  const sourceDesignContextTurnRef = React.useRef<SourceDesignTurnContextV1 | undefined>(undefined);
   const [designTargets, setDesignTargets] = React.useState<DesignTurnTargetV1[]>([]);
+  const [sourceDesignSelection, setSourceDesignSelection] =
+    React.useState<SourceSelectionBindingV1>();
   const [designCanvasImages, setDesignCanvasImages] = React.useState<Attachment[]>([]);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
@@ -594,6 +602,15 @@ export function ChatPane({
   );
   const designContextItems = React.useMemo(
     () => [
+      ...(sourceDesignSelection
+        ? [
+            {
+              id: `source:${sourceDesignSelection.id}`,
+              kind: "element" as const,
+              label: `${sourceDesignSelection.selection.label} · ${sourceDesignSelection.path}`,
+            },
+          ]
+        : []),
       ...designTargets.map((target) => {
         const artifact = designArtifacts.find(
           (entry) =>
@@ -613,7 +630,7 @@ export function ChatPane({
         label: attachment.name,
       })),
     ],
-    [designArtifacts, designCanvasImages, designTargets],
+    [designArtifacts, designCanvasImages, designTargets, sourceDesignSelection],
   );
   const removeDesignContextItem = React.useCallback((id: string) => {
     if (id.startsWith("target:")) {
@@ -626,6 +643,10 @@ export function ChatPane({
       setDesignCanvasImages((current) =>
         current.filter((attachment) => attachment.id !== attachmentId),
       );
+      return;
+    }
+    if (id.startsWith("source:")) {
+      setSourceDesignSelection(undefined);
     }
   }, []);
   const displayedGenerationTimeline =
@@ -871,6 +892,8 @@ export function ChatPane({
       designTurnRef.current = false;
       const designContext = designContextTurnRef.current;
       designContextTurnRef.current = undefined;
+      const sourceDesignContext = sourceDesignContextTurnRef.current;
+      sourceDesignContextTurnRef.current = undefined;
       const handle = startGeneration(
         {
           chatId,
@@ -880,6 +903,7 @@ export function ChatPane({
           ...(visualize ? { visualize: true as const } : {}),
           ...(design ? { design: true as const } : {}),
           ...(design && designContext ? { designContext } : {}),
+          ...(design && sourceDesignContext ? { sourceDesignContext } : {}),
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
@@ -1147,8 +1171,10 @@ export function ChatPane({
       const design = presentation === "design";
       designTurnRef.current = false;
       designContextTurnRef.current = undefined;
+      sourceDesignContextTurnRef.current = undefined;
       visualizeTurnRef.current = false;
       const selectedTargets = design ? [...designTargets] : [];
+      const selectedSource = design ? sourceDesignSelection : undefined;
       const selectedReferenceImages = design ? [...designCanvasImages] : [];
       const submittedAttachments = [...attachments];
       const submittedAttachmentIds = new Set(
@@ -1226,11 +1252,19 @@ export function ChatPane({
         designTurnRef.current = design;
         visualizeTurnRef.current = options?.visualize === true && !design;
         designContextTurnRef.current =
-          design && selectedTargets.length > 0
+          design && !selectedSource && selectedTargets.length > 0
             ? { version: DESIGN_TURN_CONTEXT_VERSION, targets: selectedTargets }
+            : undefined;
+        sourceDesignContextTurnRef.current =
+          design && selectedSource
+            ? {
+                version: SOURCE_DESIGNER_VERSION,
+                selectionId: selectedSource.id,
+              }
             : undefined;
         if (design) {
           setDesignTargets([]);
+          setSourceDesignSelection(undefined);
           setDesignCanvasImages([]);
         }
         const started = await runGeneration(messageTurnId);
@@ -1255,6 +1289,7 @@ export function ChatPane({
       designTargets,
       detachedGenerationDraining,
       presentation,
+      sourceDesignSelection,
       imageArtifactRecoveryPending,
       imageArtifactRecoveryUnavailable,
       providerId,
@@ -2158,13 +2193,16 @@ export function ChatPane({
         ) : (
           <DesignWorkspaceCanvas
             chatId={chatId}
+            workspaceId={effectiveWorkspaceId}
             artifacts={designArtifacts}
             generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
             initialMediaId={initialDesignMediaId}
             unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}
             targets={designTargets}
+            sourceSelection={sourceDesignSelection}
             selectedImages={designCanvasImages}
             onTargetsChange={setDesignTargets}
+            onSourceSelectionChange={setSourceDesignSelection}
             onSelectedImagesChange={setDesignCanvasImages}
             onRequestComposerFocus={() => composerRef.current?.focus({ preventScroll: true })}
           />
