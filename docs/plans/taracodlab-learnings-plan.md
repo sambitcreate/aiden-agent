@@ -44,7 +44,7 @@ Related plans (do not duplicate):
 
 - `docs/plans/pi-provider-integration-plan.md` — full Pi provider registry
 - `docs/plans/completed/gemini-native-upgrade-plan.md` — Phase 0 catalog-driven runtime limits (overlaps context work)
-- `docs/plans/design-workspace-plan.md` — generated and source-backed visual edit loop (orthogonal)
+- `docs/plans/completed/design-workspace-plan.md` — generated and source-backed visual edit loop (orthogonal)
 
 ## Non-goals
 

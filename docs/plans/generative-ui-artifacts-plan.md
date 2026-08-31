@@ -2,7 +2,7 @@
 
 Status: Active  
 Date: 2026-08-26  
-Sources: Google Antigravity blog [Visualizing with the help of Antigravity](https://antigravity.google/blog/visualizing-with-the-help-of-antigravity) (2026-08-26), [Antigravity changelog 2.11.0](https://antigravity.google/changelog), [Artifacts overview](https://antigravity.google/docs/artifacts), Aiden `docs/pi-gui-artifacts.md`, `display_image` extension, the source-backed track in the [Design Workspace plan](design-workspace-plan.md), and ChatGPT work-surface notes.
+Sources: Google Antigravity blog [Visualizing with the help of Antigravity](https://antigravity.google/blog/visualizing-with-the-help-of-antigravity) (2026-08-26), [Antigravity changelog 2.11.0](https://antigravity.google/changelog), [Artifacts overview](https://antigravity.google/docs/artifacts), Aiden `docs/pi-gui-artifacts.md`, `display_image` extension, the source-backed track in the [Design Workspace plan](completed/design-workspace-plan.md), and ChatGPT work-surface notes.
 
 ## Outcome
 

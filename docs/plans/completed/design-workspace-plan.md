@@ -1,6 +1,6 @@
 # Design Workspace Plan
 
-Status: Partial — spatial HTML/CSS MVP shipped; source-backed editing starts at Phase 4's go/no-go gate
+Status: Complete — generated and source-backed Design Workspace MVP shipped
 
 Date: 2026-08-30
 
@@ -10,14 +10,14 @@ Source-backed research baseline: Aiden `b6b0eff6bb55e0113a05cc8d069fce2c1be67b40
 
 ## Product outcome
 
-Design Workspace is one first-class Aiden product: an infinite canvas where a person and the existing AI backend create, inspect, and refine live interfaces. The shipped path owns app-generated, network-free HTML/CSS/JS artboards. Later phases add an explicit source-backed project path for local Vite/React apps, reviewed workspace writes, exact diffs, and undo.
+Design Workspace is one first-class Aiden product: an infinite canvas where a person and the existing AI backend create, inspect, and refine live interfaces. It supports app-generated, network-free HTML/CSS/JS artboards and an explicit source-backed path for a local Vite/React app with reviewed workspace writes, exact diffs, and undo.
 
 The two document origins share the Design sidebar entry, spatial canvas, React Grab selection language, context chips, composer, and review concepts. They do **not** share authority:
 
 | Document origin | Current state | Authority |
 | --- | --- | --- |
 | Generated design | Shipped MVP | App-owned artifacts only; no repository, command, network, or source authority |
-| Source-backed app | Planned behind Phase 4 gate | Explicit project opt-in; main-owned preview lifecycle, source mapping, always-reviewed writes, action review, and exact undo |
+| Source-backed app | Shipped MVP | Explicit project opt-in; main-owned preview lifecycle, exact proven source binding, always-reviewed single-file writes, action review, and exact undo |
 
 This is intentionally one roadmap rather than a small chat feature plus a separate Designer Mode product. “Designer mode” is the visual-edit interaction inside Design Workspace, not another sidebar destination.
 
@@ -65,73 +65,75 @@ This is intentionally one roadmap rather than a small chat feature plus a separa
 - Element, artboard, and image selections appear as removable chips in the elevated composer and apply to one accepted turn.
 - Same-title output creates another revision of an artboard; distinct stable titles create new artboards without losing canvas state.
 
-## Source-backed continuation
+## Shipped source-backed MVP
 
 The following phases extend the same Design Workspace. They do not silently attach repository power to generated artboards.
 
-### Phase 4 — containment, lifecycle, and identity proof — planned go/no-go gate (5–8 days)
+### Phase 4 — containment, lifecycle, and identity proof — complete
 
-Build disposable Vite + React + Tailwind fixtures. Do not add product writes.
+- A real Vite/React fixture proves the chosen sandboxed-iframe architecture; Electron `<webview>` and remote browsing remain disabled.
+- A person must explicitly start one detected root-package Vite script. Main launches direct argv with `shell: false`, assigns a loopback port, bounds logs and readiness time, scopes ownership to workspace and renderer document, and tears down the process group.
+- A main-owned read-only reverse proxy strips unsafe response headers, injects the pinned React Grab bridge, and accepts only GET/HEAD requests to the owned loopback target.
+- React Grab source context is treated as untrusted evidence. Main canonicalizes the workspace, resolves only supported source files, rejects ambiguous suffix matches, and verifies the exact intrinsic JSX tag before creating a binding.
+- A stable `id`, `data-testid`, or `data-aiden-id` may recover an exact intrinsic JSX element only when that same tag/attribute/value match is unique in the uniquely resolved file. Otherwise selection is unsupported.
+- Browser coverage proves exact nested-element binding, unchanged source before approval, one exact write, exact undo, and fail-closed handling for an unmapped child.
 
-1. Prove a sandboxed iframe with an Aiden-owned Vite adapter in development and a signed packaged app. Compare a main-owned `WebContentsView` only if iframe policy is unworkable; do not enable Electron `<webview>`.
-2. Start a selected workspace dev script only after an explicit **Start preview** action. Use direct argv spawning, bounded logs, readiness probes, process-group cancellation, ownership tracking, and complete teardown.
-3. Activate a temporary adapter/config outside the repository without editing source, dependencies, lockfiles, config, or Git status.
-4. Have one transform emit both `SourceElementId` markers and an atomic versioned source manifest. Assign a separate runtime `DomInstanceId` to every rendered instance.
-5. Test intrinsic elements, custom components with/without prop forwarding, fragments, maps, conditionals, portals, SVG, open shadow roots, HMR, inserted siblings, and stale selections.
-6. Use a malicious fixture to test forged/oversized messages, navigation, permissions, popup/download attempts, floods, and probes for Node or Aiden APIs.
-7. Prove a two-file, hash-bound no-op proposal with Allow, Deny, stale-preimage, cancellation, rollback, and ownership behavior without general file-write tools.
+### Phase 5 — source-backed read-only preview — complete
 
-GO requires correct source definition or an explicit unsupported/ambiguous state, never a wrong mapping; byte-for-byte unchanged workspace before approval; contained guest code; no orphan process; and a written ADR for the chosen preview, adapter, ID schema, and limitations. Failure means Preview-only or a revised plan.
+- **Connect app** lives inside the existing full Design route and shows the exact detected command before Start.
+- The running source app appears as a React Flow artboard and can coexist with generated artboards and image references.
+- Preview lifecycle, script detection, capability, logs, loopback endpoint, and stop behavior are main-owned and exposed through bounded workspace/owner-scoped IPC.
+- Unsupported roots, launch failures, timeouts, crashes, and stopped states remain explicit. The MVP supports root-package scripts whose command directly invokes Vite.
 
-### Phase 5 — source-backed read-only preview — planned (5–8 days)
+### Phase 6 — exact source-backed element selection — complete
 
-- Add main-owned preview server/config services and workspace/owner-scoped IPC.
-- Canonicalize loopback URLs; reject credentials, unsafe schemes, remote redirects, renderer-origin collisions, arbitrary shell text, and external-process termination.
-- Support loading, ready, HMR, compile error, timeout, crash, port conflict, externally owned, unsupported, and restart-required states with bounded logs.
-- Add **Open local app** within the existing Design route. Generated and source-backed artboards can coexist visually, but source-backed mode must show its project identity and authority state.
-- Keep Preview interactive with no source selection or writes in this phase.
+- Visual edit mode uses React Grab for the exact single DOM element. The renderer receives a bounded descriptor; only main may turn it into a workspace path and JSX range.
+- Main binds the selection to renderer owner, workspace, preview session, canonical file, exact range, source hash, and a two-hour opaque selection handle.
+- Ambiguous files, unsupported extensions, custom-component-only positions, mismatched tags, missing source metadata, repeated stable selectors, and changed source fail closed.
+- The source selection appears in the shared composer-chip language and excludes generated artboard/image context for the same turn.
 
-### Phase 6 — exact source-backed element selection — planned (8–12 days)
+### Phase 7 — Designer Action foundation — complete
 
-- React Grab still identifies the exact runtime DOM node. The adapter supplies opaque runtime/source IDs and bounded geometry; it never returns canonical paths or code to the guest.
-- Main owns `ElementSourceMap`, manifest revisions, workspace binding, and source resolution.
-- Definition and instance remain separate. Repeated output may map many runtime nodes to one shared definition; UI labels that consequence before any proposed edit.
-- If the exact selected element lacks a proven source mapping, keep it selected as visual/chat context and offer the nearest proven mapped ancestor as an explicit secondary action. Never silently replace the user's exact selection.
-- Add pointer and keyboard selection, Escape, accessible announcements, shared/repeated badges, and stale/ambiguous states.
-- Persist a source-backed selection only after main binds it to workspace, preview instance, manifest revision, source hash, and resolved definition.
-- `View in Files` may use the main-resolved path/range. Delete and direct mutation remain unavailable.
+- Source-backed Design generation gets one structured `propose_design_action` capability rather than general mutation tools.
+- Each proposal is bound to workspace, chat, opaque selection, exact canonical file/range, source preimage hash, bounded replacement, and a plain-language label.
+- Every proposal opens a mandatory floating Designer Action review with before/after source. Full workspace permission never bypasses this review.
+- Apply rechecks ownership and preimage, uses the versioned workspace writer, and records the postimage hash. Undo proceeds only while that exact postimage remains on disk; external edits become an explicit stale action.
+- Deny writes nothing. No Designer Action runs Git staging, commits, stash, checkout, reset, whole-tree restore, or a shell command.
 
-### Phase 7 — Designer Action foundation — planned (6–10 days)
+### Phase 8 — point → ask → review → apply → undo — complete
 
-- Add a main-owned `DesignerActionService`. Designer generation receives read/search plus one structured `propose_design_action` tool, never general mutation tools.
-- Every proposal binds workspace, chat, selections, expected SHA-256 values, permitted ranges, and exact replacements.
-- Main re-resolves all identities and renders one approval with a plain-language label, shared/repeated consequences, exact files, and bounded hunks. Approval remains mandatory even when ordinary workspace permission is Full.
-- Apply is a version-checked multi-file transaction that preserves modes and rolls back only when written postimages still match. Partial outcomes are explicit.
-- Record an action-scoped ledger under `userData`. Undo applies only when every touched file still matches the action postimage; otherwise open review for reconciliation.
-- Never automatically run `git add`, commit, stash, reset, checkout, `git restore .`, or whole-worktree checkpoint/restore operations.
+- Selecting a proven source element adds an exact source/path chip to the elevated composer and sends only an opaque main-resolved selection handle to generation.
+- The model proposes a replacement; it cannot apply it. The user reviews and chooses Apply or Deny in the canvas.
+- Apply or Undo advances the source artboard revision and reloads the preview. The review remains available for exact undo after apply.
+- Unit, IPC-contract, renderer-contract, vendor, and real Chromium/Vite coverage exercise the shipped flow and its failure boundaries.
 
-### Phase 8 — point → ask → approve → review — planned (5–8 days)
+This completes the first source-backed MVP. The implementation deliberately ships a narrow, auditable path rather than claiming universal DOM-to-source editing.
 
-- A source-backed selection uses the same composer chip language as generated artboards, with file/shared hints added only after main resolution.
-- Before send, main refreshes source range, relevant containing context, manifest revision, and hashes. Stale or ambiguous targets ask for re-selection.
-- Attach bounded static design context such as Tailwind v3 literals, Tailwind v4 `@theme`/CSS variables, relevant global CSS, and project guidance. Never execute project configuration to inspect it.
-- Treat workspace code, comments, styles, and selection text as untrusted data that cannot widen action scope.
-- After approval, wait for write completion, HMR, and the new manifest revision; then re-resolve the exact element or mark it stale and open Action Review.
-- Action Review distinguishes the action from pre-existing working-tree changes and offers exact undo when hashes permit it.
+## MVP limitations carried forward
 
-This completes the first source-backed MVP. A trustworthy Vite/React/Tailwind slice is estimated at 6–9 engineering weeks after the shipped canvas foundation; re-estimate from measured Phase 4 results.
+- Root `package.json` only; no monorepo package picker, nested app discovery, route chooser, or arbitrary command entry.
+- Vite/React only; no Next.js, webpack, Turbopack, Vue, Svelte, or remote URL adapter.
+- One proven intrinsic JSX range and one file per Designer Action. Custom-component definitions, repeated instances, fragments, portals, shadow roots, and multi-file edits fail closed or remain preview-only.
+- React Grab/sourcemap evidence plus exact tag or unique stable selector replaces a repository source transform in this slice. There is no source manifest or runtime-instance graph yet.
+- Action history is scoped to the running app session. It is not a durable cross-restart ledger.
+- The proxy is intentionally read-only and does not proxy Vite WebSocket HMR. Aiden forces an iframe revision reload after Apply/Undo; the dev server may still perform its own client-side HMR.
+- Static Tailwind/global-CSS context, layers, property editing, direct manipulation, component insertion, and generated-to-repository handoff remain later depth.
 
 ## Later depth
 
-1. Layers tree synchronized with exact React Grab selection.
-2. Bounded style/property inspector whose changes become the same reviewed Designer Action.
-3. Static text editing for proven JSX literals; dynamic/localized/rich text fails closed.
-4. Design-system component insertion, safe image asset rewriting, routes/pages, and responsive state editing.
-5. Direct manipulation for a narrow literal Tailwind/`className` matrix, one gesture per action/undo step.
-6. Multi-select within an artboard after stale-selection and shared-definition behavior is proven.
-7. Optional explicit **Build app / Continue in workspace** handoff from a generated artifact.
-8. Next.js adapters only after separate App/Pages Router, webpack/Turbopack, and server/client fixture gates.
-9. GitHub/IDE handoff, pull-request preparation, and repository design-system import as explicit post-MVP actions.
+1. Root/package/route selection for monorepos and multiple Vite apps.
+2. A durable action ledger and versioned multi-file transaction with crash recovery and conflict review.
+3. A source manifest/instance graph for custom components, lists, repeated definitions, fragments, portals, SVG, and open shadow roots.
+4. A contained Vite WebSocket/HMR path with packaged-app and orphan-process acceptance.
+5. Layers tree synchronized with exact React Grab selection.
+6. Bounded style/property inspector whose changes become the same reviewed Designer Action.
+7. Static text editing for proven JSX literals; dynamic/localized/rich text fails closed.
+8. Design-system component insertion, safe image asset rewriting, routes/pages, and responsive state editing.
+9. Direct manipulation for a narrow literal Tailwind/`className` matrix, one gesture per action/undo step.
+10. Multi-select within an artboard after stale-selection and shared-definition behavior is proven.
+11. Optional explicit **Build app / Continue in workspace** handoff from a generated artifact.
+12. Next.js adapters only after separate App/Pages Router, webpack/Turbopack, and server/client fixture gates.
+13. GitHub/IDE handoff, pull-request preparation, and repository design-system import as explicit post-MVP actions.
 
 ## Explicitly out of scope for the current MVP
 
@@ -154,12 +156,12 @@ This completes the first source-backed MVP. A trustworthy Vite/React/Tailwind sl
 - React Flow pan/zoom/fit and desktop/tablet/phone frames work without iframe remount during ordinary movement.
 - Empty, generating, ready, stale, unavailable, image, multi-artboard, revision, and export states at compact and wide widths.
 
-### Source-backed gates
+### Shipped source-backed path
 
-- URL and process ownership, packaged teardown, malicious guest, HMR/stale manifest, supported identity fixture matrix, exact/ambiguous/shared mapping.
-- Deny, stale preimage, range escape, scope widening, cancellation, external edit, multi-file failure/rollback, exact undo conflict, and pre-existing WIP unchanged.
+- Script detection, loopback URL and process ownership, readiness, stop, renderer invalidation, bounded logs, and direct-argv launch.
+- Exact nested source mapping, ambiguous and unmapped failures, ownership, preimage hash, bounded range, Deny, Apply, stale postimage, and exact Undo.
 - Keyboard and pointer paths, light/dark/high contrast/reduced motion, and 390/700/1000/1280px windows.
-- Focused unit/integration/browser suites, `npm test`, `npm run type-check`, `npm run lint`, `npm run build`, signed package inspection, and orphan-process check.
+- Focused unit/integration/browser suites, `npm test`, `npm run type-check`, `npm run lint`, and `npm run build`. Signed package inspection and physical-process acceptance remain release gates, not open implementation work.
 
 ## License and provenance
 
@@ -169,6 +171,6 @@ This completes the first source-backed MVP. A trustworthy Vite/React/Tailwind sl
 
 ## Open decisions (not blockers for the shipped MVP)
 
-- Confirm the product default that source-backed mode is explicit per-project opt-in rather than auto-started from repository detection. This plan assumes explicit opt-in.
 - Decide whether the first generated-to-source handoff creates an Aiden managed worktree by default or offers the current checkout first with a stronger warning. The safer default is a managed worktree.
 - Decide whether a later exact-element style inspector should first support Tailwind literal edits or CSS custom-property edits. Both must use the same approval transaction.
+- Decide whether nested-package discovery should be automatic with confirmation or begin with an explicit package/route picker.
