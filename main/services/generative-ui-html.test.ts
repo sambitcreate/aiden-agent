@@ -96,7 +96,7 @@ test("html admission rejects remote scripts, frames, and javascript URLs", () =>
   assert.ok(ok.byteLength > 0);
 });
 
-test("parent CSP lists only self frames so arbitrary https frames stay denied", async () => {
+test("parent CSP lists only owned and loopback previews so arbitrary web frames stay denied", async () => {
   const html = await fs.readFile(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../main-window.html"),
     "utf8",
@@ -104,7 +104,8 @@ test("parent CSP lists only self frames so arbitrary https frames stay denied", 
   assert.match(html, /frame-src 'self' aiden-genui:/u);
   assert.doesNotMatch(html, /frame-src [^;]*https/u);
   assert.doesNotMatch(html, /frame-src [^;]*blob:/u);
-  assert.equal(GENERATIVE_UI_PARENT_FRAME_SRC, "'self' aiden-genui:");
+  assert.match(html, /frame-src [^;]*http:\/\/127\.0\.0\.1:\*/u);
+  assert.equal(GENERATIVE_UI_PARENT_FRAME_SRC, "'self' aiden-genui: http://127.0.0.1:*");
 });
 
 test("export inlines host libraries and removes the custom protocol", () => {

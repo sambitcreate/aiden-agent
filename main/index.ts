@@ -130,6 +130,7 @@ import { initializeBotApplicationService } from "./services/bot-application-serv
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
+import { sourceDesignPreviewService } from "./services/source-design-preview.js";
 
 registerGenerativeUiScheme();
 
@@ -285,6 +286,7 @@ function cleanupApplication(): void {
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
   geminiLiveTranscription.dispose();
+  sourceDesignPreviewService.shutdown();
   void mcpManager.closeAll();
 }
 

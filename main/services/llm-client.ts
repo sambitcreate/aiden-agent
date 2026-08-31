@@ -265,6 +265,8 @@ import {
   isDesignHtmlArtifact,
   MAX_DESIGN_CONTEXT_BYTES,
 } from "../../renderer/shared/design-workspace.js";
+import { sourceDesignerActionService } from "./source-designer-actions.js";
+import { createSourceDesignerExtensionRuntime } from "./source-designer-extension.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -578,6 +580,7 @@ async function prepareGeneration(
   computerUseGateSnapshot: number,
   activatedComputerUse: (controller: ComputerUseController) => void,
   ownerDocumentId: string,
+  owner: ChatGenerationOwner,
   options: GenerationExecutionOptions,
 ) {
   const sharedImages: Attachment[] = [];
@@ -1135,6 +1138,7 @@ async function prepareGeneration(
   }
   if (
     !botContext &&
+    !(designWorkspace && params.sourceDesignContext) &&
     shouldEnableGenerativeUiExtension({
       usageSource: options.usageSource,
       interactionSurface: options.interactionSurface,
@@ -1280,6 +1284,19 @@ async function prepareGeneration(
       },
     });
     generationExtensions.push(generativeUiRuntime.extension);
+  }
+  if (designWorkspace && params.sourceDesignContext) {
+    if (!workspace?.id || !folderPath) {
+      throw new Error("The source-backed Design selection no longer belongs to a workspace.");
+    }
+    const binding = await sourceDesignerActionService.resolve(
+      owner,
+      workspace.id,
+      params.sourceDesignContext.selectionId,
+    );
+    generationExtensions.push(
+      createSourceDesignerExtensionRuntime({ owner, chatId: params.chatId, binding }).extension,
+    );
   }
   let googleWorkspaceSnapshot: string | undefined;
   if (
@@ -1552,6 +1569,7 @@ export const llmClient = {
           initialization.computerUse = computerUse;
         },
         owner.documentId,
+        owner,
         options,
       );
     } catch (error) {

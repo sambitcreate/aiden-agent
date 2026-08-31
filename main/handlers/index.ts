@@ -27,6 +27,7 @@ import { registerSubagentHandlers } from "./subagents.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
+import { registerDesignerHandlers } from "./designer.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -62,6 +63,7 @@ export function registerHandlers(): void {
   registerSubagentHandlers();
   registerAidenRemoteHandlers();
   registerBotHandlers();
+  registerDesignerHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

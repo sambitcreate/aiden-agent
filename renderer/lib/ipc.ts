@@ -144,6 +144,12 @@ import {
   type ChatArtifactV1,
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
+import type {
+  DesignerActionV1,
+  SourceElementDescriptorV1,
+  SourcePreviewStateV1,
+  SourceSelectionBindingV1,
+} from "../shared/source-designer";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -633,6 +639,39 @@ export const workspacesApi = {
       content,
       expectedVersion,
     ),
+};
+
+export const designerApi = {
+  previewState: (workspaceId: string) =>
+    invoke<SourcePreviewStateV1>("designer:previewState", workspaceId),
+  startPreview: (workspaceId: string, scriptId: string) =>
+    invoke<SourcePreviewStateV1>("designer:startPreview", workspaceId, scriptId),
+  stopPreview: (workspaceId: string) =>
+    invoke<void>("designer:stopPreview", workspaceId),
+  bindSelection: (
+    workspaceId: string,
+    sessionId: string,
+    descriptor: SourceElementDescriptorV1,
+  ) =>
+    invoke<SourceSelectionBindingV1>(
+      "designer:bindSelection",
+      workspaceId,
+      sessionId,
+      descriptor,
+    ),
+  listActions: (chatId: string, workspaceId: string) =>
+    invoke<DesignerActionV1[]>("designer:listActions", chatId, workspaceId),
+  applyAction: (workspaceId: string, actionId: string) =>
+    invoke<DesignerActionV1>("designer:applyAction", workspaceId, actionId),
+  rejectAction: (actionId: string) =>
+    invoke<DesignerActionV1>("designer:rejectAction", actionId),
+  undoAction: (workspaceId: string, actionId: string) =>
+    invoke<DesignerActionV1>("designer:undoAction", workspaceId, actionId),
+  onPreviewChanged: (
+    handler: (payload: { workspaceId: string; state: SourcePreviewStateV1 }) => void,
+  ) => onNotification("designer:preview-changed", handler),
+  onActionChanged: (handler: (payload: { action: DesignerActionV1 }) => void) =>
+    onNotification("designer:action-changed", handler),
 };
 
 // ── Interactive terminal ─────────────────────────────────────────────

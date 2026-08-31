@@ -42,8 +42,9 @@ export const GENERATIVE_UI_EXPORT_CSP =
 export const GENERATIVE_UI_EXPORT_HOST_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
 
-/** Parent may embed aiden-genui preview documents, not arbitrary https frames. */
-export const GENERATIVE_UI_PARENT_FRAME_SRC = "'self' aiden-genui:" as const;
+/** Parent may embed owned artifacts and explicit loopback app previews, not arbitrary web frames. */
+export const GENERATIVE_UI_PARENT_FRAME_SRC =
+  "'self' aiden-genui: http://127.0.0.1:*" as const;
 
 export const GENERATIVE_UI_PROTOCOL_SCHEME = "aiden-genui" as const;
 export const GENERATIVE_UI_PREVIEW_HOST = "preview" as const;

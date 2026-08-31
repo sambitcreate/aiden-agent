@@ -731,6 +731,8 @@ export interface ChatStartParams {
   design?: boolean;
   /** Ephemeral element target for one Design refinement; never persisted as chat content. */
   designContext?: import("../../renderer/shared/design-workspace.js").DesignTurnContextV1;
+  /** Opaque main-bound selection for a reviewed source-backed Designer Action. */
+  sourceDesignContext?: import("../../renderer/shared/source-designer.js").SourceDesignTurnContextV1;
   messages: Array<{
     role: ChatRole;
     content: string;

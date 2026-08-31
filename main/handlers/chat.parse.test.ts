@@ -187,3 +187,31 @@ test("parseParams accepts bounded Design context only on a Design turn", () => {
     /Invalid generation fields/u,
   );
 });
+
+test("parseParams accepts one opaque source Design selection instead of artifact context", () => {
+  const sourceDesignContext = {
+    version: 1,
+    selectionId: "selection_1234567890abcdef",
+  } as const;
+  assert.deepEqual(
+    parseParams({ ...base, design: true, sourceDesignContext }).sourceDesignContext,
+    sourceDesignContext,
+  );
+  assert.throws(
+    () => parseParams({ ...base, sourceDesignContext }),
+    /Invalid generation fields/u,
+  );
+  assert.throws(
+    () =>
+      parseParams({
+        ...base,
+        design: true,
+        sourceDesignContext,
+        designContext: {
+          version: 1,
+          targets: [{ mediaId: "design:x", artifactId: "a".repeat(64) }],
+        },
+      }),
+    /Invalid generation fields/u,
+  );
+});

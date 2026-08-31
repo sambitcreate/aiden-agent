@@ -54,7 +54,9 @@ test("sandboxed unique-origin guest cannot fetch the network or read parent DOM"
 }) => {
   expect(GENERATIVE_UI_IFRAME_SANDBOX).toBe("allow-scripts");
   expect(GENERATIVE_UI_IFRAME_SANDBOX).not.toMatch(/allow-same-origin/);
-  expect(GENERATIVE_UI_PARENT_FRAME_SRC).toBe("'self' aiden-genui:");
+  expect(GENERATIVE_UI_PARENT_FRAME_SRC).toBe(
+    "'self' aiden-genui: http://127.0.0.1:*",
+  );
 
   // Parent and guest share one HTTP origin so a missing unique-origin sandbox
   // would make window.parent.document readable. That is the containment proof.

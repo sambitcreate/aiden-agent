@@ -29,6 +29,7 @@ test("React Grab vendor entry exposes only the selection primitives used by Desi
   for (const primitive of [
     "getElementAtPoint",
     "getElementBounds",
+    "getElementContext",
     "getElementSelector",
     "isElementGrabbable",
   ]) {

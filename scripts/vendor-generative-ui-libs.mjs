@@ -17,12 +17,14 @@ export const REACT_GRAB_PRIMITIVES_ENTRY = `
 import {
   getElementAtPoint,
   getElementBounds,
+  getElementContext,
   getElementSelector,
   isElementGrabbable,
 } from "react-grab/primitives";
 globalThis.AidenReactGrabPrimitives = Object.freeze({
   getElementAtPoint,
   getElementBounds,
+  getElementContext,
   getElementSelector,
   isElementGrabbable,
 });

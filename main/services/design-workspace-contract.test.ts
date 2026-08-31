@@ -48,3 +48,25 @@ test("main prevents a live generative UI guest from navigating its own frame", (
   assert.match(source, /shouldBlockGenerativeUiGuestNavigation/u);
   assert.match(source, /event\.preventDefault\(\)/u);
 });
+
+test("source-backed Design uses exact React Grab context and mandatory reviewed writes", () => {
+  const preview = readFileSync(new URL("./source-design-preview.ts", import.meta.url), "utf8");
+  const actions = readFileSync(new URL("./source-designer-actions.ts", import.meta.url), "utf8");
+  const extension = readFileSync(new URL("./source-designer-extension.ts", import.meta.url), "utf8");
+  const workspace = readFileSync(
+    new URL("../../renderer/components/design-workspace.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(preview, /primitives\.getElementAtPoint\(event\.clientX, event\.clientY\)/u);
+  assert.match(preview, /getElementContext\(element\)/u);
+  assert.match(preview, /shell: false/u);
+  assert.match(preview, /127\.0\.0\.1/u);
+  assert.match(actions, /exactJsxRange/u);
+  assert.match(actions, /writeWorkspaceFile/u);
+  assert.match(actions, /status: "pending"/u);
+  assert.match(actions, /action\.afterVersion/u);
+  assert.match(extension, /propose_design_action/u);
+  assert.match(extension, /No files were changed/u);
+  assert.match(workspace, /Review required/u);
+  assert.match(workspace, /Undo exact action/u);
+});

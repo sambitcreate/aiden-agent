@@ -4,6 +4,7 @@
 import type { ChatStartParams } from "../services/types.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { parseDesignTurnContext } from "../../renderer/shared/design-workspace.js";
+import { parseSourceDesignTurnContext } from "../../renderer/shared/source-designer.js";
 import {
   MAX_CHAT_ID_BYTES,
   MAX_CHAT_ID_CHARS,
@@ -25,6 +26,7 @@ const ALLOWED_CHAT_START_KEYS = new Set([
   "visualize",
   "design",
   "designContext",
+  "sourceDesignContext",
 ]);
 
 function boundedString(
@@ -91,6 +93,13 @@ export function parseParams(value: unknown): ChatStartParams {
   if (p.designContext !== undefined && (!designContext || p.design !== true)) {
     throw new Error("Invalid generation fields.");
   }
+  const sourceDesignContext = parseSourceDesignTurnContext(p.sourceDesignContext);
+  if (
+    p.sourceDesignContext !== undefined &&
+    (!sourceDesignContext || p.design !== true || designContext !== undefined)
+  ) {
+    throw new Error("Invalid generation fields.");
+  }
 
   return {
     chatId,
@@ -102,6 +111,7 @@ export function parseParams(value: unknown): ChatStartParams {
     ...(p.visualize === true ? { visualize: true as const } : {}),
     ...(p.design === true ? { design: true as const } : {}),
     ...(designContext ? { designContext } : {}),
+    ...(sourceDesignContext ? { sourceDesignContext } : {}),
     messages: [],
   };
 }
