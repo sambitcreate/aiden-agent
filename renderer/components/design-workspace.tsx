@@ -779,6 +779,9 @@ export function DesignWorkspaceCanvas({
       if (mode !== "select") return;
       const nextTargets: DesignTurnTargetV1[] = [];
       const nextImages: Attachment[] = [];
+      const existingTargets = new Map(
+        targetsRef.current.map((target) => [target.mediaId, target]),
+      );
       let sourceSelected = false;
       for (const node of selectedNodes) {
         if (node.type === "designImage") {
@@ -790,9 +793,7 @@ export function DesignWorkspaceCanvas({
           continue;
         }
         const designData = node.data as DesignArtboardData;
-        const existing = targetsRef.current.find(
-          (target) => target.mediaId === designData.artifact.mediaId,
-        );
+        const existing = existingTargets.get(designData.artifact.mediaId);
         nextTargets.push(
           existing ?? {
             mediaId: designData.artifact.mediaId,
