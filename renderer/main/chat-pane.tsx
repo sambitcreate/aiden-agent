@@ -8,7 +8,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { BotAvatar } from "../components/bot-avatar";
-import { ShieldQuestion, TerminalSquare } from "lucide-react";
+import { MessageCircle, ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
@@ -58,6 +58,7 @@ import {
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
+import { DesignWorkspaceCanvas } from "../components/design-workspace";
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -121,7 +122,15 @@ import {
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
-import type { ChatArtifactV1 } from "../shared/chat-artifacts";
+import { isChatHtmlArtifact, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import {
+  DESIGN_TURN_CONTEXT_VERSION,
+  designSelectionDisplayLabel,
+  designWorkspaceArtifactPlan,
+  type DesignTurnContextV1,
+  type DesignTurnTargetV1,
+} from "../shared/design-workspace";
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "../shared/attachment-contract";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -144,7 +153,15 @@ function toolLabel(toolName: string): string {
   return TOOL_LABELS[toolName] ?? toolName.replace(/_/g, " ");
 }
 
-export function ChatPane({ chatId }: { chatId: string }) {
+export function ChatPane({
+  chatId,
+  presentation = "chat",
+  initialDesignMediaId,
+}: {
+  chatId: string;
+  presentation?: "chat" | "design";
+  initialDesignMediaId?: string;
+}) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const providers = useProviders();
@@ -174,6 +191,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
+  const designWorkspaceBlocked =
+    Boolean(chat.data?.botId) || effectiveWorkspace?.permission === "none";
+  const designWorkspaceDisabled = !effectiveWorkspace || designWorkspaceBlocked;
+  const designWorkspaceTitle = chat.data?.botId
+    ? "Design workspace is unavailable in Bot chats"
+    : effectiveWorkspace?.permission === "none"
+      ? "Give this workspace access before opening Design"
+      : !effectiveWorkspace
+        ? "Choose a workspace before opening Design"
+        : "Design workspace";
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -380,6 +407,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
   const visualizeTurnRef = React.useRef(false);
+  const designTurnRef = React.useRef(false);
+  const designContextTurnRef = React.useRef<DesignTurnContextV1 | undefined>(undefined);
+  const [designTargets, setDesignTargets] = React.useState<DesignTurnTargetV1[]>([]);
+  const [designCanvasImages, setDesignCanvasImages] = React.useState<Attachment[]>([]);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -546,10 +577,57 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const displayedStreamingReasoning =
     streamingReasoning ??
     (visibleDetachedProjection?.reasoning.trim() ? visibleDetachedProjection.reasoning : null);
-  const displayedStreamingArtifacts =
-    streamingArtifacts.length > 0
-      ? streamingArtifacts
-      : (visibleDetachedProjection?.artifacts ?? []);
+  const displayedStreamingArtifacts = React.useMemo(
+    () =>
+      streamingArtifacts.length > 0
+        ? streamingArtifacts
+        : (visibleDetachedProjection?.artifacts ?? []),
+    [streamingArtifacts, visibleDetachedProjection?.artifacts],
+  );
+  const liveDesignArtifacts = React.useMemo(
+    () => displayedStreamingArtifacts.filter(isChatHtmlArtifact),
+    [displayedStreamingArtifacts],
+  );
+  const designArtifacts = React.useMemo(
+    () => designWorkspaceArtifactPlan(messages, liveDesignArtifacts),
+    [liveDesignArtifacts, messages],
+  );
+  const designContextItems = React.useMemo(
+    () => [
+      ...designTargets.map((target) => {
+        const artifact = designArtifacts.find(
+          (entry) =>
+            entry.artifact.mediaId === target.mediaId && entry.artifact.id === target.artifactId,
+        )?.artifact;
+        return {
+          id: `target:${target.mediaId}`,
+          kind: target.selection ? ("element" as const) : ("design" as const),
+          label: target.selection
+            ? designSelectionDisplayLabel(target.selection)
+            : (artifact?.title ?? "Selected design"),
+        };
+      }),
+      ...designCanvasImages.map((attachment) => ({
+        id: `image:${attachment.id}`,
+        kind: "image" as const,
+        label: attachment.name,
+      })),
+    ],
+    [designArtifacts, designCanvasImages, designTargets],
+  );
+  const removeDesignContextItem = React.useCallback((id: string) => {
+    if (id.startsWith("target:")) {
+      const mediaId = id.slice("target:".length);
+      setDesignTargets((current) => current.filter((target) => target.mediaId !== mediaId));
+      return;
+    }
+    if (id.startsWith("image:")) {
+      const attachmentId = id.slice("image:".length);
+      setDesignCanvasImages((current) =>
+        current.filter((attachment) => attachment.id !== attachmentId),
+      );
+    }
+  }, []);
   const displayedGenerationTimeline =
     generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
   const displayedLiveSubagents = React.useMemo(
@@ -789,6 +867,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       };
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
+      const design = designTurnRef.current === true;
+      designTurnRef.current = false;
+      const designContext = designContextTurnRef.current;
+      designContextTurnRef.current = undefined;
       const handle = startGeneration(
         {
           chatId,
@@ -796,6 +878,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
+          ...(design ? { design: true as const } : {}),
+          ...(design && designContext ? { designContext } : {}),
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
@@ -1060,7 +1144,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
       skillInvocation?: SkillInvocationV1,
       options?: { visualize?: boolean },
     ) => {
-      visualizeTurnRef.current = options?.visualize === true;
+      const design = presentation === "design";
+      designTurnRef.current = false;
+      designContextTurnRef.current = undefined;
+      visualizeTurnRef.current = false;
+      const selectedTargets = design ? [...designTargets] : [];
+      const selectedReferenceImages = design ? [...designCanvasImages] : [];
+      const submittedAttachments = [...attachments];
+      const submittedAttachmentIds = new Set(
+        submittedAttachments.map((attachment) => attachment.id),
+      );
+      for (const attachment of selectedReferenceImages) {
+        if (!submittedAttachmentIds.has(attachment.id)) {
+          submittedAttachments.push(attachment);
+          submittedAttachmentIds.add(attachment.id);
+        }
+      }
+      if (submittedAttachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+        throw new Error(`Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments can be sent at once.`);
+      }
+      if (selectedReferenceImages.length > 0 && visionSupported === false) {
+        throw new Error("Switch to a vision-capable model before using canvas images as context.");
+      }
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
           "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
@@ -1089,7 +1194,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             {
               role: "user",
               content: text,
-              attachments: attachments.length ? attachments : undefined,
+              attachments: submittedAttachments.length ? submittedAttachments : undefined,
             },
             {
               providerId,
@@ -1118,6 +1223,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
           return;
         }
+        designTurnRef.current = design;
+        visualizeTurnRef.current = options?.visualize === true && !design;
+        designContextTurnRef.current =
+          design && selectedTargets.length > 0
+            ? { version: DESIGN_TURN_CONTEXT_VERSION, targets: selectedTargets }
+            : undefined;
+        if (design) {
+          setDesignTargets([]);
+          setDesignCanvasImages([]);
+        }
         const started = await runGeneration(messageTurnId);
         // The user message crossed its durability barrier in appendMessage.
         // Start rejection is surfaced by the stream callback but cannot turn
@@ -1136,13 +1251,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [
       chatId,
       computerUseSaving,
+      designCanvasImages,
+      designTargets,
       detachedGenerationDraining,
+      presentation,
       imageArtifactRecoveryPending,
       imageArtifactRecoveryUnavailable,
       providerId,
       model,
       qc,
       runGeneration,
+      visionSupported,
     ],
   );
 
@@ -1677,7 +1796,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     <ScrollArea
       className="h-full min-h-0"
       title={
-        bot.data ? (
+        presentation === "design" ? (
+          "Design"
+        ) : bot.data ? (
           <span className="flex min-w-0 items-center gap-2">
             <BotAvatar
               botId={bot.data.id}
@@ -1703,29 +1824,41 @@ export function ChatPane({ chatId }: { chatId: string }) {
         )
       }
       actions={
-        <>
-          <OpenInEditorPicker
-            workspaceId={effectiveWorkspace?.id}
-            folderPath={effectiveWorkspace?.folderPath}
-          />
-          <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+        presentation === "design" ? (
           <Button
-            iconOnly
             variant="toolbar"
-            size="large"
-            onClick={terminal.toggle}
-            disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-            aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-            aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-            aria-pressed={terminal.open}
-            title={`Toggle terminal (${terminalShortcut})`}
-            data-terminal-toggle
+            size="small"
+            onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId } })}
+            aria-label="Open backing conversation"
           >
-            <TerminalSquare />
+            <MessageCircle />
+            Open conversation
           </Button>
-        </>
+        ) : (
+          <>
+            <OpenInEditorPicker
+              workspaceId={effectiveWorkspace?.id}
+              folderPath={effectiveWorkspace?.folderPath}
+            />
+            <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+            <Button
+              iconOnly
+              variant="toolbar"
+              size="large"
+              onClick={terminal.toggle}
+              disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+              aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+              aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+              aria-pressed={terminal.open}
+              title={`Toggle terminal (${terminalShortcut})`}
+              data-terminal-toggle
+            >
+              <TerminalSquare />
+            </Button>
+          </>
+        )
       }
-      autoScrollToBottom
+      autoScrollToBottom={presentation === "chat"}
       autoScrollDeps={[
         messages.length,
         displayedStreamingText,
@@ -1735,7 +1868,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         approvals.length,
         displayedStreamingArtifacts.length,
       ]}
-      showScrollToBottomButton
+      showScrollToBottomButton={presentation === "chat"}
+      overlayFooter={presentation === "design"}
       footer={
         <>
           <EventPresence
@@ -1859,13 +1993,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
             // route no longer remounts the pane, and Composer owns that text
             // without a chatId reset of its own.
             key={chatId}
-            ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
+            placeholder={
+              presentation === "design"
+                ? designArtifacts.length > 0
+                  ? "Describe the next change…"
+                  : "Describe the interface you want to create…"
+                : undefined
+            }
+            ready={
+              ready &&
+              !imageArtifactRecoveryPending &&
+              !imageArtifactRecoveryUnavailable &&
+              (presentation !== "design" || !designWorkspaceDisabled)
+            }
             readinessMessage={
-              imageArtifactRecoveryUnavailable
-                ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
-                : imageArtifactRecoveryPending
-                  ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
-                  : readinessMessage
+              presentation === "design" && designWorkspaceDisabled
+                ? designWorkspaceTitle
+                : imageArtifactRecoveryUnavailable
+                  ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                  : imageArtifactRecoveryPending
+                    ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
+                    : readinessMessage
             }
             hasMessages={hasMessages}
             chatId={chatId}
@@ -1900,6 +2048,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 : "Creates a separate workspace and opens a new chat. This conversation stays here."
             }
             visionSupported={visionSupported}
+            designContextItems={presentation === "design" ? designContextItems : undefined}
+            onRemoveDesignContextItem={removeDesignContextItem}
             computerUse={
               computerUseGloballyEnabled
                 ? {
@@ -1998,7 +2148,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
         </>
       }
     >
-      {chat.isLoading || providers.isLoading ? (
+      {presentation === "design" ? (
+        chat.isLoading || providers.isLoading ? (
+          <div className="flex min-h-full items-center justify-center" aria-label="Loading Design">
+            <Text variant="small" color="secondary">
+              Loading Design…
+            </Text>
+          </div>
+        ) : (
+          <DesignWorkspaceCanvas
+            chatId={chatId}
+            artifacts={designArtifacts}
+            generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
+            initialMediaId={initialDesignMediaId}
+            unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}
+            targets={designTargets}
+            selectedImages={designCanvasImages}
+            onTargetsChange={setDesignTargets}
+            onSelectedImagesChange={setDesignCanvasImages}
+            onRequestComposerFocus={() => composerRef.current?.focus({ preventScroll: true })}
+          />
+        )
+      ) : chat.isLoading || providers.isLoading ? (
         <div
           className="flex min-h-full items-center justify-center"
           aria-label="Loading conversation"

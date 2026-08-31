@@ -24,6 +24,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  Image as ImageIcon,
   Loader2,
   Lock,
   Mic,
@@ -107,6 +108,8 @@ const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
 const MAX_CLIPBOARD_IMAGE_BYTES = 8 * 1024 * 1024;
 
 interface ComposerProps {
+  /** Optional surface-specific prompt shown when the composer is ready. */
+  placeholder?: string;
   /** True when a provider + model are selected and a message can be sent. */
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
@@ -146,6 +149,13 @@ interface ComposerProps {
   gitMutationBlockedReason?: string;
   /** Whether the selected model accepts image input. */
   visionSupported?: boolean;
+  /** Ephemeral canvas selections attached to the next Design turn. */
+  designContextItems?: readonly {
+    id: string;
+    label: string;
+    kind: "design" | "element" | "image";
+  }[];
+  onRemoveDesignContextItem?: (id: string) => void;
   /** The model picker element, rendered in the input row. */
   modelPicker?: React.ReactNode;
   /** Native model reasoning effort control, rendered only for supported models. */
@@ -235,6 +245,7 @@ function composerDraftReducer(
 }
 
 export function Composer({
+  placeholder,
   ready,
   readinessMessage,
   hasMessages,
@@ -262,6 +273,8 @@ export function Composer({
   gitWorktreeDescription = "Creates a separate workspace and keeps this checkout unchanged.",
   gitMutationBlockedReason,
   visionSupported,
+  designContextItems = [],
+  onRemoveDesignContextItem,
   computerUse,
   onChangeComputerUse,
   modelPicker,
@@ -845,8 +858,7 @@ export function Composer({
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
           if (instruction !== "visualize") return false;
-          const nextPrompt =
-            prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
           if (!nextPrompt) {
             toast.info("Add what to visualize after /visualize, then send.");
             return false;
@@ -887,10 +899,10 @@ export function Composer({
       // A generic late slash-token commit would overwrite the next-turn draft.
       if (result.command.action.kind === "composer-instruction") return;
       const usesDraftOnlyCommit =
-        (result.command.action.kind === "session" &&
-          (result.command.action.action === "clone" ||
-            result.command.action.action === "export" ||
-            result.command.action.action === "worktree"));
+        result.command.action.kind === "session" &&
+        (result.command.action.action === "clone" ||
+          result.command.action.action === "export" ||
+          result.command.action.action === "worktree");
       if (
         asyncAction &&
         !(usesDraftOnlyCommit
@@ -1531,6 +1543,34 @@ export function Composer({
                 </span>
               </div>
             ) : null}
+            {designContextItems.length > 0 ? (
+              <div
+                className="mb-1.5 flex flex-wrap gap-1.5 px-1.5"
+                aria-label="Canvas context for next message"
+              >
+                {designContextItems.map((item) => {
+                  const ContextIcon = item.kind === "image" ? ImageIcon : MousePointer2;
+                  return (
+                    <div
+                      key={item.id}
+                      className="group relative flex h-7 max-w-[14rem] items-center gap-1.5 rounded-control bg-list-selection py-1 pl-2 pr-6 text-accent"
+                    >
+                      <ContextIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                      <span className="truncate text-small-strong">{item.label}</span>
+                      <button
+                        type="button"
+                        disabled={sessionCommandBusy}
+                        onClick={() => onRemoveDesignContextItem?.(item.id)}
+                        aria-label={`Remove ${item.label} from canvas context`}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-accent outline-none transition-colors hover:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+                      >
+                        <X className="size-3" aria-hidden="true" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
             {attachments.length > 0 ? (
               <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
                 {attachments.map((a) => (
@@ -1562,6 +1602,7 @@ export function Composer({
               </div>
             ) : null}
             <Textarea
+              data-chat-composer
               ref={inputRef}
               value={text}
               readOnly={sessionCommandBusy}
@@ -1601,12 +1642,16 @@ export function Composer({
               aria-describedby={attachmentDescriptionId}
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
-              placeholder={composerPlaceholder({
-                ready,
-                readinessMessage,
-                hasMessages,
-                chatId,
-              })}
+              placeholder={
+                ready && placeholder
+                  ? placeholder
+                  : composerPlaceholder({
+                      ready,
+                      readinessMessage,
+                      hasMessages,
+                      chatId,
+                    })
+              }
               className="max-h-48 border-0 bg-transparent px-1.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
               rows={1}
             />

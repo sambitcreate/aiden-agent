@@ -804,6 +804,7 @@ export function ScrollArea({
   actions,
   toolbar,
   footer,
+  overlayFooter = false,
   autoScrollToBottom,
   autoScrollDeps = [],
   showScrollToBottomButton,
@@ -815,6 +816,7 @@ export function ScrollArea({
   actions?: React.ReactNode;
   toolbar?: React.ReactNode;
   footer?: React.ReactNode;
+  overlayFooter?: boolean;
   autoScrollToBottom?: boolean;
   autoScrollDeps?: unknown[];
   showScrollToBottomButton?: boolean;
@@ -929,7 +931,7 @@ export function ScrollArea({
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
         className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
-        style={{ paddingTop: toolbarHeight, paddingBottom: footerHeight }}
+        style={{ paddingTop: toolbarHeight, paddingBottom: overlayFooter ? 0 : footerHeight }}
         onScroll={(event) => {
           updateScrollEdges(event.currentTarget);
         }}
@@ -950,7 +952,10 @@ export function ScrollArea({
         </Button>
       ) : null}
       {footer ? (
-        <div ref={footerRef} className="absolute inset-x-0 bottom-0 z-10">
+        <div
+          ref={footerRef}
+          className={cn("absolute inset-x-0 bottom-0", overlayFooter ? "z-20" : "z-10")}
+        >
           {footer}
         </div>
       ) : null}

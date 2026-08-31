@@ -38,6 +38,7 @@ import {
   Folder,
   FolderGit2,
   Loader2,
+  PanelsTopLeft,
   Settings,
   SquarePen,
   UserRound,
@@ -76,6 +77,7 @@ const APP_UPDATE_BANNER_EXIT_MS = 120;
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
+  designChatId?: string;
   titleReveal?: ChatTitleRevealEvent | null;
 }
 
@@ -372,7 +374,7 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
   return groups;
 }
 
-export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
+export function ChatSidebar({ activeChatId, designChatId, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const qc = useQueryClient();
@@ -381,6 +383,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const activeChatIds = useActiveChatIds();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useChats(activeId);
+  const requestedDesignChatId = designChatId ?? activeChatId;
+  const eligibleDesignChatId = requestedDesignChatId
+    ? chats.data?.find((chat) => chat.id === requestedDesignChatId && !chat.botId)?.id
+    : undefined;
   const foundationModels = useFoundationModelsConnection();
   const [search, setSearch] = React.useState("");
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
@@ -610,7 +616,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     (id: string) => {
       if (id !== activeId) {
         void enterWorkspace(id).catch((error: unknown) => {
-          toast.error(error instanceof Error ? error.message : "Aiden could not switch workspaces.");
+          toast.error(
+            error instanceof Error ? error.message : "Aiden could not switch workspaces.",
+          );
         });
       }
     },
@@ -808,6 +816,20 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             title="Scheduled"
             selected={pathname === "/scheduled"}
             onClick={() => navigate({ to: "/scheduled" })}
+          />
+          <SidebarListItem
+            icon={<PanelsTopLeft />}
+            title="Design"
+            selected={pathname.startsWith("/design")}
+            onClick={() =>
+              eligibleDesignChatId
+                ? navigate({
+                    to: "/design/$chatId",
+                    params: { chatId: eligibleDesignChatId },
+                    search: {},
+                  })
+                : navigate({ to: "/design" })
+            }
           />
           <SidebarListItem
             icon={<BotSidebarIcon />}

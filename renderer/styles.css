@@ -275,6 +275,47 @@ body {
   background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
 }
 
+/* React Flow owns spatial navigation; Aiden owns every visible surface token. */
+.aiden-design-flow {
+  --xy-background-color: var(--surface-well);
+  --xy-background-pattern-dots-color: color-mix(in srgb, var(--text-tertiary) 22%, transparent);
+  --xy-node-border: 0;
+  --xy-node-background-color: transparent;
+  --xy-node-color: var(--text-primary);
+  --xy-selection-background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+  --xy-selection-border: 1px solid var(--accent);
+  background: var(--surface-well);
+}
+
+.aiden-design-flow .react-flow__node {
+  border: 0;
+  background: transparent;
+}
+
+.aiden-design-flow .react-flow__controls {
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-popover);
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-control);
+}
+
+.aiden-design-flow .react-flow__controls-button {
+  border: 0;
+  border-bottom: 1px solid var(--border-separator);
+  background: var(--surface-popover);
+  color: var(--text-secondary);
+}
+
+.aiden-design-flow .react-flow__controls-button:hover {
+  background: var(--surface-list-hover);
+  color: var(--text-primary);
+}
+
+.aiden-design-flow .react-flow__controls-button svg {
+  fill: currentColor;
+}
+
 .diff-line-marker {
   display: inline-block;
   width: 1.2ch;

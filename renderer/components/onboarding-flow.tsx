@@ -22,6 +22,7 @@ import {
   Mic2,
   MousePointer2,
   Network,
+  PanelsTopLeft,
   Palette,
   Plug,
   Send,
@@ -79,6 +80,8 @@ const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).hr
 
 const FEATURE_ILLUSTRATIONS = {
   workspace: new URL("../assets/onboarding/aiden-workspace.png", import.meta.url).href,
+  designWorkspace: new URL("../assets/onboarding/features/design-workspace.png", import.meta.url)
+    .href,
   computerUse: new URL("../assets/onboarding/features/computer-use.png", import.meta.url).href,
   subagents: new URL("../assets/onboarding/features/native-subagents.png", import.meta.url).href,
   filesEditor: new URL("../assets/onboarding/features/files-editor.png", import.meta.url).href,
@@ -183,6 +186,16 @@ const featureBentos: FeatureBento[] = [
     icon: MessageSquare,
     imageUrl: FEATURE_ILLUSTRATIONS.workspace,
     size: "hero",
+  },
+  {
+    id: "designWorkspace",
+    group: "create",
+    title: "Design Workspace",
+    description:
+      "Arrange live HTML artboards and image references on an infinite canvas, then select a screen or exact element and ask Aiden to refine it.",
+    icon: PanelsTopLeft,
+    imageUrl: FEATURE_ILLUSTRATIONS.designWorkspace,
+    size: "tall",
   },
   {
     id: "computerUse",

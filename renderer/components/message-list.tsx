@@ -18,6 +18,7 @@ import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { HtmlArtifactFrame } from "./html-artifact-frame";
+import { DesignArtifactCard } from "./design-artifact-card";
 import type { AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -38,6 +39,7 @@ import {
   htmlArtifactTranscriptPlan,
   type HtmlArtifactTranscriptEntry,
 } from "../lib/html-artifact-transcript";
+import { isDesignHtmlArtifact } from "../shared/design-workspace";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 const MINIMUM_VISUALIZING_MS = 700;
@@ -103,8 +105,7 @@ function AssistantResponse({
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
   // The one reasoning disclosure owns both the live and settled thought state.
   // Other live phases continue in the activity row below the transcript.
-  const active =
-    streaming && !streamComplete && (reasoningActive || (!timeline && !content));
+  const active = streaming && !streamComplete && (reasoningActive || (!timeline && !content));
   const visualizingLive =
     streaming && !streamComplete && hasActiveToolStep(timeline ?? null, RENDER_ARTIFACT_TOOL_NAME);
   // Fast local renders may finish in one or two frames. Keep the real phase
@@ -256,11 +257,11 @@ export function MessageList({
   );
   const streamingRowVisible = Boolean(
     timeline ||
-      liveSubagents.length > 0 ||
-      streamingReasoning ||
-      streamingText ||
-      liveAttachments.length > 0 ||
-      liveHtmlArtifacts.length > 0,
+    liveSubagents.length > 0 ||
+    streamingReasoning ||
+    streamingText ||
+    liveAttachments.length > 0 ||
+    liveHtmlArtifacts.length > 0,
   );
   const htmlArtifactPlan = React.useMemo(
     () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
@@ -330,13 +331,22 @@ export function MessageList({
   });
 
   const artifactFrames = (anchor: string) =>
-    (htmlArtifactsByAnchor.get(anchor) ?? []).map((entry) => (
-      <HtmlArtifactFrame
-        key={entry.key}
-        chatId={chatId}
-        artifact={entry.artifact}
-      />
-    ));
+    (htmlArtifactsByAnchor.get(anchor) ?? []).map((entry) =>
+      isDesignHtmlArtifact(entry.artifact) ? (
+        <DesignArtifactCard
+          key={entry.key}
+          chatId={chatId}
+          artifact={entry.artifact}
+          version={
+            htmlArtifactPlan
+              .filter((candidate) => isDesignHtmlArtifact(candidate.artifact))
+              .findIndex((candidate) => candidate.artifact.mediaId === entry.artifact.mediaId) + 1
+          }
+        />
+      ) : (
+        <HtmlArtifactFrame key={entry.key} chatId={chatId} artifact={entry.artifact} />
+      ),
+    );
 
   const transcriptRows: React.ReactNode[] = [];
   for (const message of messages) {
@@ -477,9 +487,7 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
         variant="small"
         color="secondary"
         className={
-          value.phase === "thinking" ||
-          value.phase === "loading" ||
-          value.phase === "visualizing"
+          value.phase === "thinking" || value.phase === "loading" || value.phase === "visualizing"
             ? "agent-thinking-shimmer min-w-0 break-words"
             : "min-w-0 break-words"
         }

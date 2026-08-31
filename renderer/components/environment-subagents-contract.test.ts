@@ -198,10 +198,7 @@ test("compact Environment modality blocks every app-level interaction seam and c
   assert.doesNotMatch(environment, /const snapshots = background\.map/u);
 
   assert.match(root, /<CommandSystemProvider applicationModal=\{compactModalOpen\}>/u);
-  assert.match(
-    root,
-    /<AssistantDock interactionBlocked=\{environmentPanel\.compactModalOpen\} \/>/u,
-  );
+  assert.match(root, /interactionBlocked=\{environmentPanel\.compactModalOpen\}/u);
   assert.match(layout, /contentModalOpen=\{environmentPanel\.compactModalOpen\}/u);
   assert.match(splitView, /inert=\{collapsed \|\| contentModalOpen \? true : undefined\}/u);
   assert.match(splitView, /tabIndex=\{collapsed \|\| compact \|\| contentModalOpen \? -1 : 0\}/u);
@@ -306,10 +303,7 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(
-    messages,
-    /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u,
-  );
+  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);

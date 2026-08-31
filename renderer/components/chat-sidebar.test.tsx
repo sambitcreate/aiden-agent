@@ -14,19 +14,25 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("sidebar places New Agent above Scheduled beneath search", () => {
+test("sidebar places New Agent, Scheduled, Design, and Bots above workspace content", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const sidebarBody = between(sidebar, "<Sidebar", "</Sidebar>");
   const newAgentIndex = sidebarBody.indexOf("New Agent");
   const scheduledIndex = sidebarBody.indexOf('title="Scheduled"');
+  const designIndex = sidebarBody.indexOf('title="Design"');
+  const botsIndex = sidebarBody.indexOf('title="Bots"');
   const workspaceIndex = sidebarBody.indexOf("Workspace switcher");
 
   assert.notEqual(newAgentIndex, -1);
   assert.notEqual(scheduledIndex, -1);
+  assert.notEqual(designIndex, -1);
+  assert.notEqual(botsIndex, -1);
   assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
+  assert.ok(scheduledIndex < designIndex, "Design should follow Scheduled");
+  assert.ok(designIndex < botsIndex, "Design should lead into Bots");
   assert.ok(
-    scheduledIndex < workspaceIndex,
-    "Scheduled should stay above the workspace switcher and chat list",
+    botsIndex < workspaceIndex,
+    "primary destinations should stay above the workspace switcher and chat list",
   );
 });
 
@@ -35,7 +41,15 @@ test("new agent uses the same sidebar row style as scheduled", () => {
   const section = between(sidebar, '<div className="flex flex-col gap-0.5 px-2.5 pb-2">', "</div>");
   assert.match(section, /<SidebarListItem[\s\S]*title="New Agent"/u);
   assert.match(section, /<SidebarListItem[\s\S]*title="Scheduled"/u);
+  assert.match(section, /<SidebarListItem[\s\S]*title="Design"/u);
   assert.doesNotMatch(section, /variant="accent"/u);
+});
+
+test("Design is a route-owned sidebar destination", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  assert.match(sidebar, /title="Design"[\s\S]*selected=\{pathname\.startsWith\("\/design"\)\}/u);
+  assert.match(sidebar, /to: "\/design\/\$chatId"/u);
+  assert.match(sidebar, /navigate\(\{ to: "\/design" \}\)/u);
 });
 
 test("newAgent creates a chat in the active workspace", () => {
