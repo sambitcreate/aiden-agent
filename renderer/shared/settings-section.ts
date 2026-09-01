@@ -42,7 +42,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     ],
   },
   { id: "skills", title: "Skills", group: "Agent", keywords: ["instructions", "tools"] },
-  { id: "mcp", title: "MCP Servers", group: "Agent", keywords: ["connections", "protocol"] },
+  {
+    id: "mcp",
+    title: "Plugins",
+    group: "Agent",
+    keywords: ["mcp", "connections", "protocol", "plugins", "connectors"],
+  },
   {
     id: "websearch",
     title: "Web Search",

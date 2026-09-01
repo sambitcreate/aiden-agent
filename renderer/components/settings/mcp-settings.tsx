@@ -1,5 +1,6 @@
-// MCP Servers settings — connect local (stdio) or remote (HTTP/SSE) MCP servers
-// whose tools become available to the assistant. Add, edit, test, enable, remove.
+// Plugins settings — Codex official directory plus custom MCP servers whose
+// tools become available to the assistant. Connectable plugins reuse the
+// hosted HTTP preset flow; other directory entries explain compatibility.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,7 +23,7 @@ import {
   Textarea,
   toast,
 } from "../ui";
-import { Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
 import {
   mcpPresetConnectionBadge,
@@ -30,8 +31,24 @@ import {
 } from "../../lib/mcp-preset-state";
 import { queryKeys, useMcpPresets, useMcpServers } from "../../lib/queries";
 import type { McpPresetState, McpServer, McpTransport } from "../../lib/types";
+import {
+  filterPluginCatalog,
+  isConnectablePlugin,
+  PLUGIN_CATALOG,
+  PLUGIN_CATEGORIES,
+  pluginCompatibilityLabel,
+  type PluginCatalogEntry,
+  type PluginCompatibilityFilter,
+} from "../../shared/plugin-catalog";
 import { McpPresetIcon } from "./mcp-preset-icons";
 import { PresetSetupDialog } from "./mcp-preset-setup";
+
+const COMPATIBILITY_FILTERS: ReadonlyArray<{ id: PluginCompatibilityFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "connectable", label: "Connectable MCP" },
+  { id: "skills", label: "Skills" },
+  { id: "other", label: "Other" },
+];
 
 function newServer(): McpServer {
   return { id: `mcp-${Date.now().toString(36)}`, name: "", transport: "stdio", enabled: true, args: [] };
@@ -59,6 +76,10 @@ export function McpSettings() {
   const [editing, setEditing] = React.useState<McpServer | null>(null);
   const [setup, setSetup] = React.useState<{ state: McpPresetState; server?: McpServer } | null>(null);
   const [removing, setRemoving] = React.useState<McpServer | null>(null);
+  const [pluginSearch, setPluginSearch] = React.useState("");
+  const [pluginCategory, setPluginCategory] = React.useState<string | "all">("all");
+  const [pluginFilter, setPluginFilter] = React.useState<PluginCompatibilityFilter>("all");
+  const [pluginDetails, setPluginDetails] = React.useState<PluginCatalogEntry | null>(null);
 
   const invalidate = async () => {
     await Promise.all([
@@ -92,14 +113,21 @@ export function McpSettings() {
 
   const list = servers.data ?? [];
   const catalogReady = servers.isSuccess && presets.isSuccess;
+  const visiblePlugins = filterPluginCatalog(
+    PLUGIN_CATALOG,
+    pluginSearch,
+    pluginCategory,
+    pluginFilter,
+  );
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <Text variant="strong">MCP Servers</Text>
+          <Text variant="strong">Plugins</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Connect tool providers or add your own server. Tool inputs may be shared with the configured server.
+            Browse plugins, connect hosted MCP servers, or add your own. Tool inputs may be shared
+            with the configured server.
           </Text>
         </div>
         <Button
@@ -165,36 +193,100 @@ export function McpSettings() {
         </section>
       ) : null}
 
-      {catalogReady && presets.data.length > 0 ? (
-        <section className="flex flex-col gap-2">
-          <div>
-            <Text variant="small-strong" color="secondary">
-              Popular MCPs
-            </Text>
-            <Text variant="small" color="tertiary" className="mt-0.5 block">
-              Hand-picked MCP servers with a simple setup.
-            </Text>
-          </div>
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            {presets.data.map((state) => (
-              <PresetCard
-                key={state.preset.id}
-                state={state}
-                onSetup={() =>
+      <section className="flex flex-col gap-3">
+        <div>
+          <Text variant="small-strong" color="secondary">
+            Plugin directory
+          </Text>
+          <Text variant="small" color="tertiary" className="mt-0.5 block">
+            Official Codex plugins plus Aiden’s Composio connector. Connectable entries use the
+            same hosted MCP setup as before; skills and ChatGPT-only apps stay listed so you can
+            see what they do.
+          </Text>
+        </div>
+        <label className="flex h-10 items-center gap-2 rounded-control border border-field bg-input px-3 transition-[background-color,box-shadow] duration-150 ease-out focus-within:bg-popover motion-reduce:transition-none">
+          <Search aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+          <input
+            type="search"
+            value={pluginSearch}
+            onChange={(event) => setPluginSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              setPluginSearch("");
+            }}
+            placeholder="Search plugins…"
+            aria-label="Search plugins"
+            className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-secondary"
+          />
+        </label>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter plugins by connection type">
+          {COMPATIBILITY_FILTERS.map((option) => (
+            <Button
+              key={option.id}
+              size="small"
+              variant={pluginFilter === option.id ? "muted" : "transparent"}
+              aria-pressed={pluginFilter === option.id}
+              className={pluginFilter === option.id ? "bg-list-selection text-primary" : "text-secondary"}
+              onClick={() => setPluginFilter(option.id)}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter plugins by category">
+          <Button
+            size="small"
+            variant={pluginCategory === "all" ? "muted" : "transparent"}
+            aria-pressed={pluginCategory === "all"}
+            className={pluginCategory === "all" ? "bg-list-selection text-primary" : "text-secondary"}
+            onClick={() => setPluginCategory("all")}
+          >
+            All categories
+          </Button>
+          {PLUGIN_CATEGORIES.map((category) => (
+            <Button
+              key={category}
+              size="small"
+              variant={pluginCategory === category ? "muted" : "transparent"}
+              aria-pressed={pluginCategory === category}
+              className={pluginCategory === category ? "bg-list-selection text-primary" : "text-secondary"}
+              onClick={() => setPluginCategory(category)}
+            >
+              {category}
+            </Button>
+          ))}
+        </div>
+        <Text variant="small" color="tertiary" aria-live="polite">
+          {visiblePlugins.length} plugin{visiblePlugins.length === 1 ? "" : "s"}
+        </Text>
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+          {visiblePlugins.map((plugin) => {
+            const state = presets.data?.find((entry) => entry.preset.id === plugin.id);
+            return (
+              <PluginCard
+                key={plugin.id}
+                plugin={plugin}
+                state={catalogReady ? state : undefined}
+                catalogReady={catalogReady}
+                onSetup={() => {
+                  if (!state) {
+                    toast.error("This built-in MCP definition is unavailable. Reload Settings and try again.");
+                    return;
+                  }
                   setSetup({
                     state,
                     server: list.find(
-                      (s) =>
-                        s.id === state.serverId &&
-                        s.presetId === state.preset.id,
+                      (s) => s.id === state.serverId && s.presetId === state.preset.id,
                     ),
-                  })
-                }
+                  });
+                }}
+                onDetails={() => setPluginDetails(plugin)}
               />
-            ))}
-          </div>
-        </section>
-      ) : null}
+            );
+          })}
+        </div>
+      </section>
 
       <div className="flex items-center justify-between gap-4 rounded-card border border-separator px-3.5 py-3">
         <div className="min-w-0 flex-1">
@@ -228,6 +320,51 @@ export function McpSettings() {
         />
       ) : null}
 
+      {pluginDetails ? (
+        <Dialog
+          open={pluginDetails !== null}
+          onOpenChange={(open) => !open && setPluginDetails(null)}
+          title={pluginDetails.name}
+          description={pluginDetails.tagline}
+          confirmLabel="Close"
+          onConfirm={() => setPluginDetails(null)}
+        >
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge color="secondary">{pluginCompatibilityLabel(pluginDetails.compatibility)}</Badge>
+              <Badge color="secondary">{pluginDetails.category}</Badge>
+            </div>
+            <Text variant="small" color="secondary" className="block">
+              {pluginDetails.vendor}
+              {pluginDetails.source === "openai-curated" ? " · Codex official" : " · Aiden catalog"}
+            </Text>
+            {pluginDetails.compatibilityNote ? (
+              <Text variant="small" color="secondary" className="block">
+                {pluginDetails.compatibilityNote}
+              </Text>
+            ) : (
+              <Text variant="small" color="secondary" className="block">
+                Connects over HTTPS MCP. Aiden stores credentials on this Mac and only sends them to
+                the official server origin.
+              </Text>
+            )}
+            {pluginDetails.url ? (
+              <Text variant="small" color="tertiary" className="block">
+                {pluginDetails.url}
+              </Text>
+            ) : null}
+            <a
+              href={pluginDetails.docsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-small text-secondary underline-offset-2 hover:underline"
+            >
+              Documentation
+            </a>
+          </div>
+        </Dialog>
+      ) : null}
+
       <AlertDialog
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
@@ -247,30 +384,51 @@ export function McpSettings() {
   );
 }
 
-function PresetCard({ state, onSetup }: { state: McpPresetState; onSetup: () => void }) {
-  const { preset } = state;
-  const badge = mcpPresetConnectionBadge(state);
+function PluginCard({
+  plugin,
+  state,
+  catalogReady,
+  onSetup,
+  onDetails,
+}: {
+  plugin: PluginCatalogEntry;
+  state?: McpPresetState;
+  catalogReady: boolean;
+  onSetup: () => void;
+  onDetails: () => void;
+}) {
+  const connectable = isConnectablePlugin(plugin);
+  const badge = state ? mcpPresetConnectionBadge(state) : null;
   return (
     <div className="flex flex-col gap-2 rounded-card border border-separator p-4">
       <div
         aria-hidden
         className="flex size-9 items-center justify-center rounded-lg border border-separator bg-well text-strong"
       >
-        <McpPresetIcon presetId={preset.id} name={preset.name} className="size-5" />
+        <McpPresetIcon presetId={plugin.id} name={plugin.name} className="size-5" />
       </div>
-      <Text variant="strong">{preset.name}</Text>
+      <div className="flex flex-wrap items-center gap-2">
+        <Text variant="strong">{plugin.name}</Text>
+        <Badge color="secondary">{pluginCompatibilityLabel(plugin.compatibility)}</Badge>
+      </div>
       <Text variant="small" color="secondary" className="block">
-        {preset.tagline}
+        {plugin.tagline}
       </Text>
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
         <Text variant="small" color="tertiary">
-          {preset.vendor}
+          {plugin.vendor}
         </Text>
         <div className="flex items-center gap-2">
           {badge ? <Badge color={badge.color}>{badge.label}</Badge> : null}
-          <Button variant="filled" size="small" onClick={onSetup}>
-            {state.configured ? "Manage" : "Set Up"}
-          </Button>
+          {connectable ? (
+            <Button variant="filled" size="small" disabled={!catalogReady} onClick={onSetup}>
+              {state?.configured ? "Manage" : "Set Up"}
+            </Button>
+          ) : (
+            <Button variant="filled" size="small" onClick={onDetails}>
+              Details
+            </Button>
+          )}
         </div>
       </div>
     </div>

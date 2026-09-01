@@ -12,7 +12,7 @@ import {
 } from "./mcp-presets.js";
 
 test("catalog entries are well-formed", () => {
-  assert.ok(MCP_PRESETS.length >= 3, "expected at least composio, notion, linear");
+  assert.ok(MCP_PRESETS.length >= 27, "expected Composio plus hosted Codex MCP plugins");
   const ids = new Set(MCP_PRESETS.map((p) => p.id));
   assert.equal(ids.size, MCP_PRESETS.length, "preset ids must be unique");
   for (const preset of MCP_PRESETS) {
@@ -20,6 +20,7 @@ test("catalog entries are well-formed", () => {
     assert.ok(preset.name.length > 0);
     assert.ok(preset.tagline.length > 0);
     assert.ok(preset.vendor.startsWith("By "));
+    assert.ok(preset.category.length > 0);
     assert.equal(preset.transport, "http");
     assert.match(preset.url, /^https:\/\//);
     assert.match(preset.docsUrl, /^https:\/\//);
@@ -28,10 +29,11 @@ test("catalog entries are well-formed", () => {
       assert.ok(preset.auth.keyLabel.length > 0);
       assert.match(preset.auth.keyHelpUrl, /^https:\/\//);
     }
+    assert.equal(new URL(preset.url).origin.length > 0, true);
   }
 });
 
-test("catalog includes composio (apiKey), notion (oauth), linear (oauth)", () => {
+test("catalog includes composio (apiKey) and hosted Codex OAuth plugins", () => {
   const composio = getMcpPreset("composio");
   assert.equal(composio?.auth.kind, "apiKey");
   if (composio?.auth.kind === "apiKey") {
@@ -39,6 +41,9 @@ test("catalog includes composio (apiKey), notion (oauth), linear (oauth)", () =>
   }
   assert.equal(getMcpPreset("notion")?.auth.kind, "oauth");
   assert.equal(getMcpPreset("linear")?.auth.kind, "oauth");
+  assert.equal(getMcpPreset("github")?.auth.kind, "oauth");
+  assert.equal(getMcpPreset("figma")?.url, "https://mcp.figma.com/mcp");
+  assert.equal(getMcpPreset("superpowers"), undefined);
   assert.equal(getMcpPreset("nope"), undefined);
 });
 
@@ -62,6 +67,7 @@ test("serverFromPreset builds an enabled http server with preset defaults", () =
     presetId: "composio",
     enabled: true,
   });
+  assert.equal(composio.category, "Productivity");
 });
 
 test("serverFromPreset sets oauth and allows only provider-owned endpoint paths", () => {
@@ -74,6 +80,17 @@ test("serverFromPreset sets oauth and allows only provider-owned endpoint paths"
   assert.equal(serverFromPreset(notion, "   ").url, notion.url);
   assert.throws(
     () => serverFromPreset(notion, "https://attacker.invalid/mcp"),
+    /official secure server/,
+  );
+});
+
+test("hosted Codex plugin credentials stay on their official origin", () => {
+  const github = getMcpPreset("github");
+  assert.ok(github);
+  const server = serverFromPreset(github, "https://api.githubcopilot.com/mcp/v1");
+  assert.equal(server.oauth, true);
+  assert.throws(
+    () => serverFromPreset(github, "https://api.github.com/mcp"),
     /official secure server/,
   );
 });

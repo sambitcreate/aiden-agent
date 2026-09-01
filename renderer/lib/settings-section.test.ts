@@ -33,6 +33,19 @@ test("parses the Aiden settings deep link", () => {
   });
 });
 
+test("Plugins navigation advertises MCP, connectors, and the plugin directory", () => {
+  const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "mcp");
+  assert.ok(destination);
+  assert.equal(destination.title, "Plugins");
+  assert.deepEqual(destination.keywords, [
+    "mcp",
+    "connections",
+    "protocol",
+    "plugins",
+    "connectors",
+  ]);
+});
+
 test("Web Search navigation advertises provider routing and privacy controls", () => {
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "websearch");
   assert.ok(destination);

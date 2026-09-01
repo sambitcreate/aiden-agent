@@ -12,6 +12,7 @@ const apiKeyPreset: McpPreset = {
   name: "Composio",
   tagline: "Tools",
   vendor: "By Composio",
+  category: "Productivity",
   transport: "http",
   url: "https://connect.composio.dev/mcp",
   auth: {

@@ -175,7 +175,7 @@ class McpOAuthProvider implements OAuthClientProvider {
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     if (!("signal" in this.generation)) {
       throw new Error(
-        "This MCP server needs sign-in. Open Settings → MCP and click Authorize.",
+        "This MCP server needs sign-in. Open Settings → Plugins and click Authorize.",
       );
     }
     this.assertCanMutate();
