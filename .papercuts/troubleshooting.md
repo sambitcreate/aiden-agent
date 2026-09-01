@@ -146,6 +146,8 @@
 - A dictation stop can arrive before microphone or Live-session startup finishes, and a Live transcript can be visible before its finalization handshake succeeds. Latch stop intent by operation identity, keep one wall-clock budget across Live and batch fallback, preserve committed Live text, and ensure cancellation remains callable after audio capture disconnects.
 - Release-time and live validators for the same downloaded catalog can drift even when both look strict. Keep one shared acceptance corpus that runs every payload through both validators, including optional display strings and numeric bounds, so packaging cannot emit a snapshot the runtime will reject.
 - A post-merge updater should not run dependency installation or repository scripts with `contents: write`. Verify and test under read-only permissions, transfer a hashed artifact, and give only a minimal publish job write access with checkout credentials disabled and the token scoped to its final push command.
+- A clean `npm ci` can leave the `electron` package installed without its `dist/Electron.app` payload even when npm reports dependency scripts enabled. Before diagnosing the macOS dev-runtime preparation step, check `node_modules/electron/dist` and rerun Electron's package install script when the payload is absent.
+- Computer Use can expose an Electron popover's accessibility tree while returning no screenshot for the open native menu state. Use the fresh accessibility state to verify menu contents and supplement visual-state verification with focused source/tests when pixel capture is unavailable.
 
 ## Packaged Electron consent acceptance without a shipped bypass
 

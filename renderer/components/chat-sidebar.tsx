@@ -106,11 +106,13 @@ function SidebarOverflowMenu({
   ariaLabel,
   triggerClassName,
   contentClassName,
+  triggerIcon = <MoreHorizontal />,
   children,
 }: React.PropsWithChildren<{
   ariaLabel: string;
   triggerClassName?: string;
   contentClassName: string;
+  triggerIcon?: React.ReactNode;
 }>) {
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const [sideOffset, setSideOffset] = React.useState(8);
@@ -173,7 +175,7 @@ function SidebarOverflowMenu({
           className={triggerClassName}
           aria-label={ariaLabel}
         >
-          <MoreHorizontal />
+          {triggerIcon}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -1092,7 +1094,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         onCheckedChange={() => setOrganization("workspace")}
       >
         <span className="flex items-center gap-2">
-          <ListTree className="size-4 text-secondary" aria-hidden="true" />
+          <ListTree
+            className="size-4 text-secondary group-data-[highlighted]:text-accent-foreground"
+            aria-hidden="true"
+          />
           By workspace
         </span>
       </DropdownMenuCheckboxItem>
@@ -1101,7 +1106,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         onCheckedChange={() => setOrganization("recent")}
       >
         <span className="flex items-center gap-2">
-          <Rows3 className="size-4 text-secondary" aria-hidden="true" />
+          <Rows3
+            className="size-4 text-secondary group-data-[highlighted]:text-accent-foreground"
+            aria-hidden="true"
+          />
           Recent only
         </span>
       </DropdownMenuCheckboxItem>
@@ -1109,33 +1117,25 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   );
 
   const workspaceCreationMenu = (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="transparent"
-          size="small"
-          iconOnly
-          className="size-7 text-tertiary"
-          aria-label="Add workspace"
-        >
-          <FolderPlus />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuItem
-          disabled={workspaceSwitchBlocked || appendReconciliationRequired}
-          onSelect={openFolderWorkspace}
-        >
-          Open folder as workspace…
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={workspaceSwitchBlocked || appendReconciliationRequired}
-          onSelect={newEmptyWorkspace}
-        >
-          New empty workspace
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <SidebarOverflowMenu
+      ariaLabel="Add workspace"
+      triggerClassName="size-7 text-tertiary"
+      contentClassName="w-64"
+      triggerIcon={<FolderPlus />}
+    >
+      <DropdownMenuItem
+        disabled={workspaceSwitchBlocked || appendReconciliationRequired}
+        onSelect={openFolderWorkspace}
+      >
+        Open folder as workspace…
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        disabled={workspaceSwitchBlocked || appendReconciliationRequired}
+        onSelect={newEmptyWorkspace}
+      >
+        New empty workspace
+      </DropdownMenuItem>
+    </SidebarOverflowMenu>
   );
 
   return (

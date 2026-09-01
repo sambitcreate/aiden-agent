@@ -227,7 +227,25 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   assert.match(sidebar, /ariaLabel="Organize sidebar"/u);
   assert.match(
     sidebar,
+    /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u,
+  );
+  assert.match(
+    sidebar,
     /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+  );
+});
+
+test("sidebar organizer icons retain contrast on the highlighted accent surface", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const organizer = between(
+    sidebar,
+    "const sidebarOrganizationMenu",
+    "const workspaceCreationMenu",
+  );
+
+  assert.equal(
+    organizer.match(/group-data-\[highlighted\]:text-accent-foreground/gu)?.length,
+    2,
   );
 });
 
