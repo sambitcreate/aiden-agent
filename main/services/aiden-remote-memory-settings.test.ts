@@ -42,3 +42,48 @@ test("global memory rejects stale revisions and non-foreground payloads", async 
       error instanceof AidenRemoteServiceError && error.code === "permission_confirmation_required",
   );
 });
+
+test("concurrent updates serialize the revision check with the write", async () => {
+  let settings: AppSettings = {};
+  let releaseFirstWrite!: () => void;
+  const firstWriteReleased = new Promise<void>((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  let firstWriteStarted!: () => void;
+  const firstWritePending = new Promise<void>((resolve) => {
+    firstWriteStarted = resolve;
+  });
+  let writes = 0;
+  const service = new AidenRemoteMemorySettingsService({
+    getSettings: async () => structuredClone(settings),
+    setSettings: async (patch) => {
+      writes += 1;
+      if (writes === 1) {
+        firstWriteStarted();
+        await firstWriteReleased;
+      }
+      settings = { ...settings, ...patch };
+      return structuredClone(settings);
+    },
+  });
+  const current = await service.get();
+  const first = service.update(current.revision, {
+    enabled: false,
+    confirmedForeground: true,
+  });
+  await firstWritePending;
+  const second = service.update(current.revision, {
+    enabled: false,
+    confirmedForeground: true,
+  });
+  const secondOutcome = second.then(
+    () => "saved" as const,
+    (error: unknown) => error,
+  );
+  releaseFirstWrite();
+  assert.equal((await first).enabled, false);
+  const conflict = await secondOutcome;
+  assert.equal(conflict instanceof AidenRemoteServiceError, true);
+  assert.equal(conflict instanceof AidenRemoteServiceError ? conflict.code : undefined, "revision_conflict");
+  assert.equal(writes, 1);
+});
