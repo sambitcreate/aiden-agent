@@ -1,5 +1,10 @@
 # Troubleshooting
 
+- Design Workspace looks project-like, but only chat-linked artifact bytes are durable today; React Flow positions, viewport/version choice, uploaded reference nodes, and the live visual-edit session remain renderer state. Product copy and follow-on planning must distinguish durable designs from an ephemeral canvas arrangement.
+- Electron 43.1.1's npm package exposes `install-electron` as a binary but declares no lifecycle install script, so a fresh `npm ci` can leave `node_modules/electron/dist/Electron.app` absent while reporting success. Run the package's verified `install.js` explicitly before the macOS dev-runtime preparation step.
+- zsh aborts mixed optional-worktree glob loops when any pattern has no matches. Enable `null_glob` locally or enumerate each search root with `find` so recovery-branch discovery cannot stop after the first missing path.
+- Codex task inventory caps `list_threads` at 50 despite accepting an arbitrary numeric argument. Use the maximum 50 and page or filter from the returned summaries when locating an earlier feature task.
+- Codex task reads cap `turnLimit` at 10. Request ten recent turns first and use the returned cursor for older implementation history.
 - Pi 0.80.10 can choose the oldest oversized user turn as `firstKeptEntryId`, leaving both summary inputs empty and producing a no-op checkpoint. When the journal has a newer turn, retry `prepareCompaction` with a minimal retained-tail budget; still refuse the checkpoint if both summary inputs remain empty.
 - `Session.getEntries()` includes abandoned branches. Synchronization markers must be read from `Session.getBranch()` or a rolled-back partial write can still look committed.
 - Child-runtime unit tests load outside Electron. Keep usage accounting behind an injected callback (with a production-only dynamic import) instead of statically importing the Electron-backed singleton into the reusable child registry.
@@ -151,6 +156,9 @@
 - Changing a TanStack route tree during Electron/Vite HMR can transiently retain an obsolete root and recurse through updates. After a route-topology change, restart the development process before treating the live window as product evidence.
 - A unique-origin sandbox prevents the privileged renderer from inspecting a Design iframe DOM directly. Run only the pinned React Grab hit-testing primitives inside the guest, send a bounded no-authority descriptor through a per-preview main capability, and validate both the exact `contentWindow` source and capability before treating it as one-turn model context.
 - A permissive Design-only CSP in a preview document does not override a stricter CSP response header; Chromium enforces both policies together. Store the preview class with the registered document and serve the matching CSP header, or the local React Grab bundle is silently blocked while the generated UI remains interactive underneath visual-edit mode.
+- Archiving a completed plan can leave README capability copy and links stale. Update the plan index and top-level README together so shipped source-backed work is not described as future work and archived links remain valid.
+- A shared development profile can refuse startup when its V1 subagent store changes after the V2 migration checkpoint. Diagnose the redacted fingerprint from a temporary built-output log, preserve both stores, and use an explicit isolated `--user-data-dir` for unrelated UI testing instead of deleting migration evidence.
+- A fixed Vite development port collides when two Aiden worktrees are tested at once. Build the branded runtime once, run the second renderer on an explicit free loopback port, pass the matching `AIDEN_RENDERER_URL`, and keep its `AIDEN_CONFIG_DIR` plus `--user-data-dir` isolated.
 
 ## Packaged Electron consent acceptance without a shipped bypass
 
@@ -162,3 +170,25 @@ with a loopback Chromium debugging port, invoke the public action through the
 real preload bridge, use System Events to click the real native button by its
 exact accessibility label, and verify a post-start diagnostic event plus
 `uploadToServer: false`.
+
+- A full `oxfmt --check .` currently reports 576 pre-existing formatter mismatches, so Design work uses targeted formatter checks to avoid an unrelated repository-wide rewrite.
+- Parallel shared-worktree agents can transiently break the full type-check while another slice is mid-edit; rerun after the owning agent settles and report both the transient and final result.
+- Managed-worktree and chat creation do not accept a caller-owned operation ID, so cross-store handoff recovery needs a separate durable effect ledger plus deterministic branch/title discovery tags.
+- `DesignProjectStore.duplicate()` owns the project-row commit but its preparation port has no success hook, so restart-safe production integration needs a lifecycle wrapper that clears the preparation journal only after `duplicate()` returns.
+- DataStore schema adapters need a tolerant normalizer plus a separate safety predicate; throwing from normalization turns schema-unsafe JSON into the less precise corrupt-file state.
+- A focused Node test that imports a production adapter can accidentally load Electron through singleton dependencies and fail before the test runs. Keep pure adapter factories in dependency-only modules, then compose runtime singletons in a separate main adapter file.
+- Vite embeds a fresh HMR token into `/@vite/client`, so a static preview proof either disables HMR or over-authorizes it. Start with a non-HMR proof, extract the bounded token from the already-proven client response, and replace it with an exact-value WebSocket proof before the browser upgrades.
+- Keep the durable multi-file contract's per-file byte limit aligned with the subagent file mutator's real limit. A larger journal allowance only moves an otherwise predictable rejection from proposal time to Apply.
+- Loopback cookies have no port boundary, so they cannot carry a preview capability safely. Bootstrap a same-origin service worker from a one-use URL, add the capability only to same-origin proxy requests, omit credentials, and browser-test that a sibling loopback port receives neither cookies nor the capability header.
+- Runtime selection multiplicity is not enough to prove a component is safe to edit. Pair the exact selector count with a conservative bounded workspace scan that proves one owning definition and one non-iterative use chain, then repeat the proof inside the serialized Apply lane.
+- A pre-write source-graph proof can go stale while journaled files are being written. Repeat it after full postimage verification and roll the exact transaction back before commit when any non-journaled ownership input drifts.
+- Destructive action cleanup before a project-row delete can lose review history when the delete plan goes stale. Keep preflight read-only, publish the deletion first, then remove only terminal or provably unwritten durable actions through the recoverable cascade.
+- Project-library health was embedded inside an IPC handler, which made restart acceptance either duplicate production logic or import Electron. Keep durable-reference health inspection in a pure service and compose store adapters only at the handler boundary.
+
+# Same-process durable source retry
+
+- A project-bound Apply retry could re-run the preimage authority proof after an ambiguous write and strand an already-written postimage. Stage-aware retries now roll `applying`/`verifying` records back before requiring a fresh proposal.
+
+# Multi-file postimage graph proof
+
+- Proving only the selected file's hypothetical source graph made every valid second JS/TS postimage fail after writes. Multi-file proposals now build one complete override map and reject ambiguous graphs before durable preparation.
