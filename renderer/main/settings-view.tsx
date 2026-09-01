@@ -20,6 +20,7 @@ import {
   Clock3,
   Send,
   Smartphone,
+  BrainCircuit,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -35,14 +36,13 @@ import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
+import { MemorySettings } from "../components/settings/memory-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
 
-const AIDEN_SIDEBAR_LOGO_URL = new URL(
-  "../../resources/aiden-sidebar-logo.png",
-  import.meta.url,
-).href;
+const AIDEN_SIDEBAR_LOGO_URL = new URL("../../resources/aiden-sidebar-logo.png", import.meta.url)
+  .href;
 
 function AidenSidebarLogo() {
   return (
@@ -82,6 +82,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   scheduledTasks: <Clock3 className="size-5" />,
   assistant: <AidenSidebarLogo />,
   computerUse: <MousePointer2 className="size-5" />,
+  memory: <BrainCircuit className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
@@ -105,6 +106,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,
+  memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
   assistant: AssistantSettings,
   voice: VoiceSettings,
