@@ -93,6 +93,8 @@ test("curated slash catalog freezes unique command names, aliases, and required 
     "generative-ui",
     "generative_ui",
   ]);
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "mcp")?.aliases, ["plugins"]);
+  assert.equal(SLASH_COMMANDS.find((command) => command.name === "mcp")?.action.kind, "settings");
 
   assert.equal(SLASH_LIMITS.queryCharacters, 256);
   assert.equal(SLASH_LIMITS.catalogEntries, 500);

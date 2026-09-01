@@ -178,3 +178,9 @@ on the already-promoted v4 header.
 An execution command cannot start with a workdir that the same command is meant
 to create. Add the detached worktree from an existing checkout first, then run
 stack assembly inside it.
+
+## Hosted MCP OAuth verification
+
+The Dropbox origin-level protected-resource endpoint can return 429 while the
+resource-path endpoint advertised by `WWW-Authenticate` succeeds. Verify hosted
+MCP setup through that advertised RFC 9728 URL and the SDK's DCR redirect flow.

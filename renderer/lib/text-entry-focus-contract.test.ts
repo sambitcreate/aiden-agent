@@ -31,6 +31,7 @@ test("search and shortcut text-entry wrappers do not recolor their border on foc
     "../components/ui.tsx",
     "../main/settings-view.tsx",
     "../components/settings/web-search-settings.tsx",
+    "../components/settings/mcp-settings.tsx",
     "../components/settings/shortcut-settings.tsx",
   ]) {
     assert.doesNotMatch(source(relativePath), /focus-within:border-focus-ring/u, relativePath);
