@@ -250,12 +250,15 @@ import {
 import {
   createMemoryExtension,
   authorizeMemoryProposal,
+  authorizeMemoryRemoval,
   memoryMetadataForChat,
   memoryProvenanceForGeneration,
   memoryScopeForChat,
   REMEMBER_MEMORY_TOOL_NAME,
+  FORGET_MEMORY_TOOL_NAME,
 } from "./memory-context.js";
 import { memoryStore } from "./memory-store-main.js";
+import { memoryEnabledForChat } from "./memory-policy.js";
 import { piUpgradeRolloutStore } from "./pi-upgrade-rollout-main.js";
 import {
   piUpgradeBehaviorEnabledAtStartup,
@@ -1754,6 +1757,9 @@ export const llmClient = {
           },
         );
         if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
+        if (!(await memoryEnabledForChat(configStore, generationChat))) {
+          throw new Error("Durable memory is disabled by the current memory policy.");
+        }
         const scope = memoryScopeForChat(generationChat);
         await memoryStore.replaceChatMetadata(
           scope,
@@ -1767,6 +1773,7 @@ export const llmClient = {
         );
         memoryExtension = await createMemoryExtension({
           store: memoryStore,
+          enabled: () => memoryEnabledForChat(configStore, generationChat),
           scope,
           ...(provenance ? { provenance } : {}),
         });
@@ -2235,7 +2242,9 @@ export const llmClient = {
             const workspaceApproval =
               permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
-            const memoryApproval = context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME;
+            const memoryApproval =
+              context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
+              context.toolCall.name === FORGET_MEMORY_TOOL_NAME;
             const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
@@ -2315,7 +2324,10 @@ export const llmClient = {
             }
             if (memoryApproval) {
               timeline.toolAwaitingApproval(context.toolCall.id);
-              const memoryDecision = await authorizeMemoryProposal(
+              const authorize = context.toolCall.name === FORGET_MEMORY_TOOL_NAME
+                ? authorizeMemoryRemoval
+                : authorizeMemoryProposal;
+              const memoryDecision = await authorize(
                 context.args,
                 memoryApprovalContext,
                 async (summary, approvalSignal) => {
