@@ -37,7 +37,7 @@ export interface PluginCatalogEntry {
 export const PLUGIN_CATALOG_SOURCE_URL = "https://github.com/openai/plugins";
 
 const SKILLS_NOTE =
-  "This Codex plugin ships skills and workflows, not a public hosted MCP server. Add matching instructions in Settings → Skills, or a custom MCP if the vendor publishes one.";
+  "This Codex plugin ships skills and workflows, not a public hosted MCP server. Listing it here does not add agent tools or workspace access. Add matching instructions in Settings → Skills, or a custom MCP if the vendor publishes one.";
 const APP_NOTE =
   "Codex maps this as a ChatGPT app connector without a public MCP URL Aiden can call. If the vendor publishes a hosted MCP endpoint, add it as a custom MCP server.";
 const STDIO_NOTE =

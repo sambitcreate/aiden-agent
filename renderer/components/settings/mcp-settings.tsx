@@ -27,6 +27,7 @@ import { Plus, RefreshCw, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
 import {
   mcpPresetConnectionBadge,
+  mcpServerDraftForEditor,
   mcpServerEditorKind,
 } from "../../lib/mcp-preset-state";
 import { queryKeys, useMcpPresets, useMcpServers } from "../../lib/queries";
@@ -100,7 +101,7 @@ export function McpSettings() {
       return;
     }
     if (kind === "missing-preset") {
-      toast.error("This built-in MCP definition is unavailable. Reload Settings and try again.");
+      setEditing(mcpServerDraftForEditor(server, kind));
       return;
     }
     if (kind === "preset") {
@@ -126,8 +127,10 @@ export function McpSettings() {
         <div className="min-w-0 flex-1">
           <Text variant="strong">Plugins</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Browse plugins, connect hosted MCP servers, or add your own. Tool inputs may be shared
-            with the configured server.
+            Browse plugins, connect hosted MCP servers, or add your own. Listing a plugin does not
+            add tools. Enabled MCP servers and Skills you add become assistant tools; workspace
+            folder access is a separate permission. Tool inputs may be shared with a configured
+            server.
           </Text>
         </div>
         <Button
@@ -141,6 +144,20 @@ export function McpSettings() {
         >
           <RefreshCw className="size-4" />
           Reset connections
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-between gap-4 rounded-card border border-separator px-3.5 py-3">
+        <div className="min-w-0 flex-1">
+          <Text variant="small-strong">Manual MCP server setup</Text>
+          <Text variant="small" color="secondary" className="mt-0.5 block">
+            Add a local command or remote MCP server. Enabled custom servers become assistant tools
+            the same way connectable plugins do.
+          </Text>
+        </div>
+        <Button variant="filled" size="small" className="shrink-0" onClick={() => setEditing(newServer())}>
+          <Plus className="size-4" />
+          Add custom MCP
         </Button>
       </div>
 
@@ -168,7 +185,9 @@ export function McpSettings() {
                         {s.name || "Untitled server"}
                       </Text>
                       <Badge color="secondary">{s.transport}</Badge>
-                      {s.presetId ? <Badge color="blue">built-in</Badge> : null}
+                      {mcpServerEditorKind(s, catalogReady, presets.data ?? []) === "preset" ? (
+                        <Badge color="blue">built-in</Badge>
+                      ) : null}
                     </div>
                     <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
                       {s.transport === "stdio" ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "No command" : s.url || "No URL"}
@@ -199,9 +218,9 @@ export function McpSettings() {
             Plugin directory
           </Text>
           <Text variant="small" color="tertiary" className="mt-0.5 block">
-            Official Codex plugins plus Aiden’s Composio connector. Connectable entries use the
-            same hosted MCP setup as before; skills and ChatGPT-only apps stay listed so you can
-            see what they do.
+            Official Codex plugins plus Aiden’s Composio connector. Connectable entries use hosted
+            MCP setup. Skills and ChatGPT-only apps stay listed so you can see what they do; they
+            do not install Codex skill files or grant workspace access.
           </Text>
         </div>
         <label className="flex h-10 items-center gap-2 rounded-control border border-field bg-input px-3 transition-[background-color,box-shadow] duration-150 ease-out focus-within:bg-popover motion-reduce:transition-none">
@@ -288,19 +307,6 @@ export function McpSettings() {
         </div>
       </section>
 
-      <div className="flex items-center justify-between gap-4 rounded-card border border-separator px-3.5 py-3">
-        <div className="min-w-0 flex-1">
-          <Text variant="small-strong">Manual MCP server setup</Text>
-          <Text variant="small" color="secondary" className="mt-0.5 block">
-            Add a local command or remote MCP server.
-          </Text>
-        </div>
-        <Button variant="filled" size="small" className="shrink-0" onClick={() => setEditing(newServer())}>
-          <Plus className="size-4" />
-          Add custom MCP
-        </Button>
-      </div>
-
       {editing ? (
         <McpEditor
           server={editing}
@@ -346,7 +352,8 @@ export function McpSettings() {
               <Text variant="small" color="secondary" className="block">
                 Connects over HTTPS MCP. Aiden stores credentials on this Mac and only sends resource
                 tokens to the official MCP origin. Browser sign-in may also talk to that vendor’s
-                declared OAuth provider. Connecting does not install Codex skill files.
+                declared OAuth provider. Connecting adds tools only after the server is enabled;
+                it does not install Codex skill files or change workspace folder permission.
               </Text>
             )}
             {pluginDetails.url ? (

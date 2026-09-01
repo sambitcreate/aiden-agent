@@ -55,6 +55,10 @@ test("search and compatibility filters keep connectable MCP separate from skills
   const skills = filterPluginCatalog(PLUGIN_CATALOG, "", "Developer Tools", "skills");
   assert.ok(skills.every((plugin) => plugin.compatibility === "skills"));
   assert.ok(skills.some((plugin) => plugin.id === "expo"));
+  assert.match(
+    skills[0]?.compatibilityNote ?? "",
+    /does not add agent tools or workspace access/u,
+  );
 
   const other = filterPluginCatalog(PLUGIN_CATALOG, "", "all", "other");
   assert.ok(other.some((plugin) => plugin.id === "github"));
