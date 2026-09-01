@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"fixture-corrupt","timestamp":"2026-08-31T15:00:00.000Z","cwd":"/private/aiden","metadata":{"kind":"aiden-chat-compaction-v1","chatId":"fixture-corrupt"}}
+{"type":"message","id":"u1","parentId":"missing","timestamp":"2026-08-31T15:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"invalid parent"}],"timestamp":1788188401000}}

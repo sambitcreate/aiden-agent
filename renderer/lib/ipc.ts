@@ -170,6 +170,24 @@ export interface AppInfo {
   capabilities: AppCapabilities;
 }
 
+export interface MemoryFactView {
+  id: string;
+  scope: { kind: "bot" | "workspace"; id: string };
+  text: string;
+  provenance:
+    | { kind: "user_edit"; sourceId: string }
+    | { kind: "chat_message"; chatId: string; messageId: string }
+    | { kind: "model_proposal"; chatId: string; turnId: string; anchorMessageId: string };
+  createdAt: number;
+  updatedAt: number;
+  confidence: number;
+  expiresAt?: number;
+  reviewState: "approved";
+  state: "active" | "superseded";
+  supersedesId?: string;
+  alwaysOn: boolean;
+}
+
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return bridge().invoke(channel, ...args) as Promise<T>;
 }
@@ -733,6 +751,35 @@ export const chatsApi = {
       : null;
   },
   waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
+  compact: (id: string) =>
+    invoke<
+      | { compacted: true; tokensBefore?: number; estimatedTokensAfter?: number }
+      | {
+          compacted: false;
+          reason:
+            | "already_compact"
+            | "busy"
+            | "archived"
+            | "not_canonical"
+            | "provider_unavailable"
+            | "context_metadata_invalid"
+            | "cancelled"
+            | "compaction_failed";
+        }
+    >("chats:compact", id),
+  cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
+  memoryList: (id: string) => invoke<{
+    scope: { kind: "bot" | "workspace"; id: string };
+    facts: MemoryFactView[];
+  }>("chats:memoryList", id),
+  memoryPut: (
+    id: string,
+    input: { fact: string; alwaysOn: boolean; expiresAt?: number; supersedesId?: string },
+  ) => invoke<MemoryFactView>("chats:memoryPut", id, input),
+  memoryRemove: (id: string, factId: string) =>
+    invoke<boolean>("chats:memoryRemove", id, factId),
+  memoryExport: (id: string) =>
+    invoke<{ status: "saved" | "cancelled" }>("chats:memoryExport", id),
   todoSnapshot: async (id: string): Promise<TodoSnapshotViewV1 | null> => {
     const value = await invoke<unknown>("chats:todoSnapshot", id);
     if (value === null) return null;

@@ -68,6 +68,7 @@ export interface ChatApplicationDependencies {
   >;
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
+  memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -286,6 +287,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         } catch (error) {
           deps.logError("pi", "Could not delete the private compaction journal.", error);
           throw new Error("Aiden could not delete this chat's compaction history.");
+        }
+        try {
+          await deps.memoryStore?.deleteSourceChat(chatId);
+        } catch (error) {
+          deps.logError("memory", "Could not delete facts sourced from this chat.", error);
+          throw new Error("Aiden could not delete this chat's sourced memory.");
         }
         await deps.chatStore.remove(chatId, async (chat) => {
           if (!chat) throw new Error(`Chat ${chatId} not found`);

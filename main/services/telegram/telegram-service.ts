@@ -10,8 +10,6 @@ import { llmClient } from "../llm-client.js";
 import { providerRegistry } from "../provider-registry.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../legacy-pi-credential-migration.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "../codex-provider.js";
-import { resolveModelRuntime } from "../model-runtime.js";
-import { piCompactionSessionStore } from "../pi-compaction-session-store.js";
 import { secrets } from "../secrets.js";
 import type { Provider, StoredProvider } from "../types.js";
 import {
@@ -25,7 +23,8 @@ import { createTelegramConfig } from "./telegram-config.js";
 import { isTelegramFolderWorkspace } from "./telegram-workspace-core.js";
 import type { TelegramWorkspaceResolution } from "./telegram-turn.js";
 import { createTelegramServiceCore } from "./telegram-service-core.js";
-import { compactTelegramSession } from "./telegram-session.js";
+import { contextLifecycleService } from "../context-lifecycle-service-main.js";
+import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
 import { transcribe } from "../transcription.js";
 import { skillRegistry } from "../skill-registry-main.js";
 import { formatSkillInvocation } from "@earendil-works/pi-agent-core";
@@ -337,6 +336,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
   const profile = normalizeTelegramProfileName(profileName);
+  const lifecycle = createTelegramLifecycleAdapter(contextLifecycleService, profile);
   const tokenKey = telegramProfileTokenKey(profile);
   const resolveToken = () => secrets.getKey(tokenKey);
   const api = new TelegramBotApi(
@@ -456,19 +456,11 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       await threadStore.clear();
     },
     listModels: listTelegramModels,
-    abortChat: (chatId) => llmClient.cancelChat(chatId),
-    compactChat: (chatId) =>
-      compactTelegramSession(
-        {
-          getChat: (id) => chatStore.get(id),
-          openSession: (id) => piCompactionSessionStore.openChat(id),
-          resolveProvider: () => resolveProvider(profile),
-          resolveRuntime: resolveModelRuntime,
-          resolveThinkingLevel: async () =>
-            (await getProfileSettings(profile)).telegramThinkingLevel,
-        },
-        chatId,
-      ),
+    abortChat: async (chatId) => {
+      lifecycle.cancelChat(chatId);
+      await llmClient.cancelChat(chatId);
+    },
+    compactChat: lifecycle.compactChat,
     transcribeAudio: transcribe,
     storeInboundFile: async ({ bytes, name, workspaceId, botId }) => {
       const botHome = await resolveBotInboundAttachmentHome({

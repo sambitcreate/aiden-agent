@@ -24,6 +24,11 @@ import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js"
 import { createScheduledChatClaim } from "./scheduled-chat-creation.js";
 import { firstVisibleModelForProvider } from "../../renderer/shared/model-visibility.js";
 import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
+import {
+  beginSurfaceGeneration,
+  scheduledGenerationSurface,
+  startSurfaceGeneration,
+} from "./conversation-surface-generation.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -269,7 +274,23 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const allowMcpTools =
       task.permission === "full" && (legacyAllMcp || (mcpServerIds?.length ?? 0) > 0);
     const background = createBackgroundOwner(streamId);
-    const turn = llmClient.beginChatTurn(chatId, streamId, background.owner.documentId);
+    const surface = scheduledGenerationSurface({
+      chatId,
+      streamId,
+      ownerId: background.owner.documentId,
+      workspaceId: task.workspaceId,
+      providerId,
+      model,
+      mode: scheduledTaskGenerationMode(task),
+      prompt,
+      permission: task.permission,
+      excludeToolNames: excluded,
+      allowMcpTools,
+      mcpServerIds,
+      mcpServerBindings: task.mcpServerBindings,
+      providerFingerprint: task.providerFingerprint,
+    });
+    const turn = beginSurfaceGeneration(llmClient.beginChatTurn.bind(llmClient), surface);
     if (!turn) {
       throw new Error("The scheduled task's dedicated chat already has a turn in progress.");
     }
@@ -287,29 +308,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         turn.settleAsyncWork();
       }
       if (signal.aborted) throw new Error("Scheduled task was cancelled.");
-      const started = await llmClient.start(
-        streamId,
-        {
-          chatId,
-          workspaceId: task.workspaceId,
-          providerId,
-          model,
-          mode: scheduledTaskGenerationMode(task),
-          messages: [{ role: "user", content: prompt }],
-        },
+      const started = await startSurfaceGeneration(
+        llmClient.start.bind(llmClient),
+        surface,
         background.owner,
-        {
-          permission: task.permission,
-          excludeToolNames: excluded,
-          allowComputerUse: false,
-          allowMcpTools,
-          mcpServerIds,
-          mcpServerBindings: task.mcpServerBindings,
-          providerFingerprint: task.providerFingerprint,
-          allowSubagents: false,
-          usageSource: "scheduled",
-          turnId: streamId,
-        },
       );
       if (!started) throw new Error("The scheduled generation was cancelled before it started.");
       const terminal = await background.terminal;

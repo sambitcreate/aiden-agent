@@ -55,6 +55,11 @@ import {
   parseAidenRemoteChatSummaryPage,
   parseAidenRemoteChatProjection,
 } from "./aiden-remote-protocol.js";
+import {
+  beginSurfaceGeneration,
+  remoteGenerationSurface,
+  startSurfaceGeneration,
+} from "./conversation-surface-generation.js";
 import { chatSummaryRevision } from "./chat-summary-revision.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
@@ -1201,7 +1206,27 @@ export class AidenRemoteChatService {
           const turnId = `turn_${randomUUID()}`;
           const streamId = `stream_${randomUUID()}`;
           const owner = this.options.streams.create(deviceId, streamId, chatId, turnId);
-          const turn = this.options.generation.beginChatTurn(chatId, turnId, owner.owner.documentId);
+          const workspaceId = persistedChatWorkspaceId(authoritative.workspaceId);
+          let accepted = false;
+          const surface = remoteGenerationSurface({
+            chatId,
+            turnId,
+            streamId,
+            ownerId: owner.owner.documentId,
+            workspaceId,
+            providerId: selection.providerId,
+            model: selection.modelId,
+            thinkingLevel: parsed.thinkingLevel,
+            ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
+            onTurnAccepted: () => {
+              accepted = true;
+              this.options.streams.markRunning(deviceId, streamId);
+            },
+          });
+          const turn = beginSurfaceGeneration(
+            this.options.generation.beginChatTurn,
+            surface,
+          );
           if (!turn) {
             owner.invalidate();
             this.options.streams.markStartError(deviceId, streamId, new Error("This chat already has a response in progress."));
@@ -1216,10 +1241,8 @@ export class AidenRemoteChatService {
           );
           const messageId = `message_${randomUUID()}`;
           let appended = false;
-          let accepted = false;
           let appendedChat: Chat | undefined;
           try {
-            const workspaceId = persistedChatWorkspaceId(authoritative.workspaceId);
             const chat = await appendChatMessageWithReconciliation({
               messageId,
               append: () => this.options.chatStore.appendMessage(
@@ -1242,28 +1265,10 @@ export class AidenRemoteChatService {
             appended = true;
             appendedChat = chat;
             turn.settleAsyncWork();
-            const started = await this.options.generation.start(
-              streamId,
-              {
-                chatId,
-                workspaceId,
-                providerId: selection.providerId,
-                model: selection.modelId,
-                ...(parsed.thinkingLevel ? { thinkingLevel: parsed.thinkingLevel } : {}),
-                messages: [],
-              },
+            const started = await startSurfaceGeneration(
+              this.options.generation.start,
+              surface,
               owner.owner,
-              {
-                allowSubagents: true,
-                allowComputerUse: false,
-                usageSource: "chat",
-                turnId,
-                ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
-                onTurnAccepted: () => {
-                  accepted = true;
-                  this.options.streams.markRunning(deviceId, streamId);
-                },
-              },
             );
             if (!started && !accepted) {
               this.options.streams.markStartError(

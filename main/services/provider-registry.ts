@@ -8,13 +8,16 @@ import type {
   Model,
   Models,
   Provider as PiProvider,
-  ProviderModelsStore,
   ProviderStreams,
 } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai";
 import { CodexProviderService, OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { piCredentialStore } from "./pi-credential-store.js";
-import { piModelsStore, piProviderModelsStore } from "./pi-models-store.js";
+import {
+  piModelsStore,
+  piProviderModelsStore,
+  type ProviderModelsStore,
+} from "./pi-models-store.js";
 import { isCustomProviderId } from "./custom-provider-id.js";
 import { secrets } from "./secrets.js";
 import type { Provider, StoredProvider } from "./types.js";
@@ -191,7 +194,11 @@ export class ProviderRegistry {
     return {
       snapshot: async () =>
         (await this.listBuiltinProviders()).find((item) => item.id === providerId),
-      authenticate: (interaction: AuthInteraction) => auth.login!(interaction),
+      authenticate: (interaction: AuthInteraction) =>
+        auth.login!({
+          ...interaction,
+          signal: interaction.signal ?? new AbortController().signal,
+        }),
       commitCredential: async (credential: unknown) => {
         await this.credentials.modify(providerId, async () => credential as Credential);
         // Credential setup is an explicit network action. Publish this

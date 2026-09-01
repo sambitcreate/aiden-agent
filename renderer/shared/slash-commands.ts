@@ -91,7 +91,7 @@ export type SlashCommandAction =
   | { kind: "composer-control"; control: "access" }
   | {
       kind: "session";
-      action: "fork" | "clone" | "export" | "details" | "logout" | "worktree";
+      action: "fork" | "clone" | "export" | "compact" | "details" | "logout" | "worktree";
     }
   | { kind: "composer-instruction"; instruction: "visualize" | "btw" };
 
@@ -244,6 +244,19 @@ export const SLASH_COMMANDS = Object.freeze([
     keywords: ["download", "json", "backup"],
     icon: "export",
     action: { kind: "session", action: "export" },
+    behavior: "immediate",
+    availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "compact",
+    aliases: [],
+    title: "Compact chat",
+    description: "Create a durable semantic checkpoint for this chat.",
+    keywords: ["context", "summary", "tokens"],
+    icon: "session",
+    action: { kind: "session", action: "compact" },
     behavior: "immediate",
     availability: "idle-chat-session",
     argument: "none",
