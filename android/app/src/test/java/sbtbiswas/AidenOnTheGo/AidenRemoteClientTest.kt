@@ -98,6 +98,28 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun testMemorySettingsUseRevisionCheckedForegroundMutation() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"enabled":true,"revision":"rev_memory_1"}""").setResponseCode(200))
+        server.enqueue(MockResponse().setBody("""{"enabled":false,"revision":"rev_memory_2"}""").setResponseCode(200))
+
+        val current = client.memorySettings()
+        assertTrue(current.enabled)
+        val getRequest = server.takeRequest()
+        assertEquals("GET", getRequest.method)
+        assertEquals("/api/aiden/v1/memory/settings", getRequest.path)
+
+        val saved = client.updateMemorySettings(current.revision, false)
+        assertFalse(saved.enabled)
+        val patchRequest = server.takeRequest()
+        assertEquals("PATCH", patchRequest.method)
+        assertEquals("rev_memory_1", patchRequest.getHeader("If-Match"))
+        val body = Json.parseToJsonElement(patchRequest.body.readUtf8()).jsonObject
+        assertEquals(setOf("enabled", "confirmedForeground"), body.keys)
+        assertEquals("false", body.getValue("enabled").jsonPrimitive.content)
+        assertEquals("true", body.getValue("confirmedForeground").jsonPrimitive.content)
+    }
+
+    @Test
     fun testScheduledRunBindsRevisionAndIdempotencyKey() = runBlocking {
         server.enqueue(
             MockResponse().setResponseCode(202).setBody(
