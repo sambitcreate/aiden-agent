@@ -153,6 +153,9 @@
 - A cache can satisfy the wire-item bound but still block the UI when every paginated page rewrites one maximum-size aggregate on the main thread. Size the native summary cache against the full 10,000-row contract, move encode/read/fsync work off the UI executor, and commit pagination state only after durable persistence succeeds.
 - A connected iPhone is not enough for XCTest acceptance when the local provisioning profile omits the app's App Group entitlement. Keep generic-device `build-for-testing` as the compile gate, report the signing boundary honestly, and rerun device metrics only after `group.sbtbiswas.AidenOnTheGo` is provisioned.
 - Adding a derived field to the canonical chat-list projection can leave exact-shape resilience and shipping-source assertions stale even when focused feature tests pass. Search every full-suite assertion over that projection before the first push, and derive expected compatibility values through the production helper rather than duplicating the hash contract.
+- The primary checkout can remain on a feature branch whose upstream was deleted, making an otherwise clean hotfix look detached from its delivery path. Check `git status --branch` and worktree registration before editing, then keep diagnosis and verification local unless branch or push authority is explicit.
+- A large exact-context documentation patch can fail atomically on one wrapped paragraph. Re-read the numbered lines and retry with the smallest stable context instead of assuming earlier terminal wrapping matches the file.
+- `npm ci` reports the aggregate advisory count, which can widen a release hotfix unnecessarily when every finding is development-only. Confirm the shipped graph with `npm audit --omit=dev` before changing dependencies; this hotfix had zero production advisories.
 
 ## Packaged Electron consent acceptance without a shipped bypass
 

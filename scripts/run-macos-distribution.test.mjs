@@ -212,6 +212,7 @@ test("release publication checks deployed consumers before building", async () =
   for (const stepName of [
     "Install locked dependencies",
     "Build, sign, notarize, and verify distribution",
+    "Verify reboot-safe subagent migration in the signed app",
     "Verify diagnostics in the signed packaged app",
     "Publish verified release assets",
   ]) {

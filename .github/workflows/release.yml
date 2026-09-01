@@ -141,6 +141,10 @@ jobs:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
         run: npm run dist
 
+      - name: Verify reboot-safe subagent migration in the signed app
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run test:subagents:migration:packaged
+
       - name: Verify diagnostics in the signed packaged app
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e:diagnostics:packaged

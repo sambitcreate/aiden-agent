@@ -36,6 +36,9 @@ authority. Ordinary model reads and application startup remain offline.
   checks remain mandatory on a physical Mac during packaged acceptance.
 - `npm run dist` refreshes only the approved release-time model snapshot, builds the app and
   native helpers, signs with Developer ID, notarizes, staples, and verifies the app, DMG, and ZIP.
+- Before publication, the signed app must launch from a disposable profile whose committed
+  V1-to-V2 subagent migration has identical source bytes but a deliberately stale native file
+  generation. This covers the APFS device-identifier churn observed after a reboot.
 - Automatic-update builds also generate `latest-mac.yml`. macOS archive names are restricted to
   stable GitHub-safe characters, and release verification requires the manifest URL and path to
   equal the exact ZIP basename. Verification also recomputes the ZIP's SHA-512 digest and requires
