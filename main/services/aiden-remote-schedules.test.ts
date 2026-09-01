@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
+import { scheduledTaskRevision } from "./scheduled-task-application-service.js";
 import type { ScheduledRun, ScheduledTask, ScheduledTaskInput } from "./types.js";
 
 function fixture() {
@@ -24,7 +25,7 @@ function fixture() {
     },
     save: async (input: ScheduledTaskInput, options: { expectedRevision?: string } = {}) => {
       const existing = input.id ? tasks.get(input.id) : undefined;
-      if (options.expectedRevision && options.expectedRevision !== `revision:${existing?.updatedAt}`) {
+      if (options.expectedRevision && (!existing || options.expectedRevision !== scheduledTaskRevision(existing))) {
         throw new Error("This automation changed.");
       }
       const updatedAt = ++clock;
@@ -52,7 +53,11 @@ function fixture() {
       tasks.set(id, next);
       return next;
     },
-    runNow: async (id: string, runId?: string) => {
+    runNow: async (id: string, runId?: string, revision?: string) => {
+      const task = tasks.get(id);
+      if (!task || revision !== scheduledTaskRevision(task)) {
+        throw new Error("This automation changed.");
+      }
       runStarts += 1;
       const run: ScheduledRun = {
         id: runId ?? "run-local", taskId: id, startedAt: 1, finishedAt: 2,
@@ -124,9 +129,26 @@ test("scheduled-task projections omit runtime authority and script selections ar
 test("scheduled task run retries reuse one accepted run and history is bounded and redacted", async () => {
   const value = fixture();
   const created = await value.service.create("device-1", "create-key-123456", llmMutation);
-  const first = await value.service.run("device-1", created.id, "run-key-12345678");
-  const replay = await value.service.run("device-1", created.id, "run-key-12345678");
+  await assert.rejects(
+    value.service.run("device-1", created.id, "revision:stale", "stale-run-key-1234"),
+    /changed/u,
+  );
+  assert.equal(value.runStarts(), 0);
+  const first = await value.service.run("device-1", created.id, created.revision, "run-key-12345678");
+  const replay = await value.service.run("device-1", created.id, created.revision, "run-key-12345678");
   assert.deepEqual(replay, first);
+  assert.equal(value.runStarts(), 1);
+  const updated = await value.service.update("device-1", created.id, created.revision, {
+    ...llmMutation,
+    name: "Updated morning review",
+  });
+  await assert.rejects(
+    value.service.run("device-1", created.id, updated.revision, "run-key-12345678"),
+    (error: unknown) => (
+      (error as { code?: string; status?: number }).code === "idempotency_conflict"
+      && (error as { status?: number }).status === 409
+    ),
+  );
   assert.equal(value.runStarts(), 1);
   const history = await value.service.runs(created.id);
   assert.equal(history.runs[0]?.id, first.runId);
@@ -149,7 +171,7 @@ test("accepted execution remains scheduler-owned after the remote caller disconn
     return undefined;
   };
 
-  const accepted = await value.service.run("device-1", created.id, "disconnect-key-1234");
+  const accepted = await value.service.run("device-1", created.id, created.revision, "disconnect-key-1234");
   assert.deepEqual((await value.service.runs(created.id)).runs, []);
   finish();
   await completion;

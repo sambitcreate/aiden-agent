@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   mcpPresetConnectionBadge,
   mcpPresetCredentialReady,
+  mcpServerDraftForEditor,
   mcpServerEditorKind,
 } from "./mcp-preset-state.js";
 import type { McpPreset, McpPresetState } from "./types.js";
@@ -12,6 +13,7 @@ const apiKeyPreset: McpPreset = {
   name: "Composio",
   tagline: "Tools",
   vendor: "By Composio",
+  category: "Productivity",
   transport: "http",
   url: "https://connect.composio.dev/mcp",
   auth: {
@@ -132,4 +134,22 @@ test("preset servers never fall through to the generic editor while queries race
     ]),
     "preset",
   );
+});
+
+test("removed presets reopen as custom drafts so save is not origin-locked", () => {
+  const server = {
+    id: "preset-github",
+    name: "GitHub",
+    transport: "http" as const,
+    url: "https://api.githubcopilot.com/mcp/",
+    oauth: true,
+    presetId: "github",
+    enabled: true,
+  };
+  const draft = mcpServerDraftForEditor(server, "missing-preset");
+  assert.equal(draft.presetId, undefined);
+  assert.equal(draft.id, "preset-github");
+  assert.equal(draft.oauth, true);
+  assert.equal(mcpServerDraftForEditor(server, "preset").presetId, "github");
+  assert.equal(mcpServerDraftForEditor(server, "loading").presetId, "github");
 });

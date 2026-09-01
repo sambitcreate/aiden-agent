@@ -321,6 +321,10 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     /Create reusable instructions, then type \$ to attach one to your next message\./u,
   );
   assert.match(
+    source,
+    /Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline\./u,
+  );
+  assert.match(
     featurePresentation,
     /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
   );
@@ -368,6 +372,10 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
   assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
+  assert.match(
+    featurePresentation,
+    /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
+  );
   assert.match(
     featurePresentation,
     /benchmark-only OpenRouter key never imports its model catalog/u,

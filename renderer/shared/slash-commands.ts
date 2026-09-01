@@ -91,9 +91,9 @@ export type SlashCommandAction =
   | { kind: "composer-control"; control: "access" }
   | {
       kind: "session";
-      action: "fork" | "clone" | "export" | "details" | "logout" | "worktree";
+      action: "fork" | "clone" | "export" | "compact" | "details" | "logout" | "worktree";
     }
-  | { kind: "composer-instruction"; instruction: "visualize" };
+  | { kind: "composer-instruction"; instruction: "visualize" | "btw" };
 
 export type SlashCommandAvailability =
   | "always"
@@ -244,6 +244,19 @@ export const SLASH_COMMANDS = Object.freeze([
     keywords: ["download", "json", "backup"],
     icon: "export",
     action: { kind: "session", action: "export" },
+    behavior: "immediate",
+    availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "compact",
+    aliases: [],
+    title: "Compact chat",
+    description: "Create a durable semantic checkpoint for this chat.",
+    keywords: ["context", "summary", "tokens"],
+    icon: "session",
+    action: { kind: "session", action: "compact" },
     behavior: "immediate",
     availability: "idle-chat-session",
     argument: "none",
@@ -420,10 +433,10 @@ export const SLASH_COMMANDS = Object.freeze([
   }),
   define({
     name: "mcp",
-    aliases: [],
-    title: "MCP servers",
-    description: "Open MCP settings and connection status.",
-    keywords: ["tools", "connectors", "servers"],
+    aliases: ["plugins"],
+    title: "Plugins",
+    description: "Open the plugin directory and MCP connection status.",
+    keywords: ["tools", "connectors", "servers", "mcp", "plugins"],
     icon: "mcp",
     action: { kind: "settings", section: "mcp" },
     behavior: "navigation",
@@ -455,6 +468,19 @@ export const SLASH_COMMANDS = Object.freeze([
     behavior: "picker",
     availability: "always",
     argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "btw",
+    aliases: ["side-question"],
+    title: "Ask a side question",
+    description: "Ask about this chat without adding a message to its history.",
+    keywords: ["aside", "ephemeral", "question", "context"],
+    icon: "chat",
+    action: { kind: "composer-instruction", instruction: "btw" },
+    behavior: "argument",
+    availability: "idle-chat-session",
+    argument: "optional-prompt",
     draftPolicy: "preserve",
   }),
   define({

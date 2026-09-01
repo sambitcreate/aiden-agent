@@ -675,6 +675,8 @@ final class AidenWorkspaceChatsModel {
     private let workspaceId: String
     private let cache: AidenChatCache
     private let hapticScope: UUID
+    private let onChatUpdated: @MainActor (AidenChat) -> Void
+    private let onChatRemoved: @MainActor (String) -> Void
     private(set) var chats: [AidenChat] = []
     private(set) var isLoading = false
     private(set) var isMutating = false
@@ -684,12 +686,16 @@ final class AidenWorkspaceChatsModel {
         coordinator: AidenRemoteCoordinator,
         workspaceId: String,
         hapticScope: UUID = UUID(),
-        cache: AidenChatCache = .shared
+        cache: AidenChatCache = .shared,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatRemoved: @escaping @MainActor (String) -> Void = { _ in }
     ) {
         self.coordinator = coordinator
         self.workspaceId = workspaceId
         self.hapticScope = hapticScope
         self.cache = cache
+        self.onChatUpdated = onChatUpdated
+        self.onChatRemoved = onChatRemoved
     }
 
     var isConnected: Bool { coordinator.connectionState == .connected }
@@ -743,6 +749,7 @@ final class AidenWorkspaceChatsModel {
             }
             upsert(chat)
             try? await persist(chat: chat, instanceId: instanceId)
+            onChatUpdated(chat)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-create:\(chat.id):\(chat.revision)")
             return chat
         } catch let error where aidenIsCancellation(error) {
@@ -773,6 +780,7 @@ final class AidenWorkspaceChatsModel {
             guard coordinator.isCurrent(context) else { return }
             upsert(updated)
             try? await persist(chat: updated, instanceId: instanceId)
+            onChatUpdated(updated)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
         } catch let error where aidenIsCancellation(error) {
             guard coordinator.isCurrent(context) else { return }
@@ -799,6 +807,7 @@ final class AidenWorkspaceChatsModel {
             await cache.removeChat(instanceId: instanceId, chatId: chat.id)
             await AidenChatDraftStore.shared.remove(instanceId: instanceId, chatId: chat.id)
             try? await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+            onChatRemoved(chat.id)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-remove:\(chat.id):\(chat.revision)")
         } catch let error where aidenIsCancellation(error) {
             guard coordinator.isCurrent(context) else { return }
@@ -822,6 +831,7 @@ final class AidenWorkspaceChatsModel {
     private func persist(chat: AidenChat, instanceId: String) async throws {
         try await cache.saveChat(chat, instanceId: instanceId)
         try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+        try await cache.reconcileChatSummary(chat, instanceId: instanceId)
     }
 
     private static func sorted(_ chats: [AidenChat]) -> [AidenChat] {
@@ -866,6 +876,7 @@ final class AidenChatViewModel {
     private let runtime: Runtime
     private var allowsMutations: Bool
     private let onChatUpdated: @MainActor (AidenChat) -> Void
+    private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     private let draftStore: AidenChatDraftStore
     private let hapticScope: UUID
     @ObservationIgnored private var streamTask: Task<Void, Never>?
@@ -882,7 +893,14 @@ final class AidenChatViewModel {
     private(set) var catalog: AidenModelCatalog?
     private(set) var isLoading = false
     private(set) var isStarting = false
-    private(set) var streamState: AidenStreamState?
+    private(set) var streamState: AidenStreamState? {
+        didSet {
+            let wasActive = oldValue.map { !$0.isTerminal } ?? false
+            let isActive = streamState.map { !$0.isTerminal } ?? false
+            guard wasActive != isActive else { return }
+            onChatActivityChanged(chat.id, isActive ? .active : .idle)
+        }
+    }
     private(set) var liveText = ""
     private(set) var reasoning = ""
     private(set) var tools: [AidenLiveTool] = []
@@ -957,7 +975,8 @@ final class AidenChatViewModel {
         draftStore: AidenChatDraftStore = .shared,
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         allowsMutations: Bool = true,
-        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
         runtime = .live(
             coordinator: coordinator,
@@ -970,6 +989,7 @@ final class AidenChatViewModel {
         self.draftStore = draftStore
         self.hapticScope = hapticScope
         self.onChatUpdated = onChatUpdated
+        self.onChatActivityChanged = onChatActivityChanged
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
     }
@@ -982,6 +1002,7 @@ final class AidenChatViewModel {
         draftStore = .shared
         hapticScope = UUID()
         onChatUpdated = { _ in }
+        onChatActivityChanged = { _, _ in }
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
     }
@@ -1490,7 +1511,33 @@ final class AidenChatViewModel {
         }
         let previousState = streamState
         guard let streamID = activeStreamID else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
+        guard let context = try? coordinator.requestContext(for: instanceId) else {
+            streamState = .reconciling
+            presentedError = String(localized: "Approval access changed. Reopen this chat on the active Aiden Agent and review the request again.")
+            return
+        }
+        let capabilities = approvalCapabilities(for: context)
+        let authorization = AidenApprovalResponseAuthorization.resolve(
+            approval: approval,
+            decision: decision,
+            capabilities: capabilities
+        )
+        guard authorization == .allowed else {
+            presentedError = switch authorization {
+            case .allowed:
+                nil
+            case .approvalResponseRequired:
+                String(localized: "Approval response access was removed from this paired device. The request has been refreshed without sending a decision.")
+            case .scheduleWriteRequired:
+                String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
+            case .hostApprovalRequired:
+                String(localized: "This request can only be approved on your Mac.")
+            }
+            streamState = .reconciling
+            coordinator.haptics.play(.warning, scope: hapticScope)
+            await restorePendingApproval(streamID: streamID, context: context)
+            return
+        }
         pendingApproval = nil
         streamState = .running
         do {
@@ -1823,7 +1870,8 @@ final class AidenChatViewModel {
             guard let approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId: streamID,
-                chatId: chat.id
+                chatId: chat.id,
+                capabilities: approvalCapabilities(for: context)
             ) else {
                 pendingApproval = nil
                 streamState = .reconciling
@@ -1851,6 +1899,21 @@ final class AidenChatViewModel {
             streamState = .reconciling
             await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
         }
+    }
+
+    private func approvalCapabilities(
+        for context: AidenRemoteRequestContext
+    ) -> AidenApprovalCapabilities {
+        guard coordinator.isCurrent(context),
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == context.instanceId,
+              installation.deviceId == context.deviceId else {
+            return AidenApprovalCapabilities(canRespond: false, canWriteSchedules: false)
+        }
+        return AidenApprovalCapabilities(
+            canRespond: installation.hasNegotiatedAccess(to: .approvalRespond),
+            canWriteSchedules: installation.hasNegotiatedAccess(to: .scheduleWrite)
+        )
     }
 
     @discardableResult
@@ -2025,18 +2088,32 @@ struct AidenWorkspaceChatsView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.aidenPalette) private var palette
     let workspace: AidenWorkspace
+    let onChatUpdated: @MainActor (AidenChat) -> Void
+    let onChatRemoved: @MainActor (String) -> Void
+    let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     @State private var model: AidenWorkspaceChatsModel
     @State private var createdChat: AidenChat?
     @State private var renameChat: AidenChat?
     @State private var renameTitle = ""
     @State private var deleteChat: AidenChat?
 
-    init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace) {
+    init(
+        coordinator: AidenRemoteCoordinator,
+        workspace: AidenWorkspace,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+    ) {
         self.coordinator = coordinator
         self.workspace = workspace
+        self.onChatUpdated = onChatUpdated
+        self.onChatRemoved = onChatRemoved
+        self.onChatActivityChanged = onChatActivityChanged
         _model = State(initialValue: AidenWorkspaceChatsModel(
             coordinator: coordinator,
-            workspaceId: workspace.id
+            workspaceId: workspace.id,
+            onChatUpdated: onChatUpdated,
+            onChatRemoved: onChatRemoved
         ))
     }
 
@@ -2066,7 +2143,11 @@ struct AidenWorkspaceChatsView: View {
                             AidenChatDetailView(
                                 coordinator: coordinator,
                                 chat: chat,
-                                onChatUpdated: { model.accept($0) }
+                                onChatUpdated: {
+                                    model.accept($0)
+                                    onChatUpdated($0)
+                                },
+                                onChatActivityChanged: onChatActivityChanged
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -2106,7 +2187,11 @@ struct AidenWorkspaceChatsView: View {
                 AidenChatDetailView(
                     coordinator: coordinator,
                     chat: createdChat,
-                    onChatUpdated: { model.accept($0) }
+                    onChatUpdated: {
+                        model.accept($0)
+                        onChatUpdated($0)
+                    },
+                    onChatActivityChanged: onChatActivityChanged
                 )
             }
         }
@@ -2182,14 +2267,16 @@ struct AidenChatDetailView: View {
         chat: AidenChat,
         autoStartVoice: Bool = false,
         allowsMutations: Bool = true,
-        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
         _coordinator = State(initialValue: coordinator)
         _model = State(initialValue: AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
             allowsMutations: allowsMutations,
-            onChatUpdated: onChatUpdated
+            onChatUpdated: onChatUpdated,
+            onChatActivityChanged: onChatActivityChanged
         ))
         _botToolsModel = State(initialValue: chat.botId.map {
             AidenBotChatToolsModel(chatID: chat.id, botID: $0)
@@ -3933,6 +4020,9 @@ private struct AidenLiveResponseView: View {
             if let approval = model.pendingApproval {
                 AidenApprovalCard(
                     summary: approval.summary,
+                    kind: approval.kind,
+                    canRespond: approval.canRespond,
+                    hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
                     onDeny: { Task { await model.respondToApproval(.deny) } },
                     onAllow: { Task { await model.respondToApproval(.allow) } }
@@ -3979,6 +4069,9 @@ private struct AidenApprovalCard: View {
     @State private var isExpanded = false
 
     let summary: String
+    let kind: AidenApprovalKind
+    let canRespond: Bool
+    let hasRequiredWriteCapability: Bool
     let canAllow: Bool
     let onDeny: () -> Void
     let onAllow: () -> Void
@@ -3996,82 +4089,111 @@ private struct AidenApprovalCard: View {
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Approval needed")
+                    Text(AidenApprovalPresentation.title(for: kind))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(palette.foreground)
 
-                    Text("Review this one action before Aiden continues.")
+                    Text(AidenApprovalPresentation.detail(for: kind))
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Text(AidenApprovalPresentation.oneLineSummary(summary))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(palette.foreground)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(palette.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 36)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .accessibilityLabel("Requested action")
-            .accessibilityValue(AidenApprovalPresentation.oneLineSummary(summary))
-            .accessibilityHint(isExpanded ? "Collapses action details" : "Expands action details")
-
-            if isExpanded {
+            if kind == .scheduledTask {
                 Text(summary)
                     .font(.caption.monospaced())
-                    .foregroundStyle(palette.secondary)
+                    .foregroundStyle(palette.foreground)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+                    .accessibilityLabel("Scheduled task proposal")
+                    .accessibilityValue(summary)
+            } else {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(AidenApprovalPresentation.oneLineSummary(summary))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(palette.foreground)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-
-                Button(action: onDeny) {
-                    Text("Deny")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.foreground)
-                        .padding(.horizontal, 13)
-                        .frame(height: 34)
-                        .aidenApprovalActionGlass()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(palette.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 36)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.vertical, 5)
+                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityLabel("Requested action")
+                .accessibilityValue(AidenApprovalPresentation.oneLineSummary(summary))
+                .accessibilityHint(isExpanded ? "Collapses action details" : "Expands action details")
 
-                if canAllow {
-                    Button(action: onAllow) {
-                        Text("Allow once")
+                if isExpanded {
+                    Text(summary)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(palette.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+
+            if !canRespond {
+                Label("This paired device can review approvals but cannot respond.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            } else if kind == .scheduledTask && !hasRequiredWriteCapability {
+                Label("Schedule write access is required to approve this task.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            } else if kind == .scheduledTask && !canAllow {
+                Label("This task must be approved on your Mac.", systemImage: "desktopcomputer")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            }
+
+            if canRespond {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+
+                    Button(action: onDeny) {
+                        Text(AidenApprovalPresentation.denyTitle(for: kind))
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.canvas)
+                            .foregroundStyle(palette.foreground)
                             .padding(.horizontal, 13)
                             .frame(height: 34)
-                            .aidenApprovalActionGlass(tint: palette.accent)
+                            .aidenApprovalActionGlass()
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 5)
+
+                    if canAllow {
+                        Button(action: onAllow) {
+                            Text(AidenApprovalPresentation.allowTitle(for: kind))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.canvas)
+                                .padding(.horizontal, 13)
+                                .frame(height: 34)
+                                .aidenApprovalActionGlass(tint: palette.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 5)
+                    }
                 }
             }
         }

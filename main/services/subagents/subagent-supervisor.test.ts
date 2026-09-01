@@ -1003,7 +1003,7 @@ test("Phase 6B carries usage budgets across repeated model tool calls", async ()
   await supervisor.execute(request(["First"]));
   await assert.rejects(
     supervisor.execute(request(["Second"])),
-    /generation tree budget exhausted/u,
+    /generation tree budget exhausted.*new parent turn with narrower tasks/u,
   );
   assert.equal(childRuns, 1);
 });
@@ -1046,7 +1046,7 @@ test("Phase 6B telemetry budget exhaustion cancels and terminalizes the whole sc
   );
   await assert.rejects(
     supervisor.execute(request(["Cannot reset"])),
-    /generation tree budget exhausted/u,
+    /generation tree budget exhausted.*new parent turn with narrower tasks/u,
   );
 });
 

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ShieldAlert } from "lucide-react";
+import { ChevronRight, ShieldAlert } from "lucide-react";
 import {
   Button,
   Callout,
@@ -17,6 +17,13 @@ import {
   Textarea,
 } from "./ui";
 import { scheduleApi } from "../lib/ipc";
+import {
+  cronFromScheduleDraft,
+  formatSchedule,
+  scheduleDraftFromCron,
+  type ScheduledTaskCadence,
+  type ScheduledTaskScheduleDraft,
+} from "../lib/scheduled-task-view";
 import type {
   McpServer,
   ScheduledTaskInput,
@@ -34,6 +41,26 @@ function upcomingLabel(timestamp: number): string {
     minute: "2-digit",
   }).format(timestamp);
 }
+
+const CADENCE_OPTIONS: Array<{ value: ScheduledTaskCadence; label: string }> = [
+  { value: "minutes", label: "Every few minutes" },
+  { value: "hourly", label: "Every hour" },
+  { value: "daily", label: "Every day" },
+  { value: "weekdays", label: "Weekdays" },
+  { value: "weekly", label: "Every week" },
+  { value: "monthly", label: "Every month" },
+  { value: "custom", label: "Custom schedule" },
+];
+
+const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
 
 export function ScheduledTaskEditor({
   open,
@@ -57,12 +84,16 @@ export function ScheduledTaskEditor({
   onSave: (task: ScheduledTaskInput) => Promise<void>;
 }) {
   const [draft, setDraft] = React.useState(initial);
+  const [scheduleDraft, setScheduleDraft] = React.useState(() =>
+    scheduleDraftFromCron(initial.cron),
+  );
   const [preview, setPreview] = React.useState<number[]>([]);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
   const [scripts, setScripts] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     if (open) {
+      setScheduleDraft(scheduleDraftFromCron(initial.cron));
       setDraft({
         ...initial,
         permission: initial.mode === "script" ? "full" : initial.permission,
@@ -70,6 +101,16 @@ export function ScheduledTaskEditor({
       });
     }
   }, [initial, open]);
+
+  const updateSchedule = (
+    update: (current: ScheduledTaskScheduleDraft) => ScheduledTaskScheduleDraft,
+  ) => {
+    let next = update(scheduleDraft);
+    const cron = cronFromScheduleDraft(next);
+    if (next.cadence !== "custom") next = { ...next, customCron: cron };
+    setScheduleDraft(next);
+    setDraft((task) => ({ ...task, cron }));
+  };
 
   React.useEffect(() => {
     if (!open || !draft.cron.trim() || !draft.timezone?.trim()) {
@@ -166,7 +207,23 @@ export function ScheduledTaskEditor({
       (draft.mode === "llm" &&
         draft.workspaceId === initial.workspaceId &&
         draft.permission === initial.permission &&
+        draft.webSearchEnabled === initial.webSearchEnabled &&
         JSON.stringify(selectedMcpIds) === JSON.stringify(initial.mcpServerIds ?? [])));
+  const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const timezoneOptions = React.useMemo(() => {
+    let supported: string[] = [];
+    try {
+      const supportedValuesOf = (
+        Intl as typeof Intl & {
+          supportedValuesOf?: (key: "timeZone") => string[];
+        }
+      ).supportedValuesOf;
+      supported = supportedValuesOf?.("timeZone") ?? [];
+    } catch {
+      // Older runtimes still retain the current, saved, and UTC choices below.
+    }
+    return [...new Set([localTimezone, draft.timezone ?? localTimezone, "UTC", ...supported])];
+  }, [draft.timezone, localTimezone]);
 
   return (
     <Dialog
@@ -181,7 +238,7 @@ export function ScheduledTaskEditor({
       onConfirm={() => onSave(draft)}
     >
       <FieldSet>
-        <Field label="Name">
+        <Field label="Name" description="A short label for the task and its dedicated chat.">
           <Input
             autoFocus
             value={draft.name}
@@ -259,41 +316,201 @@ export function ScheduledTaskEditor({
             ) : null}
           </Field>
         )}
-        <Field label="Schedule" description="Five-part cron, or six parts when seconds are needed.">
-          <Input
-            value={draft.cron}
-            onChange={(event) => setDraft((current) => ({ ...current, cron: event.target.value }))}
-            placeholder="0 9 * * 1-5"
-            aria-invalid={Boolean(previewError)}
-          />
-        </Field>
-        <Field label="Timezone">
-          <Input
-            value={draft.timezone ?? ""}
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, timezone: event.target.value }))
+      </FieldSet>
+      <FieldSet title="When should it run?">
+        <Field label="Repeat">
+          <Select
+            value={scheduleDraft.cadence}
+            onValueChange={(value) =>
+              updateSchedule((current) => ({
+                ...current,
+                cadence: value as ScheduledTaskCadence,
+              }))
             }
-            placeholder="America/New_York"
-            aria-invalid={Boolean(previewError)}
-          />
-        </Field>
-        <Field label="Upcoming runs" orientation="vertical">
-          {previewError ? (
-            <Text role="alert" variant="small" color="red">
-              {previewError}
-            </Text>
-          ) : preview.length > 0 ? (
-            <ol className="grid gap-1 text-small text-secondary">
-              {preview.map((timestamp) => (
-                <li key={timestamp}>{upcomingLabel(timestamp)}</li>
+          >
+            <SelectTrigger aria-label="Scheduled task frequency">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CADENCE_OPTIONS.map((option) => (
+                <SelectItem value={option.value} key={option.value}>
+                  {option.label}
+                </SelectItem>
               ))}
-            </ol>
-          ) : (
-            <Text variant="small" color="tertiary">
-              Enter a valid schedule to preview its next runs.
-            </Text>
-          )}
+            </SelectContent>
+          </Select>
         </Field>
+        {scheduleDraft.cadence === "minutes" ? (
+          <Field label="Interval" description="From 2 to 59 minutes.">
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={2}
+                max={59}
+                value={scheduleDraft.minuteInterval}
+                onChange={(event) => {
+                  const minuteInterval = event.target.valueAsNumber;
+                  if (!Number.isFinite(minuteInterval)) return;
+                  updateSchedule((current) => ({ ...current, minuteInterval }));
+                }}
+                aria-label="Minutes between runs"
+                className="w-24"
+              />
+              <Text variant="small" color="secondary">
+                minutes
+              </Text>
+            </div>
+          </Field>
+        ) : null}
+        {scheduleDraft.cadence === "hourly" ? (
+          <Field label="Minute">
+            <Select
+              value={scheduleDraft.time.slice(3)}
+              onValueChange={(minute) =>
+                updateSchedule((current) => ({ ...current, time: `00:${minute}` }))
+              }
+            >
+              <SelectTrigger aria-label="Minute past each hour">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {["00", "15", "30", "45", scheduleDraft.time.slice(3)]
+                  .filter((minute, index, minutes) => minutes.indexOf(minute) === index)
+                  .sort()
+                  .map((minute) => (
+                    <SelectItem value={minute} key={minute}>
+                      {minute === "00" ? "At the start of the hour" : `${minute} minutes past`}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+        {scheduleDraft.cadence === "weekly" ? (
+          <Field label="Day">
+            <Select
+              value={String(scheduleDraft.weekday)}
+              onValueChange={(weekday) =>
+                updateSchedule((current) => ({ ...current, weekday: Number(weekday) }))
+              }
+            >
+              <SelectTrigger aria-label="Day of week">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {WEEKDAYS.map((weekday, index) => (
+                  <SelectItem value={String(index)} key={weekday}>
+                    {weekday}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+        {scheduleDraft.cadence === "monthly" ? (
+          <Field label="Day of month">
+            <Select
+              value={String(scheduleDraft.monthDay)}
+              onValueChange={(monthDay) =>
+                updateSchedule((current) => ({ ...current, monthDay: Number(monthDay) }))
+              }
+            >
+              <SelectTrigger aria-label="Day of month">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                  <SelectItem value={String(day)} key={day}>
+                    {day}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+        {(["daily", "weekdays", "weekly", "monthly"] as ScheduledTaskCadence[]).includes(
+          scheduleDraft.cadence,
+        ) ? (
+          <Field label="Time">
+            <Input
+              type="time"
+              value={scheduleDraft.time}
+              onChange={(event) => {
+                if (!event.target.value) return;
+                updateSchedule((current) => ({ ...current, time: event.target.value }));
+              }}
+              aria-label="Scheduled task time"
+            />
+          </Field>
+        ) : null}
+        <Field label="Time zone">
+          <Select
+            value={draft.timezone ?? localTimezone}
+            onValueChange={(timezone) => setDraft((current) => ({ ...current, timezone }))}
+          >
+            <SelectTrigger aria-label="Scheduled task time zone">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {timezoneOptions.map((timezone) => (
+                <SelectItem value={timezone} key={timezone}>
+                  {timezone === localTimezone ? `Local time · ${timezone}` : timezone}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field
+          label="Schedule"
+          description={formatSchedule(draft.cron, draft.timezone ?? localTimezone)}
+          orientation="vertical"
+        >
+          <div className="grid gap-2">
+            {previewError ? (
+              <Text role="alert" variant="small" color="red">
+                {previewError}
+              </Text>
+            ) : preview.length > 0 ? (
+              <ol className="grid gap-1 text-small text-secondary">
+                {preview.map((timestamp) => (
+                  <li key={timestamp}>{upcomingLabel(timestamp)}</li>
+                ))}
+              </ol>
+            ) : (
+              <Text variant="small" color="tertiary">
+                Choose a schedule to preview its next runs.
+              </Text>
+            )}
+          </div>
+        </Field>
+        <details className="group px-4 py-3">
+          <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+            <ChevronRight className="size-4 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" />
+            Advanced schedule
+          </summary>
+          <div className="mt-3 grid gap-3 pl-6">
+            <Text variant="small" color="secondary">
+              Keep a custom cron expression only when the repeat controls do not describe the
+              schedule you need. Existing custom schedules are preserved until you change them.
+            </Text>
+            <Input
+              value={scheduleDraft.customCron}
+              onChange={(event) => {
+                const customCron = event.target.value;
+                updateSchedule((current) => ({
+                  ...current,
+                  cadence: "custom",
+                  customCron,
+                }));
+              }}
+              placeholder="0 9 * * 1-5"
+              aria-label="Custom cron schedule"
+              aria-invalid={scheduleDraft.cadence === "custom" && Boolean(previewError)}
+            />
+          </div>
+        </details>
+      </FieldSet>
+      <FieldSet title="Run context">
         <Field
           label="Workspace"
           description="Paths are always re-resolved by Aiden when the task runs."
@@ -351,6 +568,23 @@ export function ScheduledTaskEditor({
         )}
         {draft.mode === "llm" ? (
           <Field
+            label="Web Search"
+            description="Allow this task to search the public web unattended. Search queries may include task context."
+          >
+            <div className="flex justify-end">
+              <Switch
+                checked={draft.webSearchEnabled ?? false}
+                onCheckedChange={(webSearchEnabled) =>
+                  setDraft((current) => ({ ...current, webSearchEnabled }))
+                }
+                disabled={assistantOwned}
+                aria-label="Allow Web Search for this scheduled task"
+              />
+            </div>
+          </Field>
+        ) : null}
+        {draft.mode === "llm" ? (
+          <Field
             label="MCP tools"
             description="Choose the exact connected servers this automation may call unattended. MCP access requires Full permission."
             orientation="vertical"
@@ -364,7 +598,7 @@ export function ScheduledTaskEditor({
               </Callout>
             ) : visibleMcpServers.length === 0 ? (
               <Text variant="small" color="tertiary">
-                No MCP servers are enabled. Connect one in Settings → MCP Servers.
+                No MCP servers are enabled. Connect one in Settings → Plugins.
               </Text>
             ) : (
               <ul className="max-h-48 divide-y divide-separator overflow-y-auto rounded-control bg-background">

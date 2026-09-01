@@ -256,7 +256,8 @@ const featureBentos: FeatureBento[] = [
     id: "workspaces",
     group: "create",
     title: "Workspaces & Worktrees",
-    description: "Use folders, scratch spaces, and isolated worktrees while preserving context.",
+    description:
+      "Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline.",
     icon: FolderGit2,
     imageUrl: FEATURE_ILLUSTRATIONS.workspaces,
     size: "wide",
@@ -322,7 +323,7 @@ const featureBentos: FeatureBento[] = [
     id: "mcp",
     group: "extend",
     title: "MCP Connectors",
-    description: "Connect services or any MCP server and expose only the tools you enable.",
+    description: "Browse plugins, connect hosted MCP servers, and expose only the tools you enable.",
     icon: Plug,
     imageUrl: FEATURE_ILLUSTRATIONS.mcp,
     size: "wide",
@@ -350,7 +351,8 @@ const featureBentos: FeatureBento[] = [
     id: "schedules",
     group: "control",
     title: "Scheduled Automations",
-    description: "Schedule recurring model work or trusted scripts, then run or pause anytime.",
+    description:
+      "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime.",
     icon: CalendarClock,
     imageUrl: FEATURE_ILLUSTRATIONS.schedules,
     size: "tall",

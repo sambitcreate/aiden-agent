@@ -178,6 +178,7 @@ fun AidenProductShellScreen(
             AidenWorkspaceShellScreen(
                 coordinator = coordinator,
                 viewModel = workspaceHomeViewModel,
+                navigationStore = navigationStore,
                 onNavigateToChat = onNavigateToChat,
                 onNavigateToFiles = onNavigateToWorkspaceFiles,
                 onNavigateToGit = onNavigateToWorkspaceGit,

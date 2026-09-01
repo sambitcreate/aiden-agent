@@ -13,7 +13,7 @@ test("Design turns retain the model backend but use a positive tool and extensio
   assert.match(source, /if \(designWorkspace\) tools = \[\]/u);
   assert.match(
     source,
-    /params\.design === true\s*\? generationExtensions\s*:\s*\[\.\.\.runtimeExtensionSnapshot\.extensions/u,
+    /params\.design === true\s*\? generationExtensions\s*:\s*\[\s*\.\.\.runtimeExtensionSnapshot\.extensions/u,
   );
   assert.match(source, /!designWorkspace &&\s*options\.allowComputerUse/u);
   assert.match(source, /!designWorkspace &&\s*!botContext &&\s*shouldEnableDisplayImageExtension/u);

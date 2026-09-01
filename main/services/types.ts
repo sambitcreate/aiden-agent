@@ -308,6 +308,11 @@ export interface ChatMeta {
   model?: string;
   /** Bounded last visible message text for list projections; never a full history. */
   preview?: string;
+  /**
+   * Main-owned optimistic-concurrency token for transcript-free list
+   * projections. Legacy records derive a stable token until their next write.
+   */
+  summaryRevision?: string;
   createdAt: number;
   updatedAt: number;
 }

@@ -696,6 +696,7 @@ export interface McpPreset {
   name: string;
   tagline: string;
   vendor: string;
+  category: string;
   transport: "http";
   url: string;
   auth: McpPresetAuth;

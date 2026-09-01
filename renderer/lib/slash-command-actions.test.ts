@@ -140,6 +140,31 @@ test("slash availability combines the dispatcher with composer-specific state", 
     /allow workspace access/iu,
   );
   assert.match(
+    slashCommandAvailability(command("btw"), { ...context, hasCompletedTurn: false }).reason ?? "",
+    /complete an assistant turn/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("btw"), {
+      ...context,
+      hasAttachmentsOrSelectedSkill: true,
+    }).reason ?? "",
+    /remove attachments/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("btw"), {
+      ...context,
+      sideQuestionBlockedReason: "Side questions are not available in Bot chats.",
+    }).reason ?? "",
+    /not available in Bot chats/iu,
+  );
+  assert.deepEqual(
+    slashCommandAvailability(command("clone"), {
+      ...context,
+      sideQuestionBlockedReason: "Side questions are not available in Bot chats.",
+    }),
+    { available: true },
+  );
+  assert.match(
     slashCommandAvailability(command("clone"), {
       ...context,
       payloadAfterToken: true,
@@ -176,6 +201,9 @@ test("slash action adapters route canonical actions without interpreting draft t
     exportChat: () => {
       calls.push("export");
     },
+    compactChat: () => {
+      calls.push("compact");
+    },
     openSessionDetails: () => calls.push("session"),
     openLogout: () => calls.push("logout"),
     openWorktree: (branchName) => {
@@ -193,6 +221,7 @@ test("slash action adapters route canonical actions without interpreting draft t
   executeSlashCommandAction(command("fork"), "", handlers);
   executeSlashCommandAction(command("clone"), "", handlers);
   executeSlashCommandAction(command("export"), "", handlers);
+  executeSlashCommandAction(command("compact"), "", handlers);
   executeSlashCommandAction(command("session"), "", handlers);
   executeSlashCommandAction(command("logout"), "", handlers);
   executeSlashCommandAction(command("worktree"), " feature/phase-four ", handlers);
@@ -208,6 +237,7 @@ test("slash action adapters route canonical actions without interpreting draft t
     "fork",
     "clone",
     "export",
+    "compact",
     "session",
     "logout",
     "worktree:feature/phase-four",

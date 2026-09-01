@@ -21,6 +21,9 @@ export interface GenerationContextOptions {
   contextWindow: number;
   systemPrompt: string;
   tools: readonly AgentTool[];
+  /** Exact Pi provider/model identity whose usage counters remain authoritative. */
+  providerId?: string;
+  modelId?: string;
   /** Project model-neutral journal images only when this request can accept them. */
   supportsImages?: boolean;
 }
@@ -36,7 +39,27 @@ export interface GenerationContextCompaction {
   removedHistoryMessages: number;
   removedCurrentTurnMessages: number;
   usedContextFallback: boolean;
+  emergencyProjection: GenerationEmergencyProjection;
 }
+
+export type GenerationEmergencyProjection =
+  | { kind: "none" }
+  | {
+      kind: "history_removed";
+      removedHistoryMessages: number;
+      requiresDurableCheckpoint: true;
+    }
+  | {
+      kind: "active_payload_reduced";
+      truncatedToolResults: number;
+      compactedToolResults: number;
+      requiresDurableCheckpoint: false;
+    }
+  | {
+      kind: "active_payload_replaced";
+      category: "active_context_too_large";
+      requiresDurableCheckpoint: false;
+    };
 
 type CompactionListener = (result: GenerationContextCompaction) => void;
 
@@ -48,7 +71,7 @@ function safeJsonLength(value: unknown): number {
   }
 }
 
-function staticContextTokens(options: GenerationContextOptions): number {
+export function estimateStaticContextTokens(options: GenerationContextOptions): number {
   let chars = options.systemPrompt.length;
   for (const tool of options.tools) {
     const serialized = safeJsonLength({
@@ -204,6 +227,72 @@ function lastUserIndex(messages: AgentMessage[]): number {
   return -1;
 }
 
+export interface NextContextUsageProjection {
+  contextTokens: number;
+  messageTokens: number;
+  staticTokens: number;
+  providerUsageTokens: number;
+  addedAfterUsageAnchorTokens: number;
+  usageAnchorIndex: number | null;
+  compressibleHistoryMessages: number;
+  shouldCompact: boolean;
+}
+
+/**
+ * Conservatively project the complete next provider request. Unlike Pi's
+ * previous-assistant check, this includes the newly appended user/tool tail,
+ * static prompt/tool schemas, and model-specific image projection.
+ */
+export function projectNextContextUsage(
+  messages: readonly AgentMessage[],
+  options: GenerationContextOptions,
+): NextContextUsageProjection {
+  const projected = limitComputerUseImages(
+    projectMessagesForModel(messages, options.supportsImages !== false),
+  );
+  const staticTokens = estimateStaticContextTokens(options);
+  const estimatedMessages = messageTokens(projected);
+  const providerEstimate = estimateContextTokens(projected);
+  const candidateAnchorIndex = providerEstimate.lastUsageIndex;
+  const candidateAnchor =
+    candidateAnchorIndex === null ? undefined : projected[candidateAnchorIndex];
+  const anchorIndex =
+    candidateAnchor?.role === "assistant" &&
+    options.providerId !== undefined &&
+    options.modelId !== undefined &&
+    candidateAnchor.provider === options.providerId &&
+    candidateAnchor.model === options.modelId
+      ? candidateAnchorIndex
+      : null;
+  const trailing =
+    anchorIndex === null ? estimatedMessages : messageTokens(projected.slice(anchorIndex + 1));
+  const providerUsageTokens = anchorIndex === null ? 0 : providerEstimate.usageTokens;
+  const contextTokens = Math.ceil(
+    Math.max(
+      staticTokens + estimatedMessages,
+      anchorIndex === null ? 0 : providerEstimate.tokens,
+      providerUsageTokens > 0 ? providerUsageTokens + staticTokens + trailing : 0,
+    ),
+  );
+  const currentUser = lastUserIndex(projected);
+  const compressibleHistoryMessages =
+    currentUser < 0 ? projected.length : Math.max(0, currentUser);
+  const limits = contextLimits(options);
+  return {
+    contextTokens,
+    messageTokens: estimatedMessages,
+    staticTokens,
+    providerUsageTokens,
+    addedAfterUsageAnchorTokens: trailing,
+    usageAnchorIndex: anchorIndex,
+    compressibleHistoryMessages,
+    shouldCompact: shouldCompact(contextTokens, limits.contextWindow, {
+      ...DEFAULT_COMPACTION_SETTINGS,
+      reserveTokens: limits.reserveTokens,
+    }),
+  };
+}
+
 function removeOldHistoricalTurn(
   messages: AgentMessage[],
   preserveUserTurns: number,
@@ -313,7 +402,7 @@ function contextLimits(
   return {
     contextWindow,
     reserveTokens,
-    staticTokens: staticContextTokens(options),
+    staticTokens: estimateStaticContextTokens(options),
     inputBudgetTokens: Math.max(0, contextWindow - reserveTokens),
   };
 }
@@ -351,21 +440,28 @@ export function compactGenerationContext(
     contextLimits(options);
   const estimatedMessageTokensBefore = messageTokens(retained);
   const providerEstimate = estimateContextTokens(retained);
-  const providerAwareTokens = providerEstimate.tokens;
+  const candidateUsageAnchor =
+    providerEstimate.lastUsageIndex === null
+      ? undefined
+      : retained[providerEstimate.lastUsageIndex];
+  const usageAnchorIsCurrent =
+    candidateUsageAnchor?.role === "assistant" &&
+    options.providerId !== undefined &&
+    options.modelId !== undefined &&
+    candidateUsageAnchor.provider === options.providerId &&
+    candidateUsageAnchor.model === options.modelId;
+  const providerAwareTokens = usageAnchorIsCurrent ? providerEstimate.tokens : 0;
   const estimatedTokensBefore = Math.max(
     providerAwareTokens,
     estimatedMessageTokensBefore + staticTokens,
   );
-  const usageAnchor =
-    providerEstimate.lastUsageIndex === null
-      ? undefined
-      : retained[providerEstimate.lastUsageIndex];
+  const usageAnchor = usageAnchorIsCurrent ? candidateUsageAnchor : undefined;
   const estimatedPrefixTokens =
-    providerEstimate.lastUsageIndex === null
+    !usageAnchorIsCurrent || providerEstimate.lastUsageIndex === null
       ? 0
       : messageTokens(retained.slice(0, providerEstimate.lastUsageIndex + 1));
   const providerPrefixRatio =
-    providerEstimate.usageTokens > 0 && estimatedPrefixTokens > 0
+    usageAnchorIsCurrent && providerEstimate.usageTokens > 0 && estimatedPrefixTokens > 0
       ? Math.max(
           1,
           (providerEstimate.usageTokens - staticTokens) / estimatedPrefixTokens,
@@ -416,6 +512,7 @@ export function compactGenerationContext(
       removedHistoryMessages: 0,
       removedCurrentTurnMessages: 0,
       usedContextFallback: false,
+      emergencyProjection: { kind: "none" },
     };
   }
 
@@ -522,6 +619,26 @@ export function compactGenerationContext(
     usedContextFallback = true;
   }
 
+  const emergencyProjection: GenerationEmergencyProjection = usedContextFallback
+    ? {
+        kind: "active_payload_replaced",
+        category: "active_context_too_large",
+        requiresDurableCheckpoint: false,
+      }
+    : removedHistoryMessages > 0
+      ? {
+          kind: "history_removed",
+          removedHistoryMessages,
+          requiresDurableCheckpoint: true,
+        }
+      : truncatedToolResults > 0 || compactedToolResults > 0
+        ? {
+            kind: "active_payload_reduced",
+            truncatedToolResults,
+            compactedToolResults,
+            requiresDurableCheckpoint: false,
+          }
+        : { kind: "none" };
   return {
     messages: transformed,
     compacted: true,
@@ -533,16 +650,24 @@ export function compactGenerationContext(
     removedHistoryMessages,
     removedCurrentTurnMessages,
     usedContextFallback,
+    emergencyProjection,
   };
+}
+
+export interface GenerationContextTransform {
+  (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]>;
+  takeLastEmergencyProjection(): GenerationEmergencyProjection;
 }
 
 export function createGenerationContextTransform(
   options: GenerationContextOptions,
   onCompacted?: CompactionListener,
-): (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]> {
-  return async (messages) => {
+): GenerationContextTransform {
+  let lastEmergencyProjection: GenerationEmergencyProjection = { kind: "none" };
+  const transform = async (messages: AgentMessage[]) => {
     try {
       const result = compactGenerationContext(messages, options);
+      lastEmergencyProjection = result.emergencyProjection;
       if (result.compacted && onCompacted) {
         try {
           onCompacted(result);
@@ -556,4 +681,10 @@ export function createGenerationContextTransform(
       return messages;
     }
   };
+  transform.takeLastEmergencyProjection = () => {
+    const result = lastEmergencyProjection;
+    lastEmergencyProjection = { kind: "none" };
+    return result;
+  };
+  return transform;
 }

@@ -145,6 +145,8 @@
 - Sequential `lstat` checks cannot secure a multi-component path against a rename between checks; each accepted ancestor has to remain pinned while the next component opens. For workspace artifact reads, extend the native descriptor-relative helper and test a deterministic mid-walk directory swap instead of relying on timing-sensitive JavaScript races.
 - Moving an existing iframe or one of its ancestors between DOM parents can reload its document in Chromium even though React preserves the component identity. Positioning the unchanged host over a portaled modal also fails when transcript `isolate`/`mask-image` stacking contexts trap it below the opaque portal. Promote the unchanged host with the Popover API into Chromium's top layer, override the UA's closed-popover `display:none` plus fixed geometry for its inline state, and browser-test stacking, one-frame count, mutable guest state, small viewports, and Escape relayed from the exact sandbox window.
 - A mobile verification shell may know the Android SDK through `android info` while Gradle still lacks both Java and `ANDROID_HOME`. On this workstation, use Android Studio's bundled JBR as `JAVA_HOME` and the SDK path reported by `android info` as `ANDROID_HOME`; do not write a developer-specific `local.properties` into the repository.
+- An unscoped desktop chat list includes reserved or stale workspace records in addition to user workspaces. Build a workspace-ID whitelist first and project chats through it; filtering only `botId` is insufficient because the reserved Assistant home and removed-workspace orphans are not Bot chats.
+- A unified mobile chat outline can amplify an old transport cost without changing the endpoint: the current global home read carries complete transcripts. Keep the first UI delivery on the compatible read, measure real payload/decode/memory, and treat a bounded paginated summary endpoint as a coordinated server+iOS+Android follow-up rather than silently adding a second background fetch.
 - A generic-hardware `xcodebuild build-for-testing` can finish compiling Swift app/test sources and then remain silent in a stuck `ibtoold` finalization pass. Distinguish that local Xcode tooling hang from a Swift compile failure, retain the generic `platform=iOS` destination (never substitute a simulator), and let the clean CI hardware-target compile provide the terminal gate.
 - A dictation stop can arrive before microphone or Live-session startup finishes, and a Live transcript can be visible before its finalization handshake succeeds. Latch stop intent by operation identity, keep one wall-clock budget across Live and batch fallback, preserve committed Live text, and ensure cancellation remains callable after audio capture disconnects.
 - Release-time and live validators for the same downloaded catalog can drift even when both look strict. Keep one shared acceptance corpus that runs every payload through both validators, including optional display strings and numeric bounds, so packaging cannot emit a snapshot the runtime will reject.
@@ -159,6 +161,16 @@
 - Archiving a completed plan can leave README capability copy and links stale. Update the plan index and top-level README together so shipped source-backed work is not described as future work and archived links remain valid.
 - A shared development profile can refuse startup when its V1 subagent store changes after the V2 migration checkpoint. Diagnose the redacted fingerprint from a temporary built-output log, preserve both stores, and use an explicit isolated `--user-data-dir` for unrelated UI testing instead of deleting migration evidence.
 - A fixed Vite development port collides when two Aiden worktrees are tested at once. Build the branded runtime once, run the second renderer on an explicit free loopback port, pass the matching `AIDEN_RENDERER_URL`, and keep its `AIDEN_CONFIG_DIR` plus `--user-data-dir` isolated.
+- A clean `npm ci` can leave the `electron` package installed without its `dist/Electron.app` payload even when npm reports dependency scripts enabled. Before diagnosing the macOS dev-runtime preparation step, check `node_modules/electron/dist` and rerun Electron's package install script when the payload is absent.
+- Computer Use can expose an Electron popover's accessibility tree while returning no screenshot for the open native menu state. Use the fresh accessibility state to verify menu contents and supplement visual-state verification with focused source/tests when pixel capture is unavailable.
+- The root working agreement requires consulting and updating `.memory/`, but this PR worktree contains no `.memory` directory or files. Treat current plans, normative protocol docs, source, and tests as the available project history, and call out the missing checkout memory instead of inventing it.
+- Parallel server/iOS/Android contract work can briefly diverge on seemingly small constants such as activity vocabulary, cursor bounds, and unknown-field behavior. Freeze those values in one explicit coordinator message before client model tests hard-code them; here the final contract is `idle|active`, 512-character cursors, tolerant harmless additions, and fail-closed required/private fields.
+- A cache can satisfy the wire-item bound but still block the UI when every paginated page rewrites one maximum-size aggregate on the main thread. Size the native summary cache against the full 10,000-row contract, move encode/read/fsync work off the UI executor, and commit pagination state only after durable persistence succeeds.
+- A connected iPhone is not enough for XCTest acceptance when the local provisioning profile omits the app's App Group entitlement. Keep generic-device `build-for-testing` as the compile gate, report the signing boundary honestly, and rerun device metrics only after `group.sbtbiswas.AidenOnTheGo` is provisioned.
+- Adding a derived field to the canonical chat-list projection can leave exact-shape resilience and shipping-source assertions stale even when focused feature tests pass. Search every full-suite assertion over that projection before the first push, and derive expected compatibility values through the production helper rather than duplicating the hash contract.
+- The primary checkout can remain on a feature branch whose upstream was deleted, making an otherwise clean hotfix look detached from its delivery path. Check `git status --branch` and worktree registration before editing, then keep diagnosis and verification local unless branch or push authority is explicit.
+- A large exact-context documentation patch can fail atomically on one wrapped paragraph. Re-read the numbered lines and retry with the smallest stable context instead of assuming earlier terminal wrapping matches the file.
+- `npm ci` reports the aggregate advisory count, which can widen a release hotfix unnecessarily when every finding is development-only. Confirm the shipped graph with `npm audit --omit=dev` before changing dependencies; this hotfix had zero production advisories.
 
 ## Packaged Electron consent acceptance without a shipped bypass
 
@@ -192,3 +204,38 @@ exact accessibility label, and verify a post-start diagnostic event plus
 # Multi-file postimage graph proof
 
 - Proving only the selected file's hypothetical source graph made every valid second JS/TS postimage fail after writes. Multi-file proposals now build one complete override map and reject ambiguous graphs before durable preparation.
+## Pi journal promotion recovery
+
+A promoted v4 journal may legitimately retain a `.v3-backup` after its migration
+receipt is lost in a crash window. Recovery must inspect the authoritative journal
+header before choosing a decoder: decode the backup as v3 and the live journal as
+v4. Treating every backup-bearing path as v3 makes the next packaged restart fail
+on the already-promoted v4 header.
+
+## Stacked release worktree setup
+
+An execution command cannot start with a workdir that the same command is meant
+to create. Add the detached worktree from an existing checkout first, then run
+stack assembly inside it.
+
+A fresh `npm ci` installs Playwright's package but not its Chromium binary, so
+the full suite stops at Generative UI containment before assertions run. Mirror
+CI with `npx playwright install chromium` before the first full local gate.
+
+## Hosted MCP OAuth verification
+
+The Dropbox origin-level protected-resource endpoint can return 429 while the
+resource-path endpoint advertised by `WWW-Authenticate` succeeds. Verify hosted
+MCP setup through that advertised RFC 9728 URL and the SDK's DCR redirect flow.
+
+## Release preflight environment
+
+`npm run release:preflight` intentionally fails outside the release runner when
+Apple notarization credentials are absent. Treat local consumer/branding tests
+as code gates and the credentialed GitHub release job as the signing gate.
+
+## Long-lived feature branch merge
+
+Merging Design Workspace after the unified sidebar and RPIV runtime landed caused
+semantic conflicts across chat deletion, extensions, and composer chrome. Sync
+`main` before the final implementation batches when shared chat surfaces are active.

@@ -78,7 +78,7 @@ async function resolveAuth(
     throw new Error("The renderer document is no longer active.");
   if (!key)
     throw new Error(
-      `${preset.name} needs an API key — add one in Settings → MCP Servers.`,
+      `${preset.name} needs an API key — add one in Settings → Plugins.`,
     );
   return {
     ...server,

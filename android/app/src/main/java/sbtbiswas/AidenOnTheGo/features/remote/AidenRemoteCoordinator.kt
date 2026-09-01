@@ -22,6 +22,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.io.File
 import java.util.UUID
 
@@ -132,9 +133,13 @@ class AidenRemoteCoordinator(
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 _serverInfo.value = server
                 _connectionState.value = AidenConnectionState.CONNECTED
+                val serverCapabilities = server.serverCapabilities ?: server.capabilities
+                if (!serverCapabilities.contains(AidenRemoteCapability.SCHEDULE_READ)) {
+                    scheduledCache.purge(installation.instanceId)
+                }
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,
-                    serverCapabilities = server.serverCapabilities ?: server.capabilities,
+                    serverCapabilities = serverCapabilities,
                     serverName = server.name
                 )
                 refreshWorkspaces(generation)

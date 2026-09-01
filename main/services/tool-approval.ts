@@ -13,8 +13,15 @@ export interface ToolApprovalPrompt {
 interface PendingApproval {
   streamId: string;
   ownerDocumentId?: string;
-  settle(allowed: boolean): void;
+  settle(outcome: ToolApprovalOutcome): void;
 }
+
+export type ToolApprovalOutcome =
+  | "allowed"
+  | "denied"
+  | "cancelled"
+  | "detached"
+  | "unavailable";
 
 /**
  * Owns approval promises and their abort listeners. A decision is one-shot;
@@ -30,20 +37,23 @@ export class ToolApprovalCoordinator {
     descriptor: Omit<ToolApprovalPrompt, "approvalId">,
     signal?: AbortSignal,
     ownerDocumentId?: string,
-  ): Promise<boolean> {
-    if (signal?.aborted || this.detachedStreams.has(descriptor.streamId)) {
-      return Promise.resolve(false);
+  ): Promise<ToolApprovalOutcome> {
+    if (signal?.aborted) {
+      return Promise.resolve("cancelled");
+    }
+    if (this.detachedStreams.has(descriptor.streamId)) {
+      return Promise.resolve("detached");
     }
     const approvalId = `a-${randomUUID()}`;
-    return new Promise<boolean>((resolve) => {
+    return new Promise<ToolApprovalOutcome>((resolve) => {
       let settled = false;
-      const aborted = () => finish(false);
-      const finish = (allowed: boolean) => {
+      const aborted = () => finish("cancelled");
+      const finish = (outcome: ToolApprovalOutcome) => {
         if (settled) return;
         settled = true;
         this.pending.delete(approvalId);
         signal?.removeEventListener("abort", aborted);
-        resolve(allowed);
+        resolve(outcome);
       };
       this.pending.set(approvalId, {
         streamId: descriptor.streamId,
@@ -51,14 +61,18 @@ export class ToolApprovalCoordinator {
         settle: finish,
       });
       signal?.addEventListener("abort", aborted, { once: true });
-      if (signal?.aborted || this.detachedStreams.has(descriptor.streamId)) {
-        aborted();
+      if (signal?.aborted) {
+        finish("cancelled");
+        return;
+      }
+      if (this.detachedStreams.has(descriptor.streamId)) {
+        finish("detached");
         return;
       }
       try {
         this.publish({ ...descriptor, approvalId });
       } catch {
-        finish(false);
+        finish("unavailable");
       }
     });
   }
@@ -66,20 +80,20 @@ export class ToolApprovalCoordinator {
   decide(approvalId: string, allowed: boolean, ownerDocumentId?: string): boolean {
     const entry = this.pending.get(approvalId);
     if (!entry || entry.ownerDocumentId !== ownerDocumentId) return false;
-    entry.settle(allowed);
+    entry.settle(allowed ? "allowed" : "denied");
     return true;
   }
 
-  cancelStream(streamId: string): void {
+  cancelStream(streamId: string, outcome: "cancelled" | "detached" = "cancelled"): void {
     for (const entry of [...this.pending.values()]) {
-      if (entry.streamId === streamId) entry.settle(false);
+      if (entry.streamId === streamId) entry.settle(outcome);
     }
   }
 
   /** A detached renderer cannot attend pending or future approval prompts. */
   detachStream(streamId: string): void {
     this.detachedStreams.add(streamId);
-    this.cancelStream(streamId);
+    this.cancelStream(streamId, "detached");
   }
 
   /** Release bounded per-stream state after the owning generation settles. */
@@ -89,7 +103,7 @@ export class ToolApprovalCoordinator {
   }
 
   shutdown(): void {
-    for (const entry of [...this.pending.values()]) entry.settle(false);
+    for (const entry of [...this.pending.values()]) entry.settle("cancelled");
     this.detachedStreams.clear();
   }
 

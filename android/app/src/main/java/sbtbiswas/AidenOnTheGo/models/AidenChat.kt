@@ -505,6 +505,82 @@ data class AidenHtmlArtifact(
 }
 
 @Serializable
+enum class AidenChatSummaryActivity {
+    @SerialName("idle") IDLE,
+    @SerialName("active") ACTIVE
+}
+
+@Serializable
+data class AidenChatSummary(
+    val id: String,
+    val workspaceId: String,
+    val title: String,
+    val titlePending: Boolean,
+    @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
+    @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
+    val revision: String,
+    val activity: AidenChatSummaryActivity
+) {
+    init {
+        if (id.isEmpty() || id.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            workspaceId.isEmpty() || workspaceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            !IDENTIFIER.matches(id) || !IDENTIFIER.matches(workspaceId) ||
+            revision.isEmpty() || revision.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            title.codePointCount(0, title.length) > 1_024 ||
+            updatedAt.isBefore(createdAt)
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary model")
+        }
+    }
+
+    companion object {
+        private val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,128}$")
+
+        fun fromChat(
+            chat: AidenChat,
+            activity: AidenChatSummaryActivity = AidenChatSummaryActivity.IDLE
+        ): AidenChatSummary = AidenChatSummary(
+            id = chat.id,
+            workspaceId = chat.workspaceId,
+            title = chat.title,
+            titlePending = chat.isTitlePending,
+            createdAt = chat.createdAt,
+            updatedAt = chat.updatedAt,
+            revision = chat.revision,
+            activity = activity
+        )
+    }
+}
+
+@Serializable
+data class AidenChatSummaryPage(
+    val summaries: List<AidenChatSummary>,
+    val nextCursor: String? = null
+) {
+    init {
+        val canonicalOrder = summaries.sortedWith(
+            compareByDescending<AidenChatSummary> { it.updatedAt }.thenBy { it.id }
+        )
+        if (summaries.size > AidenRemoteProtocol.MAX_CHAT_SUMMARY_PAGE_SIZE ||
+            (nextCursor != null && !AidenRemoteProtocol.CHAT_SUMMARY_CURSOR_PATTERN.matches(nextCursor)) ||
+            (nextCursor != null && summaries.isEmpty()) ||
+            summaries.map { it.id }.toSet().size != summaries.size ||
+            summaries != canonicalOrder
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary page")
+        }
+    }
+
+    fun validatedWire(): AidenChatSummaryPage {
+        if (summaries.any { !AidenRemoteProtocol.CHAT_SUMMARY_REVISION_PATTERN.matches(it.revision) }) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary wire revision")
+        }
+        return this
+    }
+
+}
+
+@Serializable
 data class AidenChat(
     val id: String,
     var workspaceId: String,
@@ -700,15 +776,42 @@ data class AidenApprovalResponse(
 data class AidenPendingApproval(
     val id: String,
     val summary: String,
+    val toolName: String,
     val expiresAt: Instant,
+    val canRespond: Boolean,
+    val hasRequiredWriteCapability: Boolean,
+    val hostCanAllow: Boolean,
     val canAllow: Boolean
 )
 
+data class AidenApprovalCapabilities(
+    val canRespond: Boolean,
+    val canWriteSchedules: Boolean
+) {
+    companion object {
+        val UNRESTRICTED = AidenApprovalCapabilities(canRespond = true, canWriteSchedules = true)
+    }
+}
+
 object AidenApprovalPresentation {
+    private val automationTools = setOf("schedule_task", "edit_automation")
+
     fun oneLineSummary(summary: String): String {
         val collapsed = summary.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
         return if (collapsed.isEmpty()) "Review requested action" else collapsed
     }
+
+    fun isAutomation(toolName: String): Boolean = automationTools.contains(toolName)
+
+    fun title(toolName: String): String = when (toolName) {
+        "schedule_task" -> "Create this automation?"
+        "edit_automation" -> "Save these automation changes?"
+        else -> "Approval Required"
+    }
+
+    fun requiresMacConfirmation(approval: AidenPendingApproval): Boolean =
+        isAutomation(approval.toolName) && approval.canRespond &&
+                approval.hasRequiredWriteCapability && !approval.hostCanAllow
 }
 
 object AidenPendingApprovalResolution {
@@ -716,16 +819,23 @@ object AidenPendingApprovalResolution {
         approval: AidenStreamPendingApproval?,
         streamId: String,
         chatId: String,
+        capabilities: AidenApprovalCapabilities = AidenApprovalCapabilities.UNRESTRICTED,
         now: Instant = Instant.now()
     ): AidenPendingApproval? {
         if (approval == null || approval.streamId != streamId || approval.chatId != chatId || !approval.expiresAt.isAfter(now)) {
             return null
         }
+        val hasRequiredWriteCapability =
+            !AidenApprovalPresentation.isAutomation(approval.toolName) || capabilities.canWriteSchedules
         return AidenPendingApproval(
             id = approval.approvalId,
             summary = approval.summary,
+            toolName = approval.toolName,
             expiresAt = approval.expiresAt,
-            canAllow = approval.canAllow
+            canRespond = capabilities.canRespond,
+            hasRequiredWriteCapability = hasRequiredWriteCapability,
+            hostCanAllow = approval.canAllow,
+            canAllow = approval.canAllow && capabilities.canRespond && hasRequiredWriteCapability
         )
     }
 }

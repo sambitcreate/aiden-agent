@@ -245,6 +245,67 @@ function assertTaskCapabilitiesNarrowRoot(
   }
 }
 
+const LEGACY_SUBAGENT_CAPABILITIES: SubagentRequestedCapabilities = {
+  workspaceRead: true,
+  workspaceWrite: false,
+  shell: false,
+  delegate: false,
+  web: false,
+  mcp: [],
+};
+
+function mergeRequestedMcpScopes(
+  values: readonly SubagentRequestedCapabilities[],
+  lane: "mcp" | "mcpMutations",
+): SubagentRequestedMcpScope[] {
+  const servers = new Map<string, string[]>();
+  for (const value of values) {
+    for (const scope of value[lane] ?? []) {
+      const tools = servers.get(scope.serverId) ?? [];
+      for (const tool of scope.tools) {
+        if (!tools.includes(tool)) tools.push(tool);
+      }
+      servers.set(scope.serverId, tools);
+    }
+  }
+  return [...servers].map(([serverId, tools]) => ({ serverId, tools }));
+}
+
+/**
+ * A task-level positive request is already explicit model intent. When the
+ * optional batch root is omitted, infer only the union needed to contain those
+ * exact lanes. Tasks that omitted capabilities are pinned to the legacy
+ * workspace-read-only lane so they never inherit an inferred privilege.
+ */
+function inferRootCapabilities(
+  taskCapabilities: readonly (SubagentRequestedCapabilities | undefined)[],
+): SubagentRequestedCapabilities | undefined {
+  const explicit = taskCapabilities.filter(
+    (value): value is SubagentRequestedCapabilities => value !== undefined,
+  );
+  if (explicit.length === 0) return undefined;
+  const requested = [LEGACY_SUBAGENT_CAPABILITIES, ...explicit];
+  const mcp = mergeRequestedMcpScopes(requested, "mcp");
+  const mcpMutations = mergeRequestedMcpScopes(requested, "mcpMutations");
+  const readPairs = requestedMcpPairs({ ...LEGACY_SUBAGENT_CAPABILITIES, mcp }, "mcp");
+  if (
+    mcpMutations.some((scope) =>
+      scope.tools.some((tool) => readPairs.has(`${scope.serverId}\0${tool}`)),
+    )
+  ) {
+    throw new Error("Subagent MCP read and mutation requests must be disjoint across the batch.");
+  }
+  return {
+    workspaceRead: requested.some((value) => value.workspaceRead),
+    workspaceWrite: requested.some((value) => value.workspaceWrite),
+    shell: requested.some((value) => value.shell === true),
+    delegate: requested.some((value) => value.delegate === true),
+    web: requested.some((value) => value.web),
+    mcp,
+    ...(mcpMutations.length > 0 ? { mcpMutations } : {}),
+  };
+}
+
 /** Revalidate model arguments independently of TypeBox/provider schema enforcement. */
 export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
   const request = exactPlainDataRecord(input, ["tasks"], ["context", "capabilities"]);
@@ -258,38 +319,45 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
   if (request.tasks.length < 1 || request.tasks.length > MAX_SUBAGENT_TASKS_PER_CALL) {
     throw new Error(`A subagent request must contain 1 to ${MAX_SUBAGENT_TASKS_PER_CALL} tasks.`);
   }
-  const capabilities =
+  const suppliedCapabilities =
     request.capabilities === undefined
       ? undefined
       : parseRequestedCapabilities(request.capabilities);
-  const rootCapabilities: SubagentRequestedCapabilities = capabilities ?? {
-    workspaceRead: true,
-    workspaceWrite: false,
-    shell: false,
-    delegate: false,
-    web: false,
-    mcp: [],
-  };
+  const parsedTasks = request.tasks.map((entry) => {
+    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities"]);
+    if (!task) throw new Error("Invalid subagent task fields.");
+    if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
+      throw new Error("Unknown subagent role.");
+    }
+    return {
+      role: task.role,
+      label: boundedText(task.label, "label", MAX_SUBAGENT_LABEL_CHARS),
+      task: boundedText(task.task, "task", MAX_SUBAGENT_TASK_CHARS),
+      capabilities:
+        task.capabilities === undefined ? undefined : parseRequestedCapabilities(task.capabilities),
+    };
+  });
+  const inferredCapabilities = suppliedCapabilities
+    ? undefined
+    : inferRootCapabilities(parsedTasks.map(({ capabilities }) => capabilities));
+  const rootCapabilities =
+    suppliedCapabilities ?? inferredCapabilities ?? LEGACY_SUBAGENT_CAPABILITIES;
+  const pinLegacyTaskDefaults = suppliedCapabilities === undefined && inferredCapabilities !== undefined;
   return {
     context: request.context === "fork" ? "fork" : "fresh",
-    ...(capabilities ? { capabilities } : {}),
-    tasks: request.tasks.map((entry) => {
-      const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities"]);
-      if (!task) {
-        throw new Error("Invalid subagent task fields.");
-      }
-      if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
-        throw new Error("Unknown subagent role.");
-      }
+    ...(suppliedCapabilities || inferredCapabilities
+      ? { capabilities: suppliedCapabilities ?? inferredCapabilities }
+      : {}),
+    tasks: parsedTasks.map((task) => {
       const taskCapabilities =
-        task.capabilities === undefined ? undefined : parseRequestedCapabilities(task.capabilities);
+        task.capabilities ?? (pinLegacyTaskDefaults ? structuredClone(LEGACY_SUBAGENT_CAPABILITIES) : undefined);
       if (taskCapabilities) {
         assertTaskCapabilitiesNarrowRoot(rootCapabilities, taskCapabilities);
       }
       return {
         role: task.role,
-        label: boundedText(task.label, "label", MAX_SUBAGENT_LABEL_CHARS),
-        task: boundedText(task.task, "task", MAX_SUBAGENT_TASK_CHARS),
+        label: task.label,
+        task: task.task,
         ...(taskCapabilities ? { capabilities: taskCapabilities } : {}),
       };
     }),
@@ -303,12 +371,7 @@ export function effectiveSubagentTaskCapabilities(
   const effective = structuredClone(
     task.capabilities ??
       request.capabilities ?? {
-        workspaceRead: true,
-        workspaceWrite: false,
-        shell: false,
-        delegate: false,
-        web: false,
-        mcp: [],
+        ...LEGACY_SUBAGENT_CAPABILITIES,
       },
   );
   return { ...effective, delegate: effective.delegate === true };

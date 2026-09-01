@@ -86,6 +86,11 @@ import type {
   DesignHandoffRecoveryViewV1,
 } from "../shared/design-projects";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import {
+  parseAskUserQuestionPrompt,
+  type AskUserQuestionPromptV1,
+  type AskUserQuestionResponseV1,
+} from "../shared/ask-user-question";
 import type {
   DiagnosticSupportStatusView,
   RendererDiagnosticPolicy,
@@ -177,6 +182,8 @@ import {
   type DesignCommentProjectViewV1,
   type DesignCommentTargetV1,
 } from "../shared/design-comments";
+import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
+import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -187,6 +194,24 @@ export interface AppInfo {
   version: string;
   environment: string;
   capabilities: AppCapabilities;
+}
+
+export interface MemoryFactView {
+  id: string;
+  scope: { kind: "bot" | "workspace"; id: string };
+  text: string;
+  provenance:
+    | { kind: "user_edit"; sourceId: string }
+    | { kind: "chat_message"; chatId: string; messageId: string }
+    | { kind: "model_proposal"; chatId: string; turnId: string; anchorMessageId: string };
+  createdAt: number;
+  updatedAt: number;
+  confidence: number;
+  expiresAt?: number;
+  reviewState: "approved";
+  state: "active" | "superseded";
+  supersedesId?: string;
+  alwaysOn: boolean;
 }
 
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -339,11 +364,16 @@ export const usageApi = {
 
 export const scheduleApi = {
   list: () => invoke<ScheduledTask[]>("schedule:list"),
-  save: (task: ScheduledTaskInput) => invoke<ScheduledTask>("schedule:save", task),
-  remove: (id: string) => invoke<void>("schedule:remove", id),
-  pause: (id: string) => invoke<ScheduledTask>("schedule:pause", id),
-  resume: (id: string) => invoke<ScheduledTask>("schedule:resume", id),
-  runNow: (id: string) => invoke<ScheduledRun>("schedule:runNow", id),
+  save: (task: ScheduledTaskInput, expectedUpdatedAt?: number) =>
+    invoke<ScheduledTask>("schedule:save", task, expectedUpdatedAt),
+  remove: (id: string, expectedUpdatedAt: number) =>
+    invoke<void>("schedule:remove", id, expectedUpdatedAt),
+  pause: (id: string, expectedUpdatedAt: number) =>
+    invoke<ScheduledTask>("schedule:pause", id, expectedUpdatedAt),
+  resume: (id: string, expectedUpdatedAt: number) =>
+    invoke<ScheduledTask>("schedule:resume", id, expectedUpdatedAt),
+  runNow: (id: string, expectedUpdatedAt: number) =>
+    invoke<ScheduledRun>("schedule:runNow", id, expectedUpdatedAt),
   runs: (id: string) => invoke<ScheduledRun[]>("schedule:runs", id),
   preview: (cron: string, timezone: string, count = 3) =>
     invoke<number[]>("schedule:preview", cron, timezone, count),
@@ -853,13 +883,15 @@ export const designerApi = {
   resumeHandoff: (operationId: string) =>
     invoke<DesignHandoffRunResultV1>("designer:resumeHandoff", operationId),
   projectHandoffLinks: (projectId: string) =>
-    invoke<Array<{
-      projectId: string;
-      workspaceId: string;
-      chatId: string;
-      taskId: string;
-      branchLabel: string;
-    }>>("designer:projectHandoffLinks", projectId),
+    invoke<
+      Array<{
+        projectId: string;
+        workspaceId: string;
+        chatId: string;
+        taskId: string;
+        branchLabel: string;
+      }>
+    >("designer:projectHandoffLinks", projectId),
   projectHandoffRecoveries: (projectId: string) =>
     invoke<DesignHandoffRecoveryViewV1[]>("designer:projectHandoffRecoveries", projectId),
   readGeneratedSource: (projectId: string, lineageId: string, mediaId: string) =>
@@ -901,10 +933,7 @@ export const designerApi = {
   listActions: (chatId: string, workspaceId: string) =>
     invoke<DesignerActionV1[]>("designer:listActions", chatId, workspaceId),
   listMultifileActions: (projectId: string) =>
-    invoke<SourceDesignerMultifileActionViewV1[]>(
-      "designer:listMultifileActions",
-      projectId,
-    ),
+    invoke<SourceDesignerMultifileActionViewV1[]>("designer:listMultifileActions", projectId),
   applyMultifileAction: (projectId: string, actionId: string) =>
     invoke<SourceDesignerMultifileActionViewV1>(
       "designer:applyMultifileAction",
@@ -1011,6 +1040,52 @@ export const chatsApi = {
       : null;
   },
   waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
+  compact: (id: string) =>
+    invoke<
+      | { compacted: true; tokensBefore?: number; estimatedTokensAfter?: number }
+      | {
+          compacted: false;
+          reason:
+            | "already_compact"
+            | "busy"
+            | "archived"
+            | "not_canonical"
+            | "provider_unavailable"
+            | "context_metadata_invalid"
+            | "cancelled"
+            | "compaction_failed";
+        }
+    >("chats:compact", id),
+  cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
+  memoryList: (id: string) =>
+    invoke<{
+      scope: { kind: "bot" | "workspace"; id: string };
+      facts: MemoryFactView[];
+    }>("chats:memoryList", id),
+  memoryPut: (
+    id: string,
+    input: { fact: string; alwaysOn: boolean; expiresAt?: number; supersedesId?: string },
+  ) => invoke<MemoryFactView>("chats:memoryPut", id, input),
+  memoryRemove: (id: string, factId: string) => invoke<boolean>("chats:memoryRemove", id, factId),
+  memoryExport: (id: string) => invoke<{ status: "saved" | "cancelled" }>("chats:memoryExport", id),
+  todoSnapshot: async (id: string): Promise<TodoSnapshotViewV1 | null> => {
+    const value = await invoke<unknown>("chats:todoSnapshot", id);
+    if (value === null) return null;
+    const snapshot = parseTodoSnapshotView(value);
+    if (!snapshot || snapshot.chatId !== id)
+      throw new Error("The todo snapshot response was invalid.");
+    return snapshot;
+  },
+  btwStart: (chatId: string, question: string) =>
+    invoke<BtwStartReceiptV1>("chats:btwStart", { chatId, question }),
+  btwCancel: (chatId: string, requestId: string) =>
+    invoke<boolean>("chats:btwCancel", { chatId, requestId }),
+  btwClear: (chatId: string) => invoke<void>("chats:btwClear", { chatId }),
+  onBtwEvent: (handler: (event: BtwEventV1) => void) =>
+    onNotification<unknown>("chats:btw-event", (payload) => {
+      const event = parseBtwEvent(payload);
+      if (event) handler(event);
+    }),
   create: (input: { title?: string; workspaceId: string; providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:create", input),
   createAssistant: (input: { providerId?: string; model?: string }) =>
@@ -1028,10 +1103,8 @@ export const chatsApi = {
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   setComputerUse: (id: string, enabled: boolean) =>
     invoke<Chat>("chats:setComputerUse", id, enabled),
-  remove: (
-    id: string,
-    confirmation?: { projectId: string; expectedRevision: number },
-  ) => invoke<ChatDeleteResult>("chats:remove", id, confirmation),
+  remove: (id: string, confirmation?: { projectId: string; expectedRevision: number }) =>
+    invoke<ChatDeleteResult>("chats:remove", id, confirmation),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
     chatId: string,
@@ -1077,6 +1150,8 @@ export const chatsApi = {
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>
     invoke<void>("chat:approve", approvalId, decision),
+  answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
+    invoke<void>("chat:answerQuestionnaire", promptId, response),
 };
 
 export const botsApi = {
@@ -1235,7 +1310,12 @@ export interface RemoteApprovalPrompt {
 interface ChatApproval extends ApprovalPrompt {
   streamId: string;
 }
+type ChatQuestionnaire = AskUserQuestionPromptV1;
 interface ChatSubagents {
+  streamId: string;
+  snapshot: unknown;
+}
+interface ChatTodo {
   streamId: string;
   snapshot: unknown;
 }
@@ -1270,6 +1350,8 @@ export interface StreamCallbacks {
   onSubagents?: (snapshot: SubagentRunSnapshot) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
+  onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
+  onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
 }
 
@@ -1407,6 +1489,22 @@ export function startGeneration(
         });
     }),
   );
+  unsubs.push(
+    onNotification<ChatQuestionnaire>("chat:questionnaire", (payload) => {
+      if (payload.streamId !== streamId) return;
+      const prompt = parseAskUserQuestionPrompt(payload);
+      if (prompt) callbacks.onQuestionnaire?.(prompt);
+    }),
+  );
+  if (callbacks.onTodo) {
+    unsubs.push(
+      onNotification<ChatTodo>("chat:todo", (payload) => {
+        if (payload.streamId !== streamId) return;
+        const snapshot = parseTodoSnapshotView(payload.snapshot);
+        if (snapshot?.chatId === params.chatId) callbacks.onTodo?.(snapshot);
+      }),
+    );
+  }
 
   const started: Promise<GenerationStartResult> = invoke<{
     streamId: string;

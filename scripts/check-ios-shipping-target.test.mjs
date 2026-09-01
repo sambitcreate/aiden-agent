@@ -25,10 +25,7 @@ const iconComposerPath = fileURLToPath(
   new URL("../ios/AidenOnTheGo/Resources/AppIcon.icon/", import.meta.url),
 );
 const assetCatalogIconPath = fileURLToPath(
-  new URL(
-    "../ios/AidenOnTheGo/Resources/Assets.xcassets/AppIcon.appiconset/",
-    import.meta.url,
-  ),
+  new URL("../ios/AidenOnTheGo/Resources/Assets.xcassets/AppIcon.appiconset/", import.meta.url),
 );
 const sidebarLogoPath = fileURLToPath(
   new URL(
@@ -126,9 +123,7 @@ function phaseSourceNames(project, phaseId) {
     new RegExp(`${escaped} /\\* Sources \\*/ = \\{[\\s\\S]*?files = \\(([\\s\\S]*?)\\);`, "u"),
   );
   assert.ok(match, `missing source build phase ${phaseId}`);
-  return [...match[1].matchAll(/\/\* ([^*]+?) in Sources \*\//gu)]
-    .map((entry) => entry[1])
-    .sort();
+  return [...match[1].matchAll(/\/\* ([^*]+?) in Sources \*\//gu)].map((entry) => entry[1]).sort();
 }
 
 test("shipping, test, and widget source phases stay on the reviewed Aiden allowlists", async () => {
@@ -175,7 +170,10 @@ test("the Bot-first mobile rollout flag fails closed across pairing and product 
   ]);
 
   assert.equal([...project.matchAll(/AIDEN_BOT_FIRST_ENABLED = YES;/gu)].length, 2);
-  assert.match(info, /<key>AidenBotFirstEnabled<\/key>\s*<string>\$\(AIDEN_BOT_FIRST_ENABLED\)<\/string>/u);
+  assert.match(
+    info,
+    /<key>AidenBotFirstEnabled<\/key>\s*<string>\$\(AIDEN_BOT_FIRST_ENABLED\)<\/string>/u,
+  );
   assert.match(
     appConfig,
     /botFirstMobileEnabled:[\s\S]*?guard let value = Bundle\.main\.object[\s\S]*?return false/u,
@@ -207,7 +205,9 @@ test("the Bot-first mobile rollout flag fails closed across pairing and product 
   const createEnd = productShell.indexOf("private func allowsMutations(", createStart);
   assert.ok(createStart >= 0 && createEnd > createStart);
   const createConversation = productShell.slice(createStart, createEnd);
-  const createAdmission = createConversation.indexOf("aidenBotSurfaceAllows(\n            .createConversation");
+  const createAdmission = createConversation.indexOf(
+    "aidenBotSurfaceAllows(\n            .createConversation",
+  );
   const requestContext = createConversation.indexOf("coordinator.requestContext()");
   const createMutation = createConversation.indexOf("client.createBotChat(");
   assert.ok(createAdmission >= 0);
@@ -247,10 +247,7 @@ test("Bot Image Playground stays Apple-owned, non-personalized, and availability
   );
   const app = shippingSources.find(([path]) => path.endsWith("/AidenOnTheGoApp.swift"))?.[1];
   assert.match(app, /init\(\) \{\s*aidenBotImagePlaygroundCleanupAfterProcessLaunch\(\)/u);
-  assert.doesNotMatch(
-    source,
-    /imagePlaygroundPersonalizationPolicy\(\.(?:automatic|enabled)\)/u,
-  );
+  assert.doesNotMatch(source, /imagePlaygroundPersonalizationPolicy\(\.(?:automatic|enabled)\)/u);
   for (const [path, shippingSource] of shippingSources) {
     assert.doesNotMatch(
       shippingSource,
@@ -306,7 +303,9 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   const botEditor = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotEditorView.swift");
   const botContract = sourceByPath.get("AidenOnTheGo/Models/AidenBot.swift");
   const botProfile = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotProfileView.swift");
-  const botAvatar = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift");
+  const botAvatar = sourceByPath.get(
+    "AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift",
+  );
   const count = (pattern) => [...allSwift.matchAll(pattern)].length;
 
   assert.equal(count(/\bstruct\s+AidenChatDetailView\b/gu), 1);
@@ -315,7 +314,9 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
 
   const botSources = sources.filter(([path]) => path.includes("/Features/Bots/"));
   assert.ok(botSources.length > 0, "expected reviewed Bot sources");
-  const prototypeSources = botSources.filter(([path]) => path.includes("/Features/Bots/Prototype/"));
+  const prototypeSources = botSources.filter(([path]) =>
+    path.includes("/Features/Bots/Prototype/"),
+  );
   assert.ok(prototypeSources.length > 0, "expected reviewed Bot prototype sources");
   const botSwift = prototypeSources.map(([, source]) => source).join("\n");
   for (const [path, source] of botSources) {
@@ -333,18 +334,12 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
       `${path} fixtures must not receive live runtime dependencies`,
     );
   }
-  assert.match(
-    botSwift,
-    /AidenChatDetailView\(readOnlyFixture:\s*chat\)/u,
-  );
+  assert.match(botSwift, /AidenChatDetailView\(readOnlyFixture:\s*chat\)/u);
   assert.match(
     app,
     /let haptics = AidenHapticCenter\(\)[\s\S]*?let configuration = AidenBotFirstPrototypeConfiguration\.current[\s\S]*?initialValue: configuration == nil \? AidenRemoteCoordinator\(haptics: haptics\) : nil/u,
   );
-  assert.match(
-    app,
-    /initialValue: configuration == nil \? AidenAppearanceStore\(\) : nil/u,
-  );
+  assert.match(app, /initialValue: configuration == nil \? AidenAppearanceStore\(\) : nil/u);
   assert.match(
     app,
     /if let prototypeConfiguration \{[\s\S]*?AidenBotFirstPrototypeLaunchView\(configuration: prototypeConfiguration\)[\s\S]*?\} else if let remoteCoordinator, let appearance/u,
@@ -367,28 +362,34 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /init\(readOnlyFixture chat: AidenChat\) \{[\s\S]*?_coordinator = State\(initialValue: nil\)[\s\S]*?AidenChatViewModel\(readOnlyFixture: chat\)/u,
   );
   assert.match(chat, /func load\(\) async \{\s*guard !isReadOnlyFixture else \{ return \}/u);
-  assert.match(chat, /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \|\| !allowsMutations \}/u);
   assert.match(
     chat,
-    /AidenComposerView\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u,
+    /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \|\| !allowsMutations \}/u,
   );
+  assert.match(chat, /AidenComposerView\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u);
+  assert.match(chat, /guard !model\.isReadOnlyPresentation, autoStartVoice/u);
   assert.match(
-    chat,
-    /guard !model\.isReadOnlyPresentation, autoStartVoice/u,
+    botHome,
+    /private var bottomDock:[\s\S]*?TextField\("Search"[\s\S]*?accessibilityLabel\("Search Bots"\)[\s\S]*?Image\(systemName: "square\.and\.pencil"\)/u,
   );
-  assert.match(botHome, /private var bottomDock:[\s\S]*?TextField\("Search"[\s\S]*?accessibilityLabel\("Search Bots"\)[\s\S]*?Image\(systemName: "square\.and\.pencil"\)/u);
   assert.doesNotMatch(botHome, /Text\("Chats"\)/u);
   assert.match(botHome, /Text\("Favorites"\)[\s\S]*?Text\("Bots"\)/u);
   assert.match(botHome, /contextMenu[\s\S]*?Pin to Favorites[\s\S]*?Unpin from Favorites/u);
   assert.match(botHome, /openOrCreateConversation\(for: bot\)/u);
   assert.match(botHome, /AidenBotCanonicalAvatarView\(/u);
   assert.match(botProfile, /AidenBotCanonicalAvatarView\(/u);
-  assert.match(botEditor, /AidenBotGeneratedAvatarLifecycleView\([\s\S]*?AidenBotImagePlaygroundView\(/u);
+  assert.match(
+    botEditor,
+    /AidenBotGeneratedAvatarLifecycleView\([\s\S]*?AidenBotImagePlaygroundView\(/u,
+  );
   assert.match(botContract, /enum AidenBotContractError: Error, Equatable, LocalizedError/u);
   assert.match(botContract, /Settings → Providers/u);
   assert.match(botContract, /Update Aiden Agent and Aiden On The Go/u);
   assert.match(botEditor, /loadError = error\.localizedDescription/u);
-  assert.match(botEditor, /private var canSave:[\s\S]*?aidenBotEditorCanSubmitSettings\(hasAvatarCandidate: avatarModel\?\.hasCandidate == true\)/u);
+  assert.match(
+    botEditor,
+    /private var canSave:[\s\S]*?aidenBotEditorCanSubmitSettings\(hasAvatarCandidate: avatarModel\?\.hasCandidate == true\)/u,
+  );
   assert.match(chat, /AidenBotCanonicalAvatarView\(/u);
   assert.match(chat, /enum AidenChatPresentationStyle[\s\S]*?case botMessages/u);
   assert.match(chat, /struct AidenBotMessageBubbleShape: Shape/u);
@@ -399,10 +400,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(chat, /Image\(systemName: AidenChromeSymbols\.overflowMenu\)/u);
   assert.match(chat, /buttonBorderShape\(\.circle\)/u);
   assert.ok(chat.includes('TextField("Message Aiden"'));
-  assert.match(
-    chat,
-    /padding\(\.horizontal, 16\)[\s\S]*?padding\(\.bottom, 10\)/u,
-  );
+  assert.match(chat, /padding\(\.horizontal, 16\)[\s\S]*?padding\(\.bottom, 10\)/u);
   assert.match(
     chat,
     /TextField\("Message Aiden"[\s\S]*?HStack\(alignment: \.center, spacing: 10\)[\s\S]*?padding\(\.horizontal, 12\)[\s\S]*?aidenComposerGlass\(\)/u,
@@ -415,14 +413,14 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /AidenBotCanonicalAvatarMemoryCache[\s\S]*?assetRevision[\s\S]*?loadedCacheKey == cacheKey[\s\S]*?canonicalImage != nil[\s\S]*?return/u,
   );
   assert.doesNotMatch(botAvatar, /\.onDisappear \{ canonicalImage = nil \}/u);
-  assert.match(
-    chat,
-    /AidenApprovalCard\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u,
-  );
+  assert.match(chat, /AidenApprovalCard\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u);
   assert.match(botSwift, /--bot-first-prototype-theme/u);
   assert.match(botSwift, /--bot-first-prototype-state/u);
   assert.match(botSwift, /--bot-first-prototype-screen/u);
-  assert.match(botSwift, /case inbox[\s\S]*?case profile[\s\S]*?case editor[\s\S]*?case access[\s\S]*?case chat/u);
+  assert.match(
+    botSwift,
+    /case inbox[\s\S]*?case profile[\s\S]*?case editor[\s\S]*?case access[\s\S]*?case chat/u,
+  );
   assert.match(botSwift, /Bots can use your Mac/u);
   assert.match(botSwift, /Continue with Full Access/u);
   assert.match(botSwift, /Customize first/u);
@@ -436,7 +434,10 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /sheet\(isPresented: \$isPresentingPostNoticeEditor\)[\s\S]*?AidenBotPrototypeEditorView\(bot: nil, initialAccess: \.custom\)/u,
   );
   assert.match(botSwift, /case newChat\(botID: String, sequence: Int\)/u);
-  assert.match(botSwift, /static func newChat\(bot:[\s\S]*?"prototype-new-\\\(bot\.id\)-\\\(sequence\)"/u);
+  assert.match(
+    botSwift,
+    /static func newChat\(bot:[\s\S]*?"prototype-new-\\\(bot\.id\)-\\\(sequence\)"/u,
+  );
   assert.match(
     botSwift,
     /newConversationSequence \+= 1[\s\S]*?\.newChat\(botID: botID, sequence: newConversationSequence\)/u,
@@ -453,7 +454,10 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.ok(profileSection, "expected a bounded Bot profile section");
   assert.match(profileSection, /Button\(action: onNewConversation\)/u);
   assert.match(profileSection, /profileMetric\("Access", value: accessSummary/u);
-  assert.match(profileSection, /profileMetric\("Files", value: accessPolicy\.ceiling\.files\.rawValue/u);
+  assert.match(
+    profileSection,
+    /profileMetric\("Files", value: accessPolicy\.ceiling\.files\.rawValue/u,
+  );
   assert.match(profileSection, /accessPolicy\.ceiling\.allowedConnectionIDs\.count/u);
   assert.match(profileSection, /accessPolicy\.ceiling\.allowedSkillIDs\.count/u);
   assert.doesNotMatch(profileSection, /sampleRecent|Fixtures\.chat/u);
@@ -499,18 +503,36 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(accessSection, /scope == \.bot \? access == \.custom : chatAccess == \.customize/u);
   assert.match(accessSection, /case \.shell: return ceiling\.shell/u);
   assert.match(accessSection, /\.disabled\(!allowed\)/u);
-  assert.match(botSwift, /case fullMac = "Full Mac"[\s\S]*?case botFolderOnly = "Bot folder only"[\s\S]*?case chosenLocations = "Chosen locations"[\s\S]*?case off = "Off"/u);
-  assert.match(accessSection, /Section\("Mac files"\)[\s\S]*?Picker\("Files", selection: \$files\)[\s\S]*?locationCatalog/u);
-  assert.match(accessSection, /Section \{[\s\S]*?Picker\("Connections", selection: \$connectionMode\)[\s\S]*?connectionCatalog[\s\S]*?Text\("Connections"\)/u);
+  assert.match(
+    botSwift,
+    /case fullMac = "Full Mac"[\s\S]*?case botFolderOnly = "Bot folder only"[\s\S]*?case chosenLocations = "Chosen locations"[\s\S]*?case off = "Off"/u,
+  );
+  assert.match(
+    accessSection,
+    /Section\("Mac files"\)[\s\S]*?Picker\("Files", selection: \$files\)[\s\S]*?locationCatalog/u,
+  );
+  assert.match(
+    accessSection,
+    /Section \{[\s\S]*?Picker\("Connections", selection: \$connectionMode\)[\s\S]*?connectionCatalog[\s\S]*?Text\("Connections"\)/u,
+  );
   assert.match(accessSection, /All enabled/u);
   assert.match(accessSection, /Some connections are powered by MCP/u);
   assert.match(accessSection, /Picker\("Skills", selection: \$skillMode\)[\s\S]*?skillCatalog/u);
   assert.match(accessSection, /All available/u);
   assert.match(accessSection, /@State private var connectionIDs: Set<String>/u);
   assert.match(accessSection, /@State private var skillIDs: Set<String>/u);
-  assert.match(accessSection, /chosenLocationIDs: chosenLocationIDs[\s\S]*?connectionIDs: connectionIDs[\s\S]*?skillIDs: skillIDs/u);
-  assert.match(accessSection, /fileScopeAllowed[\s\S]*?option\.limited\(to: botPolicy\.ceiling\.files\) == option/u);
-  assert.match(accessSection, /catalogItemAllowed[\s\S]*?botPolicy\.ceiling\.allowedConnectionIDs\.contains\(id\)[\s\S]*?botPolicy\.ceiling\.allowedSkillIDs\.contains\(id\)/u);
+  assert.match(
+    accessSection,
+    /chosenLocationIDs: chosenLocationIDs[\s\S]*?connectionIDs: connectionIDs[\s\S]*?skillIDs: skillIDs/u,
+  );
+  assert.match(
+    accessSection,
+    /fileScopeAllowed[\s\S]*?option\.limited\(to: botPolicy\.ceiling\.files\) == option/u,
+  );
+  assert.match(
+    accessSection,
+    /catalogItemAllowed[\s\S]*?botPolicy\.ceiling\.allowedConnectionIDs\.contains\(id\)[\s\S]*?botPolicy\.ceiling\.allowedSkillIDs\.contains\(id\)/u,
+  );
   assert.match(
     accessSection,
     /onBotPolicyChanged\?\(\.init\(mode: access, capabilities: selectedCapabilities\)\)/u,
@@ -530,21 +552,45 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(botSwift, /\[bot\.name, bot\.summary\]\.contains/u);
   assert.match(botSwift, /\[bot\.name, bot\.summary, recent\.title, recent\.preview\]\.contains/u);
   assert.match(botSwift, /ForEach\(bots\) \{ bot in/u);
-  assert.match(botSwift, /hasTypedNoResults[\s\S]*?!normalizedQuery\.isEmpty && filteredBotResults\.isEmpty && filteredRecents\.isEmpty/u);
+  assert.match(
+    botSwift,
+    /hasTypedNoResults[\s\S]*?!normalizedQuery\.isEmpty && filteredBotResults\.isEmpty && filteredRecents\.isEmpty/u,
+  );
   assert.match(botSwift, /if hasTypedNoResults \|\| fixtureState == \.noResults/u);
   assert.match(botSwift, /ForEach\(availableBots\) \{ bot in[\s\S]*?onNewConversation\(bot\.id\)/u);
   assert.match(botSwift, /guard !isBotArchived\(botID\) else \{ return \}/u);
-  assert.match(botSwift, /@State private var favoriteOrder[\s\S]*?moveFavorite\(bot\.id, by: -1\)[\s\S]*?moveFavorite\(bot\.id, by: 1\)/u);
+  assert.match(
+    botSwift,
+    /@State private var favoriteOrder[\s\S]*?moveFavorite\(bot\.id, by: -1\)[\s\S]*?moveFavorite\(bot\.id, by: 1\)/u,
+  );
   assert.match(botSwift, /confirmationDialog\("Archive this bot\?"[\s\S]*?archivedBotIDs\.insert/u);
-  assert.match(botSwift, /confirmationDialog\("Delete selected conversations\?"[\s\S]*?deletedRecentIDs\.formUnion\(selectedRecentIDs\)/u);
+  assert.match(
+    botSwift,
+    /confirmationDialog\("Delete selected conversations\?"[\s\S]*?deletedRecentIDs\.formUnion\(selectedRecentIDs\)/u,
+  );
   assert.match(botSwift, /isArchived \? "Archived bots are read-only until restored\."/u);
   assert.match(botSwift, /\.disabled\(!allowsBotChanges\)/u);
-  assert.match(botSwift, /@Environment\(\\\.accessibilityReduceMotion\) private var accessibilityReduceMotion/u);
-  assert.match(botSwift, /\.environment\(\\\.aidenReduceMotion, aidenReduceMotion \|\| accessibilityReduceMotion\)/u);
-  assert.match(botSwift, /effectiveReduceMotion: Bool \{ reduceMotion \|\| accessibilityReduceMotion \}/u);
+  assert.match(
+    botSwift,
+    /@Environment\(\\\.accessibilityReduceMotion\) private var accessibilityReduceMotion/u,
+  );
+  assert.match(
+    botSwift,
+    /\.environment\(\\\.aidenReduceMotion, aidenReduceMotion \|\| accessibilityReduceMotion\)/u,
+  );
+  assert.match(
+    botSwift,
+    /effectiveReduceMotion: Bool \{ reduceMotion \|\| accessibilityReduceMotion \}/u,
+  );
   assert.equal([...botSwift.matchAll(/\bwithAnimation\(/gu)].length, 2);
-  assert.match(botSwift, /if effectiveReduceMotion \{[\s\S]*?isEditing = nextValue[\s\S]*?\} else \{[\s\S]*?withAnimation/u);
-  assert.match(botSwift, /if effectiveReduceMotion \{[\s\S]*?update\(\)[\s\S]*?\} else \{[\s\S]*?withAnimation/u);
+  assert.match(
+    botSwift,
+    /if effectiveReduceMotion \{[\s\S]*?isEditing = nextValue[\s\S]*?\} else \{[\s\S]*?withAnimation/u,
+  );
+  assert.match(
+    botSwift,
+    /if effectiveReduceMotion \{[\s\S]*?update\(\)[\s\S]*?\} else \{[\s\S]*?withAnimation/u,
+  );
   const inboxToolbar = botSwift.match(
     /private var inboxToolbar:[\s\S]*?private var bottomDock:/u,
   )?.[0];
@@ -564,13 +610,15 @@ test("iOS bundles every reviewed Aiden provider logo", async () => {
 
   assert.deepEqual(iosLogos, desktopLogos);
   assert.equal(iosLogos.length, 41);
-  await Promise.all(iosLogos.map(async (slug) => {
-    const [desktopArtwork, iosArtwork] = await Promise.all([
-      readFile(`${desktopProviderLogoDirectory}${slug}.svg`),
-      readFile(`${iosAssetCatalogDirectory}ProviderLogo-${slug}.imageset/${slug}.svg`),
-    ]);
-    assert.deepEqual(iosArtwork, desktopArtwork, `${slug} artwork diverged from Aiden Agent`);
-  }));
+  await Promise.all(
+    iosLogos.map(async (slug) => {
+      const [desktopArtwork, iosArtwork] = await Promise.all([
+        readFile(`${desktopProviderLogoDirectory}${slug}.svg`),
+        readFile(`${iosAssetCatalogDirectory}ProviderLogo-${slug}.imageset/${slug}.svg`),
+      ]);
+      assert.deepEqual(iosArtwork, desktopArtwork, `${slug} artwork diverged from Aiden Agent`);
+    }),
+  );
 });
 
 test("iOS onboarding reuses the reviewed Mac feature artwork byte for byte", async () => {
@@ -580,17 +628,31 @@ test("iOS onboarding reuses the reviewed Mac feature artwork byte for byte", asy
     ["features/scheduled-automations.png", "OnboardingControl.imageset/onboarding-control.png"],
   ];
 
-  await Promise.all(artworkPairs.map(async ([desktopPath, iosPath]) => {
-    const [desktopArtwork, iosArtwork] = await Promise.all([
-      readFile(`${desktopOnboardingDirectory}${desktopPath}`),
-      readFile(`${iosAssetCatalogDirectory}${iosPath}`),
-    ]);
-    assert.deepEqual(iosArtwork, desktopArtwork, `${iosPath} diverged from Aiden Agent`);
-  }));
+  await Promise.all(
+    artworkPairs.map(async ([desktopPath, iosPath]) => {
+      const [desktopArtwork, iosArtwork] = await Promise.all([
+        readFile(`${desktopOnboardingDirectory}${desktopPath}`),
+        readFile(`${iosAssetCatalogDirectory}${iosPath}`),
+      ]);
+      assert.deepEqual(iosArtwork, desktopArtwork, `${iosPath} diverged from Aiden Agent`);
+    }),
+  );
 });
 
 test("the Aiden home, onboarding, composer, schedules, and activity retain the reviewed product shell", async () => {
-  const [shell, productShell, pairing, content, chat, scheduledTasks, widget, project, logoDefinition, logoArtwork, shippingSources] = await Promise.all([
+  const [
+    shell,
+    productShell,
+    pairing,
+    content,
+    chat,
+    scheduledTasks,
+    widget,
+    project,
+    logoDefinition,
+    logoArtwork,
+    shippingSources,
+  ] = await Promise.all([
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenProductShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
@@ -608,12 +670,60 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   const usageIndex = shell.indexOf('title: "Usage"', scheduledIndex);
   const workspacesIndex = shell.indexOf('title: "Workspaces"', usageIndex);
   const homeNavigationIndex = shell.indexOf("homeNavigationRows");
-  const chatsIndex = shell.indexOf('Text("Chats")', homeNavigationIndex);
+  const sidebarIndex = shell.indexOf(
+    'Text(sidebarOrganization == .workspace ? "Workspaces" : "Recents")',
+    homeNavigationIndex,
+  );
   assert.ok(scheduledIndex >= 0 && scheduledIndex < usageIndex);
   assert.ok(usageIndex < workspacesIndex);
-  assert.ok(homeNavigationIndex >= 0 && homeNavigationIndex < chatsIndex);
+  assert.ok(homeNavigationIndex >= 0 && homeNavigationIndex < sidebarIndex);
+  assert.match(shell, /Label\("By workspace"[\s\S]*?Label\("Recent only"/u);
+  assert.match(shell, /enum ChatListLoadState: Equatable/u);
+  assert.match(shell, /var chatListLoadState: ChatListLoadState = \.unresolved/u);
+  assert.match(shell, /var chatLoadErrorMessage: String\?/u);
+  assert.match(
+    shell,
+    /case \.failure\(let error\):[\s\S]{0,180}chatListLoadState = \.failed\(error\.localizedDescription\)/u,
+  );
+  assert.match(
+    shell,
+    /if chatListUnavailable \{[\s\S]*?Chats Couldn’t Load[\s\S]*?Button\("Try Again"\)/u,
+  );
+  assert.match(
+    shell,
+    /private var chatCreationBlocked:[\s\S]{0,180}homeModel\.chatListLoadState != \.loaded/u,
+  );
+  assert.match(shell, /private struct LoadAttempt:[\s\S]{0,120}let id = UUID\(\)/u);
+  assert.match(shell, /loadingAttempt = attempt/u);
+  assert.match(
+    shell,
+    /guard loadingAttempt == attempt, coordinator\.isCurrent\(context\) else \{ return \}/u,
+  );
+  assert.match(shell, /if loadingAttempt == attempt \{[\s\S]{0,100}isLoading = false/u);
+  assert.match(
+    shell,
+    /catch let error where aidenIsCancellation\(error\) \{\s*throw CancellationError\(\)/u,
+  );
+  assert.match(
+    shell,
+    /aidenLoadHomeSegment[\s\S]*?try Task\.checkCancellation\(\)[\s\S]*?let value = try await operation\(\)[\s\S]*?try Task\.checkCancellation\(\)/u,
+  );
+  assert.match(
+    shell,
+    /catch let error where aidenIsCancellation\(error\) \{\s*return\s*\}\s*catch/u,
+  );
+  assert.doesNotMatch(shell, /loadingContext/u);
+  assert.match(
+    shell,
+    /\.task\(id: AidenHomeLoadID\([\s\S]{0,160}instanceID: coordinator\.activeInstanceId/u,
+  );
+  assert.match(shell, /Text\("Show \\\(remainingChatCount\) more"\)/u);
+  assert.doesNotMatch(shell, /Text\("Show \(remainingChatCount\) more"\)/u);
   assert.match(shell, /AidenProductSwitcherButton\([\s\S]*?searchChrome/u);
-  assert.match(productShell, /Menu \{[\s\S]*?areaButton\(\.bots\)[\s\S]*?areaButton\(\.workspaces\)[\s\S]*?HStack\(spacing: 4\)[\s\S]*?Image\("AidenAppIcon"\)[\s\S]*?AidenChromeSymbols\.productSwitcherDisclosure/u);
+  assert.match(
+    productShell,
+    /Menu \{[\s\S]*?areaButton\(\.bots\)[\s\S]*?areaButton\(\.workspaces\)[\s\S]*?HStack\(spacing: 4\)[\s\S]*?Image\("AidenAppIcon"\)[\s\S]*?AidenChromeSymbols\.productSwitcherDisclosure/u,
+  );
   assert.match(
     productShell,
     /AidenProductSwitcherGlassModifier[\s\S]*?content\.buttonStyle\(\.glass\)[\s\S]*?background\(\.ultraThinMaterial, in: Capsule\(\)\)/u,
@@ -651,8 +761,14 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(productShell, /AidenWorkspaceShellView\([\s\S]*?AidenBotShellView\(/u);
   assert.match(content, /AidenProductShellView\(/u);
   assert.match(shell, /Image\(systemName: "magnifyingglass"\)[\s\S]*?person\.crop\.circle\.fill/u);
-  assert.match(shell, /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Mac Folder"/u);
-  assert.match(shell, /Image\(systemName: "square\.and\.pencil"\)[\s\S]*?aidenProminentGlassButton\(\)[\s\S]*?accessibilityLabel\("New Workspace Chat"\)/u);
+  assert.match(
+    shell,
+    /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Mac Folder"/u,
+  );
+  assert.match(
+    shell,
+    /Image\(systemName: "square\.and\.pencil"\)[\s\S]*?aidenProminentGlassButton\(\)[\s\S]*?accessibilityLabel\("New Workspace Chat"\)/u,
+  );
   assert.match(shell, /content\.buttonStyle\(\.glass\)/u);
   assert.match(shell, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
   assert.match(
@@ -678,30 +794,55 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.doesNotMatch(shell, /confirmationDialog\([\s\S]{0,120}"Where should this agent work\?"/u);
   assert.doesNotMatch(shell, /messageLabel|chat\.messages\.count/u);
-  assert.doesNotMatch(shell, /count: homeModel\.scheduledTasks\.count|count: coordinator\.workspaces\.count/u);
-  assert.match(shell, /task\(id: coordinator\.connectionState\)[\s\S]*?homeModel\.load/u);
+  assert.doesNotMatch(
+    shell,
+    /count: homeModel\.scheduledTasks\.count|count: coordinator\.workspaces\.count/u,
+  );
+  assert.match(
+    shell,
+    /task\(id: AidenHomeLoadID\([\s\S]*?connectionState: coordinator\.connectionState[\s\S]*?homeModel\.load/u,
+  );
   assert.match(
     shell,
     /AidenNavigationResolutionID\([\s\S]*?connectionState: coordinator\.connectionState[\s\S]*?resolveNavigationRequest/u,
   );
   assert.match(
     shell,
-    /func resolveNavigationRequest\(\)[\s\S]*?coordinator\.connectionState == \.connected[\s\S]*?defer \{ navigationRequest = nil \}[\s\S]*?intentChat = chat/u,
+    /func resolveNavigationRequest\(\)[\s\S]*?coordinator\.connectionState == \.connected[\s\S]*?defer \{ navigationRequest = nil \}[\s\S]*?openChat\(chat, startsVoice: request\.startsVoice\)/u,
   );
   assert.match(
     shell,
     /func createNewAgentInScratchWorkspace\(\)[\s\S]*?workspaceCreate: \.scratch[\s\S]*?func createNewAgent\([\s\S]*?createChat\(workspaceId: workspace\.id\)/u,
   );
-  assert.match(shell, /Button\("Close"\) \{ intentChat = nil \}/u);
+  assert.match(
+    shell,
+    /navigationDestination\([\s\S]*?get: \{ selectedSidebarChat != nil \}[\s\S]*?set: \{ if !\$0 \{ clearSelectedSidebarChat\(\) \} \}/u,
+  );
   assert.match(shell, /final class AidenWorkspaceArchiveStore[\s\S]*?workspaceIDsByInstance/u);
   assert.match(shell, /Archived Workspaces[\s\S]*?hidden only on this device/u);
   assert.match(shell, /swipeActions\(edge: \.leading, allowsFullSwipe: false\)/u);
   assert.match(shell, /swipeActions\(edge: \.trailing, allowsFullSwipe: false\)/u);
-  assert.match(shell, /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your Mac and on other devices/u);
-  assert.match(shell, /onRemove: workspace\.isManagedWorktree \|\| coordinator\.workspaces\.count <= 1/u);
+  assert.match(
+    shell,
+    /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your Mac and on other devices/u,
+  );
+  assert.match(
+    shell,
+    /onRemove: workspace\.isManagedWorktree \|\| coordinator\.workspaces\.count <= 1/u,
+  );
   assert.match(shell, /if isArchived \{[\s\S]*?Button\(action: onToggleArchive\)/u);
-  assert.match(shell, /activeWorkspaceIDSet[\s\S]*?visibleChats = homeModel\.chats\.filter/u);
-  assert.match(shell, /archivedWorkspaceIDs\.contains\(chat\.workspaceId\)[\s\S]*?Unarchive it from Workspaces/u);
+  assert.match(
+    shell,
+    /AidenWorkspaceSidebarProjection\.make\([\s\S]*?workspaces: activeWorkspaces[\s\S]*?chats: homeModel\.chats/u,
+  );
+  assert.match(
+    shell,
+    /var chats: \[AidenChatSummary\][\s\S]*?let regularChats = chats[\s\S]*?filter \{ workspaceByID\[\$0\.workspaceId\] != nil \}/u,
+  );
+  assert.match(
+    shell,
+    /archivedWorkspaceIDs\.contains\(chat\.workspaceId\)[\s\S]*?Unarchive it from Workspaces/u,
+  );
   assert.match(pairing, /Aiden, wherever you are\./u);
   assert.match(pairing, /task\(id: step\)[\s\S]*?if step == 2[\s\S]*?discovery\.start\(\)/u);
   assert.match(
@@ -710,8 +851,14 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(pairing, /static let advanced: \[AidenPairingMethod\] = \[\.pastePayload\]/u);
   assert.match(pairing, /case \.scanQRCode: return String\(localized: "Scan QR Code"\)/u);
-  assert.match(pairing, /case \.nearbyMac: return String\(localized: "Nearby Mac \+ Setup Code"\)/u);
-  assert.match(pairing, /case \.privateAddress: return String\(localized: "Private Address \+ Setup Code"\)/u);
+  assert.match(
+    pairing,
+    /case \.nearbyMac: return String\(localized: "Nearby Mac \+ Setup Code"\)/u,
+  );
+  assert.match(
+    pairing,
+    /case \.privateAddress: return String\(localized: "Private Address \+ Setup Code"\)/u,
+  );
   assert.match(pairing, /case \.nearbyMac: return String\(localized: "Local Network"\)/u);
   assert.match(pairing, /case \.privateAddress: return String\(localized: "Tailscale"\)/u);
   assert.match(pairing, /Picker\("Connection method", selection: \$selectedPairingMethod\)/u);
@@ -723,10 +870,16 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /Paste Pairing Payload[\s\S]*?More pairing options/u);
   assert.match(pairing, /AidenMobileOnboardingPhase\.allCases[\s\S]*?Image\(phase\.imageName\)/u);
   assert.match(pairing, /BOTS AND WORKSPACES/u);
-  assert.match(pairing, /When Bots are available on your paired Mac[\s\S]*?tap the Aiden logo to switch\./u);
+  assert.match(
+    pairing,
+    /When Bots are available on your paired Mac[\s\S]*?tap the Aiden logo to switch\./u,
+  );
   assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
   assert.doesNotMatch(pairing, /AidenSidebarLogo/u);
-  assert.match(pairing, /GeometryReader \{ proxy in[\s\S]*?AidenMobileOnboardingLayout\.contentWidth\(for: proxy\.size\.width\)[\s\S]*?AidenMobileOnboardingLayout\.contentHeight\(for: proxy\.size\.height\)/u);
+  assert.match(
+    pairing,
+    /GeometryReader \{ proxy in[\s\S]*?AidenMobileOnboardingLayout\.contentWidth\(for: proxy\.size\.width\)[\s\S]*?AidenMobileOnboardingLayout\.contentHeight\(for: proxy\.size\.height\)/u,
+  );
   assert.match(pairing, /ViewThatFits\(in: \.vertical\)[\s\S]*?onboardingPhaseContent/u);
   assert.doesNotMatch(pairing, /UIDevice\.current\.userInterfaceIdiom/u);
   assert.match(
@@ -745,7 +898,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     pairing,
     /Text\(isOnboardingLastPage \? "Set Up Connection" : "Continue"\)[\s\S]*?Text\("Choose How to Connect"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
   );
-  assert.doesNotMatch(pairing, /Text\("Choose How to Connect"\)[\s\S]{0,180}?\.background\(\.bar\)/u);
+  assert.doesNotMatch(
+    pairing,
+    /Text\("Choose How to Connect"\)[\s\S]{0,180}?\.background\(\.bar\)/u,
+  );
   assert.doesNotMatch(
     pairing,
     /Section \{[\s\S]{0,240}?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
@@ -758,7 +914,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /https:\/\/mac-name\.local:49220\/api\/aiden\/v1/u);
   assert.match(pairing, /https:\/\/mac-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
   assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
-  assert.match(chat, /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u);
+  assert.match(
+    chat,
+    /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u,
+  );
   assert.doesNotMatch(chat, /PhotosPicker\(selection:/u);
   assert.match(chat, /\.fileImporter\(/u);
   assert.match(
@@ -798,21 +957,39 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /ThinkingOrb\(state: activity\.orb, size: \.px20\)/u);
   assert.match(
     chat,
-    /AidenApprovalCard[\s\S]*?Image\(systemName: "shield"\)[\s\S]*?Text\("Approval needed"\)[\s\S]*?font\(\.subheadline\.weight\(\.semibold\)\)/u,
+    /AidenApprovalCard[\s\S]*?Image\(systemName: "shield"\)[\s\S]*?Text\(AidenApprovalPresentation\.title\(for: kind\)\)[\s\S]*?font\(\.subheadline\.weight\(\.semibold\)\)/u,
   );
-  assert.match(chat, /Text\("Review this one action before Aiden continues\."\)[\s\S]*?font\(\.caption\)/u);
+  assert.match(
+    chat,
+    /Text\(AidenApprovalPresentation\.detail\(for: kind\)\)[\s\S]*?font\(\.caption\)/u,
+  );
   assert.match(chat, /Text\(summary\)[\s\S]*?font\(\.caption\.monospaced\(\)\)/u);
-  assert.match(chat, /Text\("Deny"\)[\s\S]*?Text\("Allow once"\)/u);
+  assert.match(
+    chat,
+    /Text\(AidenApprovalPresentation\.denyTitle\(for: kind\)\)[\s\S]*?Text\(AidenApprovalPresentation\.allowTitle\(for: kind\)\)/u,
+  );
   assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: Capsule\(\)\)/u);
   assert.match(chat, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
   assert.doesNotMatch(chat, /Label\("Approval needed", systemImage: "hand\.raised"\)/u);
   assert.doesNotMatch(chat, /Button\("Deny", role: \.destructive\)/u);
-  assert.match(chat, /ZStack\(alignment: \.bottom\)[\s\S]*?frame\(height: max\(96, composerHeight \+ 12\)\)[\s\S]*?AidenComposerView/u);
+  assert.match(
+    chat,
+    /ZStack\(alignment: \.bottom\)[\s\S]*?frame\(height: max\(96, composerHeight \+ 12\)\)[\s\S]*?AidenComposerView/u,
+  );
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
-  assert.match(chat, /sendButtonBackground[\s\S]*?palette\.accent[\s\S]*?sendButtonForeground[\s\S]*?palette\.canvas/u);
-  assert.match(chat, /@FocusState private var composerIsFocused: Bool[\s\S]*?scrollDismissesKeyboard\(\.interactively\)[\s\S]*?TapGesture\(\)\.onEnded[\s\S]*?composerIsFocused = false/u);
+  assert.match(
+    chat,
+    /sendButtonBackground[\s\S]*?palette\.accent[\s\S]*?sendButtonForeground[\s\S]*?palette\.canvas/u,
+  );
+  assert.match(
+    chat,
+    /@FocusState private var composerIsFocused: Bool[\s\S]*?scrollDismissesKeyboard\(\.interactively\)[\s\S]*?TapGesture\(\)\.onEnded[\s\S]*?composerIsFocused = false/u,
+  );
   assert.match(chat, /composerFocus: \$composerIsFocused[\s\S]*?\.focused\(composerFocus\)/u);
-  assert.match(chat, /candidate\.thinkingLevels[\s\S]*?Menu \{[\s\S]*?ForEach\(levels[\s\S]*?thinkingLevel: level/u);
+  assert.match(
+    chat,
+    /candidate\.thinkingLevels[\s\S]*?Menu \{[\s\S]*?ForEach\(levels[\s\S]*?thinkingLevel: level/u,
+  );
   assert.match(chat, /ForEach\(model\.visibleProviders\)[\s\S]*?ForEach\(provider\.models\)/u);
   assert.match(
     chat,
@@ -841,7 +1018,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(scheduledTasks, /visibleProviders[\s\S]*?selectedProvider\?\.visibleModels/u);
   assert.doesNotMatch(chat, /if let levels = model\.selectedModel\?\.thinkingLevels/u);
   assert.doesNotMatch(chat, /\.background\(\.bar\)/u);
-  assert.match(widget, /status == \.starting \|\| status == \.thinking[\s\S]*?Image\("aiden-sidebar-logo"\)/u);
+  assert.match(
+    widget,
+    /status == \.starting \|\| status == \.thinking[\s\S]*?Image\("aiden-sidebar-logo"\)/u,
+  );
   assert.match(project, /aiden-sidebar-logo\.png in Resources/u);
   assert.doesNotMatch(`${shell}\n${pairing}\n${chat}\n${widget}`, /brain|sparkle/iu);
 
@@ -878,12 +1058,10 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
   ]);
   const packages = JSON.parse(packageResolved);
 
-  assert.deepEqual(packages.pins.map((pin) => pin.identity), [
-    "keychainaccess",
-    "networkimage",
-    "swift-cmark",
-    "swift-markdown-ui",
-  ]);
+  assert.deepEqual(
+    packages.pins.map((pin) => pin.identity),
+    ["keychainaccess", "networkimage", "swift-cmark", "swift-markdown-ui"],
+  );
   assert.deepEqual(
     packages.pins.map((pin) => [pin.identity, pin.state.version]),
     [
@@ -897,7 +1075,10 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
     project,
     /packageProductDependencies = \(\s*1A2B3C4D5E6F700000000098 \/\* KeychainAccess \*\/,\s*BADA00000000000000000003 \/\* MarkdownUI \*\/,[\s\S]*?\);/u,
   );
-  assert.match(project, /repositoryURL = "https:\/\/github\.com\/gonzalezreal\/swift-markdown-ui\.git";/u);
+  assert.match(
+    project,
+    /repositoryURL = "https:\/\/github\.com\/gonzalezreal\/swift-markdown-ui\.git";/u,
+  );
   assert.doesNotMatch(project, /swift-eventsource|Splash|Highlightr|SwiftMath/u);
   assert.deepEqual(noticeFiles.sort(), [
     "Hermex-LICENSE.txt",
@@ -934,7 +1115,10 @@ test("the shipping app icon is the reviewed opaque RayChat artwork", async () =>
 
   assert.match(project, /lastKnownFileType = wrapper\.icon; path = AppIcon\.icon;/u);
   assert.match(project, /AppIcon\.icon in Resources/u);
-  assert.equal(JSON.parse(iconDefinition).groups[0].layers[0]["image-name"], "aiden-icon-june15.png");
+  assert.equal(
+    JSON.parse(iconDefinition).groups[0].layers[0]["image-name"],
+    "aiden-icon-june15.png",
+  );
   assert.equal(JSON.parse(catalogDefinition).images[0].filename, "aiden-icon-june15.png");
   assert.deepEqual(composerArtwork, catalogArtwork);
   assert.equal(composerArtwork.readUInt32BE(16), 1024, "app icon width must be 1024 pixels");

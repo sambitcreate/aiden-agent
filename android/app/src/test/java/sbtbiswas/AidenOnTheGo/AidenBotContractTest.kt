@@ -23,6 +23,10 @@ class AidenBotContractTest {
             ?: throw IllegalStateException("Resource contract.json not found")
         val jsonText = stream.bufferedReader().use { it.readText() }
         AidenRawJsonDuplicateKeyScanner.validate(jsonText)
+        AidenBotPrivateResponseValidator.validate(
+            jsonText,
+            AidenBotPrivateResponseScope.SharedFixture
+        )
         return json.decodeFromString<AidenRemoteContractFixture>(jsonText)
     }
 
@@ -100,8 +104,19 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(9, fixture.contractRevision)
+        assertEquals(10, fixture.contractRevision)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
+        assertTrue(fixture.server.features.contains(AidenRemoteProtocol.CHAT_SUMMARIES_FEATURE))
+        val chatSummaries = requireNotNull(fixture.chatSummaries)
+        chatSummaries.validatedWire()
+        assertTrue(chatSummaries.summaries.isNotEmpty())
+        assertTrue(chatSummaries.summaries.all { it.revision.isNotEmpty() })
+        assertEquals(
+            listOf("chat_fixture_summary_02", "chat_fixture_summary_01"),
+            chatSummaries.summaries.map { it.id }
+        )
+        assertEquals(AidenChatSummaryActivity.ACTIVE, chatSummaries.summaries.first().activity)
+        assertTrue(requireNotNull(chatSummaries.nextCursor).length <= AidenRemoteProtocol.MAX_CHAT_SUMMARY_CURSOR_LENGTH)
         assertEquals("bot_fixture_01", fixture.botSummary.id)
         assertEquals(256, fixture.botList.maxBots)
         assertEquals(fixture.botPolicy.botId, fixture.botDetail.id)

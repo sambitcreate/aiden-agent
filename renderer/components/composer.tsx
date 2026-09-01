@@ -122,7 +122,7 @@ interface ComposerProps {
     text: string,
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
-    options?: { visualize?: boolean },
+    options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
@@ -173,6 +173,7 @@ interface ComposerProps {
   latestAssistantResponse?: string;
   slashNavigationBlockedReason?: string;
   slashSessionBlockedReason?: string;
+  sideQuestionBlockedReason?: string;
   onOpenSettings?: (section?: SettingsSection) => void;
   onRenameChat?: (title: string) => void | Promise<void>;
   onOpenReview?: () => void;
@@ -181,6 +182,22 @@ interface ComposerProps {
   onCloneChat?: () => Promise<void>;
   onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
   onExportChat?: () => Promise<"saved" | "cancelled">;
+  onCompactChat?: () => Promise<
+    | { compacted: true; tokensBefore?: number }
+    | {
+        compacted: false;
+        reason:
+          | "already_compact"
+          | "busy"
+          | "archived"
+          | "not_canonical"
+          | "provider_unavailable"
+          | "context_metadata_invalid"
+          | "cancelled"
+          | "compaction_failed";
+      }
+  >;
+  onCancelCompact?: () => Promise<boolean>;
   onLogoutProvider?: (providerId: string) => Promise<{ remainingAuthenticated: boolean | null }>;
   slashPaletteBlocked?: boolean;
   slashActionBusy?: boolean;
@@ -283,6 +300,7 @@ export function Composer({
   latestAssistantResponse,
   slashNavigationBlockedReason,
   slashSessionBlockedReason,
+  sideQuestionBlockedReason,
   onOpenSettings,
   onRenameChat,
   onOpenReview,
@@ -291,6 +309,8 @@ export function Composer({
   onCloneChat,
   onForkChat,
   onExportChat,
+  onCompactChat,
+  onCancelCompact,
   onLogoutProvider,
   slashPaletteBlocked = false,
   slashActionBusy = false,
@@ -519,6 +539,7 @@ export function Composer({
           : undefined,
       navigationBlockedReason: slashNavigationBlockedReason,
       sessionActionBlockedReason: slashSessionBlockedReason,
+      sideQuestionBlockedReason,
       chatCloneBlockedReason: forkEligibility.cloneBlocked
         ? "This chat has too many messages to clone safely. Fork from an earlier turn instead."
         : undefined,
@@ -566,6 +587,7 @@ export function Composer({
       slashActionBusy,
       slashNavigationBlockedReason,
       slashSessionBlockedReason,
+      sideQuestionBlockedReason,
       slashSession,
       selectedSkill,
       text,
@@ -636,6 +658,38 @@ export function Composer({
       requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
     }
   }, [inputRef, onExportChat, sessionCommandBusy]);
+
+  const compactChat = React.useCallback(async () => {
+    if (!onCompactChat || sessionCommandBusy) return;
+    sessionCommandBusyRef.current = true;
+    setSessionCommandStatus("Compacting chat…");
+    try {
+      const result = await onCompactChat();
+      if (result.compacted) {
+        toast.success(
+          result.tokensBefore
+            ? `Chat compacted from about ${result.tokensBefore.toLocaleString()} tokens`
+            : "Chat compacted",
+        );
+      } else {
+        const copy = {
+          already_compact: "This chat is already compact enough.",
+          busy: "Finish the current response or approval first.",
+          archived: "This chat is archived or unavailable.",
+          not_canonical: "This legacy Bot conversation is read-only.",
+          provider_unavailable: "The saved provider is unavailable.",
+          context_metadata_invalid: "The saved model context is invalid.",
+          cancelled: "Compaction was cancelled.",
+          compaction_failed: "Compaction failed.",
+        } as const;
+        toast.info(copy[result.reason]);
+      }
+    } finally {
+      sessionCommandBusyRef.current = false;
+      setSessionCommandStatus(null);
+      requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+    }
+  }, [inputRef, onCompactChat, sessionCommandBusy]);
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
@@ -712,6 +766,7 @@ export function Composer({
       selectedSkill?: SelectedSkillInvocation;
       skillRevision: number;
       visualize?: boolean;
+      btw?: boolean;
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -735,7 +790,9 @@ export function Composer({
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
-          payload.visualize ? { visualize: true } : undefined,
+          payload.visualize || payload.btw
+            ? { visualize: payload.visualize, btw: payload.btw }
+            : undefined,
         );
         return true;
       } catch (error) {
@@ -853,14 +910,23 @@ export function Composer({
         },
         cloneChat,
         exportChat,
+        compactChat,
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          if (instruction !== "visualize") return false;
+          if (instruction !== "visualize" && instruction !== "btw") return false;
           const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const missingPromptMessage =
+            instruction === "btw"
+              ? "Add a question after /btw, then send."
+              : "Add what to visualize after /visualize, then send.";
           if (!nextPrompt) {
-            toast.info("Add what to visualize after /visualize, then send.");
+            toast.info(missingPromptMessage);
+            return false;
+          }
+          if (instruction === "btw" && (attachments.length > 0 || selectedSkill)) {
+            toast.info("Remove attachments and the selected skill before asking a side question.");
             return false;
           }
           if (selectedSkillState && selectedSkillState.state !== "valid") {
@@ -869,13 +935,23 @@ export function Composer({
           }
           const submittedAttachments = attachments;
           const submittedSkillRevision = skillSelection.revision;
+          if (instruction === "visualize") {
+            return sendComposerPayload({
+              draftText: text,
+              sendText: nextPrompt,
+              attachments: submittedAttachments,
+              selectedSkill,
+              skillRevision: submittedSkillRevision,
+              visualize: true,
+            });
+          }
           return sendComposerPayload({
             draftText: text,
             sendText: nextPrompt,
             attachments: submittedAttachments,
             selectedSkill,
             skillRevision: submittedSkillRevision,
-            visualize: true,
+            btw: true,
           });
         },
       });
@@ -939,6 +1015,7 @@ export function Composer({
       cloneChat,
       createWorktreeFromSlash,
       exportChat,
+      compactChat,
       onOpenReview,
       onOpenSettings,
       sendComposerPayload,
@@ -1656,16 +1733,21 @@ export function Composer({
               rows={1}
             />
             {sessionCommandStatus ? (
-              <Text
-                as="p"
-                role="status"
-                aria-live="polite"
-                variant="small"
-                color="tertiary"
-                className="px-1.5 pb-1"
-              >
-                {sessionCommandStatus}
-              </Text>
+              <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
+                <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
+                  {sessionCommandStatus}
+                </Text>
+                {sessionCommandStatus === "Compacting chat…" && onCancelCompact ? (
+                  <Button
+                    type="button"
+                    variant="transparent"
+                    size="small"
+                    onClick={() => void onCancelCompact()}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
             {!ready && readinessMessage && text.trim().length > 0 ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">

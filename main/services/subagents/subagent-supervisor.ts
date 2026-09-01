@@ -851,7 +851,9 @@ export class SubagentSupervisor {
       throw new Error("Subagent tree deadline elapsed.");
     }
     if (this.treeBudgetExhausted) {
-      throw new Error("Subagent generation tree budget exhausted.");
+      throw new Error(
+        "Subagent generation tree budget exhausted. Start a new parent turn with narrower tasks.",
+      );
     }
     if (this.launches + request.tasks.length > this.launchBudget) {
       throw new Error(
@@ -1467,7 +1469,9 @@ export class SubagentSupervisor {
           remainingTurns < 1 ||
           (needsNetworkOperations && remainingNetworkOperations < 1)
         ) {
-          throw new Error("Subagent generation tree budget exhausted.");
+          throw new Error(
+            "Subagent generation tree budget exhausted. Start a new parent turn with narrower tasks.",
+          );
         }
         const ledger = new SubagentTreeBudgetLedgerV2(first.treeRootId, {
           maxDepth: 2,

@@ -11,7 +11,7 @@ const UNKNOWN_COST_SENTINEL = -1_000_000;
 const MAX_CATALOG_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 /** Keep synchronized with the deliberately pinned @earendil-works/pi-ai dependency. */
-export const AIDEN_PI_CATALOG_VERSION = "0.80.10";
+export const AIDEN_PI_CATALOG_VERSION = "0.84.4";
 export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-07-16T22:04:50.937Z");
 export const AIDEN_PI_CATALOG_USER_AGENT = `Aiden-Agent pi-ai/${AIDEN_PI_CATALOG_VERSION}`;
 export const PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -320,7 +320,7 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
     ...provider,
     getModels: () => mergeModels(baseline, dynamicModels),
     refreshModels: async (context) => {
-      const stored = (await context.store.read()) as PersistedRemoteCatalog | undefined;
+      const stored = context.stored as PersistedRemoteCatalog | undefined;
       const restored = restoredCatalog(stored);
       dynamicModels = restored?.models ?? [];
       if (!context.allowNetwork || context.signal?.aborted) return;
@@ -342,11 +342,13 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
         if (context.signal?.aborted) return;
         const checkedAt = now();
         if (response.status === 304 && stored && restored) {
-          await context.store.write({
-            ...stored,
-            // A local clock rollback must not invalidate the generation's
-            // original acceptance boundary on the next process launch.
-            checkedAt: Math.max(stored.checkedAt ?? 0, checkedAt),
+          await context.publish({
+            persist: {
+              ...stored,
+              // A local clock rollback must not invalidate the generation's
+              // original acceptance boundary on the next process launch.
+              checkedAt: Math.max(stored.checkedAt ?? 0, checkedAt),
+            },
           });
           return;
         }
@@ -359,7 +361,12 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
               : checkedAt,
             etag: undefined,
           };
-          await context.store.write(retained);
+          await context.publish({
+            persist: retained,
+            update: () => {
+              dynamicModels = restored?.models ?? [];
+            },
+          });
           return;
         }
         if (!response.ok) {
@@ -390,8 +397,12 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
           lastModified: remoteModified,
           etag: response.headers.get("etag") ?? undefined,
         };
-        await context.store.write(entry);
-        if (!context.signal?.aborted) dynamicModels = refreshed;
+        await context.publish({
+          persist: entry,
+          update: () => {
+            if (!context.signal.aborted) dynamicModels = refreshed;
+          },
+        });
       })();
       activeNetworkRefresh = task;
       try { await task; } finally { if (activeNetworkRefresh === task) activeNetworkRefresh = null; }

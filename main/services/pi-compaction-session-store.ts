@@ -1,16 +1,27 @@
 import { randomUUID } from "node:crypto";
-import { chmod, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
-  JsonlSessionRepo,
   type AgentMessage,
-  type JsonlSessionMetadata,
-  type Session,
 } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { cleanupSessionResources, type Api, type Model } from "@earendil-works/pi-ai";
 import { ensureUserDataDir } from "./data-store.js";
+import { isDevelopmentRuntime } from "../runtime-mode-core.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
+import type { PiPersistentSessionMetadata, PiSessionPort } from "./pi-session-port.js";
+import {
+  createCurrentPiSessionRepository,
+  type PiSessionRepositoryPort,
+} from "./pi-session-repository-port.js";
+import { migratePiSessionJournal } from "./pi-session-migration.js";
+import { decodeLegacyPiSession } from "./pi-legacy-session.js";
+import {
+  piUpgradeBehaviorEnabledAtStartup,
+  piUpgradeJournalCreationEligible,
+  piUpgradeLegacyMigrationEligible,
+  type PiUpgradeRolloutDocument,
+} from "./pi-upgrade-rollout.js";
+import { piUpgradeRolloutStore } from "./pi-upgrade-rollout-main.js";
 import type { DurablePiRuntimeEffect } from "./pi-runtime-effect-core.js";
 import type { ChatMessage } from "./types.js";
 
@@ -133,6 +144,60 @@ function journalHeaderOwnsChat(headerLine: string, chatId: string): boolean {
   }
 }
 
+function currentJournalHeaderOwnsChat(headerLine: string, chatId: string): boolean {
+  try {
+    const header = JSON.parse(headerLine) as {
+      kind?: unknown;
+      version?: unknown;
+      id?: unknown;
+      metadata?: { kind?: unknown; chatId?: unknown };
+    };
+    return (
+      header.kind === "header" &&
+      header.version === 4 &&
+      header.id === chatId &&
+      header.metadata?.kind === SESSION_METADATA_KIND &&
+      header.metadata.chatId === chatId
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function findMigrationJournals(root: string, chatId: string): Promise<string[]> {
+  const matches: string[] = [];
+  const directories = [root];
+  while (directories.length > 0) {
+    const directory = directories.pop()!;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        directories.push(candidate);
+      } else if (entry.name.endsWith(".jsonl")) {
+        const prefix = await readJournalPrefix(candidate).catch(() => "");
+        if (
+          journalHeaderOwnsChat(prefix, chatId) ||
+          (currentJournalHeaderOwnsChat(prefix, chatId) &&
+            ((await fileExists(`${candidate}.v3-backup`)) ||
+              (await fileExists(`${candidate}.migration-v1.json`))))
+        ) {
+          matches.push(candidate);
+        }
+      }
+    }
+  }
+  return matches;
+}
+
 /** Preserve a valid durable prefix when only the final JSONL write was torn. */
 async function repairTornFinalLine(filePath: string): Promise<boolean> {
   const contents = await readFile(filePath, "utf8");
@@ -163,7 +228,7 @@ async function repairTornFinalLine(filePath: string): Promise<boolean> {
  * crash recovery and repeated generation setup idempotent.
  */
 export async function syncChatMessagesToPiSession(
-  session: Session,
+  session: PiSessionPort,
   messages: readonly ChatMessage[],
   model: Model<Api>,
   _supportsImages: boolean,
@@ -207,7 +272,10 @@ export async function syncChatMessagesToPiSession(
   }
 }
 
-async function appendPiTransaction<T>(session: Session, operation: () => Promise<T>): Promise<T> {
+async function appendPiTransaction<T>(
+  session: PiSessionPort,
+  operation: () => Promise<T>,
+): Promise<T> {
   const originalLeafId = await session.getLeafId();
   const transactionId = randomUUID();
   try {
@@ -234,7 +302,7 @@ async function appendPiTransaction<T>(session: Session, operation: () => Promise
 }
 
 /** Hold a generation suffix open until its visible assistant is durable. */
-export async function beginPiGenerationTurn(session: Session): Promise<string> {
+export async function beginPiGenerationTurn(session: PiSessionPort): Promise<string> {
   const transactionId = randomUUID();
   await session.appendCustomEntry(AIDEN_PI_TRANSACTION, {
     transactionId,
@@ -244,7 +312,7 @@ export async function beginPiGenerationTurn(session: Session): Promise<string> {
 }
 
 export async function commitPiGenerationTurn(
-  session: Session,
+  session: PiSessionPort,
   transactionId: string,
 ): Promise<void> {
   await session.appendCustomEntry(AIDEN_PI_TRANSACTION, {
@@ -269,7 +337,7 @@ export interface PiVisibleTurnLease {
  * leaf without knowing Pi transaction mechanics.
  */
 export async function beginPiVisibleTurnLease(
-  session: Session,
+  session: PiSessionPort,
   onBeginError?: (error: unknown) => void,
 ): Promise<PiVisibleTurnLease> {
   let sourceLeafId: string | null | undefined;
@@ -309,7 +377,7 @@ export async function beginPiVisibleTurnLease(
   };
 }
 
-async function recoverUncommittedTransaction(session: Session): Promise<void> {
+async function recoverUncommittedTransaction(session: PiSessionPort): Promise<void> {
   const branch = await session.getBranch();
   const open = new Map<string, string | null>();
   for (const entry of branch) {
@@ -333,7 +401,7 @@ async function recoverUncommittedTransaction(session: Session): Promise<void> {
 }
 
 export async function appendPiMessages(
-  session: Session,
+  session: PiSessionPort,
   messages: readonly AgentMessage[],
   visibleChatMessageId?: string,
 ): Promise<void> {
@@ -354,7 +422,7 @@ export async function appendPiMessages(
  * before repeating an operation that may already have happened.
  */
 export async function recordPiEffectRecoveryBoundary(
-  session: Session,
+  session: PiSessionPort,
   effects: readonly DurablePiRuntimeEffect[],
 ): Promise<void> {
   if (effects.length === 0) return;
@@ -407,16 +475,24 @@ export async function recordPiEffectRecoveryBoundary(
 
 export interface PiCompactionSessionStoreOptions {
   root: () => Promise<string>;
+  rollout?: {
+    load(): Promise<PiUpgradeRolloutDocument>;
+    development: boolean;
+    behaviorEnabled: boolean;
+  };
 }
 
 /** Durable, private Pi JSONL journals keyed one-to-one with Aiden chats. */
 export class PiCompactionSessionStore {
   private repositoryPromise?: Promise<{
-    repo: JsonlSessionRepo;
+    repo: PiSessionRepositoryPort;
     root: string;
   }>;
-  private readonly sessions = new Map<string, Session<JsonlSessionMetadata>>();
-  private readonly opening = new Map<string, Promise<Session<JsonlSessionMetadata>>>();
+  private readonly sessions = new Map<string, PiSessionPort<PiPersistentSessionMetadata>>();
+  private readonly opening = new Map<
+    string,
+    Promise<PiSessionPort<PiPersistentSessionMetadata>>
+  >();
   private readonly quarantined = new Map<string, Promise<void>>();
   private indexMutation: Promise<void> = Promise.resolve();
 
@@ -495,7 +571,7 @@ export class PiCompactionSessionStore {
   }
 
   private async repository(): Promise<{
-    repo: JsonlSessionRepo;
+    repo: PiSessionRepositoryPort;
     root: string;
   }> {
     this.repositoryPromise ??= (async () => {
@@ -503,16 +579,16 @@ export class PiCompactionSessionStore {
       await chmod(root, 0o700);
       return {
         root,
-        repo: new JsonlSessionRepo({
-          fs: new NodeExecutionEnv({ cwd: root }),
-          sessionsRoot: root,
-        }),
+        repo: createCurrentPiSessionRepository(root),
       };
     })();
     return this.repositoryPromise;
   }
 
-  async openChat(chatId: string): Promise<Session<JsonlSessionMetadata>> {
+  async openChat(
+    chatId: string,
+    chat?: { createdAt: number },
+  ): Promise<PiSessionPort<PiPersistentSessionMetadata>> {
     if (!SAFE_SESSION_ID.test(chatId)) {
       throw new Error("Invalid chat identity for the Pi compaction journal.");
     }
@@ -524,12 +600,44 @@ export class PiCompactionSessionStore {
 
     const opening = (async () => {
       const { repo, root } = await this.repository();
+      const rollout = await this.options.rollout?.load();
+      const rolloutOptions = this.options.rollout && {
+        development: this.options.rollout.development,
+        behaviorEnabled: this.options.rollout.behaviorEnabled,
+      };
+      const migrationFailures: Array<{ path: string; error: unknown }> = [];
+      const deferredMigrations: string[] = [];
+      const migrationPaths = await findMigrationJournals(root, chatId);
+      for (const migrationPath of migrationPaths) {
+        try {
+          if (rollout && rolloutOptions) {
+            const header = await readJournalPrefix(migrationPath);
+            const legacySource = journalHeaderOwnsChat(header, chatId)
+              ? migrationPath
+              : `${migrationPath}.v3-backup`;
+            const legacy = decodeLegacyPiSession(await readFile(legacySource, "utf8"));
+            if (!piUpgradeLegacyMigrationEligible(rollout, legacy.entries.length, rolloutOptions)) {
+              deferredMigrations.push(migrationPath);
+              continue;
+            }
+          }
+          const migration = await migratePiSessionJournal(migrationPath, chatId);
+          await this.rememberPath(root, chatId, migration.receipt.backupPath);
+          await this.rememberPath(root, chatId, migration.receiptPath);
+        } catch (error) {
+          migrationFailures.push({ path: migrationPath, error });
+        }
+      }
+      const failedPaths = new Set(migrationFailures.map((failure) => path.resolve(failure.path)));
       const matches = (await repo.list()).filter(
-        (metadata) => metadata.id === chatId && metadata.metadata?.kind === SESSION_METADATA_KIND,
+        (metadata) =>
+          metadata.id === chatId &&
+          metadata.metadata?.kind === SESSION_METADATA_KIND &&
+          !failedPaths.has(path.resolve(metadata.path)),
       );
       // Pi lists newest sessions first. Validate the whole body and quarantine
       // a malformed duplicate before falling back to the next valid journal.
-      let session: Session<JsonlSessionMetadata> | undefined;
+      let session: PiSessionPort<PiPersistentSessionMetadata> | undefined;
       for (const metadata of matches) {
         try {
           const candidate = await repo.open(metadata);
@@ -549,6 +657,22 @@ export class PiCompactionSessionStore {
           }
           await this.quarantine(root, chatId, metadata.path);
         }
+      }
+      if (session) {
+        for (const failure of migrationFailures) {
+          await this.quarantine(root, chatId, failure.path);
+        }
+      } else if (migrationFailures[0]) {
+        throw migrationFailures[0].error;
+      }
+      if (!session && deferredMigrations.length > 0) {
+        throw new Error("This legacy Pi journal is outside the active device rollout stage; its v3 bytes remain unchanged.");
+      }
+      if (
+        !session && rollout && rolloutOptions &&
+        !piUpgradeJournalCreationEligible(rollout, chat?.createdAt, rolloutOptions)
+      ) {
+        throw new Error("Pi v4 journal creation is outside the active device rollout stage.");
       }
       session ??= await repo.create({
         id: chatId,
@@ -636,4 +760,9 @@ export class PiCompactionSessionStore {
 
 export const piCompactionSessionStore = new PiCompactionSessionStore({
   root: () => ensureUserDataDir("pi-compaction-sessions"),
+  rollout: {
+    load: () => piUpgradeRolloutStore.load(),
+    development: isDevelopmentRuntime(process.env, Boolean(process.versions.electron)),
+    behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+  },
 });

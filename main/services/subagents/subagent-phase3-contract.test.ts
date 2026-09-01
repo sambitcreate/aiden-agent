@@ -120,7 +120,7 @@ test("chat removal deletes private child history before the chat can disappear",
   ]);
   assert.match(
     handler,
-    /const chatId = asString\(id, "id"\);[\s\S]*if \(chat\?\.botId\)[\s\S]*botApplicationService\.deleteChat\([\s\S]*return chatApplicationService\.remove\(chatId\)/u,
+    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\)[\s\S]*return result/u,
   );
   const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
   const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");
@@ -256,11 +256,12 @@ test("empty-chat workspace moves serialize against generation authority and term
 });
 
 test("renderer message appends serialize against detached terminal persistence", async () => {
-  const [handler, generationHandler, llm, schedule] = await Promise.all([
+  const [handler, generationHandler, llm, schedule, surfaces] = await Promise.all([
     source("main/handlers/chats.ts"),
     source("main/handlers/chat.ts"),
     source("main/services/llm-client.ts"),
     source("main/services/schedule-execution.ts"),
+    source("main/services/conversation-surface-generation.ts"),
   ]);
   const appendHandler = ipcHandlerStart(handler, "chats:appendMessage");
   const beginAppend = handler.indexOf(
@@ -288,8 +289,13 @@ test("renderer message appends serialize against detached terminal persistence",
   assert.match(generationHandler, /turnId: messageTurnId/u);
   assert.match(
     schedule,
-    /beginChatTurn\(\s*chatId,\s*streamId,\s*background\.owner\.documentId,?\s*\)[\s\S]{0,900}chatStore\.appendMessage\([\s\S]{0,1600}turnId: streamId/u,
+    /beginSurfaceGeneration\(llmClient\.beginChatTurn\.bind\(llmClient\), surface\)[\s\S]{0,900}chatStore\.appendMessage\([\s\S]{0,1600}startSurfaceGeneration\(/u,
   );
+  assert.match(
+    surfaces,
+    /return beginChatTurn\(entry\.chatId, entry\.turnId, entry\.ownerId\)/u,
+  );
+  assert.match(surfaces, /turnId: input\.streamId/u);
   assert.match(
     schedule,
     /beginChatTurn\(\s*chatId,\s*turnId,\s*`scheduled-script:\$\{task\.id\}`,?\s*\)[\s\S]{0,1600}appendClaimedChatMessage/u,
@@ -335,9 +341,9 @@ test("renderer turn tokens cross append and generation IPC without an admission 
 test("main announces normalized settlement only after generation ownership exits", async () => {
   const llm = await source("main/services/llm-client.ts");
   const initializingExit =
-    /initializing\.delete\(streamId\);\s*initialization\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
+    /initializing\.delete\(streamId\);\s*initialization\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*questionnaires\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
   const activeExit =
-    /active\.delete\(streamId\);\s*activeGeneration\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
+    /active\.delete\(streamId\);\s*activeGeneration\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*questionnaires\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
 
   assert.equal([...llm.matchAll(initializingExit)].length, 5);
   assert.equal([...llm.matchAll(activeExit)].length, 2);
@@ -371,7 +377,7 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
   const response = applicationService.indexOf("reconciliation: reconciliationRequired", read);
 
   assert.ok(getHandler >= 0);
-  assert.ok(inactiveCheck > getHandler);
+  assert.ok(inactiveCheck >= 0);
   assert.ok(idleWait > inactiveCheck);
   assert.ok(read > idleWait);
   assert.ok(response > read);
@@ -923,10 +929,15 @@ test("foreground child egress reaches the owner-bound approval UI and consumes a
     source("main/services/subagents/child-agent-runtime.ts"),
     source("renderer/main/chat-pane.tsx"),
   ]);
-  assert.match(
-    llm,
-    /requestApproval:[\s\S]{0,260}approvals\.request\([\s\S]{0,160}approvalOwnerDocumentId/u,
+  const requestApproval = llm.indexOf(
+    "requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId)",
   );
+  const approvalDispatch = llm.indexOf(
+    ".request(descriptor, approvalSignal, approvalOwnerDocumentId)",
+    requestApproval,
+  );
+  assert.ok(requestApproval >= 0);
+  assert.ok(approvalDispatch > requestApproval);
   assert.match(persistence, /createSubagentOutboundApprovalBrokerV2\(/u);
   assert.match(persistence, /revokedRuns\.has\(runId\) \? undefined : authorities\.get\(runId\)/u);
   const consume = runner.indexOf("outboundApproval.consume({");

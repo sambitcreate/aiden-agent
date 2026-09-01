@@ -395,6 +395,7 @@ function errorCode(error: unknown): string | undefined {
 
 function diagnosticCodeFor(error: unknown): DiagnosticCode {
   const code = errorCode(error);
+  if (code === "SUBAGENT_TREE_BUDGET_EXHAUSTED") return "contract-rejected";
   if (code === "ENOENT") return "not-found";
   if (code === "EACCES" || code === "EPERM") return "permission-denied";
   if (code === "ENOSPC" || code === "EDQUOT") return "disk-full";
