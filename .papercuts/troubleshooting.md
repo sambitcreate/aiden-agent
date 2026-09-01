@@ -152,6 +152,7 @@
 - Parallel server/iOS/Android contract work can briefly diverge on seemingly small constants such as activity vocabulary, cursor bounds, and unknown-field behavior. Freeze those values in one explicit coordinator message before client model tests hard-code them; here the final contract is `idle|active`, 512-character cursors, tolerant harmless additions, and fail-closed required/private fields.
 - A cache can satisfy the wire-item bound but still block the UI when every paginated page rewrites one maximum-size aggregate on the main thread. Size the native summary cache against the full 10,000-row contract, move encode/read/fsync work off the UI executor, and commit pagination state only after durable persistence succeeds.
 - A connected iPhone is not enough for XCTest acceptance when the local provisioning profile omits the app's App Group entitlement. Keep generic-device `build-for-testing` as the compile gate, report the signing boundary honestly, and rerun device metrics only after `group.sbtbiswas.AidenOnTheGo` is provisioned.
+- Adding a derived field to the canonical chat-list projection can leave exact-shape resilience and shipping-source assertions stale even when focused feature tests pass. Search every full-suite assertion over that projection before the first push, and derive expected compatibility values through the production helper rather than duplicating the hash contract.
 
 ## Packaged Electron consent acceptance without a shipped bypass
 
