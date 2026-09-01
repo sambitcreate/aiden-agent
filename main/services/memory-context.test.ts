@@ -13,6 +13,7 @@ import {
   parseMemoryProposal,
   RECALL_MEMORY_TOOL_NAME,
   REMEMBER_MEMORY_TOOL_NAME,
+  FORGET_MEMORY_TOOL_NAME,
 } from "./memory-context.js";
 import { MemoryStore } from "./memory-store.js";
 import type { Chat } from "./types.js";
@@ -99,6 +100,7 @@ test("recall is exact-scope and remember writes only after its tool executes", a
   });
   const recall = extension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
   const remember = extension.tools?.find(({ name }) => name === REMEMBER_MEMORY_TOOL_NAME)!;
+  const forget = extension.tools?.find(({ name }) => name === FORGET_MEMORY_TOOL_NAME)!;
 
   const recalled = await recall.execute("recall", { query: "release notes" });
   assert.match(recalled.content[0]?.type === "text" ? recalled.content[0].text : "", /workspace-fact/u);
@@ -114,6 +116,24 @@ test("recall is exact-scope and remember writes only after its tool executes", a
     turnId: "turn-a",
     anchorMessageId: "message-a",
   });
+  await forget.execute("forget", { factId: "workspace-fact" });
+  assert.equal(
+    (await store.list({ kind: "workspace", id: "workspace-a" })).some(({ id }) => id === "workspace-fact"),
+    false,
+  );
+});
+
+test("live policy disables tools retained by an already-running turn", async (t) => {
+  const store = await fixture(t);
+  let enabled = true;
+  const extension = await createMemoryExtension({
+    store,
+    scope: { kind: "workspace", id: "workspace-a" },
+    enabled: async () => enabled,
+  });
+  const recall = extension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
+  enabled = false;
+  await assert.rejects(recall.execute("recall", { query: "anything" }), /disabled/u);
 });
 
 test("headless memory is read-only and cancellation commits no proposed fact", async (t) => {
