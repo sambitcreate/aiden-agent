@@ -209,6 +209,7 @@ export async function authorizeMemoryProposal(
 export async function authorizeMemoryRemoval(
   args: unknown,
   context: { scope: MemoryScope; provenance: MemoryProvenance } | undefined,
+  resolveFact: (scope: MemoryScope, factId: string) => Promise<Pick<MemoryFact, "text"> | undefined>,
   request: (summary: string, signal?: AbortSignal) => Promise<boolean | ToolApprovalOutcome>,
   signal?: AbortSignal,
 ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
@@ -220,9 +221,13 @@ export async function authorizeMemoryRemoval(
   if (typeof factId !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/u.test(factId)) {
     return { allowed: false, reason: "The memory fact ID is invalid." };
   }
+  const fact = await resolveFact(context.scope, factId);
+  if (!fact) {
+    return { allowed: false, reason: "That approved memory fact is no longer available in this scope." };
+  }
   if (signal?.aborted) return { allowed: false, reason: "Memory deletion was cancelled." };
   const outcome = await request(
-    [`Forget fact: [memory:${factId}]`, `Scope: ${context.scope.kind}:${context.scope.id}`, "This permanently removes the approved fact from local memory."].join("\n"),
+    [`Forget exactly: “${fact.text}”`, `Fact: [memory:${factId}]`, `Scope: ${context.scope.kind}:${context.scope.id}`, "This permanently removes the approved fact from local memory."].join("\n"),
     signal,
   );
   if (signal?.aborted || outcome === "cancelled") {
