@@ -1,6 +1,6 @@
 {
   "name": "aiden-agent",
-  "version": "0.37.1",
+  "version": "0.37.2",
   "private": true,
   "description": "A macOS AI workspace agent for local and hosted models",
   "keywords": [
