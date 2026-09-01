@@ -231,6 +231,9 @@ and cover the production composition shape plus Electron IPC behavior.
 When a lifecycle router wraps chat deletion, update source-order contracts to follow the injected
 ordinary-chat callback while continuing to forbid direct chat-store removal at the handler boundary.
 
+Source-preview tests must observe both the applied and undone UI states before installing the next
+page listener; filesystem completion can precede Vite's navigation or HMR delivery on CI runners.
+
 ## Hosted MCP OAuth verification
 
 The Dropbox origin-level protected-resource endpoint can return 429 while the

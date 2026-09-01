@@ -162,6 +162,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
     expect(await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8")).toContain(
       ">Saved</span>",
     );
+    await expect(page.getByTestId("exact-child")).toHaveText("Saved");
     const undone = await sourceDesignerActionService.undo(
       owner,
       action.id,
@@ -172,6 +173,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
     expect(await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8")).toContain(
       ">Save</span>",
     );
+    await expect(page.getByTestId("exact-child")).toHaveText("Save");
 
     const unmapped = page.getByText("Unmapped child", { exact: true });
     const unmappedDescriptorPromise = page.evaluate(
