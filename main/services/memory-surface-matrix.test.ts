@@ -160,6 +160,28 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
   );
   assert.equal(cancellationRequested, false);
 
+  for (const [outcome, reason] of [
+    ["denied", "Memory proposal was not approved."],
+    ["cancelled", "Memory approval was cancelled."],
+    [
+      "detached",
+      "Memory approval is unavailable while this response continues in the background. Return to the chat and retry the action.",
+    ],
+    [
+      "unavailable",
+      "Aiden could not present the memory approval request. Return to the chat and retry the action.",
+    ],
+  ] as const) {
+    assert.deepEqual(
+      await authorizeMemoryProposal(
+        { fact: `Approval outcome ${outcome}.`, alwaysOn: false },
+        { scope: botScope, provenance: attendedProvenance },
+        async () => outcome,
+      ),
+      { allowed: false, reason },
+    );
+  }
+
   const boundRecall = boundTelegramExtension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
   const ordinaryRecall = ordinaryTelegramExtension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
   const botResult = await boundRecall.execute("recall", { query: "launch window" });

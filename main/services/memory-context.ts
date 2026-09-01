@@ -13,6 +13,7 @@ import {
   type MemoryStore,
 } from "./memory-store.js";
 import type { Chat } from "./types.js";
+import type { ToolApprovalOutcome } from "./tool-approval.js";
 
 export const MEMORY_EXTENSION_ID = "aiden.durable-memory";
 export const RECALL_MEMORY_TOOL_NAME = "recall_memory";
@@ -180,17 +181,28 @@ export function prepareMemoryApproval(
 export async function authorizeMemoryProposal(
   args: unknown,
   context: { scope: MemoryScope; provenance: MemoryProvenance } | undefined,
-  request: (summary: string, signal?: AbortSignal) => Promise<boolean>,
+  request: (
+    summary: string,
+    signal?: AbortSignal,
+  ) => Promise<boolean | ToolApprovalOutcome>,
   signal?: AbortSignal,
 ): Promise<{ allowed: true; summary: string } | { allowed: false; reason: string }> {
   const prepared = prepareMemoryApproval(args, context);
   if (!prepared.ok) return { allowed: false, reason: prepared.reason };
   if (signal?.aborted) return { allowed: false, reason: "Memory approval was cancelled." };
-  const allowed = await request(prepared.summary, signal);
+  const outcome = await request(prepared.summary, signal);
   if (signal?.aborted) return { allowed: false, reason: "Memory approval was cancelled." };
-  return allowed
-    ? { allowed: true, summary: prepared.summary }
-    : { allowed: false, reason: "Memory proposal was not approved." };
+  if (outcome === true || outcome === "allowed") {
+    return { allowed: true, summary: prepared.summary };
+  }
+  const reason = outcome === "cancelled"
+    ? "Memory approval was cancelled."
+    : outcome === "detached"
+      ? "Memory approval is unavailable while this response continues in the background. Return to the chat and retry the action."
+      : outcome === "unavailable"
+        ? "Aiden could not present the memory approval request. Return to the chat and retry the action."
+        : "Memory proposal was not approved.";
+  return { allowed: false, reason };
 }
 
 export async function createMemoryExtension(options: {

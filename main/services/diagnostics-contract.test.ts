@@ -152,4 +152,10 @@ test("error projection keeps categories and fingerprints without raw messages", 
   const hostile = new Error("private");
   hostile.name = "CorrectHorseBatteryStaple";
   assert.equal(projectDiagnosticError(hostile).errorType, "UnknownError");
+  const budget = Object.assign(new Error("private budget details"), {
+    name: "SubagentTreeBudgetExhaustedError",
+    code: "subagent_tree_budget_exhausted",
+  });
+  assert.equal(projectDiagnosticError(budget).errorType, "SubagentTreeBudgetExhaustedError");
+  assert.equal(projectDiagnosticError(budget).code, "contract-rejected");
 });

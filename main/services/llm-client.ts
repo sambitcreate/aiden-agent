@@ -141,7 +141,7 @@ import {
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
-import { GenerationTimelineProjector } from "./generation-timeline.js";
+import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
@@ -834,7 +834,9 @@ async function prepareGeneration(
           shellBinary: subagentShellEnabled ? subagentShellBinary : undefined,
           delegationEnabled: subagentDelegationEnabled,
           requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) =>
-            approvals.request(descriptor, approvalSignal, approvalOwnerDocumentId),
+            approvals
+              .request(descriptor, approvalSignal, approvalOwnerDocumentId)
+              .then((outcome) => outcome === "allowed"),
           currentWorkspace: async (workspaceId) =>
             botContext && workspaceId === workspace.id
               ? { ...workspace }
@@ -2348,7 +2350,7 @@ export const llmClient = {
                 : summarizeToolCall(context.toolCall.name, context.args);
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
-          const allowed = await approvals.request(
+          const approvalOutcome = await approvals.request(
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
               if (!toolCallId) throw new Error("The tool approval step was not initialized.");
@@ -2363,6 +2365,7 @@ export const llmClient = {
             signal,
             owner.documentId,
           );
+          const allowed = approvalOutcome === "allowed";
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
           if (allowed && attendedScheduleApproval) {
             attachAssistantScheduleMcpApproval(context.args, approvedScheduleMcpBindings);
@@ -2390,9 +2393,15 @@ export const llmClient = {
             ? undefined
             : {
                 block: true,
-                reason: attendedScheduleApproval
+                reason: attendedScheduleApproval && approvalOutcome === "denied"
                   ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
-                  : "The user denied this action.",
+                  : approvalOutcome === "denied"
+                    ? "The user denied this action."
+                    : approvalOutcome === "detached"
+                      ? "Approval is unavailable while this response continues in the background. Return to the chat and retry the action."
+                      : approvalOutcome === "unavailable"
+                        ? "Aiden could not present the approval request. Return to the chat and retry the action."
+                        : "The action was cancelled before approval.",
               };
         },
       });
@@ -2530,6 +2539,13 @@ export const llmClient = {
             break;
           case "tool_execution_end": {
             const denied = deniedToolCalls.delete(event.toolCallId);
+            const terminalStatus = generationCancelRequested()
+              ? "cancelled"
+              : denied
+                ? "blocked"
+                : event.isError
+                  ? "failed"
+                  : "completed";
             if (
               attendedAssistant &&
               event.isError &&
@@ -2547,14 +2563,10 @@ export const llmClient = {
             }
             timeline.toolFinished(
               event.toolCallId,
-              generationCancelRequested()
-                ? "cancelled"
-                : denied
-                  ? "blocked"
-                  : event.isError
-                    ? "failed"
-                    : "completed",
-              event.result?.details,
+              terminalStatus,
+              terminalStatus === "completed"
+                ? event.result?.details
+                : safeToolIssueDetails(event.toolName, terminalStatus, event.result),
             );
             sendGeneration(streamId, "chat:tool", {
               streamId,

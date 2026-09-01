@@ -4,7 +4,8 @@ Status: In progress. Phases 0–6, the production-inert Phase 7A durable
 background lifecycle core, and the Phase 7B1 storage seam are complete. The
 2026-08-18 worker-startup diagnostic hardening and the 2026-08-25 Pi semantic,
 foreground presentation/recovery, and parent-only mobile projection repairs are
-complete; Phase 7B coordinator activation is next.
+complete. The 2026-09-01 foreground failure remediation is also complete;
+Phase 7B coordinator activation is next.
 
 Spec date: 2026-08-05.
 
@@ -216,6 +217,24 @@ snapshots, histories, controls, and endpoints remain Mac-local. Structural
 privacy validation is recursive and normalized, but visible parent text stays
 opaque and exact. Aggregate desktop gates, Android 104/104 unit tests, and a
 physical-iPhone Phase 0 run (26 pass, 2 expected skips) are green.
+
+Foreground failure remediation (2026-09-01): installed-production evidence
+showed three independent failures in one attended turn. `share_image` was being
+treated as an image-inspection tool and every non-allow approval outcome became
+the misleading label “denied”; its contract now says it is outbound-only and
+approval denial, cancellation, background detachment, and publication failure
+remain distinct. A mixed workspace/Web batch omitted its optional capability
+root, so the parser applied the legacy workspace-read-only root and rejected the
+Web child; omitted roots now infer the exact union of explicit task requests,
+while capability-less siblings are pinned to the legacy read-only lane and an
+explicit root still fails closed on widening. One long workspace child then
+consumed the tree's 128,000-token ceiling by itself, making same-tree retry
+impossible; per-request context remains 128,000 tokens while the independently
+enforced cumulative tree ceiling is four times that value. Budget exhaustion is
+now a typed diagnostic and terminal activity persists only allowlisted,
+actionable issue codes, never raw provider or tool error text. Focused contract,
+supervisor, approval, timeline, diagnostic, and privacy regressions cover the
+incident paths.
 
 ## Phases
 

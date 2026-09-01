@@ -179,6 +179,10 @@ An execution command cannot start with a workdir that the same command is meant
 to create. Add the detached worktree from an existing checkout first, then run
 stack assembly inside it.
 
+A fresh `npm ci` installs Playwright's package but not its Chromium binary, so
+the full suite stops at Generative UI containment before assertions run. Mirror
+CI with `npx playwright install chromium` before the first full local gate.
+
 ## Hosted MCP OAuth verification
 
 The Dropbox origin-level protected-resource endpoint can return 429 while the

@@ -929,10 +929,15 @@ test("foreground child egress reaches the owner-bound approval UI and consumes a
     source("main/services/subagents/child-agent-runtime.ts"),
     source("renderer/main/chat-pane.tsx"),
   ]);
-  assert.match(
-    llm,
-    /requestApproval:[\s\S]{0,260}approvals\.request\([\s\S]{0,160}approvalOwnerDocumentId/u,
+  const requestApproval = llm.indexOf(
+    "requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId)",
   );
+  const approvalDispatch = llm.indexOf(
+    ".request(descriptor, approvalSignal, approvalOwnerDocumentId)",
+    requestApproval,
+  );
+  assert.ok(requestApproval >= 0);
+  assert.ok(approvalDispatch > requestApproval);
   assert.match(persistence, /createSubagentOutboundApprovalBrokerV2\(/u);
   assert.match(persistence, /revokedRuns\.has\(runId\) \? undefined : authorities\.get\(runId\)/u);
   const consume = runner.indexOf("outboundApproval.consume({");
