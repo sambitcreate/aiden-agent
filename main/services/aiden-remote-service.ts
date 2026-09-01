@@ -42,6 +42,7 @@ import type { AidenRemoteFileService } from "./aiden-remote-files.js";
 import type { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
 import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
+import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
@@ -138,6 +139,7 @@ export interface AidenRemoteServiceOptions {
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botNotice?: {
@@ -181,6 +183,7 @@ export interface AidenRemoteServiceOptions {
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botNotice?: {
