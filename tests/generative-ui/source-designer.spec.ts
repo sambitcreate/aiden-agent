@@ -1,6 +1,7 @@
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 import assert from "node:assert/strict";
+import * as http from "node:http";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -36,10 +37,30 @@ test("local React preview binds the exact nested element to its JSX range", asyn
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-source-designer-"));
   await fs.cp(fixtureTemplateRoot, fixtureRoot, { recursive: true });
   await fs.rm(path.join(fixtureRoot, "node_modules"), { recursive: true, force: true });
-  await fs.symlink(path.join(repositoryRoot, "node_modules"), path.join(fixtureRoot, "node_modules"));
+  await fs.symlink(
+    path.join(repositoryRoot, "node_modules"),
+    path.join(fixtureRoot, "node_modules"),
+  );
   const canonicalFixtureRoot = await fs.realpath(fixtureRoot);
   const owner = testOwner("source-designer-browser-fixture");
   const controller = new AbortController();
+  let resolveSiblingHeaders!: (headers: http.IncomingHttpHeaders) => void;
+  const siblingHeaders = new Promise<http.IncomingHttpHeaders>((resolve) => {
+    resolveSiblingHeaders = resolve;
+  });
+  const sibling = http.createServer((request, response) => {
+    resolveSiblingHeaders(request.headers);
+    response.writeHead(204);
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    sibling.once("error", reject);
+    sibling.listen(0, "127.0.0.1", resolve);
+  });
+  const siblingAddress = sibling.address();
+  if (!siblingAddress || typeof siblingAddress === "string") {
+    throw new Error("Sibling loopback fixture did not bind a port.");
+  }
   const state = await sourceDesignPreviewService.start({
     owner,
     admission: {
@@ -56,14 +77,27 @@ test("local React preview binds the exact nested element to its JSX range", asyn
   try {
     await page.goto(state.src);
     await expect(page.getByTestId("exact-child")).toHaveText("Save");
+    expect(
+      await page.evaluate(() => ({
+        primitives: Boolean(
+          (globalThis as { AidenReactGrabPrimitives?: unknown }).AidenReactGrabPrimitives,
+        ),
+        scripts: [...document.scripts].map(({ src }) => src),
+      })),
+    ).toMatchObject({ primitives: true });
+    await page.evaluate(
+      (url) => fetch(url, { mode: "no-cors", credentials: "include" }).then(() => undefined),
+      `http://127.0.0.1:${siblingAddress.port}/probe`,
+    );
+    const leakedHeaders = await siblingHeaders;
+    expect(leakedHeaders.cookie).toBeUndefined();
+    expect(leakedHeaders["x-aiden-preview-capability"]).toBeUndefined();
+    expect(await page.context().cookies("http://127.0.0.1")).toEqual([]);
     const descriptorPromise = page.evaluate(
       ({ command, selection, capability }) =>
         new Promise<unknown>((resolve) => {
           const receive = (event: MessageEvent) => {
-            if (
-              event.data?.type !== selection ||
-              event.data?.capability !== capability
-            ) {
+            if (event.data?.type !== selection || event.data?.capability !== capability) {
               return;
             }
             window.removeEventListener("message", receive);
@@ -115,7 +149,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
       replacement: '<span data-testid="exact-child">Saved</span>',
     });
     expect(action.status).toBe("pending");
-    expect((await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8"))).toContain(
+    expect(await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8")).toContain(
       ">Save</span>",
     );
     const applied = await sourceDesignerActionService.apply(
@@ -125,7 +159,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
       new AbortController().signal,
     );
     expect(applied.status).toBe("applied");
-    expect((await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8"))).toContain(
+    expect(await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8")).toContain(
       ">Saved</span>",
     );
     const undone = await sourceDesignerActionService.undo(
@@ -135,7 +169,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
       new AbortController().signal,
     );
     expect(undone.status).toBe("undone");
-    expect((await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8"))).toContain(
+    expect(await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8")).toContain(
       ">Save</span>",
     );
 
@@ -163,16 +197,98 @@ test("local React preview binds the exact nested element to its JSX range", asyn
     await unmapped.click({ position: { x: 4, y: 4 } });
     const unmappedDescriptor = (await unmappedDescriptorPromise) as SourceElementDescriptorV1;
     await assert.rejects(
-      () => sourceDesignerActionService.bind(
-        owner,
-        "source-designer-fixture",
-        state.sessionId,
-        unmappedDescriptor,
-      ),
+      () =>
+        sourceDesignerActionService.bind(
+          owner,
+          "source-designer-fixture",
+          state.sessionId,
+          unmappedDescriptor,
+        ),
       /could not bind that exact element/u,
     );
   } finally {
     await sourceDesignPreviewService.stop(owner, "source-designer-fixture");
+    await new Promise<void>((resolve) => sibling.close(() => resolve()));
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("live source binding rejects a custom component rendered more than once", async ({ page }) => {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-source-designer-repeat-"));
+  await fs.cp(fixtureTemplateRoot, fixtureRoot, { recursive: true });
+  await fs.rm(path.join(fixtureRoot, "node_modules"), { recursive: true, force: true });
+  await fs.symlink(
+    path.join(repositoryRoot, "node_modules"),
+    path.join(fixtureRoot, "node_modules"),
+  );
+  const sourcePath = path.join(fixtureRoot, "src", "main.tsx");
+  const original = await fs.readFile(sourcePath, "utf8");
+  await fs.writeFile(
+    sourcePath,
+    original
+      .replace('data-testid="exact-child"', 'id="save" data-testid="exact-child"')
+      .replace(
+        'createRoot(document.getElementById("root")!).render(<App />);',
+        'createRoot(document.getElementById("root")!).render(<><App /><App /></>);',
+      ),
+    "utf8",
+  );
+  const owner = testOwner("source-designer-repeated-browser-fixture");
+  const controller = new AbortController();
+  const state = await sourceDesignPreviewService.start({
+    owner,
+    admission: {
+      signal: controller.signal,
+      cancel: (reason) => controller.abort(reason),
+      release: () => undefined,
+    },
+    workspaceId: "source-designer-repeated-fixture",
+    root: fixtureRoot,
+    scriptId: "dev",
+  });
+  expect(state.status).toBe("running");
+  if (state.status !== "running") return;
+  try {
+    await page.goto(state.src);
+    await expect(page.getByTestId("exact-child")).toHaveCount(2);
+    const descriptorPromise = page.evaluate(
+      ({ command, selection, capability }) =>
+        new Promise<unknown>((resolve) => {
+          const receive = (event: MessageEvent) => {
+            if (event.data?.type !== selection || event.data?.capability !== capability) return;
+            window.removeEventListener("message", receive);
+            resolve(event.data.descriptor);
+          };
+          window.addEventListener("message", receive);
+          window.postMessage(
+            { type: command, capability, enabled: true, selectedSelector: "" },
+            "*",
+          );
+        }),
+      {
+        command: SOURCE_DESIGN_PICKER_COMMAND,
+        selection: SOURCE_DESIGN_PICKER_SELECTION,
+        capability: state.capability,
+      },
+    );
+    await page
+      .getByTestId("exact-child")
+      .first()
+      .click({ position: { x: 4, y: 4 } });
+    const descriptor = (await descriptorPromise) as SourceElementDescriptorV1;
+    expect(descriptor.selection.elementId).toBe("save");
+    await assert.rejects(
+      () =>
+        sourceDesignerActionService.bind(
+          owner,
+          "source-designer-repeated-fixture",
+          state.sessionId,
+          { ...descriptor, selectorMatchCount: 1 },
+        ),
+      /one exact runtime\/source instance/u,
+    );
+  } finally {
+    await sourceDesignPreviewService.stop(owner, "source-designer-repeated-fixture");
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
 });
