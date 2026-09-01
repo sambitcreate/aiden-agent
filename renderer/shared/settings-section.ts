@@ -7,6 +7,7 @@ export const SETTINGS_SECTIONS = [
   "telegram",
   "remoteAccess",
   "computerUse",
+  "memory",
   "scheduledTasks",
   "assistant",
   "voice",
@@ -102,6 +103,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     title: "Computer Use",
     group: "Agent",
     keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta"],
+  },
+  {
+    id: "memory",
+    title: "Memory",
+    group: "Agent",
+    keywords: ["remember", "facts", "recall", "workspace", "privacy"],
   },
   {
     id: "voice",
