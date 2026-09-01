@@ -4,8 +4,10 @@ Status: In progress. Phases 0–6, the production-inert Phase 7A durable
 background lifecycle core, and the Phase 7B1 storage seam are complete. The
 2026-08-18 worker-startup diagnostic hardening and the 2026-08-25 Pi semantic,
 foreground presentation/recovery, and parent-only mobile projection repairs are
-complete. The 2026-09-01 foreground failure remediation is also complete;
-Phase 7B coordinator activation is next.
+complete. The 2026-09-01 foreground failure remediation is also complete. The
+2026-09-01 V1-to-V2 checkpoint repair makes persisted migration verification
+content-addressed across macOS volume remounts while retaining native generation
+checks for same-process writes. Phase 7B coordinator activation is next.
 
 Spec date: 2026-08-05.
 
