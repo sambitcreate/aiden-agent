@@ -5,12 +5,31 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
+  designArtifactUsesDesignSystem,
   createGenerativeUiExtension,
   GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableDesignWorkspace,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
+
+test("design-system golden validation requires a visible named token or reviewed component", () => {
+  const context = {
+    tokens: { colors: [{ name: "color.action.primary", value: "#635bff" }] },
+    components: [{ name: "PrimaryButton" }],
+  };
+  assert.equal(
+    designArtifactUsesDesignSystem(
+      `<style>:root{--color-action-primary:#635bff}.cta{background:var(--color-action-primary)}</style><button class="cta">Pay</button>`,
+      context,
+    ),
+    true,
+  );
+  assert.equal(
+    designArtifactUsesDesignSystem(`<button style="background:#ff0000">Pay</button>`, context),
+    false,
+  );
+});
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { DESIGN_ARTIFACT_MEDIA_ID_PREFIX } from "../../renderer/shared/design-workspace.js";
@@ -276,6 +295,32 @@ test("Design context carries multiple exact artboards and a bounded element desc
   assert.match(String(context), /Receipt/u);
   assert.match(String(context), /pay-now/u);
   assert.match(String(context), /untrusted reference data/u);
+});
+
+test("Design context carries the exact normalized design-system preview as untrusted data", async () => {
+  const root = await workspace();
+  const modelContext = {
+    name: "Acme UI",
+    tokens: { colors: [{ name: "color.action.primary", value: "#635bff" }] },
+    components: [{ name: "Button", variants: ["primary"], states: ["disabled"] }],
+    icons: [{ name: "ArrowRight", tags: ["navigation"] }],
+  };
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    designWorkspaceThisTurn: true,
+    designSystemContext: modelContext,
+    onArtifact: () => undefined,
+  });
+  const transformed = await extension.transformContext?.([
+    { role: "user", content: "Design a checkout", timestamp: 4 },
+  ]);
+  assert.equal(transformed?.length, 2);
+  const context = transformed?.[0]?.role === "user" ? transformed[0].content : "";
+  assert.match(String(context), /Attached design system/u);
+  assert.match(String(context), /color\.action\.primary/u);
+  assert.match(String(context), /untrusted reference data/u);
+  assert.doesNotMatch(String(context), /sourceHash|workspaceRelativePath/u);
+  assert.deepEqual(JSON.parse(JSON.stringify(modelContext)), modelContext);
 });
 
 test("Design context always omits historical render HTML when no stored revision is available", async () => {

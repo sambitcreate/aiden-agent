@@ -70,6 +70,21 @@ import type {
   WebSearchExistingAuthRendererSnapshot,
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
+import type {
+  DesignProjectCanvasV1,
+  DesignProjectConnectionState,
+  DesignProjectDeletePlanV1,
+  DesignDirectEditV1,
+  DesignProjectMutationResultV1,
+  DesignProjectRecordSummaryV1,
+  DesignProjectSnapshotV1,
+  DesignProjectSourceDocument,
+  DesignSystemProjectionV1,
+  ManagedDesignHandoffPreviewV1,
+  ExistingDesignHandoffPreviewV1,
+  DesignHandoffRunResultV1,
+  DesignHandoffRecoveryViewV1,
+} from "../shared/design-projects";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import type {
   DiagnosticSupportStatusView,
@@ -99,6 +114,10 @@ export interface BotAccessState {
   modelSelection?: { providerId: string; modelId: string };
   visionModelSelection?: { providerId: string; modelId: string };
 }
+
+export type ChatDeleteResult =
+  | { status: "deleted"; kind: "ordinary-chat" | "design-project" | "bot-chat" }
+  | { status: "confirmation-required"; plan: DesignProjectDeletePlanV1 };
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -142,14 +161,22 @@ import {
   parseChatArtifactEventV1,
   type ChatArtifactEventV1,
   type ChatArtifactV1,
+  type ChatHtmlArtifactV1,
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import type {
   DesignerActionV1,
+  SourceDesignerMultifileActionViewV1,
   SourceElementDescriptorV1,
   SourcePreviewStateV1,
   SourceSelectionBindingV1,
 } from "../shared/source-designer";
+import type { DesignReferenceAssetV1 } from "../shared/design-reference-assets";
+import {
+  parseDesignCommentProjectView,
+  type DesignCommentProjectViewV1,
+  type DesignCommentTargetV1,
+} from "../shared/design-comments";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -642,29 +669,257 @@ export const workspacesApi = {
 };
 
 export const designerApi = {
+  connectedCommentTarget: (projectId: string, selectionId: string) =>
+    invoke<DesignCommentTargetV1>("designer:connectedCommentTarget", projectId, selectionId),
+  listComments: async (projectId: string): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:listComments", projectId),
+      projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment list.");
+    return view;
+  },
+  createComment: async (input: {
+    expectedDatabaseRevision: number;
+    target: DesignCommentTargetV1;
+    body: string;
+  }): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:createComment", input),
+      input.target.projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment update.");
+    return view;
+  },
+  reconcileCommentTarget: async (input: {
+    expectedDatabaseRevision: number;
+    current: DesignCommentTargetV1;
+  }): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:reconcileCommentTarget", input),
+      input.current.projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment update.");
+    return view;
+  },
+  resolveComment: async (input: {
+    projectId: string;
+    id: string;
+    expectedRevision: number;
+    expectedDatabaseRevision: number;
+  }): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:resolveComment", input),
+      input.projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment update.");
+    return view;
+  },
+  reopenComment: async (input: {
+    projectId: string;
+    id: string;
+    expectedRevision: number;
+    expectedDatabaseRevision: number;
+  }): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:reopenComment", input),
+      input.projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment update.");
+    return view;
+  },
+  listProjects: () => invoke<DesignProjectRecordSummaryV1[]>("designer:listProjects"),
+  openProject: (projectOrLegacyChatId: string) =>
+    invoke<DesignProjectSnapshotV1 | undefined>("designer:openProject", projectOrLegacyChatId),
+  createProject: (input: {
+    title: string;
+    chatWorkspaceId: string;
+    connectionState: DesignProjectConnectionState;
+    connectedWorkspaceId?: string;
+  }) => invoke<DesignProjectSnapshotV1>("designer:createProject", input),
+  updateProject: (input: {
+    id: string;
+    expectedRevision: number;
+    connectionState: DesignProjectConnectionState;
+    workspaceId?: string;
+    canvas: DesignProjectCanvasV1;
+    referenceAssetIds: string[];
+    designSystemBinding?: { id: string; revision: number };
+    previewScriptId?: string;
+  }) => invoke<DesignProjectMutationResultV1>("designer:updateProject", input),
+  renameProject: (input: { id: string; expectedRevision: number; title: string }) =>
+    invoke<DesignProjectMutationResultV1>("designer:renameProject", input),
+  duplicateProject: (input: { id: string; expectedRevision: number; title?: string }) =>
+    invoke<DesignProjectSnapshotV1>("designer:duplicateProject", input),
+  previewDeleteProject: (input: { id: string; expectedRevision: number }) =>
+    invoke<DesignProjectDeletePlanV1>("designer:previewDeleteProject", input),
+  deleteProject: (input: { id: string; expectedRevision: number }) =>
+    invoke<{ status: "deleted" }>("designer:deleteProject", input),
+  applyPrototypeDirectEdit: (input: {
+    projectId: string;
+    lineageId: string;
+    mediaId: string;
+    selection: { selector: string; tagName: string; elementId?: string };
+    edit: DesignDirectEditV1;
+  }) =>
+    invoke<{
+      kind: "prototype-revision";
+      proposalId: string;
+      undoId: string;
+      artifact: ChatHtmlArtifactV1;
+      project: DesignProjectSnapshotV1;
+    }>("designer:applyPrototypeDirectEdit", input),
+  undoPrototypeDirectEdit: (input: {
+    projectId: string;
+    lineageId: string;
+    editedMediaId: string;
+    revertMediaId: string;
+    undoId: string;
+  }) =>
+    invoke<{
+      kind: "prototype-revision";
+      proposalId: string;
+      undoId: string;
+      artifact: ChatHtmlArtifactV1;
+      project: DesignProjectSnapshotV1;
+    }>("designer:undoPrototypeDirectEdit", input),
+  applyConnectedDirectEdit: (input: {
+    projectId: string;
+    sourceSelectionId: string;
+    edit: DesignDirectEditV1;
+  }) =>
+    invoke<{
+      kind: "durable-designer-action";
+      proposalId: string;
+      action: SourceDesignerMultifileActionViewV1;
+    }>("designer:applyConnectedDirectEdit", input),
+  attachDesignSystem: (input: {
+    projectId: string;
+    expectedRevision: number;
+    name: string;
+    packageRoot: string;
+    routeScope: string;
+    sources: Array<{ workspaceRelativePath: string; kind: "tokens-v1" | "catalog-v1" }>;
+  }) =>
+    invoke<{ project: DesignProjectSnapshotV1; projection: DesignSystemProjectionV1 }>(
+      "designer:attachDesignSystem",
+      input,
+    ),
+  designSystemProjection: (projectId: string) =>
+    invoke<DesignSystemProjectionV1 | undefined>("designer:designSystemProjection", projectId),
+  designSystemModelContext: (projectId: string) =>
+    invoke<unknown>("designer:designSystemModelContext", projectId),
+  refreshDesignSystem: (input: { projectId: string; expectedRevision: number }) =>
+    invoke<{ project: DesignProjectSnapshotV1; projection: DesignSystemProjectionV1 }>(
+      "designer:refreshDesignSystem",
+      input,
+    ),
+  detachDesignSystem: (input: { projectId: string; expectedRevision: number }) =>
+    invoke<DesignProjectSnapshotV1>("designer:detachDesignSystem", input),
+  previewManagedHandoff: (projectId: string, sourceWorkspaceId?: string) =>
+    invoke<ManagedDesignHandoffPreviewV1>(
+      "designer:previewManagedHandoff",
+      projectId,
+      sourceWorkspaceId,
+    ),
+  previewExistingHandoff: (projectId: string, sourceWorkspaceId?: string) =>
+    invoke<ExistingDesignHandoffPreviewV1>(
+      "designer:previewExistingHandoff",
+      projectId,
+      sourceWorkspaceId,
+    ),
+  beginManagedHandoff: (input: {
+    projectId: string;
+    expectedRevision: number;
+    lineageId: string;
+    mediaId: string;
+    previewDigest: string;
+    dirtyCheckoutAcknowledged: boolean;
+    sourceWorkspaceId?: string;
+    operationId: string;
+  }) => invoke<DesignHandoffRunResultV1>("designer:beginManagedHandoff", input),
+  beginExistingHandoff: (input: {
+    projectId: string;
+    expectedRevision: number;
+    lineageId: string;
+    mediaId: string;
+    previewDigest: string;
+    sourceWorkspaceId?: string;
+    strongWarningAcknowledged: boolean;
+    operationId: string;
+  }) => invoke<DesignHandoffRunResultV1>("designer:beginExistingHandoff", input),
+  cancelHandoff: (operationId: string) =>
+    invoke<DesignHandoffRunResultV1>("designer:cancelHandoff", operationId),
+  resumeHandoff: (operationId: string) =>
+    invoke<DesignHandoffRunResultV1>("designer:resumeHandoff", operationId),
+  projectHandoffLinks: (projectId: string) =>
+    invoke<Array<{
+      projectId: string;
+      workspaceId: string;
+      chatId: string;
+      taskId: string;
+      branchLabel: string;
+    }>>("designer:projectHandoffLinks", projectId),
+  projectHandoffRecoveries: (projectId: string) =>
+    invoke<DesignHandoffRecoveryViewV1[]>("designer:projectHandoffRecoveries", projectId),
+  readGeneratedSource: (projectId: string, lineageId: string, mediaId: string) =>
+    invoke<
+      DesignProjectSourceDocument & {
+        revisionId: string;
+        lineageId: string;
+        createdAt: number;
+        model?: string;
+      }
+    >("designer:readGeneratedSource", projectId, lineageId, mediaId),
+  readConnectedSource: (projectId: string, selectionId: string) =>
+    invoke<DesignProjectSourceDocument>("designer:readConnectedSource", projectId, selectionId),
+  exportProjectBundle: (projectId: string, lineageId: string, mediaId: string) =>
+    invoke<{ status: "cancelled" } | { status: "saved"; exportId?: string; fileName?: string }>(
+      "designer:exportProjectBundle",
+      projectId,
+      lineageId,
+      mediaId,
+    ),
+  latestProjectExport: (projectId: string) =>
+    invoke<{ id: string; fileName: string } | undefined>("designer:latestProjectExport", projectId),
+  revealProjectExport: (projectId: string, exportId: string) =>
+    invoke<boolean>("designer:revealProjectExport", projectId, exportId),
+  putReferenceAsset: (input: { name: string; mimeType: string; data: string }) =>
+    invoke<DesignReferenceAssetV1>("designer:putReferenceAsset", input),
+  readReferenceAsset: (assetId: string) =>
+    invoke<{ asset: DesignReferenceAssetV1; data: string } | undefined>(
+      "designer:readReferenceAsset",
+      assetId,
+    ),
   previewState: (workspaceId: string) =>
     invoke<SourcePreviewStateV1>("designer:previewState", workspaceId),
   startPreview: (workspaceId: string, scriptId: string) =>
     invoke<SourcePreviewStateV1>("designer:startPreview", workspaceId, scriptId),
-  stopPreview: (workspaceId: string) =>
-    invoke<void>("designer:stopPreview", workspaceId),
-  bindSelection: (
-    workspaceId: string,
-    sessionId: string,
-    descriptor: SourceElementDescriptorV1,
-  ) =>
-    invoke<SourceSelectionBindingV1>(
-      "designer:bindSelection",
-      workspaceId,
-      sessionId,
-      descriptor,
-    ),
+  stopPreview: (workspaceId: string) => invoke<void>("designer:stopPreview", workspaceId),
+  bindSelection: (workspaceId: string, sessionId: string, descriptor: SourceElementDescriptorV1) =>
+    invoke<SourceSelectionBindingV1>("designer:bindSelection", workspaceId, sessionId, descriptor),
   listActions: (chatId: string, workspaceId: string) =>
     invoke<DesignerActionV1[]>("designer:listActions", chatId, workspaceId),
+  listMultifileActions: (projectId: string) =>
+    invoke<SourceDesignerMultifileActionViewV1[]>(
+      "designer:listMultifileActions",
+      projectId,
+    ),
+  applyMultifileAction: (projectId: string, actionId: string) =>
+    invoke<SourceDesignerMultifileActionViewV1>(
+      "designer:applyMultifileAction",
+      projectId,
+      actionId,
+    ),
+  undoMultifileAction: (projectId: string, actionId: string) =>
+    invoke<SourceDesignerMultifileActionViewV1>(
+      "designer:undoMultifileAction",
+      projectId,
+      actionId,
+    ),
   applyAction: (workspaceId: string, actionId: string) =>
     invoke<DesignerActionV1>("designer:applyAction", workspaceId, actionId),
-  rejectAction: (actionId: string) =>
-    invoke<DesignerActionV1>("designer:rejectAction", actionId),
+  rejectAction: (actionId: string) => invoke<DesignerActionV1>("designer:rejectAction", actionId),
   undoAction: (workspaceId: string, actionId: string) =>
     invoke<DesignerActionV1>("designer:undoAction", workspaceId, actionId),
   onPreviewChanged: (
@@ -672,6 +927,9 @@ export const designerApi = {
   ) => onNotification("designer:preview-changed", handler),
   onActionChanged: (handler: (payload: { action: DesignerActionV1 }) => void) =>
     onNotification("designer:action-changed", handler),
+  onMultifileActionChanged: (
+    handler: (payload: { action: SourceDesignerMultifileActionViewV1 }) => void,
+  ) => onNotification("designer:multifile-action-changed", handler),
 };
 
 // ── Interactive terminal ─────────────────────────────────────────────
@@ -770,7 +1028,10 @@ export const chatsApi = {
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   setComputerUse: (id: string, enabled: boolean) =>
     invoke<Chat>("chats:setComputerUse", id, enabled),
-  remove: (id: string) => invoke<void>("chats:remove", id),
+  remove: (
+    id: string,
+    confirmation?: { projectId: string; expectedRevision: number },
+  ) => invoke<ChatDeleteResult>("chats:remove", id, confirmation),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
     chatId: string,

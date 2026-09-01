@@ -74,6 +74,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:settled",
   "dictation:state",
   "designer:action-changed",
+  "designer:multifile-action-changed",
   "designer:preview-changed",
   "localModels:progress",
   "providers:auth:done",

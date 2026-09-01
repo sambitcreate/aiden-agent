@@ -52,6 +52,10 @@ import {
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
+import {
+  DesignProjectDeletionConfirmationRequiredError,
+} from "../services/design-project-lifecycle.js";
+import { designProjectLifecycle } from "../services/design-project-store-main.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -430,13 +434,49 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
-  ipcMain.handle("chats:remove", async (_event, id: unknown) => {
+  ipcMain.handle("chats:remove", async (_event, id: unknown, confirmationValue?: unknown) => {
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
     if (chat?.botId) {
-      return botApplicationService.deleteChat({ botId: chat.botId, chatId });
+      await botApplicationService.deleteChat({ botId: chat.botId, chatId });
+      return { status: "deleted" as const, kind: "bot-chat" as const };
     }
-    return chatApplicationService.remove(chatId);
+    let confirmation: { projectId: string; expectedRevision: number } | undefined;
+    if (confirmationValue !== undefined) {
+      if (
+        !confirmationValue ||
+        typeof confirmationValue !== "object" ||
+        Array.isArray(confirmationValue)
+      ) {
+        throw new Error("Invalid Design Project deletion confirmation.");
+      }
+      const candidate = confirmationValue as Record<string, unknown>;
+      if (
+        Object.keys(candidate).length !== 2 ||
+        typeof candidate.projectId !== "string" ||
+        !Number.isSafeInteger(candidate.expectedRevision) ||
+        (candidate.expectedRevision as number) < 1
+      ) {
+        throw new Error("Invalid Design Project deletion confirmation.");
+      }
+      confirmation = {
+        projectId: candidate.projectId,
+        expectedRevision: candidate.expectedRevision as number,
+      };
+    }
+    try {
+      const result = await designProjectLifecycle.routeChatDeletion({
+        chatId,
+        confirmation,
+        deleteOrdinaryChat: (ordinaryChatId) => chatApplicationService.remove(ordinaryChatId),
+      });
+      return { status: "deleted" as const, kind: result.kind };
+    } catch (error) {
+      if (error instanceof DesignProjectDeletionConfirmationRequiredError) {
+        return { status: "confirmation-required" as const, plan: error.plan };
+      }
+      throw error;
+    }
   });
 
   ipcMain.handle(
