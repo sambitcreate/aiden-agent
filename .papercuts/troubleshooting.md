@@ -182,3 +182,9 @@ stack assembly inside it.
 A fresh `npm ci` installs Playwright's package but not its Chromium binary, so
 the full suite stops at Generative UI containment before assertions run. Mirror
 CI with `npx playwright install chromium` before the first full local gate.
+
+## Hosted MCP OAuth verification
+
+The Dropbox origin-level protected-resource endpoint can return 429 while the
+resource-path endpoint advertised by `WWW-Authenticate` succeeds. Verify hosted
+MCP setup through that advertised RFC 9728 URL and the SDK's DCR redirect flow.

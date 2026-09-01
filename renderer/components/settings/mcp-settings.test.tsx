@@ -15,5 +15,7 @@ test("plugins settings browse the shared catalog and keep custom MCP setup", () 
   assert.match(source, /aria-label="Search plugins"/u);
   assert.doesNotMatch(source, /focus-within:border-focus-ring/u);
   assert.doesNotMatch(source, /Popular MCPs/u);
+  assert.match(source, /Aiden stores credentials on this device/u);
+  assert.doesNotMatch(source, /Aiden stores credentials on this Mac/u);
   assert.ok(source.indexOf("Add custom MCP") < source.indexOf("Plugin directory"));
 });
