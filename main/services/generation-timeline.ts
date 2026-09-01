@@ -415,6 +415,11 @@ export class GenerationTimelineProjector {
     if (index === undefined) return;
     const step = this.timeline.steps[index];
     if (!step || !isToolStep(step) || isTerminalAgentStep(step.status)) return;
+    // Pi can emit many tool_execution_update ticks while a tool is already
+    // running. Republishing the full timeline on each tick would copy the
+    // whole step list over IPC and into the Remote SSE journal without
+    // changing anything the activity feed can show.
+    if (!terminal && step.status === status) return;
     const timestamp = this.now();
     step.status = status;
     step.updatedAt = timestamp;

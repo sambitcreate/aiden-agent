@@ -181,6 +181,8 @@ final class AidenProductNavigationStore {
         var compactBotPathByInstance: [String: [String]] = [:]
         var selectedBotByScope: [String: String]?
         var botCoachmarkVersionsByScope: [String: Int]?
+        var workspaceSidebarOrganizationsByInstance: [String: AidenWorkspaceSidebarOrganization]?
+        var expandedSidebarWorkspaceIDsByInstance: [String: [String]]?
     }
 
     private static let snapshotKey = "aiden.product-navigation.v1"
@@ -234,6 +236,51 @@ final class AidenProductNavigationStore {
 
     func setCompactWorkspacePath(_ path: [String], for instanceID: String?) {
         setPath(path, in: \Snapshot.compactWorkspacePathByInstance, for: instanceID)
+    }
+
+    func workspaceSidebarOrganization(for instanceID: String?) -> AidenWorkspaceSidebarOrganization {
+        guard let instanceID = Self.safeID(instanceID) else { return .workspace }
+        return snapshot.workspaceSidebarOrganizationsByInstance?[instanceID] ?? .workspace
+    }
+
+    func setWorkspaceSidebarOrganization(
+        _ organization: AidenWorkspaceSidebarOrganization,
+        for instanceID: String?
+    ) {
+        guard let instanceID = Self.safeID(instanceID) else { return }
+        var values = snapshot.workspaceSidebarOrganizationsByInstance ?? [:]
+        values[instanceID] = organization
+        snapshot.workspaceSidebarOrganizationsByInstance = values
+        persist()
+    }
+
+    func expandedSidebarWorkspaceIDs(for instanceID: String?) -> Set<String> {
+        guard let instanceID = Self.safeID(instanceID) else { return [] }
+        return Set(snapshot.expandedSidebarWorkspaceIDsByInstance?[instanceID] ?? [])
+    }
+
+    func toggleExpandedSidebarWorkspace(_ workspaceID: String, for instanceID: String?) {
+        guard let workspaceID = Self.safeID(workspaceID) else { return }
+        var expanded = expandedSidebarWorkspaceIDs(for: instanceID)
+        if expanded.remove(workspaceID) == nil { expanded.insert(workspaceID) }
+        setExpandedSidebarWorkspaceIDs(expanded, for: instanceID)
+    }
+
+    func ensureExpandedSidebarWorkspace(_ workspaceID: String?, for instanceID: String?) {
+        guard let workspaceID = Self.safeID(workspaceID) else { return }
+        var expanded = expandedSidebarWorkspaceIDs(for: instanceID)
+        guard expanded.insert(workspaceID).inserted else { return }
+        setExpandedSidebarWorkspaceIDs(expanded, for: instanceID)
+    }
+
+    func pruneExpandedSidebarWorkspaces(
+        validWorkspaceIDs: Set<String>,
+        for instanceID: String?
+    ) {
+        let current = expandedSidebarWorkspaceIDs(for: instanceID)
+        let pruned = current.intersection(validWorkspaceIDs)
+        guard current != pruned else { return }
+        setExpandedSidebarWorkspaceIDs(pruned, for: instanceID)
     }
 
     func compactBotPath(for instanceID: String?) -> [String] {
@@ -291,11 +338,26 @@ final class AidenProductNavigationStore {
         snapshot.selectedWorkspaceByInstance.removeValue(forKey: instanceID)
         snapshot.compactWorkspacePathByInstance.removeValue(forKey: instanceID)
         snapshot.compactBotPathByInstance.removeValue(forKey: instanceID)
+        snapshot.workspaceSidebarOrganizationsByInstance?.removeValue(forKey: instanceID)
+        snapshot.expandedSidebarWorkspaceIDsByInstance?.removeValue(forKey: instanceID)
         let prefix = "\(instanceID.unicodeScalars.count):\(instanceID):"
         snapshot.selectedBotByScope = snapshot.selectedBotByScope?.filter { !$0.key.hasPrefix(prefix) }
         snapshot.botCoachmarkVersionsByScope = snapshot.botCoachmarkVersionsByScope?.filter {
             !$0.key.hasPrefix(prefix)
         }
+        persist()
+    }
+
+    private func setExpandedSidebarWorkspaceIDs(_ workspaceIDs: Set<String>, for instanceID: String?) {
+        guard let instanceID = Self.safeID(instanceID) else { return }
+        let sanitized = Array(workspaceIDs.compactMap(Self.safeID).sorted().prefix(200))
+        var values = snapshot.expandedSidebarWorkspaceIDsByInstance ?? [:]
+        if sanitized.isEmpty {
+            values.removeValue(forKey: instanceID)
+        } else {
+            values[instanceID] = sanitized
+        }
+        snapshot.expandedSidebarWorkspaceIDsByInstance = values.isEmpty ? nil : values
         persist()
     }
 
@@ -325,6 +387,8 @@ final class AidenProductNavigationStore {
                 + value.selectedWorkspaceByInstance.keys.compactMap(safeID)
                 + value.compactWorkspacePathByInstance.keys.compactMap(safeID)
                 + value.compactBotPathByInstance.keys.compactMap(safeID)
+                + (value.workspaceSidebarOrganizationsByInstance ?? [:]).keys.compactMap(safeID)
+                + (value.expandedSidebarWorkspaceIDsByInstance ?? [:]).keys.compactMap(safeID)
         )
         var result = instanceIDs.prefix(64).reduce(into: Snapshot()) { result, instanceID in
             if let area = value.areasByInstance[instanceID] {
@@ -344,6 +408,21 @@ final class AidenProductNavigationStore {
             )
             if !botPath.isEmpty {
                 result.compactBotPathByInstance[instanceID] = botPath
+            }
+            if let organization = value.workspaceSidebarOrganizationsByInstance?[instanceID] {
+                var organizations = result.workspaceSidebarOrganizationsByInstance ?? [:]
+                organizations[instanceID] = organization
+                result.workspaceSidebarOrganizationsByInstance = organizations
+            }
+            let expanded = Array(
+                (value.expandedSidebarWorkspaceIDsByInstance?[instanceID] ?? [])
+                    .compactMap(safeID)
+                    .prefix(200)
+            )
+            if !expanded.isEmpty {
+                var values = result.expandedSidebarWorkspaceIDsByInstance ?? [:]
+                values[instanceID] = expanded
+                result.expandedSidebarWorkspaceIDsByInstance = values
             }
         }
         let selected = (value.selectedBotByScope ?? [:]).reduce(into: [String: String]()) { values, entry in

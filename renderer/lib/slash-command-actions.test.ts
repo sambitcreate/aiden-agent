@@ -201,6 +201,9 @@ test("slash action adapters route canonical actions without interpreting draft t
     exportChat: () => {
       calls.push("export");
     },
+    compactChat: () => {
+      calls.push("compact");
+    },
     openSessionDetails: () => calls.push("session"),
     openLogout: () => calls.push("logout"),
     openWorktree: (branchName) => {
@@ -218,6 +221,7 @@ test("slash action adapters route canonical actions without interpreting draft t
   executeSlashCommandAction(command("fork"), "", handlers);
   executeSlashCommandAction(command("clone"), "", handlers);
   executeSlashCommandAction(command("export"), "", handlers);
+  executeSlashCommandAction(command("compact"), "", handlers);
   executeSlashCommandAction(command("session"), "", handlers);
   executeSlashCommandAction(command("logout"), "", handlers);
   executeSlashCommandAction(command("worktree"), " feature/phase-four ", handlers);
@@ -233,6 +237,7 @@ test("slash action adapters route canonical actions without interpreting draft t
     "fork",
     "clone",
     "export",
+    "compact",
     "session",
     "logout",
     "worktree:feature/phase-four",

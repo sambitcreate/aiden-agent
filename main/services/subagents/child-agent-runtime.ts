@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { convertToLlm, InMemorySessionRepo } from "@earendil-works/pi-agent-core";
+import { convertToLlm } from "@earendil-works/pi-agent-core";
 import type {
   AgentMessage,
   AgentTool,
@@ -29,6 +29,7 @@ import {
   type SubagentInferenceIsolation,
 } from "./subagent-inference-process.js";
 import { piRuntimeEffectStore, type PiRuntimeEffectStore } from "../pi-runtime-effect-store.js";
+import { createInMemoryPiSession } from "../pi-session-repository-port.js";
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
 export const MAX_REGISTERED_SUBAGENT_CHILDREN = 32;
@@ -201,9 +202,11 @@ export class SubagentRuntimeRegistry {
       systemPrompt: spec.systemPrompt,
       tools: spec.tools,
       supportsImages: spec.runtime.model.input.includes("image"),
+      providerId: spec.runtime.model.provider,
+      modelId: spec.runtime.model.id,
     };
     assertGenerationContextCapacity(contextOptions);
-    const sessionPromise = new InMemorySessionRepo().create({ id: sessionId });
+    const sessionPromise = createInMemoryPiSession(sessionId);
     const cancellation = new AbortController();
     const childRuntime =
       this.inferenceIsolation?.wrap(spec.runtime, {

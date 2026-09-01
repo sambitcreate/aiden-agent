@@ -37,6 +37,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.net.URLEncoder
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
@@ -45,6 +46,12 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+data class AidenPreferredChatSummaryPage(
+    val summaries: List<AidenChatSummary>,
+    val nextCursor: String?,
+    val usedLegacyEndpoint: Boolean
+)
 
 class AidenRemoteClient(
     val endpoint: String,
@@ -354,6 +361,7 @@ class AidenRemoteClient(
         acceptedStatus: Set<Int> = setOf(200),
         botScope: AidenBotPrivateResponseScope? = null,
         requestTimeoutSeconds: Long? = null,
+        maximumResponseBytes: Int? = null,
         deserializer: (ByteArray) -> T
     ): T = try {
         withContext(Dispatchers.IO) {
@@ -405,9 +413,16 @@ class AidenRemoteClient(
             throw error
         }
         val bytes = try {
-            response.body?.bytes() ?: ByteArray(0)
+            if (maximumResponseBytes != null) {
+                response.body.readBounded(maximumResponseBytes)
+            } else {
+                response.body?.bytes() ?: ByteArray(0)
+            }
         } catch (error: CancellationException) {
             throw error
+        } catch (_: ResponseBodyLimitExceededException) {
+            AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+            throw AidenRemoteContractException.PayloadTooLarge
         } catch (error: Exception) {
             AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
             throw error
@@ -540,6 +555,67 @@ class AidenRemoteClient(
             val resp = json.decodeFromString<ChatListResponse>(String(bytes, Charsets.UTF_8))
             resp.chats
         }
+    }
+
+    suspend fun chatSummaryPage(
+        limit: Int = AidenRemoteProtocol.DEFAULT_CHAT_SUMMARY_PAGE_SIZE,
+        cursor: String? = null
+    ): AidenChatSummaryPage {
+        if (limit !in 1..AidenRemoteProtocol.MAX_CHAT_SUMMARY_PAGE_SIZE ||
+            (cursor != null && !AidenRemoteProtocol.CHAT_SUMMARY_CURSOR_PATTERN.matches(cursor))
+        ) {
+            throw AidenRemoteClientException.InvalidResponse("Invalid chat summary pagination request.")
+        }
+        val encodedCursor = cursor?.let {
+            URLEncoder.encode(it, Charsets.UTF_8.name()).replace("+", "%20")
+        }
+        val path = buildString {
+            append("/chat-summaries?limit=")
+            append(limit)
+            if (encodedCursor != null) {
+                append("&cursor=")
+                append(encodedCursor)
+            }
+        }
+        return executeRequest(
+            path,
+            botScope = AidenBotPrivateResponseScope.ChatSummaryProjection,
+            maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+        ) { bytes ->
+            val page = json.decodeFromString<AidenChatSummaryPage>(String(bytes, Charsets.UTF_8)).validatedWire()
+            if (page.summaries.size > limit) {
+                throw AidenRemoteContractException.InvalidJson("Chat Summary page exceeds requested limit")
+            }
+            page
+        }
+    }
+
+    suspend fun preferredChatSummaryPage(
+        supportsChatSummaries: Boolean,
+        limit: Int = AidenRemoteProtocol.DEFAULT_CHAT_SUMMARY_PAGE_SIZE,
+        cursor: String? = null
+    ): AidenPreferredChatSummaryPage {
+        if (!supportsChatSummaries) {
+            if (cursor != null) {
+                throw AidenRemoteClientException.InvalidResponse("Legacy chat loading does not support cursors.")
+            }
+            return legacyChatSummaryPage()
+        }
+        val page = chatSummaryPage(limit, cursor)
+        return AidenPreferredChatSummaryPage(
+            summaries = page.summaries,
+            nextCursor = page.nextCursor,
+            usedLegacyEndpoint = false
+        )
+    }
+
+    private suspend fun legacyChatSummaryPage(): AidenPreferredChatSummaryPage {
+        val summaries = AidenChat.regularWorkspaceChats(chats()).map { AidenChatSummary.fromChat(it) }
+        return AidenPreferredChatSummaryPage(
+            summaries = summaries,
+            nextCursor = null,
+            usedLegacyEndpoint = true
+        )
     }
 
     suspend fun chat(id: String): AidenChat = executeRequest(

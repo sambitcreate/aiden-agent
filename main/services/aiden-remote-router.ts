@@ -5,6 +5,10 @@ import {
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
+  AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
+  AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
+  AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
+  AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   parseAidenRemoteBotConversationQuery,
   parseAidenRemoteJson,
   type AidenRemoteCapability,
@@ -60,6 +64,7 @@ export interface AidenRemoteServerProjection {
   deviceName?: string;
   connectionMode: AidenRemoteConnectionMode;
   minimumClientVersion?: string;
+  features: string[];
   serverTime: string;
 }
 
@@ -96,7 +101,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "uploadAttachment" | "removeAttachment" | "attachmentContent">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent">>;
   models?: Pick<AidenRemoteModelService, "list">;
   streams?: Pick<
     AidenRemoteStreamService,
@@ -171,6 +176,7 @@ export interface AidenRemoteRouterDependencies {
       | "usage"
       | "speech"
       | "chats"
+      | "chatSummaries"
       | "chat"
       | "chatMove"
       | "chatAttachment"
@@ -594,6 +600,45 @@ function chatsQuery(query: string): { workspaceId?: string } {
   return { workspaceId: query.slice(separator + 1) };
 }
 
+function chatSummariesQuery(query: string): { limit: number; cursor?: string } {
+  if (!query) return { limit: AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT };
+  const params = new URLSearchParams(query);
+  if (
+    [...params.keys()].some((key) => key !== "limit" && key !== "cursor") ||
+    params.getAll("limit").length > 1 ||
+    params.getAll("cursor").length > 1
+  ) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The chat summaries query is invalid.",
+      400,
+    );
+  }
+  const rawLimit = params.get("limit");
+  const limit = rawLimit === null
+    ? AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT
+    : /^\d{1,3}$/u.test(rawLimit)
+      ? Number(rawLimit)
+      : Number.NaN;
+  const cursor = params.get("cursor");
+  if (
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT ||
+    (cursor !== null &&
+      (cursor.length === 0 ||
+        cursor.length > AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH ||
+        !/^[\x21-\x7e]+$/u.test(cursor)))
+  ) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The chat summaries query is invalid.",
+      400,
+    );
+  }
+  return { limit, ...(cursor !== null ? { cursor } : {}) };
+}
+
 function usageQuery(query: string): UsageDateRange {
   const params = new URLSearchParams(query);
   const range = params.get("range") ?? "30d";
@@ -875,6 +920,9 @@ export function createAidenRemoteRequestHandler(
             ? { serverCapabilities: [...AIDEN_REMOTE_CAPABILITIES] }
             : {}),
           connectionMode: dependencies.connectionMode(),
+          features: dependencies.chats?.listSummaries
+            ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
+            : [],
           serverTime: new Date(dependencies.now()).toISOString(),
         };
         writeJson(response, 200, projection);
@@ -1794,6 +1842,21 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.chats.list(chatsQuery(query).workspaceId));
+        return;
+      }
+      if (path === "/chat-summaries" && request.method === "GET") {
+        route = "chatSummaries";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.chats?.listSummaries) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const input = chatSummariesQuery(query);
+        writeJson(
+          response,
+          200,
+          await dependencies.chats.listSummaries(input.limit, input.cursor),
+        );
         return;
       }
       if (path === "/chats" && request.method === "POST") {

@@ -73,13 +73,15 @@ test("Concentrate is an Aiden built-in with bounded dynamic refresh and no secre
     allowNetwork: true,
     force: true,
     credential: { type: "api_key", key: "sk-cn-test-secret" },
-    store: {
-      read: async () => undefined,
-      write: async (catalog) => {
-        writes.push(catalog.models as Model<"openai-responses">[]);
-      },
-      delete: async () => undefined,
+    stored: undefined,
+    publish: async (publication) => {
+      if (publication.persist) {
+        writes.push(publication.persist.models as Model<"openai-responses">[]);
+      }
+      publication.update?.();
+      return true;
     },
+    signal: new AbortController().signal,
   });
 
   assert.equal(request?.url, `${CONCENTRATE_BASE_URL}/models`);
@@ -105,11 +107,12 @@ test("Concentrate rejects empty, malformed, and oversized catalogs", async () =>
   await assert.rejects(
     provider.refreshModels({
       allowNetwork: true,
-      store: {
-        read: async () => undefined,
-        write: async () => undefined,
-        delete: async () => undefined,
+      stored: undefined,
+      publish: async (publication) => {
+        publication.update?.();
+        return true;
       },
+      signal: new AbortController().signal,
     }),
     /oversized model catalog/u,
   );

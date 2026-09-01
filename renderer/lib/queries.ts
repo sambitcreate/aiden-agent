@@ -242,6 +242,15 @@ export function useChats(workspaceId?: string) {
   });
 }
 
+/** Every regular chat that belongs to the registered workspace navigation surface. */
+export function useAllRegularChats(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatsIn(undefined),
+    queryFn: () => chatsApi.list(),
+    enabled,
+  });
+}
+
 export function useBots(includeArchived = false) {
   return useQuery({
     queryKey: [...queryKeys.bots, includeArchived ? "all" : "active"],

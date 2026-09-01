@@ -8,6 +8,8 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentImageValidation
 import sbtbiswas.AidenOnTheGo.models.AidenChat
+import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
+import sbtbiswas.AidenOnTheGo.models.AidenChatSummaryActivity
 import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticArea
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticCode
@@ -25,7 +27,8 @@ import java.util.Date
 class AidenChatCache(
     private val storageDir: File? = null,
     root: File? = null,
-    legacyRoots: List<File>? = null
+    legacyRoots: List<File>? = null,
+    private val maximumSummaryCacheBytes: Int = 64 * 1024 * 1024
 ) {
     @Serializable
     data class ActiveStream(
@@ -43,6 +46,25 @@ class AidenChatCache(
     )
 
     @Serializable
+    private data class ChatSummaryListEnvelope(
+        val instanceId: String,
+        val summaries: List<AidenChatSummary>
+    )
+
+    @Serializable
+    private data class ChatSummaryChunkEnvelope(
+        val instanceId: String,
+        val summaries: List<AidenChatSummary>
+    )
+
+    @Serializable
+    private data class ChatSummaryManifestEnvelope(
+        val instanceId: String,
+        val summaryCount: Int,
+        val chunks: List<String>
+    )
+
+    @Serializable
     private data class ChatEnvelope(
         val instanceId: String,
         val chat: AidenChat
@@ -57,6 +79,9 @@ class AidenChatCache(
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val maxCacheFileBytes = 10 * 1024 * 1024
+    private val maxSummaryCount = 10_000
+    private val summaryChunkSize = 200
+    private val maxSummaryChunkBytes = 2 * 1024 * 1024
     private val maxAttachmentImageCacheBytes = 96 * 1024 * 1024L
 
     val root: File
@@ -64,8 +89,11 @@ class AidenChatCache(
 
     private val _chats = MutableStateFlow<Map<String, AidenChat>>(emptyMap())
     val chats: StateFlow<Map<String, AidenChat>> = _chats.asStateFlow()
+    private val _summaries = MutableStateFlow<Map<String, Map<String, AidenChatSummary>>>(emptyMap())
+    val summaries: StateFlow<Map<String, Map<String, AidenChatSummary>>> = _summaries.asStateFlow()
 
     init {
+        require(maximumSummaryCacheBytes > 0) { "Summary cache limit must be positive" }
         if (root != null) {
             this.root = root
             this.legacyRoots = legacyRoots ?: emptyList()
@@ -98,6 +126,196 @@ class AidenChatCache(
     }
 
     @Synchronized
+    fun loadSummaries(instanceId: String): List<AidenChatSummary>? {
+        val manifestFile = fileURL("summary-manifests", instanceId)
+        val manifest = loadEnvelope<ChatSummaryManifestEnvelope>(manifestFile)
+        if (manifest == null) {
+            // Compatibility with pre-chunk Phase 2 development caches.
+            val legacy = loadEnvelope<ChatSummaryListEnvelope>(
+                fileURL("summaries", instanceId),
+                maximumSummaryCacheBytes
+            ) ?: return null
+            if (!isValidSummarySet(legacy.summaries, legacy.instanceId, instanceId)) return null
+            publishSummaries(instanceId, legacy.summaries)
+            return legacy.summaries
+        }
+        if (manifest.instanceId != instanceId || manifest.summaryCount !in 0..maxSummaryCount ||
+            manifest.chunks.size != (manifest.summaryCount + summaryChunkSize - 1) / summaryChunkSize ||
+            manifest.chunks.toSet().size != manifest.chunks.size ||
+            manifest.chunks.any { !it.matches(Regex("^[0-9a-f]{64}$")) }
+        ) return null
+
+        val summaries = mutableListOf<AidenChatSummary>()
+        var aggregateBytes = manifestFile.length()
+        val chunkDirectory = summaryChunkInstanceDirectory(instanceId)
+        for (chunkId in manifest.chunks) {
+            val file = File(chunkDirectory, "$chunkId.json")
+            if (!file.isFile || file.length() !in 1..maxSummaryChunkBytes.toLong()) return null
+            aggregateBytes += file.length()
+            if (aggregateBytes > maximumSummaryCacheBytes) return null
+            val bytes = try { file.readBytes() } catch (_: Exception) { return null }
+            if (digest(bytes) != chunkId) return null
+            val chunk = try {
+                json.decodeFromString<ChatSummaryChunkEnvelope>(String(bytes, Charsets.UTF_8))
+            } catch (_: Exception) {
+                return null
+            }
+            if (chunk.instanceId != instanceId || chunk.summaries.size !in 1..summaryChunkSize) return null
+            summaries += chunk.summaries
+        }
+        if (summaries.size != manifest.summaryCount || !isValidSummarySet(summaries, instanceId, instanceId)) {
+            return null
+        }
+        publishSummaries(instanceId, summaries)
+        return summaries
+    }
+
+    @Synchronized
+    fun saveSummaries(
+        summaries: List<AidenChatSummary>,
+        instanceId: String,
+        unchangedPrefixCount: Int = 0
+    ) {
+        if (summaries.size > maxSummaryCount || summaries.map { it.id }.toSet().size != summaries.size) {
+            throw IllegalArgumentException("Chat summary cache must contain at most 10,000 unique IDs")
+        }
+        if (unchangedPrefixCount !in 0..summaries.size) {
+            throw IllegalArgumentException("Unchanged summary prefix is invalid")
+        }
+        val manifestFile = fileURL("summary-manifests", instanceId)
+        val existing = loadEnvelope<ChatSummaryManifestEnvelope>(manifestFile)
+        val cachedPrefixMatches = unchangedPrefixCount == 0 ||
+            _summaries.value[instanceId]?.values?.toList()?.let { cached ->
+                cached.size == unchangedPrefixCount &&
+                    cached == summaries.take(unchangedPrefixCount)
+            } == true
+        val existingManifestIsReusable = existing?.let { manifest ->
+            manifest.instanceId == instanceId &&
+                manifest.summaryCount == unchangedPrefixCount &&
+                manifest.chunks.size == (manifest.summaryCount + summaryChunkSize - 1) / summaryChunkSize &&
+                manifest.chunks.toSet().size == manifest.chunks.size &&
+                manifest.chunks.all { it.matches(Regex("^[0-9a-f]{64}$")) }
+        } == true
+        val previouslyCommittedChunks = if (existingManifestIsReusable ||
+            existing?.let { manifest ->
+                manifest.instanceId == instanceId &&
+                    manifest.summaryCount in 0..maxSummaryCount &&
+                    manifest.chunks.size ==
+                        (manifest.summaryCount + summaryChunkSize - 1) / summaryChunkSize &&
+                    manifest.chunks.toSet().size == manifest.chunks.size &&
+                    manifest.chunks.all { it.matches(Regex("^[0-9a-f]{64}$")) }
+            } == true
+        ) requireNotNull(existing).chunks.toSet() else emptySet()
+        val reusableChunks = if (existingManifestIsReusable && cachedPrefixMatches
+        ) {
+            minOf(requireNotNull(existing).chunks.size, unchangedPrefixCount / summaryChunkSize)
+        } else 0
+        val chunkIds = existing?.chunks?.take(reusableChunks)?.toMutableList() ?: mutableListOf()
+        var aggregateBytes = manifestFile.takeIf { it.isFile }?.length() ?: 0L
+        val chunkDirectory = summaryChunkInstanceDirectory(instanceId).apply { mkdirs() }
+        cleanupSummaryChunks(chunkDirectory, previouslyCommittedChunks)
+        var physicalChunkBytes = chunkDirectory.listFiles()
+            ?.filter(File::isFile)
+            ?.sumOf(File::length)
+            ?: 0L
+        val maximumTransactionalDiskBytes = maximumSummaryCacheBytes.toLong() * 2
+        var committed = false
+        try {
+            for ((index, summariesChunk) in summaries.chunked(summaryChunkSize).withIndex()) {
+                if (index < reusableChunks) {
+                    val reusableFile = File(chunkDirectory, "${chunkIds[index]}.json")
+                    if (!reusableFile.isFile || reusableFile.length() !in 1..maxSummaryChunkBytes.toLong()) {
+                        throw IllegalStateException("Reusable summary cache chunk is unavailable")
+                    }
+                    if (runCatching { digest(reusableFile.readBytes()) }.getOrNull() != chunkIds[index]) {
+                        throw IllegalStateException("Reusable summary cache chunk is corrupt")
+                    }
+                    aggregateBytes += reusableFile.length()
+                    continue
+                }
+                val envelope = ChatSummaryChunkEnvelope(instanceId, summariesChunk)
+                val bytes = json.encodeToString(envelope).toByteArray(Charsets.UTF_8)
+                if (bytes.size > maxSummaryChunkBytes) {
+                    throw IllegalStateException("Summary cache chunk exceeds maximum size")
+                }
+                aggregateBytes += bytes.size
+                if (aggregateBytes > maximumSummaryCacheBytes) {
+                    throw IllegalStateException("Cache file exceeds maximum size")
+                }
+                val chunkId = digest(bytes)
+                val file = File(chunkDirectory, "$chunkId.json")
+                val alreadyValid = file.isFile && file.length() == bytes.size.toLong() &&
+                    runCatching { digest(file.readBytes()) == chunkId }.getOrDefault(false)
+                if (!alreadyValid) {
+                    if (physicalChunkBytes + bytes.size > maximumTransactionalDiskBytes) {
+                        throw IllegalStateException("Summary cache transaction exceeds disk limit")
+                    }
+                    writeAtomically(bytes, file)
+                    physicalChunkBytes += bytes.size
+                }
+                chunkIds += chunkId
+            }
+            val manifest = ChatSummaryManifestEnvelope(instanceId, summaries.size, chunkIds)
+            val manifestBytes = json.encodeToString(manifest).toByteArray(Charsets.UTF_8)
+            if (aggregateBytes + manifestBytes.size > maximumSummaryCacheBytes) {
+                throw IllegalStateException("Cache file exceeds maximum size")
+            }
+            writeAtomically(manifestBytes, manifestFile)
+            committed = true
+            File(root, "summaries").takeIf { it.isDirectory }?.let {
+                fileURL("summaries", instanceId).takeIf(File::exists)?.delete()
+            }
+        } finally {
+            cleanupSummaryChunks(
+                chunkDirectory,
+                if (committed) chunkIds.toSet() else previouslyCommittedChunks
+            )
+        }
+        publishSummaries(instanceId, summaries)
+    }
+
+    private fun cleanupSummaryChunks(directory: File, retainedChunkIds: Set<String>) {
+        val retainedNames = retainedChunkIds.mapTo(mutableSetOf()) { "$it.json" }
+        directory.listFiles()?.forEach { file ->
+            if (file.isFile && file.name !in retainedNames) file.delete()
+        }
+    }
+
+    private fun isValidSummarySet(
+        summaries: List<AidenChatSummary>,
+        envelopeInstanceId: String,
+        expectedInstanceId: String
+    ): Boolean = envelopeInstanceId == expectedInstanceId &&
+        summaries.size <= maxSummaryCount &&
+        summaries.map { it.id }.toSet().size == summaries.size
+
+    @Synchronized
+    fun upsertSummary(summary: AidenChatSummary, instanceId: String) {
+        val current = summariesForInstance(instanceId).associateBy { it.id }.toMutableMap()
+        current[summary.id] = summary
+        saveSummaries(current.values.toList(), instanceId)
+    }
+
+    @Synchronized
+    fun removeSummary(instanceId: String, chatId: String) {
+        val current = summariesForInstance(instanceId)
+        if (current.none { it.id == chatId }) return
+        saveSummaries(current.filterNot { it.id == chatId }, instanceId)
+    }
+
+    @Synchronized
+    fun updateSummaryActivity(
+        instanceId: String,
+        chatId: String,
+        activity: AidenChatSummaryActivity
+    ) {
+        val current = summariesForInstance(instanceId)
+        val existing = current.firstOrNull { it.id == chatId } ?: return
+        if (existing.activity == activity) return
+        saveSummaries(current.map { if (it.id == chatId) it.copy(activity = activity) else it }, instanceId)
+    }
+
+    @Synchronized
     fun loadChat(instanceId: String, chatId: String): AidenChat? {
         val file = fileURL("chats", instanceId, chatId)
         val envelope = loadEnvelope<ChatEnvelope>(file) ?: return null
@@ -112,6 +330,15 @@ class AidenChatCache(
         val map = _chats.value.toMutableMap()
         map[chat.id] = chat
         _chats.value = map
+        if (chat.isBotChat) {
+            removeSummary(instanceId, chat.id)
+        } else {
+            val activity = summariesForInstance(instanceId)
+                .firstOrNull { it.id == chat.id }
+                ?.activity
+                ?: AidenChatSummaryActivity.IDLE
+            upsertSummary(AidenChatSummary.fromChat(chat, activity), instanceId)
+        }
     }
 
     @Synchronized
@@ -126,12 +353,14 @@ class AidenChatCache(
     fun saveActiveStream(stream: ActiveStream, instanceId: String, chatId: String) {
         val envelope = StreamEnvelope(instanceId = instanceId, chatId = chatId, stream = stream)
         saveEnvelope(envelope, fileURL("streams", instanceId, chatId))
+        updateSummaryActivity(instanceId, chatId, AidenChatSummaryActivity.ACTIVE)
     }
 
     @Synchronized
     fun removeActiveStream(instanceId: String, chatId: String) {
         val file = fileURL("streams", instanceId, chatId)
         if (file.exists()) file.delete()
+        updateSummaryActivity(instanceId, chatId, AidenChatSummaryActivity.IDLE)
     }
 
     @Synchronized
@@ -152,6 +381,7 @@ class AidenChatCache(
         val map = _chats.value.toMutableMap()
         map.remove(chatId)
         _chats.value = map
+        removeSummary(instanceId, chatId)
     }
 
     @Synchronized
@@ -163,6 +393,7 @@ class AidenChatCache(
             }
         }
         _chats.value = emptyMap()
+        _summaries.value = _summaries.value - instanceId
     }
 
     @Synchronized
@@ -276,9 +507,25 @@ class AidenChatCache(
         return File(dir, "$name.json")
     }
 
+    private fun summaryChunkInstanceDirectory(instanceId: String): File =
+        File(File(root, "summary-chunks"), digest(instanceId))
+
+    private fun summariesForInstance(instanceId: String): List<AidenChatSummary> =
+        _summaries.value[instanceId]?.values?.toList()
+            ?: loadSummaries(instanceId).orEmpty()
+
+    private fun publishSummaries(instanceId: String, summaries: List<AidenChatSummary>) {
+        _summaries.value = _summaries.value + (instanceId to summaries.associateBy { it.id })
+    }
+
     private fun digest(value: String): String {
         val md = MessageDigest.getInstance("SHA-256")
         val hash = md.digest(value.toByteArray(Charsets.UTF_8))
+        return hash.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun digest(value: ByteArray): String {
+        val hash = MessageDigest.getInstance("SHA-256").digest(value)
         return hash.joinToString("") { "%02x".format(it) }
     }
 
@@ -322,8 +569,11 @@ class AidenChatCache(
         }
     }
 
-    private inline fun <reified T> loadEnvelope(file: File): T? {
-        if (!file.exists() || file.length() > maxCacheFileBytes) return null
+    private inline fun <reified T> loadEnvelope(
+        file: File,
+        maximumBytes: Int = maxCacheFileBytes
+    ): T? {
+        if (!file.exists() || file.length() > maximumBytes) return null
         return try {
             val content = file.readText(Charsets.UTF_8)
             json.decodeFromString<T>(content)
@@ -333,16 +583,45 @@ class AidenChatCache(
         }
     }
 
-    private inline fun <reified T> saveEnvelope(envelope: T, file: File) {
+    private inline fun <reified T> saveEnvelope(
+        envelope: T,
+        file: File,
+        maximumBytes: Int = maxCacheFileBytes
+    ) {
         val content = json.encodeToString(envelope)
         val bytes = content.toByteArray(Charsets.UTF_8)
-        if (bytes.size > maxCacheFileBytes) throw IllegalStateException("Cache file exceeds maximum size")
+        if (bytes.size > maximumBytes) throw IllegalStateException("Cache file exceeds maximum size")
+        writeAtomically(bytes, file)
+    }
+
+    private fun writeAtomically(bytes: ByteArray, file: File) {
         file.parentFile?.mkdirs()
-        file.writeBytes(bytes)
+        val temporary = File(file.parentFile, ".${file.name}.${java.util.UUID.randomUUID()}.tmp")
+        try {
+            FileOutputStream(temporary).use { stream ->
+                stream.write(bytes)
+                stream.fd.sync()
+            }
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    file.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (temporary.exists()) temporary.delete()
+        }
     }
 
     private fun purgeNamespace(cacheRoot: File, instanceId: String) {
         purgeFiles(cacheRoot, "lists", instanceId, ChatListEnvelope::class.java) { it.instanceId }
+        purgeFiles(cacheRoot, "summaries", instanceId, ChatSummaryListEnvelope::class.java) { it.instanceId }
+        fileURL("summary-manifests", instanceId).takeIf(File::exists)?.delete()
+        summaryChunkInstanceDirectory(instanceId).takeIf(File::exists)?.deleteRecursively()
         purgeFiles(cacheRoot, "chats", instanceId, ChatEnvelope::class.java) { it.instanceId }
         purgeFiles(cacheRoot, "streams", instanceId, StreamEnvelope::class.java) { it.instanceId }
         val attachDir = attachmentInstanceDirectory(cacheRoot, instanceId)
@@ -376,6 +655,12 @@ class AidenChatCache(
                     }
                 } else if (clazz == ChatListEnvelope::class.java) {
                     val envelope = json.decodeFromString<ChatListEnvelope>(content)
+                    if (envelope.instanceId == instanceId) {
+                        file.delete()
+                        continue
+                    }
+                } else if (clazz == ChatSummaryListEnvelope::class.java) {
+                    val envelope = json.decodeFromString<ChatSummaryListEnvelope>(content)
                     if (envelope.instanceId == instanceId) {
                         file.delete()
                         continue

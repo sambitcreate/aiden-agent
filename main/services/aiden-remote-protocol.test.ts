@@ -11,6 +11,8 @@ import {
   AIDEN_REMOTE_EVENT_TYPES,
   AIDEN_REMOTE_MAX_CHAT_MESSAGES,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH,
+  AIDEN_REMOTE_MAX_SERVER_FEATURES,
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   type AidenRemoteCapability,
@@ -85,7 +87,7 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 9);
+  assert.equal(fixture.contractRevision, 10);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
@@ -162,6 +164,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/workspace-browser/roots",
     "/workspace-browser/children",
     "/workspace-browser/selections",
+    "/chat-summaries",
     "/chats",
     "/chats/{chatId}",
     "/chats/{chatId}/move",
@@ -260,6 +263,15 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   );
   assert.equal((serverSchema.required as unknown[]).includes("serverCapabilities"), false);
   assert.equal((serverSchema.required as unknown[]).includes("deviceName"), false);
+  const serverFeatures = record(serverProperties.features, "server features");
+  assert.equal(serverFeatures.maxItems, AIDEN_REMOTE_MAX_SERVER_FEATURES);
+  assert.equal(serverFeatures.uniqueItems, true);
+  assert.deepEqual(record(serverFeatures.items, "server feature token"), {
+    type: "string",
+    minLength: 1,
+    maxLength: AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH,
+    pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
+  });
   assert.deepEqual(record(serverProperties.deviceName, "device name"), {
     type: "string",
     description: "Presentation-only label currently stored for the authenticated client device.",
@@ -372,7 +384,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     document["x-aiden-context-private-response-fields"],
     "context-private response fields",
   );
-  assert.deepEqual(privateResponseFields.appliesTo, ["Chat", "Bot"]);
+  assert.deepEqual(privateResponseFields.appliesTo, ["Chat", "ChatSummary", "Bot"]);
   assert.equal(privateResponseFields.recursive, true);
   assert.equal(
     privateResponseFields.normalization,
@@ -381,6 +393,10 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(privateResponseFields.allowedSchemaProperties, [
     "BotDetail.instructions",
     "BotDetail.openingGreeting",
+  ]);
+  assert.deepEqual(privateResponseFields.chatSummaryOnlyForbiddenNormalizedNames, [
+    "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
+    "botid", "providerid", "modelid", "preview",
   ]);
   assert.deepEqual(privateResponseFields.forbiddenNormalizedNames, [
     "credential", "credentials", "secret", "secrets", "apikey", "token",
@@ -1003,6 +1019,11 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   const missingServerTime = clone();
   delete record(missingServerTime.server, "server").serverTime;
   assert.throws(() => parseAidenRemoteContractFixture(missingServerTime), /serverTime.*RFC 3339/);
+  for (const invalidFeature of ["Uppercase", "future:feature", `f${"x".repeat(64)}`]) {
+    const malformedFeature = clone();
+    record(malformedFeature.server, "server").features = ["chat-summaries-v1", invalidFeature];
+    assert.throws(() => parseAidenRemoteContractFixture(malformedFeature), /server feature is invalid/);
+  }
   const unknownCapability = clone();
   record(unknownCapability.pairingExchange, "exchange").capabilities = ["admin:everything"];
   assert.throws(() => parseAidenRemoteContractFixture(unknownCapability), /Unknown pairing capability/);

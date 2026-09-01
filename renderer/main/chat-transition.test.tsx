@@ -223,7 +223,10 @@ test("append reconciliation is surfaced across route remounts and chat creation 
   assert.match(sidebar, /Aiden could not create a chat/u);
   assert.match(sidebar, /list\.length === 0 && appendReconciliationRequired/u);
   assert.match(sidebar, /workspaceSwitchBlocked \|\| appendReconciliationRequired/u);
-  assert.match(sidebar, /enterWorkspace\(id\)\.catch/u);
+  assert.match(
+    sidebar,
+    /const openChat[\s\S]*?catch \(error\)[\s\S]*?Aiden could not open that chat/u,
+  );
   const pane = source("./chat-pane.tsx");
   const worktreeGuard = pane.indexOf("if (documentAppendReconciliationRequired)");
   const worktreeMutation = pane.indexOf("gitApi.createWorktree(", worktreeGuard);

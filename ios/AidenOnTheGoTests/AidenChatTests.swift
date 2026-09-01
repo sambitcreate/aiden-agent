@@ -1037,6 +1037,298 @@ final class AidenChatTests: XCTestCase {
         }
     }
 
+    func testChatSummaryCacheIsInstallationScopedAndReconcilesMutations() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-summary-cache-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let chat = sampleChat()
+        let activeSummary = AidenChatSummary(chat: chat, preservingActivity: .active)
+        let cursor = "cur_page_2." + String(repeating: "C", count: 43)
+        try await cache.saveChatSummaries(
+            .init(summaries: [activeSummary], nextCursor: cursor),
+            instanceId: "instance-a"
+        )
+        try await cache.saveChatSummaries(
+            .init(summaries: [], nextCursor: nil),
+            instanceId: "instance-b"
+        )
+
+        let cachedA = await cache.loadChatSummaries(instanceId: "instance-a")
+        let cachedB = await cache.loadChatSummaries(instanceId: "instance-b")
+        XCTAssertEqual(cachedA?.summaries, [activeSummary])
+        XCTAssertEqual(cachedB?.summaries, [])
+
+        var renamed = chat
+        renamed.title = "Renamed from detail"
+        renamed.revision = "legacy-revision-2"
+        renamed.updatedAt = chat.updatedAt.addingTimeInterval(1)
+        try await cache.reconcileChatSummary(renamed, instanceId: "instance-a")
+        let reconciled = await cache.loadChatSummaries(instanceId: "instance-a")
+        XCTAssertEqual(reconciled?.summaries.first?.title, "Renamed from detail")
+        XCTAssertEqual(reconciled?.summaries.first?.revision, "legacy-revision-2")
+        XCTAssertEqual(reconciled?.summaries.first?.activity, .active)
+        XCTAssertEqual(reconciled?.nextCursor, cursor)
+
+        await cache.removeChat(instanceId: "instance-a", chatId: chat.id)
+        let removedA = await cache.loadChatSummaries(instanceId: "instance-a")
+        let retainedB = await cache.loadChatSummaries(instanceId: "instance-b")
+        XCTAssertEqual(removedA?.summaries, [])
+        XCTAssertEqual(retainedB?.summaries, [])
+    }
+
+    func testSummaryCacheSupportsMaximumBoundedProjectionAndRevalidatesFields() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-summary-max-cache-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let base = Date(timeIntervalSince1970: 5_000)
+        let maximumTitle = String(repeating: "🧪", count: 1_024)
+        let summaries = (0..<10_000).map { index in
+            AidenChatSummary(
+                id: String(format: "chat-%05d", index),
+                workspaceId: "workspace-maximum",
+                title: maximumTitle,
+                titlePending: false,
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(TimeInterval(10_000 - index)),
+                revision: "rev_" + String(repeating: "M", count: 43),
+                activity: .idle
+            )
+        }
+        try await cache.saveChatSummaries(
+            .init(summaries: summaries, nextCursor: nil),
+            instanceId: "instance-maximum"
+        )
+        let hydrated = await cache.loadChatSummaries(instanceId: "instance-maximum")
+        XCTAssertEqual(hydrated?.summaries.count, 10_000)
+        XCTAssertEqual(hydrated?.summaries.first?.title.unicodeScalars.count, 1_024)
+
+        let invalid = AidenChatSummary(
+            id: "unsafe/id",
+            workspaceId: "workspace-maximum",
+            title: "Invalid cache projection",
+            titlePending: false,
+            createdAt: base,
+            updatedAt: base,
+            revision: "legacy-revision",
+            activity: .idle
+        )
+        XCTAssertFalse(AidenChatSummary.isValidCachedProjection(invalid))
+        do {
+            try await cache.saveChatSummaries(
+                .init(summaries: [invalid], nextCursor: nil),
+                instanceId: "instance-invalid"
+            )
+            XCTFail("Invalid cached summary fields must fail before persistence.")
+        } catch {}
+    }
+
+    func testChatSummaryPaginationMergeReplacesCanonicalActivityWithoutDuplicates() throws {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let stale = AidenChatSummary(
+            id: "chat-a",
+            workspaceId: "workspace-a",
+            title: "Stale",
+            titlePending: true,
+            createdAt: now,
+            updatedAt: now.addingTimeInterval(1),
+            revision: "revision-1",
+            activity: .active
+        )
+        let canonical = AidenChatSummary(
+            id: "chat-a",
+            workspaceId: "workspace-a",
+            title: "Canonical",
+            titlePending: false,
+            createdAt: now,
+            updatedAt: now.addingTimeInterval(3),
+            revision: "revision-2",
+            activity: .idle
+        )
+        let second = AidenChatSummary(
+            id: "chat-b",
+            workspaceId: "workspace-a",
+            title: "Second",
+            titlePending: false,
+            createdAt: now,
+            updatedAt: now.addingTimeInterval(2),
+            revision: "revision-1",
+            activity: .active
+        )
+
+        let merged = AidenChatSummaryPage.merged(current: [stale], appending: [second, canonical])
+        XCTAssertEqual(merged.map(\.id), ["chat-a", "chat-b"])
+        XCTAssertEqual(merged.first?.title, "Canonical")
+        XCTAssertEqual(merged.first?.activity, .idle)
+    }
+
+    @MainActor
+    func testHomePaginationRejectsDuplicateCursorStallAndOrderingRegression() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-pagination-validation-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let now = Date(timeIntervalSince1970: 3_000)
+        func summary(_ id: String, updatedOffset: TimeInterval) -> AidenChatSummary {
+            AidenChatSummary(
+                id: id,
+                workspaceId: "workspace-a",
+                title: id,
+                titlePending: false,
+                createdAt: now,
+                updatedAt: now.addingTimeInterval(updatedOffset),
+                revision: "rev_" + String(repeating: "R", count: 43),
+                activity: .idle
+            )
+        }
+        let cursor = "cur_page_2." + String(repeating: "A", count: 43)
+        let nextCursor = "cur_page_3." + String(repeating: "B", count: 43)
+        let initial = try AidenChatSummaryPage(
+            summaries: [summary("chat-a", updatedOffset: 3), summary("chat-b", updatedOffset: 2)],
+            nextCursor: cursor
+        )
+
+        for invalidPage in [
+            try AidenChatSummaryPage(
+                summaries: [summary("chat-b", updatedOffset: 1)],
+                nextCursor: nil
+            ),
+            try AidenChatSummaryPage(
+                summaries: [summary("chat-c", updatedOffset: 1)],
+                nextCursor: cursor
+            ),
+            try AidenChatSummaryPage(
+                summaries: [summary("chat-c", updatedOffset: 4)],
+                nextCursor: nextCursor
+            ),
+        ] {
+            let model = AidenHomeModel(chatCache: cache)
+            model.acceptInitialChatSummaryPage(initial)
+            do {
+                try await model.acceptChatSummaryContinuation(
+                    invalidPage,
+                    requestedCursor: cursor,
+                    instanceId: "instance-pagination"
+                )
+                XCTFail("Invalid continuation must fail closed.")
+            } catch {}
+            XCTAssertEqual(model.chats, initial.summaries)
+            XCTAssertEqual(model.nextChatCursor, cursor)
+            guard case .failed = model.paginationState else {
+                return XCTFail("Invalid continuations must expose Retry without mutating the page.")
+            }
+        }
+
+        let model = AidenHomeModel(chatCache: cache)
+        model.acceptInitialChatSummaryPage(initial)
+        let terminal = try AidenChatSummaryPage(
+            summaries: [summary("chat-c", updatedOffset: 1)],
+            nextCursor: nil
+        )
+        try await model.acceptChatSummaryContinuation(
+            terminal,
+            requestedCursor: cursor,
+            instanceId: "instance-pagination"
+        )
+        XCTAssertEqual(model.chats.map(\.id), ["chat-a", "chat-b", "chat-c"])
+        XCTAssertNil(model.nextChatCursor)
+        XCTAssertEqual(model.paginationState, .idle)
+    }
+
+    @MainActor
+    func testPaginationCacheFailurePreservesPageAndCanRetry() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-pagination-cache-failure-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root, maxSummaryCacheFileBytes: 4_096)
+        let model = AidenHomeModel(chatCache: cache)
+        let now = Date(timeIntervalSince1970: 4_000)
+        func summary(_ id: String, offset: TimeInterval, title: String = "Summary") -> AidenChatSummary {
+            AidenChatSummary(
+                id: id,
+                workspaceId: "workspace-a",
+                title: title,
+                titlePending: false,
+                createdAt: now,
+                updatedAt: now.addingTimeInterval(offset),
+                revision: "rev_" + String(repeating: "S", count: 43),
+                activity: .idle
+            )
+        }
+        let cursor = "cur_page_2." + String(repeating: "A", count: 43)
+        let initial = try AidenChatSummaryPage(
+            summaries: [summary("chat-initial", offset: 100)],
+            nextCursor: cursor
+        )
+        model.acceptInitialChatSummaryPage(initial)
+        try await cache.saveChatSummaries(
+            .init(summaries: initial.summaries, nextCursor: cursor),
+            instanceId: "instance-cache-failure"
+        )
+
+        let oversized = try AidenChatSummaryPage(
+            summaries: (0..<20).map { index in
+                summary(
+                    String(format: "chat-%03d", index),
+                    offset: TimeInterval(99 - index),
+                    title: String(repeating: "x", count: 1_024)
+                )
+            },
+            nextCursor: nil
+        )
+        model.paginationState = .loading
+        do {
+            try await model.acceptChatSummaryContinuation(
+                oversized,
+                requestedCursor: cursor,
+                instanceId: "instance-cache-failure"
+            )
+            XCTFail("The bounded cache write must fail.")
+        } catch {}
+        XCTAssertEqual(model.chats, initial.summaries)
+        XCTAssertEqual(model.nextChatCursor, cursor)
+        guard case .failed = model.paginationState else {
+            return XCTFail("Cache failure must expose the pagination Retry state.")
+        }
+        let preserved = await cache.loadChatSummaries(instanceId: "instance-cache-failure")
+        XCTAssertEqual(preserved?.summaries, initial.summaries)
+
+        let retry = try AidenChatSummaryPage(
+            summaries: [summary("chat-retry", offset: 99)],
+            nextCursor: nil
+        )
+        try await model.acceptChatSummaryContinuation(
+            retry,
+            requestedCursor: cursor,
+            instanceId: "instance-cache-failure"
+        )
+        XCTAssertEqual(model.chats.map(\.id), ["chat-initial", "chat-retry"])
+        XCTAssertNil(model.nextChatCursor)
+        XCTAssertEqual(model.paginationState, .idle)
+        let retried = await cache.loadChatSummaries(instanceId: "instance-cache-failure")
+        XCTAssertEqual(retried?.summaries, model.chats)
+    }
+
+    @MainActor
+    func testHomeSummaryReconciliationPreservesActivityUntilCanonicalTransition() {
+        let chat = sampleChat()
+        let model = AidenHomeModel()
+        model.chats = [AidenChatSummary(chat: chat, preservingActivity: .active)]
+
+        var renamed = chat
+        renamed.title = "Renamed while active"
+        renamed.updatedAt = chat.updatedAt.addingTimeInterval(1)
+        model.accept(renamed)
+        XCTAssertEqual(model.chats.first?.title, "Renamed while active")
+        XCTAssertEqual(model.chats.first?.activity, .active)
+
+        model.setActivity(.idle, forChatID: chat.id)
+        XCTAssertEqual(model.chats.first?.activity, .idle)
+        model.removeChat(id: chat.id)
+        XCTAssertTrue(model.chats.isEmpty)
+    }
+
     func testTerminalCleanupCannotDeleteANewerActiveStream() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-stream-generation-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -1946,6 +2238,190 @@ final class AidenChatTests: XCTestCase {
     }
 }
 
+final class AidenChatSummaryPerformanceTests: XCTestCase {
+    private enum Profile: CaseIterable {
+        case small, medium, large, pathological
+
+        var chatCount: Int {
+            switch self {
+            case .small: 50
+            case .medium: 250
+            case .large: 1_000
+            case .pathological: 2_000
+            }
+        }
+
+        var messagesPerChat: Int {
+            switch self {
+            case .small: 10
+            case .medium: 50
+            case .large: 100
+            case .pathological: 100
+            }
+        }
+
+        var includesMaximumSizedMessages: Bool { self == .pathological }
+
+        func messageCount(chatIndex: Int) -> Int {
+            guard self == .pathological else { return messagesPerChat }
+            return [1, 10, 100][chatIndex % 3]
+        }
+    }
+
+    private struct FullChatList: Codable {
+        let chats: [AidenChat]
+    }
+
+    private struct SummaryPageList: Codable {
+        let pages: [AidenChatSummaryPage]
+    }
+
+    private struct Fixture {
+        let full: Data
+        let firstSummaryPage: Data
+        let allSummaryPages: Data
+        let cachedSummarySnapshot: Data
+    }
+
+    private static let fixture: Fixture = makeFixture(profile: .medium)
+
+    func testDeterministicFixtureProfilesCoverRequiredScales() throws {
+        XCTAssertEqual(Profile.allCases.map(\.chatCount), [50, 250, 1_000, 2_000])
+        XCTAssertEqual(Profile.allCases.map(\.messagesPerChat), [10, 50, 100, 100])
+        XCTAssertEqual(Profile.allCases.map(\.includesMaximumSizedMessages), [false, false, false, true])
+        for profile in Profile.allCases {
+            let fixture = Self.makeFixture(profile: profile)
+            let full = try JSONDecoder.aidenRemote().decode(FullChatList.self, from: fixture.full)
+            let pages = try JSONDecoder.aidenRemote().decode(
+                SummaryPageList.self,
+                from: fixture.allSummaryPages
+            )
+            XCTAssertEqual(full.chats.count, profile.chatCount)
+            XCTAssertEqual(pages.pages.flatMap(\.summaries).count, profile.chatCount)
+            XCTAssertTrue(pages.pages.allSatisfy { $0.summaries.count <= 200 })
+            XCTAssertNil(pages.pages.last?.nextCursor)
+        }
+    }
+
+    func testDeterministicSummaryFixtureIsMateriallySmallerThanFullChats() throws {
+        let fixture = Self.fixture
+        let full = try JSONDecoder.aidenRemote().decode(FullChatList.self, from: fixture.full)
+        let pages = try JSONDecoder.aidenRemote().decode(SummaryPageList.self, from: fixture.allSummaryPages)
+
+        XCTAssertEqual(full.chats.count, 250)
+        XCTAssertEqual(pages.pages.flatMap(\.summaries).count, 250)
+        XCTAssertLessThan(fixture.allSummaryPages.count * 5, fixture.full.count)
+    }
+
+    func testFullChatJSONDecoderPerformance() {
+        let data = Self.fixture.full
+        measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {
+            _ = try! JSONDecoder.aidenRemote().decode(FullChatList.self, from: data)
+        }
+    }
+
+    func testFirstSummaryPageJSONDecoderPerformance() {
+        let data = Self.fixture.firstSummaryPage
+        measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {
+            _ = try! JSONDecoder.aidenRemote().decode(AidenChatSummaryPage.self, from: data)
+        }
+    }
+
+    func testAllSummaryPagesJSONDecoderPerformance() {
+        let data = Self.fixture.allSummaryPages
+        measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {
+            _ = try! JSONDecoder.aidenRemote().decode(SummaryPageList.self, from: data)
+        }
+    }
+
+    func testCachedSummarySnapshotJSONDecoderPerformance() {
+        let data = Self.fixture.cachedSummarySnapshot
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {
+            _ = try! decoder.decode(AidenChatCache.SummarySnapshot.self, from: data)
+        }
+    }
+
+    private static func makeFixture(profile: Profile) -> Fixture {
+        let chatCount = profile.chatCount
+        let base = Date(timeIntervalSince1970: 1_787_100_000)
+        let chats = (0..<chatCount).map { chatIndex in
+            let messageCount = profile.messageCount(chatIndex: chatIndex)
+            return AidenChat(
+                id: String(format: "chat-%04d", chatIndex),
+                workspaceId: String(format: "workspace-%03d", chatIndex % 25),
+                title: "Deterministic performance chat \(chatIndex)",
+                providerId: "openai",
+                modelId: "gpt-5.6",
+                messages: (0..<messageCount).map { messageIndex in
+                    AidenChatMessage(
+                        id: String(format: "message-%04d-%04d", chatIndex, messageIndex),
+                        role: messageIndex.isMultiple(of: 2) ? .user : .assistant,
+                        text: fixtureMessage(
+                            profile: profile,
+                            chatIndex: chatIndex,
+                            messageIndex: messageIndex
+                        ),
+                        createdAt: base.addingTimeInterval(Double(chatIndex * 100 + messageIndex))
+                    )
+                },
+                createdAt: base.addingTimeInterval(Double(chatIndex * 100)),
+                updatedAt: base.addingTimeInterval(Double(chatIndex * 100 + messageCount + 1)),
+                revision: summaryRevision(chatIndex),
+                titlePending: chatIndex.isMultiple(of: 11) ? true : nil
+            )
+        }
+        let summaries = chats.map { AidenChatSummary(chat: $0) }
+            .sorted(by: AidenChatSummaryPage.areInCanonicalOrder)
+        let pages = stride(from: 0, to: summaries.count, by: 200).enumerated().map { page, start in
+            let end = min(start + 200, summaries.count)
+            let nextCursor = end < summaries.count
+                ? "cur_page_\(page + 2)." + String(repeating: "C", count: 43)
+                : nil
+            return try! AidenChatSummaryPage(
+                summaries: Array(summaries[start..<end]),
+                nextCursor: nextCursor
+            )
+        }
+        let first = pages[0]
+        let remoteEncoder = JSONEncoder()
+        remoteEncoder.dateEncodingStrategy = .iso8601
+        let cacheEncoder = JSONEncoder()
+        cacheEncoder.dateEncodingStrategy = .iso8601
+        return Fixture(
+            full: try! remoteEncoder.encode(FullChatList(chats: chats)),
+            firstSummaryPage: try! remoteEncoder.encode(first),
+            allSummaryPages: try! remoteEncoder.encode(SummaryPageList(pages: pages)),
+            cachedSummarySnapshot: try! cacheEncoder.encode(AidenChatCache.SummarySnapshot(
+                summaries: summaries,
+                nextCursor: nil
+            ))
+        )
+    }
+
+    private static func fixtureMessage(
+        profile: Profile,
+        chatIndex: Int,
+        messageIndex: Int
+    ) -> String {
+        let prefix = "Deterministic message \(messageIndex) for chat \(chatIndex). "
+        guard profile.includesMaximumSizedMessages,
+              chatIndex == 0,
+              messageIndex == 0 else {
+            return prefix + String(repeating: "fixture ", count: 8)
+        }
+        return prefix + String(
+            repeating: "x",
+            count: AidenRemoteProtocol.maxTextLength - prefix.unicodeScalars.count
+        )
+    }
+
+    private static func summaryRevision(_ chatIndex: Int) -> String {
+        "rev_" + String(format: "%043d", chatIndex)
+    }
+}
+
 final class AidenHapticTests: XCTestCase {
     @MainActor
     private final class RecordingEmitter: AidenHapticEmitting {
@@ -2284,6 +2760,108 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(normalized.codeFontSize, 10)
     }
 
+    func testUnifiedWorkspaceSidebarProjectsOwnedChatsWithoutDuplicates() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        let workspaces = [
+            AidenWorkspace(
+                id: "alpha",
+                name: "Alpha",
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(20),
+                revision: "alpha-r1"
+            ),
+            AidenWorkspace(
+                id: "beta",
+                name: "Beta",
+                permission: .ask,
+                hasFolder: false,
+                isManagedWorktree: false,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(10),
+                revision: "beta-r1"
+            ),
+        ]
+        let chats = [
+            AidenChat(
+                id: "alpha-chat",
+                workspaceId: "alpha",
+                title: "Review API",
+                providerId: nil,
+                modelId: nil,
+                messages: [],
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(30),
+                revision: "chat-r1"
+            ),
+            AidenChat(
+                id: "orphan-chat",
+                workspaceId: "removed",
+                title: "Removed",
+                providerId: nil,
+                modelId: nil,
+                messages: [],
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(40),
+                revision: "chat-r2"
+            ),
+        ]
+
+        let projection = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: chats,
+            searchText: ""
+        )
+        XCTAssertEqual(projection.sections.map(\.workspace.id), ["alpha", "beta"])
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-chat"])
+        XCTAssertEqual(projection.sections[1].chats, [])
+        XCTAssertEqual(projection.recents.map(\.id), ["alpha-chat"])
+
+        let search = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: chats,
+            searchText: "api"
+        )
+        XCTAssertEqual(search.sections.map(\.workspace.id), ["alpha"])
+        XCTAssertEqual(search.recents.map(\.id), ["alpha-chat"])
+    }
+
+    @MainActor
+    func testUnifiedWorkspaceSidebarPreferencesPersistPerInstallation() throws {
+        let suiteName = "AidenWorkspaceSidebarTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenProductNavigationStore(defaults: defaults)
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-one"), .workspace)
+        store.setWorkspaceSidebarOrganization(.recent, for: "mac-one")
+        store.toggleExpandedSidebarWorkspace("alpha", for: "mac-one")
+        store.toggleExpandedSidebarWorkspace("beta", for: "mac-two")
+
+        let restored = AidenProductNavigationStore(defaults: defaults)
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .recent)
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+
+        restored.pruneExpandedSidebarWorkspaces(validWorkspaceIDs: ["other"], for: "mac-one")
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), [])
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+
+        restored.purge(instanceID: "mac-one")
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .workspace)
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), [])
+        XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+    }
+
     func testWorkspaceSelectionSurvivesAdaptiveLayoutChangesAndReconcilesCRUD() {
         let ids = ["workspace-a", "workspace-b", "workspace-c"]
         var selected = AidenWorkspaceNavigation.reconciledSelection(current: nil, workspaceIDs: ids)
@@ -2369,6 +2947,17 @@ final class AidenAppearanceTests: XCTestCase {
                 workspaceIDs: ids
             ),
             []
+        )
+        XCTAssertEqual(
+            AidenWorkspaceNavigation.compactPath(
+                enteringFromSplit: true,
+                current: ["workspace-a"],
+                selectedWorkspaceID: "workspace-a",
+                workspaceIDs: ids,
+                preservingSelectedChat: true
+            ),
+            [],
+            "A selected chat should remain the compact destination across a size-class transition"
         )
     }
 

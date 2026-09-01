@@ -10,6 +10,7 @@
 
 import {
   convertToLlm,
+  DEFAULT_COMPACTION_SETTINGS,
   type AgentHarnessResources,
   type AgentMessage,
 } from "@earendil-works/pi-agent-core";
@@ -150,6 +151,7 @@ import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
 } from "./generation-context.js";
+import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
 import {
@@ -245,6 +247,23 @@ import {
   resolvePiAgentRuntimeStaticContributions,
   type PiAgentRuntimeExtension,
 } from "./pi-agent-runtime-harness.js";
+import {
+  createMemoryExtension,
+  authorizeMemoryProposal,
+  memoryMetadataForChat,
+  memoryProvenanceForGeneration,
+  memoryScopeForChat,
+  REMEMBER_MEMORY_TOOL_NAME,
+} from "./memory-context.js";
+import { memoryStore } from "./memory-store-main.js";
+import { piUpgradeRolloutStore } from "./pi-upgrade-rollout-main.js";
+import {
+  piUpgradeBehaviorEnabledAtStartup,
+  piUpgradeChatBehaviorEligible,
+  piUpgradeMemoryEligible,
+} from "./pi-upgrade-rollout.js";
+import { isPackagedRuntime } from "../runtime-mode.js";
+import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -1707,8 +1726,54 @@ export const llmClient = {
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
+    let piUpgradeCompactionEnabled = false;
+    let memoryApprovalContext:
+      | { scope: MemoryScope; provenance: MemoryProvenance }
+      | undefined;
     try {
-      piSession = await piCompactionSessionStore.openChat(params.chatId);
+      const piUpgradePolicy = await piUpgradeRolloutStore.load();
+      piUpgradeCompactionEnabled = piUpgradeChatBehaviorEligible(
+        piUpgradePolicy,
+        generationChat,
+        {
+          development: !isPackagedRuntime(),
+          behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+        },
+      );
+      piSession = await piCompactionSessionStore.openChat(params.chatId, generationChat);
+      let memoryExtension: PiAgentRuntimeExtension | undefined;
+      try {
+        const memoryEligible = piUpgradeMemoryEligible(
+          piUpgradePolicy,
+          generationChat,
+          {
+            development: !isPackagedRuntime(),
+            behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+          },
+        );
+        if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
+        const scope = memoryScopeForChat(generationChat);
+        await memoryStore.replaceChatMetadata(
+          scope,
+          generationChat.id,
+          memoryMetadataForChat(generationChat),
+        );
+        const provenance = memoryProvenanceForGeneration(
+          generationChat,
+          options.turnId,
+          owner.id !== 0,
+        );
+        memoryExtension = await createMemoryExtension({
+          store: memoryStore,
+          scope,
+          ...(provenance ? { provenance } : {}),
+        });
+        if (provenance) memoryApprovalContext = { scope, provenance };
+      } catch {
+        // Memory is an optional local context source. Corruption or an
+        // unsupported SQLite build must remove both read and write tools.
+        logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
+      }
       if (
         shouldEnableTodoExtension({
           usageSource: options.usageSource,
@@ -1749,6 +1814,7 @@ export const llmClient = {
       // unclassified capability through an alternate contribution path.
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
         ? [
+            ...(memoryExtension ? [memoryExtension] : []),
             {
               id: "aiden.bot-runtime-authority",
               beforeProviderRequest: async ({ model: requestModel }) => {
@@ -1764,7 +1830,11 @@ export const llmClient = {
               },
             },
           ]
-        : [...runtimeExtensionSnapshot.extensions, ...generationExtensions];
+        : [
+            ...runtimeExtensionSnapshot.extensions,
+            ...generationExtensions,
+            ...(memoryExtension ? [memoryExtension] : []),
+          ];
       const toolsBeforeAdvisor = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -1936,6 +2006,10 @@ export const llmClient = {
         ),
         model,
         thinkingLevel,
+        settings: {
+          ...DEFAULT_COMPACTION_SETTINGS,
+          enabled: piUpgradeCompactionEnabled,
+        },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
       };
@@ -2042,6 +2116,8 @@ export const llmClient = {
             systemPrompt,
             tools: runtimeTools,
             supportsImages,
+            providerId: model.provider,
+            modelId: model.id,
           },
           (result) => {
             logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
@@ -2157,10 +2233,17 @@ export const llmClient = {
             const workspaceApproval =
               permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+            const memoryApproval = context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME;
             const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
-            if (!scheduleApproval && !workspaceApproval && !disclosureApproval && !botMcpApproval) {
+            if (
+              !scheduleApproval &&
+              !workspaceApproval &&
+              !disclosureApproval &&
+              !memoryApproval &&
+              !botMcpApproval
+            ) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
@@ -2228,7 +2311,35 @@ export const llmClient = {
                 };
               }
             }
-            summary = editScheduleApproval
+            if (memoryApproval) {
+              timeline.toolAwaitingApproval(context.toolCall.id);
+              const memoryDecision = await authorizeMemoryProposal(
+                context.args,
+                memoryApprovalContext,
+                async (summary, approvalSignal) => {
+                  const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+                  if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+                  return approvals.request({
+                    streamId,
+                    toolCallId,
+                    toolName: context.toolCall.name,
+                    summary,
+                    details: approvalDetails,
+                  }, approvalSignal, owner.documentId);
+                },
+                signal,
+              );
+              if (!memoryDecision.allowed) {
+                deniedToolCalls.add(context.toolCall.id);
+                if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason: memoryDecision.reason,
+                };
+              }
+              timeline.toolRunning(context.toolCall.id);
+              return undefined;
+            } else summary = editScheduleApproval
               ? summarizeEditAutomationToolCall(context.args)
               : preparedStandardScheduleSummary
                 ? preparedStandardScheduleSummary
@@ -2774,7 +2885,8 @@ export const llmClient = {
           }
         }
         const finalError =
-          runtimeOutcome.kind === "provider_failed"
+          generationEmergencyUserError(runtimeOutcome.emergencyProjection) ??
+          (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
               : runtimeOutcome.reason === "context-overflow"
@@ -2786,7 +2898,7 @@ export const llmClient = {
                     : "The model could not complete this response."
             : runtimeOutcome.kind === "host_failed"
               ? "The local agent runtime could not complete this response safely."
-              : null;
+              : null);
         if (runtimeOutcome.kind === "provider_failed") {
           logger.warn("pi", `Provider generation failed for stream ${streamId}.`, {
             category: runtimeOutcome.providerFailure?.category ?? "unknown",
