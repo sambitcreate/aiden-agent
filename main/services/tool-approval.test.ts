@@ -35,7 +35,7 @@ test("approval decisions are one-shot and remove abort listeners", async () => {
   assert.equal(approvals.pendingCount, 1);
   assert.equal(tracked.listenerCount(), 1);
   assert.equal(approvals.decide(prompts[0].approvalId, true), true);
-  assert.equal(await pending, true);
+  assert.equal(await pending, "allowed");
   assert.equal(approvals.pendingCount, 0);
   assert.equal(tracked.listenerCount(), 0);
   assert.equal(approvals.decide(prompts[0].approvalId, true), false);
@@ -52,7 +52,7 @@ test("deny, abort, stream cancellation, and shutdown leave no pending state", as
     summary: "write",
   });
   approvals.decide(prompts[prompts.length - 1]!.approvalId, false);
-  assert.equal(await denied, false);
+  assert.equal(await denied, "denied");
 
   const abortedSignal = trackedSignal();
   const aborted = approvals.request(
@@ -60,7 +60,7 @@ test("deny, abort, stream cancellation, and shutdown leave no pending state", as
     abortedSignal.signal,
   );
   abortedSignal.controller.abort();
-  assert.equal(await aborted, false);
+  assert.equal(await aborted, "cancelled");
   assert.equal(abortedSignal.listenerCount(), 0);
 
   const cancelled = approvals.request({
@@ -70,7 +70,7 @@ test("deny, abort, stream cancellation, and shutdown leave no pending state", as
     summary: "edit",
   });
   approvals.cancelStream("cancel");
-  assert.equal(await cancelled, false);
+  assert.equal(await cancelled, "cancelled");
 
   const shutdown = approvals.request({
     streamId: "shutdown",
@@ -79,7 +79,7 @@ test("deny, abort, stream cancellation, and shutdown leave no pending state", as
     summary: "run",
   });
   approvals.shutdown();
-  assert.equal(await shutdown, false);
+  assert.equal(await shutdown, "cancelled");
   assert.equal(approvals.pendingCount, 0);
 });
 
@@ -100,7 +100,7 @@ test("an already-aborted request publishes nothing", async () => {
       },
       controller.signal,
     ),
-    false,
+    "cancelled",
   );
   assert.equal(publications, 0);
   assert.equal(approvals.pendingCount, 0);
@@ -123,7 +123,7 @@ test("only the renderer document that received a prompt can decide it", async ()
   assert.equal(approvals.decide(prompts[0].approvalId, true, "document-two"), false);
   assert.equal(approvals.pendingCount, 1);
   assert.equal(approvals.decide(prompts[0].approvalId, true, "document-one"), true);
-  assert.equal(await pending, true);
+  assert.equal(await pending, "allowed");
 });
 
 test("detaching a renderer denies pending and future approvals without aborting the stream", async () => {
@@ -137,7 +137,7 @@ test("detaching a renderer denies pending and future approvals without aborting 
   });
 
   approvals.detachStream("detached");
-  assert.equal(await pending, false);
+  assert.equal(await pending, "detached");
   assert.equal(approvals.pendingCount, 0);
   assert.equal(
     await approvals.request({
@@ -146,7 +146,7 @@ test("detaching a renderer denies pending and future approvals without aborting 
       toolName: "run_command",
       summary: "run",
     }),
-    false,
+    "detached",
   );
   assert.equal(prompts.length, 1);
 
@@ -159,5 +159,21 @@ test("detaching a renderer denies pending and future approvals without aborting 
   });
   assert.equal(prompts.length, 2);
   approvals.decide(prompts[1]!.approvalId, true);
-  assert.equal(await resumed, true);
+  assert.equal(await resumed, "allowed");
+});
+
+test("publication failures are distinct from user denial", async () => {
+  const approvals = new ToolApprovalCoordinator(() => {
+    throw new Error("renderer unavailable");
+  });
+  assert.equal(
+    await approvals.request({
+      streamId: "unavailable",
+      toolCallId: "call-unavailable",
+      toolName: "share_image",
+      summary: "share",
+    }),
+    "unavailable",
+  );
+  assert.equal(approvals.pendingCount, 0);
 });

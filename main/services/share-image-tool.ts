@@ -121,7 +121,7 @@ export function createShareImageTool(dependencies: ShareImageToolDependencies): 
     name: SHARE_IMAGE_TOOL_NAME,
     label: "Share Image",
     description:
-      "Attach a PNG or JPEG file from this Mac to your response so the user can view it in Aiden on Mac, iPhone, or iPad. Use this instead of opening Preview when the user asks to see or receive an image. Relative paths start at the active workspace; absolute paths are accepted after user approval.",
+      "Attach a PNG or JPEG file from this Mac to your response so the user can receive it in Aiden on Mac, iPhone, or iPad. This is an outbound sharing tool: it cannot inspect an image or add one to model input. Never call it to view, understand, or analyze an image. Images attached by the user are already supplied in the conversation when the selected model supports vision. Use this tool only when the user asks to see or receive a local image file. Relative paths start at the active workspace; absolute paths are accepted after user approval.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative or absolute path to the PNG or JPEG." }),
     }),
