@@ -220,6 +220,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/scheduled-tasks/preview",
     "/scheduled-tasks/scripts",
     "/scheduled-tasks/mcp-servers",
+    "/memory/settings",
     "/scheduled-tasks/settings",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
@@ -900,6 +901,7 @@ test("wire schemas are allowlists and pairing requires pinned HTTPS identity", a
     assert.equal(endpoint.test("https://user:secret@aiden.example.test/api/aiden/v1"), false);
   }
   assert.deepEqual(record(schemas.WorkspacePatch, "WorkspacePatch").required, ["confirmedForeground"]);
+  assert.deepEqual(record(schemas.MemorySettingsMutation, "MemorySettingsMutation").required, ["enabled", "confirmedForeground"]);
   assert.deepEqual(record(schemas.ScheduleSettingsMutation, "ScheduleSettingsMutation").required, ["confirmedForeground"]);
   const messageRoles = record(record(record(schemas.Message, "Message").properties, "Message properties").role, "Message role").enum;
   assert(Array.isArray(messageRoles));
