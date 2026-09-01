@@ -242,6 +242,7 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
     let id: String
     var name: String
     var permission: AidenWorkspacePermission
+    var memoryEnabled: Bool = true
     let hasFolder: Bool
     let isManagedWorktree: Bool
     let branchName: String?
@@ -250,6 +251,55 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let revision: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, permission, memoryEnabled, hasFolder, isManagedWorktree
+        case branchName, repositoryName, git, createdAt, updatedAt, revision
+    }
+
+    init(
+        id: String,
+        name: String,
+        permission: AidenWorkspacePermission,
+        memoryEnabled: Bool = true,
+        hasFolder: Bool,
+        isManagedWorktree: Bool,
+        branchName: String?,
+        repositoryName: String?,
+        git: AidenWorkspaceGitSummary?,
+        createdAt: Date,
+        updatedAt: Date,
+        revision: String
+    ) {
+        self.id = id
+        self.name = name
+        self.permission = permission
+        self.memoryEnabled = memoryEnabled
+        self.hasFolder = hasFolder
+        self.isManagedWorktree = isManagedWorktree
+        self.branchName = branchName
+        self.repositoryName = repositoryName
+        self.git = git
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.revision = revision
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        permission = try values.decode(AidenWorkspacePermission.self, forKey: .permission)
+        memoryEnabled = try values.decodeIfPresent(Bool.self, forKey: .memoryEnabled) ?? true
+        hasFolder = try values.decode(Bool.self, forKey: .hasFolder)
+        isManagedWorktree = try values.decode(Bool.self, forKey: .isManagedWorktree)
+        branchName = try values.decodeIfPresent(String.self, forKey: .branchName)
+        repositoryName = try values.decodeIfPresent(String.self, forKey: .repositoryName)
+        git = try values.decodeIfPresent(AidenWorkspaceGitSummary.self, forKey: .git)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        revision = try values.decode(String.self, forKey: .revision)
+    }
 }
 
 enum AidenWorkspaceCreate: Encodable, Equatable, Sendable {
@@ -280,12 +330,24 @@ enum AidenWorkspaceCreate: Encodable, Equatable, Sendable {
 struct AidenWorkspacePatch: Encodable, Equatable, Sendable {
     let name: String?
     let permission: AidenWorkspacePermission?
+    let memoryEnabled: Bool?
     let confirmedForeground = true
 
-    init(name: String? = nil, permission: AidenWorkspacePermission? = nil) {
+    init(name: String? = nil, permission: AidenWorkspacePermission? = nil, memoryEnabled: Bool? = nil) {
         self.name = name
         self.permission = permission
+        self.memoryEnabled = memoryEnabled
     }
+}
+
+struct AidenMemorySettings: Codable, Equatable, Sendable {
+    let enabled: Bool
+    let revision: String
+}
+
+private struct AidenMemorySettingsMutation: Encodable {
+    let enabled: Bool
+    let confirmedForeground = true
 }
 
 struct AidenBrowserRoot: Codable, Identifiable, Equatable, Sendable {
@@ -671,13 +733,26 @@ final class AidenRemoteClient: @unchecked Sendable {
         revision: String,
         patch: AidenWorkspacePatch
     ) async throws -> AidenWorkspace {
-        guard patch.name != nil || patch.permission != nil else {
+        guard patch.name != nil || patch.permission != nil || patch.memoryEnabled != nil else {
             throw AidenRemoteClientError.invalidResponse
         }
         return try await send(
             method: "PATCH",
             path: ["workspaces", id],
             body: patch,
+            headers: ["If-Match": revision]
+        )
+    }
+
+    func memorySettings() async throws -> AidenMemorySettings {
+        try await send(method: "GET", path: ["memory", "settings"])
+    }
+
+    func updateMemorySettings(revision: String, enabled: Bool) async throws -> AidenMemorySettings {
+        try await send(
+            method: "PATCH",
+            path: ["memory", "settings"],
+            body: AidenMemorySettingsMutation(enabled: enabled),
             headers: ["If-Match": revision]
         )
     }
