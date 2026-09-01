@@ -794,12 +794,15 @@ ipcMain.handle("app:getUpdateState", (event) => {
   return appUpdateService.snapshot();
 });
 
-ipcMain.handle("app:checkForUpdates", async (event): Promise<AppUpdateCheckResult> => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
-    return { outcome: "unavailable" };
-  }
-  return appUpdateService.checkNow(false);
-});
+ipcMain.handle(
+  "app:checkForUpdates",
+  async (event): Promise<AppUpdateCheckResult> => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+      return { outcome: "unavailable" };
+    }
+    return appUpdateService.checkNow(false);
+  },
+);
 
 ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
