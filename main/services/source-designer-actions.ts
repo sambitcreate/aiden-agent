@@ -14,8 +14,18 @@ import {
   type SourceElementDescriptorV1,
   type SourceSelectionBindingV1,
 } from "../../renderer/shared/source-designer.js";
+import type {
+  DesignCommentSourceIdentityV1,
+  DesignCommentTargetV1,
+} from "./design-comment-contract.js";
+import {
+  computeDesignSourceManifestHash,
+  resolveDesignSourceSelection,
+  type DesignSourceManifestV1,
+  type DesignSourceRangeV1,
+} from "./design-source-graph-core.js";
 
-const MAX_SOURCE_BYTES = 1_500_000;
+const MAX_SOURCE_BYTES = 192 * 1024;
 const BINDING_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_ACTIONS = 80;
 const SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
@@ -27,6 +37,9 @@ export interface ResolvedSourceSelection extends SourceSelectionBindingV1 {
   root: string;
   source: string;
   createdAt: number;
+  componentName?: string;
+  selectorMatchCount?: number;
+  sourceManifestHash?: string;
 }
 
 interface InternalAction {
@@ -40,6 +53,54 @@ interface InternalAction {
   nextSource: string;
   start: number;
   end: number;
+  preApplyGuard?: () => Promise<boolean>;
+}
+
+interface SourceGraphUse {
+  owner?: string;
+  repeated: boolean;
+  source: DesignSourceRangeV1;
+}
+
+const COMPONENT_NAME = /^[A-Z][A-Za-z0-9_$]{0,159}$/u;
+
+function enclosingComponentName(node: ts.Node | undefined): string | undefined {
+  for (let current = node?.parent; current; current = current.parent) {
+    if (ts.isFunctionDeclaration(current) && current.name) return current.name.text;
+    if (
+      (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
+      current.parent &&
+      ts.isVariableDeclaration(current.parent) &&
+      ts.isIdentifier(current.parent.name)
+    ) {
+      return current.parent.name.text;
+    }
+  }
+  return undefined;
+}
+
+function isRepeatedJsxUse(node: ts.Node): boolean {
+  const owner = enclosingComponentName(node);
+  for (let current = node.parent; current; current = current.parent) {
+    if (
+      ts.isForStatement(current) ||
+      ts.isForInStatement(current) ||
+      ts.isForOfStatement(current) ||
+      ts.isWhileStatement(current) ||
+      ts.isDoStatement(current)
+    ) {
+      return true;
+    }
+    if (
+      ts.isCallExpression(current) &&
+      ts.isPropertyAccessExpression(current.expression) &&
+      ["map", "flatMap", "forEach"].includes(current.expression.name.text)
+    ) {
+      return true;
+    }
+    if (owner && enclosingComponentName(current) !== owner) break;
+  }
+  return false;
 }
 
 interface SourceFileWithDiagnostics extends ts.SourceFile {
@@ -78,7 +139,11 @@ async function existingSourcePath(root: string, supplied: string): Promise<strin
   } catch {
     throw new Error("The selected source path is invalid.");
   }
-  suffix = suffix.split(/[?#]/u, 1)[0]?.replace(/^\/@fs\//u, "/").replace(/^\/+|^\.\//gu, "") ?? "";
+  suffix =
+    suffix
+      .split(/[?#]/u, 1)[0]
+      ?.replace(/^\/@fs\//u, "/")
+      .replace(/^\/+|^\.\//gu, "") ?? "";
   if (!suffix || !SOURCE_EXTENSIONS.has(path.extname(suffix).toLowerCase())) {
     throw new Error("The selected element does not map to a supported workspace source file.");
   }
@@ -96,7 +161,8 @@ async function existingSourcePath(root: string, supplied: string): Promise<strin
         if (!SOURCE_SEARCH_SKIP.has(entry.name)) queue.push(path.join(directory, entry.name));
         continue;
       }
-      if (!entry.isFile() || !SOURCE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+      if (!entry.isFile() || !SOURCE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
+        continue;
       const candidate = path.join(directory, entry.name);
       const relative = path.relative(root, candidate).split(path.sep).join("/");
       if (relative === portableSuffix || relative.endsWith(`/${portableSuffix}`)) {
@@ -178,7 +244,10 @@ function exactJsxRange(
       ? node.openingElement.attributes.properties
       : node.attributes.properties;
     return attributes.some((attribute) => {
-      if (!ts.isJsxAttribute(attribute) || attribute.name.getText(sourceFile) !== stableAttribute.name) {
+      if (
+        !ts.isJsxAttribute(attribute) ||
+        attribute.name.getText(sourceFile) !== stableAttribute.name
+      ) {
         return false;
       }
       return (
@@ -285,11 +354,401 @@ export class SourceDesignerActionService {
       root,
       source,
       createdAt: Date.now(),
+      ...(descriptor.componentName ? { componentName: descriptor.componentName } : {}),
+      ...(descriptor.selectorMatchCount
+        ? { selectorMatchCount: descriptor.selectorMatchCount }
+        : {}),
     };
+    const graphProof = await this.connectedSourceGraphProof(binding);
+    if (!graphProof) {
+      throw new Error(
+        "Aiden could not prove one exact runtime/source instance for that selection.",
+      );
+    }
+    binding.sourceManifestHash = graphProof.manifestHash;
     this.bindings.set(id, binding);
-    const { ownerDocumentId: _owner, root: _root, source: _source, createdAt: _created, ...view } =
-      binding;
+    const {
+      ownerDocumentId: _owner,
+      root: _root,
+      source: _source,
+      createdAt: _created,
+      componentName: _componentName,
+      selectorMatchCount: _selectorMatchCount,
+      sourceManifestHash: _sourceManifestHash,
+      ...view
+    } = binding;
     return view;
+  }
+
+  /**
+   * Conservatively prove that the selected JSX definition belongs to one
+   * component instance. The preview must report one live selector match, and
+   * every component owner up to a root/default route must have exactly one
+   * non-looped JSX use across the authorized workspace. Ambiguity fails closed.
+   */
+  private async connectedSourceGraphProof(
+    binding: ResolvedSourceSelection,
+    sourceOverrides?: ReadonlyMap<string, string>,
+  ): Promise<{ manifestHash: string } | undefined> {
+    if (
+      binding.selectorMatchCount !== 1 ||
+      !binding.componentName ||
+      !COMPONENT_NAME.test(binding.componentName)
+    ) {
+      return undefined;
+    }
+    const queue = [binding.root];
+    const documents: Array<{ relative: string; sourceFile: ts.SourceFile }> = [];
+    let visited = 0;
+    while (queue.length > 0 && visited < MAX_SOURCE_SEARCH_ENTRIES) {
+      const directory = queue.shift();
+      if (!directory) break;
+      let entries: Array<{
+        name: string;
+        isDirectory(): boolean;
+        isFile(): boolean;
+      }>;
+      try {
+        entries = await fs.readdir(directory, { withFileTypes: true });
+      } catch {
+        return undefined;
+      }
+      for (const entry of entries) {
+        visited += 1;
+        if (visited > MAX_SOURCE_SEARCH_ENTRIES) return undefined;
+        const candidate = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          if (!SOURCE_SEARCH_SKIP.has(entry.name)) queue.push(candidate);
+          continue;
+        }
+        if (!entry.isFile() || !SOURCE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+          continue;
+        }
+        let stat: Awaited<ReturnType<typeof fs.stat>>;
+        let source: string;
+        try {
+          stat = await fs.stat(candidate);
+          if (!stat.isFile() || stat.size > MAX_SOURCE_BYTES) return undefined;
+          const relative = path.relative(binding.root, candidate).split(path.sep).join("/");
+          source = sourceOverrides?.get(relative) ?? (await fs.readFile(candidate, "utf8"));
+          if (Buffer.byteLength(source, "utf8") > MAX_SOURCE_BYTES) return undefined;
+          documents.push({
+            relative,
+            sourceFile: ts.createSourceFile(
+              candidate,
+              source,
+              ts.ScriptTarget.Latest,
+              true,
+              scriptKind(candidate),
+            ),
+          });
+        } catch {
+          return undefined;
+        }
+      }
+    }
+
+    const definitions = new Map<string, DesignSourceRangeV1[]>();
+    const uses = new Map<string, SourceGraphUse[]>();
+    const defaultRoots = new Set<string>();
+    let selectedOwner: string | undefined;
+    for (const document of documents) {
+      const { sourceFile } = document;
+      const sourceRange = (node: ts.Node): DesignSourceRangeV1 => {
+        const start = node.getStart(sourceFile);
+        const end = node.getEnd();
+        const position = sourceFile.getLineAndCharacterOfPosition(start);
+        return {
+          workspaceRelativePath: document.relative,
+          sourceVersion: contentVersion(sourceFile.text),
+          start,
+          end,
+          line: position.line + 1,
+          column: position.character + 1,
+        };
+      };
+      const addDefinition = (name: string, node: ts.Node): void => {
+        if (!COMPONENT_NAME.test(name)) return;
+        const current = definitions.get(name) ?? [];
+        current.push(sourceRange(node));
+        definitions.set(name, current);
+      };
+      const visit = (node: ts.Node): void => {
+        if (ts.isFunctionDeclaration(node) && node.name) {
+          addDefinition(node.name.text, node);
+          if (
+            node.modifiers?.some(({ kind }) => kind === ts.SyntaxKind.DefaultKeyword) &&
+            node.modifiers.some(({ kind }) => kind === ts.SyntaxKind.ExportKeyword)
+          ) {
+            defaultRoots.add(node.name.text);
+          }
+        } else if (
+          ts.isVariableDeclaration(node) &&
+          ts.isIdentifier(node.name) &&
+          node.initializer !== undefined &&
+          (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+        ) {
+          addDefinition(node.name.text, node);
+        } else if (
+          ts.isExportAssignment(node) &&
+          !node.isExportEquals &&
+          ts.isIdentifier(node.expression)
+        ) {
+          defaultRoots.add(node.expression.text);
+        }
+        if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+          const opening = ts.isJsxElement(node) ? node.openingElement : node;
+          const tagName = opening.tagName.getText(sourceFile);
+          if (COMPONENT_NAME.test(tagName)) {
+            const current = uses.get(tagName) ?? [];
+            current.push({
+              ...(enclosingComponentName(node) ? { owner: enclosingComponentName(node) } : {}),
+              repeated: isRepeatedJsxUse(node),
+              source: sourceRange(node),
+            });
+            uses.set(tagName, current);
+          }
+          if (
+            document.relative === binding.path &&
+            node.getStart(sourceFile) === binding.start &&
+            node.getEnd() === binding.end
+          ) {
+            selectedOwner = enclosingComponentName(node);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+    if (selectedOwner !== binding.componentName) return undefined;
+
+    const seen = new Set<string>();
+    const componentChain: string[] = [];
+    let current: string | undefined = binding.componentName;
+    while (current) {
+      if (seen.has(current) || definitions.get(current)?.length !== 1) return undefined;
+      seen.add(current);
+      componentChain.push(current);
+      const componentUses: SourceGraphUse[] = uses.get(current) ?? [];
+      if (componentUses.length === 0) {
+        if (!defaultRoots.has(current)) return undefined;
+        current = undefined;
+        break;
+      }
+      if (componentUses.length !== 1 || componentUses[0]!.repeated) return undefined;
+      current = componentUses[0]!.owner;
+    }
+    const componentId = `intrinsic_${binding.selection.tagName}`;
+    const runtimeInstanceId = `runtime_${createHash("sha256")
+      .update(`${binding.id}\0${binding.selection.selector}`)
+      .digest("hex")
+      .slice(0, 40)}`;
+    const manifestBody = {
+      version: 1 as const,
+      id: `manifest_${createHash("sha256").update(binding.id).digest("hex").slice(0, 40)}`,
+      revision: 1,
+      workspaceId: binding.workspaceId,
+      components: [
+        { id: componentId, displayName: binding.selection.tagName, kind: "intrinsic" as const },
+        ...componentChain.map((name) => ({
+          id: `component_${name}`,
+          displayName: name,
+          kind: "custom" as const,
+          definition: definitions.get(name)![0]!,
+        })),
+      ],
+      instances: [
+        {
+          runtimeInstanceId,
+          selector: binding.selection.selector,
+          componentId,
+          source: {
+            workspaceRelativePath: binding.path,
+            sourceVersion: binding.sourceVersion,
+            start: binding.start,
+            end: binding.end,
+            line: binding.lineNumber,
+            column: binding.columnNumber,
+          },
+          ...(componentChain[0]
+            ? {
+                parentRuntimeInstanceId: `runtime_component_${createHash("sha256")
+                  .update(`${binding.id}\0${componentChain[0]}`)
+                  .digest("hex")
+                  .slice(0, 32)}`,
+              }
+            : {}),
+        },
+        ...componentChain.map((name, index) => {
+          const use = uses.get(name)?.[0];
+          const source = use?.source ?? definitions.get(name)![0]!;
+          return {
+            runtimeInstanceId: `runtime_component_${createHash("sha256")
+              .update(`${binding.id}\0${name}`)
+              .digest("hex")
+              .slice(0, 32)}`,
+            selector: `[data-aiden-component="${name}"]`,
+            componentId: `component_${name}`,
+            source,
+            ...(componentChain[index + 1]
+              ? {
+                  parentRuntimeInstanceId: `runtime_component_${createHash("sha256")
+                    .update(`${binding.id}\0${componentChain[index + 1]}`)
+                    .digest("hex")
+                    .slice(0, 32)}`,
+                }
+              : {}),
+          };
+        }),
+      ],
+    };
+    const manifest: DesignSourceManifestV1 = {
+      ...manifestBody,
+      manifestHash: computeDesignSourceManifestHash(manifestBody),
+    };
+    const currentSourceVersions = Object.fromEntries(
+      documents.map(({ relative, sourceFile }) => [relative, contentVersion(sourceFile.text)]),
+    );
+    const resolution = resolveDesignSourceSelection({
+      manifest,
+      request: {
+        version: 1,
+        manifestHash: manifest.manifestHash,
+        runtimeInstanceId,
+        selector: binding.selection.selector,
+        componentId,
+        scope: "runtime-instance",
+      },
+      currentSourceVersions,
+    });
+    return resolution.status === "resolved" ? { manifestHash: manifest.manifestHash } : undefined;
+  }
+
+  async proveConnectedComponentSingleUse(binding: ResolvedSourceSelection): Promise<boolean> {
+    const proof = await this.connectedSourceGraphProof(binding);
+    return Boolean(
+      proof && (!binding.sourceManifestHash || binding.sourceManifestHash === proof.manifestHash),
+    );
+  }
+
+  async connectedComponentManifestHash(
+    binding: ResolvedSourceSelection,
+  ): Promise<string | undefined> {
+    return (await this.connectedSourceGraphProof(binding))?.manifestHash;
+  }
+
+  async connectedComponentPostimageProof(
+    binding: ResolvedSourceSelection,
+    source: string,
+    sourcePostimages?: ReadonlyMap<string, string>,
+  ): Promise<
+    | {
+        manifestHash: string;
+        sourceVersion: string;
+        start: number;
+        end: number;
+        lineNumber: number;
+        columnNumber: number;
+      }
+    | undefined
+  > {
+    const range = exactJsxRange(source, binding.path, binding.lineNumber, binding.columnNumber, {
+      version: SOURCE_DESIGNER_VERSION,
+      selection: binding.selection,
+      filePath: binding.path,
+      lineNumber: binding.lineNumber,
+      columnNumber: binding.columnNumber,
+      ...(binding.componentName ? { componentName: binding.componentName } : {}),
+      selectorMatchCount: 1,
+    });
+    if (!range) return undefined;
+    const sourceFile = ts.createSourceFile(
+      binding.path,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      scriptKind(binding.path),
+    );
+    const position = sourceFile.getLineAndCharacterOfPosition(range.start);
+    const postimage: ResolvedSourceSelection = {
+      ...binding,
+      source,
+      sourceVersion: contentVersion(source),
+      start: range.start,
+      end: range.end,
+      lineNumber: position.line + 1,
+      columnNumber: position.character + 1,
+      snippet: source.slice(range.start, range.end),
+    };
+    delete postimage.sourceManifestHash;
+    const sourceOverrides = new Map(sourcePostimages);
+    sourceOverrides.set(binding.path, source);
+    const proof = await this.connectedSourceGraphProof(postimage, sourceOverrides);
+    return proof
+      ? {
+          manifestHash: proof.manifestHash,
+          sourceVersion: postimage.sourceVersion,
+          start: postimage.start,
+          end: postimage.end,
+          lineNumber: postimage.lineNumber,
+          columnNumber: postimage.columnNumber,
+        }
+      : undefined;
+  }
+
+  async proveDurableConnectedComponentSingleUse(input: {
+    selectionId: string;
+    workspaceId: string;
+    root: string;
+    path: string;
+    sourceVersion: string;
+    source: string;
+    start: number;
+    end: number;
+    lineNumber: number;
+    columnNumber: number;
+    componentName: string;
+    selector: string;
+    tagName: string;
+    elementId?: string;
+    manifestHash: string;
+  }): Promise<boolean> {
+    if (
+      input.start < 0 ||
+      input.end <= input.start ||
+      input.end > input.source.length ||
+      contentVersion(input.source) !== input.sourceVersion
+    ) {
+      return false;
+    }
+    const binding: ResolvedSourceSelection = {
+      version: SOURCE_DESIGNER_VERSION,
+      id: input.selectionId,
+      sessionId: "durable-authority-proof",
+      workspaceId: input.workspaceId,
+      path: input.path,
+      sourceVersion: input.sourceVersion,
+      start: input.start,
+      end: input.end,
+      lineNumber: input.lineNumber,
+      columnNumber: input.columnNumber,
+      snippet: input.source.slice(input.start, input.end),
+      selection: {
+        version: 1,
+        label: input.tagName,
+        selector: input.selector,
+        tagName: input.tagName,
+        ...(input.elementId ? { elementId: input.elementId } : {}),
+      },
+      ownerDocumentId: "durable-authority-proof",
+      root: input.root,
+      source: input.source,
+      createdAt: Date.now(),
+      componentName: input.componentName,
+      selectorMatchCount: 1,
+      sourceManifestHash: input.manifestHash,
+    };
+    return this.proveConnectedComponentSingleUse(binding);
   }
 
   async resolve(
@@ -303,11 +762,7 @@ export class SourceDesignerActionService {
       !binding ||
       binding.ownerDocumentId !== owner.documentId ||
       binding.workspaceId !== workspaceId ||
-      !sourceDesignPreviewService.authority(
-        owner.documentId,
-        workspaceId,
-        binding.sessionId,
-      )
+      !sourceDesignPreviewService.authority(owner.documentId, workspaceId, binding.sessionId)
     ) {
       throw new Error("The selected source element is stale. Select it again and retry.");
     }
@@ -321,12 +776,64 @@ export class SourceDesignerActionService {
     return binding;
   }
 
+  async proveConnectedCommentTarget(
+    owner: ChatGenerationOwner,
+    workspaceId: string,
+    target: DesignCommentTargetV1 & {
+      source: Extract<DesignCommentSourceIdentityV1, { kind: "connected-source" }>;
+    },
+  ): Promise<boolean> {
+    this.prune();
+    for (const binding of this.bindings.values()) {
+      if (
+        binding.ownerDocumentId !== owner.documentId ||
+        binding.workspaceId !== workspaceId ||
+        binding.path !== target.source.path ||
+        binding.sourceVersion !== target.source.sourceVersion ||
+        binding.start !== target.source.start ||
+        binding.end !== target.source.end ||
+        binding.selection.selector !== target.element.selector ||
+        binding.selection.tagName !== target.element.tagName ||
+        binding.selection.elementId !== target.element.elementId ||
+        createHash("sha256").update(binding.snippet).digest("hex") !== target.source.preimageHash
+      ) {
+        continue;
+      }
+      try {
+        await this.resolve(owner, workspaceId, binding.id);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Read a full, hash-pinned workspace document for the Design Code inspector.
+   * This shares the exact live-preview authority and stale-snapshot proof used
+   * by Designer Actions; it grants no write or command capability.
+   */
+  async readBoundSource(
+    owner: ChatGenerationOwner,
+    workspaceId: string,
+    selectionId: string,
+  ): Promise<{ path: string; content: string; sourceVersion: string }> {
+    const binding = await this.resolve(owner, workspaceId, selectionId);
+    return {
+      path: binding.path,
+      content: binding.source,
+      sourceVersion: binding.sourceVersion,
+    };
+  }
+
   propose(input: {
     owner: ChatGenerationOwner;
     chatId: string;
     binding: ResolvedSourceSelection;
     label: string;
     replacement: string;
+    preApplyGuard?: () => Promise<boolean>;
   }): DesignerActionV1 {
     if (!validJsxReplacement(input.replacement)) {
       throw new Error("The proposed replacement must be one valid, bounded JSX element.");
@@ -359,6 +866,7 @@ export class SourceDesignerActionService {
       nextSource,
       start: input.binding.start,
       end: input.binding.end,
+      ...(input.preApplyGuard ? { preApplyGuard: input.preApplyGuard } : {}),
     };
     this.actions.set(id, action);
     this.prune();
@@ -378,6 +886,34 @@ export class SourceDesignerActionService {
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
+  /** Main-owned cascade inspection; action contents and source bytes stay private. */
+  inspectChatActionIds(chatId: string): string[] {
+    this.prune();
+    return [...this.actions.values()]
+      .filter(({ view }) => view.chatId === chatId)
+      .map(({ view }) => view.id)
+      .sort();
+  }
+
+  /**
+   * Idempotently finish a captured Design Project cascade. An action that was
+   * created after confirmation is not part of that authority and blocks the
+   * older delete rather than being removed.
+   */
+  deleteChatActions(chatId: string, expectedIds: readonly string[]): number {
+    this.prune();
+    const expected = new Set(expectedIds);
+    if (expected.size !== expectedIds.length) {
+      throw new Error("Invalid Designer Action cascade.");
+    }
+    const current = [...this.actions.values()].filter(({ view }) => view.chatId === chatId);
+    if (current.some(({ view }) => !expected.has(view.id))) {
+      throw new Error("Designer Actions changed after deletion was confirmed.");
+    }
+    for (const action of current) this.actions.delete(action.view.id);
+    return current.length;
+  }
+
   async apply(
     owner: RendererDocumentOwner,
     actionId: string,
@@ -387,6 +923,9 @@ export class SourceDesignerActionService {
     const action = this.ownedAction(owner, actionId, root);
     if (action.view.status !== "pending") throw new Error("That action is no longer pending.");
     try {
+      if (action.preApplyGuard && !(await action.preApplyGuard())) {
+        throw new Error("The selected component instance changed before Apply.");
+      }
       const saved = await writeWorkspaceFile(
         root,
         action.view.path,
@@ -416,6 +955,19 @@ export class SourceDesignerActionService {
     action.view = { ...action.view, status: "rejected" };
     this.notify(action);
     return { ...action.view };
+  }
+
+  /** Remove an in-memory proposal after its exact bytes are durably journaled elsewhere. */
+  discardForDurable(owner: RendererDocumentOwner, actionId: string): void {
+    const action = this.actions.get(actionId);
+    if (
+      !action ||
+      action.ownerDocumentId !== owner.documentId ||
+      action.view.status !== "pending"
+    ) {
+      throw new Error("That Designer Action cannot be promoted to durable review.");
+    }
+    this.actions.delete(actionId);
   }
 
   async undo(
