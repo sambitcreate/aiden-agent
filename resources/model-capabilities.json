@@ -65503,9 +65503,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.07322,
-          "output": 0.14644,
-          "cache_read": 0.014644
+          "input": 0.07168,
+          "output": 0.14336,
+          "cache_read": 0.014336
         }
       },
       "deepseek/deepseek-v4-pro-0813": {
@@ -65591,12 +65591,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 384000
         },
         "cost": {
-          "input": 1.6,
-          "output": 3.2,
-          "cache_read": 0.135
+          "input": 1.02747,
+          "output": 2.05494,
+          "cache_read": 0.085623
         }
       },
       "deepseek/deepseek-v3.2": {
@@ -133006,8 +133006,8 @@
             ]
           }
         ],
-        "tool_call": false,
-        "structured_output": false,
+        "tool_call": true,
+        "structured_output": true,
         "temperature": false,
         "knowledge": "2026-06",
         "release_date": "2026-09-01",
@@ -133015,7 +133015,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "pdf"
           ],
           "output": [
             "text"
@@ -224999,36 +225000,6 @@
           "cache_read": 0.022
         }
       },
-      "deepseek/deepseek-v3": {
-        "id": "deepseek/deepseek-v3",
-        "name": "DeepSeek V3 0324",
-        "description": "DeepSeek chat model for instruction following, coding, and analysis",
-        "family": "deepseek",
-        "attachment": false,
-        "reasoning": false,
-        "tool_call": true,
-        "temperature": true,
-        "release_date": "2024-12-26",
-        "last_updated": "2024-12-26",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 163840,
-          "output": 163840
-        },
-        "cost": {
-          "input": 0.27,
-          "output": 1.12,
-          "cache_read": 0.135
-        }
-      },
       "deepseek/deepseek-v3.2": {
         "id": "deepseek/deepseek-v3.2",
         "name": "DeepSeek V3.2",
@@ -268405,8 +268376,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
-          "output": 393216
+          "context": 1024000,
+          "output": 384000
         },
         "cost": {
           "input": 1.6,
