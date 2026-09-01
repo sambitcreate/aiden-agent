@@ -18,6 +18,7 @@ export interface AidenRemoteWorkspaceProjection {
   id: string;
   name: string;
   permission: WorkspacePermission;
+  memoryEnabled: boolean;
   hasFolder: boolean;
   isManagedWorktree: boolean;
   branchName?: string;
@@ -67,6 +68,7 @@ export function workspaceRevision(workspace: Workspace): string {
     id: workspace.id,
     name: workspace.name,
     permission: workspace.permission,
+    memoryEnabled: workspace.memoryEnabled !== false,
     hasFolder: Boolean(workspace.folderPath),
     managedBranch: workspace.managedWorktree?.branch ?? null,
     createdAt: workspace.createdAt,
@@ -88,6 +90,7 @@ export function projectAidenRemoteWorkspace(
     id: workspace.id,
     name: workspace.name,
     permission: workspace.permission,
+    memoryEnabled: workspace.memoryEnabled !== false,
     hasFolder: Boolean(workspace.folderPath),
     isManagedWorktree: Boolean(workspace.managedWorktree),
     ...(workspace.managedWorktree?.branch
@@ -143,15 +146,17 @@ function parseCreate(value: unknown):
 function parsePatch(value: unknown): {
   name?: string;
   permission?: WorkspacePermission;
+  memoryEnabled?: boolean;
 } {
   const record = ownRecord(value);
   if (
     !record ||
-    !exactKeys(record, ["confirmedForeground"], ["name", "permission"]) ||
+    !exactKeys(record, ["confirmedForeground"], ["name", "permission", "memoryEnabled"]) ||
     record.confirmedForeground !== true ||
-    (record.name === undefined && record.permission === undefined) ||
+    (record.name === undefined && record.permission === undefined && record.memoryEnabled === undefined) ||
     (record.name !== undefined && !boundedString(record.name, 120)) ||
-    (record.permission !== undefined && !PERMISSIONS.includes(record.permission as WorkspacePermission))
+    (record.permission !== undefined && !PERMISSIONS.includes(record.permission as WorkspacePermission)) ||
+    (record.memoryEnabled !== undefined && typeof record.memoryEnabled !== "boolean")
   ) {
     throw new AidenRemoteServiceError(
       "permission_confirmation_required",
@@ -163,6 +168,9 @@ function parsePatch(value: unknown): {
     ...(typeof record.name === "string" ? { name: record.name.trim() } : {}),
     ...(record.permission !== undefined
       ? { permission: record.permission as WorkspacePermission }
+      : {}),
+    ...(typeof record.memoryEnabled === "boolean"
+      ? { memoryEnabled: record.memoryEnabled }
       : {}),
   };
 }

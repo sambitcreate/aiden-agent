@@ -183,6 +183,7 @@ function normalizeWorkspace(w: Workspace): Workspace {
     ...w,
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
+    ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),
     managedWorktree:
       w.managedWorktree &&
       typeof w.managedWorktree.repositoryPath === "string" &&

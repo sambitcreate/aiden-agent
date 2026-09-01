@@ -344,11 +344,16 @@ Status: Implemented and review-accepted after two rounds on 2026-08-31.
   reasoning, tool payloads, compaction summaries, and authority text both
   before approval and at commit, and uses Aiden's fail-closed approval request.
   Telegram, scheduled, remote, and other headless turns remain recall-only.
-- The desktop memory manager uses canonical chat authority and the shared turn
-  gate for add/replace/delete/export. It displays exact workspace/Bot scope,
-  provenance, expiry, replacement state, and always-on state; destructive
-  deletion uses the existing accessible confirmation primitive. Export is an
-  atomic private versioned JSON file.
+- Memory has no separate editor or toolbar action. The attended agent owns the
+  `recall_memory`, `remember_fact`, and `forget_fact` tools, so a user can ask in
+  chat and the agent can recall or propose maintenance when useful. Writes and
+  deletion remain sequential, never replayable, exact-scope operations behind
+  the existing fail-closed owner approval request.
+- Mac, iOS, and Android expose the same Mac-owned policy: a global memory switch
+  and an additional switch for every ordinary workspace. Disabling either
+  removes memory prompt context and tools and stops new transcript/artifact
+  indexing for affected turns without deleting existing local facts. Bot scopes
+  are independent of workspaces and follow the global switch.
 - Visible user/assistant transcript excerpts and attachment/HTML-artifact labels
   are indexed as bounded metadata; attachment contents, raw reasoning, and tool
   payloads are not indexed. Chat deletion removes its metadata and source facts,
@@ -359,7 +364,7 @@ Status: Implemented and review-accepted after two rounds on 2026-08-31.
   headless construction omits the write tool, denial/cancellation commit
   nothing, only an attended approved harness hook reaches commit, writes never
   replay, and volatile prompt/tool cost enters final context budgeting.
-- Durable memory remains available from its attended chat management surface,
+- Durable memory remains available through attended chat tools and settings,
   but is deliberately not advertised as a separate onboarding feature tile.
 - Review round one closed cross-source deletion, same-text replacement,
   provenance truthfulness, forbidden-content coverage, expired quotas, empty

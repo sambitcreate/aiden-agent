@@ -8,7 +8,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { BotAvatar } from "../components/bot-avatar";
-import { BrainCircuit, ShieldQuestion, TerminalSquare } from "lucide-react";
+import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
@@ -62,7 +62,6 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
 import { EventPresence } from "../components/event-presence";
-import { MemoryDialog } from "../components/memory-dialog";
 import {
   OPENAI_CODEX_PROVIDER_ID,
   type Attachment,
@@ -157,7 +156,6 @@ function toolLabel(toolName: string): string {
 
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
-  const [memoryOpen, setMemoryOpen] = React.useState(false);
   const navigate = useNavigate();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
@@ -1857,17 +1855,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
             iconOnly
             variant="toolbar"
             size="large"
-            onClick={() => setMemoryOpen(true)}
-            disabled={!chat.data}
-            aria-label="Manage memory"
-            title="Manage scoped memory"
-          >
-            <BrainCircuit />
-          </Button>
-          <Button
-            iconOnly
-            variant="toolbar"
-            size="large"
             onClick={terminal.toggle}
             disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
             aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
@@ -2245,7 +2232,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
         />
       )}
     </ScrollArea>
-      <MemoryDialog chatId={chatId} open={memoryOpen} onOpenChange={setMemoryOpen} />
     </>
   );
 }

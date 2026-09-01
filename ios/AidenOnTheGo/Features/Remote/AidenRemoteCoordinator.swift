@@ -428,15 +428,17 @@ final class AidenRemoteCoordinator {
     func updateWorkspace(
         _ workspace: AidenWorkspace,
         name: String? = nil,
-        permission: AidenWorkspacePermission? = nil
+        permission: AidenWorkspacePermission? = nil,
+        memoryEnabled: Bool? = nil
     ) async -> AidenWorkspace? {
-        await updateWorkspaceOutcome(workspace, name: name, permission: permission).value
+        await updateWorkspaceOutcome(workspace, name: name, permission: permission, memoryEnabled: memoryEnabled).value
     }
 
     func updateWorkspaceOutcome(
         _ workspace: AidenWorkspace,
         name: String? = nil,
-        permission: AidenWorkspacePermission? = nil
+        permission: AidenWorkspacePermission? = nil,
+        memoryEnabled: Bool? = nil
     ) async -> AidenRemoteMutationOutcome<AidenWorkspace> {
         guard !isMutating else { return .busy }
         isMutating = true
@@ -456,13 +458,14 @@ final class AidenRemoteCoordinator {
         var optimistic = workspace
         if let name { optimistic.name = name }
         if let permission { optimistic.permission = permission }
+        if let memoryEnabled { optimistic.memoryEnabled = memoryEnabled }
         upsert(optimistic)
 
         do {
             let updated = try await client.updateWorkspace(
                 id: workspace.id,
                 revision: workspace.revision,
-                patch: AidenWorkspacePatch(name: name, permission: permission)
+                patch: AidenWorkspacePatch(name: name, permission: permission, memoryEnabled: memoryEnabled)
             )
             guard isCurrentContext(installationId: installationId, generation: generation) else { return .stale }
             upsert(updated)
@@ -478,7 +481,8 @@ final class AidenRemoteCoordinator {
                 applyWorkspaceSnapshot(canonical, instanceId: installationId)
                 if let reconciled = canonical.first(where: { $0.id == workspace.id }),
                    (name == nil || reconciled.name == name),
-                   (permission == nil || reconciled.permission == permission) {
+                   (permission == nil || reconciled.permission == permission),
+                   (memoryEnabled == nil || reconciled.memoryEnabled == memoryEnabled) {
                     return .success(reconciled)
                 }
             } else {

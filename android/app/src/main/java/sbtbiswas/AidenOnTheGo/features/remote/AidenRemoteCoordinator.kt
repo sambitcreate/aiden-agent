@@ -252,7 +252,8 @@ class AidenRemoteCoordinator(
     suspend fun updateWorkspace(
         workspace: AidenWorkspace,
         name: String? = null,
-        permission: AidenWorkspacePermission? = null
+        permission: AidenWorkspacePermission? = null,
+        memoryEnabled: Boolean? = null
     ): AidenWorkspace {
         val currentClient = _client.value ?: throw AidenRemoteClientException.Disconnected()
         _isMutating.value = true
@@ -260,7 +261,7 @@ class AidenRemoteCoordinator(
             val updated = currentClient.updateWorkspace(
                 id = workspace.id,
                 revision = workspace.revision,
-                patch = AidenWorkspacePatch(name = name, permission = permission)
+                patch = AidenWorkspacePatch(name = name, permission = permission, memoryEnabled = memoryEnabled)
             )
             refreshWorkspaces()
             updated

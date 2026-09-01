@@ -81,6 +81,7 @@
       "id": "workspace_fixture_01",
       "name": "Aiden Agent",
       "permission": "ask",
+      "memoryEnabled": true,
       "hasFolder": true,
       "isManagedWorktree": false,
       "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 },
@@ -92,6 +93,7 @@
       "id": "workspace_fixture_02",
       "name": "Scratch",
       "permission": "none",
+      "memoryEnabled": false,
       "hasFolder": true,
       "isManagedWorktree": true,
       "branchName": "aiden/scratch",
@@ -220,6 +222,10 @@
     "defaultMcpEnabled": false,
     "defaultNotify": true,
     "defaultTimezone": "America/New_York"
+  },
+  "memorySettings": {
+    "enabled": true,
+    "revision": "memory_settings_revision_1"
   },
   "speechStatus": {
     "engine": { "ready": true, "error": null },

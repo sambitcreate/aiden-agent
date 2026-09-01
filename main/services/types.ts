@@ -117,6 +117,8 @@ export interface Workspace {
   /** Absolute path to the folder Pi operates in (undefined = no folder bound yet). */
   folderPath?: string;
   permission: WorkspacePermission;
+  /** Workspace-scoped durable memory. Omitted means enabled. */
+  memoryEnabled?: boolean;
   /** Present only for worktrees created and owned by Aiden. */
   managedWorktree?: ManagedWorktree;
   createdAt: number;
@@ -563,6 +565,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
+  /** Global durable-memory gate. Omitted means enabled. */
+  memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */

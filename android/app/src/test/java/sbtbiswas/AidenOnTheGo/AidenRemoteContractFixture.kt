@@ -189,6 +189,8 @@ data class AidenRemoteContractFixture(
     val pairingBootstrap: AidenPairingBootstrap,
     val pairingExchange: AidenPairingExchange,
     val server: AidenServer,
+    val workspaces: List<AidenWorkspace> = emptyList(),
+    val memorySettings: AidenMemorySettings? = null,
     val chat: AidenChat,
     val chatSummaries: AidenChatSummaryPage? = null,
     val botSummary: AidenBotSummary,
