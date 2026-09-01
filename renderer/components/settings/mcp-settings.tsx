@@ -350,7 +350,7 @@ export function McpSettings() {
               </Text>
             ) : (
               <Text variant="small" color="secondary" className="block">
-                Connects over HTTPS MCP. Aiden stores credentials on this Mac and only sends resource
+                Connects over HTTPS MCP. Aiden stores credentials on this device and only sends resource
                 tokens to the official MCP origin. Browser sign-in may also talk to that vendor’s
                 declared OAuth provider. Connecting adds tools only after the server is enabled;
                 it does not install Codex skill files or change workspace folder permission.
