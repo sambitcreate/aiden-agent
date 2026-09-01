@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  authorizeMemoryRemoval,
   createMemoryExtension,
   formatAlwaysOnMemory,
   memoryApprovalSummary,
@@ -218,6 +219,31 @@ test("memory proposal approval copy freezes exact scope, provenance, expiry, and
     () => parseMemoryProposal({ fact: "safe", scope: "bot:other" }, 1_000),
     /unsupported fields/u,
   );
+});
+
+test("memory deletion approval names the exact fact instead of only its citation", async () => {
+  let summary = "";
+  const decision = await authorizeMemoryRemoval(
+    { factId: "fact-old" },
+    {
+      scope: { kind: "workspace", id: "workspace-a" },
+      provenance: {
+        kind: "model_proposal",
+        chatId: "chat-a",
+        turnId: "turn-a",
+        anchorMessageId: "message-a",
+      },
+    },
+    async (_scope, factId) => factId === "fact-old" ? { text: "Use the Wednesday release window." } : undefined,
+    async (value) => {
+      summary = value;
+      return true;
+    },
+  );
+  assert.deepEqual(decision, { allowed: true });
+  assert.match(summary, /Forget exactly: “Use the Wednesday release window\.”/u);
+  assert.match(summary, /Fact: \[memory:fact-old\]/u);
+  assert.match(summary, /permanently removes/u);
 });
 
 test("generation provenance requires an attended durable turn and names the model proposal honestly", () => {
