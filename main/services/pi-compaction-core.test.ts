@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { InMemorySessionRepo, JsonlSessionRepo, type Session } from "@earendil-works/pi-agent-core";
+import { InMemorySessionRepo, JsonlSessionRepo } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   createModels,
@@ -24,6 +24,7 @@ import {
   syncChatMessagesToPiSession,
 } from "./pi-compaction-session-store.js";
 import type { ChatMessage } from "./types.js";
+import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 
 const ZERO_COST = {
   input: 0,
@@ -41,8 +42,8 @@ function splitSummary(label: string): string {
   return `## Original Request\n${label}\n\n## Early Progress\n- preserved\n\n## Context for Suffix\n- continue`;
 }
 
-async function memorySession(id = "compaction-test"): Promise<Session> {
-  return new InMemorySessionRepo().create({ id });
+async function memorySession(id = "compaction-test"): Promise<PiSessionPort> {
+  return createPiSessionPort(await new InMemorySessionRepo().create({ id }));
 }
 
 function user(text: string, timestamp = Date.now()) {
@@ -94,7 +95,7 @@ function compactionFixture() {
 }
 
 async function appendCompressibleHistory(
-  session: Session,
+  session: PiSessionPort,
   model: Model<Api>,
   suffix = "one",
 ): Promise<AssistantMessage> {
@@ -130,6 +131,13 @@ test("Pi coordinator appends a native checkpoint and rebuilds from it", async ()
   const after = await session.getEntries();
   assert.equal(after.length, before.length + 1);
   assert.equal(after[after.length - 1]?.type, "compaction");
+  const checkpoint = after[after.length - 1];
+  const endEvent = events.find((event) => event.type === "end");
+  assert.deepEqual(
+    checkpoint?.type === "compaction" ? checkpoint.usage : undefined,
+    endEvent?.type === "end" ? endEvent.result?.usage : undefined,
+  );
+  assert.ok(endEvent?.type === "end" && endEvent.result?.usage);
   assert.deepEqual(
     events.map((event) => event.type),
     ["start", "end"],
@@ -449,6 +457,7 @@ test("summary failure leaves the append-only history authoritative", async () =>
 
 test("transient hidden summary failure retries once with upstream request isolation", async () => {
   const { faux, models, model } = compactionFixture();
+  const retryEvents: string[] = [];
   const requestOptions: Array<{
     cacheRetention?: unknown;
     sessionId?: unknown;
@@ -480,6 +489,17 @@ test("transient hidden summary failure retries once with upstream request isolat
     model,
     thinkingLevel: "off",
     summaryRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+    summaryRetryCallbacks: {
+      onRetryScheduled: (attempt, maxAttempts, delayMs, errorMessage) => {
+        retryEvents.push(`scheduled:${attempt}:${maxAttempts}:${delayMs}:${errorMessage}`);
+      },
+      onRetryAttemptStart: () => {
+        retryEvents.push("started");
+      },
+      onRetryFinished: (success, attempt, finalError) => {
+        retryEvents.push(`finished:${success}:${attempt}:${finalError ?? ""}`);
+      },
+    },
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
   }).check(last);
 
@@ -491,6 +511,11 @@ test("transient hidden summary failure retries once with upstream request isolat
   );
   assert.equal(typeof requestOptions[0]?.sessionId, "string");
   assert.equal(requestOptions[1]?.sessionId, requestOptions[0]?.sessionId);
+  assert.deepEqual(retryEvents, [
+    "scheduled:1:1:0:terminated",
+    "started",
+    "finished:true:1:",
+  ]);
 });
 
 test("transient hidden summary retry exhaustion is bounded and non-destructive", async () => {
@@ -789,6 +814,30 @@ test("pre-prompt pressure does not compact without valid usage", async () => {
     (await session.getEntries()).some((entry) => entry.type === "compaction"),
     false,
   );
+});
+
+test("projected pressure keeps the lifecycle reserve decision authoritative", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("projected reserve"))]);
+  const session = await memorySession("projected-reserve-authority");
+  await appendCompressibleHistory(session, model);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+
+  const result = await coordinator.checkContextPressure({
+    contextTokens: 1,
+    compressibleHistoryMessages: 2,
+    shouldCompact: true,
+  });
+
+  assert.equal(result.compacted, true);
+  const branch = await session.getBranch();
+  assert.equal(branch[branch.length - 1]?.type, "compaction");
 });
 
 test("pre-prompt pressure ignores usage from before the latest checkpoint", async () => {
@@ -1156,6 +1205,82 @@ test("durable journals are private and delete with their chat", async (t) => {
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
 });
 
+test("opening a chat promotes its legacy v3 journal before current repository discovery", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-v3-open-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  const directory = path.join(root, "--legacy--");
+  await mkdir(directory, { recursive: true });
+  const journalPath = path.join(directory, "legacy-chat.jsonl");
+  const fixture = (await readFile(
+    path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"),
+    "utf8",
+  )).split("\n");
+  const header = JSON.parse(fixture[0]!) as Record<string, unknown>;
+  header.id = "chat-v3-open";
+  header.cwd = root;
+  header.metadata = { kind: "aiden-chat-compaction-v1", chatId: "chat-v3-open" };
+  fixture[0] = JSON.stringify(header);
+  await writeFile(journalPath, fixture.join("\n"), { mode: 0o600 });
+
+  const session = await new PiCompactionSessionStore({ root: async () => root }).openChat(
+    "chat-v3-open",
+  );
+  assert.match(JSON.stringify(await session.buildContext()), /Inspect the image/u);
+  assert.equal(JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).version, 4);
+  assert.equal((await stat(`${journalPath}.v3-backup`)).mode & 0o777, 0o600);
+  assert.equal((await stat(`${journalPath}.migration-v1.json`)).mode & 0o777, 0o600);
+
+  await unlink(`${journalPath}.migration-v1.json`);
+  const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat(
+    "chat-v3-open",
+  );
+  assert.match(JSON.stringify(await reopened.buildContext()), /Inspect the image/u);
+  assert.equal((await stat(`${journalPath}.migration-v1.json`)).mode & 0o777, 0o600);
+});
+
+test("a corrupt legacy duplicate is quarantined when valid v4 history exists", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-v3-duplicate-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const currentStore = new PiCompactionSessionStore({ root: async () => root });
+  const current = await currentStore.openChat("chat-v3-duplicate");
+  await current.appendMessage(user("valid current history", 10));
+
+  const legacyDirectory = path.join(root, "--corrupt-legacy--");
+  await mkdir(legacyDirectory, { recursive: true });
+  const corruptPath = path.join(legacyDirectory, "duplicate.jsonl");
+  await writeFile(
+    corruptPath,
+    [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "chat-v3-duplicate",
+        timestamp: "2026-08-31T12:00:00.000Z",
+        cwd: root,
+        metadata: { kind: "aiden-chat-compaction-v1", chatId: "chat-v3-duplicate" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "broken",
+        parentId: "missing",
+        timestamp: "2026-08-31T12:00:01.000Z",
+        message: { role: "user", content: "broken", timestamp: 1 },
+      }),
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
+
+  const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat(
+    "chat-v3-duplicate",
+  );
+  assert.match(JSON.stringify(await reopened.buildContext()), /valid current history/u);
+  await assert.rejects(stat(corruptPath), { code: "ENOENT" });
+});
+
 test("reopen rolls back a transaction interrupted by process death", async (t) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-crash-"));
   t.after(() => rm(temporary, { recursive: true, force: true }));
@@ -1409,16 +1534,14 @@ test("newest corrupt duplicate is quarantined and older valid history reopens", 
   });
   await older.appendMessage(user("older valid", 10));
   await new Promise((resolve) => setTimeout(resolve, 2));
-  const newer = await repo.create({
-    id: "chat-fallback-test",
-    cwd: root,
-    metadata: {
-      kind: "aiden-chat-compaction-v1",
-      chatId: "chat-fallback-test",
-    },
+  const olderMetadata = await older.getMetadata();
+  const newerPath = path.join(
+    path.dirname(olderMetadata.path),
+    `9999-12-31T23-59-59-999Z_chat-fallback-test.jsonl`,
+  );
+  await writeFile(newerPath, `${await readFile(olderMetadata.path, "utf8")}{not-json\n`, {
+    mode: 0o600,
   });
-  await newer.appendMessage(user("newer but corrupt", 20));
-  await appendFile((await newer.getMetadata()).path, "{not-json\n");
 
   const reopened = await new PiCompactionSessionStore({
     root: async () => root,

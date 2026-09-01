@@ -8,7 +8,8 @@ import {
   type CredentialStore,
   type Model,
   type ModelsStoreEntry,
-  type ProviderModelsStore,
+  type Provider,
+  type RefreshModelsContext,
 } from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
@@ -23,7 +24,10 @@ import {
   PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS,
   withPiRemoteCatalog,
 } from "./pi-remote-catalog.js";
-import { normalizePiModelsDocument } from "./pi-models-store.js";
+import {
+  normalizePiModelsDocument,
+  type ProviderModelsStore,
+} from "./pi-models-store.js";
 import { concentrateProvider } from "./concentrate-provider.js";
 import {
   additionalAidenPiApis,
@@ -76,6 +80,34 @@ function memoryProviderStore(initial?: ModelsStoreEntry): ProviderModelsStore & 
     },
     snapshot: () => (entry === undefined ? undefined : structuredClone(entry)),
   };
+}
+
+function refreshContext(
+  store: ReturnType<typeof memoryProviderStore>,
+  options: Partial<Pick<RefreshModelsContext, "allowNetwork" | "force" | "credential" | "signal">> = {},
+): RefreshModelsContext {
+  return {
+    stored: store.snapshot(),
+    allowNetwork: options.allowNetwork ?? true,
+    ...(options.force === undefined ? {} : { force: options.force }),
+    ...(options.credential === undefined ? {} : { credential: options.credential }),
+    signal: options.signal ?? new AbortController().signal,
+    publish: async (publication) => {
+      if (publication.persist === null) await store.delete();
+      else if (publication.persist !== undefined) await store.write(publication.persist);
+      publication.update?.();
+      return true;
+    },
+  };
+}
+
+function refreshProvider(
+  provider: Provider,
+  store: ReturnType<typeof memoryProviderStore>,
+  options?: Parameters<typeof refreshContext>[1],
+): Promise<void> {
+  assert.ok(provider.refreshModels);
+  return provider.refreshModels(refreshContext(store, options));
 }
 
 test("remote catalog parser accepts Pi's keyed response and pins provider identity", () => {
@@ -136,9 +168,8 @@ test("OpenCode Go overlay publishes ox-alpha without sending provider credential
     now: () => Date.parse("2026-08-20T16:01:00Z"),
   });
 
-  await provider.refreshModels?.({
+  await refreshProvider(provider, store, {
     credential: { type: "api_key", key: "must-not-leak" },
-    store,
     allowNetwork: true,
     force: true,
     signal: new AbortController().signal,
@@ -170,13 +201,13 @@ test("cached overlays hydrate offline and honor freshness unless force refreshed
     now: () => checkedAt + PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS - 1,
   });
 
-  await provider.refreshModels?.({ store, allowNetwork: false });
+  await refreshProvider(provider, store, { allowNetwork: false });
   assert.ok(provider.getModels().some((model) => model.id === "ox-alpha-free"));
 
-  await provider.refreshModels?.({ store, allowNetwork: true });
+  await refreshProvider(provider, store, { allowNetwork: true });
   assert.equal(fetches, 0);
 
-  await provider.refreshModels?.({ store, allowNetwork: true, force: true });
+  await refreshProvider(provider, store, { allowNetwork: true, force: true });
   assert.equal(fetches, 1);
   assert.ok(provider.getModels().some((model) => model.id === "ox-alpha-free"));
 });
@@ -197,8 +228,8 @@ test("fresh empty and negative catalog results do not refetch on every launch", 
       },
       now: () => checkedAt,
     });
-    await provider.refreshModels!({ store, allowNetwork: true });
-    await provider.refreshModels!({ store, allowNetwork: true });
+    await refreshProvider(provider, store, { allowNetwork: true });
+    await refreshProvider(provider, store, { allowNetwork: true });
     assert.equal(fetches, 1);
     assert.deepEqual(store.snapshot()?.models, []);
   }
@@ -218,7 +249,7 @@ test("conditional refresh sends only the safe ETag validator and keeps a 304 ove
       return new Response(null, { status: 304 });
     },
   });
-  await provider.refreshModels!({ store, allowNetwork: true, force: true });
+  await refreshProvider(provider, store, { allowNetwork: true, force: true });
   assert.equal(headers.get("if-none-match"), '"catalog-v1"');
   assert.equal(headers.get("if-modified-since"), null);
   assert.ok(provider.getModels().some((model) => model.id === "ox-alpha-free"));
@@ -328,8 +359,8 @@ test("last-known-good catalog survives 404, 501, server errors, and malformed pa
       fetchImpl: async () => response(),
       now: () => checkedAt + PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS,
     });
-    await provider.refreshModels?.({ store, allowNetwork: false });
-    await provider.refreshModels?.({ store, allowNetwork: true, force: true }).catch(() => undefined);
+    await refreshProvider(provider, store, { allowNetwork: false });
+    await refreshProvider(provider, store, { allowNetwork: true, force: true }).catch(() => undefined);
     assert.ok(provider.getModels().some((entry) => entry.id === "ox-alpha-free"));
     assert.ok(store.snapshot()?.models.some((entry) => entry.id === "ox-alpha-free"));
   }
@@ -355,7 +386,7 @@ test("minimum-version and oversized responses fail closed without replacing the 
     const provider = withPiRemoteCatalog(opencodeGoProvider(), {
       fetchImpl: async () => response(),
     });
-    await assert.rejects(provider.refreshModels!({ store, allowNetwork: true, force: true }));
+    await assert.rejects(refreshProvider(provider, store, { allowNetwork: true, force: true }));
     assert.ok(store.snapshot()?.models.some((entry) => entry.id === "ox-alpha-free"));
   }
 });
@@ -373,9 +404,9 @@ test("an older valid catalog cannot roll back a newer cached generation", async 
     }, { headers: { "last-modified": "Wed, 19 Aug 2026 16:00:00 GMT" } }),
   });
 
-  await provider.refreshModels?.({ store, allowNetwork: false });
+  await refreshProvider(provider, store, { allowNetwork: false });
   await assert.rejects(
-    provider.refreshModels!({ store, allowNetwork: true, force: true }),
+    refreshProvider(provider, store, { allowNetwork: true, force: true }),
     /older than the cached generation/u,
   );
   assert.deepEqual(store.snapshot()?.models.map((model) => model.id), [cached.id]);
@@ -399,9 +430,9 @@ test("a future generation cannot poison the cache and a current catalog recovers
     }),
   });
 
-  await provider.refreshModels!({ store, allowNetwork: false });
+  await refreshProvider(provider, store, { allowNetwork: false });
   assert.equal(provider.getModels().some((model) => model.id === poisoned.id), false);
-  await provider.refreshModels!({ store, allowNetwork: true, force: true });
+  await refreshProvider(provider, store, { allowNetwork: true, force: true });
   assert.deepEqual(store.snapshot()?.models.map((model) => model.id), [recovered.id]);
   assert.ok(provider.getModels().some((model) => model.id === recovered.id));
 
@@ -412,7 +443,7 @@ test("a future generation cannot poison the cache and a current catalog recovers
     }),
   });
   await assert.rejects(
-    futureResponse.refreshModels!({ store: memoryProviderStore(), allowNetwork: true, force: true }),
+    refreshProvider(futureResponse, memoryProviderStore(), { allowNetwork: true, force: true }),
     /invalid future generation timestamp/u,
   );
 });
@@ -433,10 +464,10 @@ test("clock rollback retains the last-known-good catalog and its downgrade fence
     }),
   });
 
-  await provider.refreshModels!({ store, allowNetwork: false });
+  await refreshProvider(provider, store, { allowNetwork: false });
   assert.ok(provider.getModels().some((model) => model.id === cached.id));
   await assert.rejects(
-    provider.refreshModels!({ store, allowNetwork: true, force: true }),
+    refreshProvider(provider, store, { allowNetwork: true, force: true }),
     /older than the cached generation/u,
   );
   assert.deepEqual(store.snapshot()?.models.map((model) => model.id), [cached.id]);
@@ -461,11 +492,11 @@ test("clock-rollback revalidation retains its acceptance boundary across restart
       now: () => rolledBackNow,
       fetchImpl: async () => response(),
     });
-    await provider.refreshModels!({ store, allowNetwork: true, force: true });
+    await refreshProvider(provider, store, { allowNetwork: true, force: true });
     assert.equal(store.snapshot()?.checkedAt, acceptedAt);
 
     const restarted = withPiRemoteCatalog(opencodeGoProvider(), { now: () => rolledBackNow });
-    await restarted.refreshModels!({ store, allowNetwork: false });
+    await refreshProvider(restarted, store, { allowNetwork: false });
     assert.ok(restarted.getModels().some((model) => model.id === cached.id));
   }
 });

@@ -4,7 +4,7 @@ const SETTINGS_SECTIONS = [
   "Providers",
   "Model Pad",
   "Skills",
-  "MCP Servers",
+  "Plugins",
   "Web Search",
   "Remote Access",
   "Scheduled tasks",
@@ -38,8 +38,10 @@ async function assertRenderedSettingsDestination(
         page.getByText(/Reusable instruction sets the assistant can invoke/u),
       ).toBeVisible();
       return;
-    case "MCP Servers":
-      await expect(page.getByText(/Connect tool providers or add your own server/u)).toBeVisible();
+    case "Plugins":
+      await expect(
+        page.getByText(/Browse plugins, connect hosted MCP servers, or add your own/u),
+      ).toBeVisible();
       return;
     case "Web Search":
       await expect(

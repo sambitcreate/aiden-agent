@@ -1170,10 +1170,32 @@ test("a valid index remains intact when canonical payload validation hits transi
       workspaceId: chat.workspaceId,
       providerId: chat.providerId,
       model: chat.model,
+      summaryRevision: chat.summaryRevision,
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     },
   ]);
+});
+
+test("summary metadata fails closed when chat state exists without an index", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-summary-missing-index-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const payload = path.join(directory, "crash-left-chat.json");
+  await fs.writeFile(payload, JSON.stringify({ messages: ["must not be read"] }), "utf-8");
+  const payloadReads: string[] = [];
+  const store = createChatStore(async () => directory, undefined, {
+    readFile: async (target) => {
+      if (target === payload) payloadReads.push(target);
+      return fs.readFile(target, "utf-8");
+    },
+  });
+
+  await assert.rejects(store.listSummaryMetadata(), /summary index is unavailable/u);
+  assert.deepEqual(payloadReads, []);
+  await fs.rm(payload);
+  assert.deepEqual(await store.listSummaryMetadata(), []);
 });
 
 test("mixed-index recovery reconstructs only successfully validated same-id payloads", async (t) => {

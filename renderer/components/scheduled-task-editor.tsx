@@ -598,7 +598,7 @@ export function ScheduledTaskEditor({
               </Callout>
             ) : visibleMcpServers.length === 0 ? (
               <Text variant="small" color="tertiary">
-                No MCP servers are enabled. Connect one in Settings → MCP Servers.
+                No MCP servers are enabled. Connect one in Settings → Plugins.
               </Text>
             ) : (
               <ul className="max-h-48 divide-y divide-separator overflow-y-auto rounded-control bg-background">

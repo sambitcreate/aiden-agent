@@ -618,3 +618,33 @@ test("validates persisted timelines and rejects unsafe replay data", () => {
     undefined,
   );
 });
+
+test("streaming tool updates do not republish a timeline whose visible status is unchanged", () => {
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    (timeline) => snapshots.push(timeline),
+  );
+  projector.toolStarted("call-a", "run_command", { description: "install deps" });
+  const afterStart = snapshots.length;
+  projector.toolRunning("call-a");
+  const afterFirstRunning = snapshots.length;
+  assert.equal(afterFirstRunning, afterStart + 1);
+  assert.equal(toolSteps(snapshots[afterFirstRunning - 1]!)[0]?.status, "running");
+
+  for (let index = 0; index < 2_000; index += 1) {
+    projector.toolRunning("call-a");
+  }
+  assert.equal(snapshots.length, afterFirstRunning);
+
+  const serialized = JSON.stringify(projector.snapshot());
+  const budgetBytes = 4_096;
+  assert.ok(
+    Buffer.byteLength(serialized, "utf8") < budgetBytes,
+    `one-line tool timeline exceeded ${budgetBytes} bytes: ${Buffer.byteLength(serialized, "utf8")}`,
+  );
+
+  projector.toolFinished("call-a", "completed");
+  assert.equal(snapshots.length, afterFirstRunning + 1);
+  assert.equal(toolSteps(snapshots[snapshots.length - 1]!)[0]?.status, "completed");
+});

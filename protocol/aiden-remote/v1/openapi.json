@@ -12,7 +12,7 @@
     "atomic": true
   },
   "x-aiden-context-private-response-fields": {
-    "appliesTo": ["Chat", "Bot"],
+    "appliesTo": ["Chat", "ChatSummary", "Bot"],
     "recursive": true,
     "normalization": "Remove hyphens, underscores, periods, and whitespace, then lowercase before comparison.",
     "forbiddenNormalizedNames": [
@@ -89,6 +89,18 @@
     "allowedSchemaProperties": [
       "BotDetail.instructions",
       "BotDetail.openingGreeting"
+    ],
+    "chatSummaryOnlyForbiddenNormalizedNames": [
+      "messages",
+      "attachments",
+      "htmlartifacts",
+      "outcome",
+      "timeline",
+      "reasoning",
+      "botid",
+      "providerid",
+      "modelid",
+      "preview"
     ]
   },
   "servers": [
@@ -525,6 +537,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkspaceSelection"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chat-summaries": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listChatSummaries",
+        "description": "Returns a transcript-free frozen page of regular chat metadata, ordered by updatedAt descending and then chat ID ascending. Cursors are opaque, integrity protected, expire after five minutes, and never restart pagination implicitly.",
+        "x-aiden-capability": "chat:read",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcript-free chat summary page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummaryPage"
                 }
               }
             }
@@ -3569,6 +3631,18 @@
             },
             "uniqueItems": true
           },
+          "features": {
+            "type": "array",
+            "description": "Bounded additive API feature advertisements. Clients recognize supported values and ignore other bounded values.",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+            },
+            "uniqueItems": true
+          },
           "deviceName": {
             "type": "string",
             "description": "Presentation-only label currently stored for the authenticated client device.",
@@ -5362,6 +5436,86 @@
           }
         },
         "additionalProperties": false
+      },
+      "ChatSummary": {
+        "type": "object",
+        "description": "Transcript-free regular-chat projection. Harmless additive fields are tolerated, while clients still apply the recursive private-field denial policy.",
+        "x-aiden-updated-at-not-before-created-at": true,
+        "required": [
+          "id",
+          "workspaceId",
+          "title",
+          "titlePending",
+          "createdAt",
+          "updatedAt",
+          "revision",
+          "activity"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "titlePending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 47,
+            "maxLength": 47,
+            "pattern": "^rev_[A-Za-z0-9_-]{43}$"
+          },
+          "activity": {
+            "enum": [
+              "idle",
+              "active"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "ChatSummaryPage": {
+        "type": "object",
+        "x-aiden-max-json-response-bytes": 1048576,
+        "required": [
+          "summaries"
+        ],
+        "properties": {
+          "summaries": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/ChatSummary"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^cur_[A-Za-z0-9_-]{1,384}\\.[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "additionalProperties": true
       },
       "TurnStartRequest": {
         "type": "object",

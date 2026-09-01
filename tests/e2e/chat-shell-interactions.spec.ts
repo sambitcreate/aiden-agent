@@ -82,9 +82,15 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
     name: /^Workspace access: Ask first/u,
   });
   await permission.click();
-  const accessOptions = page.getByRole("radiogroup", { name: "Workspace access" });
-  const askFirst = accessOptions.getByRole("radio", { name: /^Workspace access: Ask first/u });
-  const noAccess = accessOptions.getByRole("radio", { name: /^Workspace access: No access/u });
+  const accessOptions = page.getByRole("radiogroup", {
+    name: "Workspace access",
+  });
+  const askFirst = accessOptions.getByRole("radio", {
+    name: /^Workspace access: Ask first/u,
+  });
+  const noAccess = accessOptions.getByRole("radio", {
+    name: /^Workspace access: No access/u,
+  });
   await expect(askFirst).toHaveAttribute("aria-checked", "true");
   await expect(noAccess).toHaveAttribute("aria-checked", "false");
   await noAccess.click();
@@ -111,7 +117,9 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(page.getByText("No matches", { exact: true })).toBeHidden();
 
   await sidebarSearch.evaluate((element) => element.blur());
-  const visibleSidebarToggle = page.getByRole("button", { name: "Hide sidebar" });
+  const visibleSidebarToggle = page.getByRole("button", {
+    name: "Hide sidebar",
+  });
   await expect(visibleSidebarToggle).toHaveAttribute("aria-keyshortcuts", "Meta+B");
   await page.keyboard.press("Meta+B");
   const sidebarToggle = page.getByRole("button", { name: "Show sidebar" });
@@ -138,18 +146,136 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
 test.describe("with a workspace", () => {
   test.use({ workspaceSeed: true });
 
+  test("sidebar overflow menus stay to the right of the sidebar", async ({ aiden }) => {
+    const { app, page } = aiden;
+    await finishLmStudioOnboarding(page);
+
+    const sidebar = page.locator("[data-sidebar]");
+    const assertMenuClearsSidebar = async () => {
+      const [sidebarBounds, menuBounds] = await Promise.all([
+        sidebar.boundingBox(),
+        page.getByRole("menu").boundingBox(),
+      ]);
+      expect(sidebarBounds).not.toBeNull();
+      expect(menuBounds).not.toBeNull();
+      expect(menuBounds!.x).toBeGreaterThanOrEqual(sidebarBounds!.x + sidebarBounds!.width);
+    };
+
+    await page.getByRole("button", { name: "Organize sidebar" }).click();
+    await expect(page.getByRole("menu")).toBeVisible();
+    await assertMenuClearsSidebar();
+    await page.keyboard.press("Escape");
+
+    await page.evaluate(async () => {
+      const bridge = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: {
+              invoke<T>(channel: string, ...args: unknown[]): Promise<T>;
+            };
+          };
+        }
+      ).aidenAPI.ipc;
+      for (let index = 0; index < 12; index += 1) {
+        await bridge.invoke("workspaces:create", {
+          name: `Overflow fixture ${index + 1}`,
+          permission: "ask",
+        });
+      }
+    });
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+
+    const sidebarResizer = page.getByRole("separator", {
+      name: "Resize sidebar",
+    });
+    await sidebarResizer.focus();
+    await sidebarResizer.press("End");
+    await expect(sidebarResizer).toHaveAttribute("aria-valuenow", "340");
+
+    const workspaceActions = page.getByRole("button", {
+      name: /^Actions for Aiden E2E workspace,/u,
+    });
+    await workspaceActions.evaluate((node) => node.scrollIntoView({ block: "end" }));
+    const triggerBounds = await workspaceActions.boundingBox();
+    const viewportHeight = await page.evaluate(() => window.innerHeight);
+    expect(triggerBounds).not.toBeNull();
+    expect(triggerBounds!.y + triggerBounds!.height).toBeGreaterThan(viewportHeight / 2);
+    await workspaceActions.focus();
+    await workspaceActions.press("Enter");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await assertMenuClearsSidebar();
+    await expect(page.getByRole("menu")).toHaveAttribute("data-align", "end");
+    const menuBounds = await page.getByRole("menu").boundingBox();
+    expect(menuBounds).not.toBeNull();
+    expect(menuBounds!.y).toBeGreaterThanOrEqual(0);
+    expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(viewportHeight);
+
+    const originalWindowBounds = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]?.getBounds(),
+    );
+    expect(originalWindowBounds).toBeDefined();
+    await app.evaluate(
+      ({ BrowserWindow }, bounds) => {
+        BrowserWindow.getAllWindows()[0]?.setBounds(bounds);
+      },
+      {
+        ...originalWindowBounds!,
+        height: Math.max(520, originalWindowBounds!.height - 140),
+      },
+    );
+    await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThan(viewportHeight);
+    await expect
+      .poll(async () => {
+        const [currentSidebarBounds, currentMenuBounds, currentViewportHeight] = await Promise.all([
+          sidebar.boundingBox(),
+          page.getByRole("menu").boundingBox(),
+          page.evaluate(() => window.innerHeight),
+        ]);
+        return (
+          currentSidebarBounds !== null &&
+          currentMenuBounds !== null &&
+          currentMenuBounds.x >= currentSidebarBounds.x + currentSidebarBounds.width &&
+          currentMenuBounds.y >= 0 &&
+          currentMenuBounds.y + currentMenuBounds.height <= currentViewportHeight
+        );
+      })
+      .toBe(true);
+    await assertMenuClearsSidebar();
+    const resizedViewportHeight = await page.evaluate(() => window.innerHeight);
+    const resizedMenuBounds = await page.getByRole("menu").boundingBox();
+    expect(resizedMenuBounds).not.toBeNull();
+    expect(resizedMenuBounds!.y).toBeGreaterThanOrEqual(0);
+    expect(resizedMenuBounds!.y + resizedMenuBounds!.height).toBeLessThanOrEqual(
+      resizedViewportHeight,
+    );
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toBeHidden();
+    await app.evaluate(({ BrowserWindow }, bounds) => {
+      BrowserWindow.getAllWindows()[0]?.setBounds(bounds);
+    }, originalWindowBounds!);
+  });
+
   test("workspace access arrows move focus and explicit keys commit", async ({ aiden }) => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
 
-    const permission = page.getByRole("button", { name: /^Workspace access: Full access/u });
+    const permission = page.getByRole("button", {
+      name: /^Workspace access: Full access/u,
+    });
     await permission.click();
-    const accessOptions = page.getByRole("radiogroup", { name: "Workspace access" });
+    const accessOptions = page.getByRole("radiogroup", {
+      name: "Workspace access",
+    });
     const fullAccess = accessOptions.getByRole("radio", {
       name: /^Workspace access: Full access/u,
     });
-    const askFirst = accessOptions.getByRole("radio", { name: /^Workspace access: Ask first/u });
-    const noAccess = accessOptions.getByRole("radio", { name: /^Workspace access: No access/u });
+    const askFirst = accessOptions.getByRole("radio", {
+      name: /^Workspace access: Ask first/u,
+    });
+    const noAccess = accessOptions.getByRole("radio", {
+      name: /^Workspace access: No access/u,
+    });
     await fullAccess.focus();
     await expect(fullAccess).toBeFocused();
 

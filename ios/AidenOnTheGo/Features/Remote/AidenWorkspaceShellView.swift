@@ -1,5 +1,7 @@
 import SwiftUI
 
+private let aidenWorkspaceSidebarPreviewLimit = 20
+
 enum AidenRelativeTimestamp {
     static func text(for date: Date, now: Date = Date()) -> String {
         let elapsed = max(0, now.timeIntervalSince(date))
@@ -140,41 +142,183 @@ enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
 
 @MainActor
 @Observable
-private final class AidenHomeModel {
-    var chats: [AidenChat] = []
+final class AidenHomeModel {
+    private struct LoadAttempt: Equatable {
+        let id = UUID()
+        let context: AidenRemoteRequestContext
+    }
+
+    enum ChatListLoadState: Equatable {
+        case unresolved
+        case loading
+        case loaded
+        case failed(String)
+    }
+
+    enum PaginationState: Equatable {
+        case idle
+        case loading
+        case failed(String)
+    }
+
+    var chats: [AidenChatSummary] = []
     var scheduledTasks: [AidenScheduledTask] = []
     var usage: AidenUsageSummary?
     var modelCatalog: AidenModelCatalog?
     var isLoading = false
     var errorMessage: String?
+    var chatListLoadState: ChatListLoadState = .unresolved
+    var paginationState: PaginationState = .idle
+    private(set) var nextChatCursor: String?
+    private var contentContext: AidenRemoteRequestContext?
+    private var loadingAttempt: LoadAttempt?
+    private let chatCache: AidenChatCache
+    private var summaryCacheGeneration: UInt64 = 0
+
+    init(chatCache: AidenChatCache = .shared) {
+        self.chatCache = chatCache
+    }
+
+    var chatLoadErrorMessage: String? {
+        guard case .failed(let message) = chatListLoadState else { return nil }
+        return message
+    }
 
     func accept(_ chat: AidenChat) {
         guard !chat.isBotChat else { return }
+        let activity = chats.first(where: { $0.id == chat.id })?.activity ?? .idle
         chats.removeAll { $0.id == chat.id }
-        chats.append(chat)
-        chats.sort { $0.updatedAt > $1.updatedAt }
+        chats.append(AidenChatSummary(chat: chat, preservingActivity: activity))
+        chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
+        persistCurrentSummaries()
+    }
+
+    func setActivity(_ activity: AidenChatSummaryActivity, forChatID chatID: String) {
+        guard let index = chats.firstIndex(where: { $0.id == chatID }),
+              chats[index].activity != activity else { return }
+        chats[index].activity = activity
+        persistCurrentSummaries()
+    }
+
+    func removeChat(id: String) {
+        guard chats.contains(where: { $0.id == id }) else { return }
+        chats.removeAll { $0.id == id }
+        persistCurrentSummaries()
+    }
+
+    private func persistCurrentSummaries() {
+        guard let context = contentContext else { return }
+        let snapshot = AidenChatCache.SummarySnapshot(summaries: chats, nextCursor: nextChatCursor)
+        let generation = nextSummaryCacheGeneration()
+        Task {
+            try? await chatCache.saveChatSummaries(
+                snapshot,
+                instanceId: context.instanceId,
+                generation: generation
+            )
+        }
+    }
+
+    private func nextSummaryCacheGeneration() -> UInt64 {
+        summaryCacheGeneration &+= 1
+        return summaryCacheGeneration
+    }
+
+    func acceptInitialChatSummaryPage(_ page: AidenChatSummaryPage) {
+        chats = page.summaries
+        nextChatCursor = page.nextCursor
+        paginationState = .idle
+    }
+
+    func acceptChatSummaryContinuation(
+        _ page: AidenChatSummaryPage,
+        requestedCursor: String,
+        instanceId: String,
+        isCurrent: @MainActor () -> Bool = { true }
+    ) async throws {
+        let validated: [AidenChatSummary]
+        do {
+            validated = try AidenChatSummaryPage.validatedContinuation(
+                current: chats,
+                requestedCursor: requestedCursor,
+                page: page
+            )
+        } catch {
+            paginationState = .failed(error.localizedDescription)
+            throw error
+        }
+        let snapshot = AidenChatCache.SummarySnapshot(
+            summaries: validated,
+            nextCursor: page.nextCursor
+        )
+        let generation = nextSummaryCacheGeneration()
+        do {
+            try await chatCache.saveChatSummaries(
+                snapshot,
+                instanceId: instanceId,
+                generation: generation
+            )
+        } catch {
+            paginationState = .failed(error.localizedDescription)
+            throw error
+        }
+        guard generation == summaryCacheGeneration, isCurrent() else {
+            throw CancellationError()
+        }
+        chats = validated
+        nextChatCursor = page.nextCursor
+        paginationState = .idle
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
         guard coordinator.connectionState == .connected,
-              let context = try? coordinator.requestContext(),
-              !isLoading else { return }
+              let context = try? coordinator.requestContext() else { return }
+        let attempt = LoadAttempt(context: context)
         let plan = AidenHomeLoadPlan(
             installation: coordinator.installationStore.activeInstallation
         )
+        if contentContext != context {
+            contentContext = context
+            summaryCacheGeneration &+= 1
+            chats = []
+            nextChatCursor = nil
+            paginationState = .idle
+            scheduledTasks = []
+            usage = nil
+            modelCatalog = nil
+            if plan.loadsChats,
+               let cached = await chatCache.loadChatSummaries(instanceId: context.instanceId),
+               coordinator.isCurrent(context) {
+                chats = cached.summaries
+                nextChatCursor = cached.nextCursor
+            }
+        }
         if !plan.loadsChats {
             chats = []
+            nextChatCursor = nil
+            paginationState = .idle
             modelCatalog = nil
+            chatListLoadState = .loaded
         }
         if !plan.loadsScheduledTasks { scheduledTasks = [] }
         if !plan.loadsUsage { usage = nil }
+        loadingAttempt = attempt
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        if plan.loadsChats { chatListLoadState = .loading }
+        defer {
+            if loadingAttempt == attempt {
+                loadingAttempt = nil
+                isLoading = false
+            }
+        }
         do {
             let client = try coordinator.remoteClient(for: context)
+            let advertisesChatSummaries = coordinator.server?.supportsChatSummaries == true
             async let chatsRequest = aidenLoadHomeSegment(enabled: plan.loadsChats) {
-                try await client.chats()
+                try await client.preferredChatSummaries(
+                    advertised: advertisesChatSummaries
+                )
             }
             async let tasksRequest = aidenLoadHomeSegment(enabled: plan.loadsScheduledTasks) {
                 try await client.scheduledTasks()
@@ -185,21 +329,41 @@ private final class AidenHomeModel {
             async let usageRequest = aidenLoadHomeSegment(enabled: plan.loadsUsage) {
                 try await client.usage()
             }
-            let (chatsResult, tasksResult, catalogResult, usageResult) = await (
+            let (chatsResult, tasksResult, catalogResult, usageResult) = try await (
                 chatsRequest,
                 tasksRequest,
                 catalogRequest,
                 usageRequest
             )
-            guard coordinator.isCurrent(context) else { return }
+            guard loadingAttempt == attempt, coordinator.isCurrent(context) else { return }
             var failures: [Error] = []
             switch chatsResult {
-            case .success(let loadedChats):
-                if let loadedChats {
-                    chats = AidenChat.regularWorkspaceChats(from: loadedChats)
-                        .sorted { $0.updatedAt > $1.updatedAt }
+            case .success(let loadedPage):
+                if let loadedPage {
+                    let snapshot = AidenChatCache.SummarySnapshot(
+                        summaries: loadedPage.summaries,
+                        nextCursor: loadedPage.nextCursor
+                    )
+                    let generation = nextSummaryCacheGeneration()
+                    do {
+                        try await chatCache.saveChatSummaries(
+                            snapshot,
+                            instanceId: context.instanceId,
+                            generation: generation
+                        )
+                        guard generation == summaryCacheGeneration,
+                              loadingAttempt == attempt,
+                              coordinator.isCurrent(context) else { return }
+                        acceptInitialChatSummaryPage(loadedPage)
+                        chatListLoadState = .loaded
+                    } catch {
+                        failures.append(error)
+                        chatListLoadState = .failed(error.localizedDescription)
+                    }
                 }
-            case .failure(let error): failures.append(error)
+            case .failure(let error):
+                failures.append(error)
+                chatListLoadState = .failed(error.localizedDescription)
             }
             switch tasksResult {
             case .success(let loadedTasks):
@@ -221,10 +385,40 @@ private final class AidenHomeModel {
             case .failure(let error): failures.append(error)
             }
             errorMessage = failures.first?.localizedDescription
+        } catch let error where aidenIsCancellation(error) {
+            return
         } catch {
-            if coordinator.isCurrent(context) {
+            if loadingAttempt == attempt, coordinator.isCurrent(context) {
                 errorMessage = error.localizedDescription
+                if plan.loadsChats { chatListLoadState = .failed(error.localizedDescription) }
             }
+        }
+    }
+
+    func loadMoreChats(coordinator: AidenRemoteCoordinator) async {
+        guard case .loaded = chatListLoadState,
+              paginationState != .loading,
+              let cursor = nextChatCursor,
+              let context = contentContext,
+              coordinator.isCurrent(context) else { return }
+        paginationState = .loading
+        do {
+            let page = try await coordinator.remoteClient(for: context).chatSummaries(cursor: cursor)
+            guard coordinator.isCurrent(context), contentContext == context else { return }
+            try await acceptChatSummaryContinuation(
+                page,
+                requestedCursor: cursor,
+                instanceId: context.instanceId,
+                isCurrent: {
+                    coordinator.isCurrent(context) && self.contentContext == context
+                }
+            )
+        } catch let error where aidenIsCancellation(error) {
+            guard coordinator.isCurrent(context), contentContext == context else { return }
+            paginationState = .idle
+        } catch {
+            guard coordinator.isCurrent(context), contentContext == context else { return }
+            paginationState = .failed(error.localizedDescription)
         }
     }
 }
@@ -246,10 +440,15 @@ struct AidenHomeLoadPlan: Equatable {
 private func aidenLoadHomeSegment<Value: Sendable>(
     enabled: Bool,
     operation: @escaping @Sendable () async throws -> Value
-) async -> Result<Value?, Error> {
+) async throws -> Result<Value?, Error> {
+    try Task.checkCancellation()
     guard enabled else { return .success(nil) }
     do {
-        return .success(try await operation())
+        let value = try await operation()
+        try Task.checkCancellation()
+        return .success(value)
+    } catch let error where aidenIsCancellation(error) {
+        throw CancellationError()
     } catch {
         return .failure(error)
     }
@@ -257,6 +456,11 @@ private func aidenLoadHomeSegment<Value: Sendable>(
 
 private struct AidenNavigationResolutionID: Equatable {
     let request: AidenNavigationRequest?
+    let connectionState: AidenRemoteConnectionState
+}
+
+private struct AidenHomeLoadID: Equatable {
+    let instanceID: String?
     let connectionState: AidenRemoteConnectionState
 }
 
@@ -276,14 +480,89 @@ enum AidenWorkspaceNavigation {
         enteringFromSplit: Bool,
         current: [String],
         selectedWorkspaceID: String?,
-        workspaceIDs: [String]
+        workspaceIDs: [String],
+        preservingSelectedChat: Bool = false
     ) -> [String] {
+        if preservingSelectedChat { return [] }
         let current = reconciledCompactPath(current: current, workspaceIDs: workspaceIDs)
         if !current.isEmpty { return current }
         guard enteringFromSplit,
               let selectedWorkspaceID,
               workspaceIDs.contains(selectedWorkspaceID) else { return [] }
         return [selectedWorkspaceID]
+    }
+}
+
+enum AidenWorkspaceSidebarOrganization: String, Codable, Equatable {
+    case workspace
+    case recent
+}
+
+struct AidenWorkspaceSidebarSection: Identifiable, Equatable {
+    let workspace: AidenWorkspace
+    let chats: [AidenChatSummary]
+    let newestActivityAt: Date
+
+    var id: String { workspace.id }
+}
+
+struct AidenWorkspaceSidebarProjection: Equatable {
+    let sections: [AidenWorkspaceSidebarSection]
+    let recents: [AidenChatSummary]
+
+    static func make(
+        workspaces: [AidenWorkspace],
+        chats: [AidenChatSummary],
+        searchText: String
+    ) -> Self {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspaceByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
+        let regularChats = chats
+            .filter { workspaceByID[$0.workspaceId] != nil }
+            .sorted { left, right in
+                left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
+            }
+        let chatsByWorkspace = Dictionary(grouping: regularChats, by: \AidenChatSummary.workspaceId)
+        let sections = workspaces.compactMap { workspace -> AidenWorkspaceSidebarSection? in
+            let allChats = chatsByWorkspace[workspace.id] ?? []
+            let workspaceMatches = !query.isEmpty && workspace.name.localizedCaseInsensitiveContains(query)
+            let visibleChats = query.isEmpty || workspaceMatches
+                ? allChats
+                : allChats.filter { $0.title.localizedCaseInsensitiveContains(query) }
+            guard query.isEmpty || workspaceMatches || !visibleChats.isEmpty else { return nil }
+            return AidenWorkspaceSidebarSection(
+                workspace: workspace,
+                chats: visibleChats,
+                newestActivityAt: max(workspace.updatedAt, allChats.first?.updatedAt ?? .distantPast)
+            )
+        }
+        .sorted { left, right in
+            if left.newestActivityAt != right.newestActivityAt {
+                return left.newestActivityAt > right.newestActivityAt
+            }
+            if left.workspace.name != right.workspace.name {
+                return left.workspace.name.localizedStandardCompare(right.workspace.name) == .orderedAscending
+            }
+            return left.workspace.id < right.workspace.id
+        }
+        let recents = regularChats.filter { chat in
+            guard !query.isEmpty else { return true }
+            return chat.title.localizedCaseInsensitiveContains(query)
+                || workspaceByID[chat.workspaceId]?.name.localizedCaseInsensitiveContains(query) == true
+        }
+        return Self(sections: sections, recents: recents)
+    }
+
+    static func make(
+        workspaces: [AidenWorkspace],
+        chats: [AidenChat],
+        searchText: String
+    ) -> Self {
+        make(
+            workspaces: workspaces,
+            chats: AidenChat.regularWorkspaceChats(from: chats).map { AidenChatSummary(chat: $0) },
+            searchText: searchText
+        )
     }
 }
 
@@ -401,9 +680,12 @@ struct AidenWorkspaceShellView: View {
     @State private var isShowingAppSettings = false
     @State private var isShowingScheduledTasks = false
     @State private var isShowingUsage = false
-    @State private var intentChat: AidenChat?
-    @State private var intentStartsVoice = false
+    @State private var selectedSidebarChat: AidenChat?
+    @State private var selectedSidebarChatStartsVoice = false
+    @State private var sidebarChatNavigationTask: Task<Void, Never>?
+    @State private var sidebarChatNavigationRequestID: UUID?
     @State private var homeModel = AidenHomeModel()
+    @State private var fullyRevealedSidebarWorkspaceIDs: Set<String> = []
     @State private var searchText = ""
     @State private var isSearching = false
     @State private var isShowingNewAgentChoices = false
@@ -471,6 +753,31 @@ struct AidenWorkspaceShellView: View {
         activeWorkspaces.map(\.id)
     }
 
+    private var sidebarOrganization: AidenWorkspaceSidebarOrganization {
+        navigationStore.workspaceSidebarOrganization(for: coordinator.activeInstanceId)
+    }
+
+    private var expandedSidebarWorkspaceIDs: Set<String> {
+        navigationStore.expandedSidebarWorkspaceIDs(for: coordinator.activeInstanceId)
+    }
+
+    private var sidebarProjection: AidenWorkspaceSidebarProjection {
+        AidenWorkspaceSidebarProjection.make(
+            workspaces: activeWorkspaces,
+            chats: homeModel.chats,
+            searchText: searchText
+        )
+    }
+
+    private var chatListUnavailable: Bool {
+        if case .failed = homeModel.chatListLoadState { return true }
+        return false
+    }
+
+    private var chatCreationBlocked: Bool {
+        homeModel.chatListLoadState != .loaded
+    }
+
     var body: some View {
         Group {
             if usesSplitNavigation {
@@ -479,7 +786,23 @@ struct AidenWorkspaceShellView: View {
                         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
                 } detail: {
                     NavigationStack {
-                        workspaceDetail(workspaceID: selectedWorkspaceId)
+                        if let selectedSidebarChat {
+                            AidenChatDetailView(
+                                coordinator: coordinator,
+                                chat: selectedSidebarChat,
+                                autoStartVoice: selectedSidebarChatStartsVoice,
+                                onChatUpdated: { updated in
+                                    homeModel.accept(updated)
+                                    self.selectedSidebarChat = updated
+                                },
+                                onChatActivityChanged: { chatID, activity in
+                                    homeModel.setActivity(activity, forChatID: chatID)
+                                }
+                            )
+                            .id(selectedSidebarChat.id)
+                        } else {
+                            workspaceDetail(workspaceID: selectedWorkspaceId)
+                        }
                     }
                 }
                 .navigationSplitViewStyle(.balanced)
@@ -488,6 +811,28 @@ struct AidenWorkspaceShellView: View {
                     compactWorkspaceSidebar
                         .navigationDestination(for: String.self) { workspaceID in
                             workspaceDetail(workspaceID: workspaceID)
+                        }
+                        .navigationDestination(
+                            isPresented: Binding(
+                                get: { selectedSidebarChat != nil },
+                                set: { if !$0 { clearSelectedSidebarChat() } }
+                            )
+                        ) {
+                            if let selectedSidebarChat {
+                                AidenChatDetailView(
+                                    coordinator: coordinator,
+                                    chat: selectedSidebarChat,
+                                    autoStartVoice: selectedSidebarChatStartsVoice,
+                                    onChatUpdated: { updated in
+                                        homeModel.accept(updated)
+                                        self.selectedSidebarChat = updated
+                                    },
+                                    onChatActivityChanged: { chatID, activity in
+                                        homeModel.setActivity(activity, forChatID: chatID)
+                                    }
+                                )
+                                .id(selectedSidebarChat.id)
+                            }
                         }
                 }
             }
@@ -563,21 +908,6 @@ struct AidenWorkspaceShellView: View {
                 }
             }
         }
-        .sheet(item: $intentChat) { chat in
-            NavigationStack {
-                AidenChatDetailView(
-                    coordinator: coordinator,
-                    chat: chat,
-                    autoStartVoice: intentStartsVoice,
-                    onChatUpdated: { homeModel.accept($0) }
-                )
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { intentChat = nil }
-                    }
-                }
-            }
-        }
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -608,13 +938,24 @@ struct AidenWorkspaceShellView: View {
         .onChange(of: coordinator.workspaceSnapshotRevision) { _, _ in
             syncArchivedWorkspaceProjection()
             reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            navigationStore.pruneExpandedSidebarWorkspaces(
+                validWorkspaceIDs: Set(activeWorkspaceIDs),
+                for: coordinator.activeInstanceId
+            )
         }
         .onChange(of: archivedWorkspaceIDs) { _, _ in
             syncArchivedWorkspaceProjection()
             reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            navigationStore.pruneExpandedSidebarWorkspaces(
+                validWorkspaceIDs: Set(activeWorkspaceIDs),
+                for: coordinator.activeInstanceId
+            )
         }
         .onChange(of: coordinator.activeInstanceId) { _, _ in
+            cancelPendingSidebarChatNavigation()
             isShowingScheduledTasks = false
+            clearSelectedSidebarChat()
+            fullyRevealedSidebarWorkspaceIDs = []
             syncArchivedWorkspaceProjection()
             if coordinator.connectionState == .connected {
                 reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
@@ -637,13 +978,24 @@ struct AidenWorkspaceShellView: View {
                     enteringFromSplit: wasSplit,
                     current: compactWorkspacePath,
                     selectedWorkspaceID: selectedWorkspaceId,
-                    workspaceIDs: workspaceIDs
+                    workspaceIDs: workspaceIDs,
+                    preservingSelectedChat: selectedSidebarChat != nil
                 )
             }
         }
         .task {
             syncArchivedWorkspaceProjection()
             reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+            navigationStore.ensureExpandedSidebarWorkspace(
+                selectedWorkspaceId,
+                for: coordinator.activeInstanceId
+            )
+            if coordinator.connectionState == .connected {
+                navigationStore.pruneExpandedSidebarWorkspaces(
+                    validWorkspaceIDs: Set(activeWorkspaceIDs),
+                    for: coordinator.activeInstanceId
+                )
+            }
         }
         .task(id: AidenNavigationResolutionID(
             request: navigationRequest,
@@ -651,17 +1003,37 @@ struct AidenWorkspaceShellView: View {
         )) {
             await resolveNavigationRequest()
         }
-        .task(id: coordinator.connectionState) {
+        .task(id: AidenHomeLoadID(
+            instanceID: coordinator.activeInstanceId,
+            connectionState: coordinator.connectionState
+        )) {
             await homeModel.load(coordinator: coordinator)
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
-        .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
+        .onDisappear {
+            cancelPendingSidebarChatNavigation()
+            coordinator.haptics.deactivate(scope: hapticScope)
+        }
     }
 
     private var regularWorkspaceSidebar: some View {
         ZStack(alignment: .bottomTrailing) {
-            homeList { chat in
-                Button { intentChat = chat } label: { homeChatRow(chat) }
+            homeList { workspace in
+                Button {
+                    navigate(to: workspace.id)
+                } label: {
+                    Image(systemName: "arrow.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(workspace.name)")
+            } chatRow: { chat in
+                Button { openChat(chat) } label: {
+                    homeChatRow(chat, showsWorkspace: sidebarOrganization == .recent)
+                }
                     .buttonStyle(.plain)
             }
             if !isSearching {
@@ -676,16 +1048,24 @@ struct AidenWorkspaceShellView: View {
 
     private var compactWorkspaceSidebar: some View {
         ZStack(alignment: .bottomTrailing) {
-            homeList { chat in
-                NavigationLink {
-                    AidenChatDetailView(
-                        coordinator: coordinator,
-                        chat: chat,
-                        onChatUpdated: { homeModel.accept($0) }
-                    )
-                } label: {
-                    homeChatRow(chat)
+            homeList { workspace in
+                NavigationLink(value: workspace.id) {
+                    Image(systemName: "arrow.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(workspace.name)")
+            } chatRow: { chat in
+                Button { openChat(chat) } label: {
+                    homeChatRow(
+                        chat,
+                        showsWorkspace: sidebarOrganization == .recent
+                    )
+                }
+                .buttonStyle(.plain)
             }
             if !isSearching {
                 newAgentButton
@@ -697,17 +1077,9 @@ struct AidenWorkspaceShellView: View {
         .animation(.smooth(duration: 0.24, extraBounce: 0), value: isSearching)
     }
 
-    private var filteredChats: [AidenChat] {
-        let activeWorkspaceIDSet = Set(activeWorkspaceIDs)
-        let visibleChats = homeModel.chats.filter {
-            !$0.isBotChat && activeWorkspaceIDSet.contains($0.workspaceId)
-        }
-        guard !searchText.isEmpty else { return visibleChats }
-        return visibleChats.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
-    }
-
-    private func homeList<ChatRow: View>(
-        @ViewBuilder chatRow: @escaping (AidenChat) -> ChatRow
+    private func homeList<WorkspaceDestination: View, ChatRow: View>(
+        @ViewBuilder workspaceDestination: @escaping (AidenWorkspace) -> WorkspaceDestination,
+        @ViewBuilder chatRow: @escaping (AidenChatSummary) -> ChatRow
     ) -> some View {
         List {
             homeHeader
@@ -723,19 +1095,131 @@ struct AidenWorkspaceShellView: View {
                     .listRowBackground(palette.canvas)
             }
 
-            if !isSearching {
-                Text("Chats")
+            HStack(spacing: 12) {
+                Text(sidebarOrganization == .workspace ? "Workspaces" : "Recents")
                     .font(.title3.bold())
                     .foregroundStyle(palette.foreground)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 26)
-                    .padding(.bottom, 10)
-                    .listRowInsets(EdgeInsets())
+
+                Spacer(minLength: 8)
+
+                sidebarOrganizationMenu
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, isSearching ? 10 : 26)
+            .padding(.bottom, 10)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(palette.canvas)
+
+            if chatListUnavailable {
+                ContentUnavailableView {
+                    Label("Chats Couldn’t Load", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                } description: {
+                    Text(homeModel.chatLoadErrorMessage ?? "Reconnect and try again.")
+                } actions: {
+                    Button("Try Again") {
+                        Task { await homeModel.load(coordinator: coordinator) }
+                    }
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+            } else if sidebarOrganization == .workspace, sidebarProjection.sections.isEmpty,
+               !homeModel.isLoading {
+                ContentUnavailableView(
+                    searchText.isEmpty ? "No Workspaces Yet" : "No Matching Workspaces",
+                    systemImage: searchText.isEmpty ? "folder" : "magnifyingglass",
+                    description: Text(searchText.isEmpty
+                        ? "Add a workspace to begin."
+                        : "Try a different search term.")
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+            } else if sidebarOrganization == .workspace {
+                ForEach(sidebarProjection.sections) { section in
+                    let expanded = !searchText.isEmpty
+                        || expandedSidebarWorkspaceIDs.contains(section.workspace.id)
+                    let revealsAll = fullyRevealedSidebarWorkspaceIDs.contains(section.workspace.id)
+                    let visibleChats = revealsAll
+                        ? section.chats
+                        : Array(section.chats.prefix(aidenWorkspaceSidebarPreviewLimit))
+                    let remainingChatCount = section.chats.count - visibleChats.count
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Button {
+                                navigationStore.toggleExpandedSidebarWorkspace(
+                                    section.workspace.id,
+                                    for: coordinator.activeInstanceId
+                                )
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(palette.secondary)
+                                        .frame(width: 12)
+                                    Image(systemName: section.workspace.hasFolder ? "folder" : "tray")
+                                        .font(.body.weight(.medium))
+                                        .foregroundStyle(palette.accent)
+                                        .frame(width: 22)
+                                    Text(section.workspace.name)
+                                        .font(.headline.weight(.semibold))
+                                        .foregroundStyle(palette.foreground)
+                                        .lineLimit(1)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(
+                                "\(expanded ? "Collapse" : "Expand") \(section.workspace.name)"
+                            )
+
+                            workspaceDestination(section.workspace)
+                        }
+
+                        if expanded {
+                            ForEach(visibleChats) { chat in
+                                chatRow(chat)
+                                    .padding(.leading, 30)
+                            }
+                            if section.chats.isEmpty {
+                                Button {
+                                    Task { await createNewAgent(in: section.workspace) }
+                                } label: {
+                                    Label("New chat", systemImage: "square.and.pencil")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(palette.secondary)
+                                        .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+                                        .padding(.leading, 34)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(
+                                    coordinator.connectionState != .connected
+                                        || coordinator.isMutating
+                                        || isCreatingAgent
+                                        || chatCreationBlocked
+                                )
+                            }
+                            if remainingChatCount > 0 {
+                                Button {
+                                    fullyRevealedSidebarWorkspaceIDs.insert(section.workspace.id)
+                                } label: {
+                                    Text("Show \(remainingChatCount) more")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(palette.secondary)
+                                        .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+                                        .padding(.leading, 34)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                     .listRowSeparator(.hidden)
                     .listRowBackground(palette.canvas)
-            }
-
-            if filteredChats.isEmpty, !homeModel.isLoading {
+                }
+            } else if sidebarProjection.recents.isEmpty, !homeModel.isLoading {
                 ContentUnavailableView(
                     searchText.isEmpty ? "No Chats Yet" : "No Matching Chats",
                     systemImage: searchText.isEmpty ? "bubble.left" : "magnifyingglass",
@@ -747,12 +1231,19 @@ struct AidenWorkspaceShellView: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(palette.canvas)
             } else {
-                ForEach(filteredChats) { chat in
+                ForEach(sidebarProjection.recents) { chat in
                     chatRow(chat)
                         .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                         .listRowSeparator(.hidden)
                         .listRowBackground(palette.canvas)
                 }
+            }
+
+            if nextPageAvailableOrFailed {
+                chatPaginationRow
+                    .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 8, trailing: 24))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(palette.canvas)
             }
 
         }
@@ -766,6 +1257,78 @@ struct AidenWorkspaceShellView: View {
             await homeModel.load(coordinator: coordinator)
         }
         .overlay { if homeModel.isLoading && homeModel.chats.isEmpty { ProgressView() } }
+    }
+
+    private var nextPageAvailableOrFailed: Bool {
+        homeModel.nextChatCursor != nil || {
+            if case .failed = homeModel.paginationState { return true }
+            return false
+        }()
+    }
+
+    @ViewBuilder
+    private var chatPaginationRow: some View {
+        switch homeModel.paginationState {
+        case .loading:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Loading more chats…")
+            }
+            .font(.subheadline)
+            .foregroundStyle(palette.secondary)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .accessibilityElement(children: .combine)
+        case .failed(let message):
+            VStack(spacing: 6) {
+                Text("More chats couldn’t load")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(palette.foreground)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(2)
+                Button("Try Again") {
+                    Task { await homeModel.loadMoreChats(coordinator: coordinator) }
+                }
+                .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+        case .idle:
+            Button("Load more chats") {
+                Task { await homeModel.loadMoreChats(coordinator: coordinator) }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(palette.secondary)
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+    }
+
+    private var sidebarOrganizationMenu: some View {
+        Menu {
+            Picker("Organize sidebar", selection: Binding(
+                get: { sidebarOrganization },
+                set: {
+                    navigationStore.setWorkspaceSidebarOrganization(
+                        $0,
+                        for: coordinator.activeInstanceId
+                    )
+                }
+            )) {
+                Label("By workspace", systemImage: "list.bullet.indent").tag(
+                    AidenWorkspaceSidebarOrganization.workspace
+                )
+                Label("Recent only", systemImage: "clock").tag(
+                    AidenWorkspaceSidebarOrganization.recent
+                )
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(palette.secondary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Organize sidebar")
     }
 
     private var homeHeader: some View {
@@ -900,7 +1463,7 @@ struct AidenWorkspaceShellView: View {
         .contentShape(Rectangle())
     }
 
-    private func homeChatRow(_ chat: AidenChat) -> some View {
+    private func homeChatRow(_ chat: AidenChatSummary, showsWorkspace: Bool) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(chat.title)
@@ -908,7 +1471,8 @@ struct AidenWorkspaceShellView: View {
                     .foregroundStyle(palette.foreground)
                     .lineLimit(2)
 
-                if let workspace = coordinator.workspaces.first(where: { $0.id == chat.workspaceId }) {
+                if showsWorkspace,
+                   let workspace = coordinator.workspaces.first(where: { $0.id == chat.workspaceId }) {
                     Text(workspace.name)
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
@@ -917,6 +1481,13 @@ struct AidenWorkspaceShellView: View {
             }
 
             Spacer(minLength: 8)
+
+            if chat.activity == .active {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(palette.accent)
+                    .accessibilityLabel("Active")
+            }
 
             AidenRelativeTimestampView(date: chat.updatedAt)
                 .font(.caption)
@@ -962,7 +1533,12 @@ struct AidenWorkspaceShellView: View {
                 .contentShape(Rectangle())
         }
         .aidenProminentGlassButton()
-        .disabled(coordinator.connectionState != .connected || coordinator.isMutating || isCreatingAgent)
+        .disabled(
+            coordinator.connectionState != .connected
+                || coordinator.isMutating
+                || isCreatingAgent
+                || chatCreationBlocked
+        )
         .accessibilityLabel("New Workspace Chat")
         .accessibilityHint("Choose the workspace for a new chat.")
         .matchedTransitionSource(id: "AidenNewAgentOptions", in: newAgentTransition)
@@ -1015,6 +1591,12 @@ struct AidenWorkspaceShellView: View {
 
     @MainActor
     private func createNewAgent(workspaceCreate: AidenWorkspaceCreate, status: String) async {
+        guard !chatCreationBlocked else {
+            coordinator.presentedError = homeModel.chatLoadErrorMessage
+                ?? String(localized: "Chats are unavailable. Try loading them again first.")
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return
+        }
         guard !isCreatingAgent else { return }
         isCreatingAgent = true
         agentCreationStatus = status
@@ -1046,6 +1628,12 @@ struct AidenWorkspaceShellView: View {
         managesProgress: Bool = true,
         completionFeedback: AidenHapticEvent = .success
     ) async {
+        guard !chatCreationBlocked else {
+            coordinator.presentedError = homeModel.chatLoadErrorMessage
+                ?? String(localized: "Chats are unavailable. Try loading them again first.")
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return
+        }
         guard !isCreatingAgent || !managesProgress else { return }
         if managesProgress {
             isCreatingAgent = true
@@ -1077,8 +1665,8 @@ struct AidenWorkspaceShellView: View {
             }
             await homeModel.load(coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return }
-            navigate(to: workspace.id)
-            intentChat = chat
+            homeModel.accept(chat)
+            openChat(chat)
             coordinator.haptics.play(
                 completionFeedback,
                 scope: hapticScope,
@@ -1116,7 +1704,12 @@ struct AidenWorkspaceShellView: View {
             AidenWorkspaceDetailView(
                 coordinator: coordinator,
                 workspace: workspace,
-                onRemoved: { removeWorkspaceFromNavigation(workspaceID) }
+                onRemoved: { removeWorkspaceFromNavigation(workspaceID) },
+                onChatUpdated: { homeModel.accept($0) },
+                onChatRemoved: { homeModel.removeChat(id: $0) },
+                onChatActivityChanged: { chatID, activity in
+                    homeModel.setActivity(activity, forChatID: chatID)
+                }
             )
             .id(workspace.revision)
         } else {
@@ -1128,9 +1721,70 @@ struct AidenWorkspaceShellView: View {
         }
     }
 
-    private func navigate(to workspaceID: String) {
+    private func openChat(_ chat: AidenChat, startsVoice: Bool = false) {
+        cancelPendingSidebarChatNavigation()
+        commitOpenChat(chat, startsVoice: startsVoice)
+    }
+
+    private func commitOpenChat(_ chat: AidenChat, startsVoice: Bool = false) {
+        guard activeWorkspaceIDs.contains(chat.workspaceId) else { return }
+        selectedWorkspaceId = chat.workspaceId
+        navigationStore.ensureExpandedSidebarWorkspace(
+            chat.workspaceId,
+            for: coordinator.activeInstanceId
+        )
+        if !usesSplitNavigation { compactWorkspacePath = [] }
+        selectedSidebarChatStartsVoice = startsVoice
+        selectedSidebarChat = chat
+    }
+
+    private func openChat(_ summary: AidenChatSummary, startsVoice: Bool = false) {
+        guard activeWorkspaceIDs.contains(summary.workspaceId) else { return }
+        cancelPendingSidebarChatNavigation()
+        let requestID = UUID()
+        sidebarChatNavigationRequestID = requestID
+        sidebarChatNavigationTask = Task { @MainActor in
+            defer {
+                if sidebarChatNavigationRequestID == requestID {
+                    sidebarChatNavigationRequestID = nil
+                    sidebarChatNavigationTask = nil
+                }
+            }
+            do {
+                let context = try coordinator.requestContext()
+                let chat = try await coordinator.remoteClient(for: context).chat(id: summary.id)
+                try Task.checkCancellation()
+                guard sidebarChatNavigationRequestID == requestID,
+                      coordinator.isCurrent(context),
+                      !chat.isBotChat,
+                      chat.workspaceId == summary.workspaceId,
+                      activeWorkspaceIDs.contains(chat.workspaceId) else { return }
+                commitOpenChat(chat, startsVoice: startsVoice)
+            } catch let error where aidenIsCancellation(error) {
+                return
+            } catch {
+                coordinator.presentedError = error.localizedDescription
+            }
+        }
+    }
+
+    private func cancelPendingSidebarChatNavigation() {
+        sidebarChatNavigationRequestID = nil
+        sidebarChatNavigationTask?.cancel()
+        sidebarChatNavigationTask = nil
+    }
+
+    private func navigate(to workspaceID: String, clearsSelectedChat: Bool = true) {
         guard activeWorkspaceIDs.contains(workspaceID) else { return }
+        cancelPendingSidebarChatNavigation()
+        if clearsSelectedChat {
+            clearSelectedSidebarChat()
+        }
         selectedWorkspaceId = workspaceID
+        navigationStore.ensureExpandedSidebarWorkspace(
+            workspaceID,
+            for: coordinator.activeInstanceId
+        )
         if !usesSplitNavigation {
             compactWorkspacePath = [workspaceID]
         }
@@ -1145,6 +1799,10 @@ struct AidenWorkspaceShellView: View {
 
     private func reconcileNavigation(workspaceIDs: [String]) {
         if coordinator.connectionState == .connecting, workspaceIDs.isEmpty { return }
+        if let selectedSidebarChat, !workspaceIDs.contains(selectedSidebarChat.workspaceId) {
+            clearSelectedSidebarChat()
+        }
+        fullyRevealedSidebarWorkspaceIDs.formIntersection(workspaceIDs)
         selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
             current: selectedWorkspaceId,
             workspaceIDs: workspaceIDs
@@ -1153,6 +1811,11 @@ struct AidenWorkspaceShellView: View {
             current: compactWorkspacePath,
             workspaceIDs: workspaceIDs
         )
+    }
+
+    private func clearSelectedSidebarChat() {
+        selectedSidebarChat = nil
+        selectedSidebarChatStartsVoice = false
     }
 
     private func syncArchivedWorkspaceProjection() {
@@ -1219,8 +1882,7 @@ struct AidenWorkspaceShellView: View {
                 navigate(to: chat.workspaceId)
             }
             guard coordinator.isCurrent(context) else { return }
-            intentStartsVoice = request.startsVoice
-            intentChat = chat
+            openChat(chat, startsVoice: request.startsVoice)
         } catch {
             guard coordinator.isCurrent(context) else { return }
             coordinator.presentedError = error.localizedDescription
@@ -1768,11 +2430,36 @@ private struct AidenWorkspaceDetailView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
     let onRemoved: () -> Void
+    let onChatUpdated: @MainActor (AidenChat) -> Void
+    let onChatRemoved: @MainActor (String) -> Void
+    let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
+
+    init(
+        coordinator: AidenRemoteCoordinator,
+        workspace: AidenWorkspace,
+        onRemoved: @escaping () -> Void,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+    ) {
+        self.coordinator = coordinator
+        self.workspace = workspace
+        self.onRemoved = onRemoved
+        self.onChatUpdated = onChatUpdated
+        self.onChatRemoved = onChatRemoved
+        self.onChatActivityChanged = onChatActivityChanged
+    }
 
     @State private var isShowingSettings = false
 
     var body: some View {
-        AidenWorkspaceChatsView(coordinator: coordinator, workspace: workspace)
+        AidenWorkspaceChatsView(
+            coordinator: coordinator,
+            workspace: workspace,
+            onChatUpdated: onChatUpdated,
+            onChatRemoved: onChatRemoved,
+            onChatActivityChanged: onChatActivityChanged
+        )
         .navigationTitle(workspace.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

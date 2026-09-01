@@ -1,16 +1,20 @@
-// Built-in MCP provider catalog. Presets are first-class, preconfigured MCP
-// servers the user connects with just an API key (encrypted via secrets.ts)
-// or a browser OAuth sign-in. Adding a new provider is a data-only change:
-// one more entry in MCP_PRESETS (plus an icon mapping in the renderer).
+// Built-in MCP provider catalog. Connectable plugins from the shared Codex
+// Plugin Directory (plus Aiden's Composio connector) become first-class
+// presets: the user connects with an API key (encrypted via secrets.ts) or a
+// browser OAuth sign-in.
 //
 // This module is intentionally free of Electron imports so it can be
 // unit-tested under plain tsx.
 
+import {
+  isConnectablePlugin,
+  PLUGIN_CATALOG,
+  type McpPresetAuth as SharedMcpPresetAuth,
+  type PluginCatalogEntry,
+} from "../../renderer/shared/plugin-catalog.js";
 import type { McpServer } from "./types.js";
 
-export type McpPresetAuth =
-  | { kind: "apiKey"; headerName: string; keyLabel: string; keyHelpUrl: string }
-  | { kind: "oauth" };
+export type McpPresetAuth = SharedMcpPresetAuth;
 
 export interface McpPreset {
   id: string;
@@ -19,6 +23,7 @@ export interface McpPreset {
   tagline: string;
   /** Attribution line, e.g. "By Composio". */
   vendor: string;
+  category: string;
   /** All first-pass presets are streamable HTTP. */
   transport: "http";
   /** Default server address; the user may edit it during setup. */
@@ -27,49 +32,37 @@ export interface McpPreset {
   docsUrl: string;
 }
 
-export const MCP_PRESETS: McpPreset[] = [
-  {
-    id: "composio",
-    name: "Composio",
-    tagline: "One key unlocks 500+ app integrations — GitHub, Gmail, Slack, and more.",
-    vendor: "By Composio",
+export function mcpPresetFromPlugin(plugin: PluginCatalogEntry): McpPreset | undefined {
+  if (!isConnectablePlugin(plugin) || !plugin.url || !plugin.auth) return undefined;
+  return {
+    id: plugin.id,
+    name: plugin.name,
+    tagline: plugin.tagline,
+    vendor: plugin.vendor,
+    category: plugin.category,
     transport: "http",
-    url: "https://connect.composio.dev/mcp",
-    auth: {
-      kind: "apiKey",
-      headerName: "x-consumer-api-key",
-      keyLabel: "Composio API key",
-      keyHelpUrl: "https://dashboard.composio.dev",
-    },
-    docsUrl: "https://docs.composio.dev",
-  },
-  {
-    id: "notion",
-    name: "Notion",
-    tagline: "Search, read, and update pages and databases in your workspace.",
-    vendor: "By Notion",
-    transport: "http",
-    url: "https://mcp.notion.com/mcp",
-    auth: { kind: "oauth" },
-    docsUrl: "https://developers.notion.com/docs/get-started-with-mcp",
-  },
-  {
-    id: "linear",
-    name: "Linear",
-    tagline: "Find, create, and update issues, projects, and comments.",
-    vendor: "By Linear",
-    transport: "http",
-    url: "https://mcp.linear.app/mcp",
-    auth: { kind: "oauth" },
-    docsUrl: "https://linear.app/docs/mcp",
-  },
-];
+    url: plugin.url,
+    auth: plugin.auth,
+    docsUrl: plugin.docsUrl,
+  };
+}
 
-const MCP_PRESET_ALLOWED_ORIGINS: Readonly<Record<string, readonly string[]>> = {
-  composio: ["https://connect.composio.dev"],
-  notion: ["https://mcp.notion.com"],
-  linear: ["https://mcp.linear.app"],
-};
+export const MCP_PRESETS: McpPreset[] = PLUGIN_CATALOG.flatMap((plugin) => {
+  const preset = mcpPresetFromPlugin(plugin);
+  return preset ? [preset] : [];
+});
+
+function httpsOrigin(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:") {
+    throw new Error(`${url} must use HTTPS.`);
+  }
+  return parsed.origin;
+}
+
+const MCP_PRESET_ALLOWED_ORIGINS: Readonly<Record<string, readonly string[]>> = Object.freeze(
+  Object.fromEntries(MCP_PRESETS.map((preset) => [preset.id, [httpsOrigin(preset.url)]])),
+);
 
 /** Deterministic server id for a preset, so re-setup maps to the same record and secret. */
 export function presetServerId(presetId: string): string {

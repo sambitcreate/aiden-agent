@@ -15,10 +15,10 @@ import {
   type AfterToolCallResult,
   type AgentMessage,
   type AgentTool,
-  type Session,
 } from "@earendil-works/pi-agent-core";
 import { createModels } from "@earendil-works/pi-ai";
 import { appendPiMessages } from "./pi-compaction-session-store.js";
+import { PiCompactionCoordinator } from "./pi-compaction-core.js";
 import { buildAgentRuntimeOptions } from "./generation-runtime.js";
 import {
   PiAgentRuntimeExtensionRegistry,
@@ -32,6 +32,8 @@ import {
 import { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { createGenerationContextTransform } from "./generation-context.js";
+import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 
 function testHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
@@ -69,14 +71,16 @@ async function managedTestHarness(
     tools?: AgentTool[];
     extensions?: PiAgentRuntimeHarnessOptions["extensions"];
     identity?: PiAgentRuntimeHarnessOptions["identity"];
-    appendMessages?: (session: Session, messages: readonly AgentMessage[]) => Promise<void>;
-    appendInput?: (session: Session, message: AgentMessage) => Promise<void>;
+    appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
+    appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     contextWindow?: number;
     retryDelayMs?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
     effects?: PiRuntimeSessionBinding["effects"];
     streamFn?: PiAgentRuntimeHarnessOptions["streamFn"];
+    summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
+    generationContextTransform?: boolean;
   } = {},
 ) {
   const core = createFauxCore({
@@ -95,9 +99,27 @@ async function managedTestHarness(
   });
   core.setResponses(responses);
   const model = core.getModel();
-  const session = await new InMemorySessionRepo().create({
-    id: `managed-${Math.random().toString(36).slice(2)}`,
-  });
+  const compactionModels = createModels();
+  if (options.summaryResponses) {
+    const summaryProvider = fauxProvider({
+      api: model.api,
+      provider: model.provider,
+      models: [
+        {
+          id: model.id,
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+        },
+      ],
+    });
+    summaryProvider.setResponses(options.summaryResponses);
+    compactionModels.setProvider(summaryProvider.provider);
+  }
+  const session = createPiSessionPort(
+    await new InMemorySessionRepo().create({
+      id: `managed-${Math.random().toString(36).slice(2)}`,
+    }),
+  );
   const harness = new PiAgentRuntimeHarness({
     extensions: options.extensions,
     identity: options.identity,
@@ -107,6 +129,18 @@ async function managedTestHarness(
           message.role === "user" || message.role === "assistant" || message.role === "toolResult",
       ),
     streamFn: options.streamFn ?? core.streamSimple,
+    ...(options.generationContextTransform
+      ? {
+          transformContext: createGenerationContextTransform({
+            contextWindow: model.contextWindow,
+            systemPrompt: "Managed prompt",
+            tools: options.tools ?? [],
+            supportsImages: model.input.includes("image"),
+            providerId: model.provider,
+            modelId: model.id,
+          }),
+        }
+      : {}),
     initialState: {
       systemPrompt: "Managed prompt",
       thinkingLevel: "off",
@@ -120,7 +154,7 @@ async function managedTestHarness(
       appendMessages: options.appendMessages ?? appendPiMessages,
       appendInput: options.appendInput,
       compaction: {
-        models: createModels(),
+        models: compactionModels,
         model,
         thinkingLevel: "off",
         retryDelayMs: options.retryDelayMs,
@@ -1114,8 +1148,8 @@ test("managed cancellation settles while session opening is still pending", asyn
   const core = createFauxCore({ provider: "aiden-managed-pending-session" });
   core.setResponses([fauxAssistantMessage("must not run")]);
   const model = core.getModel();
-  let resolveSession!: (session: Session) => void;
-  const pendingSession = new Promise<Session>((resolve) => {
+  let resolveSession!: (session: PiSessionPort) => void;
+  const pendingSession = new Promise<PiSessionPort>((resolve) => {
     resolveSession = resolve;
   });
   let appends = 0;
@@ -1164,7 +1198,9 @@ test("managed cancellation settles while session opening is still pending", asyn
   assert.equal(core.state.callCount, 0);
   assert.equal(appends, 0);
 
-  resolveSession(await new InMemorySessionRepo().create({ id: "late-managed-session" }));
+  resolveSession(
+    createPiSessionPort(await new InMemorySessionRepo().create({ id: "late-managed-session" })),
+  );
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(appends, 0);
 });
@@ -1276,10 +1312,13 @@ test("managed run preserves a prior failed assistant for a later ordinary prompt
   assert.match(observedText, /PRIVATE_PRIOR_FAILURE/u);
 });
 
-test("preflight without valid usage does not require compaction", async () => {
+test("preflight without valid usage semantically compacts before provider I/O", async () => {
+  const summary = fauxAssistantMessage(
+    "## Goal\nContinue.\n\n## Constraints & Preferences\n- none\n\n## Progress\n### Done\n- restored history\n\n### In Progress\n- current request\n\n### Blocked\n- none\n\n## Key Decisions\n- preserve history\n\n## Next Steps\n1. Continue\n\n## Critical Context\n- current request\n",
+  );
   const { core, harness, session } = await managedTestHarness(
-    [fauxAssistantMessage("must not run")],
-    { contextWindow: 2_048 },
+    [fauxAssistantMessage("completed after preflight")],
+    { contextWindow: 2_048, summaryResponses: Array.from({ length: 8 }, () => summary) },
   );
   const model = harness.state.model;
   await appendPiMessages(session, [
@@ -1318,9 +1357,10 @@ test("preflight without valid usage does not require compaction", async () => {
 
   assert.equal(outcome.kind, "completed");
   assert.equal(core.state.callCount, 1);
+  assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), true);
 });
 
-test("preflight without valid usage reaches provider before a pending host fault wins", async () => {
+test("preflight without valid usage consumes a pending summary host fault before provider I/O", async () => {
   let pendingFailure: "inference" | undefined = "inference";
   const { core, harness, session } = await managedTestHarness(
     [fauxAssistantMessage("must not run")],
@@ -1335,14 +1375,14 @@ test("preflight without valid usage reaches provider before a pending host fault
   );
   const model = harness.state.model;
   await appendPiMessages(session, [
-    { role: "user", content: `old ${"a".repeat(3_000)}`, timestamp: 10 },
+    { role: "user", content: `old ${"a".repeat(100_000)}`, timestamp: 10 },
     {
       ...fauxAssistantMessage("answer", { timestamp: 20 }),
       api: model.api,
       provider: model.provider,
       model: model.id,
     },
-    { role: "user", content: `newer ${"b".repeat(3_000)}`, timestamp: 30 },
+    { role: "user", content: `newer ${"b".repeat(100_000)}`, timestamp: 30 },
     {
       ...fauxAssistantMessage("answer two", { timestamp: 40 }),
       api: model.api,
@@ -1357,7 +1397,7 @@ test("preflight without valid usage reaches provider before a pending host fault
   });
 
   assert.equal(outcome.kind, "host_failed");
-  assert.equal(core.state.callCount, 1);
+  assert.equal(core.state.callCount, 0);
   assert.equal(pendingFailure, undefined);
 });
 
@@ -1415,9 +1455,11 @@ test("cancellation after a large tool result does not wait for forced compaction
     }),
     fauxAssistantMessage("must not run"),
   ]);
-  const session = await new InMemorySessionRepo().create({
-    id: `immediate-compaction-${Math.random().toString(36).slice(2)}`,
-  });
+  const session = createPiSessionPort(
+    await new InMemorySessionRepo().create({
+      id: `immediate-compaction-${Math.random().toString(36).slice(2)}`,
+    }),
+  );
   const harness = new PiAgentRuntimeHarness({
     convertToLlm: (messages) =>
       messages.filter(
@@ -1487,9 +1529,11 @@ test("cancellation exposes no detached forced between-tool checkpoint", async ()
     fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
     fauxAssistantMessage("must not run"),
   ]);
-  const session = await new InMemorySessionRepo().create({
-    id: `detached-checkpoint-${Math.random().toString(36).slice(2)}`,
-  });
+  const session = createPiSessionPort(
+    await new InMemorySessionRepo().create({
+      id: `detached-checkpoint-${Math.random().toString(36).slice(2)}`,
+    }),
+  );
   const originalAppendCompaction = session.appendCompaction.bind(session);
   let checkpointStarted!: () => void;
   const atCheckpoint = new Promise<void>((resolve) => {
@@ -1540,14 +1584,14 @@ test("cancellation exposes no detached forced between-tool checkpoint", async ()
   assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
-test("large tool results do not force a semantic checkpoint before the next provider call", async () => {
+test("an irreducible active tool result uses bounded projection without a no-op checkpoint", async () => {
   const tool: AgentTool = {
     name: "large_unforced_result",
     label: "Large unforced result",
-    description: "Return a large result without an Aiden-only checkpoint.",
+    description: "Return an active result that cannot benefit from a history checkpoint.",
     parameters: Type.Object({}),
     execute: async () => ({
-      content: [{ type: "text", text: "x".repeat(140_000) }],
+      content: [{ type: "text", text: "x".repeat(600_000) }],
       details: null,
     }),
   };
@@ -1556,7 +1600,7 @@ test("large tool results do not force a semantic checkpoint before the next prov
       fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
       fauxAssistantMessage("completed without a forced checkpoint"),
     ],
-    { tools: [tool] },
+    { tools: [tool], contextWindow: 8_192, generationContextTransform: true },
   );
 
   const outcome = await harness.runManaged({
@@ -1565,7 +1609,41 @@ test("large tool results do not force a semantic checkpoint before the next prov
   });
 
   assert.equal(outcome.kind, "completed");
+  assert.equal(outcome.emergencyProjection?.kind, "active_payload_reduced");
   assert.equal(core.state.callCount, 2);
+  assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
+});
+
+test("hidden history removal fails closed when no durable checkpoint can be written", async () => {
+  const { harness, session } = await managedTestHarness(
+    [fauxAssistantMessage("provider answered the bounded projection")],
+    {
+      contextWindow: 4_096,
+      generationContextTransform: true,
+      extensions: [
+        {
+          id: "oversized-ephemeral-history",
+          transformContext: async (messages) => [
+            { role: "user", content: `old-${"u".repeat(60_000)}`, timestamp: 1 },
+            {
+              ...fauxAssistantMessage(`old-${"a".repeat(60_000)}`),
+              timestamp: 2,
+            },
+            ...messages,
+          ],
+        },
+      ],
+    },
+  );
+
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "current request", timestamp: 3 },
+  });
+
+  assert.equal(outcome.emergencyProjection?.kind, "history_removed");
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "compaction");
   assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
@@ -1968,6 +2046,32 @@ test("runtime resources and registry reloads are immutable operation snapshots",
   );
 });
 
+test("volatile memory follows every cache-stable prompt and skill contribution", () => {
+  const resolved = resolvePiAgentRuntimeContributionSnapshot(
+    "base identity",
+    [],
+    {},
+    [{
+      id: "static",
+      systemPrompt: "static authority",
+      volatileSystemPrompt: "volatile approved memory",
+      resources: {
+        skills: [{
+          name: "stable-skill",
+          description: "stable",
+          content: "stable skill content",
+          filePath: "/skills/stable/SKILL.md",
+        }],
+      },
+    }],
+  );
+  const base = resolved.systemPrompt.indexOf("base identity");
+  const authority = resolved.systemPrompt.indexOf("static authority");
+  const skill = resolved.systemPrompt.indexOf("stable-skill");
+  const memory = resolved.systemPrompt.indexOf("volatile approved memory");
+  assert.ok(base < authority && authority < skill && skill < memory);
+});
+
 test("custom entry projectors are snapshotted while Aiden's namespace stays private", async () => {
   assert.throws(
     () =>
@@ -2075,6 +2179,119 @@ test("managed steering is accepted only while active and queued input is durable
     users.map((message) => message.content),
     ["start", "new instruction"],
   );
+});
+
+test("terminal responses skip between-turn pressure and settle through the terminal check", async () => {
+  let continuationChecks = 0;
+  let terminalChecks = 0;
+  const originalCheckContextPressure = PiCompactionCoordinator.prototype.checkContextPressure;
+  const originalCheck = PiCompactionCoordinator.prototype.check;
+  PiCompactionCoordinator.prototype.checkContextPressure = function (projection) {
+    continuationChecks += 1;
+    return originalCheckContextPressure.call(this, projection);
+  };
+  PiCompactionCoordinator.prototype.check = function (...args) {
+    terminalChecks += 1;
+    return originalCheck.apply(this, args);
+  };
+  try {
+    const { harness } = await managedTestHarness([fauxAssistantMessage("done")], {
+      contextWindow: 8_192,
+      generationContextTransform: true,
+    });
+    const outcome = await harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "finish without a continuation", timestamp: 1 },
+    });
+
+    assert.equal(outcome.kind, "completed");
+    assert.equal(continuationChecks, 1, "only the initial provider preflight should run");
+    assert.equal(terminalChecks, 1, "the post-response lifecycle should own the idle check");
+  } finally {
+    PiCompactionCoordinator.prototype.checkContextPressure = originalCheckContextPressure;
+    PiCompactionCoordinator.prototype.check = originalCheck;
+  }
+});
+
+test("between-tool pressure includes queued steering before the next provider request", async () => {
+  let toolStarted!: () => void;
+  const atTool = new Promise<void>((resolve) => {
+    toolStarted = resolve;
+  });
+  let releaseTool!: () => void;
+  const release = new Promise<void>((resolve) => {
+    releaseTool = resolve;
+  });
+  const tool: AgentTool = {
+    name: "produce_large_result",
+    label: "Produce large result",
+    description: "Produces enough history to require a checkpoint.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      toolStarted();
+      await release;
+      return { content: [{ type: "text", text: "ready" }], details: null };
+    },
+  };
+  const projections: Array<
+    Parameters<PiCompactionCoordinator["checkContextPressure"]>[0]
+  > = [];
+  const originalCheckContextPressure = PiCompactionCoordinator.prototype.checkContextPressure;
+  PiCompactionCoordinator.prototype.checkContextPressure = function (projection) {
+    projections.push(projection);
+    return originalCheckContextPressure.call(this, projection);
+  };
+  const { harness, session } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("continued after checkpoint"),
+    ],
+    {
+      tools: [tool],
+      contextWindow: 8_192,
+      generationContextTransform: true,
+    },
+  );
+  try {
+    const running = harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "start", timestamp: 1 },
+    });
+    await atTool;
+    assert.deepEqual(
+      harness.queueSteer({
+        role: "user",
+        content: `queued ${"q".repeat(12_000)}`,
+        timestamp: 2,
+      }),
+      { accepted: true, queue: "steer" },
+    );
+    releaseTool();
+
+    assert.equal((await running).kind, "completed");
+    assert.ok(
+      projections.some(
+        (projection) =>
+          projection !== undefined &&
+          projection.compressibleHistoryMessages >= 2 &&
+          projection.contextTokens >= 3_000,
+      ),
+      JSON.stringify(projections),
+    );
+    assert.equal(
+      (await session.buildContext()).messages.some(
+        (message) => message.role === "user" && JSON.stringify(message).includes("queued"),
+      ),
+      true,
+    );
+    assert.equal(
+      (await session.getBranch()).some((entry) => entry.type === "compaction"),
+      false,
+      "queued pressure must not write a checkpoint when Pi has no effective input to summarize",
+    );
+  } finally {
+    PiCompactionCoordinator.prototype.checkContextPressure = originalCheckContextPressure;
+  }
 });
 
 test("managed follow-up input is drained after completion and journaled once", async () => {

@@ -451,6 +451,339 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenServer.self, from: nullSupport))
     }
 
+    func testCanonicalChatSummaryFixtureAndServerFeatureAdvertisementDecode() throws {
+        let fixture: AidenRemoteContractFixture = try botFixtureValue(at: [])
+        let server = fixture.server
+        XCTAssertTrue(server.supportsChatSummaries)
+        XCTAssertEqual(server.features, [AidenServer.chatSummariesFeature])
+
+        let page = fixture.chatSummaries
+        XCTAssertEqual(page.summaries.map(\.id), [
+            "chat_fixture_summary_02",
+            "chat_fixture_summary_01",
+        ])
+        XCTAssertEqual(page.summaries.map(\.activity), [.active, .idle])
+        XCTAssertEqual(page.summaries.map(\.titlePending), [true, false])
+        XCTAssertNotNil(page.nextCursor)
+    }
+
+    func testChatSummaryDecoderToleratesAdditiveFieldsButRejectsMissingRequiredFields() throws {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        var summaries = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        summaries[0]["futurePresentation"] = ["badge": "safe"]
+        object["summaries"] = summaries
+        object["futurePageMetadata"] = true
+        let additive = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        XCTAssertNoThrow(try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: additive))
+
+        for field in [
+            "id", "workspaceId", "title", "titlePending", "createdAt", "updatedAt", "revision", "activity",
+        ] {
+            var invalid = summaries[0]
+            invalid.removeValue(forKey: field)
+            let data = try JSONSerialization.data(
+                withJSONObject: ["summaries": [invalid]],
+                options: [.sortedKeys]
+            )
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data),
+                "Missing required field \(field) must fail closed."
+            )
+        }
+
+        object["nextCursor"] = NSNull()
+        let nullCursor = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: nullCursor))
+    }
+
+    func testChatSummaryDecoderRecursivelyRejectsPrivateProjectionFields() throws {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        var summaries = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        summaries[0]["futurePresentation"] = [
+            "nested": ["subagentProjectionNotices": ["private Mac-only context"]],
+        ]
+        object["summaries"] = summaries
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data)) {
+            guard case AidenRemoteContractError.unsafePayloadField("subagentProjectionNotices") = $0 else {
+                return XCTFail("Expected the recursive private-field denial, got \($0)")
+            }
+        }
+
+        var fixtureRoot = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: [])) as? [String: Any]
+        )
+        fixtureRoot["chatSummaries"] = object
+        let fixtureData = try JSONSerialization.data(withJSONObject: fixtureRoot, options: [.sortedKeys])
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(AidenRemoteContractFixture.self, from: fixtureData)
+        )
+
+        for forbiddenField in [
+            "messages", "attachments", "htmlArtifacts", "outcome", "timeline", "reasoning",
+            "botId", "providerId", "modelId", "preview",
+        ] {
+            var forbiddenObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+            )
+            var forbiddenSummaries = try XCTUnwrap(forbiddenObject["summaries"] as? [[String: Any]])
+            forbiddenSummaries[0]["futurePresentation"] = [
+                "nested": [forbiddenField: "private detail"],
+            ]
+            forbiddenObject["summaries"] = forbiddenSummaries
+            let forbiddenData = try JSONSerialization.data(
+                withJSONObject: forbiddenObject,
+                options: [.sortedKeys]
+            )
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: forbiddenData),
+                "Summary payload field \(forbiddenField) must fail closed."
+            )
+        }
+
+        for privateAlias in [
+            "childParentRunId",
+            "children_latest_messages",
+            "subagentProjectionNotices",
+            "subagent-run-history",
+            "childTimedOut",
+        ] {
+            var aliasObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+            )
+            var aliasSummaries = try XCTUnwrap(aliasObject["summaries"] as? [[String: Any]])
+            aliasSummaries[0]["futurePresentation"] = [
+                "nested": [[privateAlias: "private child state"]],
+            ]
+            aliasObject["summaries"] = aliasSummaries
+            let aliasData = try JSONSerialization.data(withJSONObject: aliasObject, options: [.sortedKeys])
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: aliasData),
+                "Segmented private alias \(privateAlias) must fail closed."
+            )
+        }
+
+        var harmlessObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        var harmlessSummaries = try XCTUnwrap(harmlessObject["summaries"] as? [[String: Any]])
+        harmlessSummaries[0]["futurePresentation"] = [
+            "nested": ["agentStatus": "safe", "childhood": "safe", "childrenPlayground": "safe"],
+        ]
+        harmlessObject["summaries"] = harmlessSummaries
+        XCTAssertNoThrow(try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: JSONSerialization.data(withJSONObject: harmlessObject, options: [.sortedKeys])
+        ))
+    }
+
+    func testRegularChatDecoderRejectsNestedPrivateChildAliases() throws {
+        let chat = Data("""
+        {"id":"chat-regular","workspaceId":"workspace-regular","title":"Regular",
+        "messages":[],"createdAt":"2026-08-19T07:00:00.000Z",
+        "updatedAt":"2026-08-19T07:01:00.000Z","revision":"legacy-revision",
+        "futurePresentation":{"nested":[{"childParentRunId":"private-run"}]}}
+        """.utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenChat.self, from: chat)) {
+            guard case AidenRemoteContractError.unsafePayloadField("childParentRunId") = $0 else {
+                return XCTFail("Expected private child alias rejection, got \($0)")
+            }
+        }
+    }
+
+    func testLegacyChatListFallbackRejectsNestedPrivateChildAliases() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            Self.response(
+                for: request,
+                status: 200,
+                json: """
+                {"chats":[{"id":"chat-regular","workspaceId":"workspace-regular","title":"Regular",
+                "messages":[],"createdAt":"2026-08-19T07:00:00.000Z",
+                "updatedAt":"2026-08-19T07:01:00.000Z","revision":"legacy-revision",
+                "futurePresentation":{"nested":{"childrenLatestMessages":[]}}}]}
+                """
+            )
+        }
+
+        do {
+            _ = try await client.preferredChatSummaries(advertised: false)
+            XCTFail("Legacy chat lists must reject private child projections.")
+        } catch AidenRemoteContractError.unsafePayloadField("childrenLatestMessages") {
+            // Expected.
+        }
+    }
+
+    func testChatSummaryDecoderRejectsInvalidActivityOrderingDuplicatesAndBounds() throws {
+        let valid = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        let summaries = try XCTUnwrap(valid["summaries"] as? [[String: Any]])
+
+        var unknownActivity = summaries[0]
+        unknownActivity["activity"] = "working"
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: JSONSerialization.data(withJSONObject: ["summaries": [unknownActivity]])
+        ))
+
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: JSONSerialization.data(withJSONObject: ["summaries": summaries.reversed()])
+        ))
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: JSONSerialization.data(withJSONObject: ["summaries": [summaries[0], summaries[0]]])
+        ))
+
+        var oversizedTitle = summaries[0]
+        oversizedTitle["title"] = String(repeating: "x", count: 1_025)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: JSONSerialization.data(withJSONObject: ["summaries": [oversizedTitle]])
+        ))
+
+        for (field, value) in [
+            ("id", "unsafe/id"),
+            ("workspaceId", "unsafe workspace"),
+            ("revision", "legacy-revision"),
+        ] {
+            var invalid = summaries[0]
+            invalid[field] = value
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
+                AidenChatSummaryPage.self,
+                from: JSONSerialization.data(withJSONObject: ["summaries": [invalid]])
+            ))
+        }
+
+        var invalidCursorPage = valid
+        invalidCursorPage["nextCursor"] = "cur_missing-signature"
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: JSONSerialization.data(withJSONObject: invalidCursorPage)
+        ))
+    }
+
+    func testServerFeaturesTolerateUnknownBoundedTokensAndRejectInvalidSets() throws {
+        var serverObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["server"])) as? [String: Any]
+        )
+        serverObject["features"] = ["chat-summaries-v1", "future-safe-feature"]
+        let additive = try JSONSerialization.data(withJSONObject: serverObject, options: [.sortedKeys])
+        let server = try AidenRemoteJSONDecoder.decode(AidenServer.self, from: additive)
+        XCTAssertTrue(server.supportsChatSummaries)
+        XCTAssertEqual(server.features.last, "future-safe-feature")
+
+        serverObject["features"] = (0..<32).map { "feature-\($0)" }
+        XCTAssertNoThrow(try AidenRemoteJSONDecoder.decode(
+            AidenServer.self,
+            from: JSONSerialization.data(withJSONObject: serverObject, options: [.sortedKeys])
+        ))
+
+        let invalidFeatureSets: [Any] = [
+            ["chat-summaries-v1", "chat-summaries-v1"],
+            ["Uppercase"],
+            [String(repeating: "x", count: 65)],
+            (0..<33).map { "feature-\($0)" },
+            NSNull(),
+        ]
+        for invalidFeatures in invalidFeatureSets {
+            serverObject["features"] = invalidFeatures
+            let data = try JSONSerialization.data(withJSONObject: serverObject, options: [.sortedKeys])
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenServer.self, from: data))
+        }
+    }
+
+    func testPreferredChatSummariesUsesAdvertisedEndpointAndFallsBackForOldMacs() async throws {
+        let client = makeClient()
+        let fixture = try botFixtureData(at: ["chatSummaries"])
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chat-summaries")
+                XCTAssertEqual(
+                    URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems,
+                    [URLQueryItem(name: "limit", value: "200")]
+                )
+                return Self.response(for: request, status: 200, data: fixture)
+            case 2:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats")
+                return Self.response(for: request, status: 200, json: #"{"chats":[]}"#)
+            default:
+                XCTFail("Unexpected summary fallback request")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        let preferred = try await client.preferredChatSummaries(advertised: true, limit: 200)
+        XCTAssertEqual(preferred.summaries.count, 2)
+        let oldMac = try await client.preferredChatSummaries(advertised: false)
+        XCTAssertEqual(oldMac.summaries, [])
+        XCTAssertEqual(step, 2)
+    }
+
+    func testAdvertisedChatSummaryFailureSurfacesWithoutLegacyDowngrade() async throws {
+        let client = makeClient()
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            requests += 1
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chat-summaries")
+            return Self.response(
+                for: request,
+                status: 404,
+                json: #"{"error":{"code":"not_found","message":"Unavailable","requestId":"request-1","retryable":false}}"#
+            )
+        }
+
+        do {
+            _ = try await client.preferredChatSummaries(advertised: true)
+            XCTFail("An advertised endpoint failure must not be hidden by legacy fallback.")
+        } catch let AidenRemoteClientError.server(statusCode, _) {
+            XCTAssertEqual(statusCode, 404)
+        }
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testLegacyChatFallbackPreservesRevisionForMutationIfMatch() async throws {
+        let client = makeClient()
+        let legacyRevision = "legacy-chat-revision-7"
+        let legacyChat = """
+        {"id":"chat-legacy","workspaceId":"workspace-legacy","title":"Legacy",
+        "messages":[],"createdAt":"2026-08-19T07:00:00.000Z",
+        "updatedAt":"2026-08-19T07:01:00.000Z","revision":"\(legacyRevision)"}
+        """
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats")
+                return Self.response(for: request, status: 200, json: "{\"chats\":[\(legacyChat)]}")
+            case 2:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat-legacy")
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), legacyRevision)
+                return Self.response(for: request, status: 200, json: legacyChat)
+            default:
+                XCTFail("Unexpected legacy mutation request")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        let page = try await client.preferredChatSummaries(advertised: false)
+        let summary = try XCTUnwrap(page.summaries.first)
+        XCTAssertEqual(summary.revision, legacyRevision)
+        _ = try await client.updateChat(id: summary.id, revision: summary.revision, title: "Renamed")
+        XCTAssertEqual(step, 2)
+    }
+
     func testWorkspaceListUsesBearerAndStrictAidenProtocolHeader() async throws {
         let client = makeClient()
         AidenRemoteMockURLProtocol.handler = { request in

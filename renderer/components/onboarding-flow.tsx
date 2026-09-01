@@ -243,7 +243,8 @@ const featureBentos: FeatureBento[] = [
     id: "workspaces",
     group: "create",
     title: "Workspaces & Worktrees",
-    description: "Use folders, scratch spaces, and isolated worktrees while preserving context.",
+    description:
+      "Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline.",
     icon: FolderGit2,
     imageUrl: FEATURE_ILLUSTRATIONS.workspaces,
     size: "wide",
@@ -309,7 +310,7 @@ const featureBentos: FeatureBento[] = [
     id: "mcp",
     group: "extend",
     title: "MCP Connectors",
-    description: "Connect services or any MCP server and expose only the tools you enable.",
+    description: "Browse plugins, connect hosted MCP servers, and expose only the tools you enable.",
     icon: Plug,
     imageUrl: FEATURE_ILLUSTRATIONS.mcp,
     size: "wide",
