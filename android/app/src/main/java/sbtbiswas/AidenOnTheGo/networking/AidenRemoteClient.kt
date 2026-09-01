@@ -515,6 +515,21 @@ class AidenRemoteClient(
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
 
+    suspend fun memorySettings(): AidenMemorySettings =
+        executeRequest("/memory/settings") { bytes ->
+            json.decodeFromString(String(bytes, Charsets.UTF_8))
+        }
+
+    suspend fun updateMemorySettings(revision: String, enabled: Boolean): AidenMemorySettings =
+        executeRequest(
+            "/memory/settings",
+            method = "PATCH",
+            ifMatchRevision = revision,
+            bodyJson = json.encodeToString(AidenMemorySettingsMutation(enabled = enabled))
+        ) { bytes ->
+            json.decodeFromString(String(bytes, Charsets.UTF_8))
+        }
+
     suspend fun removeWorkspace(id: String, revision: String) =
         executeRequest<Unit>(
             "/workspaces/$id",
