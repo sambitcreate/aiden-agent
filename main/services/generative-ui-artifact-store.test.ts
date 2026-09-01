@@ -69,6 +69,63 @@ test("staging, commit, recovery, and pending gates", async () => {
   assert.equal(await store.htmlFor("chat-1", "media-1"), HTML);
 });
 
+test("an exact failed coordinator can discard only its own pending artifact", async () => {
+  const root = await storageRoot();
+  const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
+  await store.initialize();
+  const item = artifact("media-1");
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "direct-edit-1",
+    artifact: item,
+    html: HTML,
+  });
+
+  await assert.rejects(
+    store.discardPending({
+      chatId: "chat-1",
+      generationId: "another-operation",
+      mediaId: item.mediaId,
+    }),
+    /not owned/iu,
+  );
+  assert.equal(await store.hasPending("chat-1"), true);
+  assert.equal(
+    await store.discardPending({
+      chatId: "chat-1",
+      generationId: "direct-edit-1",
+      mediaId: item.mediaId,
+    }),
+    "discarded",
+  );
+  assert.equal(await store.hasPending("chat-1"), false);
+  assert.equal(
+    await store.discardPending({
+      chatId: "chat-1",
+      generationId: "direct-edit-1",
+      mediaId: item.mediaId,
+    }),
+    "missing",
+  );
+
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "direct-edit-1",
+    artifact: item,
+    html: HTML,
+  });
+  await store.commit("chat-1", [item.mediaId]);
+  await assert.rejects(
+    store.discardPending({
+      chatId: "chat-1",
+      generationId: "direct-edit-1",
+      mediaId: item.mediaId,
+    }),
+    /not owned/iu,
+  );
+  assert.equal(await store.htmlFor("chat-1", item.mediaId), HTML);
+});
+
 test("chat HTML quotas refuse extra staged artifacts", async () => {
   const root = await storageRoot();
   const store = new GenerativeUiArtifactStore({ root: () => root });

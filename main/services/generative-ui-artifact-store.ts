@@ -70,6 +70,13 @@ export interface RecoveredHtmlMessage {
   model?: string;
 }
 
+export interface CommittedGenerativeUiSource {
+  artifact: ChatHtmlArtifactV1;
+  html: string;
+  createdAt: number;
+  model?: string;
+}
+
 function emptyDatabase(): GenerativeUiArtifactDatabase {
   return { version: STORE_VERSION, revision: 0, records: [] };
 }
@@ -313,6 +320,39 @@ export class GenerativeUiArtifactStore {
     });
   }
 
+  /**
+   * Remove only one exact, still-uncommitted staging row owned by a failed
+   * coordinator attempt. Committed artifacts and rows from another generation
+   * are immutable and therefore make this cleanup fail closed.
+   */
+  async discardPending(input: {
+    chatId: string;
+    generationId: string;
+    mediaId: string;
+  }): Promise<"discarded" | "missing"> {
+    this.requireAvailable();
+    if (
+      !boundedIdentity(input.chatId) ||
+      !boundedIdentity(input.generationId) ||
+      !boundedIdentity(input.mediaId)
+    ) {
+      throw new Error("Invalid generative-ui artifact discard identity.");
+    }
+    return this.data.update((database) => {
+      const index = database.records.findIndex(
+        (record) => record.chatId === input.chatId && record.artifact.mediaId === input.mediaId,
+      );
+      if (index < 0) return "missing" as const;
+      const record = database.records[index]!;
+      if (record.committed || record.generationId !== input.generationId) {
+        throw new Error("The HTML artifact is not owned by this pending operation.");
+      }
+      database.records.splice(index, 1);
+      database.revision += 1;
+      return "discarded" as const;
+    });
+  }
+
   async htmlFor(chatId: string, mediaId: string): Promise<string | undefined> {
     this.requireAvailable();
     if (!boundedIdentity(chatId) || !boundedIdentity(mediaId)) return undefined;
@@ -328,6 +368,25 @@ export class GenerativeUiArtifactStore {
     return (await this.data.load()).records.find(
       (item) => item.chatId === chatId && item.artifact.mediaId === mediaId,
     )?.artifact;
+  }
+
+  async committedSourceFor(
+    chatId: string,
+    mediaId: string,
+  ): Promise<CommittedGenerativeUiSource | undefined> {
+    this.requireAvailable();
+    if (!boundedIdentity(chatId) || !boundedIdentity(mediaId)) return undefined;
+    const record = (await this.data.load()).records.find(
+      (item) => item.chatId === chatId && item.artifact.mediaId === mediaId && item.committed,
+    );
+    return record
+      ? {
+          artifact: structuredClone(record.artifact),
+          html: record.html,
+          createdAt: record.stagedAt,
+          ...(record.model ? { model: record.model } : {}),
+        }
+      : undefined;
   }
 
   async pending(): Promise<readonly StagedHtmlArtifact[]> {
