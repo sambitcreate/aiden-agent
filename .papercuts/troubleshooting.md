@@ -223,3 +223,4 @@ needed to separate this change from that baseline noise.
 - Parallel `xcodebuild` invocations share DerivedData and can lock `build.db`; run simulator build and test gates sequentially or isolate derived-data paths.
 - New focused tests can pass locally yet be absent from `npm test`; register every new test script in the CI entry chain.
 - Revision checks around settings writes need an explicit serialized lane; async read-then-write alone permits stale concurrent mutations.
+- Backticks in `gh api -f body=...` are evaluated by zsh before submission; use single-quoted plain text or standard input for review replies.
