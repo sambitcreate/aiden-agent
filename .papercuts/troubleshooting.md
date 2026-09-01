@@ -188,3 +188,9 @@ CI with `npx playwright install chromium` before the first full local gate.
 The Dropbox origin-level protected-resource endpoint can return 429 while the
 resource-path endpoint advertised by `WWW-Authenticate` succeeds. Verify hosted
 MCP setup through that advertised RFC 9728 URL and the SDK's DCR redirect flow.
+
+## Release preflight environment
+
+`npm run release:preflight` intentionally fails outside the release runner when
+Apple notarization credentials are absent. Treat local consumer/branding tests
+as code gates and the credentialed GitHub release job as the signing gate.
