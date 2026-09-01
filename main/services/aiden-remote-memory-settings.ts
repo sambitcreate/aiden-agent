@@ -17,39 +17,52 @@ function project(settings: AppSettings) {
 }
 
 export class AidenRemoteMemorySettingsService {
+  private mutationTail: Promise<void> = Promise.resolve();
+
   constructor(private readonly store: MemorySettingsStore) {}
+
+  private serialized<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.mutationTail.then(operation, operation);
+    this.mutationTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
 
   async get() {
     return project(await this.store.getSettings());
   }
 
   async update(expectedRevision: string, input: unknown) {
-    const current = project(await this.store.getSettings());
-    if (expectedRevision !== current.revision) {
-      throw new AidenRemoteServiceError(
-        "revision_conflict",
-        "Memory settings changed. Refresh them before trying again.",
-        409,
-        false,
-        { currentRevision: current.revision },
-      );
-    }
-    const record =
-      input !== null && typeof input === "object" && !Array.isArray(input)
-        ? (input as Record<string, unknown>)
-        : null;
-    if (
-      !record ||
-      Object.keys(record).length !== 2 ||
-      record.confirmedForeground !== true ||
-      typeof record.enabled !== "boolean"
-    ) {
-      throw new AidenRemoteServiceError(
-        "permission_confirmation_required",
-        "Memory settings require an explicit foreground confirmation.",
-        409,
-      );
-    }
-    return project(await this.store.setSettings({ memoryEnabled: record.enabled }));
+    return this.serialized(async () => {
+      const current = project(await this.store.getSettings());
+      if (expectedRevision !== current.revision) {
+        throw new AidenRemoteServiceError(
+          "revision_conflict",
+          "Memory settings changed. Refresh them before trying again.",
+          409,
+          false,
+          { currentRevision: current.revision },
+        );
+      }
+      const record =
+        input !== null && typeof input === "object" && !Array.isArray(input)
+          ? (input as Record<string, unknown>)
+          : null;
+      if (
+        !record ||
+        Object.keys(record).length !== 2 ||
+        record.confirmedForeground !== true ||
+        typeof record.enabled !== "boolean"
+      ) {
+        throw new AidenRemoteServiceError(
+          "permission_confirmation_required",
+          "Memory settings require an explicit foreground confirmation.",
+          409,
+        );
+      }
+      return project(await this.store.setSettings({ memoryEnabled: record.enabled }));
+    });
   }
 }
