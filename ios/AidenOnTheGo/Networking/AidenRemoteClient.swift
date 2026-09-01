@@ -70,6 +70,8 @@ private struct AidenSpeechTranscriptionRequest: Encodable {
 }
 
 struct AidenServer: Codable, Equatable, Sendable {
+    static let chatSummariesFeature = "chat-summaries-v1"
+
     let protocolVersion: Int
     let instanceId: String
     let name: String
@@ -84,6 +86,9 @@ struct AidenServer: Codable, Equatable, Sendable {
     let connectionMode: AidenConnectionMode
     let minimumClientVersion: String?
     let serverTime: Date
+    /// Additive, presentation/read-path feature advertisement. Unknown valid
+    /// tokens are retained so newer Macs remain compatible with this client.
+    let features: [String]
 
     init(
         protocolVersion: Int,
@@ -95,7 +100,8 @@ struct AidenServer: Codable, Equatable, Sendable {
         deviceName: String? = nil,
         connectionMode: AidenConnectionMode,
         minimumClientVersion: String?,
-        serverTime: Date
+        serverTime: Date,
+        features: [String] = []
     ) {
         self.protocolVersion = protocolVersion
         self.instanceId = instanceId
@@ -107,6 +113,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         self.connectionMode = connectionMode
         self.minimumClientVersion = minimumClientVersion
         self.serverTime = serverTime
+        self.features = features
     }
 
     init(from decoder: Decoder) throws {
@@ -131,6 +138,11 @@ struct AidenServer: Codable, Equatable, Sendable {
             forKey: .minimumClientVersion
         )
         serverTime = try values.decode(Date.self, forKey: .serverTime)
+        if values.contains(.features) {
+            features = try values.decode([String].self, forKey: .features)
+        } else {
+            features = []
+        }
 
         guard !instanceId.isEmpty,
               instanceId.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength else {
@@ -169,6 +181,28 @@ struct AidenServer: Codable, Equatable, Sendable {
                 )
             }
         }
+        guard features.count <= 32,
+              Set(features).count == features.count,
+              features.allSatisfy(Self.isValidFeatureToken) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .features,
+                in: values,
+                debugDescription: "Expected unique bounded server feature tokens."
+            )
+        }
+    }
+
+    var supportsChatSummaries: Bool {
+        features.contains(Self.chatSummariesFeature)
+    }
+
+    private static func isValidFeatureToken(_ value: String) -> Bool {
+        guard (1...64).contains(value.utf8.count),
+              let first = value.utf8.first,
+              (first >= 97 && first <= 122) || (first >= 48 && first <= 57) else { return false }
+        return value.utf8.allSatisfy { byte in
+            (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 45
+        }
     }
 
     private static func requireUniqueCapabilities(
@@ -188,7 +222,7 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case protocolVersion, instanceId, name, appVersion, capabilities, serverCapabilities, deviceName
-        case connectionMode, minimumClientVersion, serverTime
+        case connectionMode, minimumClientVersion, serverTime, features
     }
 }
 
@@ -355,10 +389,6 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private struct BrowserSelectionRequest: Encodable {
         let location: String
-    }
-
-    private struct ChatList: Decodable {
-        let chats: [AidenChat]
     }
 
     private struct ChatCreateRequest: Encodable {
@@ -690,8 +720,37 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     func chats(workspaceId: String? = nil) async throws -> [AidenChat] {
         let query = workspaceId.map { [URLQueryItem(name: "workspaceId", value: $0)] } ?? []
-        let value: ChatList = try await send(method: "GET", path: ["chats"], query: query)
+        let value: AidenChatListResponse = try await send(method: "GET", path: ["chats"], query: query)
         return value.chats
+    }
+
+    func chatSummaries(
+        limit: Int = AidenChatSummaryPage.defaultLimit,
+        cursor: String? = nil
+    ) async throws -> AidenChatSummaryPage {
+        guard (1...AidenChatSummaryPage.maximumLimit).contains(limit),
+              cursor.map(AidenChatSummaryPage.isValidCursor) ?? true else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+        return try await send(
+            method: "GET",
+            path: ["chat-summaries"],
+            query: query
+        )
+    }
+
+    func preferredChatSummaries(
+        advertised: Bool,
+        limit: Int = AidenChatSummaryPage.defaultLimit,
+        cursor: String? = nil
+    ) async throws -> AidenChatSummaryPage {
+        guard advertised else {
+            guard cursor == nil else { throw AidenRemoteClientError.invalidResponse }
+            return AidenChatSummaryPage(legacyChats: try await chats())
+        }
+        return try await chatSummaries(limit: limit, cursor: cursor)
     }
 
     func usage(range: String = "30d") async throws -> AidenUsageSummary {

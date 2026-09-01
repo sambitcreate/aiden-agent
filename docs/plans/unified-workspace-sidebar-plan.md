@@ -1,6 +1,6 @@
 # Unified Workspace Sidebar
 
-Status: Active — Phase 1 implemented on desktop, iOS, and Android; the summary-only remote read remains a measured follow-up.
+Status: Active — Phases 1 and 2 are implemented on desktop, iOS, and Android; physical-device performance acceptance remains open.
 
 ## Outcome
 
@@ -13,10 +13,10 @@ Aiden now treats registered workspaces and their chats as one navigation graph. 
 | Proposal | Strongest idea | Cost or risk | Decision |
 | --- | --- | --- | --- |
 | A — projection-first | Reuse the existing unscoped chat read and workspace registry, then build one client-side projection. Expansion is side-effect free and new-chat creation is explicit. | Mobile still receives full chat payloads for its global home read. | Selected as the Phase 1 baseline because it changes no shared protocol and ships the information architecture consistently. |
-| B — summary-contract-first | Add a paginated chat-summary endpoint before changing any client UI. | Delays the user-facing improvement and introduces a cross-client/server migration before the navigation semantics are proven. | Deferred as the performance follow-up. |
+| B — summary-contract-first | Add a paginated chat-summary endpoint before changing any client UI. | Delays the user-facing improvement and introduces a cross-client/server migration before the navigation semantics are proven. | Deferred from Phase 1, then implemented as Phase 2 after the navigation semantics shipped. |
 | C — adaptive-outline-first | Use the same grouped outline, but emphasize iPad detail-column selection and Android adaptive behavior. | Also proposed a new summary contract in the first delivery. | Its adaptive-navigation recommendations were incorporated into Proposal A. |
 
-The integrated plan therefore uses A's low-risk data path, C's iPad detail-column behavior, and B/C's summary endpoint as an explicit follow-up rather than a blocker.
+The integrated plan therefore used A's low-risk Phase 1 data path and C's iPad detail-column behavior, then delivered B/C's summary endpoint as a compatible Phase 2 migration.
 
 ## Interaction contract
 
@@ -69,9 +69,11 @@ Two fresh-context reviews were completed before publication, split across deskto
 
 ## Phase 2: bounded remote summaries
 
-The current mobile home read predates this UI and returns full chat transcripts. That remains functionally correct, cached, and unchanged by Phase 1, but it is inefficient for installations with many chats.
-
-Before widening rollout, measure payload size, decode time, and memory on representative large histories. If the existing bounds are material, add an authenticated paginated summary projection containing only chat ID, workspace ID, title/title-pending state, timestamps, revision, and safe activity status. Preserve the current full-chat endpoint for detail reads. Update both native clients together and add fixture parity tests before switching their home loaders.
+- `GET /api/aiden/v1/chat-summaries` now provides an authenticated `chat:read` metadata projection with a default page size of 100 and a maximum of 200. It is sourced exclusively from the bounded chat index and opens zero transcript files.
+- The projection contains only chat ID, workspace ID, title/title-pending state, timestamps, summary revision, and `idle`/`active` status. Reserved Assistant records, Bot homes, and malformed index records fail closed or are omitted before projection.
+- Results use stable newest-first ordering. Integrity-protected opaque cursors retain a bounded five-minute server snapshot; deleted chats are skipped, while updates and newly created chats do not duplicate or reorder an in-progress walk. Invalid, forged, expired, evicted, and post-restart cursors fail explicitly.
+- `/server.features` advertises `chat-summaries-v1`. iOS and Android prefer paginated summaries only when advertised, preserve their installation-scoped cache/readiness fences, and fall back to the existing `/chats` read for older Mac builds. Opening a chat still performs the authoritative full `GET /chats/{id}` detail read.
+- The TypeScript, Swift, and Kotlin decoders share contract-revision 10 fixtures, tolerate harmless additive response fields, reject forbidden private fields, and cover missing-required-field failures. Synthetic benchmark fixtures cover representative and pathological list sizes; physical iPhone/iPad and Android profiling remains an operator acceptance gate.
 
 ## Acceptance gates
 

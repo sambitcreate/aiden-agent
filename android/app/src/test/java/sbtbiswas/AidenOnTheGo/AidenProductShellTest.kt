@@ -119,13 +119,14 @@ class AidenProductShellTest {
             )
         )
 
-        val projection = projectAidenWorkspaceSidebar(workspaces, chats, "")
+        val summaries = chats.map { AidenChatSummary.fromChat(it) }
+        val projection = projectAidenWorkspaceSidebar(workspaces, summaries, "")
         assertEquals(listOf("alpha", "beta"), projection.sections.map { it.workspace.id })
         assertEquals(listOf("alpha-chat"), projection.sections.first().chats.map { it.id })
         assertTrue(projection.sections.last().chats.isEmpty())
         assertEquals(listOf("alpha-chat"), projection.recents.map { it.id })
 
-        val search = projectAidenWorkspaceSidebar(workspaces, chats, "api")
+        val search = projectAidenWorkspaceSidebar(workspaces, summaries, "api")
         assertEquals(listOf("alpha"), search.sections.map { it.workspace.id })
         assertEquals(listOf("alpha-chat"), search.recents.map { it.id })
     }
@@ -182,7 +183,10 @@ class AidenProductShellTest {
             )
         )
 
-        assertEquals(listOf("chat-a", "chat-z"), regularNewestFirst(chats).map { it.id })
+        assertEquals(
+            listOf("chat-a", "chat-z"),
+            regularNewestFirst(chats.map { AidenChatSummary.fromChat(it) }).map { it.id }
+        )
     }
 
     @Test

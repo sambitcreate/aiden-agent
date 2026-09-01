@@ -47,6 +47,7 @@ data class AidenServer(
     val appVersion: String = "1.0.0",
     val capabilities: List<AidenRemoteCapability>,
     val serverCapabilities: List<AidenRemoteCapability>? = null,
+    val features: List<String> = emptyList(),
     val deviceName: String? = null,
     val connectionMode: AidenConnectionMode = AidenConnectionMode.LAN,
     val minimumClientVersion: String? = null,
@@ -55,6 +56,11 @@ data class AidenServer(
     init {
         if (instanceId.isEmpty() || instanceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
             capabilities.toSet().size != capabilities.size ||
+            features.size > 32 ||
+            features.toSet().size != features.size ||
+            features.any { feature ->
+                feature.length !in 1..64 || !FEATURE_TOKEN.matches(feature)
+            } ||
             (capabilities.contains(AidenRemoteCapability.BOT_WRITE) && !capabilities.contains(AidenRemoteCapability.BOT_READ)) ||
             (serverCapabilities != null && (serverCapabilities.toSet().size != serverCapabilities.size || !serverCapabilities.containsAll(capabilities)))
         ) {
@@ -63,6 +69,13 @@ data class AidenServer(
         if (deviceName != null && (deviceName.isEmpty() || deviceName.length > 80 || deviceName.any { Character.isISOControl(it) })) {
             throw AidenRemoteContractException.InvalidJson("Invalid deviceName in Server model")
         }
+    }
+
+    val supportsChatSummaries: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_SUMMARIES_FEATURE)
+
+    companion object {
+        private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }
 }
 

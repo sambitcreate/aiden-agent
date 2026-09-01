@@ -84,7 +84,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledTasksScreen
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
-import sbtbiswas.AidenOnTheGo.models.AidenChat
+import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
@@ -168,6 +168,9 @@ private fun AidenWorkspaceHome(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val chatLoadErrorMessage by viewModel.chatLoadErrorMessage.collectAsState()
     val chatListLoadState by viewModel.chatListLoadState.collectAsState()
+    val nextChatCursor by viewModel.nextChatCursor.collectAsState()
+    val isLoadingMoreChats by viewModel.isLoadingMoreChats.collectAsState()
+    val chatPaginationErrorMessage by viewModel.chatPaginationErrorMessage.collectAsState()
     val canReadSchedules = installations.firstOrNull { it.id == activeInstallationId }
         ?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
 
@@ -524,7 +527,7 @@ private fun AidenWorkspaceHome(
                             )
                         }
                     } else {
-                        items(sidebarProjection.recents, key = AidenChat::id) { chat ->
+                        items(sidebarProjection.recents, key = AidenChatSummary::id) { chat ->
                             AidenWorkspaceChatRow(
                                 chat = chat,
                                 workspaceName = activeById[chat.workspaceId]?.name.orEmpty(),
@@ -532,6 +535,39 @@ private fun AidenWorkspaceHome(
                                 indented = false,
                                 onClick = { onNavigateToChat(chat.id) }
                             )
+                        }
+                    }
+                    if (nextChatCursor != null) {
+                        item(key = "chat-summary-pagination") {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = AidenUi.ScreenGutter, vertical = 12.dp)
+                            ) {
+                                chatPaginationErrorMessage?.let { message ->
+                                    Text(
+                                        text = message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.warning,
+                                        modifier = Modifier.padding(bottom = 4.dp)
+                                    )
+                                }
+                                TextButton(
+                                    onClick = viewModel::loadMoreChats,
+                                    enabled = !isLoadingMoreChats
+                                ) {
+                                    if (isLoadingMoreChats) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                            color = palette.accent
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    Text(if (chatPaginationErrorMessage == null) "Load more chats" else "Retry")
+                                }
+                            }
                         }
                     }
                 }
@@ -956,7 +992,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
 
 @Composable
 private fun AidenWorkspaceChatRow(
-    chat: AidenChat,
+    chat: AidenChatSummary,
     workspaceName: String,
     showsWorkspaceName: Boolean,
     indented: Boolean,
