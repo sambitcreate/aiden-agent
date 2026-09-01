@@ -18,6 +18,7 @@ import type { ToolApprovalOutcome } from "./tool-approval.js";
 export const MEMORY_EXTENSION_ID = "aiden.durable-memory";
 export const RECALL_MEMORY_TOOL_NAME = "recall_memory";
 export const REMEMBER_MEMORY_TOOL_NAME = "remember_fact";
+export const FORGET_MEMORY_TOOL_NAME = "forget_fact";
 
 export interface MemoryProposal {
   text: string;
@@ -205,10 +206,44 @@ export async function authorizeMemoryProposal(
   return { allowed: false, reason };
 }
 
+export async function authorizeMemoryRemoval(
+  args: unknown,
+  context: { scope: MemoryScope; provenance: MemoryProvenance } | undefined,
+  request: (summary: string, signal?: AbortSignal) => Promise<boolean | ToolApprovalOutcome>,
+  signal?: AbortSignal,
+): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+  if (!context) return { allowed: false, reason: "Memory deletion requires a current attended source turn." };
+  const record = args !== null && typeof args === "object" && !Array.isArray(args)
+    ? args as Record<string, unknown>
+    : null;
+  const factId = record && Object.keys(record).length === 1 ? record.factId : undefined;
+  if (typeof factId !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/u.test(factId)) {
+    return { allowed: false, reason: "The memory fact ID is invalid." };
+  }
+  if (signal?.aborted) return { allowed: false, reason: "Memory deletion was cancelled." };
+  const outcome = await request(
+    [`Forget fact: [memory:${factId}]`, `Scope: ${context.scope.kind}:${context.scope.id}`, "This permanently removes the approved fact from local memory."].join("\n"),
+    signal,
+  );
+  if (signal?.aborted || outcome === "cancelled") {
+    return { allowed: false, reason: "Memory deletion was cancelled." };
+  }
+  if (outcome === true || outcome === "allowed") return { allowed: true };
+  return {
+    allowed: false,
+    reason: outcome === "detached"
+      ? "Memory approval is unavailable while this response continues in the background. Return to the chat and retry the action."
+      : outcome === "unavailable"
+        ? "Aiden could not present the memory approval request. Return to the chat and retry the action."
+        : "Memory deletion was not approved.",
+  };
+}
+
 export async function createMemoryExtension(options: {
   store: MemoryStore;
   scope: MemoryScope;
   provenance?: MemoryProvenance;
+  enabled?: () => Promise<boolean>;
 }): Promise<PiAgentRuntimeExtension> {
   const prompt = formatAlwaysOnMemory(options.scope, await options.store.alwaysOn(options.scope));
   const recall: AgentTool = declarePiRuntimeReplay(
@@ -223,6 +258,9 @@ export async function createMemoryExtension(options: {
       ),
       execute: async (_toolCallId, parameters, signal): Promise<AgentToolResult<null>> => {
         if (signal?.aborted) throw new Error("Memory recall was cancelled.");
+        if (options.enabled && !(await options.enabled())) {
+          throw new Error("Memory is disabled by the current settings.");
+        }
         const query = (parameters as { query?: unknown }).query;
         if (typeof query !== "string") throw new Error("The memory query is invalid.");
         const results = await options.store.recall(options.scope, query);
@@ -268,6 +306,9 @@ export async function createMemoryExtension(options: {
       ),
       execute: async (_toolCallId, parameters, signal): Promise<AgentToolResult<null>> => {
         if (signal?.aborted) throw new Error("Memory write was cancelled.");
+        if (options.enabled && !(await options.enabled())) {
+          throw new Error("Memory is disabled by the current settings.");
+        }
         const proposal = parseMemoryProposal(parameters);
         const fact = await options.store.put({
           scope: options.scope,
@@ -287,9 +328,43 @@ export async function createMemoryExtension(options: {
       "never",
     )
     : undefined;
+  const forget: AgentTool | undefined = options.provenance
+    ? declarePiRuntimeReplay(
+    {
+      name: FORGET_MEMORY_TOOL_NAME,
+      label: "Forget fact",
+      description:
+        "Remove one owner-approved durable fact from this exact Bot or workspace scope by its memory citation ID. Use recall_memory first when needed. This always requires owner approval.",
+      executionMode: "sequential" as const,
+      parameters: Type.Object(
+        { factId: Type.String({ minLength: 1, maxLength: 160 }) },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, parameters, signal): Promise<AgentToolResult<null>> => {
+        if (signal?.aborted) throw new Error("Memory deletion was cancelled.");
+        if (options.enabled && !(await options.enabled())) {
+          throw new Error("Memory is disabled by the current settings.");
+        }
+        const factId = (parameters as { factId?: unknown }).factId;
+        if (typeof factId !== "string") throw new Error("The memory fact ID is invalid.");
+        const removed = await options.store.remove(options.scope, factId);
+        return {
+          content: [{
+            type: "text",
+            text: removed
+              ? `Removed approved fact [memory:${factId}].`
+              : `No approved fact [memory:${factId}] exists in this memory scope.`,
+          }],
+          details: null,
+        };
+      },
+    },
+      "never",
+    )
+    : undefined;
   return {
     id: MEMORY_EXTENSION_ID,
     ...(prompt ? { volatileSystemPrompt: prompt } : {}),
-    tools: remember ? [recall, remember] : [recall],
+    tools: remember && forget ? [recall, remember, forget] : [recall],
   };
 }
