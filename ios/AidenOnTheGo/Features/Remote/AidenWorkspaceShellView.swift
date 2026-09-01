@@ -2497,6 +2497,7 @@ private struct AidenWorkspaceSettingsView: View {
 
     @State private var name: String
     @State private var permission: AidenWorkspacePermission
+    @State private var memoryEnabled: Bool
     @State private var isConfirmingRemoval = false
     @State private var hapticScope = UUID()
 
@@ -2510,10 +2511,11 @@ private struct AidenWorkspaceSettingsView: View {
         self.onRemoved = onRemoved
         _name = State(initialValue: workspace.name)
         _permission = State(initialValue: workspace.permission)
+        _memoryEnabled = State(initialValue: workspace.memoryEnabled)
     }
 
     private var hasChanges: Bool {
-        name.trimmingCharacters(in: .whitespacesAndNewlines) != workspace.name || permission != workspace.permission
+        name.trimmingCharacters(in: .whitespacesAndNewlines) != workspace.name || permission != workspace.permission || memoryEnabled != workspace.memoryEnabled
     }
 
     var body: some View {
@@ -2542,6 +2544,14 @@ private struct AidenWorkspaceSettingsView: View {
                     Text("Permission")
                 } footer: {
                     Text("\(permission.detail) This setting overrides the app default for this workspace.")
+                }
+
+                Section {
+                    Toggle("Use memory", isOn: $memoryEnabled)
+                } header: {
+                    Text("Memory")
+                } footer: {
+                    Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your Mac.")
                 }
 
                 Section("Workspace tools") {
@@ -2588,7 +2598,8 @@ private struct AidenWorkspaceSettingsView: View {
                             let outcome = await coordinator.updateWorkspaceOutcome(
                                 workspace,
                                 name: trimmedName == workspace.name ? nil : trimmedName,
-                                permission: permission == workspace.permission ? nil : permission
+                                permission: permission == workspace.permission ? nil : permission,
+                                memoryEnabled: memoryEnabled == workspace.memoryEnabled ? nil : memoryEnabled
                             )
                             if case .success = outcome {
                                 coordinator.haptics.play(
@@ -3083,8 +3094,39 @@ private struct AidenAppSettingsView: View {
 
     @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
+    @State private var memorySettings: AidenMemorySettings?
+    @State private var memoryError: String?
+    @State private var isSavingMemory = false
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
     @AppStorage(AidenVoiceInputMode.defaultsKey) private var voiceInputModeRaw = AidenVoiceInputMode.onDevice.rawValue
+
+    private func loadMemorySettings() async {
+        do {
+            memorySettings = try await coordinator.remoteClient().memorySettings()
+            memoryError = nil
+        } catch {
+            memoryError = error.localizedDescription
+        }
+    }
+
+    private func updateMemory(_ enabled: Bool) {
+        guard let current = memorySettings, !isSavingMemory else { return }
+        isSavingMemory = true
+        memorySettings = AidenMemorySettings(enabled: enabled, revision: current.revision)
+        Task {
+            do {
+                memorySettings = try await coordinator.remoteClient().updateMemorySettings(
+                    revision: current.revision,
+                    enabled: enabled
+                )
+                memoryError = nil
+            } catch {
+                memorySettings = current
+                memoryError = error.localizedDescription
+            }
+            isSavingMemory = false
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -3116,6 +3158,24 @@ private struct AidenAppSettingsView: View {
                     Text("Global Defaults")
                 } footer: {
                     Text("These are app-wide defaults. Permission, files, Git, and other workspace-specific options remain in each workspace’s ••• menu.")
+                }
+
+                Section {
+                    Toggle(
+                        "Use memory",
+                        isOn: Binding(
+                            get: { memorySettings?.enabled ?? true },
+                            set: { updateMemory($0) }
+                        )
+                    )
+                    .disabled(memorySettings == nil || isSavingMemory)
+                    if let memoryError {
+                        Text(memoryError).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Memory")
+                } footer: {
+                    Text("This controls memory on your paired Mac. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
                 }
 
                 Section {
@@ -3173,6 +3233,7 @@ private struct AidenAppSettingsView: View {
                 }
             }
         }
+        .task { await loadMemorySettings() }
         .sheet(isPresented: $isShowingInstallations) {
             AidenInstallationsView(
                 coordinator: coordinator,
