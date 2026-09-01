@@ -1,6 +1,6 @@
 // Persistent chat shell: workspace switcher + history sidebar + active chat.
-// Selection is route-driven (chatId param); the visible chat list is scoped to
-// the active workspace (shared via WorkspaceProvider).
+// Selection is route-driven (chatId param); the unified sidebar can open chats
+// across registered workspaces while WorkspaceProvider tracks execution context.
 
 import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";

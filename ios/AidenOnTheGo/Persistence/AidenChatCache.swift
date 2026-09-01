@@ -4,6 +4,11 @@ import Foundation
 actor AidenChatCache {
     static let shared = AidenChatCache()
 
+    struct SummarySnapshot: Codable, Equatable, Sendable {
+        let summaries: [AidenChatSummary]
+        let nextCursor: String?
+    }
+
     struct ActiveStream: Codable, Equatable, Sendable {
         let deviceId: String
         let streamId: String
@@ -22,6 +27,56 @@ actor AidenChatCache {
         let chat: AidenChat
     }
 
+    private struct CachedChatSummary: Codable {
+        let id: String
+        let workspaceId: String
+        let title: String
+        let titlePending: Bool
+        let createdAt: Date
+        let updatedAt: Date
+        let revision: String
+        let activity: AidenChatSummaryActivity
+
+        init(_ summary: AidenChatSummary) {
+            id = summary.id
+            workspaceId = summary.workspaceId
+            title = summary.title
+            titlePending = summary.titlePending
+            createdAt = summary.createdAt
+            updatedAt = summary.updatedAt
+            revision = summary.revision
+            activity = summary.activity
+        }
+
+        var summary: AidenChatSummary {
+            AidenChatSummary(
+                id: id,
+                workspaceId: workspaceId,
+                title: title,
+                titlePending: titlePending,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                revision: revision,
+                activity: activity
+            )
+        }
+    }
+
+    private struct CachedSummarySnapshot: Codable {
+        let summaries: [CachedChatSummary]
+        let nextCursor: String?
+
+        init(_ snapshot: SummarySnapshot) {
+            summaries = snapshot.summaries.map(CachedChatSummary.init)
+            nextCursor = snapshot.nextCursor
+        }
+    }
+
+    private struct ChatSummaryEnvelope: Codable {
+        let instanceId: String
+        let snapshot: CachedSummarySnapshot
+    }
+
     private struct StreamEnvelope: Codable {
         let instanceId: String
         let chatId: String
@@ -32,14 +87,19 @@ actor AidenChatCache {
     private let legacyRoots: [URL]
     private let fileManager: FileManager
     private let maxCacheFileBytes = 10 * 1_024 * 1_024
+    private let maxSummaryCacheFileBytes: Int
+    private let maxSummaryCacheItems = 10_000
     private let maxAttachmentImageCacheBytes = 96 * 1_024 * 1_024
+    private var summaryWriteGenerations: [String: UInt64] = [:]
 
     init(
         root: URL? = nil,
         fileManager: FileManager = .default,
-        legacyRoots: [URL]? = nil
+        legacyRoots: [URL]? = nil,
+        maxSummaryCacheFileBytes: Int = 80 * 1_024 * 1_024
     ) {
         self.fileManager = fileManager
+        self.maxSummaryCacheFileBytes = maxSummaryCacheFileBytes
         if let root {
             self.root = root
             self.legacyRoots = legacyRoots ?? []
@@ -95,6 +155,73 @@ actor AidenChatCache {
         )
     }
 
+    func loadChatSummaries(instanceId: String) -> SummarySnapshot? {
+        guard let envelope: ChatSummaryEnvelope = load(
+            ChatSummaryEnvelope.self,
+            from: fileURL(kind: "summaries", instanceId),
+            maximumBytes: maxSummaryCacheFileBytes
+        ), envelope.instanceId == instanceId else {
+            return nil
+        }
+        let summaries = envelope.snapshot.summaries.map(\.summary)
+        guard summaries.count <= maxSummaryCacheItems,
+              summaries.allSatisfy(AidenChatSummary.isValidCachedProjection),
+              Set(summaries.map(\.id)).count == summaries.count,
+              zip(summaries, summaries.dropFirst()).allSatisfy({ pair in
+                  AidenChatSummaryPage.areInCanonicalOrder(pair.0, pair.1)
+              }),
+              envelope.snapshot.nextCursor.map(AidenChatSummaryPage.isValidCursor) ?? true else {
+            return nil
+        }
+        return SummarySnapshot(summaries: summaries, nextCursor: envelope.snapshot.nextCursor)
+    }
+
+    func saveChatSummaries(
+        _ snapshot: SummarySnapshot,
+        instanceId: String,
+        generation: UInt64? = nil
+    ) throws {
+        guard snapshot.summaries.count <= maxSummaryCacheItems else {
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
+        guard snapshot.summaries.allSatisfy(AidenChatSummary.isValidCachedProjection) else {
+            throw AidenRemoteContractError.invalidJSON
+        }
+        if let generation {
+            guard generation >= (summaryWriteGenerations[instanceId] ?? 0) else { return }
+            summaryWriteGenerations[instanceId] = generation
+        }
+        try save(
+            ChatSummaryEnvelope(instanceId: instanceId, snapshot: CachedSummarySnapshot(snapshot)),
+            to: fileURL(kind: "summaries", instanceId),
+            maximumBytes: maxSummaryCacheFileBytes
+        )
+    }
+
+    func reconcileChatSummary(_ chat: AidenChat, instanceId: String) throws {
+        guard !chat.isBotChat else { return }
+        let cached = loadChatSummaries(instanceId: instanceId)
+        let existingActivity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
+        let summaries = AidenChatSummaryPage.merged(
+            current: cached?.summaries ?? [],
+            appending: [AidenChatSummary(chat: chat, preservingActivity: existingActivity)]
+        )
+        try saveChatSummaries(
+            SummarySnapshot(summaries: summaries, nextCursor: cached?.nextCursor),
+            instanceId: instanceId
+        )
+    }
+
+    func removeChatSummary(instanceId: String, chatId: String) throws {
+        guard let cached = loadChatSummaries(instanceId: instanceId) else { return }
+        let summaries = cached.summaries.filter { $0.id != chatId }
+        guard summaries.count != cached.summaries.count else { return }
+        try saveChatSummaries(
+            SummarySnapshot(summaries: summaries, nextCursor: cached.nextCursor),
+            instanceId: instanceId
+        )
+    }
+
     func loadActiveStream(instanceId: String, chatId: String) -> ActiveStream? {
         guard let envelope: StreamEnvelope = load(
             StreamEnvelope.self,
@@ -127,11 +254,13 @@ actor AidenChatCache {
 
     func removeChat(instanceId: String, chatId: String) {
         try? fileManager.removeItem(at: fileURL(kind: "chats", instanceId, chatId))
+        try? removeChatSummary(instanceId: instanceId, chatId: chatId)
         removeActiveStream(instanceId: instanceId, chatId: chatId)
         try? fileManager.removeItem(at: attachmentChatDirectory(instanceId: instanceId, chatId: chatId))
     }
 
     func purge(instanceId: String) {
+        summaryWriteGenerations.removeValue(forKey: instanceId)
         purgeNamespace(root, instanceId: instanceId)
         for legacyRoot in legacyRoots where legacyRoot.standardizedFileURL != root.standardizedFileURL {
             purgeNamespace(legacyRoot, instanceId: instanceId)
@@ -284,8 +413,19 @@ actor AidenChatCache {
         }
     }
 
-    private func load<Value: Decodable>(_ type: Value.Type, from url: URL) -> Value? {
+    private func load<Value: Decodable>(
+        _ type: Value.Type,
+        from url: URL,
+        maximumBytes: Int? = nil
+    ) -> Value? {
         guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let byteLimit = maximumBytes ?? maxCacheFileBytes
+        if let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+           let fileSize = values.fileSize,
+           fileSize > byteLimit {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
+            return nil
+        }
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -293,7 +433,7 @@ actor AidenChatCache {
             AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
             return nil
         }
-        guard data.count <= maxCacheFileBytes else {
+        guard data.count <= byteLimit else {
             AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
             return nil
         }
@@ -314,6 +454,15 @@ actor AidenChatCache {
         purgeFiles(root: cacheRoot, kind: "chats", instanceId: instanceId, as: ChatEnvelope.self) {
             $0.instanceId
         }
+        purgeFiles(
+            root: cacheRoot,
+            kind: "summaries",
+            instanceId: instanceId,
+            as: ChatSummaryEnvelope.self,
+            maximumBytes: maxSummaryCacheFileBytes
+        ) {
+            $0.instanceId
+        }
         purgeFiles(root: cacheRoot, kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) {
             $0.instanceId
         }
@@ -328,6 +477,7 @@ actor AidenChatCache {
         kind: String,
         instanceId: String,
         as type: Value.Type,
+        maximumBytes: Int? = nil,
         instance: (Value) -> String
     ) {
         let directory = cacheRoot.appending(path: kind, directoryHint: .isDirectory)
@@ -337,7 +487,8 @@ actor AidenChatCache {
             options: [.skipsHiddenFiles]
         ) else { return }
         for url in urls {
-            if let envelope: Value = load(type, from: url), instance(envelope) == instanceId {
+            if let envelope: Value = load(type, from: url, maximumBytes: maximumBytes),
+               instance(envelope) == instanceId {
                 try? fileManager.removeItem(at: url)
                 continue
             }
@@ -346,18 +497,22 @@ actor AidenChatCache {
             // an exact installation identity, so explicit forget/re-pair can
             // remove them without touching another Mac's cache.
             guard let data = try? Data(contentsOf: url),
-                  data.count <= maxCacheFileBytes,
+                  data.count <= (maximumBytes ?? maxCacheFileBytes),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   object["instanceId"] as? String == instanceId else { continue }
             try? fileManager.removeItem(at: url)
         }
     }
 
-    private func save<Value: Encodable>(_ value: Value, to url: URL) throws {
+    private func save<Value: Encodable>(
+        _ value: Value,
+        to url: URL,
+        maximumBytes: Int? = nil
+    ) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(value)
-        guard data.count <= maxCacheFileBytes else {
+        guard data.count <= (maximumBytes ?? maxCacheFileBytes) else {
             throw CocoaError(.fileWriteOutOfSpace)
         }
         try fileManager.createDirectory(

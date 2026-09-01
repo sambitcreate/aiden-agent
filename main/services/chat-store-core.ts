@@ -29,12 +29,19 @@ import { jsonStringBytesBounded } from "./json-representation.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
 import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
+import {
+  chatSummaryRevision,
+  isChatSummaryRevision,
+  newChatSummaryRevision,
+} from "./chat-summary-revision.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
 const MAX_VISIBLE_COPY_BYTES = 64 * 1024 * 1024;
 const MAX_CHAT_META_PREVIEW_CHARS = 500;
 const MAX_CHAT_META_PREVIEW_BYTES = 2_000;
+const MAX_SUMMARY_INDEX_BYTES = 16 * 1024 * 1024;
+const MAX_SUMMARY_INDEX_ENTRIES = 10_000;
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]+$/u;
 const CHAT_DELETE_STAGING =
   /^\.index\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.chat-delete\.tmp$/u;
@@ -116,6 +123,19 @@ export function createChatStore(
     return result;
   }
 
+  function serializedTranscriptFree<T>(operation: () => Promise<T>): Promise<T> {
+    const guarded = async () => {
+      await retryPendingDirectorySync();
+      return operation();
+    };
+    const result = operationTail.then(guarded, guarded);
+    operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   async function indexPath(): Promise<string> {
     return path.join(await resolveChatsDir(), INDEX);
   }
@@ -165,7 +185,9 @@ export function createChatStore(
       (meta.preview === undefined ||
         (typeof meta.preview === "string" &&
           Array.from(meta.preview).length <= MAX_CHAT_META_PREVIEW_CHARS &&
-          Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES))
+          Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES)) &&
+      (meta.summaryRevision === undefined ||
+        isChatSummaryRevision(meta.summaryRevision))
     );
   }
 
@@ -362,6 +384,76 @@ export function createChatStore(
     return resolved;
   }
 
+  /**
+   * Read the metadata projection directly. Unlike readIndex(), this deliberately
+   * does not bind rows back to payload files: summary consumers must never turn
+   * a list operation into N transcript reads. Normal mutations and the durable
+   * transaction journal remain responsible for keeping the index authoritative.
+   */
+  async function readSummaryIndex(): Promise<ChatMeta[]> {
+    const target = await indexPath();
+    let source: string;
+    try {
+      source = await readFile(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        const directory = path.dirname(target);
+        let entries: Array<{
+          isFile(): boolean;
+          isSymbolicLink(): boolean;
+          name: string;
+        }>;
+        try {
+          entries = await fs.readdir(directory, { withFileTypes: true });
+        } catch (directoryError) {
+          if ((directoryError as NodeJS.ErrnoException).code === "ENOENT") return [];
+          throw directoryError;
+        }
+        const hasUnindexedChatState = entries.some((entry) =>
+          entry.isFile() &&
+          !entry.isSymbolicLink() &&
+          (CHAT_TRANSACTION.test(entry.name) ||
+            (entry.name !== INDEX && !entry.name.startsWith(".") && entry.name.endsWith(".json"))),
+        );
+        if (!hasUnindexedChatState) return [];
+        throw new Error("The chat summary index is unavailable.");
+      }
+      throw error;
+    }
+    if (Buffer.byteLength(source, "utf8") > MAX_SUMMARY_INDEX_BYTES) {
+      throw new Error("The chat summary index is too large.");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(source) as unknown;
+    } catch {
+      throw new Error("The chat summary index is unavailable.");
+    }
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length > MAX_SUMMARY_INDEX_ENTRIES ||
+      !parsed.every(isValidMeta)
+    ) {
+      throw new Error("The chat summary index is unavailable.");
+    }
+    const ids = new Set<string>();
+    for (const entry of parsed) {
+      if (ids.has(entry.id)) throw new Error("The chat summary index is unavailable.");
+      ids.add(entry.id);
+    }
+    const migrated = parsed.map((entry) => ({
+      ...entry,
+      workspaceId: entry.workspaceId ?? DEFAULT_WORKSPACE_ID,
+      summaryRevision: chatSummaryRevision(entry),
+    }));
+    // A bounded, metadata-only legacy migration. It enriches old rows without
+    // opening payload files and makes subsequent summary reads constant-work.
+    if (JSON.stringify(migrated) !== JSON.stringify(parsed)) {
+      await writeIndex(migrated);
+    }
+    return migrated;
+  }
+
   async function removeFromIndexDurably(id: string): Promise<void> {
     const next = (await readIndex()).filter((entry) => entry.id !== id);
     await writeIndexDurably(next, "chat-delete");
@@ -511,6 +603,7 @@ export function createChatStore(
       providerId: chat.providerId,
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
+      summaryRevision: chatSummaryRevision(chat),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
@@ -528,6 +621,7 @@ export function createChatStore(
     chat: Chat,
     beforeRename: () => void = () => undefined,
   ): Promise<void> {
+    chat.summaryRevision = newChatSummaryRevision();
     await beginChatTransaction(chat.id);
     await writeChat(chat, beforeRename);
     await updateMeta(chat);
@@ -623,6 +717,11 @@ export function createChatStore(
 
     async listRegular(workspaceId?: string): Promise<ChatMeta[]> {
       return (await this.list(workspaceId)).filter((chat) => chat.botId === undefined);
+    },
+
+    /** Transcript-free metadata read for bounded Remote summary pages. */
+    async listSummaryMetadata(): Promise<ChatMeta[]> {
+      return serializedTranscriptFree(() => readSummaryIndex());
     },
 
     async listByBot(botId: string): Promise<ChatMeta[]> {

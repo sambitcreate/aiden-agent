@@ -190,6 +190,7 @@ data class AidenRemoteContractFixture(
     val pairingExchange: AidenPairingExchange,
     val server: AidenServer,
     val chat: AidenChat,
+    val chatSummaries: AidenChatSummaryPage? = null,
     val botSummary: AidenBotSummary,
     val botList: AidenBotList,
     val botDetail: AidenBotDetail,

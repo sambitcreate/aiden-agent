@@ -56,6 +56,7 @@ import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import { chatStore } from "./chat-store.js";
+import { chatActivityRegistry } from "./chat-activity.js";
 import { chatTitleService } from "./chat-title.js";
 import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
@@ -457,6 +458,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
+            activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
           });
           activeChats = chats;
           const projectBotHealth = async (
