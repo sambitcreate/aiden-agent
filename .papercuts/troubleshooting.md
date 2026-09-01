@@ -222,6 +222,12 @@ A fresh `npm ci` installs Playwright's package but not its Chromium binary, so
 the full suite stops at Generative UI containment before assertions run. Mirror
 CI with `npx playwright install chromium` before the first full local gate.
 
+## Circular main-service composition
+
+Registering a new handler can expose an existing singleton import cycle and capture an undefined
+dependency even though TypeScript and unit tests pass. Defer the dependency behind a method adapter
+and cover the production composition shape plus Electron IPC behavior.
+
 ## Hosted MCP OAuth verification
 
 The Dropbox origin-level protected-resource endpoint can return 429 while the
