@@ -140,7 +140,7 @@ import {
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
-import { GenerationTimelineProjector } from "./generation-timeline.js";
+import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
@@ -2428,6 +2428,13 @@ export const llmClient = {
             break;
           case "tool_execution_end": {
             const denied = deniedToolCalls.delete(event.toolCallId);
+            const terminalStatus = generationCancelRequested()
+              ? "cancelled"
+              : denied
+                ? "blocked"
+                : event.isError
+                  ? "failed"
+                  : "completed";
             if (
               attendedAssistant &&
               event.isError &&
@@ -2445,14 +2452,10 @@ export const llmClient = {
             }
             timeline.toolFinished(
               event.toolCallId,
-              generationCancelRequested()
-                ? "cancelled"
-                : denied
-                  ? "blocked"
-                  : event.isError
-                    ? "failed"
-                    : "completed",
-              event.result?.details,
+              terminalStatus,
+              terminalStatus === "completed"
+                ? event.result?.details
+                : safeToolIssueDetails(event.toolName, terminalStatus, event.result),
             );
             sendGeneration(streamId, "chat:tool", {
               streamId,

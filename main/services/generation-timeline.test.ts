@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GenerationTimelineProjector, safeToolDescriptor } from "./generation-timeline.js";
+import {
+  GenerationTimelineProjector,
+  safeToolDescriptor,
+  safeToolIssueDetails,
+} from "./generation-timeline.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -106,6 +110,53 @@ test("projects only safe completed file line changes", () => {
   assert.equal(failed?.lineChanges, undefined);
   assert.equal(invalid?.lineChanges, undefined);
   assert.doesNotMatch(JSON.stringify(projector.snapshot()), /privateContent|must not cross/u);
+});
+
+test("projects only allowlisted actionable terminal tool issues", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("budget", "subagent", {});
+  projector.toolFinished(
+    "budget",
+    "failed",
+    safeToolIssueDetails("subagent", "failed", {
+      content: [
+        {
+          type: "text",
+          text: "Subagent tree tokens budget exhausted (181,132 attempted; 128,000 allowed). Start a new parent turn with narrower tasks.",
+        },
+      ],
+    }),
+  );
+  projector.toolStarted("approval", "share_image", {});
+  projector.toolFinished(
+    "approval",
+    "blocked",
+    safeToolIssueDetails("share_image", "blocked", {
+      content: [
+        {
+          type: "text",
+          text: "Approval is unavailable while this response continues in the background. Return to the chat and retry the action.",
+        },
+      ],
+    }),
+  );
+  projector.toolStarted("private", "subagent", {});
+  projector.toolFinished(
+    "private",
+    "failed",
+    safeToolIssueDetails("subagent", "failed", {
+      content: [{ type: "text", text: "Provider leaked /Users/alice/private and secret-token" }],
+    }),
+  );
+
+  const [budget, approval, privateFailure] = toolSteps(projector.snapshot());
+  assert.equal(budget?.detail, "budget exhausted; start a new parent turn with narrower tasks");
+  assert.equal(
+    approval?.detail,
+    "approval unavailable while the response continues in the background",
+  );
+  assert.equal(privateFailure?.detail, undefined);
+  assert.doesNotMatch(JSON.stringify(projector.snapshot()), /alice|secret-token/u);
 });
 
 test("does not expose raw command, search, content, or absolute path arguments", () => {
