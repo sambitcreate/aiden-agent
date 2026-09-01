@@ -193,8 +193,15 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           permission: PERMISSIONS.includes(fields.permission as WorkspacePermission)
             ? (fields.permission as WorkspacePermission)
             : existing.permission,
+          memoryEnabled:
+            typeof fields.memoryEnabled === "boolean"
+              ? fields.memoryEnabled
+              : existing.memoryEnabled,
         };
-        if (next.permission === existing.permission) {
+        const authorityChanged =
+          next.permission !== existing.permission ||
+          next.memoryEnabled !== existing.memoryEnabled;
+        if (!authorityChanged) {
           return await deps.configStore.saveWorkspace(next);
         }
         return await withWorkspaceScheduleRestoration(
