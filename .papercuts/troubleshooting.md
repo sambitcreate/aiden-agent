@@ -220,3 +220,4 @@ needed to separate this change from that baseline noise.
 - Focused Android tests need Android Studio's bundled JDK because this shell has no default Java runtime.
 - URLProtocol request bodies can arrive through `httpBodyStream`; iOS request tests must use the existing `bodyData` helper.
 - In zsh, a loop variable named `path` overwrites the executable search path; file-by-file commit scripts must use a non-reserved name.
+- Parallel `xcodebuild` invocations share DerivedData and can lock `build.db`; run simulator build and test gates sequentially or isolate derived-data paths.
