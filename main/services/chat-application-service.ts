@@ -38,7 +38,7 @@ export interface ChatApplicationDependencies {
   chatStore: Pick<
     typeof chatStore,
     "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
-  >;
+  > & Partial<Pick<typeof chatStore, "listSummaryMetadata">>;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
     typeof llmClient,
@@ -87,6 +87,13 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
 
     listRegular(workspaceId?: string) {
       return deps.chatStore.listRegular(workspaceId);
+    },
+
+    listSummaryMetadata() {
+      if (!deps.chatStore.listSummaryMetadata) {
+        throw new Error("The transcript-free chat summary index is unavailable.");
+      }
+      return deps.chatStore.listSummaryMetadata();
     },
 
     async get(chatId: string) {

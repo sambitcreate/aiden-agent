@@ -1004,6 +1004,263 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+enum AidenChatSummaryActivity: String, Codable, Equatable, Sendable {
+    case idle
+    case active
+}
+
+struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let workspaceId: String
+    var title: String
+    var titlePending: Bool
+    let createdAt: Date
+    var updatedAt: Date
+    var revision: String
+    var activity: AidenChatSummaryActivity
+
+    init(
+        id: String,
+        workspaceId: String,
+        title: String,
+        titlePending: Bool,
+        createdAt: Date,
+        updatedAt: Date,
+        revision: String,
+        activity: AidenChatSummaryActivity
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.title = title
+        self.titlePending = titlePending
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.revision = revision
+        self.activity = activity
+    }
+
+    init(chat: AidenChat, preservingActivity activity: AidenChatSummaryActivity = .idle) {
+        self.init(
+            id: chat.id,
+            workspaceId: chat.workspaceId,
+            title: chat.title,
+            titlePending: chat.isTitlePending,
+            createdAt: chat.createdAt,
+            updatedAt: chat.updatedAt,
+            revision: chat.revision,
+            activity: activity
+        )
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        workspaceId = try values.decode(String.self, forKey: .workspaceId)
+        title = try values.decode(String.self, forKey: .title)
+        titlePending = try values.decode(Bool.self, forKey: .titlePending)
+        let createdTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
+        createdAt = createdTimestamp.date
+        let updatedTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
+        updatedAt = updatedTimestamp.date
+        revision = try values.decode(String.self, forKey: .revision)
+        activity = try values.decode(AidenChatSummaryActivity.self, forKey: .activity)
+
+        try Self.requireIdentifier(id, forKey: .id, in: values)
+        try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
+        guard Self.isValidRevision(revision) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .revision,
+                in: values,
+                debugDescription: "Expected a canonical Chat summary revision."
+            )
+        }
+        guard title.unicodeScalars.count <= 1_024 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .title,
+                in: values,
+                debugDescription: "Expected a bounded Chat summary title."
+            )
+        }
+        guard AidenRemoteTimestamp.isOrdered(
+            createdAt: createdTimestamp,
+            updatedAt: updatedTimestamp
+        ) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .updatedAt,
+                in: values,
+                debugDescription: "Chat summary updatedAt cannot precede createdAt."
+            )
+        }
+    }
+
+    private static func requireIdentifier(
+        _ value: String,
+        forKey key: CodingKeys,
+        in values: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        guard !value.isEmpty,
+              value.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength,
+              value.unicodeScalars.allSatisfy(Self.isSafeIdentifierScalar) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: values,
+                debugDescription: "Expected a non-empty bounded Chat summary identifier."
+            )
+        }
+    }
+
+    private static func isValidRevision(_ value: String) -> Bool {
+        guard value.hasPrefix("rev_") else { return false }
+        let suffix = value.dropFirst(4)
+        return suffix.unicodeScalars.count == 43
+            && suffix.unicodeScalars.allSatisfy(isBase64URLScalar)
+    }
+
+    static func isValidCachedProjection(_ summary: AidenChatSummary) -> Bool {
+        !summary.id.isEmpty
+            && summary.id.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
+            && summary.id.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
+            && !summary.workspaceId.isEmpty
+            && summary.workspaceId.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
+            && summary.workspaceId.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
+            && summary.title.unicodeScalars.count <= 1_024
+            && !summary.revision.isEmpty
+            && summary.revision.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
+            && summary.createdAt.timeIntervalSinceReferenceDate.isFinite
+            && summary.updatedAt.timeIntervalSinceReferenceDate.isFinite
+            && summary.updatedAt >= summary.createdAt
+    }
+
+    private static func isSafeIdentifierScalar(_ scalar: UnicodeScalar) -> Bool {
+        switch scalar.value {
+        case 45...46, 48...58, 65...90, 95, 97...122:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isBase64URLScalar(_ scalar: UnicodeScalar) -> Bool {
+        switch scalar.value {
+        case 45, 48...57, 65...90, 95, 97...122:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, workspaceId, title, titlePending, createdAt, updatedAt, revision, activity
+    }
+}
+
+struct AidenChatSummaryPage: Codable, Equatable, Sendable {
+    static let defaultLimit = 100
+    static let maximumLimit = 200
+    static let maximumCursorLength = 512
+
+    let summaries: [AidenChatSummary]
+    let nextCursor: String?
+
+    init(summaries: [AidenChatSummary], nextCursor: String?) throws {
+        self.summaries = summaries
+        self.nextCursor = nextCursor
+        try Self.validate(summaries: summaries, nextCursor: nextCursor)
+    }
+
+    init(legacyChats: [AidenChat]) {
+        summaries = legacyChats
+            .filter { !$0.isBotChat }
+            .map { AidenChatSummary(chat: $0) }
+            .sorted(by: Self.areInCanonicalOrder)
+        nextCursor = nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        summaries = try values.decode([AidenChatSummary].self, forKey: .summaries)
+        if values.contains(.nextCursor) {
+            nextCursor = try values.decode(String.self, forKey: .nextCursor)
+        } else {
+            nextCursor = nil
+        }
+        try Self.validate(summaries: summaries, nextCursor: nextCursor)
+    }
+
+    static func merged(
+        current: [AidenChatSummary],
+        appending page: [AidenChatSummary]
+    ) -> [AidenChatSummary] {
+        var byID = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
+        for summary in page { byID[summary.id] = summary }
+        return byID.values.sorted(by: areInCanonicalOrder)
+    }
+
+    static func validatedContinuation(
+        current: [AidenChatSummary],
+        requestedCursor: String,
+        page: AidenChatSummaryPage
+    ) throws -> [AidenChatSummary] {
+        let currentIDs = Set(current.map(\.id))
+        let pageIDs = Set(page.summaries.map(\.id))
+        let preservesBoundaryOrder: Bool
+        if let last = current.last, let first = page.summaries.first {
+            preservesBoundaryOrder = areInCanonicalOrder(last, first)
+        } else {
+            preservesBoundaryOrder = true
+        }
+        guard currentIDs.isDisjoint(with: pageIDs),
+              page.nextCursor != requestedCursor,
+              preservesBoundaryOrder else {
+            throw AidenRemoteContractError.invalidJSON
+        }
+        return current + page.summaries
+    }
+
+    static func areInCanonicalOrder(_ left: AidenChatSummary, _ right: AidenChatSummary) -> Bool {
+        if left.updatedAt != right.updatedAt { return left.updatedAt > right.updatedAt }
+        return left.id < right.id
+    }
+
+    static func isValidCursor(_ cursor: String) -> Bool {
+        guard !cursor.isEmpty,
+              cursor.unicodeScalars.count <= maximumCursorLength,
+              cursor.hasPrefix("cur_") else { return false }
+        let components = cursor.dropFirst(4).split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              (1...384).contains(components[0].unicodeScalars.count),
+              components[1].unicodeScalars.count == 43 else { return false }
+        return components.allSatisfy { component in
+            component.unicodeScalars.allSatisfy { scalar in
+                switch scalar.value {
+                case 45, 48...57, 65...90, 95, 97...122:
+                    return true
+                default:
+                    return false
+                }
+            }
+        }
+    }
+
+    private static func validate(
+        summaries: [AidenChatSummary],
+        nextCursor: String?
+    ) throws {
+        guard summaries.count <= maximumLimit,
+              Set(summaries.map(\.id)).count == summaries.count,
+              zip(summaries, summaries.dropFirst()).allSatisfy({ pair in
+                  areInCanonicalOrder(pair.0, pair.1)
+              }),
+              nextCursor.map(isValidCursor) ?? true else {
+            throw AidenRemoteContractError.invalidJSON
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case summaries, nextCursor
+    }
+}
+
 struct AidenModel: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let label: String

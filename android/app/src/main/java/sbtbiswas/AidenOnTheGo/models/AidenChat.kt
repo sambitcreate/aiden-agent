@@ -505,6 +505,82 @@ data class AidenHtmlArtifact(
 }
 
 @Serializable
+enum class AidenChatSummaryActivity {
+    @SerialName("idle") IDLE,
+    @SerialName("active") ACTIVE
+}
+
+@Serializable
+data class AidenChatSummary(
+    val id: String,
+    val workspaceId: String,
+    val title: String,
+    val titlePending: Boolean,
+    @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
+    @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
+    val revision: String,
+    val activity: AidenChatSummaryActivity
+) {
+    init {
+        if (id.isEmpty() || id.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            workspaceId.isEmpty() || workspaceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            !IDENTIFIER.matches(id) || !IDENTIFIER.matches(workspaceId) ||
+            revision.isEmpty() || revision.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            title.codePointCount(0, title.length) > 1_024 ||
+            updatedAt.isBefore(createdAt)
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary model")
+        }
+    }
+
+    companion object {
+        private val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,128}$")
+
+        fun fromChat(
+            chat: AidenChat,
+            activity: AidenChatSummaryActivity = AidenChatSummaryActivity.IDLE
+        ): AidenChatSummary = AidenChatSummary(
+            id = chat.id,
+            workspaceId = chat.workspaceId,
+            title = chat.title,
+            titlePending = chat.isTitlePending,
+            createdAt = chat.createdAt,
+            updatedAt = chat.updatedAt,
+            revision = chat.revision,
+            activity = activity
+        )
+    }
+}
+
+@Serializable
+data class AidenChatSummaryPage(
+    val summaries: List<AidenChatSummary>,
+    val nextCursor: String? = null
+) {
+    init {
+        val canonicalOrder = summaries.sortedWith(
+            compareByDescending<AidenChatSummary> { it.updatedAt }.thenBy { it.id }
+        )
+        if (summaries.size > AidenRemoteProtocol.MAX_CHAT_SUMMARY_PAGE_SIZE ||
+            (nextCursor != null && !AidenRemoteProtocol.CHAT_SUMMARY_CURSOR_PATTERN.matches(nextCursor)) ||
+            (nextCursor != null && summaries.isEmpty()) ||
+            summaries.map { it.id }.toSet().size != summaries.size ||
+            summaries != canonicalOrder
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary page")
+        }
+    }
+
+    fun validatedWire(): AidenChatSummaryPage {
+        if (summaries.any { !AidenRemoteProtocol.CHAT_SUMMARY_REVISION_PATTERN.matches(it.revision) }) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary wire revision")
+        }
+        return this
+    }
+
+}
+
+@Serializable
 data class AidenChat(
     val id: String,
     var workspaceId: String,

@@ -1,4 +1,11 @@
-import { createHash, randomUUID } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
@@ -36,16 +43,25 @@ import {
   MAX_IMAGE_BYTES,
 } from "./attachments.js";
 import type { Chat, ChatMessage, ChatStartParams } from "./types.js";
+import type { ChatMeta } from "./types.js";
 import type { BotStore } from "./bot-store-core.js";
 import type { BotMutationGate } from "./bot-mutation-gate.js";
 import {
   AIDEN_REMOTE_MAX_CHAT_MESSAGES,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
+  AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
+  AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
+  parseAidenRemoteChatSummaryPage,
   parseAidenRemoteChatProjection,
 } from "./aiden-remote-protocol.js";
+import { chatSummaryRevision } from "./chat-summary-revision.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
+const SUMMARY_CURSOR = /^cur_([A-Za-z0-9_-]{1,384})\.([A-Za-z0-9_-]{43})$/u;
+const SUMMARY_CURSOR_TTL_MS = 5 * 60_000;
+const MAX_SUMMARY_SNAPSHOTS = 16;
 type ChatApplicationService = ReturnType<typeof createChatApplicationService>;
 
 function remoteImageHasCompleteTrailer(bytes: Uint8Array, mimeType: "image/png" | "image/jpeg"): boolean {
@@ -104,6 +120,36 @@ export interface AidenRemoteChatProjection {
   updatedAt: string;
   revision: string;
   titlePending?: true;
+}
+
+export interface AidenRemoteChatSummaryProjection {
+  id: string;
+  workspaceId: string;
+  title: string;
+  titlePending: boolean;
+  createdAt: string;
+  updatedAt: string;
+  revision: string;
+  activity: "idle" | "active";
+}
+
+export interface AidenRemoteChatSummaryPage {
+  summaries: AidenRemoteChatSummaryProjection[];
+  nextCursor?: string;
+}
+
+interface AidenRemoteChatSummarySnapshot {
+  id: string;
+  expiresAt: number;
+  summaries: AidenRemoteChatSummaryProjection[];
+  pages: Map<string, { summaries: AidenRemoteChatSummaryProjection[]; nextOffset?: number }>;
+}
+
+interface AidenRemoteChatSummaryCursor {
+  v: 1;
+  snapshotId: string;
+  offset: number;
+  expiresAt: number;
 }
 
 export interface AidenRemoteChatClassification {
@@ -258,6 +304,33 @@ function chatRevision(chat: Chat): string {
       })),
   };
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
+}
+
+function safeSummaryMetadata(
+  meta: Readonly<ChatMeta>,
+): Omit<AidenRemoteChatSummaryProjection, "titlePending" | "activity"> | null {
+  const workspaceId = persistedChatWorkspaceId(meta.workspaceId);
+  if (
+    meta.botId !== undefined ||
+    workspaceId === ASSISTANT_WORKSPACE_ID ||
+    !SAFE_ID.test(meta.id) ||
+    !SAFE_ID.test(workspaceId) ||
+    !Number.isFinite(meta.createdAt) ||
+    !Number.isFinite(meta.updatedAt) ||
+    !Number.isFinite(new Date(meta.createdAt).getTime()) ||
+    !Number.isFinite(new Date(meta.updatedAt).getTime()) ||
+    meta.updatedAt < meta.createdAt
+  ) {
+    return null;
+  }
+  return {
+    id: meta.id,
+    workspaceId,
+    title: boundedUnicodeScalarPrefix(meta.title, 1_024),
+    createdAt: new Date(meta.createdAt).toISOString(),
+    updatedAt: new Date(meta.updatedAt).toISOString(),
+    revision: chatSummaryRevision(meta),
+  };
 }
 
 export function projectAidenRemoteChat(
@@ -443,6 +516,7 @@ function ephemeralOwner(deviceId: string, operationId: string): ChatGenerationOw
 }
 
 function requireRevision(expected: string, chat: Chat): void {
+  if (expected === chatSummaryRevision(chat)) return;
   try {
     assertRevision(expected, chatRevision(chat));
   } catch {
@@ -459,10 +533,13 @@ function requireRevision(expected: string, chat: Chat): void {
 export class AidenRemoteChatService {
   private readonly idempotency: AidenIdempotencyLedger;
   private readonly attachments: AidenRemoteAttachmentStore;
+  private readonly summaryCursorSecret: Buffer;
+  private readonly summarySnapshots = new Map<string, AidenRemoteChatSummarySnapshot>();
 
   constructor(
     private readonly options: {
-      application: Pick<ChatApplicationService, "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyToWorkspace" | "remove">;
+      application: Pick<ChatApplicationService, "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyToWorkspace" | "remove">
+        & Partial<Pick<ChatApplicationService, "listSummaryMetadata">>;
       chatStore: {
         get(id: string): Promise<Chat | null>;
         appendMessage(
@@ -514,10 +591,120 @@ export class AidenRemoteChatService {
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       notifyChanged?: (chatId?: string) => void;
       isTitlePending?: (chatId: string) => boolean;
+      activeChatIds?: () => readonly string[];
+      now?: () => number;
+      summaryCursorSecret?: Buffer;
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
     this.attachments = options.attachments ?? new AidenRemoteAttachmentStore();
+    this.summaryCursorSecret = options.summaryCursorSecret
+      ? Buffer.from(options.summaryCursorSecret)
+      : randomBytes(32);
+    if (this.summaryCursorSecret.length < 32) {
+      throw new Error("The chat summary cursor secret must contain at least 32 bytes.");
+    }
+  }
+
+  private summaryNow(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private pruneSummarySnapshots(now = this.summaryNow()): void {
+    for (const [id, snapshot] of this.summarySnapshots) {
+      if (snapshot.expiresAt <= now) this.summarySnapshots.delete(id);
+    }
+    while (this.summarySnapshots.size > MAX_SUMMARY_SNAPSHOTS) {
+      const oldest = this.summarySnapshots.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.summarySnapshots.delete(oldest);
+    }
+  }
+
+  private encodeSummaryCursor(snapshot: AidenRemoteChatSummarySnapshot, offset: number): string {
+    const payload: AidenRemoteChatSummaryCursor = {
+      v: 1,
+      snapshotId: snapshot.id,
+      offset,
+      expiresAt: snapshot.expiresAt,
+    };
+    const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+    const signature = createHmac("sha256", this.summaryCursorSecret)
+      .update(encoded)
+      .digest("base64url");
+    return `cur_${encoded}.${signature}`;
+  }
+
+  private decodeSummaryCursor(value: string): {
+    snapshot: AidenRemoteChatSummarySnapshot;
+    offset: number;
+  } {
+    if (value.length > AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH) {
+      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+    }
+    const match = SUMMARY_CURSOR.exec(value);
+    if (!match) {
+      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+    }
+    const expected = createHmac("sha256", this.summaryCursorSecret)
+      .update(match[1]!)
+      .digest();
+    const supplied = Buffer.from(match[2]!, "base64url");
+    if (
+      supplied.length !== expected.length ||
+      supplied.toString("base64url") !== match[2] ||
+      !timingSafeEqual(supplied, expected)
+    ) {
+      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(Buffer.from(match[1]!, "base64url").toString("utf8")) as unknown;
+    } catch {
+      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+    }
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).sort().join(",") !== "expiresAt,offset,snapshotId,v"
+    ) {
+      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid.", 400);
+    }
+    const cursor = parsed as Partial<AidenRemoteChatSummaryCursor>;
+    const now = this.summaryNow();
+    this.pruneSummarySnapshots(now);
+    if (
+      cursor.v !== 1 ||
+      typeof cursor.snapshotId !== "string" ||
+      !/^[A-Za-z0-9_-]{24}$/u.test(cursor.snapshotId) ||
+      !Number.isSafeInteger(cursor.offset) ||
+      (cursor.offset ?? 0) < 1 ||
+      !Number.isSafeInteger(cursor.expiresAt) ||
+      (cursor.expiresAt ?? 0) <= now
+    ) {
+      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid or expired.", 400);
+    }
+    const snapshot = this.summarySnapshots.get(cursor.snapshotId);
+    if (
+      !snapshot ||
+      snapshot.expiresAt !== cursor.expiresAt ||
+      cursor.offset! > snapshot.summaries.length
+    ) {
+      throw new AidenRemoteServiceError("invalid_request", "The chat summary cursor is invalid or expired.", 400);
+    }
+    return { snapshot, offset: cursor.offset! };
+  }
+
+  private freezeSummaryPage(
+    summaries: readonly Omit<AidenRemoteChatSummaryProjection, "titlePending" | "activity">[],
+  ): AidenRemoteChatSummaryProjection[] {
+    const activeChatIds = new Set(this.options.activeChatIds?.() ?? []);
+    return summaries.map((summary) => ({
+      ...summary,
+      titlePending: this.options.isTitlePending?.(summary.id) === true,
+      activity: activeChatIds.has(summary.id) ? "active" : "idle",
+    }));
   }
 
   private async executeIdempotent<T>(
@@ -605,6 +792,107 @@ export class AidenRemoteChatService {
     const metadata = await this.options.application.listRegular(workspaceId);
     const chats = await Promise.all(metadata.map((entry) => this.chat(entry.id)));
     return { chats: chats.map((chat) => this.project(chat)) };
+  }
+
+  async listSummaries(
+    limit = AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
+    cursor?: string,
+  ): Promise<AidenRemoteChatSummaryPage> {
+    const listSummaryMetadata = this.options.application.listSummaryMetadata;
+    if (!listSummaryMetadata) {
+      throw new AidenRemoteServiceError(
+        "internal_error",
+        "The transcript-free chat summary index is unavailable.",
+        500,
+      );
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT) {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        `The chat summary limit must be between 1 and ${AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT}.`,
+        400,
+      );
+    }
+
+    let snapshot: AidenRemoteChatSummarySnapshot;
+    let offset = 0;
+    if (cursor !== undefined) {
+      ({ snapshot, offset } = this.decodeSummaryCursor(cursor));
+    } else {
+      const summaries = this.freezeSummaryPage(
+        (await listSummaryMetadata())
+          .map(safeSummaryMetadata)
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+          .sort((left, right) => {
+            const byUpdatedAt = right.updatedAt.localeCompare(left.updatedAt);
+            if (byUpdatedAt !== 0) return byUpdatedAt;
+            return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+          }),
+      );
+      const now = this.summaryNow();
+      snapshot = {
+        id: randomBytes(18).toString("base64url"),
+        expiresAt: now + SUMMARY_CURSOR_TTL_MS,
+        summaries,
+        pages: new Map(),
+      };
+      this.pruneSummarySnapshots(now);
+    }
+
+    const pageKey = `${offset}:${limit}`;
+    let cached = snapshot.pages.get(pageKey);
+    if (!cached) {
+      if (cursor === undefined) {
+        const nextOffset = Math.min(snapshot.summaries.length, offset + limit);
+        cached = {
+          summaries: snapshot.summaries.slice(offset, nextOffset),
+          ...(nextOffset < snapshot.summaries.length ? { nextOffset } : {}),
+        };
+      } else {
+        const currentIds = new Set(
+          (await listSummaryMetadata())
+            .map(safeSummaryMetadata)
+            .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+            .map((entry) => entry.id),
+        );
+        const summaries: AidenRemoteChatSummaryProjection[] = [];
+        let nextOffset = offset;
+        while (nextOffset < snapshot.summaries.length && summaries.length < limit) {
+          const summary = snapshot.summaries[nextOffset++]!;
+          if (currentIds.has(summary.id)) summaries.push(summary);
+        }
+        let hasMore = false;
+        for (let index = nextOffset; index < snapshot.summaries.length; index += 1) {
+          if (currentIds.has(snapshot.summaries[index]!.id)) {
+            hasMore = true;
+            break;
+          }
+        }
+        cached = { summaries, ...(hasMore ? { nextOffset } : {}) };
+      }
+      snapshot.pages.set(pageKey, cached);
+    }
+    const hasMore = cached.nextOffset !== undefined;
+    if (cursor !== undefined || hasMore) {
+      this.summarySnapshots.set(snapshot.id, snapshot);
+      this.pruneSummarySnapshots();
+    }
+    const result: AidenRemoteChatSummaryPage = {
+      summaries: cached.summaries,
+      ...(cached.nextOffset !== undefined
+        ? { nextCursor: this.encodeSummaryCursor(snapshot, cached.nextOffset) }
+        : {}),
+    };
+    try {
+      parseAidenRemoteChatSummaryPage(result);
+    } catch {
+      throw new AidenRemoteServiceError(
+        "internal_error",
+        "Aiden could not safely project the chat summary page.",
+        500,
+      );
+    }
+    return result;
   }
 
   /**

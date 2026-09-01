@@ -7,7 +7,10 @@ import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
 import sbtbiswas.AidenOnTheGo.features.workspaces.aidenRelativeTimestamp
+import sbtbiswas.AidenOnTheGo.features.workspaces.projectAidenWorkspaceSidebar
+import sbtbiswas.AidenOnTheGo.features.workspaces.regularNewestFirst
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsHomeContentState
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotsHomeContentState
 import java.time.Instant
@@ -74,6 +77,116 @@ class AidenProductShellTest {
         assertEquals("59m", aidenRelativeTimestamp(now.minus(59, ChronoUnit.MINUTES), now))
         assertEquals("1h", aidenRelativeTimestamp(now.minus(60, ChronoUnit.MINUTES), now))
         assertEquals("1d", aidenRelativeTimestamp(now.minus(24, ChronoUnit.HOURS), now))
+    }
+
+    @Test
+    fun testUnifiedWorkspaceSidebarProjectsOnlyOwnedRegularChats() {
+        val base = Instant.parse("2026-08-24T12:00:00Z")
+        val workspaces = listOf(
+            AidenWorkspace(
+                id = "alpha",
+                name = "Alpha",
+                permission = AidenWorkspacePermission.ASK,
+                updatedAt = base.plusSeconds(20),
+                revision = "alpha-r1"
+            ),
+            AidenWorkspace(
+                id = "beta",
+                name = "Beta",
+                permission = AidenWorkspacePermission.ASK,
+                updatedAt = base.plusSeconds(10),
+                revision = "beta-r1"
+            )
+        )
+        val chats = listOf(
+            AidenChat(
+                id = "alpha-chat",
+                workspaceId = "alpha",
+                title = "Review API",
+                messages = emptyList(),
+                createdAt = base,
+                updatedAt = base.plusSeconds(30),
+                revision = "chat-r1"
+            ),
+            AidenChat(
+                id = "orphan-chat",
+                workspaceId = "removed",
+                title = "Removed",
+                messages = emptyList(),
+                createdAt = base,
+                updatedAt = base.plusSeconds(40),
+                revision = "chat-r2"
+            )
+        )
+
+        val summaries = chats.map { AidenChatSummary.fromChat(it) }
+        val projection = projectAidenWorkspaceSidebar(workspaces, summaries, "")
+        assertEquals(listOf("alpha", "beta"), projection.sections.map { it.workspace.id })
+        assertEquals(listOf("alpha-chat"), projection.sections.first().chats.map { it.id })
+        assertTrue(projection.sections.last().chats.isEmpty())
+        assertEquals(listOf("alpha-chat"), projection.recents.map { it.id })
+
+        val search = projectAidenWorkspaceSidebar(workspaces, summaries, "api")
+        assertEquals(listOf("alpha"), search.sections.map { it.workspace.id })
+        assertEquals(listOf("alpha-chat"), search.recents.map { it.id })
+    }
+
+    @Test
+    fun testUnifiedWorkspaceSidebarPreferencesPersistPerInstallation() {
+        val store = AidenProductNavigationStore(tempFolder.root)
+        store.setWorkspaceSidebarOrganization("mac-1", AidenWorkspaceSidebarOrganization.RECENT)
+        store.setExpandedSidebarWorkspaceIds("mac-1", setOf("alpha"))
+        store.setExpandedSidebarWorkspaceIds("mac-2", setOf("beta"))
+
+        val restored = AidenProductNavigationStore(tempFolder.root)
+        assertEquals(
+            AidenWorkspaceSidebarOrganization.RECENT,
+            restored.workspaceSidebarOrganization("mac-1")
+        )
+        assertEquals(
+            AidenWorkspaceSidebarOrganization.WORKSPACE,
+            restored.workspaceSidebarOrganization("mac-2")
+        )
+        assertEquals(setOf("alpha"), restored.expandedSidebarWorkspaceIds("mac-1"))
+        assertEquals(setOf("beta"), restored.expandedSidebarWorkspaceIds("mac-2"))
+
+        restored.purge("mac-1")
+        assertEquals(
+            AidenWorkspaceSidebarOrganization.WORKSPACE,
+            restored.workspaceSidebarOrganization("mac-1")
+        )
+        assertTrue(restored.expandedSidebarWorkspaceIds("mac-1").isEmpty())
+        assertEquals(setOf("beta"), restored.expandedSidebarWorkspaceIds("mac-2"))
+    }
+
+    @Test
+    fun testUnifiedWorkspaceSidebarUsesStableCrossPlatformChatTieBreak() {
+        val timestamp = Instant.parse("2026-08-24T12:00:00Z")
+        val chats = listOf(
+            AidenChat(
+                id = "chat-z",
+                workspaceId = "alpha",
+                title = "Same title",
+                messages = emptyList(),
+                createdAt = timestamp,
+                updatedAt = timestamp,
+                revision = "chat-z-r1"
+            ),
+            AidenChat(
+                id = "chat-a",
+                workspaceId = "alpha",
+                title = "Same title",
+                messages = emptyList(),
+                createdAt = timestamp,
+                updatedAt = timestamp,
+                revision = "chat-a-r1"
+            )
+        )
+
+        assertEquals(
+            listOf("chat-a", "chat-z"),
+            regularNewestFirst(chats.map { AidenChatSummary.fromChat(it) }).map { it.id }
+        )
     }
 
     @Test

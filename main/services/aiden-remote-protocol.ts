@@ -1,11 +1,21 @@
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
-import type { AidenRemoteChatProjection } from "./aiden-remote-chats.js";
+import type {
+  AidenRemoteChatProjection,
+  AidenRemoteChatSummaryPage,
+  AidenRemoteChatSummaryProjection,
+} from "./aiden-remote-chats.js";
 
 export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_CHAT_MESSAGES = 10_000;
+export const AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT = 100;
+export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT = 200;
+export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH = 512;
+export const AIDEN_REMOTE_CHAT_SUMMARY_FEATURE = "chat-summaries-v1" as const;
+export const AIDEN_REMOTE_MAX_SERVER_FEATURES = 32;
+export const AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH = 64;
 export const AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION = "bot-full-access-v1" as const;
 
 const AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH = 128;
@@ -496,8 +506,10 @@ export interface AidenRemoteContractFixture {
     serverCapabilities: AidenRemoteCapability[];
     connectionMode: "lan" | "tailscale" | "both";
     minimumClientVersion?: string;
+    features: string[];
     serverTime: string;
   };
+  chatSummaries: AidenRemoteChatSummaryPage;
   workspaces: unknown;
   browser: unknown;
   chat: AidenRemoteChatProjection;
@@ -825,6 +837,41 @@ function assertNoPrivateChildProjectionFields(value: unknown, label: string): vo
         throw new Error(
           `${label} contains private child field ${childPath.join(".")}.`,
         );
+      }
+      visit(child, childPath);
+    }
+  };
+  visit(value, []);
+}
+
+const AIDEN_REMOTE_PRIVATE_CHAT_SUMMARY_KEYS = new Set([
+  "messages",
+  "attachments",
+  "htmlartifacts",
+  "outcome",
+  "timeline",
+  "reasoning",
+  "botid",
+  "providerid",
+  "modelid",
+  "preview",
+]);
+
+function assertNoPrivateSummaryProjectionFields(value: unknown, label: string): void {
+  const visit = (current: unknown, path: readonly string[]): void => {
+    if (Array.isArray(current)) {
+      for (const entry of current) visit(entry, [...path, "[]"]);
+      return;
+    }
+    if (!isRecord(current)) return;
+    for (const [key, child] of Object.entries(current)) {
+      const childPath = [...path, key];
+      if (
+        AIDEN_REMOTE_PRIVATE_CHAT_SUMMARY_KEYS.has(normalizedPrivateWireKey(key)) ||
+        isPrivateBotWireKey(key) ||
+        isPrivateChildProjectionKey(key)
+      ) {
+        throw new Error(`${label} contains private field ${childPath.join(".")}.`);
       }
       visit(child, childPath);
     }
@@ -1770,6 +1817,87 @@ export function parseAidenRemoteChatProjection(
         : (() => { throw new Error(`${label} titlePending may only be true.`); })()
       : {}),
   };
+}
+
+export function parseAidenRemoteChatSummaryProjection(
+  value: unknown,
+  label = "Aiden Remote Chat summary",
+): AidenRemoteChatSummaryProjection {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertNoForbiddenWireKeys(value, label);
+  assertNoPrivateSummaryProjectionFields(value, label);
+  const id = boundedText(value.id, `${label} id`, 128);
+  const workspaceId = boundedText(value.workspaceId, `${label} workspaceId`, 128);
+  if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(id) || !/^[A-Za-z0-9._:-]{1,128}$/u.test(workspaceId)) {
+    throw new Error(`${label} identifiers are invalid.`);
+  }
+  if (typeof value.titlePending !== "boolean") {
+    throw new Error(`${label} titlePending must be a boolean.`);
+  }
+  const createdAt = dateTimeValue(value.createdAt, `${label} createdAt`);
+  const updatedAt = dateTimeValue(value.updatedAt, `${label} updatedAt`);
+  if (
+    compareStrictRfc3339(
+      updatedAt,
+      `${label} updatedAt`,
+      createdAt,
+      `${label} createdAt`,
+    ) < 0
+  ) {
+    throw new Error(`${label} updatedAt must not precede createdAt.`);
+  }
+  const revision = boundedRevision(value.revision, `${label} revision`);
+  if (!/^rev_[A-Za-z0-9_-]{43}$/u.test(revision)) {
+    throw new Error(`${label} revision is invalid.`);
+  }
+  return {
+    id,
+    workspaceId,
+    title: boundedText(value.title, `${label} title`, 1_024, true),
+    titlePending: value.titlePending,
+    createdAt,
+    updatedAt,
+    revision,
+    activity: enumMember(
+      value.activity,
+      ["idle", "active"] as const,
+      `${label} activity`,
+    ),
+  };
+}
+
+export function parseAidenRemoteChatSummaryPage(
+  value: unknown,
+  label = "Aiden Remote Chat summary page",
+): AidenRemoteChatSummaryPage {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertNoForbiddenWireKeys(value, label);
+  assertNoPrivateSummaryProjectionFields(value, label);
+  if (
+    !Array.isArray(value.summaries) ||
+    value.summaries.length > AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT
+  ) {
+    throw new Error(`${label} summaries are invalid.`);
+  }
+  const summaries = value.summaries.map((entry, index) =>
+    parseAidenRemoteChatSummaryProjection(entry, `${label} summary ${index}`),
+  );
+  const ids = new Set(summaries.map((summary) => summary.id));
+  if (ids.size !== summaries.length) throw new Error(`${label} contains duplicate chat ids.`);
+  const nextCursor = hasOwn(value, "nextCursor")
+    ? boundedText(
+        value.nextCursor,
+        `${label} nextCursor`,
+        AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
+      )
+    : undefined;
+  if (
+    nextCursor !== undefined &&
+    !/^cur_[A-Za-z0-9_-]{1,384}\.[A-Za-z0-9_-]{43}$/u.test(nextCursor)
+  ) {
+    throw new Error(`${label} nextCursor is invalid.`);
+  }
+  return { summaries, ...(nextCursor ? { nextCursor } : {}) };
 }
 
 function parseBotCapabilityOption(
@@ -2809,8 +2937,8 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     throw new Error("Aiden Remote contract fixture protocolVersion must be 1.");
   }
   const contractRevision = requiredInteger(value, "contractRevision");
-  if (contractRevision < 8) {
-    throw new Error("The canonical Bot fixture requires contractRevision 8 or newer.");
+  if (contractRevision < 10) {
+    throw new Error("The canonical summary fixture requires contractRevision 10 or newer.");
   }
   if (value.generated !== false) throw new Error("The canonical fixture must be synthetic.");
   const fixtureNotice = boundedText(value.notice, "Fixture notice", 280);
@@ -2857,6 +2985,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       "serverCapabilities",
       "connectionMode",
       "minimumClientVersion",
+      "features",
       "serverTime",
     ],
     "Fixture server projection",
@@ -2874,6 +3003,25 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   const deviceCapabilities = parseCapabilityList(server.capabilities, "server device-grant");
   const serverCapabilities = parseCapabilityList(server.serverCapabilities, "server-supported");
+  if (!Array.isArray(server.features) || server.features.length > AIDEN_REMOTE_MAX_SERVER_FEATURES) {
+    throw new Error("Fixture server features must be a bounded array.");
+  }
+  const serverFeatures = server.features.map((feature) => {
+    if (
+      typeof feature !== "string" ||
+      feature.length > AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH ||
+      !/^[a-z0-9][a-z0-9-]{0,63}$/u.test(feature)
+    ) {
+      throw new Error("Fixture server feature is invalid.");
+    }
+    return feature;
+  });
+  if (new Set(serverFeatures).size !== serverFeatures.length) {
+    throw new Error("Fixture server features must be unique.");
+  }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_SUMMARY_FEATURE)) {
+    throw new Error("Fixture server must advertise chat summaries.");
+  }
   if (!deviceCapabilities.every((capability) => serverCapabilities.includes(capability))) {
     throw new Error("Fixture device capabilities must be a subset of server-supported capabilities.");
   }
@@ -2911,6 +3059,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (requiredString(pairingExchange, "endpoint") !== endpoint || requiredString(pairingExchange, "serverSpkiSha256") !== fingerprint) throw new Error("Pairing exchange identity does not match bootstrap.");
 
   const chat = parseAidenRemoteChatProjection(value.chat, "Fixture Chat response");
+  const chatSummaries = parseAidenRemoteChatSummaryPage(
+    value.chatSummaries,
+    "Fixture Chat summary page",
+  );
   const botSummary = parseAidenRemoteBotSummary(value.botSummary);
   const botList = parseAidenRemoteBotList(value.botList);
   const botDetail = parseAidenRemoteBotDetail(value.botDetail);
@@ -3410,7 +3562,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       ...(server as unknown as AidenRemoteContractFixture["server"]),
       capabilities: deviceCapabilities,
       serverCapabilities,
+      features: serverFeatures,
     },
+    chatSummaries,
     workspaces: value.workspaces,
     browser: value.browser,
     chat,

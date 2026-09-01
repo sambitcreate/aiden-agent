@@ -20,6 +20,7 @@ import {
   DataStoreUnsafeWriteError,
 } from "./data-store.js";
 import { createChatStore } from "./chat-store-core.js";
+import { chatSummaryRevision } from "./chat-summary-revision.js";
 
 async function tmpDir(t: test.TestContext, prefix: string): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -875,7 +876,9 @@ test("chat store: list() drops malformed index entries while preserving valid ch
     "utf-8",
   );
   const store = createChatStore(async () => dir);
-  assert.deepEqual(await store.list(), [valid]);
+  assert.deepEqual(await store.list(), [
+    { ...valid, summaryRevision: chatSummaryRevision(valid) },
+  ]);
 });
 
 test("chat store: list() returns [] when index.json is missing", async (t) => {

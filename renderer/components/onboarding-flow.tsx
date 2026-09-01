@@ -243,7 +243,8 @@ const featureBentos: FeatureBento[] = [
     id: "workspaces",
     group: "create",
     title: "Workspaces & Worktrees",
-    description: "Use folders, scratch spaces, and isolated worktrees while preserving context.",
+    description:
+      "Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline.",
     icon: FolderGit2,
     imageUrl: FEATURE_ILLUSTRATIONS.workspaces,
     size: "wide",
