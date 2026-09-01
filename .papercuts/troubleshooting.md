@@ -197,3 +197,26 @@ MCP setup through that advertised RFC 9728 URL and the SDK's DCR redirect flow.
 `npm run release:preflight` intentionally fails outside the release runner when
 Apple notarization credentials are absent. Treat local consumer/branding tests
 as code gates and the credentialed GitHub release job as the signing gate.
+
+## Cross-client global settings
+
+Remote has feature-specific settings routes but no general settings contract.
+An authoritative global preference therefore needs a narrow server-owned
+endpoint; storing it only in iOS or Android would not change Mac agent behavior.
+
+## Worktree verification dependencies
+
+This worktree has no local `node_modules`; `npm run type-check` initially fails
+with `tsc: command not found`, so verification needs the bundled runtime or a
+dependency install before TypeScript suites can run.
+
+Android Gradle also does not discover the installed SDK in this worktree;
+verification needs `ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk`.
+
+The full iOS `AidenRemoteClientTests` target currently has two unrelated
+failures in chat-summary/private-child validation; focused memory tests are
+needed to separate this change from that baseline noise.
+- Verification initially referenced a guessed OpenAPI path; the canonical files are under `protocol/aiden-remote/v1/`.
+- Focused Android tests need Android Studio's bundled JDK because this shell has no default Java runtime.
+- URLProtocol request bodies can arrive through `httpBodyStream`; iOS request tests must use the existing `bodyData` helper.
+- In zsh, a loop variable named `path` overwrites the executable search path; file-by-file commit scripts must use a non-reserved name.
