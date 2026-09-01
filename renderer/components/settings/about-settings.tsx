@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Download, Github, Loader2, RefreshCw, RotateCcw, Sparkles } from "lucide-react";
+import { Download, Github, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
@@ -198,7 +198,7 @@ export function AboutSettings() {
               disabled={showingOnboarding}
               onClick={() => void showOnboarding()}
             >
-              {showingOnboarding ? <Loader2 className="animate-spin" /> : <Sparkles />}
+              {showingOnboarding ? <Loader2 className="animate-spin" /> : null}
               {showingOnboarding ? "Opening…" : "Show onboarding"}
             </Button>
           </div>
