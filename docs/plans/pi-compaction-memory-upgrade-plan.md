@@ -220,15 +220,15 @@ Gate: one shared contract matrix runs against every adapter, with credentialed T
 
 ### 6C. Approval-controlled writes
 
-- Explicit user edits may write immediately through the owning main process.
-- Model-proposed memories are suggestions only. Show the exact fact, scope, provenance, replacement/expiry behavior, and require owner approval before commit.
+- The agent may call memory tools as needed, including when the user explicitly asks in chat; there is no separate manual memory editor.
+- Model-proposed writes and deletions are suggestions only. Show the exact fact or citation, scope, provenance, replacement/expiry behavior where applicable, and require owner approval before commit.
 - Use Aiden's own bounded, fail-closed approval contract. Mirror the permission-system lesson that child-originated asks must forward to the owning attended surface; never let a headless child or Telegram transport silently convert `ask` into `allow`.
 - A compaction cycle may produce memory suggestions once, after a successful checkpoint, but summary success never implies memory approval. Failure or cancellation commits neither a checkpoint nor suggestions.
 - Identity, Bot persona, AGENTS instructions, skills, and permissions are not memory and cannot be rewritten through this path.
 
 ### 6D. Retrieval quality and maintenance
 
-- Add deduplication, contradiction/supersession, expiry, delete/export, and source-chat deletion policy.
+- Add deduplication, contradiction/supersession, expiry, in-chat deletion, and source-chat deletion policy.
 - Evaluate whether an FTS5-backed device-local index is sufficient before adding embeddings. Any embedding path must be local or an explicit user-authorized provider action with the same privacy boundaries as generation.
 
 Gate: scope-isolation, prompt-injection, approval, provenance, deletion/export, compaction-cancellation, and prompt-budget tests pass across workspace, Bot, and Telegram adapters.
