@@ -1,5 +1,8 @@
 # Troubleshooting
 
+- `.papercuts/troubleshooting.md` is tracked but also matches an ignore rule; `git add` stages it yet exits nonzero and breaks an `&& git commit` chain. Stage that exact tracked file with `git add -f -- .papercuts/troubleshooting.md` before committing.
+- This repository names its TypeScript gate `npm run type-check`; the common `npm run typecheck` spelling exits before checking anything.
+- Impeccable context discovery can report `hasVisualImplementation: false` for a large existing TSX surface when no `DESIGN.md` or surface brief exists. Treat that as missing design documentation, not proof that the target is greenfield; inspect the component and incumbent tokens before choosing a workflow.
 - Design Workspace looks project-like, but only chat-linked artifact bytes are durable today; React Flow positions, viewport/version choice, uploaded reference nodes, and the live visual-edit session remain renderer state. Product copy and follow-on planning must distinguish durable designs from an ephemeral canvas arrangement.
 - Electron 43.1.1's npm package exposes `install-electron` as a binary but declares no lifecycle install script, so a fresh `npm ci` can leave `node_modules/electron/dist/Electron.app` absent while reporting success. Run the package's verified `install.js` explicitly before the macOS dev-runtime preparation step.
 - zsh aborts mixed optional-worktree glob loops when any pattern has no matches. Enable `null_glob` locally or enumerate each search root with `find` so recovery-branch discovery cannot stop after the first missing path.

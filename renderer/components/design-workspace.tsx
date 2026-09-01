@@ -14,6 +14,7 @@ import {
   type NodeTypes,
   type ReactFlowInstance,
 } from "@xyflow/react";
+import { Tooltip as TooltipPrimitive } from "radix-ui";
 import {
   Download,
   AppWindow,
@@ -496,31 +497,56 @@ function canvasImageAttachment(file: File): Promise<Attachment> {
 
 function CanvasToolButton({
   label,
+  description,
   shortcut,
-  active = false,
+  active,
   onClick,
   children,
 }: {
   label: string;
+  description: string;
   shortcut?: string;
   active?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={shortcut ? `${label} (${shortcut})` : label}
-      aria-pressed={active || undefined}
-      title={shortcut ? `${label} · ${shortcut}` : label}
-      className={cn(
-        "design-canvas-control grid size-9 place-items-center rounded-control text-secondary transition-colors duration-150 hover:bg-list-hover hover:text-primary",
-        active && "bg-list-selection text-accent",
-      )}
-    >
-      {children}
-    </button>
+    <TooltipPrimitive.Root delayDuration={300}>
+      <TooltipPrimitive.Trigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={label}
+          aria-keyshortcuts={shortcut}
+          aria-pressed={active}
+          className={cn(
+            "design-canvas-control grid size-9 place-items-center rounded-control text-secondary transition-colors duration-150 hover:bg-list-hover hover:text-primary",
+            active && "bg-list-selection text-accent",
+          )}
+        >
+          {children}
+        </button>
+      </TooltipPrimitive.Trigger>
+      <TooltipPrimitive.Portal>
+        <TooltipPrimitive.Content
+          side="right"
+          align="center"
+          sideOffset={10}
+          collisionPadding={12}
+          className="z-[70] flex max-w-64 items-start gap-3 rounded-control bg-popover px-2.5 py-2 text-primary shadow-popover"
+        >
+          <span className="min-w-0">
+            <span className="block text-small-strong">{label}</span>
+            <span className="mt-0.5 block text-mini text-secondary">{description}</span>
+          </span>
+          {shortcut ? (
+            <kbd className="shrink-0 rounded-control bg-control px-1.5 py-0.5 font-sans text-mini text-secondary">
+              {shortcut}
+            </kbd>
+          ) : null}
+        </TooltipPrimitive.Content>
+      </TooltipPrimitive.Portal>
+    </TooltipPrimitive.Root>
   );
 }
 
@@ -2834,6 +2860,7 @@ function CanvasToolRail({
     >
       <CanvasToolButton
         label="Select"
+        description="Select and move items on the canvas."
         shortcut="V"
         active={mode === "select"}
         onClick={() => onModeChange("select")}
@@ -2842,6 +2869,7 @@ function CanvasToolRail({
       </CanvasToolButton>
       <CanvasToolButton
         label="Visual edits"
+        description="Pick an element in a generated screen or running app."
         shortcut="E"
         active={mode === "inspect"}
         onClick={() => onModeChange("inspect")}
@@ -2850,20 +2878,30 @@ function CanvasToolRail({
       </CanvasToolButton>
       <CanvasToolButton
         label="Preview"
+        description="Use the interface without selecting its elements."
         active={mode === "preview"}
         onClick={() => onModeChange("preview")}
       >
         <Play className="size-4" aria-hidden="true" />
       </CanvasToolButton>
       <span className="my-1 h-px w-6 bg-separator" aria-hidden="true" />
-      <CanvasToolButton label="New design" onClick={onNewDesign}>
+      <CanvasToolButton
+        label="New design"
+        description="Focus the prompt to describe another screen or flow."
+        onClick={onNewDesign}
+      >
         <Plus className="size-4" aria-hidden="true" />
       </CanvasToolButton>
-      <CanvasToolButton label="Upload image" onClick={onUpload}>
+      <CanvasToolButton
+        label="Add reference image"
+        description="Add up to six local images as visual references."
+        onClick={onUpload}
+      >
         <ImagePlus className="size-4" aria-hidden="true" />
       </CanvasToolButton>
       <CanvasToolButton
         label="Hand"
+        description="Pan around the canvas without moving artboards."
         shortcut="H"
         active={mode === "hand"}
         onClick={() => onModeChange("hand")}
