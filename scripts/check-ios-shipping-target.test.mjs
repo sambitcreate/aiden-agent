@@ -837,7 +837,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     shell,
-    /let regularChats = chats[\s\S]*?filter \{ !\$0\.isBotChat && workspaceByID\[\$0\.workspaceId\] != nil \}/u,
+    /var chats: \[AidenChatSummary\][\s\S]*?let regularChats = chats[\s\S]*?filter \{ workspaceByID\[\$0\.workspaceId\] != nil \}/u,
   );
   assert.match(
     shell,
