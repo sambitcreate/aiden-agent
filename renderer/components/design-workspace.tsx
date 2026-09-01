@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useNavigate } from "@tanstack/react-router";
 import {
   Background,
   BackgroundVariant,
@@ -16,23 +17,27 @@ import {
 import {
   Download,
   AppWindow,
+  ArrowRight,
   Check,
   Code2,
   Hand,
   ImagePlus,
   Loader2,
+  MessageSquareText,
   Monitor,
   MousePointer2,
   PanelsTopLeft,
+  Palette,
   Play,
   Plus,
   ScanSearch,
+  SlidersHorizontal,
   Smartphone,
   Tablet,
   Undo2,
   X,
 } from "lucide-react";
-import type { Attachment } from "../lib/types";
+import type { Attachment, Workspace } from "../lib/types";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import {
   groupDesignWorkspaceArtifacts,
@@ -41,9 +46,9 @@ import {
   type DesignWorkspaceArtifactEntry,
   type DesignWorkspaceArtifactGroup,
 } from "../shared/design-workspace";
-import { chatsApi, designerApi } from "../lib/ipc";
+import { chatsApi, designerApi, workspacesApi } from "../lib/ipc";
 import { cn } from "../lib/ui-utils";
-import { Button, Text, toast } from "./ui";
+import { Button, Dialog, Text, toast } from "./ui";
 import { HtmlArtifactIframe } from "./html-artifact-frame";
 import { htmlArtifactThemeTokensFromDocument } from "../lib/html-artifact-preview";
 import {
@@ -54,8 +59,30 @@ import {
   type SourceElementDescriptorV1,
   type SourcePreviewStateV1,
   type SourceSelectionBindingV1,
+  type SourceDesignerMultifileActionViewV1,
 } from "../shared/source-designer";
 import { GENERATIVE_UI_ESCAPE_MESSAGE } from "../shared/generative-ui";
+import type {
+  DesignProjectCanvasV1,
+  DesignDirectEditV1,
+  DesignProjectDesignerActionSummary,
+  DesignProjectInspectorTab,
+  DesignProjectRevisionSummary,
+  DesignProjectSourceDocument,
+  DesignProjectSnapshotV1,
+  DesignSystemProjectionV1,
+  DesignHandoffRecoveryViewV1,
+  ManagedDesignHandoffPreviewV1,
+  ExistingDesignHandoffPreviewV1,
+} from "../shared/design-projects";
+import { DesignProjectInspector } from "./design-project-inspector";
+import { DesignCommentsPanel } from "./design-comments-panel";
+import { DesignHandoffRecoveryPanel } from "./design-handoff-recovery";
+import type {
+  DesignCommentProjectViewV1,
+  DesignCommentTargetV1,
+  DesignCommentV1,
+} from "../shared/design-comments";
 
 type DesignViewport = "desktop" | "tablet" | "phone";
 type CanvasMode = "select" | "inspect" | "preview" | "hand";
@@ -67,6 +94,44 @@ const VIEWPORT_SIZE: Record<DesignViewport, { width: number; height: number }> =
 };
 const MAX_CANVAS_IMAGES = 6;
 const MAX_CANVAS_IMAGE_BYTES = 8 * 1024 * 1024;
+
+function durableArtifactGroups(
+  project: DesignProjectSnapshotV1 | undefined,
+  entries: readonly DesignWorkspaceArtifactEntry[],
+): DesignWorkspaceArtifactGroup[] {
+  if (!project) return groupDesignWorkspaceArtifacts(entries);
+  const byMediaId = new Map(entries.map((entry) => [entry.artifact.mediaId, entry]));
+  const claimed = new Set<string>();
+  const groups: DesignWorkspaceArtifactGroup[] = [];
+  for (const node of project.canvas.nodes) {
+    if (node.kind !== "artboard" || !node.artifactMediaIds) continue;
+    const revisions = node.artifactMediaIds.flatMap((mediaId) => {
+      const entry = byMediaId.get(mediaId);
+      if (!entry) return [];
+      claimed.add(mediaId);
+      return [entry];
+    });
+    if (revisions.length === 0) continue;
+    const active = revisions.find(({ artifact }) => artifact.mediaId === node.activeMediaId);
+    groups.push({
+      id: node.id,
+      title: active?.artifact.title ?? revisions[revisions.length - 1]!.artifact.title,
+      revisions,
+    });
+  }
+  for (const entry of entries) {
+    if (claimed.has(entry.artifact.mediaId)) continue;
+    // The legacy artifact contract contains no lineage fact. Never infer one
+    // from a mutable title: a new committed artifact starts conservatively as
+    // its own durable lineage until an explicit revision operation links it.
+    groups.push({
+      id: `design-artboard:${entry.artifact.id}`,
+      title: entry.artifact.title,
+      revisions: [entry],
+    });
+  }
+  return groups;
+}
 
 interface DesignArtboardData extends Record<string, unknown> {
   kind: "design";
@@ -133,7 +198,10 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
           setError("This design version is no longer available.");
           return;
         }
-        setPreview({ src: result.src, designCapability: result.designCapability });
+        setPreview({
+          src: result.src,
+          designCapability: result.designCapability,
+        });
         setError(undefined);
       })
       .catch((cause: unknown) => {
@@ -447,7 +515,7 @@ function CanvasToolButton({
       aria-pressed={active || undefined}
       title={shortcut ? `${label} · ${shortcut}` : label}
       className={cn(
-        "grid size-9 place-items-center rounded-control text-secondary transition-colors duration-150 hover:bg-list-hover hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+        "design-canvas-control grid size-9 place-items-center rounded-control text-secondary transition-colors duration-150 hover:bg-list-hover hover:text-primary",
         active && "bg-list-selection text-accent",
       )}
     >
@@ -458,6 +526,7 @@ function CanvasToolButton({
 
 export function DesignWorkspaceCanvas({
   chatId,
+  project,
   workspaceId,
   artifacts,
   generating,
@@ -472,6 +541,7 @@ export function DesignWorkspaceCanvas({
   onRequestComposerFocus,
 }: {
   chatId: string;
+  project?: DesignProjectSnapshotV1;
   workspaceId?: string;
   artifacts: readonly DesignWorkspaceArtifactEntry[];
   generating: boolean;
@@ -485,6 +555,7 @@ export function DesignWorkspaceCanvas({
   onSelectedImagesChange: (images: Attachment[]) => void;
   onRequestComposerFocus: () => void;
 }) {
+  const navigate = useNavigate();
   const [viewport, setViewport] = React.useState<DesignViewport>("desktop");
   const [mode, setMode] = React.useState<CanvasMode>("select");
   const [activeVersions, setActiveVersions] = React.useState<Record<string, string>>({});
@@ -495,26 +566,400 @@ export function DesignWorkspaceCanvas({
   const [sourceRevision, setSourceRevision] = React.useState(0);
   const [designerActions, setDesignerActions] = React.useState<DesignerActionV1[]>([]);
   const [actionBusy, setActionBusy] = React.useState(false);
+  const [multifileActions, setMultifileActions] = React.useState<
+    SourceDesignerMultifileActionViewV1[]
+  >([]);
+  const [multifileBusy, setMultifileBusy] = React.useState(false);
+  const [dismissedMultifileActionId, setDismissedMultifileActionId] = React.useState<string>();
+  const [flowSaveRevision, setFlowSaveRevision] = React.useState(0);
+  const [inspectorOpen, setInspectorOpen] = React.useState(false);
+  const [commentsOpen, setCommentsOpen] = React.useState(false);
+  const [commentView, setCommentView] = React.useState<DesignCommentProjectViewV1>();
+  const [connectedCommentTarget, setConnectedCommentTarget] =
+    React.useState<DesignCommentTargetV1>();
+  const [commentsLoading, setCommentsLoading] = React.useState(false);
+  const [commentsError, setCommentsError] = React.useState<string>();
+  const [inspectorTab, setInspectorTab] = React.useState<DesignProjectInspectorTab>("preview");
+  const [inspectorFind, setInspectorFind] = React.useState("");
+  const [comparisonMediaId, setComparisonMediaId] = React.useState<string>();
+  const [selectedGroupId, setSelectedGroupId] = React.useState<string>();
+  const [sourceByMediaId, setSourceByMediaId] = React.useState<
+    Record<
+      string,
+      DesignProjectSourceDocument & {
+        revisionId: string;
+        lineageId: string;
+        createdAt: number;
+        model?: string;
+      }
+    >
+  >({});
+  const [connectedSource, setConnectedSource] = React.useState<DesignProjectSourceDocument>();
+  const [connectedSourceLoading, setConnectedSourceLoading] = React.useState(false);
+  const [designSystemOpen, setDesignSystemOpen] = React.useState(false);
+  const [designSystemBusy, setDesignSystemBusy] = React.useState(false);
+  const [designSystemName, setDesignSystemName] = React.useState("App design system");
+  const [designPackageRoot, setDesignPackageRoot] = React.useState(".");
+  const [designRouteScope, setDesignRouteScope] = React.useState("/");
+  const [designTokenPath, setDesignTokenPath] = React.useState("");
+  const [designCatalogPath, setDesignCatalogPath] = React.useState("");
+  const [designSystemProjection, setDesignSystemProjection] =
+    React.useState<DesignSystemProjectionV1>();
+  const [designSystemModelContext, setDesignSystemModelContext] = React.useState<unknown>();
+  const [handoffOpen, setHandoffOpen] = React.useState(false);
+  const [handoffBusy, setHandoffBusy] = React.useState(false);
+  const [handoffPreview, setHandoffPreview] = React.useState<
+    ManagedDesignHandoffPreviewV1 | ExistingDesignHandoffPreviewV1
+  >();
+  const [handoffTargetKind, setHandoffTargetKind] = React.useState<"managed" | "existing">("managed");
+  const [handoffWorkspaces, setHandoffWorkspaces] = React.useState<Workspace[]>([]);
+  const [handoffWorkspaceId, setHandoffWorkspaceId] = React.useState("");
+  const [dirtyCheckoutAcknowledged, setDirtyCheckoutAcknowledged] = React.useState(false);
+  const [existingWorkspaceAcknowledged, setExistingWorkspaceAcknowledged] = React.useState(false);
+  const [handoffLinks, setHandoffLinks] = React.useState<
+    Array<{ workspaceId: string; chatId: string; taskId: string; branchLabel: string }>
+  >([]);
+  const [activeHandoffOperationId, setActiveHandoffOperationId] = React.useState<string>();
+  const [handoffRecoveries, setHandoffRecoveries] = React.useState<
+    DesignHandoffRecoveryViewV1[]
+  >([]);
+  const [handoffRecoveriesLoading, setHandoffRecoveriesLoading] = React.useState(false);
+  const [handoffRecoveriesError, setHandoffRecoveriesError] = React.useState<string>();
+  const [handoffRecoveryBusyId, setHandoffRecoveryBusyId] = React.useState<string>();
+  const [directEditOpen, setDirectEditOpen] = React.useState(false);
+  const [directEditBusy, setDirectEditBusy] = React.useState(false);
+  const [directEditControl, setDirectEditControl] = React.useState<
+    "padding" | "gap" | "width" | "height" | "alignment" | "radius" | "text" | "color"
+  >("padding");
+  const [directEditValue, setDirectEditValue] = React.useState("16px");
+  const [directEditArtifacts, setDirectEditArtifacts] = React.useState<
+    DesignWorkspaceArtifactEntry[]
+  >([]);
+  const [prototypeDirectEditUndo, setPrototypeDirectEditUndo] = React.useState<{
+    undoId: string;
+    lineageId: string;
+    nodeId: string;
+    editedMediaId: string;
+    revertMediaId: string;
+  }>();
+  const [prototypeDirectEditUndoBusy, setPrototypeDirectEditUndoBusy] = React.useState(false);
   const [nodes, setNodes] = React.useState<StudioNode[]>([]);
+  const [savedProject, setSavedProject] = React.useState(project);
+  const connectedWorkspaceId =
+    savedProject?.connectionState === "connected" ? savedProject.workspaceId : undefined;
+  const [latestExport, setLatestExport] = React.useState<
+    { id: string; fileName: string } | undefined
+  >();
+  const [assetsHydrated, setAssetsHydrated] = React.useState(!project);
+  const savedProjectRef = React.useRef(project);
   const flowRef = React.useRef<ReactFlowInstance<StudioNode> | null>(null);
+  const flowViewportRef = React.useRef(project?.canvas.flowViewport ?? { x: 0, y: 0, zoom: 1 });
+  const assetIdByNodeRef = React.useRef(new Map<string, string>());
+  const persistTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const persistInFlightRef = React.useRef(false);
+  const persistAgainRef = React.useRef(false);
+  const lastPersistedCanvasRef = React.useRef(project ? JSON.stringify(project.canvas) : undefined);
   const uploadRef = React.useRef<HTMLInputElement | null>(null);
-  const groups = React.useMemo(() => groupDesignWorkspaceArtifacts(artifacts), [artifacts]);
+  const groups = React.useMemo(
+    () => durableArtifactGroups(savedProject, [...artifacts, ...directEditArtifacts]),
+    [artifacts, directEditArtifacts, savedProject],
+  );
+  const selectedGroup = groups.find(({ id }) => id === selectedGroupId);
+  const selectedGroupNode = savedProject?.canvas.nodes.find(
+    (node) => node.kind === "artboard" && node.id === selectedGroupId,
+  );
+  const selectedMediaId = selectedGroup
+    ? (activeVersions[selectedGroup.id] ??
+      selectedGroupNode?.activeMediaId ??
+      selectedGroup.revisions[selectedGroup.revisions.length - 1]?.artifact.mediaId)
+    : undefined;
+  const selectedSource = selectedMediaId ? sourceByMediaId[selectedMediaId] : connectedSource;
+  const compareSource = comparisonMediaId ? sourceByMediaId[comparisonMediaId] : undefined;
+  const selectedRevisionKey =
+    selectedGroup?.revisions.map(({ artifact }) => artifact.mediaId).join("\0") ?? "";
+  const selectedDirectEditTarget = targets.find(
+    (target) =>
+      target.mediaId === selectedMediaId &&
+      target.selection?.elementId &&
+      target.selection.selector === `[data-aiden-id="${target.selection.elementId}"]`,
+  );
+  const generatedCommentTarget = React.useMemo<DesignCommentTargetV1 | undefined>(() => {
+    if (!savedProject || !selectedGroupNode?.lineageId || !selectedMediaId) {
+      return undefined;
+    }
+    const selected = targets.find(
+      (target) => target.mediaId === selectedMediaId && target.selection,
+    );
+    if (
+      !selected?.selection?.elementId ||
+      selected.selection.selector !== `[data-aiden-id="${selected.selection.elementId}"]`
+    ) {
+      return undefined;
+    }
+    return {
+      projectId: savedProject.id,
+      lineageId: selectedGroupNode.lineageId,
+      mediaId: selectedMediaId,
+      element: {
+        selector: selected.selection.selector,
+        selectorMatchCount: 1,
+        tagName: selected.selection.tagName,
+        ...(selected.selection.elementId ? { elementId: selected.selection.elementId } : {}),
+      },
+      source: {
+        kind: "generated-artifact",
+        artifactId: selected.artifactId,
+      },
+    };
+  }, [savedProject, selectedGroupNode?.lineageId, selectedMediaId, targets]);
+  const currentCommentTarget = generatedCommentTarget ?? connectedCommentTarget;
   const targetsRef = React.useRef(targets);
   React.useLayoutEffect(() => {
     targetsRef.current = targets;
   }, [targets]);
 
   React.useEffect(() => {
-    if (!workspaceId || unavailableMessage) return;
+    setSavedProject(project);
+    setDirectEditArtifacts([]);
+    setPrototypeDirectEditUndo(undefined);
+    savedProjectRef.current = project;
+    setAssetsHydrated(!project);
+    if (!project) return;
+    setViewport(project.canvas.viewport);
+    flowViewportRef.current = project.canvas.flowViewport;
+    lastPersistedCanvasRef.current = JSON.stringify(project.canvas);
+    assetIdByNodeRef.current = new Map(
+      project.canvas.nodes.flatMap((node) =>
+        node.kind === "reference-image" && node.assetId ? [[node.id, node.assetId]] : [],
+      ),
+    );
+    setActiveVersions(
+      Object.fromEntries(
+        project.canvas.nodes.flatMap((node) =>
+          node.kind === "artboard" && node.activeMediaId ? [[node.id, node.activeMediaId]] : [],
+        ),
+      ),
+    );
+    let cancelled = false;
+    void Promise.all(
+      project.canvas.nodes.flatMap((node) =>
+        node.kind === "reference-image" && node.assetId
+          ? [
+              designerApi.readReferenceAsset(node.assetId).then((result) =>
+                result
+                  ? {
+                      id: node.id,
+                      kind: "image" as const,
+                      name: result.asset.name,
+                      mimeType: result.asset.mimeType,
+                      size: result.asset.size,
+                      data: result.data,
+                    }
+                  : undefined,
+              ),
+            ]
+          : [],
+      ),
+    )
+      .then((images) => {
+        if (!cancelled) {
+          setCanvasImages(images.filter((image) => image !== undefined));
+          setAssetsHydrated(true);
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          toast.error(cause instanceof Error ? cause.message : "Reference images need repair.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project]);
+
+  const loadHandoffRecoveries = React.useCallback(async (projectId: string) => {
+    setHandoffRecoveriesLoading(true);
+    setHandoffRecoveriesError(undefined);
+    try {
+      const records = await designerApi.projectHandoffRecoveries(projectId);
+      if (savedProjectRef.current?.id === projectId) setHandoffRecoveries(records);
+    } catch (cause) {
+      if (savedProjectRef.current?.id === projectId) {
+        setHandoffRecoveriesError(
+          cause instanceof Error ? cause.message : "Preserved handoffs could not be loaded.",
+        );
+      }
+    } finally {
+      if (savedProjectRef.current?.id === projectId) setHandoffRecoveriesLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    setHandoffRecoveries([]);
+    setHandoffRecoveriesError(undefined);
+    setHandoffRecoveriesLoading(false);
+    if (!project?.id) return;
+    void loadHandoffRecoveries(project.id);
+  }, [loadHandoffRecoveries, project?.id]);
+
+  React.useEffect(() => {
+    if (!savedProject) {
+      setHandoffLinks([]);
+      return;
+    }
+    let cancelled = false;
+    void designerApi.projectHandoffLinks(savedProject.id).then((links) => {
+      if (!cancelled) setHandoffLinks(links);
+    }).catch(() => {
+      if (!cancelled) setHandoffLinks([]);
+    });
+    return () => { cancelled = true; };
+  }, [savedProject?.id]);
+
+  React.useEffect(() => {
+    if (!savedProject?.id) {
+      setLatestExport(undefined);
+      return;
+    }
+    let cancelled = false;
+    void designerApi
+      .latestProjectExport(savedProject.id)
+      .then((record) => {
+        if (!cancelled) setLatestExport(record);
+      })
+      .catch(() => {
+        if (!cancelled) setLatestExport(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedProject?.id]);
+
+  const loadComments = React.useCallback(async () => {
+    if (!savedProject?.id) return;
+    setCommentsLoading(true);
+    setCommentsError(undefined);
+    try {
+      setCommentView(await designerApi.listComments(savedProject.id));
+    } catch (cause) {
+      setCommentsError(cause instanceof Error ? cause.message : "Comments are unavailable.");
+    } finally {
+      setCommentsLoading(false);
+    }
+  }, [savedProject?.id]);
+
+  React.useEffect(() => {
+    setCommentView(undefined);
+    setCommentsError(undefined);
+    if (commentsOpen) void loadComments();
+  }, [commentsOpen, loadComments, savedProject?.id]);
+
+  const updateCommentStatus = React.useCallback(
+    async (comment: DesignCommentV1, operation: "resolve" | "reopen") => {
+      const currentProject = savedProjectRef.current;
+      const currentView = commentView;
+      if (!currentProject || !currentView) return;
+      setCommentsLoading(true);
+      setCommentsError(undefined);
+      try {
+        const input = {
+          projectId: currentProject.id,
+          id: comment.id,
+          expectedRevision: comment.revision,
+          expectedDatabaseRevision: currentView.databaseRevision,
+        };
+        setCommentView(
+          operation === "resolve"
+            ? await designerApi.resolveComment(input)
+            : await designerApi.reopenComment(input),
+        );
+      } catch (cause) {
+        setCommentsError(cause instanceof Error ? cause.message : "The comment changed.");
+        await loadComments();
+      } finally {
+        setCommentsLoading(false);
+      }
+    },
+    [commentView, loadComments],
+  );
+
+  React.useEffect(() => {
+    if (!commentsOpen || !commentView || !currentCommentTarget) return;
+    const requiresReconciliation = commentView.comments.some(
+      (comment) =>
+        !comment.stale &&
+        comment.target.lineageId === currentCommentTarget.lineageId &&
+        comment.target.mediaId !== currentCommentTarget.mediaId,
+    );
+    if (!requiresReconciliation) return;
+    let cancelled = false;
+    void designerApi
+      .reconcileCommentTarget({
+        expectedDatabaseRevision: commentView.databaseRevision,
+        current: currentCommentTarget,
+      })
+      .then((view) => {
+        if (!cancelled) setCommentView(view);
+      })
+      .catch(() => {
+        if (!cancelled) void loadComments();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [commentView, commentsOpen, currentCommentTarget, loadComments]);
+
+  React.useEffect(() => {
+    if (!savedProject || !selectedGroup || !selectedGroupNode?.lineageId) {
+      setSourceByMediaId({});
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      selectedGroup.revisions.map(({ artifact }) =>
+        designerApi.readGeneratedSource(
+          savedProject.id,
+          selectedGroupNode.lineageId!,
+          artifact.mediaId,
+        ),
+      ),
+    )
+      .then((sources) => {
+        if (!cancelled) {
+          setSourceByMediaId(
+            Object.fromEntries(sources.map((source) => [source.revisionId, source])),
+          );
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setSourceByMediaId({});
+          toast.error(cause instanceof Error ? cause.message : "Source is unavailable.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedProject?.id, selectedGroupId, selectedGroupNode?.lineageId, selectedRevisionKey]);
+
+  React.useEffect(() => {
+    if (!connectedWorkspaceId || unavailableMessage) {
+      setSourcePreview(undefined);
+      setDesignerActions([]);
+      setMultifileActions([]);
+      return;
+    }
     let cancelled = false;
     void Promise.all([
-      designerApi.previewState(workspaceId),
-      designerApi.listActions(chatId, workspaceId),
+      designerApi.previewState(connectedWorkspaceId),
+      designerApi.listActions(chatId, connectedWorkspaceId),
+      ...(savedProject ? [designerApi.listMultifileActions(savedProject.id)] : []),
     ])
-      .then(([preview, actions]) => {
+      .then(([preview, actions, multifile]) => {
         if (cancelled) return;
         setSourcePreview(preview);
         setDesignerActions(actions);
+        setMultifileActions(multifile ?? []);
       })
       .catch((cause: unknown) => {
         if (!cancelled) {
@@ -522,28 +967,341 @@ export function DesignWorkspaceCanvas({
         }
       });
     const offPreview = designerApi.onPreviewChanged((payload) => {
-      if (payload.workspaceId === workspaceId) setSourcePreview(payload.state);
+      if (payload.workspaceId === connectedWorkspaceId) setSourcePreview(payload.state);
     });
     const offAction = designerApi.onActionChanged(({ action }) => {
-      if (action.chatId !== chatId || action.workspaceId !== workspaceId) return;
+      if (action.chatId !== chatId || action.workspaceId !== connectedWorkspaceId) return;
       setDesignerActions((current) => [
         action,
         ...current.filter((candidate) => candidate.id !== action.id),
+      ]);
+    });
+    const offMultifile = designerApi.onMultifileActionChanged(({ action }) => {
+      if (action.projectId !== savedProject?.id || action.workspaceId !== connectedWorkspaceId) return;
+      setDismissedMultifileActionId(undefined);
+      setMultifileActions((current) => [
+        action,
+        ...current.filter((candidate) => candidate.actionId !== action.actionId),
       ]);
     });
     return () => {
       cancelled = true;
       offPreview();
       offAction();
+      offMultifile();
     };
-  }, [chatId, unavailableMessage, workspaceId]);
+  }, [chatId, connectedWorkspaceId, savedProject?.id, unavailableMessage]);
+
+  React.useEffect(() => {
+    if (!savedProject || !sourceSelection) {
+      setConnectedSource(undefined);
+      setConnectedSourceLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setConnectedSource(undefined);
+    setConnectedSourceLoading(true);
+    void designerApi
+      .readConnectedSource(savedProject.id, sourceSelection.id)
+      .then((source) => {
+        if (!cancelled) {
+          setConnectedSource(source);
+          setConnectedSourceLoading(false);
+        }
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setConnectedSource(undefined);
+        setConnectedSourceLoading(false);
+        toast.error(cause instanceof Error ? cause.message : "The workspace source is stale.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedProject, sourceSelection]);
+
+  React.useEffect(() => {
+    if (!savedProject?.designSystemBinding) {
+      setDesignSystemProjection(undefined);
+      return;
+    }
+    let cancelled = false;
+    void Promise.all([
+      designerApi.designSystemProjection(savedProject.id),
+      designerApi.designSystemModelContext(savedProject.id),
+    ])
+      .then(([projection, modelContext]) => {
+        if (!cancelled) {
+          setDesignSystemProjection(projection);
+          setDesignSystemModelContext(modelContext);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDesignSystemProjection(undefined);
+          setDesignSystemModelContext(undefined);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedProject?.designSystemBinding, savedProject?.id]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setConnectedCommentTarget(undefined);
+    if (!savedProject || !sourceSelection) return;
+    void designerApi
+      .connectedCommentTarget(savedProject.id, sourceSelection.id)
+      .then((target) => {
+        if (!cancelled) setConnectedCommentTarget(target);
+      })
+      .catch(() => {
+        if (!cancelled) setConnectedCommentTarget(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedProject?.id, sourceSelection]);
+
+  const acceptProjectUpdate = React.useCallback((next: DesignProjectSnapshotV1) => {
+    savedProjectRef.current = next;
+    setSavedProject(next);
+  }, []);
+
+  const updateDesignSystem = React.useCallback(async () => {
+    const current = savedProjectRef.current;
+    if (!current || designSystemBusy) return;
+    setDesignSystemBusy(true);
+    try {
+      if (current.designSystemBinding) {
+        const result = await designerApi.refreshDesignSystem({
+          projectId: current.id,
+          expectedRevision: current.revision,
+        });
+        acceptProjectUpdate(result.project);
+        setDesignSystemProjection(result.projection);
+        setDesignSystemModelContext(await designerApi.designSystemModelContext(result.project.id));
+        toast.success("Design system refreshed from the reviewed files.");
+      } else {
+        const sources = [
+          ...(designTokenPath.trim()
+            ? [{ workspaceRelativePath: designTokenPath.trim(), kind: "tokens-v1" as const }]
+            : []),
+          ...(designCatalogPath.trim()
+            ? [{ workspaceRelativePath: designCatalogPath.trim(), kind: "catalog-v1" as const }]
+            : []),
+        ];
+        const result = await designerApi.attachDesignSystem({
+          projectId: current.id,
+          expectedRevision: current.revision,
+          name: designSystemName.trim(),
+          packageRoot: designPackageRoot.trim(),
+          routeScope: designRouteScope.trim(),
+          sources,
+        });
+        acceptProjectUpdate(result.project);
+        setDesignSystemProjection(result.projection);
+        setDesignSystemModelContext(await designerApi.designSystemModelContext(result.project.id));
+        toast.success("Design system attached as read-only model context.");
+      }
+      setDesignSystemOpen(false);
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error ? cause.message : "The design system could not be updated.",
+      );
+    } finally {
+      setDesignSystemBusy(false);
+    }
+  }, [acceptProjectUpdate, designCatalogPath, designPackageRoot, designRouteScope, designSystemBusy, designSystemName, designTokenPath]);
+
+  const detachDesignSystem = React.useCallback(async () => {
+    const current = savedProjectRef.current;
+    if (!current?.designSystemBinding || designSystemBusy) return;
+    setDesignSystemBusy(true);
+    try {
+      const next = await designerApi.detachDesignSystem({
+        projectId: current.id,
+        expectedRevision: current.revision,
+      });
+      acceptProjectUpdate(next);
+      setDesignSystemProjection(undefined);
+      setDesignSystemModelContext(undefined);
+      setDesignSystemOpen(false);
+      toast.success("Design system detached.");
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error ? cause.message : "The design system could not be detached.",
+      );
+    } finally {
+      setDesignSystemBusy(false);
+    }
+  }, [acceptProjectUpdate, designSystemBusy]);
+
+  const previewHandoff = React.useCallback(async () => {
+    const current = savedProjectRef.current;
+    if (!current || handoffBusy) return;
+    setHandoffBusy(true);
+    try {
+      if (current.connectionState === "connected" && current.workspaceId) {
+        const preview =
+          handoffTargetKind === "managed"
+            ? await designerApi.previewManagedHandoff(current.id)
+            : await designerApi.previewExistingHandoff(current.id);
+        setHandoffPreview(preview);
+        setDirtyCheckoutAcknowledged(preview.kind === "managed-worktree" && !preview.dirtyCheckout);
+        setExistingWorkspaceAcknowledged(false);
+      } else {
+        const candidates = (await workspacesApi.list()).filter(
+          (workspace) => Boolean(workspace.folderPath) && !workspace.managedWorktree,
+        );
+        setHandoffWorkspaces(candidates);
+        setHandoffWorkspaceId((selected) =>
+          candidates.some(({ id }) => id === selected) ? selected : (candidates[0]?.id ?? ""),
+        );
+        setHandoffPreview(undefined);
+      }
+      setHandoffOpen(true);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The handoff target is unavailable.");
+    } finally {
+      setHandoffBusy(false);
+    }
+  }, [handoffBusy, handoffTargetKind]);
+
+  const reviewHandoffTarget = React.useCallback(async () => {
+    const current = savedProjectRef.current;
+    if (
+      !current ||
+      (current.connectionState === "prototype-only" && !handoffWorkspaceId) ||
+      handoffBusy
+    ) return;
+    setHandoffBusy(true);
+    try {
+      const preview =
+        handoffTargetKind === "managed"
+          ? await designerApi.previewManagedHandoff(current.id, handoffWorkspaceId || undefined)
+          : await designerApi.previewExistingHandoff(current.id, handoffWorkspaceId || undefined);
+      setHandoffPreview(preview);
+      setDirtyCheckoutAcknowledged(preview.kind === "managed-worktree" && !preview.dirtyCheckout);
+      setExistingWorkspaceAcknowledged(false);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The handoff target is unavailable.");
+    } finally {
+      setHandoffBusy(false);
+    }
+  }, [handoffBusy, handoffTargetKind, handoffWorkspaceId]);
+
+  const beginHandoff = React.useCallback(async () => {
+    const current = savedProjectRef.current;
+    if (
+      !current ||
+      !handoffPreview ||
+      !selectedGroupNode?.lineageId ||
+      !selectedMediaId ||
+      handoffBusy
+    ) {
+      return;
+    }
+    setHandoffBusy(true);
+    const operationId = `handoff:${crypto.randomUUID()}`;
+    setActiveHandoffOperationId(operationId);
+    try {
+      const base = {
+        projectId: current.id,
+        expectedRevision: current.revision,
+        lineageId: selectedGroupNode.lineageId,
+        mediaId: selectedMediaId,
+        previewDigest: handoffPreview.previewDigest,
+        operationId,
+      };
+      const result =
+        handoffPreview.kind === "managed-worktree"
+          ? await designerApi.beginManagedHandoff({
+              ...base,
+              dirtyCheckoutAcknowledged,
+              ...(current.connectionState === "prototype-only"
+                ? { sourceWorkspaceId: handoffPreview.source.workspaceId }
+                : {}),
+            })
+          : await designerApi.beginExistingHandoff({
+              ...base,
+              strongWarningAcknowledged: existingWorkspaceAcknowledged,
+              ...(current.connectionState === "prototype-only"
+                ? { sourceWorkspaceId: handoffPreview.target.workspaceId }
+                : {}),
+            });
+      if (result.status === "published" && result.record.linkage) {
+        setHandoffOpen(false);
+        toast.success("Managed workspace and implementation task created.");
+        void navigate({
+          to: "/chat/$chatId",
+          params: { chatId: result.record.linkage.chatId },
+        });
+        return;
+      }
+      toast.error(
+        result.record.recoveryReason ??
+          "The managed workspace was preserved and needs recovery review.",
+      );
+      await loadHandoffRecoveries(current.id);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The handoff could not be completed.");
+      await loadHandoffRecoveries(current.id);
+    } finally {
+      setActiveHandoffOperationId(undefined);
+      setHandoffBusy(false);
+    }
+  }, [
+    dirtyCheckoutAcknowledged,
+    existingWorkspaceAcknowledged,
+    handoffBusy,
+    handoffPreview,
+    loadHandoffRecoveries,
+    navigate,
+    selectedGroupNode?.lineageId,
+    selectedMediaId,
+  ]);
+
+  const runHandoffRecovery = React.useCallback(
+    async (record: DesignHandoffRecoveryViewV1, operation: "resume" | "cancel") => {
+      const current = savedProjectRef.current;
+      if (!current || handoffRecoveryBusyId) return;
+      setHandoffRecoveryBusyId(record.operationId);
+      try {
+        const result =
+          operation === "resume"
+            ? await designerApi.resumeHandoff(record.operationId)
+            : await designerApi.cancelHandoff(record.operationId);
+        if (result.status === "published" && result.record.linkage) {
+          toast.success("Handoff completed.");
+          void navigate({
+            to: "/chat/$chatId",
+            params: { chatId: result.record.linkage.chatId },
+          });
+        } else if (result.status === "rolled-back") {
+          toast.info("Handoff cancelled and rolled back.");
+        } else {
+          toast.error(
+            result.record.recoveryReason ?? "The preserved handoff still needs recovery review.",
+          );
+        }
+        await loadHandoffRecoveries(current.id);
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "The handoff operation failed.");
+      } finally {
+        setHandoffRecoveryBusyId(undefined);
+      }
+    },
+    [handoffRecoveryBusyId, loadHandoffRecoveries, navigate],
+  );
 
   const bindSourceSelection = React.useCallback(
     async (descriptor: SourceElementDescriptorV1) => {
-      if (!workspaceId || sourcePreview?.status !== "running") return;
+      if (!connectedWorkspaceId || sourcePreview?.status !== "running") return;
       try {
         const binding = await designerApi.bindSelection(
-          workspaceId,
+          connectedWorkspaceId,
           sourcePreview.sessionId,
           descriptor,
         );
@@ -558,21 +1316,36 @@ export function DesignWorkspaceCanvas({
             : "That element does not expose exact React source metadata.",
         );
       }
-    }, [
-      onSelectedImagesChange,
-      onSourceSelectionChange,
-      onTargetsChange,
-      sourcePreview,
-      workspaceId,
-    ],
+    },
+    [connectedWorkspaceId, onSelectedImagesChange, onSourceSelectionChange, onTargetsChange, sourcePreview],
   );
 
   const startSourcePreview = React.useCallback(
     async (scriptId: string) => {
-      if (!workspaceId || previewBusy) return;
+      if (!connectedWorkspaceId || previewBusy) return;
       setPreviewBusy(true);
       try {
-        const state = await designerApi.startPreview(workspaceId, scriptId);
+        const current = savedProjectRef.current;
+        if (current?.connectionState === "connected") {
+          const saved = await designerApi.updateProject({
+            id: current.id,
+            expectedRevision: current.revision,
+            connectionState: current.connectionState,
+            workspaceId: current.workspaceId,
+            canvas: current.canvas,
+            referenceAssetIds: current.referenceAssetIds,
+            ...(current.designSystemBinding
+              ? { designSystemBinding: current.designSystemBinding }
+              : {}),
+            previewScriptId: scriptId,
+          });
+          if (saved.status === "conflict") {
+            acceptProjectUpdate(saved.current);
+            throw new Error("The project changed. Review the restored preview configuration.");
+          }
+          acceptProjectUpdate(saved.project);
+        }
+        const state = await designerApi.startPreview(connectedWorkspaceId, scriptId);
         setSourcePreview(state);
         setPreviewSetupOpen(false);
         requestAnimationFrame(() => void flowRef.current?.fitView({ padding: 0.18, maxZoom: 0.9 }));
@@ -582,22 +1355,22 @@ export function DesignWorkspaceCanvas({
         setPreviewBusy(false);
       }
     },
-    [previewBusy, workspaceId],
+    [acceptProjectUpdate, connectedWorkspaceId, previewBusy],
   );
 
   const stopSourcePreview = React.useCallback(async () => {
-    if (!workspaceId || previewBusy) return;
+    if (!connectedWorkspaceId || previewBusy) return;
     setPreviewBusy(true);
     try {
-      await designerApi.stopPreview(workspaceId);
-      setSourcePreview(await designerApi.previewState(workspaceId));
+      await designerApi.stopPreview(connectedWorkspaceId);
+      setSourcePreview(await designerApi.previewState(connectedWorkspaceId));
       onSourceSelectionChange(undefined);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Could not stop the local app.");
     } finally {
       setPreviewBusy(false);
     }
-  }, [onSourceSelectionChange, previewBusy, workspaceId]);
+  }, [connectedWorkspaceId, onSourceSelectionChange, previewBusy]);
 
   const exportArtifact = React.useCallback(
     async (artifact: ChatHtmlArtifactV1) => {
@@ -609,6 +1382,146 @@ export function DesignWorkspaceCanvas({
     },
     [chatId],
   );
+
+  const applyDirectEdit = React.useCallback(async () => {
+    if (
+      !savedProject ||
+      (!sourceSelection &&
+        (!selectedGroupNode?.lineageId ||
+          !selectedMediaId ||
+          !selectedDirectEditTarget?.selection)) ||
+      directEditBusy
+    ) {
+      return;
+    }
+    const value = directEditValue.trim();
+    const edit: DesignDirectEditV1 =
+      directEditControl === "padding"
+        ? { kind: "spacing", property: "padding", value }
+        : directEditControl === "gap"
+          ? { kind: "spacing", property: "gap", value }
+          : directEditControl === "width"
+            ? { kind: "size", property: "width", value }
+            : directEditControl === "height"
+              ? { kind: "size", property: "height", value }
+              : directEditControl === "alignment"
+                ? { kind: "alignment", property: "justify-content", value: value as "center" }
+                : directEditControl === "radius"
+                  ? { kind: "radius", property: "border-radius", value }
+                  : directEditControl === "color"
+                    ? { kind: "color-token", property: "background-color", token: value }
+                    : { kind: "static-text", text: directEditValue };
+    setDirectEditBusy(true);
+    try {
+      if (sourceSelection) {
+        await designerApi.applyConnectedDirectEdit({
+          projectId: savedProject.id,
+          sourceSelectionId: sourceSelection.id,
+          edit,
+        });
+        setDirectEditOpen(false);
+        toast.success("Designer Action ready for exact review.");
+        return;
+      }
+      if (
+        !selectedGroupNode?.lineageId ||
+        !selectedMediaId ||
+        !selectedDirectEditTarget?.selection
+      ) {
+        throw new Error("Select one exact generated element before editing it.");
+      }
+      const result = await designerApi.applyPrototypeDirectEdit({
+        projectId: savedProject.id,
+        lineageId: selectedGroupNode.lineageId,
+        mediaId: selectedMediaId,
+        selection: selectedDirectEditTarget.selection,
+        edit,
+      });
+      const revertMediaId = selectedMediaId;
+      savedProjectRef.current = result.project;
+      setSavedProject(result.project);
+      setDirectEditArtifacts((current) => [
+        ...current.filter(({ artifact }) => artifact.mediaId !== result.artifact.mediaId),
+        { artifact: result.artifact, source: "persisted" },
+      ]);
+      setActiveVersions((current) => ({
+        ...current,
+        [selectedGroupNode.id]: result.artifact.mediaId,
+      }));
+      setPrototypeDirectEditUndo({
+        undoId: result.undoId,
+        lineageId: selectedGroupNode.lineageId,
+        nodeId: selectedGroupNode.id,
+        editedMediaId: result.artifact.mediaId,
+        revertMediaId,
+      });
+      const source = await designerApi.readGeneratedSource(
+        result.project.id,
+        selectedGroupNode.lineageId,
+        result.artifact.mediaId,
+      );
+      setSourceByMediaId((current) => ({ ...current, [result.artifact.mediaId]: source }));
+      setDirectEditOpen(false);
+      onTargetsChange([]);
+      toast.success("Created a new immutable Design revision.");
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The direct edit could not be proven.");
+    } finally {
+      setDirectEditBusy(false);
+    }
+  }, [
+    directEditBusy,
+    directEditControl,
+    directEditValue,
+    onTargetsChange,
+    savedProject,
+    selectedDirectEditTarget?.selection,
+    selectedGroupNode,
+    selectedMediaId,
+    sourceSelection,
+  ]);
+
+  const undoPrototypeDirectEdit = React.useCallback(async () => {
+    const current = savedProjectRef.current;
+    const undo = prototypeDirectEditUndo;
+    if (!current || !undo || prototypeDirectEditUndoBusy) return;
+    setPrototypeDirectEditUndoBusy(true);
+    try {
+      const result = await designerApi.undoPrototypeDirectEdit({
+        projectId: current.id,
+        lineageId: undo.lineageId,
+        editedMediaId: undo.editedMediaId,
+        revertMediaId: undo.revertMediaId,
+        undoId: undo.undoId,
+      });
+      savedProjectRef.current = result.project;
+      setSavedProject(result.project);
+      setDirectEditArtifacts((artifacts) => [
+        ...artifacts.filter(({ artifact }) => artifact.mediaId !== result.artifact.mediaId),
+        { artifact: result.artifact, source: "persisted" },
+      ]);
+      setActiveVersions((versions) => ({
+        ...versions,
+        [undo.nodeId]: result.artifact.mediaId,
+      }));
+      const source = await designerApi.readGeneratedSource(
+        result.project.id,
+        undo.lineageId,
+        result.artifact.mediaId,
+      );
+      setSourceByMediaId((sources) => ({
+        ...sources,
+        [result.artifact.mediaId]: source,
+      }));
+      setPrototypeDirectEditUndo(undefined);
+      onTargetsChange([]);
+      toast.success("Created a new exact-revert Design revision.");
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The direct edit could not be undone.");
+    } finally {
+      setPrototypeDirectEditUndoBusy(false);
+    }
+  }, [onTargetsChange, prototypeDirectEditUndo, prototypeDirectEditUndoBusy]);
 
   const selectElement = React.useCallback(
     (artifact: ChatHtmlArtifactV1, selection: DesignElementSelectionV1, additive: boolean) => {
@@ -622,12 +1535,17 @@ export function DesignWorkspaceCanvas({
         ? [...current.filter((item) => item.mediaId !== artifact.mediaId), target].slice(-5)
         : [target];
       onTargetsChange(next);
+      const group = groups.find((candidate) =>
+        candidate.revisions.some(({ artifact: revision }) => revision.mediaId === artifact.mediaId),
+      );
+      setSelectedGroupId(group?.id);
+      setInspectorOpen(Boolean(group));
       if (!additive) {
         onSelectedImagesChange([]);
         onSourceSelectionChange(undefined);
       }
     },
-    [onSelectedImagesChange, onSourceSelectionChange, onTargetsChange],
+    [groups, onSelectedImagesChange, onSourceSelectionChange, onTargetsChange],
   );
 
   const changeVersion = React.useCallback(
@@ -649,16 +1567,152 @@ export function DesignWorkspaceCanvas({
     [groups, onTargetsChange],
   );
 
+  const buildDurableCanvas = React.useCallback(
+    (currentNodes: readonly StudioNode[]): DesignProjectCanvasV1 | undefined => {
+      const currentProject = savedProjectRef.current;
+      if (!currentProject) return undefined;
+      const previous = new Map(currentProject.canvas.nodes.map((node) => [node.id, node]));
+      const durableNodes: DesignProjectCanvasV1["nodes"] = [];
+      for (const node of currentNodes) {
+        if (node.type === "designArtboard") {
+          const data = node.data as DesignArtboardData;
+          const prior = previous.get(node.id);
+          const artifactMediaIds = data.group.revisions.map(({ artifact }) => artifact.mediaId);
+          durableNodes.push({
+            id: node.id,
+            kind: "artboard" as const,
+            canonicalOrigin: "generated-artifact" as const,
+            x: node.position.x,
+            y: node.position.y,
+            lineageId:
+              prior?.kind === "artboard" && prior.lineageId
+                ? prior.lineageId
+                : `lineage:${data.group.revisions[0]!.artifact.id}`,
+            artifactMediaIds,
+            activeMediaId: data.artifact.mediaId,
+          });
+          continue;
+        }
+        if (node.type === "designImage") {
+          const assetId = assetIdByNodeRef.current.get(node.id);
+          if (!assetId) continue;
+          durableNodes.push({
+            id: node.id,
+            kind: "reference-image" as const,
+            canonicalOrigin: "reference-asset" as const,
+            x: node.position.x,
+            y: node.position.y,
+            assetId,
+          });
+          continue;
+        }
+        durableNodes.push({
+          id: `source-preview:${currentProject.workspaceId ?? "unbound"}`,
+          kind: "source-preview" as const,
+          canonicalOrigin: "connected-app" as const,
+          x: node.position.x,
+          y: node.position.y,
+        });
+      }
+      for (const previousNode of currentProject.canvas.nodes) {
+        if (
+          previousNode.kind === "source-preview" &&
+          !durableNodes.some(({ id }) => id === previousNode.id)
+        ) {
+          durableNodes.push(previousNode);
+        }
+      }
+      return {
+        viewport,
+        flowViewport: flowViewportRef.current,
+        nodes: durableNodes,
+      };
+    },
+    [viewport],
+  );
+
+  const persistCanvas = React.useCallback(async () => {
+    const currentProject = savedProjectRef.current;
+    if (!currentProject) return;
+    if (persistInFlightRef.current) {
+      persistAgainRef.current = true;
+      return;
+    }
+    const canvas = buildDurableCanvas(nodes);
+    if (!canvas) return;
+    const serialized = JSON.stringify(canvas);
+    if (serialized === lastPersistedCanvasRef.current) return;
+    persistInFlightRef.current = true;
+    try {
+      const result = await designerApi.updateProject({
+        id: currentProject.id,
+        expectedRevision: currentProject.revision,
+        connectionState: currentProject.connectionState,
+        ...(currentProject.workspaceId ? { workspaceId: currentProject.workspaceId } : {}),
+        canvas,
+        referenceAssetIds: canvas.nodes.flatMap((node) =>
+          node.kind === "reference-image" && node.assetId ? [node.assetId] : [],
+        ),
+        ...(currentProject.designSystemBinding
+          ? { designSystemBinding: currentProject.designSystemBinding }
+          : {}),
+        ...(currentProject.previewScriptId
+          ? { previewScriptId: currentProject.previewScriptId }
+          : {}),
+      });
+      if (result.status === "conflict") {
+        savedProjectRef.current = result.current;
+        setSavedProject(result.current);
+        lastPersistedCanvasRef.current = JSON.stringify(result.current.canvas);
+        setNodes([]);
+        toast.error("This canvas changed in another window. The latest version was restored.");
+      } else {
+        savedProjectRef.current = result.project;
+        setSavedProject(result.project);
+        lastPersistedCanvasRef.current = serialized;
+      }
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The canvas could not be saved.");
+    } finally {
+      persistInFlightRef.current = false;
+      if (persistAgainRef.current) {
+        persistAgainRef.current = false;
+        void persistCanvas();
+      }
+    }
+  }, [buildDurableCanvas, nodes]);
+
+  React.useEffect(() => {
+    if (!savedProject || !assetsHydrated) return;
+    clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = setTimeout(() => void persistCanvas(), 350);
+    return () => clearTimeout(persistTimerRef.current);
+  }, [
+    activeVersions,
+    assetsHydrated,
+    canvasImages,
+    flowSaveRevision,
+    nodes,
+    persistCanvas,
+    savedProject,
+    viewport,
+  ]);
+
   React.useEffect(() => {
     setNodes((current) => {
-      const positions = new Map(current.map((node) => [node.id, node.position]));
+      const positions = new Map(
+        savedProject?.canvas.nodes.map((node) => [node.id, { x: node.x, y: node.y }]) ?? [],
+      );
+      for (const node of current) positions.set(node.id, node.position);
       const sourceNode: SourceArtboardNode[] =
         sourcePreview?.status === "running"
           ? [
               {
-                id: `source-artboard:${sourcePreview.sessionId}`,
+                id: `source-preview:${connectedWorkspaceId ?? "unbound"}`,
                 type: "sourceArtboard",
-                position: positions.get(`source-artboard:${sourcePreview.sessionId}`) ?? {
+                position: positions.get(
+                  `source-preview:${connectedWorkspaceId ?? "unbound"}`,
+                ) ?? {
                   x: 0,
                   y: 0,
                 },
@@ -748,8 +1802,10 @@ export function DesignWorkspaceCanvas({
     sourcePreview,
     sourceRevision,
     sourceSelection,
+    savedProject,
     targets,
     viewport,
+    workspaceId,
   ]);
 
   React.useEffect(() => {
@@ -779,9 +1835,7 @@ export function DesignWorkspaceCanvas({
       if (mode !== "select") return;
       const nextTargets: DesignTurnTargetV1[] = [];
       const nextImages: Attachment[] = [];
-      const existingTargets = new Map(
-        targetsRef.current.map((target) => [target.mediaId, target]),
-      );
+      const existingTargets = new Map(targetsRef.current.map((target) => [target.mediaId, target]));
       let sourceSelected = false;
       for (const node of selectedNodes) {
         if (node.type === "designImage") {
@@ -793,6 +1847,7 @@ export function DesignWorkspaceCanvas({
           continue;
         }
         const designData = node.data as DesignArtboardData;
+        setSelectedGroupId(designData.group.id);
         const existing = existingTargets.get(designData.artifact.mediaId);
         nextTargets.push(
           existing ?? {
@@ -802,6 +1857,7 @@ export function DesignWorkspaceCanvas({
         );
       }
       onTargetsChange(nextTargets.slice(0, 5));
+      if (nextTargets.length > 0) setInspectorOpen(true);
       onSelectedImagesChange(nextImages.slice(0, 5));
       if (!sourceSelected || nextTargets.length > 0 || nextImages.length > 0) {
         onSourceSelectionChange(undefined);
@@ -822,7 +1878,20 @@ export function DesignWorkspaceCanvas({
         return;
       }
       try {
-        const attachments = await Promise.all(accepted.map(canvasImageAttachment));
+        const rawAttachments = await Promise.all(accepted.map(canvasImageAttachment));
+        const attachments = await Promise.all(
+          rawAttachments.map(async (attachment) => {
+            if (!attachment.data) throw new Error(`Could not persist ${attachment.name}.`);
+            const asset = await designerApi.putReferenceAsset({
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              data: attachment.data,
+            });
+            const nodeId = `reference-node:${crypto.randomUUID()}`;
+            assetIdByNodeRef.current.set(nodeId, asset.id);
+            return { ...attachment, id: nodeId };
+          }),
+        );
         setCanvasImages((current) => [...current, ...attachments]);
         onSelectedImagesChange(attachments);
         onTargetsChange([]);
@@ -837,14 +1906,14 @@ export function DesignWorkspaceCanvas({
   const updateDesignerAction = React.useCallback(
     async (action: DesignerActionV1, operation: "apply" | "reject" | "undo") => {
       if (actionBusy) return;
-      if (!workspaceId) return;
+      if (!connectedWorkspaceId) return;
       setActionBusy(true);
       try {
         const updated =
           operation === "apply"
-            ? await designerApi.applyAction(workspaceId, action.id)
+            ? await designerApi.applyAction(connectedWorkspaceId, action.id)
             : operation === "undo"
-              ? await designerApi.undoAction(workspaceId, action.id)
+              ? await designerApi.undoAction(connectedWorkspaceId, action.id)
               : await designerApi.rejectAction(action.id);
         setDesignerActions((current) => [
           updated,
@@ -867,12 +1936,83 @@ export function DesignWorkspaceCanvas({
         setActionBusy(false);
       }
     },
-    [actionBusy, onSourceSelectionChange, workspaceId],
+    [actionBusy, connectedWorkspaceId, onSourceSelectionChange],
   );
 
   const reviewAction =
     designerActions.find((action) => action.status === "pending") ??
     designerActions.find((action) => action.status === "applied");
+  const reviewMultifileAction = multifileActions.find(
+    (action) =>
+      action.actionId !== dismissedMultifileActionId &&
+      ["prepared", "committed", "recoverable"].includes(action.stage),
+  );
+  const updateMultifileAction = React.useCallback(
+    async (action: SourceDesignerMultifileActionViewV1, operation: "apply" | "undo") => {
+      if (multifileBusy || !savedProject) return;
+      setMultifileBusy(true);
+      try {
+        const updated =
+          operation === "apply"
+            ? await designerApi.applyMultifileAction(savedProject.id, action.actionId)
+            : await designerApi.undoMultifileAction(savedProject.id, action.actionId);
+        setMultifileActions((current) => [
+          updated,
+          ...current.filter((candidate) => candidate.actionId !== updated.actionId),
+        ]);
+        setSourceRevision((current) => current + 1);
+        onSourceSelectionChange(undefined);
+        if (updated.stage === "recoverable") {
+          toast.error("This Designer Action needs conflict recovery review.");
+        } else {
+          toast.success(operation === "apply" ? "Multi-file action applied." : "Action undone.");
+        }
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "The multi-file action failed.");
+      } finally {
+        setMultifileBusy(false);
+      }
+    },
+    [multifileBusy, onSourceSelectionChange, savedProject],
+  );
+  const revisionSummaries: DesignProjectRevisionSummary[] =
+    selectedGroup?.revisions.map(({ artifact }, index) => {
+      const source = sourceByMediaId[artifact.mediaId];
+      return {
+        id: artifact.mediaId,
+        lineageId: selectedGroupNode?.lineageId ?? `unavailable:${artifact.id}`,
+        label: artifact.title || `Revision ${index + 1}`,
+        createdAt: source?.createdAt ?? savedProject?.createdAt ?? 0,
+        provenance: source?.provenance ?? "Generated by Aiden",
+        ...(source?.model ? { model: source.model } : {}),
+        active: artifact.mediaId === selectedMediaId,
+      };
+    }) ?? [];
+  const designerActionSummaries: DesignProjectDesignerActionSummary[] = designerActions.map(
+    (action) => ({
+      id: action.id,
+      label: action.label,
+      createdAt: action.createdAt,
+      status: action.status,
+      fileLabel: action.path,
+    }),
+  );
+  designerActionSummaries.push(
+    ...multifileActions.map((action) => ({
+      id: action.actionId,
+      label: action.label,
+      createdAt: action.createdAt,
+      status:
+        action.stage === "prepared"
+          ? ("pending" as const)
+          : action.stage === "committed"
+            ? ("applied" as const)
+            : action.stage === "undone"
+              ? ("undone" as const)
+              : ("stale" as const),
+      fileLabel: `${action.files.length} files`,
+    })),
+  );
 
   if (unavailableMessage) {
     return (
@@ -889,11 +2029,7 @@ export function DesignWorkspaceCanvas({
     );
   }
 
-  if (
-    groups.length === 0 &&
-    canvasImages.length === 0 &&
-    sourcePreview?.status !== "running"
-  ) {
+  if (groups.length === 0 && canvasImages.length === 0 && sourcePreview?.status !== "running") {
     return (
       <section
         className="relative grid h-full min-h-[32rem] place-items-center overflow-hidden bg-well px-8"
@@ -955,9 +2091,17 @@ export function DesignWorkspaceCanvas({
         onSelectionChange={onSelectionChange}
         onInit={(instance) => {
           flowRef.current = instance;
-          requestAnimationFrame(() => void instance.fitView({ padding: 0.18, maxZoom: 0.9 }));
+          if (savedProject) {
+            void instance.setViewport(savedProject.canvas.flowViewport);
+          } else {
+            requestAnimationFrame(() => void instance.fitView({ padding: 0.18, maxZoom: 0.9 }));
+          }
         }}
-        fitView
+        onMoveEnd={(_event, nextViewport) => {
+          flowViewportRef.current = nextViewport;
+          setFlowSaveRevision((current) => current + 1);
+        }}
+        fitView={!savedProject}
         fitViewOptions={{ padding: 0.18, maxZoom: 0.9 }}
         minZoom={0.12}
         maxZoom={2}
@@ -994,6 +2138,7 @@ export function DesignWorkspaceCanvas({
         onOpenChange={setPreviewSetupOpen}
         onStart={(scriptId) => void startSourcePreview(scriptId)}
         onStop={() => void stopSourcePreview()}
+        savedScriptId={savedProject?.previewScriptId}
       />
       <input
         ref={uploadRef}
@@ -1008,7 +2153,7 @@ export function DesignWorkspaceCanvas({
         }}
       />
 
-      <div className="absolute right-4 top-4 z-20 flex items-center gap-1 rounded-popover bg-popover p-1 shadow-control">
+      <div className="design-canvas-toolbar absolute right-4 top-4 z-20 flex items-center gap-1 rounded-popover bg-popover p-1 shadow-control">
         {(["desktop", "tablet", "phone"] as const).map((id) => {
           const Icon = id === "desktop" ? Monitor : id === "tablet" ? Tablet : Smartphone;
           return (
@@ -1019,7 +2164,7 @@ export function DesignWorkspaceCanvas({
               aria-label={`${id} artboards`}
               onClick={() => setViewport(id)}
               className={cn(
-                "grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary",
+                "design-canvas-control grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary",
                 viewport === id && "bg-list-selection text-accent",
               )}
             >
@@ -1028,10 +2173,89 @@ export function DesignWorkspaceCanvas({
           );
         })}
         <span className="mx-1 h-5 w-px bg-separator" aria-hidden="true" />
+        <Button
+          size="small"
+          variant="accent"
+          disabled={
+            handoffBusy ||
+            !selectedGroupNode?.lineageId ||
+            !selectedMediaId
+          }
+          onClick={() => void previewHandoff()}
+          aria-label="Continue in workspace"
+          title="Create an isolated managed worktree and a normal implementation task"
+          className="design-canvas-continue design-canvas-control"
+        >
+          <span className="design-canvas-continue-label">Continue in workspace</span>
+          <ArrowRight aria-hidden="true" />
+        </Button>
+        <button
+          type="button"
+          disabled={!selectedDirectEditTarget && !sourceSelection}
+          onClick={() => setDirectEditOpen(true)}
+          className="design-canvas-control grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary disabled:opacity-40"
+          aria-label="Edit selected element"
+          title={
+            sourceSelection
+              ? "Create a reviewable Designer Action for this exact connected element"
+              : selectedDirectEditTarget
+                ? "Create a literal, immutable revision for this element"
+                : "Select one stable element in a generated artboard"
+          }
+        >
+          <SlidersHorizontal className="size-4" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          aria-pressed={inspectorOpen}
+          disabled={!selectedGroup && !sourceSelection}
+          onClick={() => {
+            setInspectorOpen((open) => !open);
+            setCommentsOpen(false);
+          }}
+          className="design-canvas-control grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary disabled:opacity-40"
+          aria-label="Toggle Design inspector"
+        >
+          <Code2 className="size-4" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          aria-pressed={designSystemOpen}
+          disabled={savedProject?.connectionState !== "connected"}
+          onClick={() => setDesignSystemOpen(true)}
+          className="design-canvas-control grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary disabled:opacity-40"
+          aria-label={
+            savedProject?.designSystemBinding
+              ? "Manage attached design system"
+              : "Attach a design system"
+          }
+          title={
+            savedProject?.connectionState === "connected"
+              ? designSystemProjection?.freshness === "current"
+                ? `${designSystemProjection.snapshot?.name ?? "Design system"} is current`
+                : "Attach or verify a local design system"
+              : "Connect a local app before attaching its design system"
+          }
+        >
+          <Palette className="size-4" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          aria-pressed={commentsOpen}
+          disabled={!savedProject}
+          onClick={() => {
+            setCommentsOpen((open) => !open);
+            setInspectorOpen(false);
+          }}
+          className="design-canvas-control grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary disabled:opacity-40"
+          aria-label="Toggle Design comments"
+        >
+          <MessageSquareText className="size-4" aria-hidden="true" />
+        </button>
         <button
           type="button"
           onClick={() => void flowRef.current?.fitView({ padding: 0.18, maxZoom: 0.9 })}
-          className="h-8 rounded-control px-2 text-small-strong text-secondary hover:bg-list-hover hover:text-primary"
+          className="design-canvas-control h-8 rounded-control px-2 text-small-strong text-secondary hover:bg-list-hover hover:text-primary"
         >
           Fit
         </button>
@@ -1039,6 +2263,391 @@ export function DesignWorkspaceCanvas({
           <Loader2 className="mx-2 size-4 animate-spin text-secondary" aria-label="Generating" />
         ) : null}
       </div>
+
+      <Dialog
+        open={directEditOpen}
+        onOpenChange={(open) => {
+          if (!directEditBusy) setDirectEditOpen(open);
+        }}
+        title="Edit selected element"
+        description={
+          sourceSelection
+            ? "Only a unique, non-repeated component chain can change. A successful edit creates a Designer Action for exact review; it does not write source yet."
+            : "Only exact literal HTML values can change. A successful edit creates a new immutable revision; it never rewrites the previous source."
+        }
+        confirmLabel={sourceSelection ? "Create Designer Action" : "Create revision"}
+        confirmDisabled={!directEditValue.trim() || (!selectedDirectEditTarget && !sourceSelection)}
+        busy={directEditBusy}
+        onConfirm={applyDirectEdit}
+      >
+        <div className="grid gap-3">
+          <label className="grid gap-1 text-small-strong">
+            Control
+            <select
+              value={directEditControl}
+              onChange={(event) => {
+                const control = event.currentTarget.value as typeof directEditControl;
+                setDirectEditControl(control);
+                setDirectEditValue(
+                  control === "alignment"
+                    ? "center"
+                    : control === "text"
+                      ? selectedDirectEditTarget?.selection?.text ?? "Text"
+                      : control === "color"
+                        ? "--color-action-primary"
+                        : control === "width" || control === "height"
+                          ? "100%"
+                          : "16px",
+                );
+              }}
+              className="h-9 rounded-control border border-separator bg-input px-3 text-regular text-primary outline-none focus:bg-control"
+            >
+              <option value="padding">Padding</option>
+              <option value="gap">Gap</option>
+              <option value="width">Width</option>
+              <option value="height">Height</option>
+              <option value="alignment">Horizontal alignment</option>
+              <option value="radius">Corner radius</option>
+              <option value="text">Static text</option>
+              <option value="color">Background semantic token</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-small-strong">
+            {directEditControl === "color"
+              ? "CSS custom property"
+              : directEditControl === "text"
+                ? "Text"
+                : "Value"}
+            {directEditControl === "alignment" ? (
+              <select
+                value={directEditValue}
+                onChange={(event) => setDirectEditValue(event.currentTarget.value)}
+                className="h-9 rounded-control border border-separator bg-input px-3 text-regular text-primary outline-none focus:bg-control"
+              >
+                <option value="start">Start</option>
+                <option value="center">Center</option>
+                <option value="end">End</option>
+                <option value="space-between">Space between</option>
+                <option value="space-around">Space around</option>
+              </select>
+            ) : (
+              <input
+                value={directEditValue}
+                maxLength={directEditControl === "text" ? 2000 : 64}
+                onChange={(event) => setDirectEditValue(event.currentTarget.value)}
+                placeholder={directEditControl === "color" ? "--color-action-primary" : "16px"}
+                className="h-9 rounded-control border border-separator bg-input px-3 text-regular text-primary outline-none focus:bg-control"
+              />
+            )}
+          </label>
+          <Text as="p" variant="small" color="tertiary">
+            Dynamic styles, rich or localized text, computed classes, ambiguous selectors, and
+            unverified semantic colors are blocked.
+          </Text>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={designSystemOpen}
+        onOpenChange={(open) => {
+          if (!designSystemBusy) setDesignSystemOpen(open);
+        }}
+        title={
+          savedProject?.designSystemBinding ? "Attached design system" : "Attach design system"
+        }
+        description="Aiden reads only the reviewed static JSON files. It does not run package code or gain write, command, network, or Git access."
+        confirmLabel={savedProject?.designSystemBinding ? "Refresh files" : "Attach design system"}
+        confirmDisabled={
+          !savedProject?.designSystemBinding &&
+          (!designSystemName.trim() ||
+            !designPackageRoot.trim() ||
+            !designRouteScope.trim().startsWith("/") ||
+            (!designTokenPath.trim() && !designCatalogPath.trim()))
+        }
+        busy={designSystemBusy}
+        onConfirm={updateDesignSystem}
+      >
+        {savedProject?.designSystemBinding ? (
+          <div className="grid gap-3">
+            <div className="rounded-control bg-control p-3">
+              <Text variant="small-strong">
+                {designSystemProjection?.snapshot?.name ?? "Attached design system"}
+              </Text>
+              <Text as="p" variant="small" color="secondary" className="mt-1">
+                {designSystemProjection?.freshness === "current"
+                  ? `${designSystemProjection.snapshot?.tokens.colors.length ?? 0} colors · ${designSystemProjection.snapshot?.components.length ?? 0} components · ${designSystemProjection.snapshot?.icons.length ?? 0} icons`
+                  : "Refresh to prove the reviewed files are still current before sending context to a model."}
+              </Text>
+            </div>
+            {designSystemModelContext ? (
+              <details className="rounded-control bg-well p-3 text-small">
+                <summary className="cursor-default font-medium text-secondary">
+                  Exactly what Aiden sends with an accepted Design turn
+                </summary>
+                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap font-mono text-mini text-tertiary">
+                  {JSON.stringify(designSystemModelContext, null, 2)}
+                </pre>
+              </details>
+            ) : (
+              <Text as="p" variant="small" color="tertiary">
+                Refresh the reviewed files to preview the exact normalized model context.
+              </Text>
+            )}
+            <Button
+              variant="transparent"
+              className="justify-self-start text-red"
+              disabled={designSystemBusy}
+              onClick={() => void detachDesignSystem()}
+            >
+              Detach design system
+            </Button>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            <label className="grid gap-1 text-small-strong">
+              Name
+              <input
+                value={designSystemName}
+                maxLength={160}
+                onChange={(event) => setDesignSystemName(event.currentTarget.value)}
+                className="h-9 rounded-control border border-separator bg-input px-3 text-regular text-primary outline-none focus:bg-control"
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1 text-small-strong">
+                Confirmed package root
+                <input
+                  value={designPackageRoot}
+                  maxLength={256}
+                  placeholder="packages/ui"
+                  onChange={(event) => setDesignPackageRoot(event.currentTarget.value)}
+                  className="h-9 rounded-control border border-separator bg-input px-3 font-mono text-small text-primary outline-none focus:bg-control"
+                />
+              </label>
+              <label className="grid gap-1 text-small-strong">
+                Route scope
+                <input
+                  value={designRouteScope}
+                  maxLength={160}
+                  placeholder="/settings"
+                  onChange={(event) => setDesignRouteScope(event.currentTarget.value)}
+                  className="h-9 rounded-control border border-separator bg-input px-3 font-mono text-small text-primary outline-none focus:bg-control"
+                />
+              </label>
+            </div>
+            <label className="grid gap-1 text-small-strong">
+              Semantic tokens JSON
+              <input
+                value={designTokenPath}
+                maxLength={512}
+                placeholder="packages/ui/semantic.tokens.json"
+                onChange={(event) => setDesignTokenPath(event.currentTarget.value)}
+                className="h-9 rounded-control border border-separator bg-input px-3 font-mono text-small text-primary outline-none focus:bg-control"
+              />
+            </label>
+            <label className="grid gap-1 text-small-strong">
+              Reviewed component catalog JSON
+              <input
+                value={designCatalogPath}
+                maxLength={512}
+                placeholder="packages/ui/components.catalog.json"
+                onChange={(event) => setDesignCatalogPath(event.currentTarget.value)}
+                className="h-9 rounded-control border border-separator bg-input px-3 font-mono text-small text-primary outline-none focus:bg-control"
+              />
+            </label>
+            <Text as="p" variant="small" color="tertiary">
+              Paths are relative to the connected workspace and must stay inside the confirmed package. The package and route labels become part of the reviewed, path-free model context. Add either file or both.
+            </Text>
+          </div>
+        )}
+      </Dialog>
+
+      <Dialog
+        open={handoffOpen}
+        onOpenChange={(open) => {
+          if (!handoffBusy) setHandoffOpen(open);
+        }}
+        title="Continue in workspace"
+        description={
+          handoffTargetKind === "managed"
+            ? "Aiden will create an isolated managed worktree from committed HEAD, then open a normal workspace task with this selected prototype as untrusted design context. No application source is written during handoff."
+            : "Use the existing authorized workspace only when isolation is not appropriate. The handoff creates a normal Ask-permission task and does not write source, but later approved edits will affect this checkout."
+        }
+        confirmLabel={handoffPreview ? "Create workspace task" : "Review target"}
+        confirmDisabled={
+          handoffPreview
+            ? handoffPreview.kind === "managed-worktree"
+              ? Boolean(handoffPreview.dirtyCheckout && !dirtyCheckoutAcknowledged)
+              : !existingWorkspaceAcknowledged
+            : savedProject?.connectionState === "prototype-only" && !handoffWorkspaceId
+        }
+        busy={handoffBusy}
+        onConfirm={handoffPreview ? beginHandoff : reviewHandoffTarget}
+      >
+        <div className="mb-3 grid grid-cols-2 rounded-control bg-control p-1" role="radiogroup" aria-label="Handoff target">
+          {(["managed", "existing"] as const).map((kind) => (
+            <label key={kind} className={cn("flex items-center gap-2 rounded-control px-2 py-1.5 text-small", handoffTargetKind === kind && "bg-list-selection text-primary")}>
+              <input
+                type="radio"
+                name="handoff-target"
+                value={kind}
+                checked={handoffTargetKind === kind}
+                onChange={() => {
+                  setHandoffTargetKind(kind);
+                  setHandoffPreview(undefined);
+                  setExistingWorkspaceAcknowledged(false);
+                }}
+              />
+              {kind === "managed" ? "Managed worktree" : "Existing workspace"}
+            </label>
+          ))}
+        </div>
+        {!handoffPreview && savedProject?.connectionState === "prototype-only" ? (
+          <div className="grid gap-2">
+            <label className="grid gap-1 text-small-strong">
+              Source repository
+              <select
+                value={handoffWorkspaceId}
+                onChange={(event) => setHandoffWorkspaceId(event.currentTarget.value)}
+                className="h-9 rounded-control border border-separator bg-input px-3 text-regular text-primary outline-none focus:bg-control"
+              >
+                {handoffWorkspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                ))}
+              </select>
+            </label>
+            <Text as="p" variant="small" color="secondary">
+              Select an authorized Git workspace. Aiden will review its committed branch before creating an isolated managed worktree; the prototype remains immutable.
+            </Text>
+            {handoffWorkspaces.length === 0 ? (
+              <Text as="p" variant="small" color="red">Add a local Git workspace first.</Text>
+            ) : null}
+          </div>
+        ) : handoffPreview ? (
+          <div className="grid gap-3">
+            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-control bg-control p-3 text-small">
+              <dt className="text-tertiary">Repository</dt>
+              <dd className="truncate text-primary">{(handoffPreview.kind === "managed-worktree" ? handoffPreview.source : handoffPreview.target).repositoryLabel}</dd>
+              <dt className="text-tertiary">Committed branch</dt>
+              <dd className="truncate text-primary">{(handoffPreview.kind === "managed-worktree" ? handoffPreview.source : handoffPreview.target).branchLabel}</dd>
+              <dt className="text-tertiary">New branch</dt>
+              <dd className="text-primary">{handoffPreview.kind === "managed-worktree" ? "Aiden-managed feature branch" : "No new branch"}</dd>
+              <dt className="text-tertiary">Permissions</dt>
+              <dd className="text-primary">Ask before source changes</dd>
+            </dl>
+            {handoffPreview.kind === "existing-workspace" ? (
+              <label className="flex gap-3 rounded-control bg-well p-3 text-small text-secondary">
+                <input type="checkbox" checked={existingWorkspaceAcknowledged} onChange={(event) => setExistingWorkspaceAcknowledged(event.currentTarget.checked)} />
+                <span>{handoffPreview.requiredStrongWarningAcknowledgement}. Later approved actions will affect this exact checkout.</span>
+              </label>
+            ) : handoffPreview.dirtyCheckout ? (
+              <label className="flex gap-3 rounded-control bg-well p-3 text-small text-secondary">
+                <input
+                  type="checkbox"
+                  checked={dirtyCheckoutAcknowledged}
+                  onChange={(event) => setDirtyCheckoutAcknowledged(event.currentTarget.checked)}
+                />
+                <span>
+                  {handoffPreview.requiredDirtyCheckoutAcknowledgement}. The worktree starts from
+                  committed HEAD, so current uncommitted changes are not included.
+                </span>
+              </label>
+            ) : (
+              <Text as="p" variant="small" color="secondary">
+                The source checkout is clean. The new worktree will start from the confirmed commit.
+              </Text>
+            )}
+          </div>
+        ) : null}
+        {handoffLinks.length > 0 ? (
+          <div className="mt-3 grid gap-2 border-t border-separator pt-3">
+            <Text variant="small-strong">Implementation tasks</Text>
+            {handoffLinks.map((link) => (
+              <button
+                key={link.taskId}
+                type="button"
+                onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId: link.chatId } })}
+                className="flex items-center justify-between rounded-control bg-control px-3 py-2 text-left text-small text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              >
+                <span className="truncate">{link.branchLabel}</span>
+                <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {activeHandoffOperationId ? (
+          <div className="mt-3 border-t border-separator pt-3">
+            <Button
+              size="small"
+              variant="toolbar"
+              onClick={() => void designerApi.cancelHandoff(activeHandoffOperationId).then((result) => {
+                toast.info(result.status === "rolled-back" ? "Handoff cancelled and rolled back." : "Cancellation requested; preserved work remains recoverable.");
+              }).catch((cause: unknown) => {
+                toast.error(cause instanceof Error ? cause.message : "Cancellation could not be requested.");
+              })}
+            >
+              Cancel handoff
+            </Button>
+          </div>
+        ) : null}
+      </Dialog>
+
+      {prototypeDirectEditUndo ||
+      handoffRecoveriesLoading ||
+      handoffRecoveriesError ||
+      handoffRecoveries.length > 0 ? (
+        <div className="design-canvas-status-stack" aria-label="Design project status">
+          {prototypeDirectEditUndo ? (
+            <section
+              className="design-direct-edit-undo flex items-center gap-3 rounded-popover bg-popover px-3 py-2.5 shadow-popover"
+            >
+              <Check className="size-4 shrink-0 text-accent" aria-hidden="true" />
+              <div className="min-w-0 flex-1" role="status" aria-live="polite">
+                <Text as="p" variant="small-strong">
+                  Direct edit saved
+                </Text>
+                <Text as="p" variant="small" color="secondary">
+                  Undo creates a new exact-revert revision.
+                </Text>
+              </div>
+              <Button
+                size="small"
+                variant="toolbar"
+                className="design-canvas-control"
+                disabled={prototypeDirectEditUndoBusy}
+                onClick={() => void undoPrototypeDirectEdit()}
+                aria-label="Undo direct edit as a new exact-revert revision"
+              >
+                {prototypeDirectEditUndoBusy ? (
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <Undo2 aria-hidden="true" />
+                )}
+                Undo
+              </Button>
+            </section>
+          ) : null}
+          <DesignHandoffRecoveryPanel
+            records={handoffRecoveries}
+            loading={handoffRecoveriesLoading}
+            error={handoffRecoveriesError}
+            busyOperationId={handoffRecoveryBusyId}
+            onRetry={() => {
+              const current = savedProjectRef.current;
+              if (current) void loadHandoffRecoveries(current.id);
+            }}
+            onResume={(record) => void runHandoffRecovery(record, "resume")}
+            onCancel={(record) => void runHandoffRecovery(record, "cancel")}
+            onOpen={(record) => {
+              if (!record.linkage) return;
+              void navigate({
+                to: "/chat/$chatId",
+                params: { chatId: record.linkage.chatId },
+              });
+            }}
+          />
+        </div>
+      ) : null}
 
       {mode === "inspect" ? (
         <div className="absolute inset-x-0 top-4 z-20 mx-auto flex w-fit items-center gap-2 rounded-popover bg-popover px-3 py-2 shadow-popover">
@@ -1049,7 +2658,15 @@ export function DesignWorkspaceCanvas({
           </Button>
         </div>
       ) : null}
-      {reviewAction ? (
+      {reviewMultifileAction ? (
+        <MultifileDesignerActionReview
+          action={reviewMultifileAction}
+          busy={multifileBusy}
+          onApply={() => void updateMultifileAction(reviewMultifileAction, "apply")}
+          onUndo={() => void updateMultifileAction(reviewMultifileAction, "undo")}
+          onLater={() => setDismissedMultifileActionId(reviewMultifileAction.actionId)}
+        />
+      ) : reviewAction ? (
         <DesignerActionReview
           action={reviewAction}
           busy={actionBusy}
@@ -1057,6 +2674,143 @@ export function DesignWorkspaceCanvas({
           onReject={() => void updateDesignerAction(reviewAction, "reject")}
           onUndo={() => void updateDesignerAction(reviewAction, "undo")}
         />
+      ) : null}
+      {commentsOpen && savedProject ? (
+        <div className="absolute inset-y-0 right-0 z-40">
+          <DesignCommentsPanel
+            view={commentView}
+            currentTarget={currentCommentTarget}
+            loading={commentsLoading}
+            error={commentsError}
+            layout="drawer"
+            onCreate={async (body, target) => {
+              const currentView = commentView ?? (await designerApi.listComments(savedProject.id));
+              try {
+                setCommentView(
+                  await designerApi.createComment({
+                    expectedDatabaseRevision: currentView.databaseRevision,
+                    target,
+                    body,
+                  }),
+                );
+              } catch (cause) {
+                await loadComments();
+                throw cause;
+              }
+            }}
+            onResolve={(comment) => void updateCommentStatus(comment, "resolve")}
+            onReopen={(comment) => void updateCommentStatus(comment, "reopen")}
+            onSelectTarget={(target) => {
+              const node = savedProject.canvas.nodes.find(
+                (candidate) =>
+                  candidate.kind === "artboard" && candidate.lineageId === target.lineageId,
+              );
+              if (!node) return;
+              setSelectedGroupId(node.id);
+              changeVersion(node.id, target.mediaId);
+            }}
+            onRetry={() => void loadComments()}
+            onClose={() => setCommentsOpen(false)}
+          />
+        </div>
+      ) : null}
+      {inspectorOpen && savedProject ? (
+        <div className="absolute inset-y-0 right-0 z-40">
+          <DesignProjectInspector
+            selectionTitle={selectedGroup?.title ?? sourceSelection?.selection.label}
+            connectionState={savedProject.connectionState}
+            hasPrototypeArtboards={savedProject.canvas.nodes.some(
+              ({ kind }) => kind === "artboard",
+            )}
+            activeTab={inspectorTab}
+            source={selectedSource}
+            sourceLoading={Boolean(
+              sourceSelection && !selectedMediaId && connectedSourceLoading,
+            )}
+            compareSource={compareSource}
+            revisions={revisionSummaries}
+            designerActions={designerActionSummaries}
+            preview={
+              <div className="grid h-full place-items-center p-6 text-center">
+                <Text color="secondary">
+                  The live sandbox preview remains on the canvas so inspection never mounts a second
+                  executable document.
+                </Text>
+              </div>
+            }
+            findQuery={inspectorFind}
+            layout="drawer"
+            onTabChange={setInspectorTab}
+            onFindChange={setInspectorFind}
+            onCopySource={(source) => {
+              void navigator.clipboard
+                .writeText(source.content)
+                .then(() => toast.success("Source copied."))
+                .catch(() => toast.error("Aiden could not copy the source."));
+            }}
+            onSaveSource={(source) => {
+              const artifact = selectedGroup?.revisions.find(
+                ({ artifact }) => artifact.mediaId === selectedMediaId,
+              )?.artifact;
+              if (artifact && source.contentHash === selectedSource?.contentHash) {
+                void exportArtifact(artifact);
+              }
+            }}
+            onExportBundle={() => {
+              if (!selectedGroupNode?.lineageId || !selectedMediaId) return;
+              void designerApi
+                .exportProjectBundle(savedProject.id, selectedGroupNode.lineageId, selectedMediaId)
+                .then((result) => {
+                  if (result.status !== "saved") return;
+                  if (result.exportId && result.fileName) {
+                    setLatestExport({
+                      id: result.exportId,
+                      fileName: result.fileName,
+                    });
+                  }
+                  toast.success("Design source bundle saved.");
+                })
+                .catch((cause: unknown) =>
+                  toast.error(cause instanceof Error ? cause.message : "Export failed."),
+                );
+            }}
+            canExportBundle={Boolean(selectedGroupNode?.lineageId && selectedMediaId)}
+            latestExportName={latestExport?.fileName}
+            onRevealExport={
+              latestExport
+                ? () => {
+                    void designerApi
+                      .revealProjectExport(savedProject.id, latestExport.id)
+                      .catch((cause: unknown) =>
+                        toast.error(
+                          cause instanceof Error
+                            ? cause.message
+                            : "The saved export is unavailable.",
+                        ),
+                      );
+                  }
+                : undefined
+            }
+            onSelectRevision={(lineageId, revisionId) => {
+              if (lineageId === selectedGroupNode?.lineageId && selectedGroup) {
+                changeVersion(selectedGroup.id, revisionId);
+              }
+            }}
+            onCompareRevision={(lineageId, revisionId) => {
+              if (lineageId !== selectedGroupNode?.lineageId) return;
+              setComparisonMediaId(revisionId);
+              setInspectorTab("code");
+            }}
+            onCloseComparison={() => setComparisonMediaId(undefined)}
+            onSelectDesignerAction={(actionId) => {
+              const action = designerActions.find(({ id }) => id === actionId);
+              if (action?.status === "pending" || action?.status === "applied") {
+                toast.info("Use the exact Designer Action review on the canvas.");
+              }
+            }}
+            onClose={() => setInspectorOpen(false)}
+          />
+        </div>
       ) : null}
     </section>
   );
@@ -1127,6 +2881,7 @@ function SourcePreviewControl({
   onOpenChange,
   onStart,
   onStop,
+  savedScriptId,
 }: {
   state?: SourcePreviewStateV1;
   open: boolean;
@@ -1134,10 +2889,11 @@ function SourcePreviewControl({
   onOpenChange: (open: boolean) => void;
   onStart: (scriptId: string) => void;
   onStop: () => void;
+  savedScriptId?: string;
 }) {
   const running = state?.status === "running";
   return (
-    <div className="absolute right-4 top-16 z-30">
+    <div className="design-source-preview-control absolute right-4 top-16 z-30">
       <Button
         size="small"
         variant="toolbar"
@@ -1145,7 +2901,7 @@ function SourcePreviewControl({
         onClick={() => onOpenChange(!open)}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className="shadow-control"
+        className="design-canvas-control shadow-control"
       >
         {busy ? (
           <Loader2 className="animate-spin" aria-hidden="true" />
@@ -1177,7 +2933,7 @@ function SourcePreviewControl({
             <button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="grid size-7 shrink-0 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              className="design-canvas-control grid size-7 shrink-0 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary"
               aria-label="Close local app controls"
             >
               <X className="size-4" aria-hidden="true" />
@@ -1188,7 +2944,12 @@ function SourcePreviewControl({
             <div className="mt-3 space-y-2">
               {state.scripts.map((script) => (
                 <div key={script.id} className="rounded-control bg-control p-2.5">
-                  <Text variant="small-strong">{script.label}</Text>
+                  <div className="flex items-center justify-between gap-2">
+                    <Text variant="small-strong">{script.label}</Text>
+                    {savedScriptId === script.id ? (
+                      <span className="rounded-pill bg-list-selection px-2 py-0.5 text-mini text-secondary">Saved configuration · stopped</span>
+                    ) : null}
+                  </div>
                   <code className="mt-1 block break-all text-mini text-secondary">
                     {script.command}
                   </code>
@@ -1240,6 +3001,99 @@ function previewCode(value: string): string {
   return value.length > 4_000 ? `${value.slice(0, 4_000)}\n…` : value;
 }
 
+function MultifileDesignerActionReview({
+  action,
+  busy,
+  onApply,
+  onUndo,
+  onLater,
+}: {
+  action: SourceDesignerMultifileActionViewV1;
+  busy: boolean;
+  onApply: () => void;
+  onUndo: () => void;
+  onLater: () => void;
+}) {
+  const [selectedPath, setSelectedPath] = React.useState(action.files[0]?.path ?? "");
+  React.useEffect(() => {
+    if (!action.files.some(({ path }) => path === selectedPath)) {
+      setSelectedPath(action.files[0]?.path ?? "");
+    }
+  }, [action, selectedPath]);
+  const file = action.files.find(({ path }) => path === selectedPath) ?? action.files[0];
+  const pending = action.stage === "prepared";
+  const applied = action.stage === "committed";
+  return (
+    <aside
+      aria-label="Multi-file Designer Action review"
+      className="absolute bottom-16 left-4 right-4 z-30 flex max-h-[min(42rem,76%)] flex-col overflow-hidden rounded-popover bg-popover shadow-popover sm:left-auto sm:w-[42rem]"
+    >
+      <header className="flex items-start gap-3 border-b border-separator px-4 py-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-control bg-list-selection text-accent">
+          {applied ? <Check className="size-4" aria-hidden="true" /> : <Code2 className="size-4" aria-hidden="true" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <Text variant="small-strong" truncate>{action.label}</Text>
+          <Text as="p" variant="small" color="secondary">
+            {action.files.length} existing files · atomic rollback and crash recovery
+          </Text>
+        </div>
+        <span className="rounded-control bg-control px-2 py-1 text-mini text-secondary">
+          {action.stage === "recoverable" ? "Recovery needed" : pending ? "Review required" : "Applied"}
+        </span>
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex gap-1 overflow-x-auto border-b border-separator px-3 py-2" role="tablist" aria-label="Changed files">
+          {action.files.map((candidate) => (
+            <button
+              key={candidate.path}
+              type="button"
+              role="tab"
+              aria-selected={candidate.path === file?.path}
+              onClick={() => setSelectedPath(candidate.path)}
+              className={cn(
+                "shrink-0 rounded-control px-2.5 py-1.5 font-mono text-mini text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                candidate.path === file?.path && "bg-list-selection text-primary",
+              )}
+            >
+              {candidate.path}
+            </button>
+          ))}
+        </div>
+        {file ? (
+          <div className="grid min-h-0 flex-1 gap-px overflow-auto bg-separator sm:grid-cols-2">
+            <section className="min-w-0 bg-popover p-3" aria-label={`${file.path} before`}>
+              <Text variant="small-strong" color="secondary">Before · {file.beforeSha256.slice(0, 10)}</Text>
+              <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-control bg-control p-2.5 font-mono text-mini text-secondary">{file.before}</pre>
+            </section>
+            <section className="min-w-0 bg-popover p-3" aria-label={`${file.path} after`}>
+              <Text variant="small-strong" color="secondary">After · {file.afterSha256.slice(0, 10)}</Text>
+              <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-control bg-control p-2.5 font-mono text-mini text-primary">{file.after}</pre>
+            </section>
+          </div>
+        ) : null}
+        {action.recovery ? (
+          <div className="border-t border-separator px-4 py-3 text-small text-danger">
+            {action.recovery.conflicts.map((conflict) => `${conflict.path}: ${conflict.reason}`).join(" · ")}
+          </div>
+        ) : null}
+      </div>
+      <footer className="flex items-center justify-end gap-2 border-t border-separator px-4 py-3">
+        <Button size="small" variant="toolbar" disabled={busy} onClick={onLater}>Later</Button>
+        {pending ? (
+          <Button size="small" variant="accent" disabled={busy} onClick={onApply}>
+            {busy ? <Loader2 className="animate-spin" /> : <Check />}Apply all files
+          </Button>
+        ) : applied ? (
+          <Button size="small" variant="toolbar" disabled={busy} onClick={onUndo}>
+            {busy ? <Loader2 className="animate-spin" /> : <Undo2 />}Undo exact action
+          </Button>
+        ) : null}
+      </footer>
+    </aside>
+  );
+}
+
 function DesignerActionReview({
   action,
   busy,
@@ -1261,7 +3115,11 @@ function DesignerActionReview({
     >
       <header className="flex items-start gap-3 border-b border-separator px-4 py-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-control bg-list-selection text-accent">
-          {pending ? <Code2 className="size-4" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}
+          {pending ? (
+            <Code2 className="size-4" aria-hidden="true" />
+          ) : (
+            <Check className="size-4" aria-hidden="true" />
+          )}
         </span>
         <div className="min-w-0 flex-1">
           <Text variant="small-strong" truncate>

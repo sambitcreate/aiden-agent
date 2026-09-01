@@ -22,6 +22,7 @@ test("parses bounded exact source descriptors", () => {
       lineNumber: 12,
       columnNumber: 5,
       componentName: "App",
+      selectorMatchCount: 1,
     }),
     {
       version: SOURCE_DESIGNER_VERSION,
@@ -30,6 +31,7 @@ test("parses bounded exact source descriptors", () => {
       lineNumber: 12,
       columnNumber: 5,
       componentName: "App",
+      selectorMatchCount: 1,
     },
   );
   assert.equal(

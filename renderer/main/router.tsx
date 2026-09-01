@@ -5,7 +5,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { RootView } from "./root-view";
-import { ChatLayout, ChatIndex, DesignIndex } from "./chat-layout";
+import { ChatLayout, ChatIndex, DesignIndex, DesignProjectRoute } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
 import { SettingsView } from "./settings-view";
 import { ProfileView } from "./profile-view";
@@ -75,7 +75,7 @@ const designRoute = createRoute({
   component: function DesignRoute() {
     const { chatId } = designRoute.useParams();
     const { artifact } = designRoute.useSearch();
-    return <ChatPane chatId={chatId} presentation="design" initialDesignMediaId={artifact} />;
+    return <DesignProjectRoute projectOrLegacyChatId={chatId} initialMediaId={artifact} />;
   },
   staticData: { title: "Design" },
 });

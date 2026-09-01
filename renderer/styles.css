@@ -312,6 +312,105 @@ body {
   color: var(--text-primary);
 }
 
+.design-canvas-control:focus-visible,
+.aiden-design-flow .react-flow__controls-button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
+.design-canvas-toolbar {
+  max-width: calc(100% - 5rem);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.design-canvas-status-stack {
+  position: absolute;
+  z-index: 25;
+  bottom: 4.5rem;
+  left: 4.75rem;
+  display: grid;
+  width: min(24rem, calc(100% - 9.5rem));
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.design-canvas-status-stack > * {
+  pointer-events: auto;
+}
+
+.design-direct-edit-undo,
+.design-handoff-recovery {
+  transition: box-shadow 150ms ease-out;
+}
+
+.design-handoff-recovery button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
+:root[data-reduce-motion="true"] .design-direct-edit-undo,
+:root[data-reduce-motion="true"] .design-handoff-recovery {
+  transition: none;
+}
+
+@media (max-width: 700px) {
+  .design-canvas-toolbar {
+    right: 0.5rem;
+    top: 0.5rem;
+    max-width: calc(100% - 4.5rem);
+  }
+
+  .design-canvas-continue {
+    width: 2rem;
+    padding-inline: 0;
+  }
+
+  .design-canvas-continue-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .design-canvas-status-stack {
+    right: 0.5rem;
+    bottom: 4rem;
+    left: 0.5rem;
+    width: auto;
+    max-height: min(22rem, 48%);
+    overflow: auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .design-direct-edit-undo {
+    flex-wrap: wrap;
+  }
+
+  .design-direct-edit-undo [data-slot="button"] {
+    margin-inline-start: auto;
+  }
+}
+
+@media (max-width: 400px) {
+  .design-source-preview-control {
+    right: 0.5rem;
+    top: 5.75rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .design-canvas-control:focus-visible,
+  .aiden-design-flow .react-flow__controls-button:focus-visible,
+  .design-handoff-recovery button:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: -2px;
+  }
+}
+
 .aiden-design-flow .react-flow__controls-button svg {
   fill: currentColor;
 }

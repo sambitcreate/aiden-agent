@@ -59,6 +59,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
 import { DesignWorkspaceCanvas } from "../components/design-workspace";
+import type { DesignProjectSnapshotV1 } from "../shared/design-projects";
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -162,10 +163,12 @@ export function ChatPane({
   chatId,
   presentation = "chat",
   initialDesignMediaId,
+  designProject,
 }: {
   chatId: string;
   presentation?: "chat" | "design";
   initialDesignMediaId?: string;
+  designProject?: DesignProjectSnapshotV1;
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -180,6 +183,7 @@ export function ChatPane({
   const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] = React.useState<
     ReadonlySet<string>
   >(() => new Set());
+  const [designConversationOpen, setDesignConversationOpen] = React.useState(true);
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
@@ -1832,7 +1836,13 @@ export function ChatPane({
       className="h-full min-h-0"
       title={
         presentation === "design" ? (
-          "Design"
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">{designProject?.title ?? "Design Project"}</span>
+            <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
+              {designProject?.connectionState === "connected" ? "Connected App" : "Prototype"}
+            </span>
+            <span className="hidden text-small font-normal text-tertiary sm:inline">Saved locally</span>
+          </span>
         ) : bot.data ? (
           <span className="flex min-w-0 items-center gap-2">
             <BotAvatar
@@ -1863,11 +1873,12 @@ export function ChatPane({
           <Button
             variant="toolbar"
             size="small"
-            onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId } })}
-            aria-label="Open backing conversation"
+            onClick={() => setDesignConversationOpen((open) => !open)}
+            aria-label="Toggle project conversation"
+            aria-pressed={designConversationOpen}
           >
             <MessageCircle />
-            Open conversation
+            Conversation
           </Button>
         ) : (
           <>
@@ -2191,21 +2202,64 @@ export function ChatPane({
             </Text>
           </div>
         ) : (
-          <DesignWorkspaceCanvas
-            chatId={chatId}
-            workspaceId={effectiveWorkspaceId}
-            artifacts={designArtifacts}
-            generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
-            initialMediaId={initialDesignMediaId}
-            unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}
-            targets={designTargets}
-            sourceSelection={sourceDesignSelection}
-            selectedImages={designCanvasImages}
-            onTargetsChange={setDesignTargets}
-            onSourceSelectionChange={setSourceDesignSelection}
-            onSelectedImagesChange={setDesignCanvasImages}
-            onRequestComposerFocus={() => composerRef.current?.focus({ preventScroll: true })}
-          />
+          <div className="relative flex h-full min-h-0 overflow-hidden">
+            {designConversationOpen ? (
+              <aside
+                aria-label="Design Project conversation"
+                className="absolute inset-y-0 left-0 z-40 flex w-full max-w-[22rem] flex-col border-r border-separator bg-sidebar shadow-popover lg:relative lg:z-auto lg:shadow-none"
+              >
+                <div className="flex items-center justify-between border-b border-separator px-3 py-2">
+                  <div>
+                    <Text variant="small-strong">Conversation</Text>
+                    <Text as="p" variant="small" color="tertiary">Prompts, decisions, and artifact turns</Text>
+                  </div>
+                  <Button size="small" variant="transparent" onClick={() => setDesignConversationOpen(false)}>
+                    Hide
+                  </Button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {messages.length === 0 && displayedStreamingText === null ? (
+                    <div className="p-4"><Text variant="small" color="secondary">Start with a prompt from the composer.</Text></div>
+                  ) : (
+                    <MessageList
+                      key={`design:${chatId}`}
+                      chatId={chatId}
+                      messages={messages}
+                      streamingText={displayedStreamingText}
+                      streamingReasoning={displayedStreamingReasoning}
+                      streamingArtifacts={displayedStreamingArtifacts}
+                      streamComplete={streamComplete || visibleDetachedProjection !== null}
+                      onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+                      timeline={displayedGenerationTimeline}
+                      liveSubagents={displayedLiveSubagents}
+                      subagentsEnabled={environmentPanel.subagentsEnabled}
+                      onOpenSubagent={environmentPanel.openSubagent}
+                      agentActivity={visibleAgentActivity}
+                      error={error}
+                    />
+                  )}
+                </div>
+              </aside>
+            ) : null}
+            <div className="min-w-0 flex-1">
+              <DesignWorkspaceCanvas
+                chatId={chatId}
+                project={designProject}
+                workspaceId={effectiveWorkspaceId}
+                artifacts={designArtifacts}
+                generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
+                initialMediaId={initialDesignMediaId}
+                unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}
+                targets={designTargets}
+                sourceSelection={sourceDesignSelection}
+                selectedImages={designCanvasImages}
+                onTargetsChange={setDesignTargets}
+                onSourceSelectionChange={setSourceDesignSelection}
+                onSelectedImagesChange={setDesignCanvasImages}
+                onRequestComposerFocus={() => composerRef.current?.focus({ preventScroll: true })}
+              />
+            </div>
+          </div>
         )
       ) : chat.isLoading || providers.isLoading ? (
         <div

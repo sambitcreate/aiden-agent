@@ -70,6 +70,7 @@ import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
+import type { DesignProjectDeletePlanV1 } from "../shared/design-projects";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 /** Must match aiden-app-update-banner-out in styles.css. */
@@ -374,7 +375,7 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
   return groups;
 }
 
-export function ChatSidebar({ activeChatId, designChatId, titleReveal }: ChatSidebarProps) {
+export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const qc = useQueryClient();
@@ -383,16 +384,14 @@ export function ChatSidebar({ activeChatId, designChatId, titleReveal }: ChatSid
   const activeChatIds = useActiveChatIds();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useChats(activeId);
-  const requestedDesignChatId = designChatId ?? activeChatId;
-  const eligibleDesignChatId = requestedDesignChatId
-    ? chats.data?.find((chat) => chat.id === requestedDesignChatId && !chat.botId)?.id
-    : undefined;
   const foundationModels = useFoundationModelsConnection();
   const [search, setSearch] = React.useState("");
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
   const [renamingWithAppleId, setRenamingWithAppleId] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null);
+  const [designDeletePlan, setDesignDeletePlan] = React.useState<DesignProjectDeletePlanV1>();
+  const [deletingChatBusy, setDeletingChatBusy] = React.useState(false);
   const [removingWorkspace, setRemovingWorkspace] = React.useState<Workspace | null>(null);
   const [removingWorkspaceBusy, setRemovingWorkspaceBusy] = React.useState(false);
   const [deletingWorktree, setDeletingWorktree] = React.useState<Workspace | null>(null);
@@ -733,15 +732,35 @@ export function ChatSidebar({ activeChatId, designChatId, titleReveal }: ChatSid
   };
 
   const commitDelete = async () => {
-    if (!deleting) return;
+    if (!deleting || deletingChatBusy) return;
     if (deleting.id === activeChatId && environmentPanel.agentBusy) {
       environmentPanel.cancelAgent?.();
     }
-    await chatsApi.remove(deleting.id);
-    await removeDeletedChatFromCache(qc, deleting.id);
-    await qc.invalidateQueries({ queryKey: queryKeys.chats });
-    if (deleting.id === activeChatId) void navigate({ to: "/" });
-    setDeleting(null);
+    setDeletingChatBusy(true);
+    try {
+      const result = await chatsApi.remove(
+        deleting.id,
+        designDeletePlan
+          ? {
+              projectId: designDeletePlan.projectId,
+              expectedRevision: designDeletePlan.expectedRevision,
+            }
+          : undefined,
+      );
+      if (result.status === "confirmation-required") {
+        setDesignDeletePlan(result.plan);
+        return;
+      }
+      await removeDeletedChatFromCache(qc, deleting.id);
+      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      if (deleting.id === activeChatId) void navigate({ to: "/" });
+      setDesignDeletePlan(undefined);
+      setDeleting(null);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The chat could not be deleted.");
+    } finally {
+      setDeletingChatBusy(false);
+    }
   };
 
   // Warm the transcript before the click lands so opening a chat does not blank
@@ -821,15 +840,7 @@ export function ChatSidebar({ activeChatId, designChatId, titleReveal }: ChatSid
             icon={<PanelsTopLeft />}
             title="Design"
             selected={pathname.startsWith("/design")}
-            onClick={() =>
-              eligibleDesignChatId
-                ? navigate({
-                    to: "/design/$chatId",
-                    params: { chatId: eligibleDesignChatId },
-                    search: {},
-                  })
-                : navigate({ to: "/design" })
-            }
+            onClick={() => navigate({ to: "/design" })}
           />
           <SidebarListItem
             icon={<BotSidebarIcon />}
@@ -1019,7 +1030,10 @@ export function ChatSidebar({ activeChatId, designChatId, titleReveal }: ChatSid
                           icon="trash"
                           color="red"
                           disabled={renamingWithAppleId === chat.id}
-                          onSelect={() => setDeleting(chat)}
+                          onSelect={() => {
+                            setDesignDeletePlan(undefined);
+                            setDeleting(chat);
+                          }}
                         >
                           Delete
                         </ContextMenuItem>
@@ -1052,17 +1066,34 @@ export function ChatSidebar({ activeChatId, designChatId, titleReveal }: ChatSid
 
       <AlertDialog
         open={deleting !== null}
-        onOpenChange={(open) => !open && setDeleting(null)}
-        title="Delete this chat?"
+        onOpenChange={(open) => {
+          if (!open && !deletingChatBusy) {
+            setDesignDeletePlan(undefined);
+            setDeleting(null);
+          }
+        }}
+        title={designDeletePlan ? "Delete this Design Project?" : "Delete this chat?"}
         description={
           deleting ? (
-            <Text variant="small" color="secondary">
-              “{deleting.title}” and its messages will be permanently removed.
-            </Text>
+            <div className="grid gap-2 text-small text-secondary">
+              <Text variant="small" color="secondary">
+                “{deleting.title}” and its messages will be permanently removed.
+              </Text>
+              {designDeletePlan ? (
+                <div className="grid gap-1 rounded-control bg-control p-3">
+                  <span>{designDeletePlan.artifactMediaIds.length} generated revisions</span>
+                  <span>{designDeletePlan.detachedReferenceAssetIds.length} reference links</span>
+                  <span>{designDeletePlan.commentIds.length} comments</span>
+                  <span>{designDeletePlan.designerActionIds.length} source actions</span>
+                </div>
+              ) : null}
+            </div>
           ) : null
         }
-        confirmLabel="Delete"
+        confirmLabel={designDeletePlan ? "Delete project" : "Delete"}
         confirmVariant="destructive"
+        busy={deletingChatBusy}
+        keepOpenOnConfirm
         onConfirm={commitDelete}
       />
 

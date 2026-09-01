@@ -121,6 +121,7 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
     new URL("../components/design-artifact-card.tsx", import.meta.url),
     "utf8",
   );
+  const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   assert.match(workspace, /HtmlArtifactIframe/u);
   assert.match(workspace, /ReactFlow/u);
   assert.match(workspace, /CanvasToolRail/u);
@@ -132,6 +133,13 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
   assert.match(workspace, /What should we design\?/u);
   assert.match(workspace, /data-design-workspace-canvas/u);
   assert.match(workspace, /data-design-preview-stage/u);
+  assert.match(workspace, /setConnectedSource\(undefined\);[\s\S]*setConnectedSourceLoading\(true\)/u);
+  assert.match(workspace, /sourceLoading=\{Boolean\(/u);
+  assert.match(workspace, /design-canvas-toolbar/u);
+  assert.match(workspace, /design-canvas-control/u);
+  assert.match(styles, /\.design-canvas-control:focus-visible/u);
+  assert.match(styles, /\.react-flow__controls-button:focus-visible/u);
+  assert.match(styles, /@media \(max-width: 700px\)[\s\S]*\.design-canvas-toolbar/u);
   assert.doesNotMatch(workspace, /role=\{compact \? "dialog"/u);
   assert.doesNotMatch(workspace, /DesignWorkspaceWorkbench/u);
   assert.match(messages, /isDesignHtmlArtifact/u);
@@ -147,14 +155,20 @@ test("Design is owned by stable routes and never mounts chat-adjacent chrome", (
 
   assert.match(router, /path: "\/design"/u);
   assert.match(router, /path: "\/design\/\$chatId"/u);
-  assert.match(router, /<ChatPane chatId=\{chatId\} presentation="design"/u);
+  assert.match(
+    router,
+    /<DesignProjectRoute projectOrLegacyChatId=\{chatId\} initialMediaId=\{artifact\}/u,
+  );
   assert.match(layout, /pathname\.startsWith\("\/design"\)/u);
   assert.match(layout, /export function DesignIndex\(\)/u);
+  assert.match(layout, /designerApi\.listProjects\(\)/u);
+  assert.match(layout, /export function DesignProjectRoute/u);
+  assert.match(layout, /designProject=\{project\}/u);
   assert.match(pane, /presentation\?: "chat" \| "design"/u);
   assert.match(pane, /<DesignWorkspaceCanvas/u);
   assert.match(pane, /designContextItems/u);
   assert.match(pane, /DESIGN_TURN_CONTEXT_VERSION/u);
-  assert.match(pane, /Open conversation/u);
+  assert.match(pane, /aria-label="Design Project conversation"/u);
   assert.match(pane, /overlayFooter=\{presentation === "design"\}/u);
   assert.doesNotMatch(
     readFileSync(new URL("../components/design-workspace.tsx", import.meta.url), "utf8"),

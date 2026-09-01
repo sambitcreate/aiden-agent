@@ -47,6 +47,7 @@ export interface SourceElementDescriptorV1 {
   lineNumber?: number;
   columnNumber?: number;
   componentName?: string;
+  selectorMatchCount?: number;
 }
 
 /** Main-bound, hash-pinned authority for one exact JSX element range. */
@@ -88,6 +89,37 @@ export interface DesignerActionV1 {
   message?: string;
 }
 
+export interface SourceDesignerMultifileActionViewV1 {
+  version: 1;
+  actionId: string;
+  workspaceId: string;
+  projectId: string;
+  label: string;
+  stage:
+    | "prepared"
+    | "applying"
+    | "verifying"
+    | "committed"
+    | "rolling-back"
+    | "rolled-back"
+    | "undoing"
+    | "undone"
+    | "recoverable";
+  files: Array<{
+    path: string;
+    before: string;
+    after: string;
+    beforeSha256: string;
+    afterSha256: string;
+  }>;
+  recovery?: {
+    kind: string;
+    conflicts: Array<{ path: string; reason: string }>;
+  };
+  createdAt: number;
+  updatedAt: number;
+}
+
 function exactKeys(record: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
   return Object.keys(record).every((key) => allowed.has(key));
 }
@@ -118,6 +150,7 @@ export function parseSourceElementDescriptor(value: unknown): SourceElementDescr
         "lineNumber",
         "columnNumber",
         "componentName",
+        "selectorMatchCount",
       ]),
     ) ||
     record.version !== SOURCE_DESIGNER_VERSION
@@ -129,12 +162,14 @@ export function parseSourceElementDescriptor(value: unknown): SourceElementDescr
   const lineNumber = boundedInteger(record.lineNumber);
   const columnNumber = boundedInteger(record.columnNumber);
   const componentName = boundedText(record.componentName, 160, true);
+  const selectorMatchCount = boundedInteger(record.selectorMatchCount);
   if (!selection) return undefined;
   if (
     (record.filePath !== undefined && !filePath) ||
     (record.lineNumber !== undefined && !lineNumber) ||
     (record.columnNumber !== undefined && !columnNumber) ||
-    (record.componentName !== undefined && !componentName)
+    (record.componentName !== undefined && !componentName) ||
+    (record.selectorMatchCount !== undefined && !selectorMatchCount)
   ) {
     return undefined;
   }
@@ -145,6 +180,7 @@ export function parseSourceElementDescriptor(value: unknown): SourceElementDescr
     ...(lineNumber ? { lineNumber } : {}),
     ...(columnNumber ? { columnNumber } : {}),
     ...(componentName ? { componentName } : {}),
+    ...(selectorMatchCount ? { selectorMatchCount } : {}),
   };
   return new TextEncoder().encode(JSON.stringify(parsed)).byteLength <= MAX_SOURCE_DESCRIPTOR_BYTES
     ? parsed

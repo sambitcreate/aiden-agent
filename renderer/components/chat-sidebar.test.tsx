@@ -48,8 +48,8 @@ test("new agent uses the same sidebar row style as scheduled", () => {
 test("Design is a route-owned sidebar destination", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /title="Design"[\s\S]*selected=\{pathname\.startsWith\("\/design"\)\}/u);
-  assert.match(sidebar, /to: "\/design\/\$chatId"/u);
   assert.match(sidebar, /navigate\(\{ to: "\/design" \}\)/u);
+  assert.doesNotMatch(sidebar, /eligibleDesignChatId/u);
 });
 
 test("newAgent creates a chat in the active workspace", () => {
@@ -181,11 +181,13 @@ test("workspace menu middle-truncates folder paths", () => {
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const deletion = between(sidebar, "const commitDelete = async () => {", "\n  };");
-  const remove = deletion.indexOf("await chatsApi.remove(deleting.id)");
+  const remove = deletion.indexOf("const result = await chatsApi.remove(");
+  const confirmation = deletion.indexOf('result.status === "confirmation-required"');
   const purge = deletion.indexOf("await removeDeletedChatFromCache(qc, deleting.id)");
   const refresh = deletion.indexOf("await qc.invalidateQueries({ queryKey: queryKeys.chats })");
 
   assert.ok(remove >= 0);
+  assert.ok(confirmation > remove);
   assert.ok(purge > remove);
   assert.ok(refresh > purge);
 });
