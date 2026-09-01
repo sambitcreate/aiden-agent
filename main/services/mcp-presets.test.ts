@@ -12,7 +12,7 @@ import {
 } from "./mcp-presets.js";
 
 test("catalog entries are well-formed", () => {
-  assert.ok(MCP_PRESETS.length >= 27, "expected Composio plus hosted Codex MCP plugins");
+  assert.ok(MCP_PRESETS.length >= 20, "expected Composio plus hosted Codex MCP plugins Aiden can authorize");
   const ids = new Set(MCP_PRESETS.map((p) => p.id));
   assert.equal(ids.size, MCP_PRESETS.length, "preset ids must be unique");
   for (const preset of MCP_PRESETS) {
@@ -41,7 +41,7 @@ test("catalog includes composio (apiKey) and hosted Codex OAuth plugins", () => 
   }
   assert.equal(getMcpPreset("notion")?.auth.kind, "oauth");
   assert.equal(getMcpPreset("linear")?.auth.kind, "oauth");
-  assert.equal(getMcpPreset("github")?.auth.kind, "oauth");
+  assert.equal(getMcpPreset("github"), undefined);
   assert.equal(getMcpPreset("figma")?.url, "https://mcp.figma.com/mcp");
   assert.equal(getMcpPreset("superpowers"), undefined);
   assert.equal(getMcpPreset("nope"), undefined);
@@ -85,12 +85,12 @@ test("serverFromPreset sets oauth and allows only provider-owned endpoint paths"
 });
 
 test("hosted Codex plugin credentials stay on their official origin", () => {
-  const github = getMcpPreset("github");
-  assert.ok(github);
-  const server = serverFromPreset(github, "https://api.githubcopilot.com/mcp/v1");
+  const figma = getMcpPreset("figma");
+  assert.ok(figma);
+  const server = serverFromPreset(figma, "https://mcp.figma.com/mcp/session/abc");
   assert.equal(server.oauth, true);
   assert.throws(
-    () => serverFromPreset(github, "https://api.github.com/mcp"),
+    () => serverFromPreset(figma, "https://api.figma.com/mcp"),
     /official secure server/,
   );
 });

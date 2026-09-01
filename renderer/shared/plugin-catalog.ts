@@ -9,7 +9,8 @@ export type PluginCompatibility =
   | "skills"
   | "chatgpt-app"
   | "local-stdio"
-  | "git-marketplace";
+  | "git-marketplace"
+  | "mcp-auth-unsupported";
 
 export type PluginCatalogSource = "aiden" | "openai-curated";
 
@@ -43,6 +44,8 @@ const STDIO_NOTE =
   "Codex launches this as a local process (stdio). Add the same command as a custom local MCP server if you want those tools in Aiden.";
 const GIT_NOTE =
   "Codex installs this from a Git marketplace source, not a hosted HTTP MCP. Clone or add a custom MCP if the project publishes one.";
+const AUTH_NOTE =
+  "This vendor publishes a hosted MCP URL, but Aiden can only complete MCP OAuth when the server supports dynamic client registration, or a stored API key. This connector needs a sign-in flow Aiden cannot finish yet, so it is listed instead of offering a broken Set Up.";
 
 const oauth = { kind: "oauth" as const };
 
@@ -105,7 +108,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     source: "openai-curated",
     url: "https://mcp.atlassian.com/v1/mcp/authv2",
   }),
-  httpMcp({
+  listed("mcp-auth-unsupported", AUTH_NOTE, {
     id: "google-calendar",
     name: "Google Calendar",
     tagline: "Scheduling, availability, daily briefs, and event management.",
@@ -115,7 +118,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     source: "openai-curated",
     url: "https://calendarmcp.googleapis.com/mcp/v1",
   }),
-  httpMcp({
+  listed("mcp-auth-unsupported", AUTH_NOTE, {
     id: "gmail",
     name: "Gmail",
     tagline: "Read, search, and compose mail in Gmail.",
@@ -125,7 +128,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     source: "openai-curated",
     url: "https://gmailmcp.googleapis.com/mcp/v1",
   }),
-  httpMcp({
+  listed("mcp-auth-unsupported", AUTH_NOTE, {
     id: "slack",
     name: "Slack",
     tagline: "Search channels, send messages, and manage conversations.",
@@ -229,7 +232,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     docsUrl: "https://github.com/obra/superpowers",
     source: "openai-curated",
   }),
-  httpMcp({
+  listed("mcp-auth-unsupported", AUTH_NOTE, {
     id: "github",
     name: "GitHub",
     tagline: "Inspect repositories, triage PRs and issues, and debug CI.",
@@ -248,7 +251,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     docsUrl: "https://circleci.com",
     source: "openai-curated",
   }),
-  httpMcp({
+  listed("mcp-auth-unsupported", AUTH_NOTE, {
     id: "google-drive",
     name: "Google Drive",
     tagline: "Drive, Docs, Sheets, and Slides as a single workspace.",
@@ -472,7 +475,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     source: "openai-curated",
     url: "https://mcp.datadoghq.com/v1/mcp",
   }),
-  httpMcp({
+  listed("mcp-auth-unsupported", AUTH_NOTE, {
     id: "zoom",
     name: "Zoom",
     tagline: "Smart meeting insights from Zoom.",
@@ -529,7 +532,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     docsUrl: "https://openai.com/",
     source: "openai-curated",
   }),
-  httpMcp({
+  listed("mcp-auth-unsupported", AUTH_NOTE, {
     id: "shopify",
     name: "Shopify",
     tagline: "Build and manage a Shopify store from the conversation.",
@@ -711,6 +714,8 @@ export function pluginCompatibilityLabel(compatibility: PluginCompatibility): st
       return "Local MCP";
     case "git-marketplace":
       return "Git marketplace";
+    case "mcp-auth-unsupported":
+      return "MCP (auth)";
   }
 }
 

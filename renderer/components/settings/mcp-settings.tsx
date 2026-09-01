@@ -344,8 +344,9 @@ export function McpSettings() {
               </Text>
             ) : (
               <Text variant="small" color="secondary" className="block">
-                Connects over HTTPS MCP. Aiden stores credentials on this Mac and only sends them to
-                the official server origin.
+                Connects over HTTPS MCP. Aiden stores credentials on this Mac and only sends resource
+                tokens to the official MCP origin. Browser sign-in may also talk to that vendor’s
+                declared OAuth provider. Connecting does not install Codex skill files.
               </Text>
             )}
             {pluginDetails.url ? (

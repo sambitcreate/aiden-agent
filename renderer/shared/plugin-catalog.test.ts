@@ -15,7 +15,12 @@ test("plugin catalog ids are unique kebab-case entries from Codex plus Composio"
   assert.ok(ids.includes("linear"));
   assert.ok(ids.includes("superpowers"));
   assert.ok(ids.includes("crowdstrike-falcon-foundry"));
-  assert.ok(PLUGIN_CATALOG.length >= 60);
+  assert.equal(PLUGIN_CATALOG.length, 65);
+  assert.equal(PLUGIN_CATALOG.filter(isConnectablePlugin).length, 20);
+  assert.equal(
+    PLUGIN_CATALOG.filter((plugin) => plugin.compatibility === "mcp-auth-unsupported").length,
+    7,
+  );
   assert.equal(PLUGIN_CATALOG_SOURCE_URL, "https://github.com/openai/plugins");
   for (const plugin of PLUGIN_CATALOG) {
     assert.match(plugin.id, /^[a-z0-9-]+$/);
@@ -52,6 +57,7 @@ test("search and compatibility filters keep connectable MCP separate from skills
   assert.ok(skills.some((plugin) => plugin.id === "expo"));
 
   const other = filterPluginCatalog(PLUGIN_CATALOG, "", "all", "other");
+  assert.ok(other.some((plugin) => plugin.id === "github"));
   assert.ok(other.some((plugin) => plugin.id === "teams"));
   assert.ok(other.some((plugin) => plugin.id === "build-ios-apps"));
   assert.ok(!other.some(isConnectablePlugin));
@@ -59,4 +65,5 @@ test("search and compatibility filters keep connectable MCP separate from skills
 
   assert.equal(pluginCompatibilityLabel("http-mcp"), "MCP");
   assert.equal(pluginCompatibilityLabel("chatgpt-app"), "ChatGPT app");
+  assert.equal(pluginCompatibilityLabel("mcp-auth-unsupported"), "MCP (auth)");
 });
