@@ -16,6 +16,7 @@ import {
   prepareMemoryApproval,
   RECALL_MEMORY_TOOL_NAME,
   REMEMBER_MEMORY_TOOL_NAME,
+  FORGET_MEMORY_TOOL_NAME,
 } from "./memory-context.js";
 import { MemoryStore } from "./memory-store.js";
 import {
@@ -93,6 +94,7 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
   assert.deepEqual(macExtension.tools?.map(({ name }) => name), [
     RECALL_MEMORY_TOOL_NAME,
     REMEMBER_MEMORY_TOOL_NAME,
+    FORGET_MEMORY_TOOL_NAME,
   ]);
   assert.deepEqual(boundTelegramExtension.tools?.map(({ name }) => name), [RECALL_MEMORY_TOOL_NAME]);
   assert.deepEqual(ordinaryTelegramExtension.tools?.map(({ name }) => name), [RECALL_MEMORY_TOOL_NAME]);
