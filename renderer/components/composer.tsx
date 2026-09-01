@@ -172,6 +172,22 @@ interface ComposerProps {
   onCloneChat?: () => Promise<void>;
   onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
   onExportChat?: () => Promise<"saved" | "cancelled">;
+  onCompactChat?: () => Promise<
+    | { compacted: true; tokensBefore?: number }
+    | {
+        compacted: false;
+        reason:
+          | "already_compact"
+          | "busy"
+          | "archived"
+          | "not_canonical"
+          | "provider_unavailable"
+          | "context_metadata_invalid"
+          | "cancelled"
+          | "compaction_failed";
+      }
+  >;
+  onCancelCompact?: () => Promise<boolean>;
   onLogoutProvider?: (providerId: string) => Promise<{ remainingAuthenticated: boolean | null }>;
   slashPaletteBlocked?: boolean;
   slashActionBusy?: boolean;
@@ -280,6 +296,8 @@ export function Composer({
   onCloneChat,
   onForkChat,
   onExportChat,
+  onCompactChat,
+  onCancelCompact,
   onLogoutProvider,
   slashPaletteBlocked = false,
   slashActionBusy = false,
@@ -628,6 +646,38 @@ export function Composer({
     }
   }, [inputRef, onExportChat, sessionCommandBusy]);
 
+  const compactChat = React.useCallback(async () => {
+    if (!onCompactChat || sessionCommandBusy) return;
+    sessionCommandBusyRef.current = true;
+    setSessionCommandStatus("Compacting chat…");
+    try {
+      const result = await onCompactChat();
+      if (result.compacted) {
+        toast.success(
+          result.tokensBefore
+            ? `Chat compacted from about ${result.tokensBefore.toLocaleString()} tokens`
+            : "Chat compacted",
+        );
+      } else {
+        const copy = {
+          already_compact: "This chat is already compact enough.",
+          busy: "Finish the current response or approval first.",
+          archived: "This chat is archived or unavailable.",
+          not_canonical: "This legacy Bot conversation is read-only.",
+          provider_unavailable: "The saved provider is unavailable.",
+          context_metadata_invalid: "The saved model context is invalid.",
+          cancelled: "Compaction was cancelled.",
+          compaction_failed: "Compaction failed.",
+        } as const;
+        toast.info(copy[result.reason]);
+      }
+    } finally {
+      sessionCommandBusyRef.current = false;
+      setSessionCommandStatus(null);
+      requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+    }
+  }, [inputRef, onCompactChat, sessionCommandBusy]);
+
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
       if (!branchName) {
@@ -847,6 +897,7 @@ export function Composer({
         },
         cloneChat,
         exportChat,
+        compactChat,
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
@@ -950,6 +1001,7 @@ export function Composer({
       cloneChat,
       createWorktreeFromSlash,
       exportChat,
+      compactChat,
       onOpenReview,
       onOpenSettings,
       sendComposerPayload,
@@ -1634,16 +1686,27 @@ export function Composer({
               rows={1}
             />
             {sessionCommandStatus ? (
-              <Text
-                as="p"
-                role="status"
-                aria-live="polite"
-                variant="small"
-                color="tertiary"
-                className="px-1.5 pb-1"
-              >
-                {sessionCommandStatus}
-              </Text>
+              <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
+                <Text
+                  as="p"
+                  role="status"
+                  aria-live="polite"
+                  variant="small"
+                  color="tertiary"
+                >
+                  {sessionCommandStatus}
+                </Text>
+                {sessionCommandStatus === "Compacting chat…" && onCancelCompact ? (
+                  <Button
+                    type="button"
+                    variant="transparent"
+                    size="small"
+                    onClick={() => void onCancelCompact()}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
             {!ready && readinessMessage && text.trim().length > 0 ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">

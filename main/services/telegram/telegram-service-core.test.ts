@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createTelegramServiceCore } from "./telegram-service-core.js";
 import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
+import { telegramChatId } from "./telegram-turn.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -28,6 +29,11 @@ import type {
 import type { TelegramConfig } from "./telegram-config.js";
 import type { TelegramTurnDeps } from "./telegram-turn.js";
 import type { AppSettings } from "../types.js";
+import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
+import type {
+  ContextLifecycleAudience,
+  ContextLifecycleService,
+} from "../context-lifecycle-service.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -502,6 +508,7 @@ interface HarnessOptions {
   applyModelSelection?: (
     choice: import("./telegram-controls.js").TelegramModelChoice,
   ) => Promise<void>;
+  compactChat?: import("./telegram-service-core.js").TelegramServiceDeps["compactChat"];
   abortChat?: (chatId: string) => Promise<void>;
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
@@ -564,6 +571,7 @@ function harness(o: HarnessOptions = {}) {
     listWorkspaces: async () => o.workspaces ?? [],
     listModels: o.listModels,
     applyModelSelection: o.applyModelSelection,
+    compactChat: o.compactChat,
     abortChat: o.abortChat,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
@@ -1647,5 +1655,104 @@ test("a stale model callback cannot select a model omitted by the current visibl
   await result.service.start();
   await waitFor(() => result.api.answerCallbackQueryCalls() > 0);
   assert.deepEqual(applied, []);
+  result.service.stop();
+});
+
+test("bound Bot compaction callback targets the immutable canonical backing chat", async () => {
+  const owner = person(42);
+  const binding = {
+    botId: "bot-1",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: owner.id,
+    workspaceId: "bot-workspace",
+    backingWorkspaceId: "bot-workspace",
+    backingChatId: "canonical-bot-chat",
+    enabled: true,
+  } as const;
+  const compactedChatIds: string[] = [];
+  const lifecycle = createTelegramLifecycleAdapter(
+    {
+      compactChat: async (chatId: string, audience: ContextLifecycleAudience) => {
+        compactedChatIds.push(chatId);
+        assert.deepEqual(audience, {
+          kind: "telegram",
+          profile: "default",
+          ownerId: "telegram:default",
+        });
+        return { compacted: true, tokensBefore: 123_456 };
+      },
+      cancelChat: () => false,
+    } as unknown as ContextLifecycleService,
+    "default",
+  );
+  const result = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "compact-bound-bot",
+            from: owner,
+            message: makeMessage(20, BOT, "session menu"),
+            data: "compact:yes",
+          },
+        },
+      ],
+    ],
+    resolveBotBinding: async () => binding,
+    validateBotBinding: async () => true,
+    compactChat: lifecycle.compactChat,
+  });
+
+  await result.service.start();
+  await waitFor(() => compactedChatIds.length === 1);
+
+  assert.deepEqual(compactedChatIds, [binding.backingChatId]);
+  assert.ok(
+    result.api.sentMessages.some(({ text }) =>
+      text.includes("Session compacted from about 123,456 tokens")),
+  );
+  result.service.stop();
+});
+
+test("manual Telegram compaction preserves the shared busy admission result", async () => {
+  const owner = person(42);
+  const compactedChatIds: string[] = [];
+  const result = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    telegramWorkspaceId: "workspace-a",
+    profile: "work",
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "compact-busy",
+            from: owner,
+            message: makeMessage(20, BOT, "session menu"),
+            data: "compact:yes",
+          },
+        },
+      ],
+    ],
+    compactChat: async (chatId) => {
+      compactedChatIds.push(chatId);
+      return { compacted: false, error: "Wait for the active turn to finish or abort it first." };
+    },
+  });
+
+  await result.service.start();
+  await waitFor(() => compactedChatIds.length === 1);
+
+  assert.deepEqual(compactedChatIds, [telegramChatId(owner.id, "workspace-a", "work")]);
+  assert.ok(
+    result.api.sentMessages.some(({ text }) =>
+      text.includes("Wait for the active turn to finish or abort it first")),
+  );
+  assert.equal(result.turnMock.startCalls(), 0);
   result.service.stop();
 });

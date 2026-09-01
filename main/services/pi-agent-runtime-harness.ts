@@ -12,9 +12,7 @@ import {
   type AgentHarnessStreamOptionsPatch,
   type BeforeToolCallContext,
   type BeforeToolCallResult,
-  type CustomEntryContextMessageProjector,
   formatSkillsForSystemPrompt,
-  Session,
 } from "@earendil-works/pi-agent-core";
 import {
   type AssistantMessage,
@@ -32,6 +30,7 @@ import {
   type PiCompactionCoordinatorOptions,
 } from "./pi-compaction-core.js";
 import { appendPiMessages } from "./pi-compaction-session-store.js";
+import type { PiEntryProjector, PiSessionPort } from "./pi-session-port.js";
 import {
   PiRuntimeEventChannel,
   projectPiRuntimeAgentEvent,
@@ -49,6 +48,12 @@ import { piRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { providerFailureFromTerminalOutcome } from "./provider-failure.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import {
+  projectNextContextUsage,
+  type GenerationContextTransform,
+  type GenerationEmergencyProjection,
+  type GenerationContextOptions,
+} from "./generation-context.js";
 
 export type PiHarnessFaultSource =
   | "extension_context"
@@ -80,12 +85,14 @@ export interface PiAgentRuntimeExtension {
   id: string;
   /** Static prompt contribution snapshotted when the harness is created. */
   systemPrompt?: string;
+  /** Bounded per-turn data appended after every cache-stable prompt/resource block. */
+  volatileSystemPrompt?: string;
   /** Pi-native tools contributed to this one runtime. */
   tools?: readonly AgentTool[];
   /** Pi-compatible skills/templates snapshotted with the runtime. */
   resources?: AgentHarnessResources;
   /** Custom durable entry projection into provider context. */
-  entryProjectors?: Readonly<Record<string, CustomEntryContextMessageProjector>>;
+  entryProjectors?: Readonly<Record<string, PiEntryProjector>>;
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
   beforeToolCall?: (
     context: BeforeToolCallContext,
@@ -177,7 +184,7 @@ export type PiRuntimeHostFaultKind =
   | "policy"
   | "invariant";
 
-export type PiRuntimeTerminalOutcome =
+export type PiRuntimeTerminalOutcome = (
   | {
       kind: "completed";
       finalMessage: AssistantMessage;
@@ -206,15 +213,15 @@ export type PiRuntimeTerminalOutcome =
       finalMessage?: AssistantMessage;
       finalMessageWasAbandoned?: boolean;
       attempts: 0 | 1 | 2;
-    };
+    }) & { emergencyProjection?: Exclude<GenerationEmergencyProjection, { kind: "none" }> };
 
 export interface PiRuntimeSessionBinding {
-  session: Session | Promise<Session>;
+  session: PiSessionPort | Promise<PiSessionPort>;
   initialMessages?: readonly AgentMessage[];
   compaction: Omit<PiCompactionCoordinatorOptions, "session">;
-  appendMessages?: (session: Session, messages: readonly AgentMessage[]) => Promise<void>;
+  appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
   /** Host adapter for atomically journaling a visible user plus its sync marker. */
-  appendInput?: (session: Session, message: AgentMessage) => Promise<void>;
+  appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
   signal?: AbortSignal;
   /** Foreground continue() does not emit its already-journaled user tail. */
   journalUserMessages?: boolean;
@@ -294,6 +301,9 @@ function snapshotExtension(extension: PiAgentRuntimeExtension): PiAgentRuntimeEx
   return Object.freeze({
     id: extension.id.trim(),
     ...(extension.systemPrompt === undefined ? {} : { systemPrompt: extension.systemPrompt }),
+    ...(extension.volatileSystemPrompt === undefined
+      ? {}
+      : { volatileSystemPrompt: extension.volatileSystemPrompt }),
     ...(tools === undefined ? {} : { tools: Object.freeze(tools) }),
     ...(extension.resources === undefined
       ? {}
@@ -392,7 +402,12 @@ function composeSystemPrompt(
     .filter((value): value is string => Boolean(value));
   const extensionSkills = extensions.flatMap((extension) => extension.resources?.skills ?? []);
   const skillsPrompt = formatSkillsForSystemPrompt(extensionSkills);
-  return [basePrompt, ...contributions, skillsPrompt].filter(Boolean).join("\n\n");
+  const volatileContributions = extensions
+    .map((extension) => extension.volatileSystemPrompt?.trim())
+    .filter((value): value is string => Boolean(value));
+  return [basePrompt, ...contributions, skillsPrompt, ...volatileContributions]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function composeResources(
@@ -425,8 +440,8 @@ function composeResources(
 function composeEntryProjectors(
   extensions: readonly PiAgentRuntimeExtension[],
   onError: (extensionId: string, error: unknown) => never,
-): Readonly<Record<string, CustomEntryContextMessageProjector>> {
-  const projectors: Record<string, CustomEntryContextMessageProjector> = {};
+): Readonly<Record<string, PiEntryProjector>> {
+  const projectors: Record<string, PiEntryProjector> = {};
   for (const extension of extensions) {
     for (const [customType, projector] of Object.entries(extension.entryProjectors ?? {})) {
       if (!customType.trim() || customType.startsWith("aiden.") || projectors[customType]) {
@@ -438,7 +453,7 @@ function composeEntryProjectors(
         try {
           const visibleEntries = entries.filter(
             (candidate) =>
-              !(candidate.type === "custom" || candidate.type === "custom_message") ||
+              candidate.type !== "custom" ||
               candidate.customType === customType,
           );
           const visibleIndex = visibleEntries.findIndex((candidate) => candidate.id === entry.id);
@@ -724,7 +739,7 @@ async function waitForManagedPromise<T>(
 /**
  * Aiden's Pi-shaped runtime boundary.
  *
- * Pi 0.80.10's public AgentHarness owns a different session lifecycle and
+ * Pi 0.84.4's public AgentHarness owns a different session lifecycle and
  * silently falls back to parallel tool execution. This adapter keeps Aiden's
  * durable journal/compaction protocol while centralizing the stable Pi Agent
  * surface that both foreground and child runs need. It is deliberately the
@@ -740,12 +755,12 @@ export class PiAgentRuntimeHarness {
   readonly models?: Models;
   private readonly resources: AgentHarnessResources;
   private readonly contributionRevision: number;
-  private readonly entryProjectors: Readonly<Record<string, CustomEntryContextMessageProjector>>;
+  private readonly entryProjectors: Readonly<Record<string, PiEntryProjector>>;
   private readonly runtimeEvents?: PiRuntimeEventChannel;
   private readonly passiveObserverAbort = new AbortController();
   private providerObserverSettlement = Promise.resolve();
   private readonly passiveAgentObservers = new Set<Promise<void>>();
-  private sessionPromise?: Promise<Session>;
+  private sessionPromise?: Promise<PiSessionPort>;
   private sessionSeedPromise?: Promise<void>;
   private compactionPromise?: Promise<PiCompactionCoordinator>;
   private pendingDurableMessages: AgentMessage[] = [];
@@ -781,8 +796,11 @@ export class PiAgentRuntimeHarness {
   private running = false;
   private operationSettlement: Promise<void> | undefined;
   private disposed = false;
+  private readonly contextProjectionOptions?: GenerationContextOptions;
+  private pendingEmergencyCheckpoint = false;
+  private lastEmergencyProjection: GenerationEmergencyProjection = { kind: "none" };
 
-  constructor(options: PiAgentRuntimeHarnessOptions = {}) {
+  constructor(options: PiAgentRuntimeHarnessOptions) {
     const {
       extensions: requestedExtensions = [],
       contributions,
@@ -828,6 +846,16 @@ export class PiAgentRuntimeHarness {
         ? [...contributions.tools]
         : composeTools(baseState.tools ?? [], extensions),
     };
+    if (initialState.model) {
+      this.contextProjectionOptions = {
+        contextWindow: initialState.model.contextWindow,
+        systemPrompt: initialState.systemPrompt ?? "",
+        tools: initialState.tools ?? [],
+        supportsImages: initialState.model.input.includes("image"),
+        providerId: initialState.model.provider,
+        modelId: initialState.model.id,
+      };
+    }
     const reportExtensionFault = (
       source: Exclude<PiHarnessFaultSource, "lifecycle_subscriber">,
       extensionId: string,
@@ -1018,7 +1046,17 @@ export class PiAgentRuntimeHarness {
               // extension cannot re-expand an already bounded provider request.
               if (!options.transformContext) return current;
               try {
-                return await options.transformContext(current, signal);
+                const transformed = await options.transformContext(current, signal);
+                const emergency = (
+                  options.transformContext as GenerationContextTransform
+                ).takeLastEmergencyProjection?.();
+                if (emergency && emergency.kind !== "none") {
+                  this.lastEmergencyProjection = emergency;
+                  if (emergency.kind === "history_removed") {
+                    this.pendingEmergencyCheckpoint = true;
+                  }
+                }
+                return transformed;
               } catch (error) {
                 this.policyFault ??= toError(error);
                 this.reportFault({
@@ -1298,7 +1336,17 @@ export class PiAgentRuntimeHarness {
         try {
           await this.flushDurableMessages();
           const coordinator = await this.resolveCompaction();
-          const operation = coordinator.checkContextPressure();
+          // Pi v4 keeps accepted steering outside prepareNextTurnWithContext
+          // until after this hook. Budget it now so history is compacted before
+          // the queued payload becomes the next provider request.
+          const projectedMessages = [
+            ...context.messages,
+            ...this.acceptedQueuedMessages.map(({ message }) => message),
+          ];
+          const projection = this.contextProjectionOptions
+            ? projectNextContextUsage(projectedMessages, this.contextProjectionOptions)
+            : undefined;
+          const operation = coordinator.checkContextPressure(projection);
           const managedSignal = this.managedAbortController?.signal;
           const result = managedSignal
             ? await waitForManagedPromise(operation, managedSignal).then((settled) => {
@@ -1331,6 +1379,7 @@ export class PiAgentRuntimeHarness {
           }
           if (!result.messages) return hostPrepared;
           this.agent.state.messages = [...result.messages];
+          if (result.compacted) this.pendingEmergencyCheckpoint = false;
           return {
             ...hostPrepared,
             context: { ...context, messages: [...result.messages] },
@@ -1467,6 +1516,8 @@ export class PiAgentRuntimeHarness {
     this.capturedTurnMessages = [];
     this.turnHadToolExecution = false;
     this.lastAssistantMessage = undefined;
+    this.pendingEmergencyCheckpoint = false;
+    this.lastEmergencyProjection = { kind: "none" };
     const abortController = new AbortController();
     this.managedAbortController = abortController;
     const parentSignal = durability.signal;
@@ -1527,18 +1578,22 @@ export class PiAgentRuntimeHarness {
                     : "The provider did not complete the model operation.",
               ),
             };
-      this.lastManagedOutcome = closed;
+      const projectedClosed =
+        this.lastEmergencyProjection.kind === "none"
+          ? closed
+          : { ...closed, emergencyProjection: this.lastEmergencyProjection };
+      this.lastManagedOutcome = projectedClosed;
       this.runtimeEvents?.emit({
         type: "run_end",
-        outcome: closed.kind,
-        attempts: closed.attempts,
-        ...(closed.kind === "provider_failed"
-          ? { reason: closed.reason }
-          : closed.kind === "host_failed"
-            ? { reason: closed.faultKind }
+        outcome: projectedClosed.kind,
+        attempts: projectedClosed.attempts,
+        ...(projectedClosed.kind === "provider_failed"
+          ? { reason: projectedClosed.reason }
+          : projectedClosed.kind === "host_failed"
+            ? { reason: projectedClosed.faultKind }
             : {}),
       });
-      return closed;
+      return projectedClosed;
     };
     this.runtimeEvents?.setAttempt(0);
     this.runtimeEvents?.emit({ type: "run_start", input: input.kind });
@@ -1698,6 +1753,41 @@ export class PiAgentRuntimeHarness {
       }
       coordinator.beginPrompt();
       if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
+
+      if (this.contextProjectionOptions) {
+        try {
+          const projection = projectNextContextUsage(
+            this.agent.state.messages,
+            this.contextProjectionOptions,
+          );
+          const preflightOperation = coordinator.checkContextPressure(projection);
+          const preflight = await waitForManagedPromise(
+            preflightOperation,
+            abortController.signal,
+          );
+          if (preflight.kind === "cancelled") {
+            this.trackDetachedDurability(preflightOperation);
+            return await finish({ kind: "app_cancelled", attempts });
+          }
+          if (preflight.kind === "failed") throw preflight.error;
+          const preflightHostFault = compactionHostFault(preflight.value);
+          if (preflightHostFault) {
+            return await finish({ kind: "host_failed", faultKind: preflightHostFault, attempts });
+          }
+          if (preflight.value.failureCode === "session-failed") {
+            return await finish({ kind: "host_failed", faultKind: "session", attempts });
+          }
+          if (preflight.value.errorMessage) {
+            return await finish({ kind: "provider_failed", reason: "compaction-failed", attempts });
+          }
+          if (preflight.value.messages) {
+            this.agent.state.messages = [...preflight.value.messages];
+          }
+        } catch (error) {
+          this.reportFault({ source: "compaction", error: toError(error) });
+          return await finish({ kind: "host_failed", faultKind: "compaction", attempts });
+        }
+      }
 
       for (;;) {
         if (cancelled()) {
@@ -1970,6 +2060,28 @@ export class PiAgentRuntimeHarness {
             ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
             attempts,
           });
+        }
+        if (this.pendingEmergencyCheckpoint && !compactionResult.compacted) {
+          const recoveryOperation = coordinator.compact();
+          const recovery = await waitForManagedPromise(recoveryOperation, abortController.signal);
+          if (recovery.kind === "cancelled") {
+            this.trackDetachedDurability(recoveryOperation);
+            return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
+          }
+          if (
+            recovery.kind === "failed" ||
+            recovery.value.errorMessage ||
+            !recovery.value.compacted
+          ) {
+            return await finish({
+              kind: "host_failed",
+              faultKind: "compaction",
+              finalMessage: assistant,
+              attempts,
+            });
+          }
+          if (recovery.value.messages) this.agent.state.messages = [...recovery.value.messages];
+          this.pendingEmergencyCheckpoint = false;
         }
         return await finish({ kind: "completed", finalMessage: assistant, attempts });
       }
@@ -2339,20 +2451,18 @@ export class PiAgentRuntimeHarness {
     return this.compactionPromise;
   }
 
-  private resolveSession(): Promise<Session> {
+  private resolveSession(): Promise<PiSessionPort> {
     const durability = this.durability;
     if (!durability) {
       return Promise.reject(new Error("Pi runtime durability is not configured."));
     }
     this.sessionPromise ??= Promise.resolve(durability.session).then((session) =>
-      Object.keys(this.entryProjectors).length === 0
-        ? session
-        : new Session(session.getStorage(), { entryProjectors: this.entryProjectors }),
+      session.withEntryProjectors(this.entryProjectors),
     );
     return this.sessionPromise;
   }
 
-  private ensureSessionSeeded(session: Session): Promise<void> {
+  private ensureSessionSeeded(session: PiSessionPort): Promise<void> {
     const durability = this.durability;
     if (!durability?.initialMessages?.length) return Promise.resolve();
     this.sessionSeedPromise ??= (durability.appendMessages ?? appendPiMessages)(

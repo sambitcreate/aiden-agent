@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   InMemorySessionRepo,
   type AgentMessage,
-  type Session,
 } from "@earendil-works/pi-agent-core";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -14,10 +13,11 @@ import {
 import { todoSnapshotForRenderer, type TodoSnapshotViewV1 } from "../../../renderer/shared/todo.js";
 import { PiAgentRuntimeHarness } from "../pi-agent-runtime-harness.js";
 import { appendPiMessages } from "../pi-compaction-session-store.js";
+import { createPiSessionPort, type PiSessionPort } from "../pi-session-port.js";
 import { createTodoExtensionRuntime } from "./extension.js";
 
 async function todoHarness(input: {
-  appendMessages: (session: Session, messages: readonly AgentMessage[]) => Promise<void>;
+  appendMessages: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
   published: TodoSnapshotViewV1[];
 }) {
   const core = createFauxCore({ provider: `todo-harness-${Math.random().toString(36).slice(2)}` });
@@ -28,9 +28,11 @@ async function todoHarness(input: {
     fauxAssistantMessage("done"),
   ]);
   const model = core.getModel();
-  const session = await new InMemorySessionRepo().create({
-    id: `todo-session-${Math.random().toString(36).slice(2)}`,
-  });
+  const session = createPiSessionPort(
+    await new InMemorySessionRepo().create({
+      id: `todo-session-${Math.random().toString(36).slice(2)}`,
+    }),
+  );
   const runtime = createTodoExtensionRuntime(
     { tasks: [], nextId: 1 },
     {

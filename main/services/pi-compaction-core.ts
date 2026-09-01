@@ -9,7 +9,6 @@ import {
   uuidv7,
   type AgentMessage,
   type CompactionSettings,
-  type Session,
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import {
@@ -18,8 +17,12 @@ import {
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Models,
+  type RetryCallbacks,
+  type RetryPolicy,
+  type Usage,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
+import type { PiSessionPort } from "./pi-session-port.js";
 
 export type PiCompactionReason = "threshold" | "overflow" | "manual";
 
@@ -30,9 +33,10 @@ export interface PiCompactionDetails {
 
 export interface PiCompactionResult {
   summary: string;
-  firstKeptEntryId: string;
+  retainedTail: AgentMessage[];
   tokensBefore: number;
   estimatedTokensAfter: number;
+  usage?: Usage;
   details?: PiCompactionDetails;
 }
 
@@ -67,7 +71,7 @@ export interface PiCompactionCheckResult {
 }
 
 export interface PiCompactionCoordinatorOptions {
-  session: Session;
+  session: PiSessionPort;
   models: Models;
   model: ResolvedModelRuntime["model"];
   thinkingLevel: ThinkingLevel;
@@ -78,11 +82,9 @@ export interface PiCompactionCoordinatorOptions {
   /** Bounded host backoff for transient provider/transport retries. */
   retryDelayMs?: number;
   /** Current-Pi-compatible retry policy for each standalone hidden summary request. */
-  summaryRetry?: {
-    enabled: boolean;
-    maxRetries: number;
-    baseDelayMs: number;
-  };
+  summaryRetry?: RetryPolicy;
+  /** Native Pi retry lifecycle callbacks for the isolated summary request. */
+  summaryRetryCallbacks?: RetryCallbacks;
 }
 
 class PiCompactionSessionError extends Error {
@@ -100,7 +102,7 @@ async function sessionOperation<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-function latestCompaction(entries: Awaited<ReturnType<Session["getBranch"]>>) {
+function latestCompaction(entries: Awaited<ReturnType<PiSessionPort["getBranch"]>>) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry.type === "compaction") return entry;
@@ -118,74 +120,6 @@ function withoutRetryableAssistantTail(messages: readonly AgentMessage[]): Agent
     (tail.stopReason === "error" || tail.stopReason === "length")
     ? messages.slice(0, -1)
     : [...messages];
-}
-
-function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve(false);
-      return;
-    }
-    const abort = () => {
-      clearTimeout(timeout);
-      resolve(false);
-    };
-    const timeout = setTimeout(
-      () => {
-        signal?.removeEventListener("abort", abort);
-        resolve(true);
-      },
-      Math.max(0, delayMs),
-    );
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
-
-/** Mirror current Pi's standalone summary request isolation and retry loop. */
-function createUpstreamSummaryModels(
-  models: Models,
-  retry: NonNullable<PiCompactionCoordinatorOptions["summaryRetry"]>,
-): Models {
-  return new Proxy(models, {
-    get(target, property, receiver) {
-      if (property === "completeSimple") {
-        return async (...args: Parameters<Models["completeSimple"]>) => {
-          const [model, context, options] = args;
-          const requestOptions = {
-            ...options,
-            cacheRetention: "none" as const,
-            sessionId: uuidv7(),
-          };
-          const maxRetries = retry.enabled ? Math.max(0, Math.floor(retry.maxRetries)) : 0;
-          let attempt = 0;
-          for (;;) {
-            const message = await target.completeSimple(model, context, requestOptions);
-            if (
-              message.stopReason !== "error" ||
-              !isRetryableAssistantError(message) ||
-              attempt >= maxRetries
-            ) {
-              return message;
-            }
-            attempt += 1;
-            const continued = await abortableDelay(
-              Math.max(0, retry.baseDelayMs) * 2 ** (attempt - 1),
-              requestOptions.signal,
-            );
-            if (!continued) {
-              return {
-                ...message,
-                stopReason: "aborted",
-                errorMessage: undefined,
-              };
-            }
-          }
-        };
-      }
-      const value = Reflect.get(target, property, receiver) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
 }
 
 /**
@@ -244,7 +178,11 @@ export class PiCompactionCoordinator {
   }
 
   /** Check the reconstructed journal before provider I/O, including the new user turn. */
-  async checkContextPressure(): Promise<PiCompactionCheckResult> {
+  async checkContextPressure(projected?: {
+    contextTokens: number;
+    compressibleHistoryMessages: number;
+    shouldCompact: boolean;
+  }): Promise<PiCompactionCheckResult> {
     if (!this.settings.enabled) return { compacted: false, shouldRetry: false };
     let branch;
     let context;
@@ -263,6 +201,15 @@ export class PiCompactionCoordinator {
     const previousAssistant = [...context.messages]
       .reverse()
       .find((message): message is AssistantMessage => message.role === "assistant");
+    if (projected) {
+      if (
+        projected.compressibleHistoryMessages === 0 ||
+        !projected.shouldCompact
+      ) {
+        return { compacted: false, shouldRetry: false, messages: context.messages };
+      }
+      return this.run("threshold", false, true);
+    }
     if (!previousAssistant) return { compacted: false, shouldRetry: false };
     if (
       compactionEntry &&
@@ -442,6 +389,7 @@ export class PiCompactionCoordinator {
   private async run(
     reason: PiCompactionReason,
     willRetry: boolean,
+    requireEffectiveInput = false,
   ): Promise<PiCompactionCheckResult> {
     let started = false;
     let removeParentAbort = () => {};
@@ -451,6 +399,13 @@ export class PiCompactionCoordinator {
       if (!preparationResult.ok) throw preparationResult.error;
       const preparation = preparationResult.value;
       if (!preparation) return { compacted: false, shouldRetry: false };
+      if (
+        requireEffectiveInput &&
+        preparation.messagesToSummarize.length === 0 &&
+        preparation.turnPrefixMessages.length === 0
+      ) {
+        return { compacted: false, shouldRetry: false };
+      }
 
       const abortController = new AbortController();
       this.activeAbortController = abortController;
@@ -462,21 +417,19 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
-      const summaryModels = createUpstreamSummaryModels(
+      const compactResult = await compact(
+        preparation,
         this.options.models,
+        this.options.model,
+        undefined,
+        abortController.signal,
+        this.options.thinkingLevel,
         this.options.summaryRetry ?? {
           enabled: true,
           maxRetries: 3,
           baseDelayMs: 2_000,
         },
-      );
-      const compactResult = await compact(
-        preparation,
-        summaryModels,
-        this.options.model,
-        undefined,
-        abortController.signal,
-        this.options.thinkingLevel,
+        this.options.summaryRetryCallbacks,
       );
       if (!compactResult.ok) throw compactResult.error;
       if (abortController.signal.aborted) {
@@ -491,13 +444,16 @@ export class PiCompactionCoordinator {
 
       const result = compactResult.value;
       const priorLeafId = await sessionOperation(() => this.options.session.getLeafId());
-      const checkpointId = await sessionOperation(() =>
-        this.options.session.appendCompaction(
-          result.summary,
-          result.firstKeptEntryId,
-          result.tokensBefore,
-          result.details,
-        ),
+      const checkpointId = uuidv7();
+      await sessionOperation(() =>
+        this.options.session.appendCompaction({
+          id: checkpointId,
+          summary: result.summary,
+          retainedTail: result.retainedTail,
+          tokensBefore: result.tokensBefore,
+          ...(result.details === undefined ? {} : { details: result.details }),
+          ...(result.usage === undefined ? {} : { usage: result.usage }),
+        }),
       );
       const context = await sessionOperation(() => this.options.session.buildContext());
       if (abortController.signal.aborted) {
@@ -520,9 +476,10 @@ export class PiCompactionCoordinator {
         : context.messages;
       const publicResult: PiCompactionResult = {
         summary: result.summary,
-        firstKeptEntryId: result.firstKeptEntryId,
+        retainedTail: result.retainedTail,
         tokensBefore: result.tokensBefore,
         estimatedTokensAfter: estimatedMessageTokens(context.messages),
+        ...(result.usage === undefined ? {} : { usage: result.usage }),
         ...(result.details ? { details: result.details as PiCompactionDetails } : {}),
       };
       this.options.onEvent?.({
@@ -624,4 +581,3 @@ export function createPiCompactionModels(
     },
   }) as Models;
 }
-

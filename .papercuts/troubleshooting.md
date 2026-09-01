@@ -155,3 +155,11 @@ with a loopback Chromium debugging port, invoke the public action through the
 real preload bridge, use System Events to click the real native button by its
 exact accessibility label, and verify a post-start diagnostic event plus
 `uploadToServer: false`.
+
+## Pi journal promotion recovery
+
+A promoted v4 journal may legitimately retain a `.v3-backup` after its migration
+receipt is lost in a crash window. Recovery must inspect the authoritative journal
+header before choosing a decoder: decode the backup as v3 and the live journal as
+v4. Treating every backup-bearing path as v3 makes the next packaged restart fail
+on the already-promoted v4 header.

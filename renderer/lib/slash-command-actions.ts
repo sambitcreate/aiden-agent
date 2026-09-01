@@ -45,6 +45,7 @@ export interface SlashCommandActionHandlers {
   openFork?: () => void;
   cloneChat?: () => void | Promise<void>;
   exportChat?: () => void | Promise<void>;
+  compactChat?: () => void | Promise<void>;
   openSessionDetails?: () => void;
   openLogout?: () => void;
   openWorktree?: (branchName?: string) => void | Promise<void>;
@@ -280,6 +281,11 @@ export function executeSlashCommandAction(
         case "export": {
           if (!handlers.exportChat) return false;
           const result = handlers.exportChat();
+          return result instanceof Promise ? result.then(() => true) : true;
+        }
+        case "compact": {
+          if (!handlers.compactChat) return false;
+          const result = handlers.compactChat();
           return result instanceof Promise ? result.then(() => true) : true;
         }
         case "details":
