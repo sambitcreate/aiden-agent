@@ -228,6 +228,9 @@ Registering a new handler can expose an existing singleton import cycle and capt
 dependency even though TypeScript and unit tests pass. Defer the dependency behind a method adapter
 and cover the production composition shape plus Electron IPC behavior.
 
+When a lifecycle router wraps chat deletion, update source-order contracts to follow the injected
+ordinary-chat callback while continuing to forbid direct chat-store removal at the handler boundary.
+
 ## Hosted MCP OAuth verification
 
 The Dropbox origin-level protected-resource endpoint can return 429 while the

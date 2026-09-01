@@ -118,10 +118,20 @@ test("chat removal deletes private child history before the chat can disappear",
     source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
   ]);
-  assert.match(
-    handler,
-    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\)[\s\S]*return result/u,
-  );
+  const removalStart = handler.indexOf('ipcMain.handle("chats:remove"');
+  const removalEnd = handler.indexOf('ipcMain.handle("chats:appendMessage"', removalStart);
+  const removal = handler.slice(removalStart, removalEnd);
+  const parseChatId = removal.indexOf('const chatId = asString(id, "id")');
+  const botDelete = removal.indexOf("botApplicationService.deleteChat", parseChatId);
+  const routeDesignDeletion = removal.indexOf("designProjectLifecycle.routeChatDeletion", botDelete);
+  const ordinaryDelete = removal.indexOf("chatApplicationService.remove(ordinaryChatId)", routeDesignDeletion);
+  assert.ok(removalStart >= 0);
+  assert.ok(removalEnd > removalStart);
+  assert.ok(parseChatId >= 0);
+  assert.ok(botDelete > parseChatId);
+  assert.ok(routeDesignDeletion > botDelete);
+  assert.ok(ordinaryDelete > routeDesignDeletion);
+  assert.doesNotMatch(removal, /chatStore\.remove\(/u);
   const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
   const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");
   const deleteRuns = applicationService.indexOf(
