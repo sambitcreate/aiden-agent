@@ -192,7 +192,7 @@ const featureBentos: FeatureBento[] = [
     group: "create",
     title: "Design Workspace",
     description:
-      "Arrange live HTML artboards and image references on an infinite canvas, or explicitly open a local React app, select an exact element, and review every source change before apply.",
+      "Create durable named projects stored locally on this Mac, refine artboards with comments or bounded direct edits, inspect Preview, Code, and History, then Continue in workspace with every source change reviewed.",
     icon: PanelsTopLeft,
     imageUrl: FEATURE_ILLUSTRATIONS.designWorkspace,
     size: "tall",

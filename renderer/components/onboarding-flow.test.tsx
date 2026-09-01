@@ -376,11 +376,11 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /ordinary browsing stays offline/u);
   assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
-  assert.match(featurePresentation, /live HTML artboards and image references/u);
-  assert.match(featurePresentation, /infinite canvas/u);
-  assert.match(featurePresentation, /exact element/u);
-  assert.match(featurePresentation, /explicitly open a local React app/u);
-  assert.match(featurePresentation, /review every source change before apply/u);
+  assert.match(featurePresentation, /durable named projects stored locally on this Mac/u);
+  assert.match(featurePresentation, /comments or bounded direct edits/u);
+  assert.match(featurePresentation, /Preview, Code, and History/u);
+  assert.match(featurePresentation, /Continue in workspace/u);
+  assert.match(featurePresentation, /every source change reviewed/u);
   assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 26);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
