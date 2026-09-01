@@ -65505,9 +65505,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.07168,
-          "output": 0.14336,
-          "cache_read": 0.014336
+          "input": 0.07014,
+          "output": 0.14028,
+          "cache_read": 0.014028
         }
       },
       "deepseek/deepseek-v4-pro-0813": {
@@ -65596,9 +65596,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 1.02747,
-          "output": 2.05494,
-          "cache_read": 0.085623
+          "input": 1.024164,
+          "output": 2.048328,
+          "cache_read": 0.085347
         }
       },
       "deepseek/deepseek-v3.2": {
@@ -74674,12 +74674,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 262144
+          "output": 131072
         },
         "cost": {
           "input": 2,
           "output": 6,
-          "cache_read": 0.25
+          "cache_read": 0.2
         }
       },
       "liquid/lfm-2.5-2.6b:free": {
@@ -136894,7 +136894,7 @@
         "name": "Qwen3.5 27B",
         "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
         "family": "qwen",
-        "attachment": true,
+        "attachment": false,
         "reasoning": true,
         "reasoning_options": [
           {
@@ -136908,8 +136908,7 @@
         "last_updated": "2026-02-23",
         "modalities": {
           "input": [
-            "text",
-            "image"
+            "text"
           ],
           "output": [
             "text"
@@ -136917,8 +136916,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 256000,
-          "output": 64000
+          "context": 131072,
+          "output": 32768
         },
         "cost": {
           "input": 0.086,
@@ -238345,6 +238344,53 @@
           "cache_write": 6.25
         }
       },
+      "anthropic/claude-fable-5-1": {
+        "id": "anthropic/claude-fable-5-1",
+        "name": "Claude Fable 5.1",
+        "description": "Claude model for demanding reasoning and long-horizon agentic work",
+        "family": "claude-fable",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": false,
+        "knowledge": "2026-06",
+        "release_date": "2026-09-01",
+        "last_updated": "2026-09-01",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 10,
+          "output": 50,
+          "cache_read": 0.25,
+          "cache_write": 12.5
+        }
+      },
       "anthropic/claude-sonnet-5": {
         "id": "anthropic/claude-sonnet-5",
         "name": "Claude Sonnet 5",
@@ -238581,8 +238627,8 @@
       },
       "anthropic/claude-fable-latest": {
         "id": "anthropic/claude-fable-latest",
-        "name": "Claude Fable 5",
-        "description": "Claude model for creative writing, analysis, and controlled agent workflows",
+        "name": "Claude Fable 5.1",
+        "description": "Claude model for demanding reasoning and long-horizon agentic work",
         "family": "claude-fable",
         "attachment": true,
         "reasoning": true,
@@ -238601,9 +238647,9 @@
         "tool_call": true,
         "structured_output": true,
         "temperature": false,
-        "knowledge": "2026-01-31",
-        "release_date": "2026-06-09",
-        "last_updated": "2026-06-09",
+        "knowledge": "2026-06",
+        "release_date": "2026-09-01",
+        "last_updated": "2026-09-01",
         "modalities": {
           "input": [
             "text",
@@ -238622,7 +238668,7 @@
         "cost": {
           "input": 10,
           "output": 50,
-          "cache_read": 1,
+          "cache_read": 0.25,
           "cache_write": 12.5
         }
       },
@@ -239332,6 +239378,49 @@
           "cache_write": 0.15001
         }
       },
+      "databricks/databricks-deepseek-v4-pro-0813": {
+        "id": "databricks/databricks-deepseek-v4-pro-0813",
+        "name": "DeepSeek V4 Pro 0813",
+        "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
+        "family": "deepseek-thinking",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": false,
+        "temperature": true,
+        "release_date": "2026-08-12",
+        "last_updated": "2026-08-22",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "cost": {
+          "input": 1.31999,
+          "output": 3.95997,
+          "cache_read": 0.13202,
+          "cache_write": 1.31999
+        }
+      },
       "databricks/databricks-gpt-oss-20b": {
         "id": "databricks/databricks-gpt-oss-20b",
         "name": "GPT OSS 20B",
@@ -239372,6 +239461,50 @@
           "output": 0.30002,
           "cache_read": 0.07,
           "cache_write": 0.07
+        }
+      },
+      "databricks/databricks-deepseek-v4-flash-0731": {
+        "id": "databricks/databricks-deepseek-v4-flash-0731",
+        "name": "DeepSeek V4 Flash 0731",
+        "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+        "family": "deepseek-flash",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": false,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2026-07-31",
+        "last_updated": "2026-07-31",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.14,
+          "output": 0.28,
+          "cache_read": 0.028,
+          "cache_write": 0.14
         }
       },
       "databricks/databricks-gpt-oss-120b": {
@@ -277178,8 +277311,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1000000,
-          "output": 262144
+          "context": 262144,
+          "output": 131072
         },
         "cost": {
           "input": 2,
