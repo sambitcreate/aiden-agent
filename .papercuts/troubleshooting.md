@@ -221,3 +221,5 @@ needed to separate this change from that baseline noise.
 - URLProtocol request bodies can arrive through `httpBodyStream`; iOS request tests must use the existing `bodyData` helper.
 - In zsh, a loop variable named `path` overwrites the executable search path; file-by-file commit scripts must use a non-reserved name.
 - Parallel `xcodebuild` invocations share DerivedData and can lock `build.db`; run simulator build and test gates sequentially or isolate derived-data paths.
+- New focused tests can pass locally yet be absent from `npm test`; register every new test script in the CI entry chain.
+- Revision checks around settings writes need an explicit serialized lane; async read-then-write alone permits stale concurrent mutations.
