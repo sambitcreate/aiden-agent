@@ -2324,13 +2324,7 @@ export const llmClient = {
             }
             if (memoryApproval) {
               timeline.toolAwaitingApproval(context.toolCall.id);
-              const authorize = context.toolCall.name === FORGET_MEMORY_TOOL_NAME
-                ? authorizeMemoryRemoval
-                : authorizeMemoryProposal;
-              const memoryDecision = await authorize(
-                context.args,
-                memoryApprovalContext,
-                async (summary, approvalSignal) => {
+              const requestMemoryApproval = async (summary: string, approvalSignal?: AbortSignal) => {
                   const toolCallId = timeline.publicToolCallId(context.toolCall.id);
                   if (!toolCallId) throw new Error("The tool approval step was not initialized.");
                   return approvals.request({
@@ -2340,9 +2334,23 @@ export const llmClient = {
                     summary,
                     details: approvalDetails,
                   }, approvalSignal, owner.documentId);
-                },
-                signal,
-              );
+                };
+              const memoryDecision = context.toolCall.name === FORGET_MEMORY_TOOL_NAME
+                ? await authorizeMemoryRemoval(
+                    context.args,
+                    memoryApprovalContext,
+                    async (scope, factId) => (await memoryStore.list(scope)).find(
+                      (fact) => fact.id === factId && fact.state === "active",
+                    ),
+                    requestMemoryApproval,
+                    signal,
+                  )
+                : await authorizeMemoryProposal(
+                    context.args,
+                    memoryApprovalContext,
+                    requestMemoryApproval,
+                    signal,
+                  );
               if (!memoryDecision.allowed) {
                 deniedToolCalls.add(context.toolCall.id);
                 if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
