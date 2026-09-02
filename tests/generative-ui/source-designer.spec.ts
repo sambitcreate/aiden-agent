@@ -70,6 +70,10 @@ async function expectSourcePreview(
 }
 
 test("local React preview binds the exact nested element to its JSX range", async ({ page }) => {
+  // This integration path boots a real Vite server and verifies apply plus
+  // undo across three full navigations. Shared CI runners can legitimately
+  // exceed the suite's 30-second unit-test budget without being stuck.
+  test.slow();
   const projectId = "source-designer-project";
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-source-designer-"));
   await fs.cp(fixtureTemplateRoot, fixtureRoot, { recursive: true });
