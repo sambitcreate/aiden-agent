@@ -538,7 +538,6 @@ export function DesignWorkspaceCanvas({
   livePreviewAuthority,
   projectReconciliationError,
   projectReconciliationBusy = false,
-  projectReconciliationHasPreview = false,
   onRetryProjectReconciliation,
   generating,
   initialMediaId,
@@ -560,7 +559,6 @@ export function DesignWorkspaceCanvas({
   livePreviewAuthority?: string;
   projectReconciliationError?: string;
   projectReconciliationBusy?: boolean;
-  projectReconciliationHasPreview?: boolean;
   onRetryProjectReconciliation?: () => void;
   generating: boolean;
   initialMediaId?: string;
@@ -2374,7 +2372,6 @@ export function DesignWorkspaceCanvas({
     <ProjectReconciliationNotice
       message={projectReconciliationError}
       busy={projectReconciliationBusy}
-      previewAvailable={projectReconciliationHasPreview}
       offset={Boolean(missingReferenceNotice)}
       onRetry={onRetryProjectReconciliation}
     />
@@ -3811,13 +3808,11 @@ function DesignEmptyState({
 function ProjectReconciliationNotice({
   message,
   busy,
-  previewAvailable,
   offset,
   onRetry,
 }: {
   message: string;
   busy: boolean;
-  previewAvailable: boolean;
   offset: boolean;
   onRetry?: () => void;
 }) {
@@ -3833,10 +3828,7 @@ function ProjectReconciliationNotice({
       <div className="min-w-0 flex-1">
         <Text variant="small-strong">Design history needs refresh</Text>
         <Text variant="small" color="secondary">
-          {message}{" "}
-          {previewAvailable
-            ? "The generated preview remains available while you retry."
-            : "Retry to finish restoring project history."}
+          {message} Retry to finish restoring project history.
         </Text>
       </div>
       {onRetry ? (

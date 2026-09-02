@@ -50,7 +50,9 @@ export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwne
   artifacts: readonly ChatArtifactV1[];
   subagents: readonly SubagentRunSnapshot[];
   /** Retained after terminal cache settlement until Design consumes its project handoff. */
-  designPublication?: "published" | "retryable";
+  designPublication?: "published" | "retryable" | "suppressed";
+  /** Main-owned terminal explanation retained only for suppressed Design publication. */
+  terminalError?: string;
 }
 
 export type DetachedLifecycleProjectionSeed = Omit<
@@ -62,6 +64,7 @@ interface TerminalChatNotification {
   streamId: string;
   chat?: Chat;
   designPublication?: "retryable" | "suppressed";
+  terminalError?: string;
 }
 
 export interface ChatSettlementNotification {
@@ -234,15 +237,24 @@ function parseTerminalChatNotification(payload: unknown): TerminalChatNotificati
     candidate.designPublication === "retryable" || candidate.designPublication === "suppressed"
       ? candidate.designPublication
       : undefined;
+  const terminalError =
+    typeof candidate.message === "string" && candidate.message.trim()
+      ? candidate.message.trim().slice(0, MAX_DETACHED_REASONING_CHARS)
+      : undefined;
   if (candidate.designPublication !== undefined && !designPublication) return null;
   if (candidate.chat === undefined) {
-    return { streamId, ...(designPublication ? { designPublication } : {}) };
+    return {
+      streamId,
+      ...(designPublication ? { designPublication } : {}),
+      ...(terminalError ? { terminalError } : {}),
+    };
   }
   if (!isChatSnapshot(candidate.chat)) return null;
   return {
     streamId,
     chat: candidate.chat as Chat,
     ...(designPublication ? { designPublication } : {}),
+    ...(terminalError ? { terminalError } : {}),
   };
 }
 
@@ -603,8 +615,11 @@ export function subscribeDetachedTerminalChats(
       content: reset
         ? ""
         : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
-      lastTextDeltaAt:
-        reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
+      lastTextDeltaAt: reset
+        ? null
+        : (delta as string).length > 0
+          ? Date.now()
+          : current.lastTextDeltaAt,
     }));
   });
   const unsubscribeReasoning = subscribe("chat:reasoning-delta", (payload) => {
@@ -689,16 +704,25 @@ export function subscribeDetachedTerminalChats(
         const projection = detachedLifecycleProjections.get(terminal.streamId);
         const persistedDesignArtifacts = terminalDesignArtifacts(terminal.chat!);
         const retainedPublication =
-          terminal.designPublication === "retryable"
-            ? "retryable"
-            : terminalKind === "done" && persistedDesignArtifacts.length > 0
-              ? "published"
-              : undefined;
+          terminal.designPublication === "suppressed"
+            ? "suppressed"
+            : terminal.designPublication === "retryable"
+              ? "retryable"
+              : terminalKind === "done" && persistedDesignArtifacts.length > 0
+                ? "published"
+                : undefined;
         if (retainedPublication && projection) {
           detachedLifecycleProjections.set(terminal.streamId, {
             ...projection,
             artifacts: mergeBoundedArtifacts(projection.artifacts, persistedDesignArtifacts),
             designPublication: retainedPublication,
+            ...(retainedPublication === "suppressed"
+              ? {
+                  terminalError:
+                    terminal.terminalError ??
+                    "The response was saved, but its Design revision was not added to project history.",
+                }
+              : {}),
           });
         } else {
           deleteDetachedProjection(terminal.streamId);

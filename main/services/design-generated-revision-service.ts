@@ -30,7 +30,14 @@ export interface DesignGeneratedRevisionServiceDependencies {
 }
 
 export interface DesignGeneratedRevisionReconciliationResult {
-  designPublication?: "retryable";
+  designPublication?: "retryable" | "suppressed";
+}
+
+function isSemanticPublicationConflict(error: unknown): boolean {
+  return (
+    error instanceof DesignProjectRevisionConflictError ||
+    error instanceof DesignProjectConflictError
+  );
 }
 
 function exactArtifactPersisted(
@@ -173,10 +180,7 @@ export class DesignGeneratedRevisionService {
       // A semantic CAS failure is final for this candidate: leaving it eligible
       // would retry forever and could later roll a lineage backward. Storage
       // errors remain eligible so startup can safely retry an unknown outcome.
-      if (
-        error instanceof DesignProjectRevisionConflictError ||
-        error instanceof DesignProjectConflictError
-      ) {
+      if (isSemanticPublicationConflict(error)) {
         await this.suppressCandidates(
           chatId,
           eligible.map((record) => record.artifact.mediaId),
@@ -193,7 +197,8 @@ export class DesignGeneratedRevisionService {
       >
     >,
     chatById: ReadonlyMap<string, DesignRevisionRecoveryChat>,
-  ): Promise<void> {
+  ): Promise<{ semanticConflictSuppressed: boolean }> {
+    let semanticConflictSuppressed = false;
     const generations = new Map<string, typeof eligible>();
     for (const record of eligible) {
       const key = `${record.chatId}\0${record.generationId}`;
@@ -229,12 +234,14 @@ export class DesignGeneratedRevisionService {
         await this.dependencies.artifacts.commit(first.chatId, mediaIds);
         await this.publishEligible(first.chatId, mediaIds);
       } catch (error) {
+        if (isSemanticPublicationConflict(error)) semanticConflictSuppressed = true;
         this.dependencies.onWarning?.(
           `Could not recover generated Design revisions for ${first.chatId}.`,
           error,
         );
       }
     }
+    return { semanticConflictSuppressed };
   }
 
   async reconcilePersistedChat(
@@ -249,15 +256,18 @@ export class DesignGeneratedRevisionService {
     const eligible = await this.dependencies.artifacts.designPublicationRecords(["eligible"], {
       chatId: chat.id,
     });
-    await this.reconcileRecords(eligible, new Map([[chat.id, chat]]));
+    const reconciliation = await this.reconcileRecords(eligible, new Map([[chat.id, chat]]));
     const unresolved = await this.dependencies.artifacts.designPublicationRecords(["eligible"], {
       chatId: chat.id,
     });
     if (this.dependencies.isChatGenerationActive?.(chat.id)) return {};
-    return unresolved.some(
-      (record) => !this.dependencies.isGenerationActive?.(record.generationId),
-    )
-      ? { designPublication: "retryable" }
+    if (
+      unresolved.some((record) => !this.dependencies.isGenerationActive?.(record.generationId))
+    ) {
+      return { designPublication: "retryable" };
+    }
+    return reconciliation.semanticConflictSuppressed
+      ? { designPublication: "suppressed" }
       : {};
   }
 

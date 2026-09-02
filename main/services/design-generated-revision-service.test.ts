@@ -487,6 +487,64 @@ test("foreground reconciliation reports durable eligibility after publication re
   assert.equal((await artifacts.designPublicationRecords(["eligible"])).length, 1);
 });
 
+test("foreground reconciliation reports a semantic conflict suppressed during this attempt", async (t) => {
+  const { projects, artifacts, service } = await fixture(t);
+  const project = await projects.create({
+    chatId: "chat:suppressed-open",
+    title: "Suppressed open",
+    connectionState: "prototype-only",
+    canvas: {
+      viewport: "desktop",
+      flowViewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        {
+          id: "node:suppressed-open",
+          kind: "artboard",
+          canonicalOrigin: "generated-artifact",
+          x: 0,
+          y: 0,
+          lineageId: "lineage:suppressed-open",
+          artifactMediaIds: ["design:old", "design:current"],
+          activeMediaId: "design:current",
+        },
+      ],
+    },
+  });
+  const item = artifact("design:stale-child", "Stale child", "design:old");
+  await artifacts.stage({
+    chatId: project.chatId,
+    generationId: "generation:suppressed-open",
+    artifact: item,
+    html: HTML,
+    designOwnership: {
+      version: DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION,
+      kind: "revision",
+      projectId: project.id,
+      lineageId: "lineage:suppressed-open",
+      baseMediaId: "design:old",
+    },
+  });
+  await service.markSuccessfulCandidate(project.chatId, [item.mediaId]);
+
+  const result = await service.reconcilePersistedChat({
+    id: project.chatId,
+    messages: [{ role: "assistant", htmlArtifacts: [item] }],
+  });
+
+  assert.deepEqual(result, { designPublication: "suppressed" });
+  assert.equal((await artifacts.designPublicationRecords(["eligible"])).length, 0);
+  assert.equal((await artifacts.designPublicationRecords(["suppressed"])).length, 1);
+  assert.equal((await projects.get(project.id))?.canvas.nodes[0]?.activeMediaId, "design:current");
+  assert.deepEqual(
+    await service.reconcilePersistedChat({
+      id: project.chatId,
+      messages: [{ role: "assistant", htmlArtifacts: [item] }],
+    }),
+    {},
+    "suppression is projected only by the attempt that observes the semantic conflict",
+  );
+});
+
 test("route re-entry never publishes older eligible history while the Design chat is generating", async (t) => {
   const { projects, artifacts } = await fixture(t);
   const project = await projects.create({

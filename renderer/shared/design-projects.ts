@@ -48,7 +48,7 @@ export interface DesignProjectSnapshotV1 {
 /** Transient main-owned state returned when opening a durable Design Project. */
 export interface DesignProjectOpenResultV1 {
   project: DesignProjectSnapshotV1;
-  designPublication?: "retryable";
+  designPublication?: "retryable" | "suppressed";
 }
 
 export interface DesignProjectRecordSummaryV1 {

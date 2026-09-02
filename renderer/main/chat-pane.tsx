@@ -168,6 +168,8 @@ const ANTHROPIC_PROVIDER_ID = "anthropic";
  * that bursty providers do not flap the label mid-prose.
  */
 const TEXT_STREAMING_IDLE_MS = 2_000;
+const SUPPRESSED_DESIGN_PUBLICATION_MESSAGE =
+  "The response was saved, but its Design revision conflicted with newer project history and was not added. The existing canvas was preserved; generate again from the latest project state.";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -202,7 +204,7 @@ export function ChatPane({
   presentation?: "chat" | "design";
   initialDesignMediaId?: string;
   designProject?: DesignProjectSnapshotV1;
-  designPublication?: "retryable";
+  designPublication?: "retryable" | "suppressed";
   onDesignPublicationResolved?: () => void;
   onDesignProjectChange?: (project: DesignProjectSnapshotV1) => void;
 }) {
@@ -301,6 +303,19 @@ export function ChatPane({
       onDesignProjectChange?.(project);
     },
     [onDesignProjectChange],
+  );
+  const adoptSuppressedDesignPublication = React.useCallback(
+    (message = SUPPRESSED_DESIGN_PUBLICATION_MESSAGE) => {
+      setDesignProjectReconciliation(undefined);
+      setStreamingArtifacts([]);
+      streamingArtifactsRef.current = [];
+      setStreamingArtifactGenerationId(undefined);
+      setResumedDetachedDesignPreviewStreamId(undefined);
+      setHasUnpersistedResponse(false);
+      setError(message);
+      onDesignPublicationResolved?.();
+    },
+    [onDesignPublicationResolved],
   );
   const registerDesignPersistenceBarrier = React.useCallback(
     (barrier: (() => Promise<DesignProjectPersistenceSnapshotV1 | undefined>) | undefined) => {
@@ -696,9 +711,12 @@ export function ChatPane({
   // optimistic artifact payload in this renderer. Seed the same inline
   // reconciliation state used by terminal handoffs before the composer paints.
   React.useLayoutEffect(() => {
-    if (presentation !== "design" || designPublication !== "retryable" || !designProject) {
+    if (presentation !== "design" || !designProject) return;
+    if (designPublication === "suppressed") {
+      adoptSuppressedDesignPublication();
       return;
     }
+    if (designPublication !== "retryable") return;
     setDesignProjectReconciliation((current) =>
       current?.projectId === designProject.id
         ? current
@@ -710,7 +728,13 @@ export function ChatPane({
             retrying: false,
           },
     );
-  }, [chatId, designProject?.id, designPublication, presentation]);
+  }, [
+    adoptSuppressedDesignPublication,
+    chatId,
+    designProject?.id,
+    designPublication,
+    presentation,
+  ]);
 
   React.useEffect(() => {
     let current = true;
@@ -740,7 +764,7 @@ export function ChatPane({
     messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
   const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (
       presentation !== "design" ||
       !currentDesignProject ||
@@ -787,6 +811,11 @@ export function ChatPane({
       });
       acknowledge();
     };
+    if (detachedProjection.designPublication === "suppressed") {
+      adoptSuppressedDesignPublication(detachedProjection.terminalError);
+      acknowledge();
+      return;
+    }
     if (detachedProjection.designPublication === "retryable") {
       handoffToReconciliation(
         "The Design revision is saved and waiting to be added to project history.",
@@ -806,6 +835,17 @@ export function ChatPane({
         if (!current || chatIdRef.current !== chatId) return;
         const project = openResult?.project;
         const latest = currentDesignProjectRef.current;
+        if (openResult?.designPublication === "suppressed") {
+          if (
+            project &&
+            (!latest || latest.id !== project.id || latest.revision <= project.revision)
+          ) {
+            updateDesignProject(project);
+          }
+          adoptSuppressedDesignPublication();
+          acknowledge();
+          return;
+        }
         if (!project || !designProjectClaimsArtifacts(project, artifacts)) {
           handoffToReconciliation(
             "The Design revision was published, but the latest project snapshot could not be loaded.",
@@ -848,6 +888,7 @@ export function ChatPane({
       current = false;
     };
   }, [
+    adoptSuppressedDesignPublication,
     chatId,
     currentDesignProject,
     detachedProjection,
@@ -909,11 +950,13 @@ export function ChatPane({
     (visibleDetachedProjection?.reasoning.trim() ? visibleDetachedProjection.reasoning : null);
   const displayedStreamingArtifacts = React.useMemo(
     () =>
-      streamingArtifacts.length > 0
-        ? streamingArtifacts
-        : ((detachedProjection?.designPublication
-            ? detachedProjection.artifacts
-            : visibleDetachedProjection?.artifacts) ?? []),
+      detachedProjection?.designPublication === "suppressed"
+        ? []
+        : streamingArtifacts.length > 0
+          ? streamingArtifacts
+          : ((detachedProjection?.designPublication
+              ? detachedProjection.artifacts
+              : visibleDetachedProjection?.artifacts) ?? []),
     [detachedProjection, streamingArtifacts, visibleDetachedProjection?.artifacts],
   );
   const liveDesignArtifacts = React.useMemo(() => {
@@ -953,6 +996,14 @@ export function ChatPane({
       const openResult = await designerApi.openProject(pending.projectId);
       const project = openResult?.project;
       if (chatIdRef.current !== chatId) return;
+      if (project && openResult.designPublication === "suppressed") {
+        const latest = currentDesignProjectRef.current;
+        if (!latest || latest.id !== project.id || latest.revision <= project.revision) {
+          updateDesignProject(project);
+        }
+        adoptSuppressedDesignPublication();
+        return;
+      }
       if (
         !project ||
         openResult.designPublication === "retryable" ||
@@ -986,7 +1037,13 @@ export function ChatPane({
     } finally {
       designOperationFenceRef.current.release(operation);
     }
-  }, [chatId, designProjectReconciliation, onDesignPublicationResolved, updateDesignProject]);
+  }, [
+    adoptSuppressedDesignPublication,
+    chatId,
+    designProjectReconciliation,
+    onDesignPublicationResolved,
+    updateDesignProject,
+  ]);
   const designContextItems = React.useMemo(
     () => [
       ...(sourceDesignSelection
@@ -1455,6 +1512,21 @@ export function ChatPane({
                 const publishedProject = openResult?.project;
                 if (
                   publishedProject &&
+                  openResult.designPublication === "suppressed" &&
+                  mountedRef.current &&
+                  generationIntentRef.current === generationIntent
+                ) {
+                  const latest = currentDesignProjectRef.current;
+                  if (
+                    !latest ||
+                    latest.id !== publishedProject.id ||
+                    latest.revision <= publishedProject.revision
+                  ) {
+                    updateDesignProject(publishedProject);
+                  }
+                  adoptSuppressedDesignPublication();
+                } else if (
+                  publishedProject &&
                   openResult.designPublication !== "retryable" &&
                   designProjectClaimsArtifacts(publishedProject, optimisticDesignArtifacts) &&
                   mountedRef.current &&
@@ -1561,9 +1633,7 @@ export function ChatPane({
                 void qc.invalidateQueries({ queryKey: queryKeys.chats });
               }
               if (designPublication === "suppressed") {
-                setDesignProjectReconciliation(undefined);
-                setStreamingArtifacts([]);
-                streamingArtifactsRef.current = [];
+                adoptSuppressedDesignPublication(message);
               } else if (
                 designPublication === "retryable" &&
                 currentDesignProject &&
@@ -1636,6 +1706,7 @@ export function ChatPane({
     },
     [
       chatId,
+      adoptSuppressedDesignPublication,
       anthropicThinkingLevel,
       anthropicThinkingSupported,
       clearTextStreaming,
@@ -3001,9 +3072,6 @@ export function ChatPane({
                   livePreviewAuthority={liveDesignPreviewAuthority}
                   projectReconciliationError={designProjectReconciliation?.message}
                   projectReconciliationBusy={designProjectReconciliation?.retrying === true}
-                  projectReconciliationHasPreview={
-                    (designProjectReconciliation?.artifacts.length ?? 0) > 0
-                  }
                   onRetryProjectReconciliation={
                     isGenerating || isStartingGeneration || detachedGenerationDraining
                       ? undefined

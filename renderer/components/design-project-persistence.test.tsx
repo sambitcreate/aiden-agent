@@ -28,6 +28,7 @@ test("Design routes migrate legacy chats and open projects by durable identity",
   assert.match(layout, /opened\.id !== projectOrLegacyChatId/u);
   assert.match(layout, /designProject=\{project\}/u);
   assert.match(layout, /designPublication=\{designPublication\}/u);
+  assert.match(layout, /React\.useState<\s*"retryable" \| "suppressed"\s*>/u);
   assert.match(
     layout,
     /onDesignPublicationResolved=\{\(\) => setDesignPublication\(undefined\)\}/u,
@@ -169,7 +170,14 @@ test("terminal Design output remains optimistic behind actionable reconciliation
     pane.indexOf(
       'openResult.designPublication === "retryable"',
       pane.indexOf("const pending = designProjectReconciliation"),
-    ) < pane.indexOf("onDesignPublicationResolved?.()"),
+    ) <
+      pane.indexOf(
+        "updateDesignProject(project)",
+        pane.indexOf(
+          'openResult.designPublication === "retryable"',
+          pane.indexOf("const pending = designProjectReconciliation"),
+        ),
+      ),
     "retryable durable state is never cleared before main reports it resolved",
   );
   assert.match(pane, /designOperationFenceRef\.current\.tryAcquire\("design-reconciliation"\)/u);
@@ -219,13 +227,8 @@ test("terminal Design output remains optimistic behind actionable reconciliation
     "a delayed terminal refresh cannot overwrite a newer renderer project snapshot",
   );
   assert.match(canvas, /<ProjectReconciliationNotice/u);
-  assert.match(canvas, /The generated preview remains available while you retry/u);
   assert.match(canvas, /Retry to finish restoring project history/u);
-  assert.match(
-    pane,
-    /projectReconciliationHasPreview=\{[\s\S]{0,100}designProjectReconciliation\?\.artifacts\.length/u,
-    "a durable route-open retry does not claim that an absent optimistic preview is visible",
-  );
+  assert.doesNotMatch(canvas, /generated preview remains available/u);
   assert.match(
     canvas,
     /\{onRetry \? \([\s\S]{0,300}<Button[\s\S]{0,200}Retry[\s\S]{0,80}: null\}/u,
@@ -238,10 +241,40 @@ test("terminal semantic publication conflicts discard optimism and never adverti
   assert.match(llmClient, /designPublicationFailure: "retryable" \| "suppressed"/u);
   assert.match(llmClient, /designPublication: persisted\.designPublicationFailure/u);
   assert.match(llmClient, /conflicted with newer project history and was not added/u);
-  assert.match(pane, /if \(designPublication === "suppressed"\) \{/u);
   assert.match(
     pane,
-    /setDesignProjectReconciliation\(undefined\);\s+setStreamingArtifacts\(\[\]\);\s+streamingArtifactsRef\.current = \[\];/u,
+    /if \(detachedProjection\.designPublication === "suppressed"\) \{\s+adoptSuppressedDesignPublication\(detachedProjection\.terminalError\);\s+acknowledge\(\);\s+return;/u,
+    "detached suppression transfers exact terminal truth before exact acknowledgement",
+  );
+  assert.match(
+    pane,
+    /const adoptSuppressedDesignPublication[\s\S]{0,300}setDesignProjectReconciliation\(undefined\);\s+setStreamingArtifacts\(\[\]\);\s+streamingArtifactsRef\.current = \[\];[\s\S]{0,250}setError\(message\);/u,
+    "suppression clears optimistic and retryable state into an honest terminal error",
+  );
+  const retryStart = pane.indexOf("const pending = designProjectReconciliation");
+  const retrySuppressed = pane.indexOf(
+    'project && openResult.designPublication === "suppressed"',
+    retryStart,
+  );
+  const retrySuppressedAdoption = pane.indexOf(
+    "adoptSuppressedDesignPublication();",
+    retrySuppressed,
+  );
+  const retryableCheck = pane.indexOf(
+    'openResult.designPublication === "retryable"',
+    retrySuppressed,
+  );
+  assert.ok(
+    retryStart >= 0 &&
+      retrySuppressed > retryStart &&
+      retrySuppressedAdoption > retrySuppressed &&
+      retryableCheck > retrySuppressedAdoption,
+    "Retry adopts durable suppression as terminal instead of advertising another Retry",
+  );
+  assert.match(
+    pane,
+    /designPublication === "suppressed"\) \{\s+adoptSuppressedDesignPublication\(\);\s+return;[\s\S]{0,100}designPublication !== "retryable"/u,
+    "route-open suppression is consumed before retryable reconciliation can be seeded",
   );
   assert.match(
     pane,

@@ -174,10 +174,48 @@ test("detached retryable Design publication survives terminal cache settlement u
   const retained = detachedLifecycleChatProjection(owner.chatId, owner.workspaceId);
   assert.equal(retained?.designPublication, "retryable");
   assert.equal(retained?.artifacts[0]?.kind, "html");
-  assert.equal(
-    acknowledgeDetachedDesignPublication({ ...owner, chatId: "chat:other" }),
-    false,
+  assert.equal(acknowledgeDetachedDesignPublication({ ...owner, chatId: "chat:other" }), false);
+  assert.equal(acknowledgeDetachedDesignPublication(owner), true);
+  assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId), null);
+  unsubscribe();
+});
+
+test("detached suppressed Design publication retains exact terminal truth until adopted", () => {
+  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => {
+      const handlers = listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    () => undefined,
   );
+  const owner = detached("stream-design-suppressed");
+  const artifact = designArtifact("design:suppressed");
+  const terminalError =
+    "The response was saved, but its Design revision conflicted with newer project history and was not added.";
+  rememberDetachedLifecycleStream(owner, {
+    content: "Conflicted design",
+    reasoning: "",
+    timeline: null,
+    artifacts: [artifact],
+    subagents: [],
+  });
+
+  for (const handler of listeners.get("chat:error") ?? []) {
+    handler({
+      streamId: owner.streamId,
+      chat: chat(owner.chatId, "saved", [artifact]),
+      message: terminalError,
+      designPublication: "suppressed",
+    });
+  }
+
+  const retained = detachedLifecycleChatProjection(owner.chatId, owner.workspaceId);
+  assert.equal(retained?.designPublication, "suppressed");
+  assert.equal(retained?.terminalError, terminalError);
+  assert.deepEqual(retained?.artifacts, [artifact]);
   assert.equal(acknowledgeDetachedDesignPublication(owner), true);
   assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId), null);
   unsubscribe();

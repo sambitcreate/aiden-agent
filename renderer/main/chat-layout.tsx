@@ -353,7 +353,7 @@ export function DesignProjectRoute({
   } = React.useContext(DesignProjectChangeContext);
   const [project, setProject] = React.useState<DesignProjectSnapshotV1>();
   const [openedRouteIdentity, setOpenedRouteIdentity] = React.useState<string>();
-  const [designPublication, setDesignPublication] = React.useState<"retryable">();
+  const [designPublication, setDesignPublication] = React.useState<"retryable" | "suppressed">();
   const latestProjectRef = React.useRef<DesignProjectSnapshotV1 | undefined>(undefined);
   const [error, setError] = React.useState<string>();
 
