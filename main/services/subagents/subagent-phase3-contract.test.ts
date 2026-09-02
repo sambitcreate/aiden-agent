@@ -417,6 +417,7 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
 test("application startup reconciles private runs and worktree deletions before UI and schedules", async () => {
   const main = await source("main/index.ts");
   const initialize = main.indexOf("await subagentRunStore.initialize()");
+  const recoverDesignProjects = main.indexOf("await designProjectLifecycle.recover()", initialize);
   const reconcileDeletions = main.indexOf("await reconcilePendingChatDeletions(", initialize);
   const reconcileWorktrees = main.indexOf(
     "await reconcilePendingManagedWorktreeDeletions({",
@@ -429,6 +430,7 @@ test("application startup reconciles private runs and worktree deletions before 
   const createWindow = main.indexOf("await createMainWindow()", finalizeOrphanedJournals);
   const startSchedules = main.indexOf("await scheduleService.start()", createWindow);
   assert.ok(initialize >= 0);
+  assert.ok(recoverDesignProjects > initialize);
   assert.ok(reconcileDeletions > initialize);
   assert.ok(reconcileWorktrees > reconcileDeletions);
   assert.ok(finalizeOrphanedJournals > reconcileWorktrees);

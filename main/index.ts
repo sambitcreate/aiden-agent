@@ -1615,6 +1615,9 @@ if (!ownsSingleInstanceLock) {
       await designCommentStore.initialize();
       await designSystemSnapshotStore.initialize();
       await designHandoffApplicationService.initialize();
+      // Design recovery can cascade into chat deletion, whose application
+      // service must tombstone private subagent history first.
+      await subagentRunStore.initialize();
       await designProjectLifecycle.recover();
       await recoverSourceDesignerMultifileActions(designProjectStore);
       const handoffRecovery = await designHandoffApplicationService.reconcileAtStartup();
@@ -1678,7 +1681,6 @@ if (!ownsSingleInstanceLock) {
           `Design comments unavailable: ${designCommentAvailability.reason}`,
         );
       }
-      await subagentRunStore.initialize();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
         if (displayImageArtifactAvailability.available) {
           await displayImageArtifactStore.deleteChat(chatId);

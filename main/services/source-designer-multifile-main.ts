@@ -177,8 +177,8 @@ export async function recoverSourceDesignerMultifileActions(projects?: {
 }): Promise<void> {
   const results = [];
   for (const record of await sourceDesignerMultifileJournal.listInterrupted()) {
-    if (record.projectId && projects) {
-      const project = await projects.get(record.projectId);
+    if (record.projectId) {
+      const project = await projects?.get(record.projectId);
       const authorized =
         project?.connectionState === "connected" &&
         project.chatId === record.chatId &&
@@ -190,24 +190,22 @@ export async function recoverSourceDesignerMultifileActions(projects?: {
             (node) => node.kind === "source-preview" && node.id === record.sourceNodeId,
           ),
         );
-      if (!authorized || record.projectId) {
-        const revoked = await sourceDesignerMultifileCoordinator.revoke(
-          record.actionId,
-          authorized
-            ? "A restarted source-backed Designer Action was rolled back for a fresh ownership review."
-            : "The owning Design Project authority changed before restart recovery.",
-        );
-        results.push({
-          status:
-            revoked.stage === "recoverable"
-              ? ("recoverable" as const)
-              : revoked.stage === "undone"
-                ? ("undone" as const)
-                : ("rolled-back" as const),
-          record: revoked,
-        });
-        continue;
-      }
+      const revoked = await sourceDesignerMultifileCoordinator.revoke(
+        record.actionId,
+        authorized
+          ? "A restarted source-backed Designer Action was rolled back for a fresh ownership review."
+          : "The owning Design Project authority changed before restart recovery.",
+      );
+      results.push({
+        status:
+          revoked.stage === "recoverable"
+            ? ("recoverable" as const)
+            : revoked.stage === "undone"
+              ? ("undone" as const)
+              : ("rolled-back" as const),
+        record: revoked,
+      });
+      continue;
     }
     results.push(await sourceDesignerMultifileCoordinator.resume(record.actionId));
   }
