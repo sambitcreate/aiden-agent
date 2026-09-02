@@ -34,7 +34,7 @@ export function DesignProjectSidebar({
   activeProjectId?: string;
   projectUpdate?: DesignProjectSnapshotV1;
   mode: ShellMode;
-  onModeChange: (mode: ShellMode) => void;
+  onModeChange: (mode: ShellMode) => boolean;
   onProjectChange: (project: DesignProjectSnapshotV1) => void;
   onProjectUnavailable: (projectId: string) => void;
 }) {

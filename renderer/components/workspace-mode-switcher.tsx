@@ -18,14 +18,13 @@ export function WorkspaceModeSwitcher({
   onModeChange,
 }: {
   mode: ShellMode;
-  onModeChange: (mode: ShellMode) => void;
+  onModeChange: (mode: ShellMode) => boolean;
 }) {
   const label = mode === "design" ? "Design" : "Agent";
   const { closeIfCompact } = useSplitViewSidebar();
 
   const selectMode = (nextMode: ShellMode) => {
-    closeIfCompact();
-    onModeChange(nextMode);
+    if (onModeChange(nextMode)) closeIfCompact();
   };
 
   return (

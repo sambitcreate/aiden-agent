@@ -91,7 +91,7 @@ const APP_UPDATE_BANNER_EXIT_MS = 120;
 interface ChatSidebarProps {
   activeChatId: string | undefined;
   mode: ShellMode;
-  onModeChange: (mode: ShellMode) => void;
+  onModeChange: (mode: ShellMode) => boolean;
   titleReveal?: ChatTitleRevealEvent | null;
 }
 

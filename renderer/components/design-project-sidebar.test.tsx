@@ -66,3 +66,13 @@ test("route changes select their sidebar before paint and preserve newer project
     /latest\?\.id === opened\.id && latest\.revision > opened\.revision[\s\S]*setProject\(latest\)/u,
   );
 });
+
+test("a rejected mode change keeps the compact sidebar open", () => {
+  const switcher = readFileSync(
+    new URL("./workspace-mode-switcher.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(switcher, /if \(onModeChange\(nextMode\)\) closeIfCompact\(\)/u);
+  assert.match(layout, /if \(nextMode === mode\) return false/u);
+  assert.match(layout, /toast\.info\(blockedReason\);\s*return false/u);
+});

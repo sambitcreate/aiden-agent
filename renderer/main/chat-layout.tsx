@@ -100,7 +100,7 @@ export function ChatLayout() {
 
   const switchMode = React.useCallback(
     (nextMode: ShellMode) => {
-      if (nextMode === mode) return;
+      if (nextMode === mode) return false;
       const blockedReason = environmentPanel.gitOperationBusy
         ? "Wait for the current Git operation to finish"
         : environmentPanel.editorState.saving
@@ -110,7 +110,7 @@ export function ChatLayout() {
             : undefined;
       if (blockedReason) {
         toast.info(blockedReason);
-        return;
+        return false;
       }
       setMode(nextMode);
       localStorage.setItem(SHELL_MODE_STORAGE_KEY, nextMode);
@@ -125,7 +125,7 @@ export function ChatLayout() {
         } else {
           void navigate({ to: "/design" });
         }
-        return;
+        return true;
       }
       const target = lastAgentTargetRef.current;
       const chatMatch = /^\/chat\/([^/]+)$/u.exec(target);
@@ -156,6 +156,7 @@ export function ChatLayout() {
       } else {
         void navigate({ to: "/" });
       }
+      return true;
     },
     [
       environmentPanel.editorState.dirty,
