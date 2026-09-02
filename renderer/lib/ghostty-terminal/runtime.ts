@@ -1,7 +1,7 @@
 type GhosttyWasmFile = "ghostty-vt.wasm" | "ghostty-write-pty.wasm";
 
 async function loadWasmBytes(filename: GhosttyWasmFile): Promise<ArrayBuffer> {
-  if (typeof window !== "undefined") {
+  if (typeof document !== "undefined") {
     const { VT_WASM_URL, WRITE_PTY_WASM_URL } = await import("./wasm-assets");
     const assetUrl = filename === "ghostty-vt.wasm" ? VT_WASM_URL : WRITE_PTY_WASM_URL;
     const response = await fetch(assetUrl);
@@ -10,10 +10,12 @@ async function loadWasmBytes(filename: GhosttyWasmFile): Promise<ArrayBuffer> {
     }
     return await response.arrayBuffer();
   }
+  // Keep this URL dynamic so tsx/esbuild does not rewrite it to a cache path
+  // that has no vendor/ directory. Vite still emits wasm from wasm-assets.ts.
+  const vendorPath = `./vendor/${filename}`;
   const { readFile } = await import("node:fs/promises");
   const { fileURLToPath } = await import("node:url");
-  const { join } = await import("node:path");
-  const buffer = await readFile(join(fileURLToPath(new URL(".", import.meta.url)), "vendor", filename));
+  const buffer = await readFile(fileURLToPath(new URL(vendorPath, import.meta.url)));
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
