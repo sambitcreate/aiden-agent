@@ -1,15 +1,25 @@
-async function loadWasmBytes(relativePath: string): Promise<ArrayBuffer> {
-  const url = new URL(relativePath, import.meta.url);
+/**
+ * Vite only emits these files when the URL is a compile-time string
+ * literal. A runtime `relativePath` argument is invisible to the bundler,
+ * so `scripts/verify-ghostty-terminal-assets.mjs` (and the packaged
+ * renderer) would 404. The write-pty trampoline is 112 bytes; `?no-inline`
+ * keeps Vite from turning it into a `data:` URL that CSP `connect-src 'self'`
+ * cannot fetch.
+ */
+const VT_WASM_URL = new URL("./vendor/ghostty-vt.wasm", import.meta.url);
+const WRITE_PTY_WASM_URL = new URL("./vendor/ghostty-write-pty.wasm?no-inline", import.meta.url);
+
+async function loadWasmBytes(assetUrl: URL): Promise<ArrayBuffer> {
   if (typeof window !== "undefined") {
-    const response = await fetch(url);
+    const response = await fetch(assetUrl);
     if (!response.ok) {
-      throw new Error(`Unable to load ${relativePath} (${response.status})`);
+      throw new Error(`Unable to load ${assetUrl.pathname} (${response.status})`);
     }
     return await response.arrayBuffer();
   }
   const { readFile } = await import("node:fs/promises");
   const { fileURLToPath } = await import("node:url");
-  const buffer = await readFile(fileURLToPath(url));
+  const buffer = await readFile(fileURLToPath(assetUrl));
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
@@ -54,7 +64,7 @@ export class GhosttyRuntime {
   }
 
   static async load(): Promise<GhosttyRuntime> {
-    const wasmBytes = await loadWasmBytes("./vendor/ghostty-vt.wasm");
+    const wasmBytes = await loadWasmBytes(VT_WASM_URL);
     let instance: WebAssembly.Instance | undefined;
     const imports = {
       env: {
@@ -191,7 +201,7 @@ export class GhosttyRuntime {
   }
 
   private async installWritePtyTrampoline(): Promise<void> {
-    const trampolineBytes = await loadWasmBytes("./vendor/ghostty-write-pty.wasm");
+    const trampolineBytes = await loadWasmBytes(WRITE_PTY_WASM_URL);
     const result = await WebAssembly.instantiate(trampolineBytes, {
       env: {
         t3_write_pty: (_terminal: number, userdata: number, pointer: number, length: number) => {

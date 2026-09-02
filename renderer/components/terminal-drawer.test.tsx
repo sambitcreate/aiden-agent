@@ -22,8 +22,12 @@ test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
   assert.doesNotMatch(styles, /\.xterm-viewport/u);
   assert.match(csp, /wasm-unsafe-eval/u);
   assert.match(commands, /\.ghostty-screen/u);
-  assert.match(runtime, /vendor\/ghostty-vt\.wasm/u);
-  assert.match(runtime, /vendor\/ghostty-write-pty\.wasm/u);
+  assert.match(runtime, /new URL\("\.\/vendor\/ghostty-vt\.wasm", import\.meta\.url\)/u);
+  assert.match(
+    runtime,
+    /new URL\("\.\/vendor\/ghostty-write-pty\.wasm\?no-inline", import\.meta\.url\)/u,
+  );
+  assert.match(source("../../vite.config.ts"), /assetsInlineLimit/u);
   assert.doesNotMatch(packageJson, /"@xterm\/xterm"/u);
   assert.doesNotMatch(packageJson, /"@xterm\/addon-fit"/u);
 });
