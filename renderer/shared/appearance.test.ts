@@ -280,7 +280,7 @@ test("text entry stays quiet while non-text controls retain visible keyboard foc
   );
   assert.match(modeSwitcher, /Build, debug, and ship/u);
   assert.match(modeSwitcher, /Create, iterate, and explore/u);
-  assert.match(modeSwitcher, /w-80 rounded-\[24px\] p-2/u);
+  assert.match(modeSwitcher, /w-80 rounded-\[18px\] p-2/u);
   assert.match(modeSwitcher, /min-h-20[\s\S]*rounded-\[18px\]/u);
   assert.match(modeSwitcher, /rounded-\[10px\] border-0 bg-transparent px-1[\s\S]*shadow-none/u);
   assert.doesNotMatch(modeSwitcher, /rounded-\[22px\] bg-control/u);
