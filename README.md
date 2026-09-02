@@ -91,7 +91,7 @@ The native Aiden On The Go iPhone and iPad client lives in [`ios/`](ios/README.m
 
 ### Mobile distribution
 
-The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation builds remain separate from the macOS release and are uploaded by CI as installable APK artifacts.
+The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation remains separate from the macOS release. Pull requests run the Android verification gates without retaining an installable artifact; relevant merges to `main` publish the debug APK and its checksum.
 
 The development launcher prepares a cached, ad-hoc-signed **Aiden Agent Dev** runtime that can run beside the installed **Aiden Agent** app. Development uses separate Application Support, Chromium session, log, crash, and `~/.aiden-dev` roots; it does not copy production data, register global shortcuts, or check the production update feed by default. Set `AIDEN_DEV_GLOBAL_SHORTCUTS=1` only when a development run intentionally needs the global bindings.
 
