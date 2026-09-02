@@ -36,19 +36,10 @@ import {
 } from "../services/chat-append-commit.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
-import {
-  parseAssistantChatCreate,
-  parseChatCreate,
-} from "./chat-create-params.js";
+import { parseAssistantChatCreate, parseChatCreate } from "./chat-create-params.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
-import {
-  parseChatCopyRequest,
-  parseChatOnlyRequest,
-} from "./chat-session-params.js";
-import {
-  safeExportFileName,
-  writeAidenChatExportForRenderer,
-} from "../services/chat-export.js";
+import { parseChatCopyRequest, parseChatOnlyRequest } from "./chat-session-params.js";
+import { safeExportFileName, writeAidenChatExportForRenderer } from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
@@ -57,13 +48,26 @@ import {
   compactDesktopChat,
 } from "../services/context-lifecycle-adapters.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
+import { DesignProjectDeletionConfirmationRequiredError } from "../services/design-project-lifecycle.js";
+import {
+  designProjectLifecycle,
+  designProjectStore,
+} from "../services/design-project-store-main.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { memoryStore } from "../services/memory-store-main.js";
 import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
-import {
-  todoSnapshotForRenderer,
-  unavailableTodoSnapshot,
-} from "../../renderer/shared/todo.js";
+import { todoSnapshotForRenderer, unavailableTodoSnapshot } from "../../renderer/shared/todo.js";
+import { createDesignProjectConnectionService } from "../services/design-project-connection-service.js";
+import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
+import { designLivePreviewAuthority } from "../services/design-live-preview-authority-main.js";
+
+const designProjectAppendService = createDesignProjectConnectionService({
+  projects: designProjectStore,
+  workspaces: workspaceEnvironmentApplicationService,
+  runProjectMutation: (operation) => designProjectLifecycle.runProjectMutation(operation),
+  chatWorkspaceId: async (chatId) => (await chatStore.get(chatId))?.workspaceId,
+});
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -80,14 +84,25 @@ function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): 
   );
 }
 
+async function listAgentChats(workspaceId?: string) {
+  const chats = await chatApplicationService.listRegular(workspaceId);
+  const projects = designProjectStore.availability().available
+    ? await designProjectStore.list()
+    : [];
+  const projectChatIds = new Set(projects.map((project) => project.chatId));
+  return chats.filter(
+    (chat) =>
+      persistedChatWorkspaceId(chat.workspaceId) !== DESIGN_PROJECT_CHAT_WORKSPACE_ID &&
+      !projectChatIds.has(chat.id),
+  );
+}
+
 export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
-    chatApplicationService.listRegular(
-      typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,
-    ),
+    listAgentChats(typeof workspaceId === "string" && workspaceId ? workspaceId : undefined),
   );
 
   ipcMain.handle("chats:get", async (_event, id: unknown) =>
@@ -101,7 +116,11 @@ export function registerChatHistoryHandlers(): void {
     );
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
-    if (!chat || chat.botId || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
+    if (
+      !chat ||
+      chat.botId ||
+      persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID
+    ) {
       return null;
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
@@ -135,11 +154,7 @@ export function registerChatHistoryHandlers(): void {
       event,
       () => new Error("Compaction cancellation requires the active application document."),
     );
-    return cancelDesktopCompaction(
-      contextLifecycleService,
-      asString(id, "id"),
-      owner.documentId,
-    );
+    return cancelDesktopCompaction(contextLifecycleService, asString(id, "id"), owner.documentId);
   });
 
   ipcMain.handle("chats:create", async (event, input: unknown) => {
@@ -158,16 +173,14 @@ export function registerChatHistoryHandlers(): void {
     // creation from forging the persisted identity that main treats as mode.
     const owner = rendererDocumentOwner(
       event,
-      () =>
-        new Error("Assistant chats require the active application document."),
+      () => new Error("Assistant chats require the active application document."),
     );
     if (llmClient.requiresAppendReconciliation(owner.documentId)) {
       throw new Error(appendReconciliationFailureMessage("blocked"));
     }
     const parsed = parseAssistantChatCreate(input);
     const assertCurrent = () => {
-      if (owner.isDestroyed())
-        throw new Error("The renderer document is no longer active.");
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
       if (llmClient.requiresAppendReconciliation(owner.documentId)) {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
@@ -192,17 +205,12 @@ export function registerChatHistoryHandlers(): void {
     }
   });
 
-  ipcMain.handle(
-    "chats:rename",
-    async (_event, id: unknown, title: unknown) => {
-      await chatApplicationService.rename(asString(id, "id"), asString(title, "title"));
-    },
-  );
+  ipcMain.handle("chats:rename", async (_event, id: unknown, title: unknown) => {
+    await chatApplicationService.rename(asString(id, "id"), asString(title, "title"));
+  });
 
-  ipcMain.handle(
-    "chats:renameWithFoundationModels",
-    async (_event, id: unknown) =>
-      chatTitleService.renameWithFoundationModels(asString(id, "id")),
+  ipcMain.handle("chats:renameWithFoundationModels", async (_event, id: unknown) =>
+    chatTitleService.renameWithFoundationModels(asString(id, "id")),
   );
 
   ipcMain.handle("chats:copyVisibleHistory", async (event, input: unknown) => {
@@ -222,9 +230,7 @@ export function registerChatHistoryHandlers(): void {
     try {
       finishCopy = llmClient.beginChatCopy(parsed.chatId);
       if (!finishCopy) {
-        throw new Error(
-          "Finish the current response or approval before copying this chat.",
-        );
+        throw new Error("Finish the current response or approval before copying this chat.");
       }
       const source = await chatStore.get(parsed.chatId);
       if (!source) throw new Error("The chat is no longer available.");
@@ -264,9 +270,7 @@ export function registerChatHistoryHandlers(): void {
 
         const workspaceId = persistedChatWorkspaceId(source.workspaceId);
         if (workspaceId === ASSISTANT_WORKSPACE_ID) {
-          throw new Error(
-            "Assistant chats cannot be copied into the main chat surface.",
-          );
+          throw new Error("Assistant chats cannot be copied into the main chat surface.");
         }
         const mutationAdmission = workspaceMutationGate.admit(workspaceId);
         const workspaceOperation = admitRendererOwnedWorkspaceOperation(
@@ -371,9 +375,7 @@ export function registerChatHistoryHandlers(): void {
     try {
       finishExport = llmClient.beginChatExport(chatId);
       if (!finishExport) {
-        throw new Error(
-          "Finish the current response or approval before exporting this chat.",
-        );
+        throw new Error("Finish the current response or approval before exporting this chat.");
       }
       const chat = await chatStore.get(chatId);
       if (!chat) throw new Error("The chat is no longer available.");
@@ -399,8 +401,7 @@ export function registerChatHistoryHandlers(): void {
         filters: [{ name: "Aiden chat", extensions: ["json"] }],
         properties: ["createDirectory", "showOverwriteConfirmation"],
       });
-      if (result.canceled || !result.filePath)
-        return { status: "cancelled" as const };
+      if (result.canceled || !result.filePath) return { status: "cancelled" as const };
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -436,278 +437,358 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
-  ipcMain.handle(
-    "chats:setComputerUse",
-    async (event, id: unknown, enabled: unknown) => {
-      const owner = rendererDocumentOwner(
-        event,
-        () =>
-          new Error(
-            "Computer Use settings require the active application document.",
-          ),
-      );
-      const chatId = asString(id, "id");
-      if (typeof enabled !== "boolean")
-        throw new Error("Invalid Computer Use chat setting.");
-      const release = llmClient.beginComputerUseSettingChange(chatId);
-      if (!release) {
-        throw new Error(
-          "Finish or stop the current response before changing Computer Use.",
-        );
-      }
-      const controller = new AbortController();
-      const removeInvalidation = owner.onInvalidated(() =>
-        controller.abort(
-          new Error("The renderer document is no longer active."),
-        ),
-      );
-      try {
-        if (enabled) {
-          const status = await computerUseStatus.status({
-            signal: controller.signal,
-          });
-          if (owner.isDestroyed())
-            throw new Error("The renderer document is no longer active.");
-          if (!status.ready) throw new Error(status.detail);
-        }
-        if (owner.isDestroyed())
-          throw new Error("The renderer document is no longer active.");
-        return chatForRenderer(
-          await chatStore.setComputerUseEnabled(
-            chatId,
-            enabled,
-            () => !owner.isDestroyed(),
-          ),
-        );
-      } finally {
-        removeInvalidation();
-        release();
-      }
-    },
-  );
-
-  ipcMain.handle("chats:remove", async (_event, id: unknown) => {
+  ipcMain.handle("chats:setComputerUse", async (event, id: unknown, enabled: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Computer Use settings require the active application document."),
+    );
     const chatId = asString(id, "id");
-    const chat = await chatStore.get(chatId);
-    const result = chat?.botId
-      ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
-      : await chatApplicationService.remove(chatId);
-    if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
-    return result;
+    if (typeof enabled !== "boolean") throw new Error("Invalid Computer Use chat setting.");
+    const release = llmClient.beginComputerUseSettingChange(chatId);
+    if (!release) {
+      throw new Error("Finish or stop the current response before changing Computer Use.");
+    }
+    const controller = new AbortController();
+    const removeInvalidation = owner.onInvalidated(() =>
+      controller.abort(new Error("The renderer document is no longer active.")),
+    );
+    try {
+      if (enabled) {
+        const status = await computerUseStatus.status({
+          signal: controller.signal,
+        });
+        if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+        if (!status.ready) throw new Error(status.detail);
+      }
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+      return chatForRenderer(
+        await chatStore.setComputerUseEnabled(chatId, enabled, () => !owner.isDestroyed()),
+      );
+    } finally {
+      removeInvalidation();
+      release();
+    }
   });
 
-  ipcMain.handle(
-    "chats:appendMessage",
-    (event, id: unknown, message: unknown, meta?: unknown) => {
-      // Parse and project the entire renderer envelope synchronously. The raw
-      // IPC objects are never captured by the asynchronous persistence frame.
-      const parsed = parseChatAppend(id, message, meta);
-      const {
+  ipcMain.handle("chats:remove", async (_event, id: unknown, confirmationValue?: unknown) => {
+    const chatId = asString(id, "id");
+    const chat = await chatStore.get(chatId);
+    if (chat?.botId) {
+      const result = await botApplicationService.deleteChat({ botId: chat.botId, chatId });
+      await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
+      return result;
+    }
+    let confirmation: { projectId: string; expectedRevision: number } | undefined;
+    if (confirmationValue !== undefined) {
+      if (
+        !confirmationValue ||
+        typeof confirmationValue !== "object" ||
+        Array.isArray(confirmationValue)
+      ) {
+        throw new Error("Invalid Design Project deletion confirmation.");
+      }
+      const candidate = confirmationValue as Record<string, unknown>;
+      if (
+        Object.keys(candidate).length !== 2 ||
+        typeof candidate.projectId !== "string" ||
+        !Number.isSafeInteger(candidate.expectedRevision) ||
+        (candidate.expectedRevision as number) < 1
+      ) {
+        throw new Error("Invalid Design Project deletion confirmation.");
+      }
+      confirmation = {
+        projectId: candidate.projectId,
+        expectedRevision: candidate.expectedRevision as number,
+      };
+    }
+    try {
+      const result = await designProjectLifecycle.routeChatDeletion({
         chatId,
-        role,
-        content,
-        messageModel,
-        attachments,
-        providerId,
-        metaModel,
-        autoTitle,
-        turnId,
-        skillReference,
-        retainedBytes,
-      } = parsed;
-      const owner = rendererDocumentOwner(
-        event,
-        () =>
-          new Error("Chat messages require the active application document."),
-      );
-      if (llmClient.requiresAppendReconciliation(owner.documentId)) {
-        throw new Error(appendReconciliationFailureMessage("blocked"));
+        confirmation,
+        deleteOrdinaryChat: (ordinaryChatId) => chatApplicationService.remove(ordinaryChatId),
+        beforeDesignDelete: (plan) => {
+          if (llmClient.isChatBusy(plan.chatId)) {
+            throw new Error(
+              "Finish or stop the current Design response before deleting this project.",
+            );
+          }
+        },
+      });
+      return { status: "deleted" as const, kind: result.kind };
+    } catch (error) {
+      if (error instanceof DesignProjectDeletionConfirmationRequiredError) {
+        return { status: "confirmation-required" as const, plan: error.plan };
       }
-      const turn = llmClient.beginChatTurn(chatId, turnId, owner.documentId);
-      if (!turn) {
-        throw new Error(
-          "Wait for the previous response to finish saving before sending again.",
-        );
-      }
-      turn.onReleased(owner.onInvalidated(turn.release));
-      try {
-        if (skillReference) turn.reserveSkillPreparation();
-        turn.reserveAppendPayload(retainedBytes);
-      } catch (error) {
-        turn.release();
-        turn.settleAsyncWork();
-        throw error;
-      }
+      throw error;
+    }
+  });
 
-      return (async () => {
-        let appended = false;
-        try {
-          const unresolvedSend = await unresolvedGuiArtifactMessage(chatId);
-          if (unresolvedSend) {
-            throw new Error(
-              artifactRecoveryMessage(
-                unresolvedSend,
-                "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
-              ),
-            );
-          }
-          const authoritativeChat = skillReference
-            ? await chatStore.get(chatId)
-            : undefined;
-          if (skillReference && !authoritativeChat) {
-            throw new Error("This chat is no longer available.");
-          }
-          if (!turn.isActive()) {
-            throw new Error(
-              "This message turn expired before it could be saved.",
-            );
-          }
-          const workspaceId = authoritativeChat
-            ? persistedChatWorkspaceId(authoritativeChat.workspaceId)
-            : undefined;
-          const skillWorkspaceId = skillReference
-            ? requireSkillInvocationWorkspace(workspaceId)
-            : undefined;
-          const workspaceAdmission = skillWorkspaceId
-            ? workspaceMutationGate.admit(skillWorkspaceId)
-            : undefined;
-          if (workspaceAdmission) {
-            const abortTurn = () => turn.release();
-            workspaceAdmission.signal.addEventListener("abort", abortTurn, {
-              once: true,
-            });
-            turn.onReleased(() => {
-              workspaceAdmission.signal.removeEventListener("abort", abortTurn);
-              workspaceAdmission.release();
-            });
-          }
-          const userMessageId = randomUUID();
-          const isCurrent = () =>
-            turn.isActive() && workspaceAdmission?.signal.aborted !== true;
-          const append = (skill?: {
+  ipcMain.handle("chats:appendMessage", (event, id: unknown, message: unknown, meta?: unknown) => {
+    // Parse and project the entire renderer envelope synchronously. The raw
+    // IPC objects are never captured by the asynchronous persistence frame.
+    const parsed = parseChatAppend(id, message, meta);
+    const {
+      chatId,
+      role,
+      content,
+      messageModel,
+      attachments,
+      providerId,
+      metaModel,
+      autoTitle,
+      turnId,
+      skillReference,
+      designPreflight,
+      retainedBytes,
+    } = parsed;
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Chat messages require the active application document."),
+    );
+    if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+      throw new Error(appendReconciliationFailureMessage("blocked"));
+    }
+    const turn = llmClient.beginChatTurn(chatId, turnId, owner.documentId);
+    if (!turn) {
+      throw new Error("Wait for the previous response to finish saving before sending again.");
+    }
+    turn.onReleased(owner.onInvalidated(turn.release));
+    try {
+      if (skillReference) turn.reserveSkillPreparation();
+      turn.reserveAppendPayload(retainedBytes);
+    } catch (error) {
+      turn.release();
+      turn.settleAsyncWork();
+      throw error;
+    }
+
+    return (async () => {
+      let appended = false;
+      try {
+        const unresolvedSend = await unresolvedGuiArtifactMessage(chatId);
+        if (unresolvedSend) {
+          throw new Error(
+            artifactRecoveryMessage(
+              unresolvedSend,
+              "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
+            ),
+          );
+        }
+        const authoritativeChat = await chatStore.get(chatId);
+        if (!authoritativeChat) {
+          throw new Error("This chat is no longer available.");
+        }
+        if (!turn.isActive()) {
+          throw new Error("This message turn expired before it could be saved.");
+        }
+        const workspaceId = persistedChatWorkspaceId(authoritativeChat.workspaceId);
+        const isDesignChat =
+          workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID ||
+          (await designProjectStore.getByChatId(chatId)) !== undefined;
+        if (isDesignChat && !designPreflight) {
+          throw new Error(
+            "This Design Project changed before the prompt could be saved. Review it and try again.",
+          );
+        }
+        if (!isDesignChat && designPreflight) {
+          throw new Error("Design Project authority cannot be used with this chat.");
+        }
+        if (isDesignChat && skillReference) {
+          throw new Error("Design Project prompts cannot invoke workspace skills.");
+        }
+        const skillWorkspaceId = skillReference
+          ? requireSkillInvocationWorkspace(workspaceId)
+          : undefined;
+        const workspaceAdmission = skillWorkspaceId
+          ? workspaceMutationGate.admit(skillWorkspaceId)
+          : undefined;
+        if (workspaceAdmission) {
+          const abortTurn = () => turn.release();
+          workspaceAdmission.signal.addEventListener("abort", abortTurn, {
+            once: true,
+          });
+          turn.onReleased(() => {
+            workspaceAdmission.signal.removeEventListener("abort", abortTurn);
+            workspaceAdmission.release();
+          });
+        }
+        const userMessageId = randomUUID();
+        const isCurrent = () => turn.isActive() && workspaceAdmission?.signal.aborted !== true;
+        const append = (
+          skill?: {
             provenance: {
               version: 1;
               name: string;
               source: "configured" | "workspace" | "global";
             };
-          }) =>
-            appendChatMessageWithReconciliation({
-              messageId: userMessageId,
-              append: () =>
-                chatStore.appendMessage(
-                  chatId,
-                  {
-                    id: userMessageId,
-                    role,
-                    content,
-                    model: messageModel,
-                    attachments,
-                    skill: skill?.provenance,
-                    // Reasoning and generation timelines are persisted by the trusted
-                    // main-process generation owner, never accepted from renderer data.
-                    reasoning: undefined,
-                    timeline: undefined,
-                    subagents: undefined,
-                  },
-                  {
-                    providerId,
-                    model: metaModel,
-                    autoTitle,
-                    expectedWorkspaceId: workspaceId,
-                    isCurrent,
-                  },
-                ),
-              recover: () => chatStore.get(chatId),
-            });
-          const chat = skillReference
-            ? await commitSkillInvocationForAppend(
+          },
+          appendIsCurrent: () => boolean = () => true,
+        ) =>
+          appendChatMessageWithReconciliation({
+            messageId: userMessageId,
+            append: () =>
+              chatStore.appendMessage(
+                chatId,
                 {
-                  invocationId: skillReference.invocationId,
+                  id: userMessageId,
                   role,
                   content,
+                  model: messageModel,
                   attachments,
-                  workspaceId: skillWorkspaceId!,
-                  userMessageId,
+                  skill: skill?.provenance,
+                  // Reasoning and generation timelines are persisted by the trusted
+                  // main-process generation owner, never accepted from renderer data.
+                  reasoning: undefined,
+                  timeline: undefined,
+                  subagents: undefined,
                 },
                 {
-                  resolveFresh: (resolvedWorkspaceId, invocationId) =>
-                    skillRegistry.resolveFresh(
-                      resolvedWorkspaceId,
-                      invocationId,
-                    ),
-                  isCurrent,
-                  prepareLease: (prepared) =>
-                    turn.prepareSkillInvocation(prepared),
-                  append,
+                  providerId,
+                  model: metaModel,
+                  autoTitle,
+                  expectedWorkspaceId: workspaceId,
+                  isCurrent: () => isCurrent() && appendIsCurrent(),
                 },
-              )
-            : await append();
-          appended = true;
-          return chatForRenderer(chat);
-        } catch (error) {
-          if (isAppendReconciliationRequiredError(error)) {
-            llmClient.markAppendReconciliationRequired(owner.documentId);
-            owner.onInvalidated(() => {
-              llmClient.clearAppendReconciliationRequired(owner.documentId);
-            });
+              ),
+            recover: () => chatStore.get(chatId),
+          });
+        const appendDesignTurn = async () => {
+          if (!designPreflight || designPreflight.chatId !== chatId) {
+            throw new Error(
+              "This Design Project changed before the prompt could be saved. Review it and try again.",
+            );
           }
-          throw error;
-        } finally {
-          if (!appended) turn.release();
-          turn.settleAsyncWork();
+          return designProjectAppendService.runGenerationAppend(
+            owner,
+            designPreflight,
+            (designIsCurrent) => append(undefined, designIsCurrent),
+          );
+        };
+        const chat = skillReference
+          ? await commitSkillInvocationForAppend(
+              {
+                invocationId: skillReference.invocationId,
+                role,
+                content,
+                attachments,
+                workspaceId: skillWorkspaceId!,
+                userMessageId,
+              },
+              {
+                resolveFresh: (resolvedWorkspaceId, invocationId) =>
+                  skillRegistry.resolveFresh(resolvedWorkspaceId, invocationId),
+                isCurrent,
+                prepareLease: (prepared) => turn.prepareSkillInvocation(prepared),
+                append,
+              },
+            )
+          : isDesignChat
+            ? await appendDesignTurn()
+            : await append();
+        appended = true;
+        return chatForRenderer(chat);
+      } catch (error) {
+        if (isAppendReconciliationRequiredError(error)) {
+          llmClient.markAppendReconciliationRequired(owner.documentId);
+          owner.onInvalidated(() => {
+            llmClient.clearAppendReconciliationRequired(owner.documentId);
+          });
         }
-      })();
-    },
-  );
-
-  ipcMain.handle(
-    "chats:htmlArtifactSrcdoc",
-    async (event, input: unknown) => {
-      rendererDocumentOwner(
-        event,
-        () => new Error("HTML artifact preview requires the active application document."),
-      );
-      if (!input || typeof input !== "object" || Array.isArray(input)) {
-        throw new Error("Invalid HTML artifact request.");
+        throw error;
+      } finally {
+        if (!appended) turn.release();
+        turn.settleAsyncWork();
       }
-      const record = input as Record<string, unknown>;
-      const chatId = asString(record.chatId, "chatId");
-      const mediaId = asString(record.mediaId, "mediaId");
-      return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
-    },
-  );
+    })();
+  });
+
+  ipcMain.handle("chats:htmlArtifactSrcdoc", async (event, input: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("HTML artifact preview requires the active application document."),
+    );
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new Error("Invalid HTML artifact request.");
+    }
+    const record = input as Record<string, unknown>;
+    const chatId = asString(record.chatId, "chatId");
+    const mediaId = asString(record.mediaId, "mediaId");
+    const designStudio = record.designStudio === true;
+    const requestedLiveGeneration =
+      typeof record.liveDesignCandidateGenerationId === "string"
+        ? record.liveDesignCandidateGenerationId
+        : undefined;
+    const liveDesignCandidateGenerationId =
+      designStudio &&
+      requestedLiveGeneration &&
+      designLivePreviewAuthority.allows({
+        streamId: requestedLiveGeneration,
+        documentId: owner.documentId,
+        chatId,
+        mediaId,
+      })
+        ? requestedLiveGeneration
+        : undefined;
+    return wrapStoredHtmlArtifact({
+      chatId,
+      mediaId,
+      theme: record.theme,
+      designStudio,
+      ...(liveDesignCandidateGenerationId ? { liveDesignCandidateGenerationId } : {}),
+    });
+  });
 
   ipcMain.handle(
-    "chats:exportHtmlArtifact",
-    async (event, input: unknown) => {
+    "chats:resumeDetachedDesignPreview",
+    (event, streamIdValue: unknown, chatIdValue: unknown) => {
       const owner = rendererDocumentOwner(
         event,
-        () => new Error("HTML artifact export requires the active application document."),
+        () => new Error("Detached Design preview requires the active application document."),
       );
-      if (!input || typeof input !== "object" || Array.isArray(input)) {
-        throw new Error("Invalid HTML artifact export request.");
-      }
-      const record = input as Record<string, unknown>;
-      const chatId = asString(record.chatId, "chatId");
-      const mediaId = asString(record.mediaId, "mediaId");
-      const unresolved = await unresolvedGuiArtifactMessage(chatId);
-      if (unresolved) {
-        throw new Error(
-          unresolved.includes("could not be recovered")
-            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
-            : unresolved,
-        );
-      }
-      if (owner.isDestroyed()) {
-        throw new Error("The renderer document is no longer active.");
-      }
-      const parent = BrowserWindow.fromWebContents(event.sender);
-      if (!parent || parent.isDestroyed()) {
-        throw new Error("The export window is unavailable.");
-      }
-      return exportStoredHtmlArtifact({ chatId, mediaId, parent });
+      return llmClient.resumeDetachedDesignPreview(
+        asString(streamIdValue, "streamId"),
+        asString(chatIdValue, "chatId"),
+        owner.documentId,
+      );
     },
   );
+
+  ipcMain.handle("chats:suspendDetachedDesignPreview", (event, streamIdValue: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Detached Design preview requires the active application document."),
+    );
+    return llmClient.detachRenderer(asString(streamIdValue, "streamId"), owner.documentId);
+  });
+
+  ipcMain.handle("chats:exportHtmlArtifact", async (event, input: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("HTML artifact export requires the active application document."),
+    );
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new Error("Invalid HTML artifact export request.");
+    }
+    const record = input as Record<string, unknown>;
+    const chatId = asString(record.chatId, "chatId");
+    const mediaId = asString(record.mediaId, "mediaId");
+    const unresolved = await unresolvedGuiArtifactMessage(chatId);
+    if (unresolved) {
+      throw new Error(
+        unresolved.includes("could not be recovered")
+          ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
+          : unresolved,
+      );
+    }
+    if (owner.isDestroyed()) {
+      throw new Error("The renderer document is no longer active.");
+    }
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed()) {
+      throw new Error("The export window is unavailable.");
+    }
+    return exportStoredHtmlArtifact({ chatId, mediaId, parent });
+  });
 
   ipcMain.handle("chats:abandonTurn", (event, id: unknown, turnId: unknown) => {
     const owner = rendererDocumentOwner(
@@ -718,10 +799,6 @@ export function registerChatHistoryHandlers(): void {
     if (!isSafeSubagentIdentifier(parsedTurnId)) {
       throw new Error("Invalid chat message turn identifier.");
     }
-    return llmClient.abandonChatTurn(
-      asString(id, "id"),
-      parsedTurnId,
-      owner.documentId,
-    );
+    return llmClient.abandonChatTurn(asString(id, "id"), parsedTurnId, owner.documentId);
   });
 }

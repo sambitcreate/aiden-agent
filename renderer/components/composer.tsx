@@ -24,6 +24,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  Image as ImageIcon,
   Loader2,
   Lock,
   Mic,
@@ -107,6 +108,8 @@ const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
 const MAX_CLIPBOARD_IMAGE_BYTES = 8 * 1024 * 1024;
 
 interface ComposerProps {
+  /** Optional surface-specific prompt shown when the composer is ready. */
+  placeholder?: string;
   /** True when a provider + model are selected and a message can be sent. */
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
@@ -127,6 +130,10 @@ interface ComposerProps {
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
+  /** Places the same composer state inside the compact Design conversation rail. */
+  placement?: "chat" | "design-conversation";
+  /** Keeps a containing surface visible while private or asynchronous controls need attention. */
+  onVisibilityRequirementChange?: (required: boolean) => void;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
   gitBranch?: string;
@@ -146,6 +153,13 @@ interface ComposerProps {
   gitMutationBlockedReason?: string;
   /** Whether the selected model accepts image input. */
   visionSupported?: boolean;
+  /** Ephemeral canvas selections attached to the next Design turn. */
+  designContextItems?: readonly {
+    id: string;
+    label: string;
+    kind: "design" | "element" | "image";
+  }[];
+  onRemoveDesignContextItem?: (id: string) => void;
   /** The model picker element, rendered in the input row. */
   modelPicker?: React.ReactNode;
   /** Native model reasoning effort control, rendered only for supported models. */
@@ -252,6 +266,7 @@ function composerDraftReducer(
 }
 
 export function Composer({
+  placeholder,
   ready,
   readinessMessage,
   hasMessages,
@@ -262,6 +277,8 @@ export function Composer({
   canStopGeneration = isGenerating,
   configurationBusy = false,
   inputRef,
+  placement = "chat",
+  onVisibilityRequirementChange,
   workspace,
   gitBranch,
   gitDetached,
@@ -279,6 +296,8 @@ export function Composer({
   gitWorktreeDescription = "Creates a separate workspace and keeps this checkout unchanged.",
   gitMutationBlockedReason,
   visionSupported,
+  designContextItems = [],
+  onRemoveDesignContextItem,
   computerUse,
   onChangeComputerUse,
   modelPicker,
@@ -440,6 +459,17 @@ export function Composer({
       localModel: settings.data?.localVoiceModel,
       model: settings.data?.voiceModel,
     },
+  );
+  const requiresVisibleComposer =
+    voice.recording || voice.transcribing || attaching || sending || sessionCommandBusy;
+
+  React.useEffect(() => {
+    onVisibilityRequirementChange?.(requiresVisibleComposer);
+  }, [onVisibilityRequirementChange, requiresVisibleComposer]);
+
+  React.useEffect(
+    () => () => onVisibilityRequirementChange?.(false),
+    [onVisibilityRequirementChange],
   );
 
   React.useLayoutEffect(() => {
@@ -902,11 +932,12 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          const nextPrompt =
-            prompt.trim() || consumeSlashToken(text, slashSession).trim();
-          const missingPromptMessage = instruction === "btw"
-            ? "Add a question after /btw, then send."
-            : "Add what to visualize after /visualize, then send.";
+          if (instruction !== "visualize" && instruction !== "btw") return false;
+          const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const missingPromptMessage =
+            instruction === "btw"
+              ? "Add a question after /btw, then send."
+              : "Add what to visualize after /visualize, then send.";
           if (!nextPrompt) {
             toast.info(missingPromptMessage);
             return false;
@@ -961,10 +992,10 @@ export function Composer({
       // A generic late slash-token commit would overwrite the next-turn draft.
       if (result.command.action.kind === "composer-instruction") return;
       const usesDraftOnlyCommit =
-        (result.command.action.kind === "session" &&
-          (result.command.action.action === "clone" ||
-            result.command.action.action === "export" ||
-            result.command.action.action === "worktree"));
+        result.command.action.kind === "session" &&
+        (result.command.action.action === "clone" ||
+          result.command.action.action === "export" ||
+          result.command.action.action === "worktree");
       if (
         asyncAction &&
         !(usesDraftOnlyCommit
@@ -1396,7 +1427,14 @@ export function Composer({
 
   return (
     <>
-      <div className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
+      <div
+        className={cn(
+          "pointer-events-none",
+          placement === "design-conversation"
+            ? "w-full px-3 pb-3 pt-2"
+            : "aiden-dock-inset chat-content-column pb-4 pt-3 sm:pb-5",
+        )}
+      >
         <div className="composer-responsive pointer-events-auto relative isolate">
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
@@ -1466,82 +1504,84 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
-          {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
-          <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
-            {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
-              <WorkspacePicker
-                key={workspaceChangeBlockedReason ? "blocked" : "available"}
-                workspaces={workspaces}
-                activeWorkspaceId={workspace?.id}
-                onSelectWorkspace={onSelectWorkspace}
-                onCreateScratchWorkspace={onCreateScratchWorkspace}
-                blockedReason={workspaceChangeBlockedReason}
-                trigger={
-                  <Button
-                    variant="transparent"
-                    size="small"
-                    className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                    disabled={
-                      isGenerating ||
-                      sending ||
-                      gitOperationBusy ||
-                      Boolean(workspaceChangeBlockedReason)
-                    }
-                    aria-label={
-                      workspaceChangeBlockedReason
-                        ? `Workspace unavailable: ${workspaceChangeBlockedReason}`
-                        : "Choose a workspace"
-                    }
-                  >
-                    <Folder className="size-4 shrink-0" />
-                    <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
-                  </Button>
-                }
-              />
-            ) : (
-              <Button
-                variant="transparent"
-                size="small"
-                className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                onClick={onOpenFolder}
-                disabled={!workspace?.folderPath}
-                aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+          {/* Design Projects are local-first; workspace connection remains a later project action. */}
+          {placement === "chat" ? (
+            <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
+              {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
+                <WorkspacePicker
+                  key={workspaceChangeBlockedReason ? "blocked" : "available"}
+                  workspaces={workspaces}
+                  activeWorkspaceId={workspace?.id}
+                  onSelectWorkspace={onSelectWorkspace}
+                  onCreateScratchWorkspace={onCreateScratchWorkspace}
+                  blockedReason={workspaceChangeBlockedReason}
+                  trigger={
+                    <Button
+                      variant="transparent"
+                      size="small"
+                      className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                      disabled={
+                        isGenerating ||
+                        sending ||
+                        gitOperationBusy ||
+                        Boolean(workspaceChangeBlockedReason)
+                      }
+                      aria-label={
+                        workspaceChangeBlockedReason
+                          ? `Workspace unavailable: ${workspaceChangeBlockedReason}`
+                          : "Choose a workspace"
+                      }
+                    >
+                      <Folder className="size-4 shrink-0" />
+                      <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                    </Button>
+                  }
+                />
+              ) : (
+                <Button
+                  variant="transparent"
+                  size="small"
+                  className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                  onClick={onOpenFolder}
+                  disabled={!workspace?.folderPath}
+                  aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+                >
+                  <Folder className="size-4 shrink-0" />
+                  <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                </Button>
+              )}
+              {/* Execution location — Pi runs locally on this Mac. */}
+              <span
+                className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
+                title="The agent runs locally on this Mac"
               >
-                <Folder className="size-4 shrink-0" />
-                <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
-              </Button>
-            )}
-            {/* Execution location — Pi runs locally on this Mac. */}
-            <span
-              className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-              title="The agent runs locally on this Mac"
-            >
-              <Monitor className="size-4 shrink-0" />
-              Local
-            </span>
-            {gitBranch && workspace?.folderPath ? (
-              <GitBranchPicker
-                key={`git-branch-picker-${worktreeRequest}`}
-                workspaceId={workspace.id}
-                branch={gitBranch}
-                detached={gitDetached}
-                unborn={gitUnborn}
-                disabled={
-                  isGenerating ||
-                  sending ||
-                  attaching ||
-                  permissionSaving ||
-                  Boolean(gitMutationBlockedReason)
-                }
-                disabledReason={gitMutationBlockedReason}
-                onCreateWorktree={onCreateGitWorktree}
-                onBusyChange={onGitOperationBusyChange}
-                worktreeDescription={gitWorktreeDescription}
-                openWorktreeOnMount={worktreeRequest > 0}
-                programmaticReturnFocusRef={inputRef}
-              />
-            ) : null}
-          </div>
+                <Monitor className="size-4 shrink-0" />
+                Local
+              </span>
+              {gitBranch && workspace?.folderPath ? (
+                <GitBranchPicker
+                  key={`git-branch-picker-${worktreeRequest}`}
+                  workspaceId={workspace.id}
+                  branch={gitBranch}
+                  detached={gitDetached}
+                  unborn={gitUnborn}
+                  disabled={
+                    isGenerating ||
+                    sending ||
+                    attaching ||
+                    permissionSaving ||
+                    Boolean(gitMutationBlockedReason)
+                  }
+                  disabledReason={gitMutationBlockedReason}
+                  onCreateWorktree={onCreateGitWorktree}
+                  onBusyChange={onGitOperationBusyChange}
+                  worktreeDescription={gitWorktreeDescription}
+                  openWorktreeOnMount={worktreeRequest > 0}
+                  programmaticReturnFocusRef={inputRef}
+                />
+              ) : null}
+            </div>
+          ) : null}
 
           <div
             className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80"
@@ -1606,8 +1646,44 @@ export function Composer({
                 </span>
               </div>
             ) : null}
+            {designContextItems.length > 0 ? (
+              <div
+                className={cn(
+                  "mb-1.5 flex flex-wrap gap-1.5 px-1.5",
+                  placement === "design-conversation" && "max-h-16 overflow-y-auto",
+                )}
+                aria-label="Canvas context for next message"
+              >
+                {designContextItems.map((item) => {
+                  const ContextIcon = item.kind === "image" ? ImageIcon : MousePointer2;
+                  return (
+                    <div
+                      key={item.id}
+                      className="group relative flex h-7 max-w-[14rem] items-center gap-1.5 rounded-control bg-list-selection py-1 pl-2 pr-6 text-accent"
+                    >
+                      <ContextIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                      <span className="truncate text-small-strong">{item.label}</span>
+                      <button
+                        type="button"
+                        disabled={sessionCommandBusy}
+                        onClick={() => onRemoveDesignContextItem?.(item.id)}
+                        aria-label={`Remove ${item.label} from canvas context`}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-accent outline-none transition-colors hover:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+                      >
+                        <X className="size-3" aria-hidden="true" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
             {attachments.length > 0 ? (
-              <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
+              <div
+                className={cn(
+                  "mb-1.5 flex flex-wrap gap-2 px-1.5",
+                  placement === "design-conversation" && "max-h-20 overflow-y-auto",
+                )}
+              >
                 {attachments.map((a) => (
                   <div
                     key={a.id}
@@ -1637,6 +1713,7 @@ export function Composer({
               </div>
             ) : null}
             <Textarea
+              data-chat-composer
               ref={inputRef}
               value={text}
               readOnly={sessionCommandBusy}
@@ -1676,24 +1753,22 @@ export function Composer({
               aria-describedby={attachmentDescriptionId}
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
-              placeholder={composerPlaceholder({
-                ready,
-                readinessMessage,
-                hasMessages,
-                chatId,
-              })}
+              placeholder={
+                ready && placeholder
+                  ? placeholder
+                  : composerPlaceholder({
+                      ready,
+                      readinessMessage,
+                      hasMessages,
+                      chatId,
+                    })
+              }
               className="max-h-48 border-0 bg-transparent px-1.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
               rows={1}
             />
             {sessionCommandStatus ? (
               <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
-                <Text
-                  as="p"
-                  role="status"
-                  aria-live="polite"
-                  variant="small"
-                  color="tertiary"
-                >
+                <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
                   {sessionCommandStatus}
                 </Text>
                 {sessionCommandStatus === "Compacting chat…" && onCancelCompact ? (
@@ -1734,127 +1809,130 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
-                <div
-                  className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
-                  data-open={permissionMenuOpen || undefined}
-                  onPointerEnter={dismissSlash}
-                  onPointerLeave={() => setPermissionMenuOpen(false)}
-                  onBlur={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget)) {
-                      setPermissionMenuOpen(false);
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
-                    event.preventDefault();
-                    setPermissionMenuOpen(false);
-                    inputRef?.current?.focus();
-                  }}
-                >
-                  <button
-                    type="button"
-                    aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
-                    aria-haspopup="true"
-                    onFocus={() => setPermissionMenuOpen(true)}
-                    onClick={() => setPermissionMenuOpen(true)}
-                    onKeyDown={(event) => {
-                      if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
-                      event.preventDefault();
-                      setPermissionMenuOpen(true);
-                      requestAnimationFrame(() => permissionControlRef.current?.focus());
-                    }}
-                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-hover/access:opacity-0 group-focus-within/access:opacity-0 group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
-                  >
-                    <PermissionIcon
-                      className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
-                    />
-                    <span className="truncate max-[520px]:sr-only">
-                      {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
-                    </span>
-                  </button>
+                {/* Design has full authority inside its project scope and no workspace access mode. */}
+                {placement === "chat" ? (
                   <div
-                    role="radiogroup"
-                    aria-label="Workspace access"
-                    aria-disabled={
-                      !workspace ||
-                      permissionSaving ||
-                      isGenerating ||
-                      sending ||
-                      gitOperationBusy ||
-                      Boolean(workspaceChangeBlockedReason) ||
-                      undefined
-                    }
-                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-[16px] bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-hover/access:visible group-hover/access:pointer-events-auto group-hover/access:translate-y-0 group-hover/access:opacity-100 group-focus-within/access:visible group-focus-within/access:pointer-events-auto group-focus-within/access:translate-y-0 group-focus-within/access:opacity-100 group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
+                    data-open={permissionMenuOpen || undefined}
+                    onPointerEnter={dismissSlash}
+                    onPointerLeave={() => setPermissionMenuOpen(false)}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) {
+                        setPermissionMenuOpen(false);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Escape") return;
+                      event.preventDefault();
+                      setPermissionMenuOpen(false);
+                      inputRef?.current?.focus();
+                    }}
                   >
-                    {PERMISSION_ORDER.map((value, index) => {
-                      const meta = PERMISSION_META[value];
-                      const Icon = meta.icon;
-                      const selected = value === permission;
-                      const disabled =
+                    <button
+                      type="button"
+                      aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
+                      aria-haspopup="true"
+                      onFocus={() => setPermissionMenuOpen(true)}
+                      onClick={() => setPermissionMenuOpen(true)}
+                      onKeyDown={(event) => {
+                        if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
+                        event.preventDefault();
+                        setPermissionMenuOpen(true);
+                        requestAnimationFrame(() => permissionControlRef.current?.focus());
+                      }}
+                      className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-hover/access:opacity-0 group-focus-within/access:opacity-0 group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
+                    >
+                      <PermissionIcon
+                        className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
+                      />
+                      <span className="truncate max-[520px]:sr-only">
+                        {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
+                      </span>
+                    </button>
+                    <div
+                      role="radiogroup"
+                      aria-label="Workspace access"
+                      aria-disabled={
                         !workspace ||
                         permissionSaving ||
                         isGenerating ||
                         sending ||
                         gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason);
-                      return (
-                        <button
-                          ref={selected ? permissionControlRef : undefined}
-                          key={value}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          aria-label={
-                            workspaceChangeBlockedReason
-                              ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
-                              : isGenerating || sending
-                                ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
-                                : `Workspace access: ${meta.label}`
-                          }
-                          tabIndex={selected ? 0 : -1}
-                          aria-disabled={disabled || undefined}
-                          onClick={() => {
-                            if (!disabled) requestPermission(value);
-                          }}
-                          onKeyDown={(event) => {
-                            if (disabled) return;
-                            if (event.key === "Enter" || event.key === " ") {
+                        Boolean(workspaceChangeBlockedReason) ||
+                        undefined
+                      }
+                      className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-[16px] bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-hover/access:visible group-hover/access:pointer-events-auto group-hover/access:translate-y-0 group-hover/access:opacity-100 group-focus-within/access:visible group-focus-within/access:pointer-events-auto group-focus-within/access:translate-y-0 group-focus-within/access:opacity-100 group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    >
+                      {PERMISSION_ORDER.map((value, index) => {
+                        const meta = PERMISSION_META[value];
+                        const Icon = meta.icon;
+                        const selected = value === permission;
+                        const disabled =
+                          !workspace ||
+                          permissionSaving ||
+                          isGenerating ||
+                          sending ||
+                          gitOperationBusy ||
+                          Boolean(workspaceChangeBlockedReason);
+                        return (
+                          <button
+                            ref={selected ? permissionControlRef : undefined}
+                            key={value}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            aria-label={
+                              workspaceChangeBlockedReason
+                                ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
+                                : isGenerating || sending
+                                  ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
+                                  : `Workspace access: ${meta.label}`
+                            }
+                            tabIndex={selected ? 0 : -1}
+                            aria-disabled={disabled || undefined}
+                            onClick={() => {
+                              if (!disabled) requestPermission(value);
+                            }}
+                            onKeyDown={(event) => {
+                              if (disabled) return;
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                if (value !== permission) requestPermission(value);
+                                return;
+                              }
+                              let nextIndex: number | undefined;
+                              if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+                                nextIndex = (index + 1) % PERMISSION_ORDER.length;
+                              }
+                              if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+                                nextIndex =
+                                  (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
+                              }
+                              if (event.key === "Home") nextIndex = 0;
+                              if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
+                              if (nextIndex === undefined) return;
                               event.preventDefault();
-                              if (value !== permission) requestPermission(value);
-                              return;
-                            }
-                            let nextIndex: number | undefined;
-                            if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-                              nextIndex = (index + 1) % PERMISSION_ORDER.length;
-                            }
-                            if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-                              nextIndex =
-                                (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
-                            }
-                            if (event.key === "Home") nextIndex = 0;
-                            if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
-                            if (nextIndex === undefined) return;
-                            event.preventDefault();
-                            const radios =
-                              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
-                                '[role="radio"]',
-                              );
-                            radios?.[nextIndex]?.focus();
-                          }}
-                          className={cn(
-                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
-                            selected
-                              ? "bg-popover shadow-control"
-                              : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
-                          )}
-                        >
-                          <Icon className={cn("size-4 shrink-0", meta.className)} />
-                          <span className="truncate">{meta.label}</span>
-                        </button>
-                      );
-                    })}
+                              const radios =
+                                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                                  '[role="radio"]',
+                                );
+                              radios?.[nextIndex]?.focus();
+                            }}
+                            className={cn(
+                              "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                              selected
+                                ? "bg-popover shadow-control"
+                                : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
+                            )}
+                          >
+                            <Icon className={cn("size-4 shrink-0", meta.className)} />
+                            <span className="truncate">{meta.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                ) : null}
                 {computerUse && onChangeComputerUse ? (
                   <Button
                     variant={computerUse.enabled ? "muted" : "transparent"}

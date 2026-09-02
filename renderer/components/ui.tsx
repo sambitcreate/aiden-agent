@@ -358,6 +358,7 @@ export const FieldLabel = Label;
 const SplitContext = React.createContext<{
   collapsed: boolean;
   toggle: () => void;
+  closeIfCompact: () => void;
   leadingAnchor: HTMLDivElement | null;
 } | null>(null);
 
@@ -418,6 +419,11 @@ function SplitViewRoot({
     localStorage.setItem(collapseKey, next ? "1" : "0");
     setCollapsed(next);
   }, [collapseKey, collapsed]);
+  const closeIfCompact = React.useCallback(() => {
+    if (!compact || collapsed) return;
+    localStorage.setItem(collapseKey, "1");
+    setCollapsed(true);
+  }, [collapseKey, collapsed, compact]);
   useCommandHandler("sidebar.toggle", toggle, !contentModalOpen);
 
   React.useEffect(() => {
@@ -544,7 +550,7 @@ function SplitViewRoot({
   }, [collapseKey, compactOpen, leadingAnchor]);
 
   return (
-    <SplitContext.Provider value={{ collapsed, toggle, leadingAnchor }}>
+    <SplitContext.Provider value={{ collapsed, toggle, closeIfCompact, leadingAnchor }}>
       <div className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary">
         {compactOpen ? (
           <button
@@ -642,7 +648,13 @@ function SidebarToggle() {
 
 export const SplitView = Object.assign(SplitViewRoot, { SidebarToggle });
 
+export function useSplitViewSidebar() {
+  const context = React.useContext(SplitContext);
+  return { closeIfCompact: context?.closeIfCompact ?? (() => undefined) };
+}
+
 export function Sidebar({
+  header,
   searchable,
   searchPlaceholder,
   searchValue,
@@ -651,6 +663,7 @@ export function Sidebar({
   footer,
   children,
 }: React.PropsWithChildren<{
+  header?: React.ReactNode;
   searchable?: boolean;
   searchPlaceholder?: string;
   searchValue?: string;
@@ -698,6 +711,7 @@ export function Sidebar({
       className="glass-surface relative flex h-full min-h-0 flex-col overflow-hidden"
     >
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
+      {header ? <div className="min-w-0 shrink-0 px-3 pb-2">{header}</div> : null}
       {searchable ? (
         <div className="px-3 pb-3">
           <label className="flex h-8 items-center gap-2 rounded-pill border border-transparent bg-input px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-control/70 focus-within:bg-control">
@@ -804,6 +818,7 @@ export function ScrollArea({
   actions,
   toolbar,
   footer,
+  overlayFooter = false,
   autoScrollToBottom,
   autoScrollDeps = [],
   showScrollToBottomButton,
@@ -816,6 +831,7 @@ export function ScrollArea({
   actions?: React.ReactNode;
   toolbar?: React.ReactNode;
   footer?: React.ReactNode;
+  overlayFooter?: boolean;
   autoScrollToBottom?: boolean;
   autoScrollDeps?: unknown[];
   showScrollToBottomButton?: boolean;
@@ -931,7 +947,7 @@ export function ScrollArea({
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
         className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
-        style={{ paddingTop: toolbarHeight, paddingBottom: footerHeight }}
+        style={{ paddingTop: toolbarHeight, paddingBottom: overlayFooter ? 0 : footerHeight }}
         onScroll={(event) => {
           updateScrollEdges(event.currentTarget);
         }}
@@ -952,7 +968,10 @@ export function ScrollArea({
         </Button>
       ) : null}
       {footer ? (
-        <div ref={footerRef} className="absolute inset-x-0 bottom-0 z-10">
+        <div
+          ref={footerRef}
+          className={cn("absolute inset-x-0 bottom-0", overlayFooter ? "z-20" : "z-10")}
+        >
           {footer}
         </div>
       ) : null}

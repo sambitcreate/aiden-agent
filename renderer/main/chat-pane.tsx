@@ -4,11 +4,12 @@
 // "ask" mode.
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { BotAvatar } from "../components/bot-avatar";
-import { ShieldQuestion, TerminalSquare } from "lucide-react";
+import { MessageCircle, ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
@@ -32,6 +33,7 @@ import {
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
 import {
   chatsApi,
+  designerApi,
   aidenRemoteApi,
   createChatTurnId,
   settingsApi,
@@ -61,6 +63,8 @@ import {
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
+import { DesignWorkspaceCanvas } from "../components/design-workspace";
+import type { DesignProjectSnapshotV1 } from "../shared/design-projects";
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -111,6 +115,7 @@ import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
+  acknowledgeDetachedDesignPublication,
   detachedTextStreamingRemaining,
   detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
@@ -125,10 +130,31 @@ import {
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
-import type { ChatArtifactV1 } from "../shared/chat-artifacts";
-import type {
-  AskUserQuestionPromptV1,
-  AskUserQuestionResponseV1,
+import {
+  isChatHtmlArtifact,
+  type ChatArtifactV1,
+  type ChatHtmlArtifactV1,
+} from "../shared/chat-artifacts";
+import {
+  DESIGN_TURN_CONTEXT_VERSION,
+  DesignOperationFence,
+  designProjectClaimsArtifacts,
+  designSelectionDisplayLabel,
+  designWorkspaceArtifactPlan,
+  type DesignProjectPersistenceSnapshotV1,
+  type DesignTurnContextV1,
+  type DesignTurnTargetV1,
+} from "../shared/design-workspace";
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "../shared/attachment-contract";
+import {
+  SOURCE_DESIGNER_VERSION,
+  type SourceDesignTurnContextV1,
+  type SourceSelectionBindingV1,
+} from "../shared/source-designer";
+import {
+  discardsCancelledDesignDraft,
+  type AskUserQuestionPromptV1,
+  type AskUserQuestionResponseV1,
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
@@ -142,6 +168,8 @@ const ANTHROPIC_PROVIDER_ID = "anthropic";
  * that bursty providers do not flap the label mid-prose.
  */
 const TEXT_STREAMING_IDLE_MS = 2_000;
+const SUPPRESSED_DESIGN_PUBLICATION_MESSAGE =
+  "The response was saved, but its Design revision conflicted with newer project history and was not added. The existing canvas was preserved; generate again from the latest project state.";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -154,8 +182,48 @@ function toolLabel(toolName: string): string {
   return TOOL_LABELS[toolName] ?? toolName.replace(/_/g, " ");
 }
 
-export function ChatPane({ chatId }: { chatId: string }) {
+function DesignFooterPlacement({
+  design,
+  host,
+  children,
+}: React.PropsWithChildren<{ design: boolean; host: HTMLDivElement | null }>) {
+  if (!design) return children;
+  return host ? createPortal(children, host) : null;
+}
+
+export function ChatPane({
+  chatId,
+  presentation = "chat",
+  initialDesignMediaId,
+  designProject,
+  designPublication,
+  onDesignPublicationResolved,
+  onDesignProjectChange,
+}: {
+  chatId: string;
+  presentation?: "chat" | "design";
+  initialDesignMediaId?: string;
+  designProject?: DesignProjectSnapshotV1;
+  designPublication?: "retryable" | "suppressed";
+  onDesignPublicationResolved?: () => void;
+  onDesignProjectChange?: (project: DesignProjectSnapshotV1) => void;
+}) {
   const qc = useQueryClient();
+  const [currentDesignProject, setCurrentDesignProject] = React.useState<
+    DesignProjectSnapshotV1 | undefined
+  >(designProject);
+  const currentDesignProjectRef = React.useRef(currentDesignProject);
+  currentDesignProjectRef.current = currentDesignProject;
+  const [designProjectReconciliation, setDesignProjectReconciliation] = React.useState<{
+    projectId: string;
+    artifacts: ChatHtmlArtifactV1[];
+    message: string;
+    retrying: boolean;
+  }>();
+  const designOperationFenceRef = React.useRef(new DesignOperationFence());
+  const designPersistenceBarrierRef = React.useRef<
+    (() => Promise<DesignProjectPersistenceSnapshotV1 | undefined>) | undefined
+  >(undefined);
   const navigate = useNavigate();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
@@ -168,14 +236,31 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] = React.useState<
     ReadonlySet<string>
   >(() => new Set());
+  const [designConversationOpen, setDesignConversationOpen] = React.useState(true);
+  const [designFooterHost, setDesignFooterHost] = React.useState<HTMLDivElement | null>(null);
+  const [designComposerRequiresVisibility, setDesignComposerRequiresVisibility] =
+    React.useState(false);
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
-  const sideQuestionBlockedReason = chat.data?.botId || bot.data
-    ? "Side questions are not available in Bot chats."
-    : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
-      ? "Side questions are not available in Assistant chats."
+  const connectedDesignWorkspace =
+    currentDesignProject?.connectionState === "connected"
+      ? workspaces.find((workspace) => workspace.id === currentDesignProject.workspaceId)
       : undefined;
+  const generationWorkspaceId =
+    presentation === "design"
+      ? currentDesignProject?.connectionState === "connected"
+        ? currentDesignProject.workspaceId
+        : undefined
+      : effectiveWorkspaceId;
+  const sideQuestionBlockedReason =
+    presentation === "design"
+      ? "Side questions are not available in Design Projects."
+      : chat.data?.botId || bot.data
+        ? "Side questions are not available in Bot chats."
+        : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
+          ? "Side questions are not available in Assistant chats."
+          : undefined;
   const detachedGenerationDraining = React.useSyncExternalStore(
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
@@ -189,6 +274,55 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
+  const designWorkspaceBlocked = Boolean(chat.data?.botId);
+  const designWorkspaceDisabled =
+    presentation === "design" &&
+    (!currentDesignProject ||
+      designWorkspaceBlocked ||
+      (currentDesignProject.connectionState === "connected" &&
+        (!connectedDesignWorkspace?.folderPath || connectedDesignWorkspace.permission === "none")));
+  const designWorkspaceTitle = chat.data?.botId
+    ? "Design workspace is unavailable in Bot chats"
+    : currentDesignProject?.connectionState === "connected" &&
+        connectedDesignWorkspace?.permission === "none"
+      ? "Give the connected app workspace file access before continuing"
+      : currentDesignProject?.connectionState === "connected" &&
+          !connectedDesignWorkspace?.folderPath
+        ? "Reconnect this project to an available folder workspace"
+        : !currentDesignProject
+          ? "This Design Project is unavailable"
+          : "Design workspace";
+
+  React.useEffect(() => {
+    currentDesignProjectRef.current = designProject;
+    setCurrentDesignProject(designProject);
+  }, [designProject]);
+  const updateDesignProject = React.useCallback(
+    (project: DesignProjectSnapshotV1) => {
+      setCurrentDesignProject(project);
+      onDesignProjectChange?.(project);
+    },
+    [onDesignProjectChange],
+  );
+  const adoptSuppressedDesignPublication = React.useCallback(
+    (message = SUPPRESSED_DESIGN_PUBLICATION_MESSAGE) => {
+      setDesignProjectReconciliation(undefined);
+      setStreamingArtifacts([]);
+      streamingArtifactsRef.current = [];
+      setStreamingArtifactGenerationId(undefined);
+      setResumedDetachedDesignPreviewStreamId(undefined);
+      setHasUnpersistedResponse(false);
+      setError(message);
+      onDesignPublicationResolved?.();
+    },
+    [onDesignPublicationResolved],
+  );
+  const registerDesignPersistenceBarrier = React.useCallback(
+    (barrier: (() => Promise<DesignProjectPersistenceSnapshotV1 | undefined>) | undefined) => {
+      designPersistenceBarrierRef.current = barrier;
+    },
+    [],
+  );
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -375,6 +509,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
   const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
+  const [streamingArtifactGenerationId, setStreamingArtifactGenerationId] =
+    React.useState<string>();
+  const [resumedDetachedDesignPreviewStreamId, setResumedDetachedDesignPreviewStreamId] =
+    React.useState<string>();
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
@@ -399,14 +537,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
   const visualizeTurnRef = React.useRef(false);
+  const designTurnRef = React.useRef(false);
+  const designContextTurnRef = React.useRef<DesignTurnContextV1 | undefined>(undefined);
+  const sourceDesignContextTurnRef = React.useRef<SourceDesignTurnContextV1 | undefined>(undefined);
+  const [designTargets, setDesignTargets] = React.useState<DesignTurnTargetV1[]>([]);
+  const [sourceDesignSelection, setSourceDesignSelection] =
+    React.useState<SourceSelectionBindingV1>();
+  const [designCanvasImages, setDesignCanvasImages] = React.useState<Attachment[]>([]);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const todoSnapshotReadFenceRef = React.useRef<TodoSnapshotReadFence | null>(null);
-  const todoSnapshotReadFence =
-    todoSnapshotReadFenceRef.current ??= new TodoSnapshotReadFence();
+  const todoSnapshotReadFence = (todoSnapshotReadFenceRef.current ??= new TodoSnapshotReadFence());
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
-  useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const designConversationToggleRef = React.useRef<HTMLButtonElement | null>(null);
+  const focusComposer = React.useCallback(() => {
+    if (presentation === "design") setDesignConversationOpen(true);
+    requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+  }, [presentation]);
+  useCommandHandler("composer.focus", focusComposer);
   const terminalShortcut = useShortcutLabel("terminal.toggle");
   const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
@@ -535,6 +684,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingReasoning(null);
     clearTextStreaming();
     setStreamingArtifacts([]);
+    setStreamingArtifactGenerationId(undefined);
+    setResumedDetachedDesignPreviewStreamId(undefined);
+    setDesignProjectReconciliation(undefined);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
     setIsStartingGeneration(false);
@@ -554,6 +706,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
     decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
   }, [chatId]);
+
+  // Project open can discover durable publication work without having an
+  // optimistic artifact payload in this renderer. Seed the same inline
+  // reconciliation state used by terminal handoffs before the composer paints.
+  React.useLayoutEffect(() => {
+    if (presentation !== "design" || !designProject) return;
+    if (designPublication === "suppressed") {
+      adoptSuppressedDesignPublication();
+      return;
+    }
+    if (designPublication !== "retryable") return;
+    setDesignProjectReconciliation((current) =>
+      current?.projectId === designProject.id
+        ? current
+        : {
+            projectId: designProject.id,
+            artifacts: [],
+            message:
+              "Design history contains a saved revision waiting to be added to this project.",
+            retrying: false,
+          },
+    );
+  }, [
+    adoptSuppressedDesignPublication,
+    chatId,
+    designProject?.id,
+    designPublication,
+    presentation,
+  ]);
 
   React.useEffect(() => {
     let current = true;
@@ -583,6 +764,156 @@ export function ChatPane({ chatId }: { chatId: string }) {
     messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
   const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
+  React.useLayoutEffect(() => {
+    if (
+      presentation !== "design" ||
+      !currentDesignProject ||
+      !detachedProjection?.designPublication
+    ) {
+      return;
+    }
+    const artifactsByMediaId = new Map<string, ChatHtmlArtifactV1>();
+    for (const artifact of detachedProjection.artifacts.filter(isChatHtmlArtifact)) {
+      artifactsByMediaId.set(artifact.mediaId, artifact);
+    }
+    const terminalMessage = messages[messages.length - 1];
+    if (terminalMessage?.role === "assistant") {
+      for (const artifact of terminalMessage.htmlArtifacts ?? []) {
+        artifactsByMediaId.set(artifact.mediaId, artifact);
+      }
+    }
+    const artifacts = [...artifactsByMediaId.values()];
+    const acknowledge = () =>
+      acknowledgeDetachedDesignPublication({
+        streamId: detachedProjection.streamId,
+        chatId,
+        workspaceId: detachedProjection.workspaceId,
+      });
+    const handoffToReconciliation = (message: string) => {
+      setDesignProjectReconciliation((current) => {
+        if (current?.projectId !== currentDesignProject.id) {
+          return {
+            projectId: currentDesignProject.id,
+            artifacts,
+            message,
+            retrying: false,
+          };
+        }
+        const byMediaId = new Map(
+          current.artifacts.map((artifact) => [artifact.mediaId, artifact] as const),
+        );
+        for (const artifact of artifacts) byMediaId.set(artifact.mediaId, artifact);
+        return {
+          ...current,
+          artifacts: [...byMediaId.values()],
+          message: current.artifacts.length > 0 ? current.message : message,
+        };
+      });
+      acknowledge();
+    };
+    if (detachedProjection.designPublication === "suppressed") {
+      adoptSuppressedDesignPublication(detachedProjection.terminalError);
+      acknowledge();
+      return;
+    }
+    if (detachedProjection.designPublication === "retryable") {
+      handoffToReconciliation(
+        "The Design revision is saved and waiting to be added to project history.",
+      );
+      return;
+    }
+    if (artifacts.length === 0 || designProjectClaimsArtifacts(currentDesignProject, artifacts)) {
+      acknowledge();
+      return;
+    }
+    const operation = designOperationFenceRef.current.tryAcquire("design-terminal-publication");
+    if (!operation) return;
+    let current = true;
+    void designerApi
+      .openProject(currentDesignProject.id)
+      .then((openResult) => {
+        if (!current || chatIdRef.current !== chatId) return;
+        const project = openResult?.project;
+        const latest = currentDesignProjectRef.current;
+        if (openResult?.designPublication === "suppressed") {
+          if (
+            project &&
+            (!latest || latest.id !== project.id || latest.revision <= project.revision)
+          ) {
+            updateDesignProject(project);
+          }
+          adoptSuppressedDesignPublication();
+          acknowledge();
+          return;
+        }
+        if (!project || !designProjectClaimsArtifacts(project, artifacts)) {
+          handoffToReconciliation(
+            "The Design revision was published, but the latest project snapshot could not be loaded.",
+          );
+          return;
+        }
+        if (
+          latest?.id === project.id &&
+          latest.revision > project.revision &&
+          !designProjectClaimsArtifacts(latest, artifacts)
+        ) {
+          handoffToReconciliation(
+            "The Design revision was published, but a newer local project snapshot still needs to be refreshed.",
+          );
+          return;
+        }
+        if (!latest || latest.id !== project.id || latest.revision <= project.revision) {
+          updateDesignProject(project);
+        }
+        if (openResult.designPublication === "retryable") {
+          handoffToReconciliation(
+            "Design history still contains a saved revision waiting to be added to this project.",
+          );
+          return;
+        }
+        acknowledge();
+      })
+      .catch((cause: unknown) => {
+        if (!current || chatIdRef.current !== chatId) return;
+        handoffToReconciliation(
+          cause instanceof Error
+            ? cause.message
+            : "The published Design revision could not be loaded.",
+        );
+      })
+      .finally(() => {
+        designOperationFenceRef.current.release(operation);
+      });
+    return () => {
+      current = false;
+    };
+  }, [
+    adoptSuppressedDesignPublication,
+    chatId,
+    currentDesignProject,
+    detachedProjection,
+    messages,
+    presentation,
+    updateDesignProject,
+  ]);
+  React.useEffect(() => {
+    setResumedDetachedDesignPreviewStreamId(undefined);
+    if (!visibleDetachedStreamId || presentation !== "design") return;
+    let current = true;
+    void chatsApi
+      .resumeDetachedDesignPreview(visibleDetachedStreamId, chatId)
+      .then((resumed) => {
+        if (current && resumed) setResumedDetachedDesignPreviewStreamId(visibleDetachedStreamId);
+      })
+      .catch(() => {
+        // The optimistic projection remains visible without a capability. Its
+        // preview will become readable from committed storage at settlement.
+      });
+    return () => {
+      current = false;
+      void chatsApi.suspendDetachedDesignPreview(visibleDetachedStreamId).catch(() => {});
+    };
+  }, [chatId, presentation, visibleDetachedStreamId]);
   React.useEffect(() => {
     if (!visibleDetachedStreamId) return;
     const remaining = detachedTextStreamingRemaining(
@@ -617,10 +948,151 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const displayedStreamingReasoning =
     streamingReasoning ??
     (visibleDetachedProjection?.reasoning.trim() ? visibleDetachedProjection.reasoning : null);
-  const displayedStreamingArtifacts =
+  const displayedStreamingArtifacts = React.useMemo(
+    () =>
+      detachedProjection?.designPublication === "suppressed"
+        ? []
+        : streamingArtifacts.length > 0
+          ? streamingArtifacts
+          : ((detachedProjection?.designPublication
+              ? detachedProjection.artifacts
+              : visibleDetachedProjection?.artifacts) ?? []),
+    [detachedProjection, streamingArtifacts, visibleDetachedProjection?.artifacts],
+  );
+  const liveDesignArtifacts = React.useMemo(() => {
+    const byMediaId = new Map<string, ChatHtmlArtifactV1>();
+    for (const artifact of displayedStreamingArtifacts.filter(isChatHtmlArtifact)) {
+      byMediaId.set(artifact.mediaId, artifact);
+    }
+    for (const artifact of designProjectReconciliation?.artifacts ?? []) {
+      byMediaId.set(artifact.mediaId, artifact);
+    }
+    return [...byMediaId.values()];
+  }, [designProjectReconciliation?.artifacts, displayedStreamingArtifacts]);
+  const designArtifacts = React.useMemo(
+    () => designWorkspaceArtifactPlan(messages, liveDesignArtifacts),
+    [liveDesignArtifacts, messages],
+  );
+  const persistedDesignMediaIds = React.useMemo(
+    () =>
+      currentDesignProject?.canvas.nodes.flatMap((node) =>
+        node.kind === "artboard" ? (node.artifactMediaIds ?? []) : [],
+      ) ?? [],
+    [currentDesignProject],
+  );
+  const liveDesignPreviewAuthority =
     streamingArtifacts.length > 0
-      ? streamingArtifacts
-      : (visibleDetachedProjection?.artifacts ?? []);
+      ? streamingArtifactGenerationId
+      : resumedDetachedDesignPreviewStreamId === visibleDetachedStreamId
+        ? visibleDetachedStreamId
+        : undefined;
+  const retryDesignProjectReconciliation = React.useCallback(async () => {
+    const pending = designProjectReconciliation;
+    if (!pending || pending.retrying || generationRef.current) return;
+    const operation = designOperationFenceRef.current.tryAcquire("design-reconciliation");
+    if (!operation) return;
+    setDesignProjectReconciliation({ ...pending, retrying: true });
+    try {
+      const openResult = await designerApi.openProject(pending.projectId);
+      const project = openResult?.project;
+      if (chatIdRef.current !== chatId) return;
+      if (project && openResult.designPublication === "suppressed") {
+        const latest = currentDesignProjectRef.current;
+        if (!latest || latest.id !== project.id || latest.revision <= project.revision) {
+          updateDesignProject(project);
+        }
+        adoptSuppressedDesignPublication();
+        return;
+      }
+      if (
+        !project ||
+        openResult.designPublication === "retryable" ||
+        !designProjectClaimsArtifacts(project, pending.artifacts)
+      ) {
+        throw new Error(
+          "The generated revision is still being reconciled. Retry after it finishes saving.",
+        );
+      }
+      updateDesignProject(project);
+      onDesignPublicationResolved?.();
+      setDesignProjectReconciliation(undefined);
+      setStreamingArtifacts([]);
+      streamingArtifactsRef.current = [];
+      setStreamingArtifactGenerationId(undefined);
+      setError(null);
+    } catch (cause) {
+      if (chatIdRef.current !== chatId) return;
+      setDesignProjectReconciliation((current) =>
+        current?.projectId === pending.projectId
+          ? {
+              ...current,
+              retrying: false,
+              message:
+                cause instanceof Error
+                  ? cause.message
+                  : "The latest Design Project revision could not be loaded.",
+            }
+          : current,
+      );
+    } finally {
+      designOperationFenceRef.current.release(operation);
+    }
+  }, [
+    adoptSuppressedDesignPublication,
+    chatId,
+    designProjectReconciliation,
+    onDesignPublicationResolved,
+    updateDesignProject,
+  ]);
+  const designContextItems = React.useMemo(
+    () => [
+      ...(sourceDesignSelection
+        ? [
+            {
+              id: `source:${sourceDesignSelection.id}`,
+              kind: "element" as const,
+              label: `${sourceDesignSelection.selection.label} · ${sourceDesignSelection.path}`,
+            },
+          ]
+        : []),
+      ...designTargets.map((target) => {
+        const artifact = designArtifacts.find(
+          (entry) =>
+            entry.artifact.mediaId === target.mediaId && entry.artifact.id === target.artifactId,
+        )?.artifact;
+        return {
+          id: `target:${target.mediaId}`,
+          kind: target.selection ? ("element" as const) : ("design" as const),
+          label: target.selection
+            ? designSelectionDisplayLabel(target.selection)
+            : (artifact?.title ?? "Selected design"),
+        };
+      }),
+      ...designCanvasImages.map((attachment) => ({
+        id: `image:${attachment.id}`,
+        kind: "image" as const,
+        label: attachment.name,
+      })),
+    ],
+    [designArtifacts, designCanvasImages, designTargets, sourceDesignSelection],
+  );
+  const removeDesignContextItem = React.useCallback((id: string) => {
+    if (id.startsWith("target:")) {
+      const mediaId = id.slice("target:".length);
+      setDesignTargets((current) => current.filter((target) => target.mediaId !== mediaId));
+      return;
+    }
+    if (id.startsWith("image:")) {
+      const attachmentId = id.slice("image:".length);
+      setDesignCanvasImages((current) =>
+        current.filter((attachment) => attachment.id !== attachmentId),
+      );
+      return;
+    }
+    if (id.startsWith("source:")) {
+      setSourceDesignSelection(undefined);
+    }
+  }, []);
   const displayedGenerationTimeline =
     generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
   const displayedLiveSubagents = React.useMemo(
@@ -815,7 +1287,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, []);
 
   const runGeneration = React.useCallback(
-    (messageTurnId: string) => {
+    (messageTurnId: string, preparedWorkspaceId = generationWorkspaceId) => {
       const generationIntent = generationIntentRef.current;
       setError(null);
       setIsStoppingGeneration(false);
@@ -826,6 +1298,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setStreamingReasoning(null);
       clearTextStreaming();
       setStreamingArtifacts([]);
+      setStreamingArtifactGenerationId(messageTurnId);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
       pendingDeltaRef.current = "";
@@ -862,13 +1335,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
       };
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
+      const design = designTurnRef.current === true;
+      designTurnRef.current = false;
+      const designContext = designContextTurnRef.current;
+      designContextTurnRef.current = undefined;
+      const sourceDesignContext = sourceDesignContextTurnRef.current;
+      sourceDesignContextTurnRef.current = undefined;
       const handle = startGeneration(
         {
           chatId,
-          workspaceId: effectiveWorkspaceId,
+          workspaceId: preparedWorkspaceId,
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
+          ...(design ? { design: true as const } : {}),
+          ...(design && designContext ? { designContext } : {}),
+          ...(design && sourceDesignContext ? { sourceDesignContext } : {}),
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
@@ -982,6 +1464,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           },
           onQuestionnaire: (prompt) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              // Open in the same render that mounts the questionnaire so its
+              // initial focus never targets controls inside a hidden rail.
+              setDesignConversationOpen(true);
               setQuestionnaireSubmitting(false);
               setQuestionnaire(prompt);
             }
@@ -1019,6 +1504,73 @@ export function ChatPane({ chatId }: { chatId: string }) {
               qc.setQueryData(queryKeys.chat(chatId), updatedChat);
               void qc.invalidateQueries({ queryKey: queryKeys.chats });
             }
+            const optimisticDesignArtifacts =
+              streamingArtifactsRef.current.filter(isChatHtmlArtifact);
+            if (design && currentDesignProject) {
+              try {
+                const openResult = await designerApi.openProject(currentDesignProject.id);
+                const publishedProject = openResult?.project;
+                if (
+                  publishedProject &&
+                  openResult.designPublication === "suppressed" &&
+                  mountedRef.current &&
+                  generationIntentRef.current === generationIntent
+                ) {
+                  const latest = currentDesignProjectRef.current;
+                  if (
+                    !latest ||
+                    latest.id !== publishedProject.id ||
+                    latest.revision <= publishedProject.revision
+                  ) {
+                    updateDesignProject(publishedProject);
+                  }
+                  adoptSuppressedDesignPublication();
+                } else if (
+                  publishedProject &&
+                  openResult.designPublication !== "retryable" &&
+                  designProjectClaimsArtifacts(publishedProject, optimisticDesignArtifacts) &&
+                  mountedRef.current &&
+                  generationIntentRef.current === generationIntent
+                ) {
+                  updateDesignProject(publishedProject);
+                  setDesignProjectReconciliation(undefined);
+                } else if (
+                  optimisticDesignArtifacts.length > 0 &&
+                  mountedRef.current &&
+                  generationIntentRef.current === generationIntent
+                ) {
+                  setDesignProjectReconciliation({
+                    projectId: currentDesignProject.id,
+                    artifacts: optimisticDesignArtifacts,
+                    message:
+                      "The design was generated, but its project history is still being reconciled.",
+                    retrying: false,
+                  });
+                }
+              } catch (cause) {
+                if (
+                  optimisticDesignArtifacts.length > 0 &&
+                  mountedRef.current &&
+                  generationIntentRef.current === generationIntent
+                ) {
+                  setDesignProjectReconciliation({
+                    projectId: currentDesignProject.id,
+                    artifacts: optimisticDesignArtifacts,
+                    message:
+                      cause instanceof Error
+                        ? cause.message
+                        : "The latest Design Project revision could not be loaded.",
+                    retrying: false,
+                  });
+                } else {
+                  toast.error(
+                    cause instanceof Error
+                      ? cause.message
+                      : "The latest Design Project revision could not be loaded.",
+                  );
+                }
+              }
+            }
             await waitForStreamHandoff(Boolean(full.trim()));
             if (generationIntentRef.current !== generationIntent) return;
             if (mountedRef.current) {
@@ -1039,7 +1591,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setQuestionnaireSubmitting(false);
             }
           },
-          onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
+          onError: (
+            message,
+            partialContent,
+            finalTimeline,
+            updatedChat,
+            finalReasoning,
+            designPublication,
+          ) => {
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
@@ -1073,6 +1632,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 qc.setQueryData(queryKeys.chat(chatId), updatedChat);
                 void qc.invalidateQueries({ queryKey: queryKeys.chats });
               }
+              if (designPublication === "suppressed") {
+                adoptSuppressedDesignPublication(message);
+              } else if (
+                designPublication === "retryable" &&
+                currentDesignProject &&
+                streamingArtifactsRef.current.some(isChatHtmlArtifact)
+              ) {
+                setDesignProjectReconciliation({
+                  projectId: currentDesignProject.id,
+                  artifacts: streamingArtifactsRef.current.filter(isChatHtmlArtifact),
+                  message:
+                    "The Design revision is saved and waiting to be added to project history.",
+                  retrying: false,
+                });
+              }
               if (partial) {
                 setStreamingText(resolvedPartialContent);
                 setStreamComplete(true);
@@ -1092,7 +1666,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 setHasUnpersistedResponse(
                   Boolean((partial || hasUnpersistedArtifact) && !updatedChat),
                 );
-                if (updatedChat) {
+                if (
+                  designPublication === "suppressed" ||
+                  (updatedChat && designPublication !== "retryable")
+                ) {
                   setStreamingArtifacts([]);
                   streamingArtifactsRef.current = [];
                 }
@@ -1111,9 +1688,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 setError(
                   persistedFailure
                     ? null
-                    : partial
-                      ? `Generation stopped after a partial response: ${message}`
-                      : message,
+                    : updatedChat
+                      ? message
+                      : partial
+                        ? `Generation stopped after a partial response: ${message}`
+                        : message,
                 );
               }
             })();
@@ -1127,12 +1706,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       chatId,
+      adoptSuppressedDesignPublication,
       anthropicThinkingLevel,
       anthropicThinkingSupported,
       clearTextStreaming,
       codexThinkingLevel,
       codexThinkingSupported,
-      effectiveWorkspaceId,
+      currentDesignProject,
+      generationWorkspaceId,
       environmentPanel.subagentsEnabled,
       googleThinkingLevel,
       googleThinkingSupported,
@@ -1142,6 +1723,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       providerThinkingSupported,
       model,
       qc,
+      updateDesignProject,
       waitForStreamHandoff,
     ],
   );
@@ -1175,12 +1757,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
               : current,
           );
         } catch (error) {
-          setBtwView((current) => current?.requestId === "pending" ? null : current);
+          setBtwView((current) => (current?.requestId === "pending" ? null : current));
           throw error;
         }
         return;
       }
-      visualizeTurnRef.current = options?.visualize === true;
+      const design = presentation === "design";
+      designTurnRef.current = false;
+      designContextTurnRef.current = undefined;
+      sourceDesignContextTurnRef.current = undefined;
+      visualizeTurnRef.current = false;
+      let selectedTargets: DesignTurnTargetV1[] = [];
+      const selectedSource = design ? sourceDesignSelection : undefined;
+      const selectedReferenceImages = design ? [...designCanvasImages] : [];
+      const submittedAttachments = [...attachments];
+      const submittedAttachmentIds = new Set(
+        submittedAttachments.map((attachment) => attachment.id),
+      );
+      for (const attachment of selectedReferenceImages) {
+        if (!submittedAttachmentIds.has(attachment.id)) {
+          submittedAttachments.push(attachment);
+          submittedAttachmentIds.add(attachment.id);
+        }
+      }
+      if (submittedAttachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+        throw new Error(`Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments can be sent at once.`);
+      }
+      if (selectedReferenceImages.length > 0 && visionSupported === false) {
+        throw new Error("Switch to a vision-capable model before using canvas images as context.");
+      }
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
           "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
@@ -1197,72 +1802,152 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (detachedGenerationDraining) {
         throw new Error("Wait for the previous response to finish saving before sending again.");
       }
-      const generationIntent = ++generationIntentRef.current;
-      const messageTurnId = createChatTurnId();
-      setIsStoppingGeneration(false);
-      setIsStartingGeneration(true);
+      if (
+        design &&
+        (designProjectReconciliation || detachedProjection?.designPublication !== undefined)
+      ) {
+        throw new Error("Refresh Design history before sending another prompt.");
+      }
+      const designOperation = design
+        ? designOperationFenceRef.current.tryAcquire("design-generation")
+        : undefined;
+      if (design && !designOperation) {
+        throw new Error("Wait for Design history to finish refreshing before sending.");
+      }
       try {
-        let updated: Chat;
+        let preparedWorkspaceId = generationWorkspaceId;
+        let designPreflight:
+          | Awaited<ReturnType<typeof designerApi.preflightGeneration>>
+          | undefined;
+        if (design) {
+          if (!currentDesignProject) throw new Error("This Design Project is unavailable.");
+          const persistenceBarrier = designPersistenceBarrierRef.current;
+          if (!persistenceBarrier) {
+            throw new Error("Wait for the Design canvas to finish loading before sending.");
+          }
+          const persistenceSnapshot = await persistenceBarrier();
+          if (!persistenceSnapshot || persistenceSnapshot.project.id !== currentDesignProject.id) {
+            throw new Error("The Design canvas could not be saved before sending.");
+          }
+          const persistedProject = persistenceSnapshot.project;
+          selectedTargets = persistenceSnapshot.targets;
+          const preflight = await designerApi.preflightGeneration({
+            projectId: persistedProject.id,
+          });
+          if (
+            preflight.projectId !== persistedProject.id ||
+            preflight.chatId !== chatId ||
+            preflight.projectRevision !== persistedProject.revision ||
+            preflight.connectionState !== persistedProject.connectionState ||
+            preflight.workspaceId !== persistedProject.workspaceId
+          ) {
+            throw new Error(
+              "This Design Project changed in another window. Reopen it before sending this prompt.",
+            );
+          }
+          preparedWorkspaceId = preflight.workspaceId;
+          designPreflight = preflight;
+        }
+        const generationIntent = ++generationIntentRef.current;
+        const messageTurnId = createChatTurnId();
+        setIsStoppingGeneration(false);
+        setIsStartingGeneration(true);
         try {
-          updated = await chatsApi.appendMessage(
-            chatId,
-            {
-              role: "user",
-              content: text,
-              attachments: attachments.length ? attachments : undefined,
-            },
-            {
-              providerId,
-              model,
-              autoTitle: true,
-              turnId: messageTurnId,
-              skillInvocation,
-            },
-          );
-        } catch (appendError) {
-          if (isAppendReconciliationRequired(appendError)) {
-            setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
-            void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
-          }
-          throw appendError;
-        }
-        qc.setQueryData(queryKeys.chat(chatId), updated);
-        void qc.invalidateQueries({ queryKey: queryKeys.chats });
-        if (generationIntentRef.current !== generationIntent) {
+          let updated: Chat;
           try {
-            await chatsApi.abandonTurn(chatId, messageTurnId);
-          } catch (error) {
-            if (mountedRef.current) {
-              setError(error instanceof Error ? error.message : String(error));
+            updated = await chatsApi.appendMessage(
+              chatId,
+              {
+                role: "user",
+                content: text,
+                attachments: submittedAttachments.length ? submittedAttachments : undefined,
+              },
+              {
+                providerId,
+                model,
+                autoTitle: true,
+                turnId: messageTurnId,
+                skillInvocation,
+                designPreflight,
+              },
+            );
+          } catch (appendError) {
+            if (isAppendReconciliationRequired(appendError)) {
+              setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
+              void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
             }
+            throw appendError;
           }
-          return;
+          qc.setQueryData(queryKeys.chat(chatId), updated);
+          void qc.invalidateQueries({ queryKey: queryKeys.chats });
+          if (generationIntentRef.current !== generationIntent) {
+            try {
+              await chatsApi.abandonTurn(chatId, messageTurnId);
+            } catch (error) {
+              if (mountedRef.current) {
+                setError(error instanceof Error ? error.message : String(error));
+              }
+            }
+            return;
+          }
+          designTurnRef.current = design;
+          visualizeTurnRef.current = options?.visualize === true && !design;
+          designContextTurnRef.current =
+            design && !selectedSource && selectedTargets.length > 0
+              ? {
+                  version: DESIGN_TURN_CONTEXT_VERSION,
+                  targets: selectedTargets,
+                }
+              : undefined;
+          sourceDesignContextTurnRef.current =
+            design && selectedSource
+              ? {
+                  version: SOURCE_DESIGNER_VERSION,
+                  selectionId: selectedSource.id,
+                }
+              : undefined;
+          if (design) {
+            setDesignTargets([]);
+            setSourceDesignSelection(undefined);
+            setDesignCanvasImages([]);
+          }
+          const started = await runGeneration(messageTurnId, preparedWorkspaceId);
+          // The user message crossed its durability barrier in appendMessage.
+          // Start rejection is surfaced by the stream callback but cannot turn
+          // that committed message back into an unsent composer payload.
+          if (!started.ok && mountedRef.current) setError(started.error.message);
+        } finally {
+          if (
+            mountedRef.current &&
+            chatIdRef.current === chatId &&
+            generationIntentRef.current === generationIntent
+          ) {
+            setIsStartingGeneration(false);
+          }
         }
-        const started = await runGeneration(messageTurnId);
-        // The user message crossed its durability barrier in appendMessage.
-        // Start rejection is surfaced by the stream callback but cannot turn
-        // that committed message back into an unsent composer payload.
-        if (!started.ok && mountedRef.current) setError(started.error.message);
       } finally {
-        if (
-          mountedRef.current &&
-          chatIdRef.current === chatId &&
-          generationIntentRef.current === generationIntent
-        ) {
-          setIsStartingGeneration(false);
-        }
+        if (designOperation) designOperationFenceRef.current.release(designOperation);
       }
     },
     [
       chatId,
       computerUseSaving,
+      currentDesignProject,
+      designCanvasImages,
+      designProjectReconciliation,
+      designTargets,
+      detachedProjection,
       detachedGenerationDraining,
+      presentation,
+      sourceDesignSelection,
       imageArtifactRecoveryPending,
       imageArtifactRecoveryUnavailable,
+      generationWorkspaceId,
       providerId,
       model,
       qc,
       runGeneration,
+      visionSupported,
     ],
   );
 
@@ -1354,7 +2039,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setQuestionnaireSubmitting(true);
       try {
         await chatsApi.answerQuestionnaire(questionnaire.promptId, response);
-        if (chatIdRef.current === chatId) setQuestionnaire(null);
+        if (chatIdRef.current === chatId) {
+          if (discardsCancelledDesignDraft(questionnaire, response)) {
+            setStreamingArtifacts([]);
+            streamingArtifactsRef.current = [];
+            setDesignProjectReconciliation(undefined);
+          }
+          setQuestionnaire(null);
+          focusComposer();
+        }
       } catch (questionError) {
         if (chatIdRef.current !== chatId) return;
         toast.error(
@@ -1364,7 +2057,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (chatIdRef.current === chatId) setQuestionnaireSubmitting(false);
       }
     },
-    [chatId, questionnaire, questionnaireSubmitting],
+    [chatId, focusComposer, questionnaire, questionnaireSubmitting],
   );
 
   const openFolder = React.useCallback(() => {
@@ -1763,6 +2456,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
+  const designConversationMustStayOpen =
+    presentation === "design" &&
+    Boolean(
+      questionnaire ||
+      pending ||
+      btwView ||
+      isGenerating ||
+      isStartingGeneration ||
+      detachedGenerationDraining ||
+      designComposerRequiresVisibility,
+    );
+
+  React.useEffect(() => {
+    if (designConversationMustStayOpen) setDesignConversationOpen(true);
+  }, [designConversationMustStayOpen]);
+
+  const closeDesignConversation = React.useCallback(() => {
+    if (designConversationMustStayOpen) return;
+    setDesignConversationOpen(false);
+    requestAnimationFrame(() => designConversationToggleRef.current?.focus());
+  }, [designConversationMustStayOpen]);
+
+  const toggleDesignConversation = React.useCallback(() => {
+    if (designConversationOpen) {
+      closeDesignConversation();
+    } else {
+      setDesignConversationOpen(true);
+    }
+  }, [closeDesignConversation, designConversationOpen]);
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -1810,428 +2532,613 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (pending) return;
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && approvalCardRef.current?.contains(focused)) {
-      composerRef.current?.focus({ preventScroll: true });
+      focusComposer();
     }
-  }, [pending]);
+  }, [focusComposer, pending]);
 
   return (
     <>
-    <ScrollArea
-      className="h-full min-h-0"
-      title={
-        bot.data ? (
-          <span className="flex min-w-0 items-center gap-2">
-            <BotAvatar
-              botId={bot.data.id}
-              avatar={bot.data.avatar}
-              name={bot.data.name}
-              photoLoading="immediate"
-              size="small"
-            />
-            <span className="min-w-0">
-              <span className="flex items-center gap-2">
-                <span className="truncate">{bot.data.name}</span>
-                <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
-                  Bot
-                </span>
+      <ScrollArea
+        className="h-full min-h-0"
+        title={
+          presentation === "design" ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate">{currentDesignProject?.title ?? "Design Project"}</span>
+              <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
+                {currentDesignProject?.connectionState === "connected"
+                  ? "Connected App"
+                  : "Prototype"}
               </span>
-              <span className="block truncate text-small font-normal text-secondary">
-                {chat.data?.title ?? "New conversation"}
+              <span className="hidden text-small font-normal text-tertiary sm:inline">
+                Saved locally
               </span>
             </span>
-          </span>
-        ) : (
-          (chat.data?.title ?? "New agent")
-        )
-      }
-      actions={
-        <>
-          <OpenInEditorPicker
-            workspaceId={effectiveWorkspace?.id}
-            folderPath={effectiveWorkspace?.folderPath}
-          />
-          <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
-          <Button
-            iconOnly
-            variant="toolbar"
-            size="large"
-            onClick={terminal.toggle}
-            disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-            aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-            aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-            aria-pressed={terminal.open}
-            title={`Toggle terminal (${terminalShortcut})`}
-            data-terminal-toggle
-          >
-            <TerminalSquare />
-          </Button>
-        </>
-      }
-      autoScrollToBottom
-      autoScrollDeps={[
-        messages.length,
-        displayedStreamingText,
-        displayedStreamingReasoning,
-        displayedGenerationTimeline,
-        agentActivity?.phase,
-        approvals.length,
-        questionnaire?.promptId,
-        displayedStreamingArtifacts.length,
-      ]}
-      showScrollToBottomButton
-      scrollToBottomButtonOffset={
-        todoSnapshot?.availability === "unavailable" ||
-        todoSnapshot?.tasks.some(
-          (task) => task.status !== "deleted" && task.status !== "completed",
-        )
-          ? 44
-          : 0
-      }
-      footer={
-        <>
-          <EventPresence
-            present={Boolean(pending)}
-            className="aiden-dock-inset chat-content-column pb-2"
-          >
-            {pending ? (
-              <div>
-                <p className="sr-only" role="status">
-                  {invalidPendingPrivilegedApproval
-                    ? "Invalid privileged approval blocked"
-                    : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}`}
-                </p>
-                <section
-                  ref={approvalCardRef}
-                  aria-labelledby={`approval-title-${pending.approvalId}`}
-                  aria-describedby={`approval-summary-${pending.approvalId}`}
-                  className="rounded-card bg-popover p-3 shadow-popover"
-                >
-                  <div className="flex items-start gap-2.5">
-                    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-support-warning/10 text-support-warning">
-                      <ShieldQuestion className="size-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <Text
-                        variant="small-strong"
-                        as="p"
-                        id={`approval-title-${pending.approvalId}`}
-                      >
-                        {invalidPendingPrivilegedApproval
-                          ? "Invalid privileged approval blocked"
-                          : pendingWorkspaceWrite
-                            ? `${pendingWorkspaceWrite.childLabel} wants to ${subagentWorkspaceWriteOperationLabel(
-                                pendingWorkspaceWrite.operation,
-                              ).toLocaleLowerCase("en-US")}`
-                            : pendingMcpMutation
-                              ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
-                              : pendingShell
-                                ? `${pendingShell.childLabel} wants to run a full-host command`
-                                : `${toolLabel(pending.toolName)} needs approval`}
-                      </Text>
-                      <Text variant="small" color="secondary" as="p" className="mt-0.5">
-                        {invalidPendingPrivilegedApproval
-                          ? "This malformed privileged action cannot be allowed. Deny it to continue."
-                          : pendingWorkspaceWrite
-                            ? "Review this one exact file change before Aiden continues."
-                            : pendingMcpMutation
-                              ? "Review this one exact external mutation before Aiden continues."
-                              : pendingShell
-                                ? "Review this one exact full-host command before Aiden continues."
-                                : "Review this one action before Aiden continues."}
-                      </Text>
+          ) : bot.data ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <BotAvatar
+                botId={bot.data.id}
+                avatar={bot.data.avatar}
+                name={bot.data.name}
+                photoLoading="immediate"
+                size="small"
+              />
+              <span className="min-w-0">
+                <span className="flex items-center gap-2">
+                  <span className="truncate">{bot.data.name}</span>
+                  <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
+                    Bot
+                  </span>
+                </span>
+                <span className="block truncate text-small font-normal text-secondary">
+                  {chat.data?.title ?? "New conversation"}
+                </span>
+              </span>
+            </span>
+          ) : (
+            (chat.data?.title ?? "New agent")
+          )
+        }
+        actions={
+          presentation === "design" ? (
+            <Button
+              ref={designConversationToggleRef}
+              variant="toolbar"
+              size="small"
+              onClick={toggleDesignConversation}
+              disabled={designConversationOpen && designConversationMustStayOpen}
+              aria-label="Toggle project conversation"
+              aria-pressed={designConversationOpen}
+              title={
+                designConversationMustStayOpen
+                  ? "Conversation stays open while an active interaction needs its controls"
+                  : "Toggle project conversation"
+              }
+            >
+              <MessageCircle />
+              Conversation
+            </Button>
+          ) : (
+            <>
+              <OpenInEditorPicker
+                workspaceId={effectiveWorkspace?.id}
+                folderPath={effectiveWorkspace?.folderPath}
+              />
+              <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+              <Button
+                iconOnly
+                variant="toolbar"
+                size="large"
+                onClick={terminal.toggle}
+                disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+                aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+                aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+                aria-pressed={terminal.open}
+                title={`Toggle terminal (${terminalShortcut})`}
+                data-terminal-toggle
+              >
+                <TerminalSquare />
+              </Button>
+            </>
+          )
+        }
+        autoScrollToBottom={presentation === "chat"}
+        autoScrollDeps={[
+          messages.length,
+          displayedStreamingText,
+          displayedStreamingReasoning,
+          displayedGenerationTimeline,
+          agentActivity?.phase,
+          approvals.length,
+          questionnaire?.promptId,
+          displayedStreamingArtifacts.length,
+        ]}
+        showScrollToBottomButton={presentation === "chat"}
+        overlayFooter={presentation === "design"}
+        scrollToBottomButtonOffset={
+          presentation === "chat" &&
+          (todoSnapshot?.availability === "unavailable" ||
+            todoSnapshot?.tasks.some(
+              (task) => task.status !== "deleted" && task.status !== "completed",
+            ))
+            ? 44
+            : 0
+        }
+        footer={
+          <DesignFooterPlacement design={presentation === "design"} host={designFooterHost}>
+            <EventPresence
+              present={Boolean(pending)}
+              className={
+                presentation === "design"
+                  ? "w-full px-3 pb-2"
+                  : "aiden-dock-inset chat-content-column pb-2"
+              }
+            >
+              {pending ? (
+                <div>
+                  <p className="sr-only" role="status">
+                    {invalidPendingPrivilegedApproval
+                      ? "Invalid privileged approval blocked"
+                      : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}`}
+                  </p>
+                  <section
+                    ref={approvalCardRef}
+                    aria-labelledby={`approval-title-${pending.approvalId}`}
+                    aria-describedby={`approval-summary-${pending.approvalId}`}
+                    className="rounded-card bg-popover p-3 shadow-popover"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-support-warning/10 text-support-warning">
+                        <ShieldQuestion className="size-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <Text
+                          variant="small-strong"
+                          as="p"
+                          id={`approval-title-${pending.approvalId}`}
+                        >
+                          {invalidPendingPrivilegedApproval
+                            ? "Invalid privileged approval blocked"
+                            : pendingWorkspaceWrite
+                              ? `${pendingWorkspaceWrite.childLabel} wants to ${subagentWorkspaceWriteOperationLabel(
+                                  pendingWorkspaceWrite.operation,
+                                ).toLocaleLowerCase("en-US")}`
+                              : pendingMcpMutation
+                                ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
+                                : pendingShell
+                                  ? `${pendingShell.childLabel} wants to run a full-host command`
+                                  : `${toolLabel(pending.toolName)} needs approval`}
+                        </Text>
+                        <Text variant="small" color="secondary" as="p" className="mt-0.5">
+                          {invalidPendingPrivilegedApproval
+                            ? "This malformed privileged action cannot be allowed. Deny it to continue."
+                            : pendingWorkspaceWrite
+                              ? "Review this one exact file change before Aiden continues."
+                              : pendingMcpMutation
+                                ? "Review this one exact external mutation before Aiden continues."
+                                : pendingShell
+                                  ? "Review this one exact full-host command before Aiden continues."
+                                  : "Review this one action before Aiden continues."}
+                        </Text>
+                      </div>
                     </div>
-                  </div>
-                  {!pendingCanAllow ? (
-                    <Text
-                      variant="small"
-                      as="p"
-                      id={`approval-summary-${pending.approvalId}`}
-                      className="mt-2.5 rounded-control bg-well px-3 py-2"
-                    >
-                      Aiden cannot safely authorize this action from this view. Deny it here or
-                      review the exact action on the Mac that owns this chat.
-                    </Text>
-                  ) : pendingWorkspaceWrite ? (
-                    <SubagentWorkspaceWriteApproval
-                      details={pendingWorkspaceWrite}
-                      descriptionId={`approval-summary-${pending.approvalId}`}
-                    />
-                  ) : pendingMcpMutation ? (
-                    <SubagentMcpMutationApproval
-                      details={pendingMcpMutation}
-                      descriptionId={`approval-summary-${pending.approvalId}`}
-                    />
-                  ) : pendingShell ? (
-                    <SubagentShellApproval
-                      details={pendingShell}
-                      descriptionId={`approval-summary-${pending.approvalId}`}
-                    />
-                  ) : (
-                    <Text
-                      variant="small"
-                      as="p"
-                      id={`approval-summary-${pending.approvalId}`}
-                      className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
-                    >
-                      {pending.summary}
-                    </Text>
-                  )}
-                  <div className="mt-2.5 flex justify-end gap-2">
-                    <Button
-                      ref={approvalDenyRef}
-                      variant="transparent"
-                      size="small"
-                      disabled={decidingApprovalId === pending.approvalId}
-                      onClick={() => void decideApproval(pending, "deny")}
-                    >
-                      Deny
-                    </Button>
-                    {pendingCanAllow ? (
+                    {!pendingCanAllow ? (
+                      <Text
+                        variant="small"
+                        as="p"
+                        id={`approval-summary-${pending.approvalId}`}
+                        className="mt-2.5 rounded-control bg-well px-3 py-2"
+                      >
+                        Aiden cannot safely authorize this action from this view. Deny it here or
+                        review the exact action on the Mac that owns this chat.
+                      </Text>
+                    ) : pendingWorkspaceWrite ? (
+                      <SubagentWorkspaceWriteApproval
+                        details={pendingWorkspaceWrite}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingMcpMutation ? (
+                      <SubagentMcpMutationApproval
+                        details={pendingMcpMutation}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingShell ? (
+                      <SubagentShellApproval
+                        details={pendingShell}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : (
+                      <Text
+                        variant="small"
+                        as="p"
+                        id={`approval-summary-${pending.approvalId}`}
+                        className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
+                      >
+                        {pending.summary}
+                      </Text>
+                    )}
+                    <div className="mt-2.5 flex justify-end gap-2">
                       <Button
-                        variant="accent"
+                        ref={approvalDenyRef}
+                        variant="transparent"
                         size="small"
                         disabled={decidingApprovalId === pending.approvalId}
-                        onClick={() => void decideApproval(pending, "allow")}
+                        onClick={() => void decideApproval(pending, "deny")}
                       >
-                        {decidingApprovalId === pending.approvalId
-                          ? "Sending…"
-                          : pendingMcpMutation
-                            ? subagentMcpMutationAllowLabel(pendingMcpMutation)
-                            : "Allow once"}
+                        Deny
                       </Button>
-                    ) : null}
-                  </div>
-                </section>
-              </div>
+                      {pendingCanAllow ? (
+                        <Button
+                          variant="accent"
+                          size="small"
+                          disabled={decidingApprovalId === pending.approvalId}
+                          onClick={() => void decideApproval(pending, "allow")}
+                        >
+                          {decidingApprovalId === pending.approvalId
+                            ? "Sending…"
+                            : pendingMcpMutation
+                              ? subagentMcpMutationAllowLabel(pendingMcpMutation)
+                              : "Allow once"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+            </EventPresence>
+            <TodoPanel
+              snapshot={todoSnapshot}
+              placement={presentation === "design" ? "design-conversation" : "chat"}
+            />
+            {btwView ? (
+              <BtwCard
+                view={btwView}
+                placement={presentation === "design" ? "design-conversation" : "chat"}
+                onAsk={(question) => handleSend(question, [], undefined, { btw: true })}
+                onCancel={async () => {
+                  if (btwView.requestId !== "pending") {
+                    await chatsApi.btwCancel(chatId, btwView.requestId);
+                  }
+                }}
+                onClear={async () => {
+                  await chatsApi.btwClear(chatId);
+                  setBtwView(null);
+                }}
+                onClose={async () => {
+                  if (
+                    btwView.requestId !== "pending" &&
+                    (btwView.status === "starting" || btwView.status === "running")
+                  ) {
+                    await chatsApi.btwCancel(chatId, btwView.requestId);
+                  }
+                  setBtwView(null);
+                }}
+              />
             ) : null}
-          </EventPresence>
-          <TodoPanel snapshot={todoSnapshot} />
-          {btwView ? (
-            <BtwCard
-              view={btwView}
-              onAsk={(question) => handleSend(question, [], undefined, { btw: true })}
-              onCancel={async () => {
-                if (btwView.requestId !== "pending") {
-                  await chatsApi.btwCancel(chatId, btwView.requestId);
+            {questionnaire ? (
+              <AskUserQuestionComposer
+                key={questionnaire.promptId}
+                prompt={questionnaire}
+                submitting={questionnaireSubmitting}
+                placement={presentation === "design" ? "design-conversation" : "chat"}
+                onRespond={answerQuestionnaire}
+              />
+            ) : (
+              <Composer
+                // Keyed so the draft and attachments stay scoped to one chat. The
+                // route no longer remounts the pane, and Composer owns that text
+                // without a chatId reset of its own.
+                key={chatId}
+                placeholder={
+                  presentation === "design"
+                    ? designArtifacts.length > 0
+                      ? "Describe the next change…"
+                      : "Describe the interface you want to create…"
+                    : undefined
                 }
-              }}
-              onClear={async () => {
-                await chatsApi.btwClear(chatId);
-                setBtwView(null);
-              }}
-              onClose={async () => {
-                if (
-                  btwView.requestId !== "pending" &&
-                  (btwView.status === "starting" || btwView.status === "running")
-                ) {
-                  await chatsApi.btwCancel(chatId, btwView.requestId);
+                ready={
+                  ready &&
+                  !imageArtifactRecoveryPending &&
+                  !imageArtifactRecoveryUnavailable &&
+                  (presentation !== "design" || !designWorkspaceDisabled)
                 }
-                setBtwView(null);
-              }}
+                readinessMessage={
+                  presentation === "design" && designWorkspaceDisabled
+                    ? designWorkspaceTitle
+                    : imageArtifactRecoveryUnavailable
+                      ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                      : imageArtifactRecoveryPending
+                        ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
+                        : readinessMessage
+                }
+                hasMessages={hasMessages}
+                chatId={chatId}
+                onSend={handleSend}
+                onStop={handleStop}
+                isGenerating={isGenerating}
+                canStopGeneration={canStopGeneration}
+                configurationBusy={
+                  thinkingSaving ||
+                  designProjectReconciliation !== undefined ||
+                  detachedProjection?.designPublication !== undefined
+                }
+                inputRef={composerRef}
+                placement={presentation === "design" ? "design-conversation" : "chat"}
+                onVisibilityRequirementChange={
+                  presentation === "design" ? setDesignComposerRequiresVisibility : undefined
+                }
+                workspace={presentation === "design" ? undefined : effectiveWorkspace}
+                gitBranch={
+                  presentation !== "design" && git.data?.isRepo ? git.data.branch : undefined
+                }
+                gitDetached={presentation === "design" ? undefined : git.data?.detached}
+                gitUnborn={presentation === "design" ? undefined : git.data?.unborn}
+                onOpenFolder={presentation === "design" ? undefined : openFolder}
+                onChangePermission={presentation === "design" ? undefined : changePermission}
+                workspacePickerEnabled={presentation !== "design" && isNewChat}
+                workspaces={presentation === "design" ? [] : workspaces}
+                onSelectWorkspace={presentation === "design" ? undefined : moveNewChatToWorkspace}
+                onCreateScratchWorkspace={
+                  presentation === "design" ? undefined : createScratchWorkspace
+                }
+                onCreateGitWorktree={presentation === "design" ? undefined : createGitWorktree}
+                onGitOperationBusyChange={
+                  presentation === "design" ? undefined : environmentPanel.setGitOperationBusy
+                }
+                gitOperationBusy={
+                  presentation === "design" ? false : environmentPanel.gitOperationBusy
+                }
+                workspaceChangeBlockedReason={
+                  documentAppendReconciliationRequired
+                    ? "Reload Aiden before changing this chat's workspace."
+                    : settingsBlockedReason
+                }
+                gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
+                gitWorktreeDescription={
+                  isNewChat
+                    ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
+                    : "Creates a separate workspace and opens a new chat. This conversation stays here."
+                }
+                visionSupported={visionSupported}
+                designContextItems={presentation === "design" ? designContextItems : undefined}
+                onRemoveDesignContextItem={removeDesignContextItem}
+                computerUse={
+                  presentation !== "design" && computerUseGloballyEnabled
+                    ? {
+                        enabled: chatComputerUseEnabled,
+                        ready: computerUseReady,
+                        checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
+                        saving: computerUseSaving,
+                        detail: computerUseStatusDetail,
+                      }
+                    : undefined
+                }
+                onChangeComputerUse={presentation === "design" ? undefined : changeComputerUse}
+                currentChatTitle={chat.data?.title}
+                latestAssistantResponse={latestAssistantResponse}
+                slashNavigationBlockedReason={settingsBlockedReason}
+                sideQuestionBlockedReason={sideQuestionBlockedReason}
+                slashSessionBlockedReason={
+                  documentAppendReconciliationRequired
+                    ? "Reload Aiden before copying this chat."
+                    : imageArtifactRecoveryUnavailable
+                      ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
+                      : imageArtifactRecoveryPending
+                        ? "Delete this chat to discard the unrecovered visual artifact before copying."
+                        : undefined
+                }
+                slashPaletteBlocked={Boolean(pending)}
+                slashActionBusy={isGenerating || isStartingGeneration}
+                onOpenSettings={(section) =>
+                  void navigate({
+                    to: "/settings",
+                    search: section ? { section } : {},
+                  })
+                }
+                onRenameChat={renameChat}
+                onOpenReview={
+                  presentation === "design"
+                    ? undefined
+                    : () => environmentPanel.openReview("changes")
+                }
+                sessionChat={chat.data ?? undefined}
+                authenticatedProviders={authenticatedProviders}
+                onCloneChat={() => copyChat()}
+                onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
+                onExportChat={exportChat}
+                onCompactChat={() => chatsApi.compact(chatId)}
+                onCancelCompact={() => chatsApi.cancelCompact(chatId)}
+                onLogoutProvider={logoutProvider}
+                thinkingControl={
+                  googleThinkingSupported ? (
+                    <ThinkingControl
+                      level={googleThinkingLevel}
+                      levels={googleThinkingLevels}
+                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(level) => void changeGoogleThinking(level)}
+                    />
+                  ) : codexThinkingSupported ? (
+                    <ThinkingControl
+                      providerLabel="Codex"
+                      level={codexThinkingLevel}
+                      levels={codexThinkingLevels}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(level) => void changeCodexThinking(level)}
+                    />
+                  ) : anthropicThinkingSupported ? (
+                    <ThinkingControl
+                      providerLabel="Claude"
+                      level={anthropicThinkingLevel}
+                      levels={anthropicThinkingLevels}
+                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(level) => void changeAnthropicThinking(level)}
+                    />
+                  ) : providerThinkingSupported ? (
+                    <ThinkingControl
+                      providerLabel={selectedProvider?.label ?? "Model"}
+                      level={providerThinkingLevel}
+                      levels={providerThinkingLevels}
+                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(level) => void changeProviderThinking(level)}
+                    />
+                  ) : localReasoningVisibilitySupported ? (
+                    <ReasoningVisibilityControl
+                      visible={showLocalModelReasoning}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
+                    />
+                  ) : undefined
+                }
+                modelPicker={
+                  <ModelPicker
+                    providers={settings.data ? (providers.data ?? []) : []}
+                    providerId={providerId}
+                    model={model}
+                    onChange={select}
+                    disabled={isGenerating || thinkingSaving}
+                    settingsBlockedReason={settingsBlockedReason}
+                    hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
+                  />
+                }
+              />
+            )}
+          </DesignFooterPlacement>
+        }
+      >
+        {presentation === "design" ? (
+          <div className="relative flex h-full min-h-0 overflow-hidden">
+            <aside
+              aria-label="Design Project conversation"
+              aria-hidden={!designConversationOpen || undefined}
+              inert={!designConversationOpen ? true : undefined}
+              className={
+                designConversationOpen
+                  ? "absolute inset-y-0 left-0 z-40 flex w-full max-w-[22rem] flex-col border-r border-separator bg-sidebar shadow-popover lg:relative lg:z-auto lg:shadow-none"
+                  : "hidden"
+              }
+            >
+              <div className="flex items-center justify-between border-b border-separator px-3 py-2">
+                <div>
+                  <Text variant="small-strong">Conversation</Text>
+                  <Text as="p" variant="small" color="tertiary">
+                    Prompts, decisions, and artifact turns
+                  </Text>
+                </div>
+                <Button
+                  size="small"
+                  variant="transparent"
+                  disabled={designConversationMustStayOpen}
+                  onClick={closeDesignConversation}
+                  title={
+                    designConversationMustStayOpen
+                      ? "Resolve or stop the active interaction before hiding Conversation"
+                      : "Hide project conversation"
+                  }
+                >
+                  Hide
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                {messages.length === 0 && displayedStreamingText === null ? (
+                  <div className="p-4">
+                    <Text variant="small" color="secondary">
+                      Start with a prompt from the composer.
+                    </Text>
+                  </div>
+                ) : (
+                  <MessageList
+                    key={`design:${chatId}`}
+                    chatId={chatId}
+                    messages={messages}
+                    streamingText={displayedStreamingText}
+                    streamingReasoning={displayedStreamingReasoning}
+                    streamingArtifacts={displayedStreamingArtifacts}
+                    persistedDesignMediaIds={persistedDesignMediaIds}
+                    streamComplete={streamComplete || visibleDetachedProjection !== null}
+                    onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+                    timeline={displayedGenerationTimeline}
+                    liveSubagents={displayedLiveSubagents}
+                    subagentsEnabled={environmentPanel.subagentsEnabled}
+                    onOpenSubagent={environmentPanel.openSubagent}
+                    agentActivity={visibleAgentActivity}
+                    error={error}
+                  />
+                )}
+              </div>
+              <div
+                ref={setDesignFooterHost}
+                className="relative max-h-[min(70vh,36rem)] shrink-0 overflow-y-auto border-t border-separator bg-sidebar"
+                aria-label="Design conversation controls"
+              />
+            </aside>
+            <div className="min-w-0 flex-1">
+              {chat.isLoading || providers.isLoading ? (
+                <div
+                  className="flex min-h-full items-center justify-center"
+                  aria-label="Loading Design"
+                >
+                  <Text variant="small" color="secondary">
+                    Loading Design…
+                  </Text>
+                </div>
+              ) : (
+                <DesignWorkspaceCanvas
+                  chatId={chatId}
+                  project={currentDesignProject}
+                  workspaceId={generationWorkspaceId}
+                  artifacts={designArtifacts}
+                  livePreviewAuthority={liveDesignPreviewAuthority}
+                  projectReconciliationError={designProjectReconciliation?.message}
+                  projectReconciliationBusy={designProjectReconciliation?.retrying === true}
+                  onRetryProjectReconciliation={
+                    isGenerating || isStartingGeneration || detachedGenerationDraining
+                      ? undefined
+                      : () => void retryDesignProjectReconciliation()
+                  }
+                  generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
+                  initialMediaId={initialDesignMediaId}
+                  unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}
+                  targets={designTargets}
+                  sourceSelection={sourceDesignSelection}
+                  selectedImages={designCanvasImages}
+                  onTargetsChange={setDesignTargets}
+                  onSourceSelectionChange={setSourceDesignSelection}
+                  onSelectedImagesChange={setDesignCanvasImages}
+                  onProjectChange={updateDesignProject}
+                  onPersistenceBarrierChange={registerDesignPersistenceBarrier}
+                  onRequestComposerFocus={focusComposer}
+                />
+              )}
+            </div>
+          </div>
+        ) : chat.isLoading || providers.isLoading ? (
+          <div
+            className="flex min-h-full items-center justify-center"
+            aria-label="Loading conversation"
+          >
+            <Text variant="small" color="secondary">
+              Loading…
+            </Text>
+          </div>
+        ) : messages.length === 0 && displayedStreamingText === null ? (
+          <div className="flex min-h-full items-center justify-center">
+            <EmptyState
+              title="What would you like to work on?"
+              description={
+                (providers.data ?? []).some((p) => p.models.length > 0 && (p.hasKey || !p.needsKey))
+                  ? undefined
+                  : "Set up a provider in Settings to start."
+              }
             />
-          ) : null}
-          {questionnaire ? (
-            <AskUserQuestionComposer
-              key={questionnaire.promptId}
-              prompt={questionnaire}
-              submitting={questionnaireSubmitting}
-              onRespond={answerQuestionnaire}
-            />
-          ) : (
-            <Composer
-            // Keyed so the draft and attachments stay scoped to one chat. The
-            // route no longer remounts the pane, and Composer owns that text
-            // without a chatId reset of its own.
+          </div>
+        ) : (
+          <MessageList
             key={chatId}
-            ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
-            readinessMessage={
-              imageArtifactRecoveryUnavailable
+            chatId={chatId}
+            messages={messages}
+            streamingText={displayedStreamingText}
+            streamingReasoning={displayedStreamingReasoning}
+            streamingArtifacts={displayedStreamingArtifacts}
+            streamComplete={streamComplete || visibleDetachedProjection !== null}
+            onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+            timeline={displayedGenerationTimeline}
+            liveSubagents={displayedLiveSubagents}
+            subagentsEnabled={environmentPanel.subagentsEnabled}
+            onOpenSubagent={environmentPanel.openSubagent}
+            agentActivity={visibleAgentActivity}
+            error={
+              error ??
+              (imageArtifactRecoveryUnavailable
                 ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
                 : imageArtifactRecoveryPending
-                  ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
-                  : readinessMessage
-            }
-            hasMessages={hasMessages}
-            chatId={chatId}
-            onSend={handleSend}
-            onStop={handleStop}
-            isGenerating={isGenerating}
-            canStopGeneration={canStopGeneration}
-            configurationBusy={thinkingSaving}
-            inputRef={composerRef}
-            workspace={effectiveWorkspace}
-            gitBranch={git.data?.isRepo ? git.data.branch : undefined}
-            gitDetached={git.data?.detached}
-            gitUnborn={git.data?.unborn}
-            onOpenFolder={openFolder}
-            onChangePermission={changePermission}
-            workspacePickerEnabled={isNewChat}
-            workspaces={workspaces}
-            onSelectWorkspace={moveNewChatToWorkspace}
-            onCreateScratchWorkspace={createScratchWorkspace}
-            onCreateGitWorktree={createGitWorktree}
-            onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
-            gitOperationBusy={environmentPanel.gitOperationBusy}
-            workspaceChangeBlockedReason={
-              documentAppendReconciliationRequired
-                ? "Reload Aiden before changing this chat's workspace."
-                : settingsBlockedReason
-            }
-            gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
-            gitWorktreeDescription={
-              isNewChat
-                ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
-                : "Creates a separate workspace and opens a new chat. This conversation stays here."
-            }
-            visionSupported={visionSupported}
-            computerUse={
-              computerUseGloballyEnabled
-                ? {
-                    enabled: chatComputerUseEnabled,
-                    ready: computerUseReady,
-                    checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
-                    saving: computerUseSaving,
-                    detail: computerUseStatusDetail,
-                  }
-                : undefined
-            }
-            onChangeComputerUse={changeComputerUse}
-            currentChatTitle={chat.data?.title}
-            latestAssistantResponse={latestAssistantResponse}
-            slashNavigationBlockedReason={settingsBlockedReason}
-            sideQuestionBlockedReason={sideQuestionBlockedReason}
-            slashSessionBlockedReason={
-              documentAppendReconciliationRequired
-                ? "Reload Aiden before copying this chat."
-                : imageArtifactRecoveryUnavailable
-                  ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
-                  : imageArtifactRecoveryPending
-                    ? "Delete this chat to discard the unrecovered visual artifact before copying."
-                    : undefined
-            }
-            slashPaletteBlocked={Boolean(pending)}
-            slashActionBusy={isGenerating || isStartingGeneration}
-            onOpenSettings={(section) =>
-              void navigate({
-                to: "/settings",
-                search: section ? { section } : {},
-              })
-            }
-            onRenameChat={renameChat}
-            onOpenReview={() => environmentPanel.openReview("changes")}
-            sessionChat={chat.data ?? undefined}
-            authenticatedProviders={authenticatedProviders}
-            onCloneChat={() => copyChat()}
-            onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
-            onExportChat={exportChat}
-            onCompactChat={() => chatsApi.compact(chatId)}
-            onCancelCompact={() => chatsApi.cancelCompact(chatId)}
-            onLogoutProvider={logoutProvider}
-            thinkingControl={
-              googleThinkingSupported ? (
-                <ThinkingControl
-                  level={googleThinkingLevel}
-                  levels={googleThinkingLevels}
-                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(level) => void changeGoogleThinking(level)}
-                />
-              ) : codexThinkingSupported ? (
-                <ThinkingControl
-                  providerLabel="Codex"
-                  level={codexThinkingLevel}
-                  levels={codexThinkingLevels}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(level) => void changeCodexThinking(level)}
-                />
-              ) : anthropicThinkingSupported ? (
-                <ThinkingControl
-                  providerLabel="Claude"
-                  level={anthropicThinkingLevel}
-                  levels={anthropicThinkingLevels}
-                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(level) => void changeAnthropicThinking(level)}
-                />
-              ) : providerThinkingSupported ? (
-                <ThinkingControl
-                  providerLabel={selectedProvider?.label ?? "Model"}
-                  level={providerThinkingLevel}
-                  levels={providerThinkingLevels}
-                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(level) => void changeProviderThinking(level)}
-                />
-              ) : localReasoningVisibilitySupported ? (
-                <ReasoningVisibilityControl
-                  visible={showLocalModelReasoning}
-                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                  onChange={(visible) => void changeLocalReasoningVisibility(visible)}
-                />
-              ) : undefined
-            }
-            modelPicker={
-              <ModelPicker
-                providers={settings.data ? (providers.data ?? []) : []}
-                providerId={providerId}
-                model={model}
-                onChange={select}
-                disabled={isGenerating || thinkingSaving}
-                settingsBlockedReason={settingsBlockedReason}
-                hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-              />
+                  ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
+                  : null)
             }
           />
-          )}
-        </>
-      }
-    >
-      {chat.isLoading || providers.isLoading ? (
-        <div
-          className="flex min-h-full items-center justify-center"
-          aria-label="Loading conversation"
-        >
-          <Text variant="small" color="secondary">
-            Loading…
-          </Text>
-        </div>
-      ) : messages.length === 0 && displayedStreamingText === null ? (
-        <div className="flex min-h-full items-center justify-center">
-          <EmptyState
-            title="What would you like to work on?"
-            description={
-              (providers.data ?? []).some((p) => p.models.length > 0 && (p.hasKey || !p.needsKey))
-                ? undefined
-                : "Set up a provider in Settings to start."
-            }
-          />
-        </div>
-      ) : (
-        <MessageList
-          key={chatId}
-          chatId={chatId}
-          messages={messages}
-          streamingText={displayedStreamingText}
-          streamingReasoning={displayedStreamingReasoning}
-          streamingArtifacts={displayedStreamingArtifacts}
-          streamComplete={streamComplete || visibleDetachedProjection !== null}
-          onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-          timeline={displayedGenerationTimeline}
-          liveSubagents={displayedLiveSubagents}
-          subagentsEnabled={environmentPanel.subagentsEnabled}
-          onOpenSubagent={environmentPanel.openSubagent}
-          agentActivity={visibleAgentActivity}
-          error={
-            error ??
-            (imageArtifactRecoveryUnavailable
-              ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
-              : imageArtifactRecoveryPending
-                ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
-                : null)
-          }
-        />
-      )}
-    </ScrollArea>
+        )}
+      </ScrollArea>
     </>
   );
 }

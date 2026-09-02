@@ -736,6 +736,12 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this attended turn. */
   visualize?: boolean;
+  /** Host-owned Design workspace intent for this attended turn. */
+  design?: boolean;
+  /** Ephemeral element target for one Design refinement; never persisted as chat content. */
+  designContext?: import("../../renderer/shared/design-workspace.js").DesignTurnContextV1;
+  /** Opaque main-bound selection for a reviewed source-backed Designer Action. */
+  sourceDesignContext?: import("../../renderer/shared/source-designer.js").SourceDesignTurnContextV1;
   messages: Array<{
     role: ChatRole;
     content: string;
@@ -779,6 +785,8 @@ export interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  /** Main-owned Design publication outcome; suppressed is terminal and must not be retried. */
+  designPublication?: "retryable" | "suppressed";
 }
 export const MAX_CONFIG_ID_LENGTH = 256;
 export const MAX_PROVIDER_BASE_URL_LENGTH = 4_096;

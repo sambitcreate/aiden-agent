@@ -96,8 +96,14 @@ function assertSemanticContrast(
 
 test("the built-in theme pairs remain readable and avoid black dark canvases", () => {
   for (const preset of THEME_PRESETS) {
-    assert.ok(colorContrastRatio(preset.light.canvas, preset.light.foreground) >= 7, `${preset.label} light contrast`);
-    assert.ok(colorContrastRatio(preset.dark.canvas, preset.dark.foreground) >= 7, `${preset.label} dark contrast`);
+    assert.ok(
+      colorContrastRatio(preset.light.canvas, preset.light.foreground) >= 7,
+      `${preset.label} light contrast`,
+    );
+    assert.ok(
+      colorContrastRatio(preset.dark.canvas, preset.dark.foreground) >= 7,
+      `${preset.label} dark contrast`,
+    );
     assert.notEqual(preset.dark.canvas, "#000000");
     assert.notEqual(preset.dark.raised, "#000000");
     for (const surface of ["canvas", "sidebar", "raised"] as const) {
@@ -152,16 +158,8 @@ test("built-in themes keep light neutrals softer and dark neutrals calmer", () =
 
 test("every built-in theme keeps semantic foregrounds readable on canvas, sidebars, and popovers", () => {
   for (const preset of THEME_PRESETS) {
-    assertSemanticContrast(
-      getPresetVariant(preset.id, "light"),
-      "light",
-      `${preset.label} light`,
-    );
-    assertSemanticContrast(
-      getPresetVariant(preset.id, "dark"),
-      "dark",
-      `${preset.label} dark`,
-    );
+    assertSemanticContrast(getPresetVariant(preset.id, "light"), "light", `${preset.label} light`);
+    assertSemanticContrast(getPresetVariant(preset.id, "dark"), "dark", `${preset.label} dark`);
   }
 });
 
@@ -256,33 +254,50 @@ test("appearance normalization safely clamps user-controlled values", () => {
   assert.equal(normalizeAppearanceConfig({}).diffMarkers, "symbols");
 });
 
-test("the shared focus treatment never draws an outline", () => {
+test("text entry stays quiet while non-text controls retain visible keyboard focus", () => {
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   const ui = readFileSync(new URL("../components/ui.tsx", import.meta.url), "utf8");
+  const designStyles = readFileSync(new URL("../design-projects.css", import.meta.url), "utf8");
+  const modeSwitcher = readFileSync(
+    new URL("../components/workspace-mode-switcher.tsx", import.meta.url),
+    "utf8",
+  );
   const assistantBubble = readFileSync(
     new URL("../components/assistant/assistant-bubble.tsx", import.meta.url),
     "utf8",
   );
   assert.match(
     styles,
-    /:root :where\(\*\):focus,\s*:root :where\(\*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
-  );
-  assert.doesNotMatch(
-    styles,
-    /:focus-visible\s*\{[\s\S]*?outline:\s*2px solid var\(--focus-ring\)/u,
+    /:root :where\(input, textarea, \[contenteditable="true"\]\):focus,\s*:root :where\(input, textarea, \[contenteditable="true"\]\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
   assert.match(
-    styles,
-    /--color-support-red-foreground: var\(--support-red-foreground\);/u,
+    designStyles,
+    /\.design-project-row:focus-visible[\s\S]*outline: 2px solid var\(--focus-ring\)/u,
   );
   assert.match(
-    styles,
-    /--color-support-green-foreground: var\(--support-green-foreground\);/u,
+    modeSwitcher,
+    /fontSize: "calc\(var\(--ui-font-size\) \+ var\(--ui-font-size\)\)"[\s\S]*font-bold/u,
+  );
+  assert.match(modeSwitcher, /Build, debug, and ship/u);
+  assert.match(modeSwitcher, /Create, iterate, and explore/u);
+  assert.match(modeSwitcher, /w-80 !rounded-\[18px\] p-2/u);
+  assert.match(modeSwitcher, /min-h-20[\s\S]*rounded-\[18px\]/u);
+  assert.match(modeSwitcher, /rounded-\[10px\] border-0 bg-transparent px-1[\s\S]*shadow-none/u);
+  assert.doesNotMatch(modeSwitcher, /rounded-\[22px\] bg-control/u);
+  assert.match(modeSwitcher, /className="group min-h-20/u);
+  assert.match(
+    modeSwitcher,
+    /text-primary group-data-\[highlighted\]:text-accent-foreground/u,
   );
   assert.match(
-    styles,
-    /--color-support-warning-foreground: var\(--support-warning-foreground\);/u,
+    modeSwitcher,
+    /text-secondary group-data-\[highlighted\]:text-accent-foreground/u,
   );
+  assert.match(modeSwitcher, /focus-visible:ring-2/u);
+  assert.doesNotMatch(modeSwitcher, /focus-visible:outline/u);
+  assert.match(styles, /--color-support-red-foreground: var\(--support-red-foreground\);/u);
+  assert.match(styles, /--color-support-green-foreground: var\(--support-green-foreground\);/u);
+  assert.match(styles, /--color-support-warning-foreground: var\(--support-warning-foreground\);/u);
   assert.match(
     ui,
     /bg-red text-red-foreground[\s\S]*?hover:bg-red[\s\S]*?active:bg-red[\s\S]*?focus-visible:bg-red/u,
@@ -338,19 +353,24 @@ test("per-scheme theme JSON round-trips without losing editable fields", () => {
     /not a light theme/i,
   );
   assert.throws(
-    () => parseThemeVariantJson(JSON.stringify({ version: 2, scheme: "dark", theme: original }), "dark"),
+    () =>
+      parseThemeVariantJson(
+        JSON.stringify({ version: 2, scheme: "dark", theme: original }),
+        "dark",
+      ),
     /unsupported version/i,
   );
   assert.throws(
-    () => parseThemeVariantJson(JSON.stringify({ accent: "#7C5CFC", background: "#20242C", foreground: "#FFFFFF" }), "dark"),
+    () =>
+      parseThemeVariantJson(
+        JSON.stringify({ accent: "#7C5CFC", background: "#20242C", foreground: "#FFFFFF" }),
+        "dark",
+      ),
     /font selection/i,
   );
 
   const mismatchedPreset = { ...getPresetVariant("aiden", "dark"), accent: "#A18FFF" };
-  assert.equal(
-    parseThemeVariantJson(JSON.stringify(mismatchedPreset), "dark").preset,
-    "custom",
-  );
+  assert.equal(parseThemeVariantJson(JSON.stringify(mismatchedPreset), "dark").preset, "custom");
 });
 
 test("resolved dark tokens use the selected graphite canvas and accent", () => {

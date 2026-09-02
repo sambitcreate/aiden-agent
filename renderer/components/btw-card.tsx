@@ -54,12 +54,14 @@ export function reduceBtwView(current: BtwLiveView | null, event: BtwEventV1): B
 
 export function BtwCard({
   view,
+  placement = "chat",
   onAsk,
   onCancel,
   onClear,
   onClose,
 }: {
   view: BtwCardView;
+  placement?: "chat" | "design-conversation";
   onAsk(question: string): void | Promise<void>;
   onCancel(): void | Promise<void>;
   onClear(): void | Promise<void>;
@@ -77,7 +79,13 @@ export function BtwCard({
   }, [draft, onAsk, running]);
 
   return (
-    <div className="aiden-dock-inset chat-content-column pb-2">
+    <div
+      className={
+        placement === "design-conversation"
+          ? "w-full px-3 pb-2"
+          : "aiden-dock-inset chat-content-column pb-2"
+      }
+    >
       <section
         className="overflow-hidden rounded-[22px] border border-field/80 bg-popover shadow-composer"
         aria-labelledby="btw-card-title"

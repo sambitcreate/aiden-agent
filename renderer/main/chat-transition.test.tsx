@@ -135,7 +135,7 @@ test("a committed append is not presented as unsent when generation start later 
     "const handleStop = React.useCallback",
   );
   const append = handleSend.indexOf("await chatsApi.appendMessage(");
-  const start = handleSend.indexOf("await runGeneration(messageTurnId)");
+  const start = handleSend.indexOf("await runGeneration(messageTurnId");
   assert.ok(append >= 0 && start > append);
   assert.match(handleSend, /if \(!started\.ok && mountedRef\.current\) setError/u);
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
@@ -158,7 +158,7 @@ test("an unpersisted image response blocks sends, copies, and the composer until
   );
   assert.match(
     pane,
-    /ready=\{\s*ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable\s*\}/u,
+    /ready=\{\s*ready\s*&&\s*!imageArtifactRecoveryPending\s*&&\s*!imageArtifactRecoveryUnavailable/u,
   );
   assert.match(pane, /Delete this chat to discard it/iu);
   assert.match(pane, /imageArtifactRecoveryUnavailable/u);
@@ -186,9 +186,14 @@ test("terminal chat snapshots reach cache before visual stream handoff awaits", 
 
 test("a persisted provider failure replaces the transient stream error", () => {
   const pane = source("./chat-pane.tsx");
-  const terminal = between(
+  const generation = between(
     pane,
-    "onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {",
+    "const runGeneration = React.useCallback(",
+    "const handleSend = React.useCallback(",
+  );
+  const terminal = between(
+    generation,
+    "onError: (",
     "messageTurnId,",
   );
   assert.match(terminal, /updatedChat\?\.messages\[updatedChat\.messages\.length - 1\]/u);
@@ -279,16 +284,17 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   assert.ok(syncIndex < frameIndex, "The synchronous settle must precede the rAF pass");
 });
 
-test("scroll area still pads the viewport for its overlaid chrome", () => {
+test("scroll area pads ordinary chrome while allowing the Design composer to overlay", () => {
   const ui = source("../components/ui.tsx");
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
 
   // Toolbar and footer are absolutely positioned, so the viewport must reserve
-  // their measured height or the composer overlaps the transcript.
+  // their measured height unless the caller explicitly requests an overlay footer.
   assert.match(
     scrollArea,
-    /style=\{\{ paddingTop: toolbarHeight, paddingBottom: footerHeight \}\}/u,
+    /style=\{\{\s*paddingTop: toolbarHeight,\s*paddingBottom: overlayFooter \? 0 : footerHeight\s*\}\}/u,
   );
+  assert.match(scrollArea, /overlayFooter = false/u);
   assert.match(scrollArea, /ref=\{toolbarRef\}[^>]*absolute inset-x-0 top-0/u);
   assert.match(scrollArea, /ref=\{footerRef\}[^>]*absolute inset-x-0 bottom-0/u);
 });

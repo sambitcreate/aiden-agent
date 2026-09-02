@@ -59,6 +59,7 @@ import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import { chatStore } from "./chat-store.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { chatTitleService } from "./chat-title.js";
+import { designProjectStore } from "./design-project-store-main.js";
 import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
@@ -461,6 +462,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
+            isDesignProjectChat: async (chatId) =>
+              (await designProjectStore.getByChatId(chatId)) !== undefined,
           });
           activeChats = chats;
           const projectBotHealth = async (

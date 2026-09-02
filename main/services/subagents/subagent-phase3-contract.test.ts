@@ -118,10 +118,20 @@ test("chat removal deletes private child history before the chat can disappear",
     source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
   ]);
-  assert.match(
-    handler,
-    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\)[\s\S]*return result/u,
-  );
+  const removalStart = handler.indexOf('ipcMain.handle("chats:remove"');
+  const removalEnd = handler.indexOf('ipcMain.handle("chats:appendMessage"', removalStart);
+  const removal = handler.slice(removalStart, removalEnd);
+  const parseChatId = removal.indexOf('const chatId = asString(id, "id")');
+  const botDelete = removal.indexOf("botApplicationService.deleteChat", parseChatId);
+  const routeDesignDeletion = removal.indexOf("designProjectLifecycle.routeChatDeletion", botDelete);
+  const ordinaryDelete = removal.indexOf("chatApplicationService.remove(ordinaryChatId)", routeDesignDeletion);
+  assert.ok(removalStart >= 0);
+  assert.ok(removalEnd > removalStart);
+  assert.ok(parseChatId >= 0);
+  assert.ok(botDelete > parseChatId);
+  assert.ok(routeDesignDeletion > botDelete);
+  assert.ok(ordinaryDelete > routeDesignDeletion);
+  assert.doesNotMatch(removal, /chatStore\.remove\(/u);
   const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
   const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");
   const deleteRuns = applicationService.indexOf(
@@ -328,7 +338,7 @@ test("renderer turn tokens cross append and generation IPC without an admission 
   assert.match(ipc, /"chat:start",\s*streamId,\s*params,\s*messageTurnId/u);
   const turn = pane.indexOf("const messageTurnId = createChatTurnId()");
   const append = pane.indexOf("turnId: messageTurnId", turn);
-  const generation = pane.indexOf("runGeneration(messageTurnId)", append);
+  const generation = pane.indexOf("runGeneration(messageTurnId", append);
   assert.ok(turn >= 0 && append > turn && generation > append);
   assert.match(
     assistant,
@@ -407,6 +417,11 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
 test("application startup reconciles private runs and worktree deletions before UI and schedules", async () => {
   const main = await source("main/index.ts");
   const initialize = main.indexOf("await subagentRunStore.initialize()");
+  const recoverDesignProjects = main.indexOf("await designProjectLifecycle.recover()", initialize);
+  const recoverDesignHandoffs = main.indexOf(
+    "await designHandoffApplicationService.reconcileAtStartup()",
+    initialize,
+  );
   const reconcileDeletions = main.indexOf("await reconcilePendingChatDeletions(", initialize);
   const reconcileWorktrees = main.indexOf(
     "await reconcilePendingManagedWorktreeDeletions({",
@@ -419,6 +434,8 @@ test("application startup reconciles private runs and worktree deletions before 
   const createWindow = main.indexOf("await createMainWindow()", finalizeOrphanedJournals);
   const startSchedules = main.indexOf("await scheduleService.start()", createWindow);
   assert.ok(initialize >= 0);
+  assert.ok(recoverDesignProjects > initialize);
+  assert.ok(recoverDesignHandoffs > initialize);
   assert.ok(reconcileDeletions > initialize);
   assert.ok(reconcileWorktrees > reconcileDeletions);
   assert.ok(finalizeOrphanedJournals > reconcileWorktrees);
@@ -434,20 +451,25 @@ test("persisted chat workspace ownership closes generation admission before setu
   ]);
   const chatRead = llm.indexOf("const chat = await chatStore.get(params.chatId)");
   const authority = llm.indexOf("authoritativeChatWorkspaceId(", chatRead);
-  const bindInitialization = llm.indexOf(
-    "initialization.workspaceId = authoritativeWorkspaceId",
+  const designAuthority = llm.indexOf(
+    "authoritativeDesignGenerationWorkspaceId(",
     authority,
   );
+  const bindInitialization = llm.indexOf(
+    "initialization.workspaceId = authoritativeWorkspaceId",
+    designAuthority,
+  );
   const admissionCheck = llm.indexOf(
-    "workspaceMutationGate.isChanging(authoritativeWorkspaceId)",
+    "workspaceMutationGate.isChanging(generationWorkspaceId)",
     bindInitialization,
   );
-  const prepare = llm.indexOf("mode: authoritativeMode", admissionCheck);
+  const prepare = llm.indexOf("workspaceId: generationWorkspaceId", admissionCheck);
   const registerInitialization = llm.indexOf("initializing.set(streamId, initialization)");
   assert.ok(registerInitialization >= 0);
   assert.ok(chatRead > registerInitialization);
   assert.ok(authority > chatRead);
-  assert.ok(bindInitialization > authority);
+  assert.ok(designAuthority > authority);
+  assert.ok(bindInitialization > designAuthority);
   assert.ok(admissionCheck > bindInitialization);
   assert.ok(prepare > admissionCheck);
 

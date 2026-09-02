@@ -49,11 +49,7 @@ test("chat lifecycle handling detaches the renderer instead of aborting inferenc
 test("parseParams accepts only the attended Assistant mode", () => {
   assert.equal(parseParams({ ...base, mode: "assistant" }).mode, "assistant");
   assert.equal(parseParams(base).mode, undefined);
-  for (const mode of [
-    "assistant-unattended",
-    "assistant-automation",
-    "workspace",
-  ]) {
+  for (const mode of ["assistant-unattended", "assistant-automation", "workspace"]) {
     assert.throws(() => parseParams({ ...base, mode }), /Invalid chat mode/);
   }
 });
@@ -68,10 +64,7 @@ test("chat:start rejects renderer history and every unknown authority field", ()
     /history is main-owned/,
   );
   for (const field of ["skillInvocation", "permission", "tools"]) {
-    assert.throws(
-      () => parseParams({ ...base, [field]: "forged" }),
-      /Invalid generation field/u,
-    );
+    assert.throws(() => parseParams({ ...base, [field]: "forged" }), /Invalid generation field/u);
   }
 });
 
@@ -80,38 +73,23 @@ test("parseParams rejects invalid envelopes and requires provider/model identity
     assert.throws(() => parseParams(value), /Invalid generation params/);
   }
   assert.throws(() => parseParams({}), /Invalid chat id/);
-  assert.throws(
-    () => parseParams({ chatId: "c", providerId: "p" }),
-    /Invalid model id/,
-  );
+  assert.throws(() => parseParams({ chatId: "c", providerId: "p" }), /Invalid model id/);
   assert.throws(
     () => parseParams({ chatId: "c", providerId: "", model: "m" }),
     /Invalid provider id/,
   );
-  assert.throws(
-    () => parseParams({ chatId: "c", providerId: "p", model: "" }),
-    /Invalid model id/,
-  );
+  assert.throws(() => parseParams({ chatId: "c", providerId: "p", model: "" }), /Invalid model id/);
 });
 
 test("parseParams bounds every selector before generation handoff", () => {
   const cases: Array<[string, Record<string, unknown>]> = [
     ["chat id", { ...base, chatId: "c".repeat(MAX_CHAT_ID_CHARS + 1) }],
-    [
-      "workspace id",
-      { ...base, workspaceId: "w".repeat(MAX_WORKSPACE_ID_CHARS + 1) },
-    ],
-    [
-      "provider id",
-      { ...base, providerId: "p".repeat(MAX_PROVIDER_ID_CHARS + 1) },
-    ],
+    ["workspace id", { ...base, workspaceId: "w".repeat(MAX_WORKSPACE_ID_CHARS + 1) }],
+    ["provider id", { ...base, providerId: "p".repeat(MAX_PROVIDER_ID_CHARS + 1) }],
     ["model id", { ...base, model: "m".repeat(MAX_MODEL_ID_CHARS + 1) }],
   ];
   for (const [label, value] of cases) {
-    assert.throws(
-      () => parseParams(value),
-      new RegExp(`Invalid ${label}`, "u"),
-    );
+    assert.throws(() => parseParams(value), new RegExp(`Invalid ${label}`, "u"));
   }
 });
 
@@ -129,41 +107,23 @@ test("start envelope rejects many extra properties without materializing an Obje
     providerId: "provider-1",
     model: "model-1",
   };
-  for (let index = 0; index < 10_000; index += 1)
-    manyFields[`extra-${index}`] = index;
+  for (let index = 0; index < 10_000; index += 1) manyFields[`extra-${index}`] = index;
   assert.throws(
     () => parseParams(manyFields),
-    (error: unknown) =>
-      error instanceof Error && error.message === "Invalid generation fields.",
+    (error: unknown) => error instanceof Error && error.message === "Invalid generation fields.",
   );
-  const parserSource = readFileSync(
-    new URL("./chat-params.ts", import.meta.url),
-    "utf8",
-  );
+  const parserSource = readFileSync(new URL("./chat-params.ts", import.meta.url), "utf8");
   assert.doesNotMatch(parserSource, /Object\.keys/u);
   assert.match(parserSource, /keyCount > ALLOWED_CHAT_START_KEYS\.size/u);
 });
 
 test("parseParams accepts only Aiden's bounded generation thinking enum", () => {
-  for (const thinkingLevel of [
-    "off",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-  ] as const) {
-    assert.equal(
-      parseParams({ ...base, thinkingLevel }).thinkingLevel,
-      thinkingLevel,
-    );
+  for (const thinkingLevel of ["off", "low", "medium", "high", "xhigh", "max"] as const) {
+    assert.equal(parseParams({ ...base, thinkingLevel }).thinkingLevel, thinkingLevel);
   }
   assert.equal(parseParams(base).thinkingLevel, undefined);
   for (const thinkingLevel of ["minimal", "dynamic", "", 1, null]) {
-    assert.throws(
-      () => parseParams({ ...base, thinkingLevel }),
-      /Invalid thinking level/u,
-    );
+    assert.throws(() => parseParams({ ...base, thinkingLevel }), /Invalid thinking level/u);
   }
 });
 
@@ -187,4 +147,71 @@ test("parseParams keeps bounded generation selectors and creates empty authorita
   );
   assert.deepEqual(parseParams({ ...base, visualize: true }).visualize, true);
   assert.throws(() => parseParams({ ...base, visualize: false }), /Invalid generation fields/);
+  assert.deepEqual(parseParams({ ...base, design: true }).design, true);
+  assert.throws(() => parseParams({ ...base, design: false }), /Invalid generation fields/);
+  assert.throws(
+    () => parseParams({ ...base, design: true, visualize: true }),
+    /Invalid generation fields/,
+  );
+});
+
+test("parseParams accepts bounded Design context only on a Design turn", () => {
+  const designContext = {
+    version: 1,
+    targets: [
+      {
+        mediaId: "design:checkout",
+        artifactId: "b".repeat(64),
+        selection: {
+          version: 1,
+          tagName: "button",
+          label: "Pay now",
+          selector: '[data-aiden-id="pay-now"]',
+          elementId: "pay-now",
+        },
+      },
+    ],
+  } as const;
+  assert.deepEqual(
+    parseParams({ ...base, design: true, designContext }).designContext,
+    designContext,
+  );
+  assert.throws(() => parseParams({ ...base, designContext }), /Invalid generation fields/u);
+  assert.throws(
+    () =>
+      parseParams({
+        ...base,
+        design: true,
+        designContext: { ...designContext, forged: true },
+      }),
+    /Invalid generation fields/u,
+  );
+});
+
+test("parseParams accepts one opaque source Design selection instead of artifact context", () => {
+  const sourceDesignContext = {
+    version: 1,
+    selectionId: "selection_1234567890abcdef",
+  } as const;
+  assert.deepEqual(
+    parseParams({ ...base, design: true, sourceDesignContext }).sourceDesignContext,
+    sourceDesignContext,
+  );
+  assert.throws(
+    () => parseParams({ ...base, sourceDesignContext }),
+    /Invalid generation fields/u,
+  );
+  assert.throws(
+    () =>
+      parseParams({
+        ...base,
+        design: true,
+        sourceDesignContext,
+        designContext: {
+          version: 1,
+          targets: [{ mediaId: "design:x", artifactId: "a".repeat(64) }],
+        },
+      }),
+    /Invalid generation fields/u,
+  );
 });

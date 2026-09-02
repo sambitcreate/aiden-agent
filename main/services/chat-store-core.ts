@@ -875,6 +875,7 @@ export function createChatStore(
             chargedBytes += 128;
             charge(artifact.title);
             charge(artifact.mediaId);
+            charge(artifact.revisionOfMediaId);
           }
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new Error("This chat is too large to copy safely.");
@@ -890,7 +891,18 @@ export function createChatStore(
               message.role === "assistant"
                 ? (message.htmlArtifacts ?? []).map((artifact) => {
                     const mediaId = remappedHtmlArtifactMediaId(newChatId, artifact.mediaId);
-                    return { ...artifact, mediaId };
+                    return {
+                      ...artifact,
+                      mediaId,
+                      ...(artifact.revisionOfMediaId
+                        ? {
+                            revisionOfMediaId: remappedHtmlArtifactMediaId(
+                              newChatId,
+                              artifact.revisionOfMediaId,
+                            ),
+                          }
+                        : {}),
+                    };
                   })
                 : undefined,
             skill:

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { Workspace } from "./types.js";
 import {
@@ -66,6 +67,18 @@ function fixture(options: { existing?: Workspace | null; saveError?: Error } = {
     saved,
   };
 }
+
+test("runtime composition defers the llm client across circular module initialization", () => {
+  const source = readFileSync(
+    new URL("./workspace-application-service-main.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /llmClient:\s*\{\s*cancelWorkspaceAndSettle\(workspaceId\)\s*\{\s*return llmClient\.cancelWorkspaceAndSettle\(workspaceId\);/u,
+  );
+  assert.doesNotMatch(source, /configStore,\s*llmClient,\s*scheduleService/u);
+});
 
 test("shared workspace creation preserves defaults and rejects path authority", async () => {
   const application = fixture({ existing: null });

@@ -20,7 +20,7 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   );
   assert.match(
     styles,
-    /:root :where\(\*\):focus,\s*:root :where\(\*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
+    /:root :where\(input, textarea, \[contenteditable="true"\]\):focus,\s*:root :where\(input, textarea, \[contenteditable="true"\]\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
 });
 
@@ -46,6 +46,92 @@ test("composer context controls stay compact without exposing provider copy", ()
   assert.doesNotMatch(modelPicker, /ChevronsUpDown/u);
   assert.doesNotMatch(modelPicker, /Selected model: \$\{selected\.label\} from/u);
   assert.doesNotMatch(modelPicker, /\$\{selected\.label\} · \$\{selected\.providerLabel\}/u);
+});
+
+test("Design placement moves the complete action footer into the conversation rail without workspace chrome", () => {
+  const composer = source("./composer.tsx");
+  const pane = source("../main/chat-pane.tsx");
+
+  assert.match(composer, /placement\?: "chat" \| "design-conversation"/u);
+  assert.match(composer, /placement = "chat"/u);
+  assert.match(
+    composer,
+    /placement === "design-conversation"\s*\? "w-full px-3 pb-3 pt-2"\s*: "aiden-dock-inset chat-content-column pb-4 pt-3 sm:pb-5"/u,
+  );
+  assert.match(composer, /\{placement === "chat" \? \([\s\S]*<WorkspacePicker/u);
+  assert.match(composer, /<Monitor[\s\S]{0,180}Local/u);
+  assert.match(
+    composer,
+    /placement === "chat" \? \(\s*<div\s*className="composer-permission-control/u,
+  );
+  assert.match(
+    composer,
+    /voice\.recording \|\| voice\.transcribing \|\| attaching \|\| sending \|\| sessionCommandBusy/u,
+  );
+  assert.match(composer, /onVisibilityRequirementChange\?\.\(requiresVisibleComposer\)/u);
+  assert.match(composer, /placement === "design-conversation" && "max-h-16 overflow-y-auto"/u);
+  assert.match(composer, /placement === "design-conversation" && "max-h-20 overflow-y-auto"/u);
+
+  assert.match(pane, /function DesignFooterPlacement\([\s\S]*createPortal\(children, host\)/u);
+  assert.match(
+    pane,
+    /footer=\{\s*<DesignFooterPlacement design=\{presentation === "design"\} host=\{designFooterHost\}>/u,
+  );
+  assert.match(
+    pane,
+    /<DesignFooterPlacement[\s\S]*<EventPresence[\s\S]*<TodoPanel[\s\S]*<BtwCard[\s\S]*<Composer[\s\S]*<\/DesignFooterPlacement>/u,
+  );
+  assert.match(pane, /placement=\{presentation === "design" \? "design-conversation" : "chat"\}/u);
+  assert.match(
+    pane,
+    /onVisibilityRequirementChange=\{\s*presentation === "design" \? setDesignComposerRequiresVisibility : undefined\s*\}/u,
+  );
+  assert.match(pane, /workspace=\{presentation === "design" \? undefined : effectiveWorkspace\}/u);
+  assert.match(
+    pane,
+    /onChangePermission=\{presentation === "design" \? undefined : changePermission\}/u,
+  );
+  assert.match(pane, /workspacePickerEnabled=\{presentation !== "design" && isNewChat\}/u);
+  assert.match(pane, /workspaces=\{presentation === "design" \? \[\] : workspaces\}/u);
+  assert.match(
+    pane,
+    /onCreateGitWorktree=\{presentation === "design" \? undefined : createGitWorktree\}/u,
+  );
+  assert.match(
+    pane,
+    /gitOperationBusy=\{\s*presentation === "design" \? false : environmentPanel\.gitOperationBusy\s*\}/u,
+  );
+  assert.match(pane, /computerUse=\{\s*presentation !== "design" && computerUseGloballyEnabled/u);
+  assert.match(
+    pane,
+    /onChangeComputerUse=\{\s*presentation === "design" \? undefined : changeComputerUse\s*\}/u,
+  );
+  assert.match(pane, /ref=\{setDesignFooterHost\}[\s\S]{0,260}Design conversation controls/u);
+  assert.match(
+    pane,
+    /presentation === "design" \? \(\s*<div className="relative flex h-full[\s\S]*ref=\{setDesignFooterHost\}[\s\S]*chat\.isLoading \|\| providers\.isLoading[\s\S]*<DesignWorkspaceCanvas/u,
+  );
+  assert.match(
+    pane,
+    /const designConversationMustStayOpen =[\s\S]{0,440}questionnaire[\s\S]{0,180}btwView[\s\S]{0,180}isGenerating/u,
+  );
+  assert.doesNotMatch(pane, /designHas(?:Visible|Active)Todo/u);
+  assert.match(
+    pane,
+    /Resolve or stop the active interaction before hiding Conversation/u,
+  );
+  assert.match(
+    pane,
+    /presentation === "design"\s*\? "w-full px-3 pb-2"\s*: "aiden-dock-inset chat-content-column pb-2"/u,
+  );
+  assert.match(
+    pane,
+    /<BtwCard[\s\S]{0,160}placement=\{presentation === "design" \? "design-conversation" : "chat"\}/u,
+  );
+  assert.match(
+    pane,
+    /aria-hidden=\{!designConversationOpen \|\| undefined\}[\s\S]{0,120}inert=\{!designConversationOpen \? true : undefined\}/u,
+  );
 });
 
 test("composer routes Finder drops and raster paste through the fixed preload bridge", () => {

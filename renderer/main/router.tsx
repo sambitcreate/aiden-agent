@@ -5,7 +5,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { RootView } from "./root-view";
-import { ChatLayout, ChatIndex } from "./chat-layout";
+import { ChatLayout, ChatIndex, DesignIndex, DesignProjectRoute } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
 import { SettingsView } from "./settings-view";
 import { ProfileView } from "./profile-view";
@@ -56,6 +56,28 @@ const chatRoute = createRoute({
     return <ChatPane chatId={chatId} />;
   },
   staticData: { title: "Chat" },
+});
+
+const designIndexRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/design",
+  component: DesignIndex,
+  staticData: { title: "Design" },
+});
+
+const designRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/design/$chatId",
+  validateSearch: (search: Record<string, unknown>): { artifact?: string } =>
+    typeof search.artifact === "string" && search.artifact.startsWith("design:")
+      ? { artifact: search.artifact }
+      : {},
+  component: function DesignRoute() {
+    const { chatId } = designRoute.useParams();
+    const { artifact } = designRoute.useSearch();
+    return <DesignProjectRoute projectOrLegacyChatId={chatId} initialMediaId={artifact} />;
+  },
+  staticData: { title: "Design" },
 });
 
 const profileRoute = createRoute({
@@ -112,6 +134,8 @@ const routeTree = rootRoute.addChildren([
   chatLayoutRoute.addChildren([
     indexRoute,
     chatRoute,
+    designIndexRoute,
+    designRoute,
     profileRoute,
     scheduledRoute,
     botsRoute,

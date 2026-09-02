@@ -2,7 +2,7 @@
 
 Status: Active  
 Date: 2026-08-26  
-Sources: Google Antigravity blog [Visualizing with the help of Antigravity](https://antigravity.google/blog/visualizing-with-the-help-of-antigravity) (2026-08-26), [Antigravity changelog 2.11.0](https://antigravity.google/changelog), [Artifacts overview](https://antigravity.google/docs/artifacts), Aiden `docs/pi-gui-artifacts.md`, `display_image` extension, Designer Mode plan, ChatGPT work-surface notes.
+Sources: Google Antigravity blog [Visualizing with the help of Antigravity](https://antigravity.google/blog/visualizing-with-the-help-of-antigravity) (2026-08-26), [Antigravity changelog 2.11.0](https://antigravity.google/changelog), [Artifacts overview](https://antigravity.google/docs/artifacts), Aiden `docs/pi-gui-artifacts.md`, `display_image` extension, the source-backed track in the [Design Workspace plan](completed/design-workspace-plan.md), and ChatGPT work-surface notes.
 
 ## Outcome
 
@@ -19,8 +19,8 @@ This is **not** Antigravity Planning Mode (implementation plans, HITL approve/re
 | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Official Pi extension loader (`@earendil-works/pi-coding-agent`, `discoverAndLoadExtensions`) | **Reject.** Aiden deliberately does not depend on that package. Executable user plugins in Electron main are a trust decision we already refused.                                                  |
 | Ordinary `buildAgentTools` tool                                                               | **Reject for this feature.** GUI presentation is chat-scoped, non-replayable, and must not leak HTML into Pi history. `docs/pi-gui-artifacts.md` requires a chat-scoped `PiAgentRuntimeExtension`. |
-| New Electron `<webview>`                                                                      | **Reject for MVP.** Disabled today; Designer Mode already prefers iframe; Electron discourages webview.                                                                                            |
-| Designer Mode Vite/Onlook preview                                                             | **Do not wait on, do not merge.** Designer is source-mapped preview of the user’s running app with write-back. GenUI is a **self-contained generated document** with no project toolchain.         |
+| New Electron `<webview>`                                                                      | **Reject for MVP.** Disabled today; source-backed Design already prefers iframe; Electron discourages webview.                                                                                     |
+| Source-backed Design Vite/Onlook preview                                                      | **Keep a distinct authority path inside the unified product.** It previews the user's running app with reviewed write-back; GenUI is a **self-contained generated document** with no project toolchain. |
 | **Chat-scoped** `PiAgentRuntimeExtension` **+** `chat:artifact` **+ sandboxed** `iframe`      | **Adopt.** Same shape as `aiden.gui.display-image`.                                                                                                                                                |
 
 
@@ -246,7 +246,7 @@ Rendering must not flicker and the creation window must stay narrated:
 
 - Pi coding-agent extension marketplace or loading `.pi` plugins.
 - Arbitrary CDN / npm from the artifact.
-- Executing workspace Vite/React apps inside this frame (Designer Mode).
+- Executing workspace Vite/React apps inside this generated-artifact frame; the unified Design Workspace roadmap gives source-backed previews a separately contained document origin and authority path.
 - Planning-artifact review (approve diffs/plans).
 - Shipping HTML artifacts to Telegram or Aiden On The Go in this plan.
 - Storing generated HTML in the user’s repository unless they export or the agent used `path` for a file they asked to keep.

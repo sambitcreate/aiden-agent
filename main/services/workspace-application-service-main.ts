@@ -14,7 +14,11 @@ import {
 
 export const workspaceApplicationService = createWorkspaceApplicationService({
   configStore,
-  llmClient,
+  llmClient: {
+    cancelWorkspaceAndSettle(workspaceId) {
+      return llmClient.cancelWorkspaceAndSettle(workspaceId);
+    },
+  },
   scheduleService,
   terminalService,
   workspaceMutationGate,

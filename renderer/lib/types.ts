@@ -983,6 +983,12 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this turn. */
   visualize?: boolean;
+  /** Host-owned Design workspace intent for this turn. */
+  design?: boolean;
+  /** Ephemeral element target for one Design refinement. */
+  designContext?: import("../shared/design-workspace").DesignTurnContextV1;
+  /** Opaque main-bound selection for a reviewed source-backed Designer Action. */
+  sourceDesignContext?: import("../shared/source-designer").SourceDesignTurnContextV1;
 }
 
 export interface ApprovalRequest {

@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   parseGenerationTimeline,
@@ -318,6 +319,7 @@ function safeSummaryMetadata(
   if (
     meta.botId !== undefined ||
     workspaceId === ASSISTANT_WORKSPACE_ID ||
+    workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID ||
     !SAFE_ID.test(meta.id) ||
     !SAFE_ID.test(workspaceId) ||
     !Number.isFinite(meta.createdAt) ||
@@ -597,6 +599,7 @@ export class AidenRemoteChatService {
       notifyChanged?: (chatId?: string) => void;
       isTitlePending?: (chatId: string) => boolean;
       activeChatIds?: () => readonly string[];
+      isDesignProjectChat?: (chatId: string) => boolean | Promise<boolean>;
       now?: () => number;
       summaryCursorSecret?: Buffer;
     },
@@ -613,6 +616,14 @@ export class AidenRemoteChatService {
 
   private summaryNow(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  private async isDesignProjectChat(
+    chatId: string,
+    workspaceId: string | undefined,
+  ): Promise<boolean> {
+    return persistedChatWorkspaceId(workspaceId) === DESIGN_PROJECT_CHAT_WORKSPACE_ID ||
+      (await this.options.isDesignProjectChat?.(chatId)) === true;
   }
 
   private pruneSummarySnapshots(now = this.summaryNow()): void {
@@ -712,6 +723,20 @@ export class AidenRemoteChatService {
     }));
   }
 
+  private async visibleSummaryPage(
+    summaries: readonly AidenRemoteChatSummaryProjection[],
+  ): Promise<AidenRemoteChatSummaryProjection[]> {
+    return (
+      await Promise.all(
+        summaries.map(async (summary) =>
+          (await this.isDesignProjectChat(summary.id, summary.workspaceId))
+            ? undefined
+            : summary,
+        ),
+      )
+    ).filter((summary): summary is AidenRemoteChatSummaryProjection => summary !== undefined);
+  }
+
   private async executeIdempotent<T>(
     scope: { deviceId: string; route: string; resourceId: string; key: string },
     input: unknown,
@@ -761,7 +786,11 @@ export class AidenRemoteChatService {
 
   private async chat(chatId: string): Promise<Chat> {
     const result = await this.options.application.get(safeId(chatId, "chat"));
-    if (!result.chat || result.chat.id !== chatId) {
+    if (
+      !result.chat ||
+      result.chat.id !== chatId ||
+      await this.isDesignProjectChat(result.chat.id, result.chat.workspaceId)
+    ) {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     if (result.reconciliation) {
@@ -794,7 +823,14 @@ export class AidenRemoteChatService {
 
   async list(workspaceId?: string): Promise<{ chats: AidenRemoteChatProjection[] }> {
     if (workspaceId) safeId(workspaceId, "workspace");
-    const metadata = await this.options.application.listRegular(workspaceId);
+    if (workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID) return { chats: [] };
+    const metadata = (
+      await Promise.all(
+        (await this.options.application.listRegular(workspaceId)).map(async (entry) =>
+          (await this.isDesignProjectChat(entry.id, entry.workspaceId)) ? undefined : entry,
+        ),
+      )
+    ).filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
     const chats = await Promise.all(metadata.map((entry) => this.chat(entry.id)));
     return { chats: chats.map((chat) => this.project(chat)) };
   }
@@ -824,10 +860,18 @@ export class AidenRemoteChatService {
     if (cursor !== undefined) {
       ({ snapshot, offset } = this.decodeSummaryCursor(cursor));
     } else {
+      const indexed = (await listSummaryMetadata())
+        .map(safeSummaryMetadata)
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      const visible = (
+        await Promise.all(
+          indexed.map(async (entry) =>
+            (await this.isDesignProjectChat(entry.id, entry.workspaceId)) ? undefined : entry,
+          ),
+        )
+      ).filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
       const summaries = this.freezeSummaryPage(
-        (await listSummaryMetadata())
-          .map(safeSummaryMetadata)
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+        visible
           .sort((left, right) => {
             const byUpdatedAt = right.updatedAt.localeCompare(left.updatedAt);
             if (byUpdatedAt !== 0) return byUpdatedAt;
@@ -854,11 +898,19 @@ export class AidenRemoteChatService {
           ...(nextOffset < snapshot.summaries.length ? { nextOffset } : {}),
         };
       } else {
+        const current = (await listSummaryMetadata())
+          .map(safeSummaryMetadata)
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
         const currentIds = new Set(
-          (await listSummaryMetadata())
-            .map(safeSummaryMetadata)
-            .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-            .map((entry) => entry.id),
+          (
+            await Promise.all(
+              current.map(async (entry) =>
+                (await this.isDesignProjectChat(entry.id, entry.workspaceId))
+                  ? undefined
+                  : entry.id,
+              ),
+            )
+          ).filter((id): id is string => id !== undefined),
         );
         const summaries: AidenRemoteChatSummaryProjection[] = [];
         let nextOffset = offset;
@@ -883,7 +935,9 @@ export class AidenRemoteChatService {
       this.pruneSummarySnapshots();
     }
     const result: AidenRemoteChatSummaryPage = {
-      summaries: cached.summaries,
+      // A legacy chat can be claimed by a Design Project after a cursor page
+      // was frozen. Privacy classification must override snapshot replay.
+      summaries: await this.visibleSummaryPage(cached.summaries),
       ...(cached.nextOffset !== undefined
         ? { nextCursor: this.encodeSummaryCursor(snapshot, cached.nextOffset) }
         : {}),
@@ -908,7 +962,10 @@ export class AidenRemoteChatService {
   async classify(chatId: string): Promise<AidenRemoteChatClassification> {
     const id = safeId(chatId, "chat");
     const metadata = (await this.options.application.list()).find((entry) => entry.id === id);
-    if (!metadata) {
+    if (
+      !metadata ||
+      await this.isDesignProjectChat(metadata.id, metadata.workspaceId)
+    ) {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     if (!metadata.botId) return {};
@@ -1078,7 +1135,16 @@ export class AidenRemoteChatService {
   async rename(chatId: string, revision: string, input: unknown): Promise<AidenRemoteChatProjection> {
     const title = parseTitle(input);
     const updated = await this.options.application.rename(safeId(chatId, "chat"), title, {
-      assertCurrent: (chat) => requireRevision(revision, chat),
+      assertCurrent: async (chat) => {
+        if (await this.isDesignProjectChat(chat.id, chat.workspaceId)) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This Aiden chat no longer exists.",
+            404,
+          );
+        }
+        requireRevision(revision, chat);
+      },
     });
     this.options.notifyChanged?.(chatId);
     return projectAidenRemoteChat(updated);
@@ -1104,7 +1170,16 @@ export class AidenRemoteChatService {
         { revision, ...parsed },
         async () => {
           const moved = await this.options.application.moveEmptyToWorkspace(chatId, parsed.workspaceId, {
-            assertCurrent: (chat) => requireRevision(revision, chat),
+            assertCurrent: async (chat) => {
+              if (await this.isDesignProjectChat(chat.id, chat.workspaceId)) {
+                throw new AidenRemoteServiceError(
+                  "not_found",
+                  "This Aiden chat no longer exists.",
+                  404,
+                );
+              }
+              requireRevision(revision, chat);
+            },
           });
           this.options.notifyChanged?.(chatId);
           return projectAidenRemoteChat(moved!);
@@ -1123,7 +1198,16 @@ export class AidenRemoteChatService {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     await this.options.application.remove(safeId(chatId, "chat"), {
-      assertCurrent: (chat) => requireRevision(revision, chat),
+      assertCurrent: async (chat) => {
+        if (await this.isDesignProjectChat(chat.id, chat.workspaceId)) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This Aiden chat no longer exists.",
+            404,
+          );
+        }
+        requireRevision(revision, chat);
+      },
     });
     this.options.notifyChanged?.(chatId);
   }

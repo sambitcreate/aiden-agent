@@ -7,11 +7,12 @@ import {
 } from "./generative-ui-host-libraries.js";
 
 test("host library names map to allowlisted filenames under resources/generative-ui", () => {
-  assert.equal(GENERATIVE_UI_HOST_LIBS.length, 4);
+  assert.equal(GENERATIVE_UI_HOST_LIBS.length, 5);
   assert.match(generativeUiLibraryPath("chart.js"), /chart\.umd\.min\.js$/u);
   assert.match(generativeUiLibraryPath("plotly.js"), /plotly\.min\.js$/u);
   assert.match(generativeUiLibraryPath("katex.js"), /katex\.min\.js$/u);
   assert.match(generativeUiLibraryPath("katex.css"), /katex\.min\.css$/u);
+  assert.match(generativeUiLibraryPath("react-grab-primitives.js"), /react-grab-primitives\.js$/u);
 });
 
 test("unknown host library names are not read from disk", async () => {
