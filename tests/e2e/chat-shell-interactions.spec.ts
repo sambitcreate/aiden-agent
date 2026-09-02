@@ -98,8 +98,9 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
     "aria-pressed",
     "true",
   );
-  await page.getByRole("button", { name: "Hide Environment" }).click();
+  await environmentSurface.getByRole("button", { name: "Close environment panel" }).click();
   await expect(environmentSurface).toBeHidden();
+  await expect(environment).toHaveAttribute("aria-pressed", "false");
 
   const terminal = page.getByRole("button", { name: "Show terminal" });
   await expect(terminal).toBeDisabled();
