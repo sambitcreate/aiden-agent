@@ -1113,12 +1113,9 @@ textarea {
   transition: none;
 }
 
-.terminal-drawer .xterm {
+.terminal-drawer .ghostty-screen,
+.terminal-drawer .ghostty-screen canvas {
   height: 100%;
-}
-
-.terminal-drawer .xterm-viewport {
-  background-color: transparent !important;
 }
 
 @keyframes aiden-terminal-drawer-in {

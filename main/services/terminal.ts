@@ -298,7 +298,7 @@ export class TerminalService {
       throw new Error("The workspace changed before the terminal could start.");
     }
     // Restore the sanitized prior-session output so the terminal reopens with
-    // its history. The renderer writes this buffer to xterm on hydrate, so no
+    // its history. The renderer writes this buffer to the Ghostty surface on hydrate, so no
     // renderer change is required for the seed.
     const restoredHistory = await this.historyStore?.read(workspaceId);
     if (ownerInvalidated()) {

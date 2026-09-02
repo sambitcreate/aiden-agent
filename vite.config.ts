@@ -8,6 +8,7 @@ export default defineConfig(({ command }) => {
   return {
     plugins: [react(), tailwindcss()],
     base: "./",
+    assetsInclude: ["**/*.wasm"],
     define: { __APP_DISPLAY_NAME__: JSON.stringify(appDisplayName) },
     resolve: {
       alias: {

@@ -3,9 +3,7 @@
 // resized, or hidden without leaving the chat.
 
 import * as React from "react";
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal as Xterm } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
+import type { GhosttySurfaceHandle } from "../lib/ghostty-terminal/surface";
 import {
   Minus,
   PanelBottomClose,
@@ -309,7 +307,7 @@ function TerminalViewport({
   clearEpoch: number;
 }) {
   const hostRef = React.useRef<HTMLDivElement>(null);
-  const xtermRef = React.useRef<Xterm | null>(null);
+  const surfaceRef = React.useRef<GhosttySurfaceHandle | null>(null);
   const resizeTerminalRef = React.useRef<(() => void) | null>(null);
   const onUnavailableRef = React.useRef(onUnavailable);
   onUnavailableRef.current = onUnavailable;
@@ -317,92 +315,123 @@ function TerminalViewport({
   React.useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const xterm = new Xterm({
-      cursorBlink: true,
-      fontFamily: terminalFontFamily(),
-      fontSize: terminalFontSize(),
-      lineHeight: 1.25,
-      scrollback: 5_000,
-      theme: terminalTheme(),
-    });
-    const fit = new FitAddon();
-    xterm.loadAddon(fit);
-    xterm.open(host);
-    xtermRef.current = xterm;
-    const resize = () => {
-      try {
-        fit.fit();
-        void terminalApi.resize(session.id, xterm.cols, xterm.rows).catch(() => undefined);
-      } catch {
-        // The host can briefly have zero size during drawer animation.
+    let cancelled = false;
+    let surface: GhosttySurfaceHandle | null = null;
+    let cancelData: (() => void) | undefined;
+    let observer: ResizeObserver | undefined;
+    let disposeInput: { dispose: () => void } | undefined;
+    const teardown = () => {
+      cancelData?.();
+      cancelData = undefined;
+      observer?.disconnect();
+      observer = undefined;
+      disposeInput?.dispose();
+      disposeInput = undefined;
+      if (surfaceRef.current === surface) surfaceRef.current = null;
+      surface?.dispose();
+      surface = null;
+      resizeTerminalRef.current = null;
+    };
+    void import("../lib/ghostty-terminal/surface").then(async ({ openGhosttySurface }) => {
+      if (cancelled || !hostRef.current) return;
+      const next = await openGhosttySurface(hostRef.current, {
+        cursorBlink: true,
+        fontFamily: terminalFontFamily(),
+        fontSize: terminalFontSize(),
+        lineHeight: 1.25,
+        theme: terminalTheme(),
+      });
+      const mount = hostRef.current;
+      if (cancelled || !mount) {
+        next.dispose();
+        return;
       }
-    };
-    resizeTerminalRef.current = resize;
-    const observer = new ResizeObserver(() => requestAnimationFrame(resize));
-    observer.observe(host);
-    let hydrated = false;
-    let lastSequence = 0;
-    const queuedData: Array<{ sequence: number; data: string }> = [];
-    const writeData = (event: { sequence: number; data: string }) => {
-      if (event.sequence <= lastSequence) return;
-      lastSequence = event.sequence;
-      xterm.write(event.data);
-    };
-    const cancelData = onNotification<{ sessionId: string; sequence: number; data: string }>(
-      "terminal:data",
-      (event) => {
-        if (event.sessionId !== session.id) return;
-        if (!hydrated) queuedData.push(event);
-        else writeData(event);
-      },
-    );
-    void terminalApi
-      .snapshot(session.id)
-      .then(({ buffer, sequence }) => {
-        if (xtermRef.current !== xterm) return;
-        if (buffer) xterm.write(buffer);
+      surface = next;
+      surfaceRef.current = next;
+      const resize = () => {
+        try {
+          next.fit();
+          void terminalApi.resize(session.id, next.cols, next.rows).catch(() => undefined);
+        } catch {
+          // The host can briefly have zero size during drawer animation.
+        }
+      };
+      resizeTerminalRef.current = resize;
+      observer = new ResizeObserver(() => requestAnimationFrame(resize));
+      observer.observe(mount);
+      let hydrated = false;
+      let lastSequence = 0;
+      const queuedData: Array<{ sequence: number; data: string }> = [];
+      const writeData = (event: { sequence: number; data: string }) => {
+        if (event.sequence <= lastSequence) return;
+        lastSequence = event.sequence;
+        next.write(event.data);
+      };
+      cancelData = onNotification<{ sessionId: string; sequence: number; data: string }>(
+        "terminal:data",
+        (event) => {
+          if (event.sessionId !== session.id) return;
+          if (!hydrated) queuedData.push(event);
+          else writeData(event);
+        },
+      );
+      if (cancelled) {
+        teardown();
+        return;
+      }
+      try {
+        const { buffer, sequence } = await terminalApi.snapshot(session.id);
+        if (cancelled) {
+          teardown();
+          return;
+        }
+        if (buffer) next.write(buffer);
         lastSequence = sequence;
         hydrated = true;
         for (const event of queuedData) writeData(event);
         resize();
-      })
-      .catch(() => {
+      } catch {
         // Electron's main process can restart during development. Remove the
         // renderer-side tab instead of leaving an inert terminal pane behind.
-        onUnavailableRef.current();
+        teardown();
+        if (!cancelled) onUnavailableRef.current();
+        return;
+      }
+      if (cancelled) {
+        teardown();
+        return;
+      }
+      disposeInput = next.onData(
+        (data) => void terminalApi.write(session.id, data).catch(() => undefined),
+      );
+      next.attachCustomKeyEventHandler((event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
+        return true;
       });
-    const disposeInput = xterm.onData(
-      (data) => void terminalApi.write(session.id, data).catch(() => undefined),
-    );
-    xterm.attachCustomKeyEventHandler((event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
-      return true;
+      requestAnimationFrame(resize);
     });
-    requestAnimationFrame(resize);
     return () => {
-      cancelData();
-      observer.disconnect();
-      disposeInput.dispose();
-      xterm.dispose();
-      xtermRef.current = null;
-      resizeTerminalRef.current = null;
+      cancelled = true;
+      teardown();
     };
   }, [session.id]);
 
   React.useEffect(() => {
-    if (active) requestAnimationFrame(() => xtermRef.current?.focus());
+    if (active) requestAnimationFrame(() => surfaceRef.current?.focus());
   }, [active]);
 
   React.useEffect(() => {
-    if (clearEpoch > 0) xtermRef.current?.clear();
+    if (clearEpoch > 0) surfaceRef.current?.clear();
   }, [clearEpoch]);
 
   React.useEffect(() => {
     const updateAppearance = () => {
-      if (!xtermRef.current) return;
-      xtermRef.current.options.theme = terminalTheme();
-      xtermRef.current.options.fontFamily = terminalFontFamily();
-      xtermRef.current.options.fontSize = terminalFontSize();
+      if (!surfaceRef.current) return;
+      surfaceRef.current.setAppearance({
+        theme: terminalTheme(),
+        fontFamily: terminalFontFamily(),
+        fontSize: terminalFontSize(),
+      });
       requestAnimationFrame(() => resizeTerminalRef.current?.());
     };
     window.addEventListener(APPEARANCE_CHANGE_EVENT, updateAppearance);
