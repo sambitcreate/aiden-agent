@@ -48,7 +48,7 @@ test("composer context controls stay compact without exposing provider copy", ()
   assert.doesNotMatch(modelPicker, /\$\{selected\.label\} · \$\{selected\.providerLabel\}/u);
 });
 
-test("Design placement moves the same composer into the conversation rail without workspace chrome", () => {
+test("Design placement moves the complete action footer into the conversation rail without workspace chrome", () => {
   const composer = source("./composer.tsx");
   const pane = source("../main/chat-pane.tsx");
 
@@ -72,20 +72,28 @@ test("Design placement moves the same composer into the conversation rail withou
   assert.match(composer, /placement === "design-conversation" && "max-h-16 overflow-y-auto"/u);
   assert.match(composer, /placement === "design-conversation" && "max-h-20 overflow-y-auto"/u);
 
-  assert.match(pane, /function ComposerPlacement\([\s\S]*createPortal\(children, host\)/u);
+  assert.match(pane, /function DesignFooterPlacement\([\s\S]*createPortal\(children, host\)/u);
   assert.match(
     pane,
-    /<ComposerPlacement design=\{presentation === "design"\} host=\{designComposerHost\}>/u,
+    /footer=\{\s*<DesignFooterPlacement design=\{presentation === "design"\} host=\{designFooterHost\}>/u,
+  );
+  assert.match(
+    pane,
+    /<DesignFooterPlacement[\s\S]*<EventPresence[\s\S]*<TodoPanel[\s\S]*<BtwCard[\s\S]*<Composer[\s\S]*<\/DesignFooterPlacement>/u,
   );
   assert.match(pane, /placement=\{presentation === "design" \? "design-conversation" : "chat"\}/u);
   assert.match(
     pane,
     /onVisibilityRequirementChange=\{\s*presentation === "design" \? setDesignComposerRequiresVisibility : undefined\s*\}/u,
   );
-  assert.match(pane, /ref=\{setDesignComposerHost\}[\s\S]{0,180}Design prompt composer/u);
+  assert.match(pane, /ref=\{setDesignFooterHost\}[\s\S]{0,260}Design conversation controls/u);
   assert.match(
     pane,
-    /presentation === "design" \? \(\s*<div className="relative flex h-full[\s\S]*ref=\{setDesignComposerHost\}[\s\S]*chat\.isLoading \|\| providers\.isLoading[\s\S]*<DesignWorkspaceCanvas/u,
+    /presentation === "design" \? \(\s*<div className="relative flex h-full[\s\S]*ref=\{setDesignFooterHost\}[\s\S]*chat\.isLoading \|\| providers\.isLoading[\s\S]*<DesignWorkspaceCanvas/u,
+  );
+  assert.match(
+    pane,
+    /const designConversationMustStayOpen =[\s\S]{0,440}designHasVisibleTodo[\s\S]{0,140}btwView/u,
   );
   assert.match(
     pane,

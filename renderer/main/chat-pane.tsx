@@ -171,7 +171,7 @@ function toolLabel(toolName: string): string {
   return TOOL_LABELS[toolName] ?? toolName.replace(/_/g, " ");
 }
 
-function ComposerPlacement({
+function DesignFooterPlacement({
   design,
   host,
   children,
@@ -210,7 +210,7 @@ export function ChatPane({
     ReadonlySet<string>
   >(() => new Set());
   const [designConversationOpen, setDesignConversationOpen] = React.useState(true);
-  const [designComposerHost, setDesignComposerHost] = React.useState<HTMLDivElement | null>(null);
+  const [designFooterHost, setDesignFooterHost] = React.useState<HTMLDivElement | null>(null);
   const [designComposerRequiresVisibility, setDesignComposerRequiresVisibility] =
     React.useState(false);
   const chatWorkspaceId = chat.data?.workspaceId;
@@ -2003,11 +2003,18 @@ export function ChatPane({
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
-  const designComposerMustStayOpen =
+  const designHasVisibleTodo =
+    todoSnapshot?.availability === "unavailable" ||
+    todoSnapshot?.tasks.some(
+      (task) => task.status !== "deleted" && task.status !== "completed",
+    );
+  const designConversationMustStayOpen =
     presentation === "design" &&
     Boolean(
       questionnaire ||
       pending ||
+      designHasVisibleTodo ||
+      btwView ||
       isGenerating ||
       isStartingGeneration ||
       detachedGenerationDraining ||
@@ -2015,14 +2022,14 @@ export function ChatPane({
     );
 
   React.useEffect(() => {
-    if (designComposerMustStayOpen) setDesignConversationOpen(true);
-  }, [designComposerMustStayOpen]);
+    if (designConversationMustStayOpen) setDesignConversationOpen(true);
+  }, [designConversationMustStayOpen]);
 
   const closeDesignConversation = React.useCallback(() => {
-    if (designComposerMustStayOpen) return;
+    if (designConversationMustStayOpen) return;
     setDesignConversationOpen(false);
     requestAnimationFrame(() => designConversationToggleRef.current?.focus());
-  }, [designComposerMustStayOpen]);
+  }, [designConversationMustStayOpen]);
 
   const toggleDesignConversation = React.useCallback(() => {
     if (designConversationOpen) {
@@ -2131,11 +2138,11 @@ export function ChatPane({
               variant="toolbar"
               size="small"
               onClick={toggleDesignConversation}
-              disabled={designConversationOpen && designComposerMustStayOpen}
+              disabled={designConversationOpen && designConversationMustStayOpen}
               aria-label="Toggle project conversation"
               aria-pressed={designConversationOpen}
               title={
-                designComposerMustStayOpen
+                designConversationMustStayOpen
                   ? "Conversation stays open while an active task needs its controls"
                   : "Toggle project conversation"
               }
@@ -2190,7 +2197,7 @@ export function ChatPane({
             : 0
         }
         footer={
-          <>
+          <DesignFooterPlacement design={presentation === "design"} host={designFooterHost}>
             <EventPresence
               present={Boolean(pending)}
               className="aiden-dock-inset chat-content-column pb-2"
@@ -2307,7 +2314,10 @@ export function ChatPane({
                 </div>
               ) : null}
             </EventPresence>
-            <TodoPanel snapshot={todoSnapshot} />
+            <TodoPanel
+              snapshot={todoSnapshot}
+              placement={presentation === "design" ? "design-conversation" : "chat"}
+            />
             {btwView ? (
               <BtwCard
                 view={btwView}
@@ -2332,8 +2342,7 @@ export function ChatPane({
                 }}
               />
             ) : null}
-            <ComposerPlacement design={presentation === "design"} host={designComposerHost}>
-              {questionnaire ? (
+            {questionnaire ? (
                 <AskUserQuestionComposer
                   key={questionnaire.promptId}
                   prompt={questionnaire}
@@ -2507,8 +2516,7 @@ export function ChatPane({
                   }
                 />
               )}
-            </ComposerPlacement>
-          </>
+          </DesignFooterPlacement>
         }
       >
         {presentation === "design" ? (
@@ -2533,10 +2541,10 @@ export function ChatPane({
                   <Button
                     size="small"
                     variant="transparent"
-                    disabled={designComposerMustStayOpen}
+                    disabled={designConversationMustStayOpen}
                     onClick={closeDesignConversation}
                     title={
-                      designComposerMustStayOpen
+                      designConversationMustStayOpen
                         ? "Finish or stop the active task before hiding Conversation"
                         : "Hide project conversation"
                     }
@@ -2571,9 +2579,9 @@ export function ChatPane({
                   )}
                 </div>
                 <div
-                  ref={setDesignComposerHost}
-                  className="shrink-0 border-t border-separator bg-sidebar"
-                  aria-label="Design prompt composer"
+                  ref={setDesignFooterHost}
+                  className="relative max-h-[min(70vh,36rem)] shrink-0 overflow-y-auto border-t border-separator bg-sidebar"
+                  aria-label="Design conversation controls"
                 />
               </aside>
               <div className="min-w-0 flex-1">

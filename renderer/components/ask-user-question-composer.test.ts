@@ -44,12 +44,15 @@ test("Design questions stay in the persistent conversation rail and cannot focus
   );
   assert.match(
     pane,
-    /const designComposerMustStayOpen =[\s\S]{0,260}questionnaire[\s\S]{0,260}isGenerating/u,
+    /const designConversationMustStayOpen =[\s\S]{0,340}questionnaire[\s\S]{0,340}isGenerating/u,
   );
-  assert.match(pane, /if \(designComposerMustStayOpen\) setDesignConversationOpen\(true\)/u);
   assert.match(
     pane,
-    /ref=\{designConversationToggleRef\}[\s\S]{0,240}disabled=\{designConversationOpen && designComposerMustStayOpen\}/u,
+    /if \(designConversationMustStayOpen\) setDesignConversationOpen\(true\)/u,
+  );
+  assert.match(
+    pane,
+    /ref=\{designConversationToggleRef\}[\s\S]{0,260}disabled=\{designConversationOpen && designConversationMustStayOpen\}/u,
   );
   assert.match(
     pane,
