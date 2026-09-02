@@ -15,6 +15,17 @@
   border-right: 1px solid var(--border-separator);
 }
 
+.design-project-library[data-layout="sidebar"] {
+  height: auto;
+  min-height: 100%;
+  background: transparent;
+}
+
+.design-project-library[data-layout="sidebar"] .design-project-library-body {
+  flex: none;
+  overflow: visible;
+}
+
 .design-project-inspector[data-layout="rail"] {
   width: clamp(360px, 32vw, 520px);
   border-left: 1px solid var(--border-separator);
@@ -153,8 +164,7 @@
 .design-project-filter button:focus-visible,
 .design-project-tabs button:focus-visible,
 .design-project-row:focus-visible,
-.design-project-menu summary:focus-visible,
-.design-project-menu button:focus-visible,
+.design-project-menu-trigger:focus-visible,
 .design-project-recovery button:focus-visible,
 .design-project-revision:focus-visible,
 .design-project-compare:focus-visible,
@@ -280,80 +290,34 @@
   font-size: var(--text-mini);
 }
 
-.design-project-menu {
+.design-project-menu-trigger {
   position: absolute;
   z-index: 3;
   top: 17px;
   right: 4px;
-}
-
-.design-project-menu summary {
   display: grid;
   width: 28px;
   height: 28px;
   place-items: center;
-  border-radius: 8px;
-  outline: 0;
-  color: var(--text-secondary);
-  list-style: none;
-}
-
-.design-project-menu summary::-webkit-details-marker {
-  display: none;
-}
-
-.design-project-menu summary:hover,
-.design-project-menu[open] summary {
-  background: var(--surface-control);
-  color: var(--text-primary);
-}
-
-.design-project-menu summary > svg {
-  width: 16px;
-  height: 16px;
-}
-
-.design-project-menu > div {
-  position: absolute;
-  top: 32px;
-  right: 0;
-  display: grid;
-  width: 154px;
-  gap: 2px;
-  padding: 5px;
-  border-radius: var(--radius-popover);
-  background: var(--surface-popover);
-  box-shadow: var(--shadow-popover);
-}
-
-.design-project-menu button {
-  display: flex;
-  height: 30px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 8px;
   border: 0;
   border-radius: 8px;
   outline: 0;
   background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--text-small);
-  text-align: left;
-}
-
-.design-project-menu button:hover,
-.design-project-menu button:focus-visible {
-  background: var(--surface-list-hover);
-}
-
-.design-project-menu button > svg {
-  width: 14px;
-  height: 14px;
   color: var(--text-secondary);
 }
 
-.design-project-menu .design-project-menu-danger {
+.design-project-menu-trigger:hover,
+.design-project-menu-trigger[data-state="open"] {
+  background: var(--surface-control);
+  color: var(--text-primary);
+}
+
+.design-project-menu-trigger > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.design-project-menu-danger {
   color: var(--support-red);
 }
 

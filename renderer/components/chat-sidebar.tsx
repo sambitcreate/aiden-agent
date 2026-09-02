@@ -30,6 +30,7 @@ import {
   SplitView,
   Text,
   toast,
+  useSplitViewSidebar,
 } from "./ui";
 import {
   ChevronDown,
@@ -40,7 +41,6 @@ import {
   FolderGit2,
   ListTree,
   Loader2,
-  PanelsTopLeft,
   MoreHorizontal,
   Rows3,
   Settings,
@@ -79,6 +79,8 @@ import {
   projectSidebarWorkspaces,
   type SidebarOrganization,
 } from "../lib/sidebar-workspace-groups";
+import type { ShellMode } from "../lib/shell-mode";
+import { WorkspaceModeSwitcher } from "./workspace-mode-switcher";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 const SIDEBAR_PREFERENCES_KEY = "aiden-agent.sidebar.v1";
@@ -88,7 +90,8 @@ const APP_UPDATE_BANNER_EXIT_MS = 120;
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
-  designChatId?: string;
+  mode: ShellMode;
+  onModeChange: (mode: ShellMode) => void;
   titleReveal?: ChatTitleRevealEvent | null;
 }
 
@@ -489,8 +492,9 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
   return groups;
 }
 
-export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
+export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
+  const { closeIfCompact } = useSplitViewSidebar();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -602,6 +606,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       }
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+        closeIfCompact();
       } catch (error) {
         if (previousWorkspaceId && targetWorkspaceId !== previousWorkspaceId) {
           select(previousWorkspaceId);
@@ -613,6 +618,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       activeId,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
+      closeIfCompact,
       navigate,
       select,
       settingsBlockedReason,
@@ -624,7 +630,8 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       return;
     }
     void navigate({ to: "/settings", search: { section: "remoteAccess" } });
-  }, [navigate, settingsBlockedReason]);
+    closeIfCompact();
+  }, [closeIfCompact, navigate, settingsBlockedReason]);
 
   React.useEffect(() => {
     if (!activeId || initializedExpansionRef.current) return;
@@ -777,6 +784,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       select(id);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: target.id } });
+        closeIfCompact();
       } catch (error) {
         if (previousWorkspaceId) select(previousWorkspaceId);
         throw error;
@@ -791,6 +799,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       environmentPanel.editorState.dirty,
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
+      closeIfCompact,
       navigate,
       qc,
       select,
@@ -969,6 +978,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         select(workspaceId);
         setExpandedWorkspaceIds((current) => new Set(current).add(workspaceId));
         await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        closeIfCompact();
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
       }
@@ -978,6 +988,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       appendReconciliationRequired,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
+      closeIfCompact,
       navigate,
       qc,
       select,
@@ -1169,6 +1180,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   return (
     <>
       <Sidebar
+        header={<WorkspaceModeSwitcher mode={mode} onModeChange={onModeChange} />}
         searchable
         searchPlaceholder="Search chats…"
         searchValue={search}
@@ -1183,7 +1195,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 title="Profile"
                 selected={pathname === "/profile"}
                 disabled={Boolean(settingsBlockedReason)}
-                onClick={() => navigate({ to: "/profile" })}
+                onClick={() => {
+                  closeIfCompact();
+                  void navigate({ to: "/profile" });
+                }}
               />
               <div className="flex min-w-0 items-center gap-0.5">
                 <SidebarListItem
@@ -1192,7 +1207,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   selected={pathname === "/settings"}
                   disabled={Boolean(settingsBlockedReason)}
                   className="min-w-0 flex-1"
-                  onClick={() => navigate({ to: "/settings" })}
+                  onClick={() => {
+                    closeIfCompact();
+                    void navigate({ to: "/settings" });
+                  }}
                 />
                 <RemoteConnectionPopover
                   settingsBlockedReason={settingsBlockedReason}
@@ -1214,19 +1232,19 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             icon={<Clock3 />}
             title="Scheduled"
             selected={pathname === "/scheduled"}
-            onClick={() => navigate({ to: "/scheduled" })}
-          />
-          <SidebarListItem
-            icon={<PanelsTopLeft />}
-            title="Design"
-            selected={pathname.startsWith("/design")}
-            onClick={() => navigate({ to: "/design" })}
+            onClick={() => {
+              closeIfCompact();
+              void navigate({ to: "/scheduled" });
+            }}
           />
           <SidebarListItem
             icon={<BotSidebarIcon />}
             title="Bots"
             selected={pathname.startsWith("/bots")}
-            onClick={() => navigate({ to: "/bots" })}
+            onClick={() => {
+              closeIfCompact();
+              void navigate({ to: "/bots" });
+            }}
           />
         </div>
 

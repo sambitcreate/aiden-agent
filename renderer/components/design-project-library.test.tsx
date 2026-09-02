@@ -14,13 +14,15 @@ test("library exposes controlled search, origin filters, local storage copy, and
   assert.match(source, /value=\{query\}/u);
   assert.match(source, /onQueryChange\(event\.currentTarget\.value\)/u);
   assert.match(source, /Prototype/u);
-  assert.match(source, /Connected App/u);
+  assert.match(source, /label: "Connected"/u);
   assert.match(source, /Stored locally on this Mac/u);
   assert.match(source, /onOpenProject\(project\.id\)/u);
   assert.match(source, /onRenameProject\(project\.id\)/u);
   assert.match(source, /onDuplicateProject\(project\.id\)/u);
   assert.match(source, /onExportProject\(project\.id\)/u);
   assert.match(source, /onDeleteProject\(project\.id\)/u);
+  assert.match(source, /<DropdownMenu>/u);
+  assert.doesNotMatch(source, /<details/u);
 });
 
 test("library has loading, empty, filtered-empty, error, and repair states", () => {
@@ -40,6 +42,7 @@ test("library rail and drawer preserve focus while text search keeps a quiet foc
   assert.match(source, /event\.key === "Escape" && layout === "drawer" && onClose/u);
   assert.match(styles, /\.design-project-library\[data-layout="rail"\]/u);
   assert.match(styles, /\.design-project-library\[data-layout="drawer"\]/u);
+  assert.match(styles, /\.design-project-library\[data-layout="sidebar"\]/u);
   assert.match(
     styles,
     /\.design-project-search:focus-within[\s\S]*background: var\(--surface-control\)/u,

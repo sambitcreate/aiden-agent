@@ -22,7 +22,15 @@ import {
   type DesignProjectFilter,
   type DesignProjectSummary,
 } from "../shared/design-projects";
-import { Button, EmptyState, Text } from "./ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  EmptyState,
+  Text,
+} from "./ui";
 import "../design-projects.css";
 
 export interface DesignProjectLibraryProps {
@@ -32,7 +40,7 @@ export interface DesignProjectLibraryProps {
   filter: DesignProjectFilter;
   loading?: boolean;
   error?: string;
-  layout?: "rail" | "drawer";
+  layout?: "rail" | "drawer" | "sidebar";
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: DesignProjectFilter) => void;
   onCreateProject: () => void;
@@ -50,7 +58,7 @@ export interface DesignProjectLibraryProps {
 const FILTERS: ReadonlyArray<{ id: DesignProjectFilter; label: string }> = [
   { id: "all", label: "All" },
   { id: "prototype", label: "Prototype" },
-  { id: "connected-app", label: "Connected App" },
+  { id: "connected-app", label: "Connected" },
 ];
 
 function defaultFormatUpdatedAt(timestamp: number): string {
@@ -71,29 +79,34 @@ function ProjectActions({
   "onRenameProject" | "onDuplicateProject" | "onExportProject" | "onDeleteProject"
 > & { project: DesignProjectSummary }) {
   return (
-    <details className="design-project-menu" onClick={(event) => event.stopPropagation()}>
-      <summary aria-label={`More actions for ${project.title}`}>
-        <Ellipsis aria-hidden="true" />
-      </summary>
-      <div role="group" aria-label={`${project.title} actions`}>
-        <button type="button" onClick={() => onRenameProject(project.id)}>
-          <Pencil aria-hidden="true" /> Rename
-        </button>
-        <button type="button" onClick={() => onDuplicateProject(project.id)}>
-          <Copy aria-hidden="true" /> Duplicate
-        </button>
-        <button type="button" onClick={() => onExportProject(project.id)}>
-          <Download aria-hidden="true" /> Export
-        </button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="design-project-menu-danger"
-          onClick={() => onDeleteProject(project.id)}
+          className="design-project-menu-trigger"
+          aria-label={`More actions for ${project.title}`}
         >
-          <Trash2 aria-hidden="true" /> Delete…
+          <Ellipsis aria-hidden="true" />
         </button>
-      </div>
-    </details>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-40">
+        <DropdownMenuItem onSelect={() => onRenameProject(project.id)}>
+          <Pencil className="size-4 text-secondary" aria-hidden="true" /> Rename
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onDuplicateProject(project.id)}>
+          <Copy className="size-4 text-secondary" aria-hidden="true" /> Duplicate
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onExportProject(project.id)}>
+          <Download className="size-4 text-secondary" aria-hidden="true" /> Export
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="design-project-menu-danger"
+          onSelect={() => onDeleteProject(project.id)}
+        >
+          <Trash2 className="size-4" aria-hidden="true" /> Delete…
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -137,49 +150,54 @@ export function DesignProjectLibrary({
     <aside
       className="design-project-library"
       data-layout={layout}
-      aria-labelledby={titleId}
+      aria-label={layout === "sidebar" ? "Design projects" : undefined}
+      aria-labelledby={layout === "sidebar" ? undefined : titleId}
       aria-modal={layout === "drawer" ? false : undefined}
       role={layout === "drawer" ? "dialog" : undefined}
       onKeyDown={onKeyDown}
     >
-      <header className="design-project-panel-header">
-        <div className="design-project-panel-heading">
-          <Text as="h2" variant="strong" id={titleId}>
-            Design Projects
-          </Text>
-          <Text variant="small" color="tertiary">
-            Stored locally on this Mac
-          </Text>
-        </div>
-        <div className="design-project-panel-actions">
-          <Button size="small" variant="accent" onClick={onCreateProject}>
-            <Plus aria-hidden="true" /> New project
-          </Button>
-          {layout === "drawer" && onClose ? (
-            <Button
-              iconOnly
-              size="small"
-              variant="transparent"
-              aria-label="Close projects"
-              onClick={onClose}
-            >
-              <X aria-hidden="true" />
+      {layout !== "sidebar" ? (
+        <header className="design-project-panel-header">
+          <div className="design-project-panel-heading">
+            <Text as="h2" variant="strong" id={titleId}>
+              Design Projects
+            </Text>
+            <Text variant="small" color="tertiary">
+              Stored locally on this Mac
+            </Text>
+          </div>
+          <div className="design-project-panel-actions">
+            <Button size="small" variant="accent" onClick={onCreateProject}>
+              <Plus aria-hidden="true" /> New project
             </Button>
-          ) : null}
-        </div>
-      </header>
+            {layout === "drawer" && onClose ? (
+              <Button
+                iconOnly
+                size="small"
+                variant="transparent"
+                aria-label="Close projects"
+                onClick={onClose}
+              >
+                <X aria-hidden="true" />
+              </Button>
+            ) : null}
+          </div>
+        </header>
+      ) : null}
 
       <div className="design-project-library-controls">
-        <label className="design-project-search">
-          <Search aria-hidden="true" />
-          <span className="sr-only">Search design projects</span>
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => onQueryChange(event.currentTarget.value)}
-            placeholder="Search projects"
-          />
-        </label>
+        {layout !== "sidebar" ? (
+          <label className="design-project-search">
+            <Search aria-hidden="true" />
+            <span className="sr-only">Search design projects</span>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => onQueryChange(event.currentTarget.value)}
+              placeholder="Search projects"
+            />
+          </label>
+        ) : null}
         <div className="design-project-filter" role="group" aria-label="Filter design projects">
           {FILTERS.map((item) => (
             <button
@@ -212,7 +230,7 @@ export function DesignProjectLibrary({
             title={projects.length === 0 ? "No design projects yet" : "No matching projects"}
             description={
               projects.length === 0
-                ? "Start a prototype or connect a local app."
+                ? "Create a local project to start exploring."
                 : "Try another search or filter."
             }
             placement="inline"
@@ -233,7 +251,7 @@ export function DesignProjectLibrary({
                       onClick={() => onOpenProject(project.id)}
                     >
                       <span className="design-project-origin-icon" aria-hidden="true">
-                          {project.connectionState === "connected" ? <AppWindow /> : <Box />}
+                        {project.connectionState === "connected" ? <AppWindow /> : <Box />}
                       </span>
                       <span className="design-project-row-copy">
                         <strong>{project.title}</strong>
@@ -241,8 +259,8 @@ export function DesignProjectLibrary({
                           {designProjectOriginLabel(
                             project.connectionState,
                             project.hasPrototypeArtboards,
-                          )} ·{" "}
-                          {designProjectArtboardLabel(project.artboardCount)}
+                          )}{" "}
+                          · {designProjectArtboardLabel(project.artboardCount)}
                         </span>
                         <span>Updated {formatUpdatedAt(project.updatedAt)}</span>
                       </span>

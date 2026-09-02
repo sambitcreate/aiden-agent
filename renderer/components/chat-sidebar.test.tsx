@@ -14,22 +14,20 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("sidebar places New Agent, Scheduled, Design, and Bots above workspace content", () => {
+test("Agent mode keeps primary destinations above workspaces without a nested Design row", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const sidebarBody = between(sidebar, "<Sidebar\n", "</Sidebar>");
   const newAgentIndex = sidebarBody.indexOf("New Agent");
   const scheduledIndex = sidebarBody.indexOf('title="Scheduled"');
-  const designIndex = sidebarBody.indexOf('title="Design"');
   const botsIndex = sidebarBody.indexOf('title="Bots"');
   const workspaceIndex = sidebarBody.indexOf("Workspaces");
 
   assert.notEqual(newAgentIndex, -1);
   assert.notEqual(scheduledIndex, -1);
-  assert.notEqual(designIndex, -1);
   assert.notEqual(botsIndex, -1);
   assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
-  assert.ok(scheduledIndex < designIndex, "Design should follow Scheduled");
-  assert.ok(designIndex < botsIndex, "Design should lead into Bots");
+  assert.ok(scheduledIndex < botsIndex, "Bots should follow Scheduled");
+  assert.doesNotMatch(sidebarBody, /title="Design"/u);
   assert.ok(
     botsIndex < workspaceIndex,
     "primary destinations should stay above the unified workspace and chat list",
@@ -41,15 +39,18 @@ test("new agent uses the same sidebar row style as scheduled", () => {
   const section = between(sidebar, '<div className="flex flex-col gap-0.5 px-2.5 pb-2">', "</div>");
   assert.match(section, /<SidebarListItem[\s\S]*title="New Agent"/u);
   assert.match(section, /<SidebarListItem[\s\S]*title="Scheduled"/u);
-  assert.match(section, /<SidebarListItem[\s\S]*title="Design"/u);
+  assert.match(section, /<SidebarListItem[\s\S]*title="Bots"/u);
   assert.doesNotMatch(section, /variant="accent"/u);
 });
 
-test("Design is a route-owned sidebar destination", () => {
+test("Agent and Design are peer workspace modes above the mode-specific search", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /title="Design"[\s\S]*selected=\{pathname\.startsWith\("\/design"\)\}/u);
-  assert.match(sidebar, /navigate\(\{ to: "\/design" \}\)/u);
-  assert.doesNotMatch(sidebar, /eligibleDesignChatId/u);
+  const switcher = source("./workspace-mode-switcher.tsx");
+  const ui = source("./ui.tsx");
+  assert.match(sidebar, /header=\{<WorkspaceModeSwitcher mode=\{mode\}/u);
+  assert.match(switcher, /\{ id: "agent", label: "Agent" \}/u);
+  assert.match(switcher, /\{ id: "design", label: "Design" \}/u);
+  assert.ok(ui.indexOf("{header ?") < ui.indexOf("{searchable ?"));
 });
 
 test("newAgent delegates explicit creation to the active workspace", () => {
