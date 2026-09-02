@@ -62,6 +62,10 @@ test("Design placement moves the same composer into the conversation rail withou
   assert.match(composer, /<Monitor[\s\S]{0,180}Local/u);
   assert.match(
     composer,
+    /placement === "chat" \? \(\s*<div\s*className="composer-permission-control/u,
+  );
+  assert.match(
+    composer,
     /voice\.recording \|\| voice\.transcribing \|\| attaching \|\| sending \|\| sessionCommandBusy/u,
   );
   assert.match(composer, /onVisibilityRequirementChange\?\.\(requiresVisibleComposer\)/u);

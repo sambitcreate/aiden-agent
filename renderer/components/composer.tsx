@@ -1809,127 +1809,130 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
-                <div
-                  className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
-                  data-open={permissionMenuOpen || undefined}
-                  onPointerEnter={dismissSlash}
-                  onPointerLeave={() => setPermissionMenuOpen(false)}
-                  onBlur={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget)) {
-                      setPermissionMenuOpen(false);
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
-                    event.preventDefault();
-                    setPermissionMenuOpen(false);
-                    inputRef?.current?.focus();
-                  }}
-                >
-                  <button
-                    type="button"
-                    aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
-                    aria-haspopup="true"
-                    onFocus={() => setPermissionMenuOpen(true)}
-                    onClick={() => setPermissionMenuOpen(true)}
-                    onKeyDown={(event) => {
-                      if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
-                      event.preventDefault();
-                      setPermissionMenuOpen(true);
-                      requestAnimationFrame(() => permissionControlRef.current?.focus());
-                    }}
-                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-hover/access:opacity-0 group-focus-within/access:opacity-0 group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
-                  >
-                    <PermissionIcon
-                      className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
-                    />
-                    <span className="truncate max-[520px]:sr-only">
-                      {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
-                    </span>
-                  </button>
+                {/* Design has full authority inside its project scope and no workspace access mode. */}
+                {placement === "chat" ? (
                   <div
-                    role="radiogroup"
-                    aria-label="Workspace access"
-                    aria-disabled={
-                      !workspace ||
-                      permissionSaving ||
-                      isGenerating ||
-                      sending ||
-                      gitOperationBusy ||
-                      Boolean(workspaceChangeBlockedReason) ||
-                      undefined
-                    }
-                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-[16px] bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-hover/access:visible group-hover/access:pointer-events-auto group-hover/access:translate-y-0 group-hover/access:opacity-100 group-focus-within/access:visible group-focus-within/access:pointer-events-auto group-focus-within/access:translate-y-0 group-focus-within/access:opacity-100 group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
+                    data-open={permissionMenuOpen || undefined}
+                    onPointerEnter={dismissSlash}
+                    onPointerLeave={() => setPermissionMenuOpen(false)}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) {
+                        setPermissionMenuOpen(false);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Escape") return;
+                      event.preventDefault();
+                      setPermissionMenuOpen(false);
+                      inputRef?.current?.focus();
+                    }}
                   >
-                    {PERMISSION_ORDER.map((value, index) => {
-                      const meta = PERMISSION_META[value];
-                      const Icon = meta.icon;
-                      const selected = value === permission;
-                      const disabled =
+                    <button
+                      type="button"
+                      aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
+                      aria-haspopup="true"
+                      onFocus={() => setPermissionMenuOpen(true)}
+                      onClick={() => setPermissionMenuOpen(true)}
+                      onKeyDown={(event) => {
+                        if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
+                        event.preventDefault();
+                        setPermissionMenuOpen(true);
+                        requestAnimationFrame(() => permissionControlRef.current?.focus());
+                      }}
+                      className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-hover/access:opacity-0 group-focus-within/access:opacity-0 group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
+                    >
+                      <PermissionIcon
+                        className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
+                      />
+                      <span className="truncate max-[520px]:sr-only">
+                        {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
+                      </span>
+                    </button>
+                    <div
+                      role="radiogroup"
+                      aria-label="Workspace access"
+                      aria-disabled={
                         !workspace ||
                         permissionSaving ||
                         isGenerating ||
                         sending ||
                         gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason);
-                      return (
-                        <button
-                          ref={selected ? permissionControlRef : undefined}
-                          key={value}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          aria-label={
-                            workspaceChangeBlockedReason
-                              ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
-                              : isGenerating || sending
-                                ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
-                                : `Workspace access: ${meta.label}`
-                          }
-                          tabIndex={selected ? 0 : -1}
-                          aria-disabled={disabled || undefined}
-                          onClick={() => {
-                            if (!disabled) requestPermission(value);
-                          }}
-                          onKeyDown={(event) => {
-                            if (disabled) return;
-                            if (event.key === "Enter" || event.key === " ") {
+                        Boolean(workspaceChangeBlockedReason) ||
+                        undefined
+                      }
+                      className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-[16px] bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-hover/access:visible group-hover/access:pointer-events-auto group-hover/access:translate-y-0 group-hover/access:opacity-100 group-focus-within/access:visible group-focus-within/access:pointer-events-auto group-focus-within/access:translate-y-0 group-focus-within/access:opacity-100 group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    >
+                      {PERMISSION_ORDER.map((value, index) => {
+                        const meta = PERMISSION_META[value];
+                        const Icon = meta.icon;
+                        const selected = value === permission;
+                        const disabled =
+                          !workspace ||
+                          permissionSaving ||
+                          isGenerating ||
+                          sending ||
+                          gitOperationBusy ||
+                          Boolean(workspaceChangeBlockedReason);
+                        return (
+                          <button
+                            ref={selected ? permissionControlRef : undefined}
+                            key={value}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            aria-label={
+                              workspaceChangeBlockedReason
+                                ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
+                                : isGenerating || sending
+                                  ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
+                                  : `Workspace access: ${meta.label}`
+                            }
+                            tabIndex={selected ? 0 : -1}
+                            aria-disabled={disabled || undefined}
+                            onClick={() => {
+                              if (!disabled) requestPermission(value);
+                            }}
+                            onKeyDown={(event) => {
+                              if (disabled) return;
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                if (value !== permission) requestPermission(value);
+                                return;
+                              }
+                              let nextIndex: number | undefined;
+                              if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+                                nextIndex = (index + 1) % PERMISSION_ORDER.length;
+                              }
+                              if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+                                nextIndex =
+                                  (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
+                              }
+                              if (event.key === "Home") nextIndex = 0;
+                              if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
+                              if (nextIndex === undefined) return;
                               event.preventDefault();
-                              if (value !== permission) requestPermission(value);
-                              return;
-                            }
-                            let nextIndex: number | undefined;
-                            if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-                              nextIndex = (index + 1) % PERMISSION_ORDER.length;
-                            }
-                            if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-                              nextIndex =
-                                (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
-                            }
-                            if (event.key === "Home") nextIndex = 0;
-                            if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
-                            if (nextIndex === undefined) return;
-                            event.preventDefault();
-                            const radios =
-                              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
-                                '[role="radio"]',
-                              );
-                            radios?.[nextIndex]?.focus();
-                          }}
-                          className={cn(
-                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
-                            selected
-                              ? "bg-popover shadow-control"
-                              : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
-                          )}
-                        >
-                          <Icon className={cn("size-4 shrink-0", meta.className)} />
-                          <span className="truncate">{meta.label}</span>
-                        </button>
-                      );
-                    })}
+                              const radios =
+                                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                                  '[role="radio"]',
+                                );
+                              radios?.[nextIndex]?.focus();
+                            }}
+                            className={cn(
+                              "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                              selected
+                                ? "bg-popover shadow-control"
+                                : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
+                            )}
+                          >
+                            <Icon className={cn("size-4 shrink-0", meta.className)} />
+                            <span className="truncate">{meta.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                ) : null}
                 {computerUse && onChangeComputerUse ? (
                   <Button
                     variant={computerUse.enabled ? "muted" : "transparent"}

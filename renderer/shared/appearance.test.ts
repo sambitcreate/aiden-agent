@@ -274,7 +274,14 @@ test("text entry stays quiet while non-text controls retain visible keyboard foc
     designStyles,
     /\.design-project-row:focus-visible[\s\S]*outline: 2px solid var\(--focus-ring\)/u,
   );
-  assert.match(modeSwitcher, /text-\[30px\][\s\S]*font-bold/u);
+  assert.match(
+    modeSwitcher,
+    /fontSize: "calc\(var\(--ui-font-size\) \+ var\(--ui-font-size\)\)"[\s\S]*font-bold/u,
+  );
+  assert.match(modeSwitcher, /Build, debug, and ship/u);
+  assert.match(modeSwitcher, /Create, iterate, and explore/u);
+  assert.match(modeSwitcher, /w-80 rounded-\[24px\] p-2/u);
+  assert.match(modeSwitcher, /min-h-20[\s\S]*rounded-\[18px\]/u);
   assert.match(modeSwitcher, /focus-visible:ring-2/u);
   assert.doesNotMatch(modeSwitcher, /focus-visible:outline/u);
   assert.match(styles, /--color-support-red-foreground: var\(--support-red-foreground\);/u);
