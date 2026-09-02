@@ -1113,9 +1113,14 @@ textarea {
   transition: none;
 }
 
-.terminal-drawer .ghostty-screen,
+.terminal-drawer .ghostty-screen {
+  position: relative;
+  height: 100%;
+}
+
 .terminal-drawer .ghostty-screen canvas {
   height: 100%;
+  width: 100%;
 }
 
 @keyframes aiden-terminal-drawer-in {
