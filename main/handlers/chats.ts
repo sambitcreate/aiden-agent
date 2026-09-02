@@ -83,12 +83,25 @@ function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): 
   );
 }
 
+async function listAgentChats(workspaceId?: string) {
+  const chats = await chatApplicationService.listRegular(workspaceId);
+  const projects = designProjectStore.availability().available
+    ? await designProjectStore.list()
+    : [];
+  const projectChatIds = new Set(projects.map((project) => project.chatId));
+  return chats.filter(
+    (chat) =>
+      persistedChatWorkspaceId(chat.workspaceId) !== DESIGN_PROJECT_CHAT_WORKSPACE_ID &&
+      !projectChatIds.has(chat.id),
+  );
+}
+
 export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
-    chatApplicationService.listRegular(
+    listAgentChats(
       typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,
     ),
   );

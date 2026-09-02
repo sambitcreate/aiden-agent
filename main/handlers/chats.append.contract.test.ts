@@ -33,6 +33,28 @@ test("private canonical Pi protocol never crosses the renderer chat boundary", (
   assert.match(source, /return chatForRenderer\(copied\)/u);
 });
 
+test("Agent chat lists exclude durable and migrated Design conversations", () => {
+  const listProjection = source.slice(
+    source.indexOf("async function listAgentChats"),
+    source.indexOf("export function registerChatHistoryHandlers"),
+  );
+  const listHandler = source.slice(
+    source.indexOf('ipcMain.handle("chats:list"'),
+    source.indexOf('ipcMain.handle("chats:get"'),
+  );
+
+  assert.match(listProjection, /chatApplicationService\.listRegular\(workspaceId\)/u);
+  assert.match(listProjection, /designProjectStore\.list\(\)/u);
+  assert.match(listProjection, /new Set\(projects\.map\(\(project\) => project\.chatId\)\)/u);
+  assert.match(
+    listProjection,
+    /persistedChatWorkspaceId\(chat\.workspaceId\) !== DESIGN_PROJECT_CHAT_WORKSPACE_ID/u,
+  );
+  assert.match(listProjection, /!projectChatIds\.has\(chat\.id\)/u);
+  assert.match(listHandler, /listAgentChats\(/u);
+  assert.doesNotMatch(listHandler, /chatApplicationService\.listRegular/u);
+});
+
 test("indeterminate appends fence create and append for the renderer document", () => {
   const create = source.slice(
     source.indexOf('"chats:create"'),
