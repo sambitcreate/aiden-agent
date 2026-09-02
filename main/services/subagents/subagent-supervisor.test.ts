@@ -2195,6 +2195,9 @@ test("supervisor seals an uncooperative tree only after bounded cancellation gra
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
     projector,
     healthMetrics: health.sink,
+    // Keep pre-admission accounting deterministic under aggregate CI load;
+    // the real tree timer and cancellation grace still exercise wall time.
+    now: () => 0,
     // This assertion is specifically about post-launch cancellation. Leave
     // enough time for request validation and child registration even when the
     // aggregate suite is under load.
