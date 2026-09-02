@@ -1,6 +1,12 @@
 import { Check, ChevronDown } from "lucide-react";
 import type { ShellMode } from "../lib/shell-mode";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  useSplitViewSidebar,
+} from "./ui";
 
 const MODES: ReadonlyArray<{ id: ShellMode; label: string; description: string }> = [
   { id: "agent", label: "Agent", description: "Build, debug, and ship" },
@@ -15,6 +21,13 @@ export function WorkspaceModeSwitcher({
   onModeChange: (mode: ShellMode) => void;
 }) {
   const label = mode === "design" ? "Design" : "Agent";
+  const { closeIfCompact } = useSplitViewSidebar();
+
+  const selectMode = (nextMode: ShellMode) => {
+    closeIfCompact();
+    onModeChange(nextMode);
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -35,7 +48,7 @@ export function WorkspaceModeSwitcher({
             aria-checked={mode === item.id}
             role="menuitemradio"
             className="min-h-20 items-center justify-between rounded-[18px] px-4 py-3 outline-none"
-            onSelect={() => onModeChange(item.id)}
+            onSelect={() => selectMode(item.id)}
           >
             <span className="min-w-0">
               <span className="block text-[18px] font-medium leading-tight text-primary">

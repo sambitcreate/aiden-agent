@@ -48,8 +48,16 @@ test("Agent and Design are peer workspace modes above the mode-specific search",
   const switcher = source("./workspace-mode-switcher.tsx");
   const ui = source("./ui.tsx");
   assert.match(sidebar, /header=\{<WorkspaceModeSwitcher mode=\{mode\}/u);
-  assert.match(switcher, /\{ id: "agent", label: "Agent" \}/u);
-  assert.match(switcher, /\{ id: "design", label: "Design" \}/u);
+  assert.match(
+    switcher,
+    /\{ id: "agent", label: "Agent", description: "Build, debug, and ship" \}/u,
+  );
+  assert.match(
+    switcher,
+    /\{ id: "design", label: "Design", description: "Create, iterate, and explore" \}/u,
+  );
+  assert.match(switcher, /const selectMode[\s\S]*closeIfCompact\(\)[\s\S]*onModeChange/u);
+  assert.match(switcher, /onSelect=\{\(\) => selectMode\(item\.id\)\}/u);
   assert.ok(ui.indexOf("{header ?") < ui.indexOf("{searchable ?"));
 });
 
