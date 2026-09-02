@@ -5,8 +5,10 @@
 - Design project identity and workspace filesystem authority are separate facts. Resolve the durable project by `chatId` before generation: repository-free prototypes may render inline HTML without a folder, while connected projects must still match their exact workspace ID, live root, and permission.
 - `.papercuts/troubleshooting.md` is tracked but also matches an ignore rule; `git add` stages it yet exits nonzero and breaks an `&& git commit` chain. Stage that exact tracked file with `git add -f -- .papercuts/troubleshooting.md` before committing.
 - This repository names its TypeScript gate `npm run type-check`; the common `npm run typecheck` spelling exits before checking anything.
+- Design persistence is covered by `renderer/components/design-project-persistence.test.tsx` inside `test:generative-ui`, but there is no standalone `test:design-project-persistence` script; run that file through `tsx --test` for a focused gate.
 - Impeccable context discovery can report `hasVisualImplementation: false` for a large existing TSX surface when no `DESIGN.md` or surface brief exists. Treat that as missing design documentation, not proof that the target is greenfield; inspect the component and incumbent tokens before choosing a workflow.
 - Design Workspace looks project-like, but only chat-linked artifact bytes are durable today; React Flow positions, viewport/version choice, uploaded reference nodes, and the live visual-edit session remain renderer state. Product copy and follow-on planning must distinguish durable designs from an ephemeral canvas arrangement.
+- The chat composer was owned by the scroll-area footer, while the Design conversation rail was conditionally mounted. Moving it directly would discard drafts, attachments, and dialog state; use one Composer with a persistent portal host and hide or inert the rail without unmounting it.
 - Electron 43.1.1's npm package exposes `install-electron` as a binary but declares no lifecycle install script, so a fresh `npm ci` can leave `node_modules/electron/dist/Electron.app` absent while reporting success. Run the package's verified `install.js` explicitly before the macOS dev-runtime preparation step.
 - zsh aborts mixed optional-worktree glob loops when any pattern has no matches. Enable `null_glob` locally or enumerate each search root with `find` so recovery-branch discovery cannot stop after the first missing path.
 - Codex task inventory caps `list_threads` at 50 despite accepting an arbitrary numeric argument. Use the maximum 50 and page or filter from the returned summaries when locating an earlier feature task.
@@ -210,6 +212,7 @@ exact accessibility label, and verify a post-start diagnostic event plus
 # Multi-file postimage graph proof
 
 - Proving only the selected file's hypothetical source graph made every valid second JS/TS postimage fail after writes. Multi-file proposals now build one complete override map and reject ambiguous graphs before durable preparation.
+
 ## Pi journal promotion recovery
 
 A promoted v4 journal may legitimately retain a `.v3-backup` after its migration
@@ -286,6 +289,7 @@ verification needs `ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk`.
 The full iOS `AidenRemoteClientTests` target currently has two unrelated
 failures in chat-summary/private-child validation; focused memory tests are
 needed to separate this change from that baseline noise.
+
 - Verification initially referenced a guessed OpenAPI path; the canonical files are under `protocol/aiden-remote/v1/`.
 - Focused Android tests need Android Studio's bundled JDK because this shell has no default Java runtime.
 - URLProtocol request bodies can arrive through `httpBodyStream`; iOS request tests must use the existing `bodyData` helper.
@@ -295,3 +299,5 @@ needed to separate this change from that baseline noise.
 - Revision checks around settings writes need an explicit serialized lane; async read-then-write alone permits stale concurrent mutations.
 - Backticks in `gh api -f body=...` are evaluated by zsh before submission; use single-quoted plain text or standard input for review replies.
 - A merged feature does not auto-increment releases; bump both package manifests before merging when the current tag already exists.
+- Dev startup can fail with only a redacted `TypeError` fingerprint when Design Project lifecycle recovery crashes; the structured log omits the failing cascade step and stack, making a stale journal hard to diagnose safely.
+- The Design Project library previously owned navigation, CRUD state, and dialogs inside the `/design` route, so promoting it to a peer sidebar required extracting a persistent controller instead of reusing the rail directly.
