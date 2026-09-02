@@ -40,7 +40,7 @@ export function WorkspaceModeSwitcher({
           <ChevronDown className="size-5 shrink-0 text-tertiary" aria-hidden="true" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={8} className="w-80 rounded-[32px] p-2">
+      <DropdownMenuContent align="start" sideOffset={8} className="w-80 !rounded-[18px] p-2">
         {MODES.map((item) => (
           <DropdownMenuItem
             key={item.id}
