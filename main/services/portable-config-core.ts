@@ -46,6 +46,8 @@ import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -729,9 +731,15 @@ function normalizeLocalConfigShape(value: unknown): LocalConfigShape {
   for (const workspace of validWorkspaces) {
     workspaceIdCounts.set(workspace.id, (workspaceIdCounts.get(workspace.id) ?? 0) + 1);
   }
+  const visibleWorkspaces = validWorkspaces.filter(
+    (workspace) =>
+      workspaceIdCounts.get(workspace.id) === 1 &&
+      workspace.id !== ASSISTANT_WORKSPACE_ID &&
+      workspace.id !== DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+  );
   return {
     ...rest,
-    workspaces: validWorkspaces.filter((workspace) => workspaceIdCounts.get(workspace.id) === 1),
+    workspaces: visibleWorkspaces,
     seeded: seeded === true,
     ...(typeof aidenDirMigratedAt === "number" ? { aidenDirMigratedAt } : {}),
     ...(webSearchProfileKind === "fresh" || webSearchProfileKind === "upgrade"
@@ -746,6 +754,11 @@ function isLocalConfigShapeSafe(value: unknown): boolean {
     Array.isArray(value.workspaces) &&
     value.workspaces.every(isWorkspace) &&
     hasUniqueIds(value.workspaces) &&
+    value.workspaces.every(
+      (workspace) =>
+        workspace.id !== ASSISTANT_WORKSPACE_ID &&
+        workspace.id !== DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+    ) &&
     (value.webSearchProfileKind === undefined ||
       value.webSearchProfileKind === "fresh" ||
       value.webSearchProfileKind === "upgrade")

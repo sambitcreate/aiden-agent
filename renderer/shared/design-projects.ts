@@ -1,4 +1,6 @@
 export type DesignProjectConnectionState = "prototype-only" | "connected";
+/** Storage namespace for backing conversations; never a filesystem authority. */
+export const DESIGN_PROJECT_CHAT_WORKSPACE_ID = "design-projects";
 export type DesignProjectFilter = "all" | "prototype" | "connected-app";
 export type DesignProjectHealth = "ready" | "needs-repair";
 export type DesignProjectInspectorTab = "preview" | "code" | "history";
@@ -60,6 +62,14 @@ export interface DesignProjectRecordSummaryV1 {
 export type DesignProjectMutationResultV1 =
   | { status: "updated"; project: DesignProjectSnapshotV1 }
   | { status: "conflict"; current: DesignProjectSnapshotV1 };
+
+export interface DesignProjectGenerationPreflightV1 {
+  projectId: string;
+  projectRevision: number;
+  chatId: string;
+  connectionState: DesignProjectConnectionState;
+  workspaceId?: string;
+}
 
 export interface DesignProjectDeletePlanV1 {
   version: 1;

@@ -6,9 +6,21 @@ test("Design turns retain the model backend but use a positive tool and extensio
   const source = readFileSync(new URL("./llm-client.ts", import.meta.url), "utf8");
   const extension = readFileSync(new URL("./generative-ui-extension.ts", import.meta.url), "utf8");
   assert.match(source, /const designWorkspace = params\.design === true/u);
+  assert.match(source, /designProjectStore\.getByChatId\(params\.chatId\)/u);
+  assert.match(source, /authoritativeDesignGenerationWorkspaceId/u);
+  assert.match(source, /params\.design \? DESIGN_PROJECT_CHAT_WORKSPACE_ID : params\.workspaceId/u);
+  assert.match(source, /workspaceId: generationWorkspaceId/u);
+  assert.match(source, /designProject\?\.connectionState === "prototype-only"/u);
+  assert.match(source, /!assistantPersonaMode && !repositoryFreeDesign/u);
   assert.match(source, /Design workspace is unavailable for this conversation/u);
   assert.match(source, /shouldEnableDesignWorkspace/u);
   assert.match(source, /botBound: botContext !== undefined/u);
+  assert.match(source, /project: designProject/u);
+  assert.match(source, /workspaceId: workspace\?\.id/u);
+  assert.match(
+    source,
+    /designWorkspace\s*\? designWorkspaceEnabled\s*:\s*!botContext &&\s*shouldEnableGenerativeUiExtension/u,
+  );
   assert.match(source, /permission,\s*excluded:/u);
   assert.match(source, /if \(designWorkspace\) tools = \[\]/u);
   assert.match(

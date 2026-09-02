@@ -1,4 +1,5 @@
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { ParsedPublicChatCreate } from "../handlers/chat-create-params.js";
@@ -184,6 +185,42 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       } finally {
         workspaceOperation?.release();
         mutationAdmission.release();
+      }
+    },
+
+    /**
+     * Create the private backing conversation for a Design Project. Its
+     * reserved workspace id is a storage namespace only: it is deliberately
+     * not resolved through configStore and cannot convey folder authority.
+     */
+    async createDesignConversation(
+      input: { title: string },
+      owner: ChatApplicationOwner,
+    ) {
+      if (deps.llmClient.requiresAppendReconciliation(owner.documentId)) {
+        throw new Error(appendReconciliationFailureMessage("blocked"));
+      }
+      const assertCurrent = () => {
+        if (owner.isDestroyed()) {
+          throw new Error("The renderer document is no longer active.");
+        }
+        if (deps.llmClient.requiresAppendReconciliation(owner.documentId)) {
+          throw new Error(appendReconciliationFailureMessage("blocked"));
+        }
+      };
+      try {
+        return chatForRenderer(
+          await deps.chatStore.create({
+            title: input.title,
+            workspaceId: DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+            assertCurrent,
+          }),
+        );
+      } catch (error) {
+        if (isChatCreateReconciliationRequiredError(error)) {
+          return markReconciliationRequired(owner);
+        }
+        throw error;
       }
     },
 

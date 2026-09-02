@@ -15,6 +15,7 @@ import {
   AidenRemoteAttachmentStore,
 } from "./aiden-remote-attachments.js";
 import { BotMutationGate } from "./bot-mutation-gate.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -616,6 +617,40 @@ test("workspace chat lists use the regular-only application classification", asy
   assert.deepEqual((await regular.service.list("workspace-1")).chats.map(({ id }) => id), ["chat-1"]);
   assert.deepEqual(await bot.service.list("workspace-1"), { chats: [] });
   assert.deepEqual(requestedWorkspaces, ["workspace-1"]);
+});
+
+test("Design backing conversations are absent from every generic Remote chat path", async () => {
+  const app = fixture(chat({ workspaceId: DESIGN_PROJECT_CHAT_WORKSPACE_ID }));
+  const revision = projectAidenRemoteChat(app.current()!).revision;
+  const isNotFound = (error: unknown) =>
+    (error as { code?: string; status?: number }).code === "not_found" &&
+    (error as { status?: number }).status === 404;
+
+  assert.deepEqual(await app.service.list(), { chats: [] });
+  assert.deepEqual(await app.service.list(DESIGN_PROJECT_CHAT_WORKSPACE_ID), { chats: [] });
+  assert.deepEqual((await app.service.listSummaries()).summaries, []);
+
+  await assert.rejects(app.service.get("chat-1"), isNotFound);
+  await assert.rejects(app.service.classify("chat-1"), isNotFound);
+  await assert.rejects(app.service.rename("chat-1", revision, { title: "Hidden" }), isNotFound);
+  await assert.rejects(
+    app.service.move("device-1", "chat-1", revision, "design-move-0001", {
+      workspaceId: "workspace-2",
+    }),
+    isNotFound,
+  );
+  await assert.rejects(app.service.remove("chat-1", revision), isNotFound);
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "design-turn-0001", { text: "Hello" }),
+    isNotFound,
+  );
+
+  assert.equal(app.current()?.workspaceId, DESIGN_PROJECT_CHAT_WORKSPACE_ID);
+  assert.equal(app.current()?.title, "New chat");
+  assert.equal(app.appends(), 0);
+  assert.equal(app.begins(), 0);
+  assert.equal(app.starts(), 0);
+  assert.equal(app.notifications(), 0);
 });
 
 test("chat classification reads only main-owned metadata before payload access", async () => {

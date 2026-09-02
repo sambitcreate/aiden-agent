@@ -50,7 +50,7 @@ async function workspace(): Promise<string> {
   return directory;
 }
 
-test("generative UI enablement matches the display_image chat gate", () => {
+test("ordinary and Design artifact gates preserve their separate authority boundaries", () => {
   assert.equal(
     shouldEnableGenerativeUiExtension({
       usageSource: "chat",
@@ -86,10 +86,90 @@ test("generative UI enablement matches the display_image chat gate", () => {
     shouldEnableDesignWorkspace({
       usageSource: "chat",
       assistantMode: false,
-      workspaceRoot: "/tmp/ws",
       permission: "none",
       excluded: false,
       botBound: false,
+      project: { connectionState: "prototype-only" },
+    }),
+    true,
+  );
+  for (const blocked of [
+    { interactionSurface: "telegram" },
+    { assistantMode: true },
+    { excluded: true },
+    { botBound: true },
+  ]) {
+    assert.equal(
+      shouldEnableDesignWorkspace({
+        usageSource: "chat",
+        assistantMode: false,
+        permission: "ask",
+        excluded: false,
+        botBound: false,
+        project: { connectionState: "prototype-only" },
+        ...blocked,
+      }),
+      false,
+    );
+  }
+  assert.equal(
+    shouldEnableDesignWorkspace({
+      usageSource: "chat",
+      assistantMode: false,
+      permission: "ask",
+      excluded: false,
+      botBound: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldEnableDesignWorkspace({
+      usageSource: "chat",
+      assistantMode: false,
+      workspaceRoot: "/tmp/ws",
+      workspaceId: "workspace-1",
+      permission: "ask",
+      excluded: false,
+      botBound: false,
+      project: { connectionState: "connected", workspaceId: "workspace-1" },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldEnableDesignWorkspace({
+      usageSource: "chat",
+      assistantMode: false,
+      workspaceId: "workspace-1",
+      permission: "ask",
+      excluded: false,
+      botBound: false,
+      project: { connectionState: "connected", workspaceId: "workspace-1" },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldEnableDesignWorkspace({
+      usageSource: "chat",
+      assistantMode: false,
+      workspaceRoot: "/tmp/ws",
+      workspaceId: "workspace-2",
+      permission: "ask",
+      excluded: false,
+      botBound: false,
+      project: { connectionState: "connected", workspaceId: "workspace-1" },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldEnableDesignWorkspace({
+      usageSource: "chat",
+      assistantMode: false,
+      workspaceRoot: "/tmp/ws",
+      workspaceId: "workspace-1",
+      permission: "none",
+      excluded: false,
+      botBound: false,
+      project: { connectionState: "connected", workspaceId: "workspace-1" },
     }),
     false,
   );
@@ -101,8 +181,36 @@ test("generative UI enablement matches the display_image chat gate", () => {
       permission: "ask",
       excluded: false,
       botBound: true,
+      project: { connectionState: "connected", workspaceId: "workspace-1" },
+      workspaceId: "workspace-1",
     }),
     false,
+  );
+});
+
+test("repository-free Design accepts inline HTML without granting ordinary path authority", async () => {
+  const artifacts: ChatHtmlArtifactV1[] = [];
+  const extension = createGenerativeUiExtension({
+    designWorkspaceThisTurn: true,
+    onArtifact: (artifact) => {
+      artifacts.push(artifact);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  await tool.execute("prototype", {
+    title: "Repository-free prototype",
+    html: "<main><h1>Prototype</h1></main>",
+  });
+  assert.equal(artifacts.length, 1);
+  assert.match(artifacts[0]?.mediaId ?? "", /^design:/u);
+
+  assert.throws(
+    () =>
+      createGenerativeUiExtension({
+        onArtifact: () => undefined,
+      }),
+    /workspace root is required/iu,
   );
 });
 

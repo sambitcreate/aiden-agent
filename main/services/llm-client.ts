@@ -233,9 +233,11 @@ import {
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { ChatDeletionGate } from "./chat-deletion-gate.js";
 import {
+  authoritativeDesignGenerationWorkspaceId,
   authoritativeChatGenerationMode,
   authoritativeChatWorkspaceId,
 } from "./chat-workspace-authority.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
@@ -663,6 +665,10 @@ async function prepareGeneration(
   const assistantAutomationMode = params.mode === "assistant-automation";
   const assistantMode = assistantPersonaMode || assistantAutomationMode;
   const designWorkspace = params.design === true;
+  const designProject = designWorkspace
+    ? await designProjectStore.getByChatId(params.chatId)
+    : undefined;
+  const repositoryFreeDesign = designProject?.connectionState === "prototype-only";
   if (
     !designWorkspace &&
     shouldEnableAskUserQuestionExtension({
@@ -690,7 +696,7 @@ async function prepareGeneration(
   // has bound the scheduled run to a workspace.
   const workspace =
     botContext?.prepared.workspace ??
-    (params.workspaceId && !assistantPersonaMode
+    (params.workspaceId && !assistantPersonaMode && !repositoryFreeDesign
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined);
   if (workspace && !botBound) await assertManagedWorktreeAdmission(workspace);
@@ -757,9 +763,9 @@ async function prepareGeneration(
       },
     });
   }
-  if (
+  const designWorkspaceEnabled =
     designWorkspace &&
-    !shouldEnableDesignWorkspace({
+    shouldEnableDesignWorkspace({
       usageSource: options.usageSource,
       interactionSurface: options.interactionSurface,
       assistantMode,
@@ -767,8 +773,10 @@ async function prepareGeneration(
       permission,
       excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
       botBound: botContext !== undefined,
-    })
-  ) {
+      project: designProject,
+      workspaceId: workspace?.id,
+    });
+  if (designWorkspace && !designWorkspaceEnabled) {
     throw new Error("Design workspace is unavailable for this conversation.");
   }
   const git =
@@ -1265,16 +1273,18 @@ async function prepareGeneration(
     generationExtensions.push(displayImageRuntime.extension);
   }
   if (
-    !botContext &&
     !(designWorkspace && params.sourceDesignContext) &&
-    shouldEnableGenerativeUiExtension({
-      usageSource: options.usageSource,
-      interactionSurface: options.interactionSurface,
-      assistantMode,
-      workspaceRoot: folderPath,
-      permission,
-      excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
-    })
+    (designWorkspace
+      ? designWorkspaceEnabled
+      : !botContext &&
+        shouldEnableGenerativeUiExtension({
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          assistantMode,
+          workspaceRoot: folderPath,
+          permission,
+          excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
+        }))
   ) {
     const htmlStoreAvailability = generativeUiArtifactStore.availability();
     if (!htmlStoreAvailability.available) {
@@ -1376,16 +1386,15 @@ async function prepareGeneration(
     }
     let designSystemContext: Awaited<ReturnType<typeof currentDesignSystemModelContext>>;
     if (designWorkspace) {
-      const project = await designProjectStore.getByChatId(params.chatId);
-      if (project?.designSystemBinding) {
-        if (!folderPath || project.workspaceId !== params.workspaceId) {
+      if (designProject?.designSystemBinding) {
+        if (!folderPath || designProject.workspaceId !== params.workspaceId) {
           throw new Error("The attached design system is not bound to this active workspace.");
         }
-        designSystemContext = await currentDesignSystemModelContext(project, folderPath);
+        designSystemContext = await currentDesignSystemModelContext(designProject, folderPath);
       }
     }
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
-      workspaceRoot: folderPath!,
+      workspaceRoot: folderPath,
       artifactNamespace: `${streamId}:html`,
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
@@ -1433,18 +1442,17 @@ async function prepareGeneration(
       workspace.id,
       params.sourceDesignContext.selectionId,
     );
-    const project = await designProjectStore.getByChatId(params.chatId);
-    if (!project) throw new Error("The source-backed Design Project is unavailable.");
-    const sourceNode = project.canvas.nodes.find(({ kind }) => kind === "source-preview");
-    if (!sourceNode || project.connectionState !== "connected") {
+    if (!designProject) throw new Error("The source-backed Design Project is unavailable.");
+    const sourceNode = designProject.canvas.nodes.find(({ kind }) => kind === "source-preview");
+    if (!sourceNode || designProject.connectionState !== "connected") {
       throw new Error("The source-backed Design Project connection is unavailable.");
     }
     generationExtensions.push(
       createSourceDesignerExtensionRuntime({
         owner,
         chatId: params.chatId,
-        projectId: project.id,
-        projectRevision: project.revision,
+        projectId: designProject.id,
+        projectRevision: designProject.revision,
         sourceNodeId: sourceNode.id,
         binding,
       }).extension,
@@ -1685,8 +1693,16 @@ export const llmClient = {
       }
       const authoritativeWorkspaceId = authoritativeChatWorkspaceId(
         chat.workspaceId,
-        params.workspaceId,
+        params.design ? DESIGN_PROJECT_CHAT_WORKSPACE_ID : params.workspaceId,
       );
+      const generationWorkspaceId = params.design
+        ? authoritativeDesignGenerationWorkspaceId(
+            chat.workspaceId,
+            params.workspaceId,
+            chat.id,
+            await designProjectStore.getByChatId(chat.id),
+          )
+        : authoritativeWorkspaceId;
       initialization.workspaceId = authoritativeWorkspaceId;
       const preparedSkillInvocation = initialization.skillInvocation;
       if (preparedSkillInvocation) {
@@ -1695,12 +1711,12 @@ export const llmClient = {
           .find((message) => message.role === "user");
         initialization.skillPrompt = preparedSkillPromptForCurrentTurn(
           preparedSkillInvocation,
-          authoritativeWorkspaceId,
+          generationWorkspaceId,
           currentUser,
           authoritativeMode,
         );
       }
-      if (workspaceMutationGate.isChanging(authoritativeWorkspaceId)) {
+      if (workspaceMutationGate.isChanging(generationWorkspaceId)) {
         throw new Error("The workspace is changing. Try again in a moment.");
       }
       if (initialization.controller.signal.aborted) {
@@ -1710,7 +1726,7 @@ export const llmClient = {
         streamId,
         {
           ...params,
-          workspaceId: authoritativeWorkspaceId,
+          workspaceId: generationWorkspaceId,
           mode: authoritativeMode,
         },
         chat,

@@ -7,6 +7,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 import { createConfigStore, type SecretsPort } from "./config-store-core.js";
 import {
   LEGACY_CONFIG_ARCHIVE_SUFFIX,
@@ -568,6 +569,59 @@ test("every install ends up with at least one workspace", async (t) => {
 
   await h.store.removeWorkspace(workspaces[0].id);
   assert.equal((await h.store.listWorkspaces()).length, 1, "the app is never workspace-less");
+});
+
+test("Design backing-chat namespace cannot be registered as a user workspace", async (t) => {
+  const h = await harness(t);
+  await assert.rejects(
+    h.store.saveWorkspace({
+      id: DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+      name: "Forged Design authority",
+      folderPath: "/tmp/forged-design-authority",
+      permission: "full",
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+    /reserved and cannot be a workspace id/u,
+  );
+  assert.equal(await h.store.getWorkspace(DESIGN_PROJECT_CHAT_WORKSPACE_ID), undefined);
+});
+
+test("a pre-existing Design namespace collision is quarantined without rewriting local config", async (t) => {
+  const collision: Workspace = {
+    id: DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+    name: "Existing user folder",
+    folderPath: "/tmp/existing-user-folder",
+    permission: "full",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const ordinary: Workspace = {
+    id: "workspace-safe",
+    name: "Safe workspace",
+    folderPath: "/tmp/safe-workspace",
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const h = await harness(t, {
+    workspaces: [collision, ordinary],
+    seeded: true,
+    aidenDirMigratedAt: 1,
+  });
+  const before = await fs.readFile(h.localFile);
+
+  assert.deepEqual(
+    (await h.store.listWorkspaces()).map(({ id }) => id),
+    [ordinary.id],
+  );
+  assert.equal(await h.store.getWorkspace(DESIGN_PROJECT_CHAT_WORKSPACE_ID), undefined);
+  assert.equal(await h.stores.local.loadedFromUnsafeFile(), true);
+  await assert.rejects(
+    h.store.saveWorkspace({ ...ordinary, name: "Blocked while quarantined" }),
+    /migration is deferred/u,
+  );
+  assert.deepEqual(await fs.readFile(h.localFile), before);
 });
 
 // ── Seeding order ────────────────────────────────────────────────────────────

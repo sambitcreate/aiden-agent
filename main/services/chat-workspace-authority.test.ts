@@ -2,11 +2,34 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  authoritativeDesignGenerationWorkspaceId,
   authoritativeChatGenerationMode,
   authoritativeChatWorkspaceId,
   persistedChatReferencesSubagentRun,
   persistedChatWorkspaceId,
 } from "./chat-workspace-authority.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
+import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+
+function designProject(overrides: Partial<DesignProjectSnapshotV1> = {}): DesignProjectSnapshotV1 {
+  return {
+    version: 1,
+    id: "project:one",
+    revision: 1,
+    title: "Prototype",
+    chatId: "chat:design",
+    connectionState: "prototype-only",
+    createdAt: 1,
+    updatedAt: 1,
+    canvas: {
+      viewport: "desktop",
+      flowViewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+    },
+    referenceAssetIds: [],
+    ...overrides,
+  };
+}
 
 test("persisted chat workspace ownership is authoritative over renderer input", () => {
   assert.equal(authoritativeChatWorkspaceId("workspace-a", "workspace-a"), "workspace-a");
@@ -27,6 +50,83 @@ test("legacy and omitted chat workspace ids normalize to the default workspace",
   assert.throws(
     () => authoritativeChatWorkspaceId(undefined, "workspace-b"),
     /different workspace/u,
+  );
+});
+
+test("Design storage identity stays separate from Prototype and Connected App generation roots", () => {
+  assert.equal(
+    authoritativeDesignGenerationWorkspaceId(
+      DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+      undefined,
+      "chat:design",
+      designProject(),
+    ),
+    DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+  );
+  assert.equal(
+    authoritativeDesignGenerationWorkspaceId(
+      DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+      "workspace-2",
+      "chat:design",
+      designProject({
+        connectionState: "connected",
+        workspaceId: "workspace-2",
+      }),
+    ),
+    "workspace-2",
+  );
+});
+
+test("Design generation rejects forged chats, stale renderer roots, and invalid bindings", () => {
+  assert.throws(
+    () =>
+      authoritativeDesignGenerationWorkspaceId(
+        "workspace-1",
+        undefined,
+        "chat:design",
+        designProject(),
+      ),
+    /not a Design Project conversation/u,
+  );
+  assert.throws(
+    () =>
+      authoritativeDesignGenerationWorkspaceId(
+        DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+        undefined,
+        "chat:other",
+        designProject(),
+      ),
+    /conversation is unavailable/u,
+  );
+  assert.throws(
+    () =>
+      authoritativeDesignGenerationWorkspaceId(
+        DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+        "workspace-forged",
+        "chat:design",
+        designProject({ connectionState: "connected", workspaceId: "workspace-2" }),
+      ),
+    /workspace changed/u,
+  );
+  assert.throws(
+    () =>
+      authoritativeDesignGenerationWorkspaceId(
+        DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+        undefined,
+        "chat:design",
+        designProject({ connectionState: "connected" }),
+      ),
+    /binding is invalid/u,
+  );
+  assert.throws(
+    () =>
+      authoritativeDesignGenerationWorkspaceId(
+        DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+        "workspace-2",
+        "chat:design",
+        designProject({ workspaceId: "workspace-2" }),
+      ),
+    /binding is invalid/u,
   );
 });
 
@@ -57,7 +157,7 @@ test("generation uses the persisted Assistant mode for handoff, tools, and promp
   );
   assert.match(
     startSource,
-    /\{\s*\.\.\.params,\s*workspaceId: authoritativeWorkspaceId,\s*mode: authoritativeMode,?\s*\}/u,
+    /\{\s*\.\.\.params,\s*workspaceId: generationWorkspaceId,\s*mode: authoritativeMode,?\s*\}/u,
   );
   assert.match(startSource, /authoritativeMode === "assistant"/u);
   assert.doesNotMatch(startSource, /params\.mode\s*===/u);

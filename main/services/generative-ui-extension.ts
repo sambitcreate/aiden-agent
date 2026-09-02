@@ -80,6 +80,15 @@ export interface GenerativeUiExtensionScope {
   excluded: boolean;
 }
 
+export interface DesignWorkspaceExtensionScope extends GenerativeUiExtensionScope {
+  botBound: boolean;
+  project?: {
+    connectionState: "prototype-only" | "connected";
+    workspaceId?: string;
+  };
+  workspaceId?: string;
+}
+
 export function shouldEnableGenerativeUiExtension(scope: GenerativeUiExtensionScope): boolean {
   return (
     scope.usageSource === "chat" &&
@@ -91,10 +100,24 @@ export function shouldEnableGenerativeUiExtension(scope: GenerativeUiExtensionSc
   );
 }
 
-export function shouldEnableDesignWorkspace(
-  scope: GenerativeUiExtensionScope & { botBound: boolean },
-): boolean {
-  return !scope.botBound && shouldEnableGenerativeUiExtension(scope);
+export function shouldEnableDesignWorkspace(scope: DesignWorkspaceExtensionScope): boolean {
+  if (
+    scope.usageSource !== "chat" ||
+    scope.interactionSurface === "telegram" ||
+    scope.assistantMode ||
+    scope.excluded ||
+    scope.botBound ||
+    !scope.project
+  ) {
+    return false;
+  }
+  if (scope.project.connectionState === "prototype-only") return true;
+  return (
+    Boolean(scope.workspaceRoot) &&
+    scope.permission !== "none" &&
+    Boolean(scope.project.workspaceId) &&
+    scope.project.workspaceId === scope.workspaceId
+  );
 }
 
 export function displayedAssistantHtmlUsage(
@@ -117,7 +140,8 @@ export function displayedAssistantHtmlUsage(
 }
 
 export interface GenerativeUiExtensionOptions {
-  workspaceRoot: string;
+  /** Required for ordinary artifacts. Design turns accept inline HTML only. */
+  workspaceRoot?: string;
   artifactNamespace?: string;
   existingChatHtmlBytes?: number;
   existingChatHtmlCount?: number;
@@ -206,15 +230,24 @@ export function designArtifactUsesDesignSystem(html: string, context: unknown): 
 export function createGenerativeUiExtensionRuntime(options: GenerativeUiExtensionOptions): {
   extension: PiAgentRuntimeExtension;
 } {
-  const lexicalRoot = path.resolve(options.workspaceRoot);
-  const canonicalRoot = realpathSync(lexicalRoot);
-  const rootIdentity = statSync(canonicalRoot, { bigint: true });
-  if (!rootIdentity.isDirectory()) throw new Error("The workspace root is not a directory.");
-  const workspaceRootIdentity = Object.freeze({
-    canonicalPath: canonicalRoot,
-    device: rootIdentity.dev.toString(10),
-    inode: rootIdentity.ino.toString(10),
-  });
+  const designWorkspace = options.designWorkspaceThisTurn === true;
+  let canonicalRoot: string | undefined;
+  let workspaceRootIdentity:
+    | Readonly<{ canonicalPath: string; device: string; inode: string }>
+    | undefined;
+  if (options.workspaceRoot) {
+    const lexicalRoot = path.resolve(options.workspaceRoot);
+    canonicalRoot = realpathSync(lexicalRoot);
+    const rootIdentity = statSync(canonicalRoot, { bigint: true });
+    if (!rootIdentity.isDirectory()) throw new Error("The workspace root is not a directory.");
+    workspaceRootIdentity = Object.freeze({
+      canonicalPath: canonicalRoot,
+      device: rootIdentity.dev.toString(10),
+      inode: rootIdentity.ino.toString(10),
+    });
+  } else if (!designWorkspace) {
+    throw new Error("A workspace root is required for ordinary HTML artifacts.");
+  }
   const existingChatHtmlBytes = options.existingChatHtmlBytes ?? 0;
   const existingChatHtmlCount = options.existingChatHtmlCount ?? 0;
   if (
@@ -231,7 +264,6 @@ export function createGenerativeUiExtensionRuntime(options: GenerativeUiExtensio
   let serial = Promise.resolve();
   const titlesInGeneration = new Map<string, { mediaId: string; size: number }>();
 
-  const designWorkspace = options.designWorkspaceThisTurn === true;
   const artifactParameters = designWorkspace
     ? Type.Object({
         title: Type.String({
@@ -297,6 +329,9 @@ export function createGenerativeUiExtensionRuntime(options: GenerativeUiExtensio
           let html: string;
           let sourceLabel = "inline HTML";
           if (hasPath) {
+            if (!canonicalRoot || !workspaceRootIdentity) {
+              throw new Error("A workspace root is required to render an HTML file.");
+            }
             const resolved = resolveWorkspaceHtml(canonicalRoot, input.path as string);
             const relative = resolved.relative.split(path.sep).join("/");
             const reader = createSubagentFileMutatorClient({

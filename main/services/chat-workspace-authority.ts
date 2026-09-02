@@ -3,6 +3,8 @@ import {
   persistedChatWorkspaceId,
 } from "../../renderer/shared/chat-workspace.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
+import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import type { ChatStartParams } from "./types.js";
 
 export { persistedChatWorkspaceId };
@@ -20,6 +22,37 @@ export function authoritativeChatWorkspaceId(
     throw new Error("This chat belongs to a different workspace.");
   }
   return authoritative;
+}
+
+/**
+ * Keep a Design conversation's private storage namespace separate from the
+ * optional filesystem authority durably bound to its project. Renderer input
+ * is only a stale-preflight guard and can never select another workspace.
+ */
+export function authoritativeDesignGenerationWorkspaceId(
+  persistedWorkspaceId: string | undefined,
+  requestedWorkspaceId: string | undefined,
+  chatId: string,
+  project: DesignProjectSnapshotV1 | undefined,
+): string {
+  if (persistedChatWorkspaceId(persistedWorkspaceId) !== DESIGN_PROJECT_CHAT_WORKSPACE_ID) {
+    throw new Error("This chat is not a Design Project conversation.");
+  }
+  if (!project || project.chatId !== chatId) {
+    throw new Error("This Design Project conversation is unavailable.");
+  }
+  const connectedWorkspaceId =
+    project.connectionState === "connected" ? project.workspaceId : undefined;
+  if (
+    (project.connectionState === "prototype-only" && project.workspaceId !== undefined) ||
+    (project.connectionState === "connected" && !connectedWorkspaceId)
+  ) {
+    throw new Error("This Design Project workspace binding is invalid.");
+  }
+  if (requestedWorkspaceId !== connectedWorkspaceId) {
+    throw new Error("This Design Project workspace changed before generation started.");
+  }
+  return connectedWorkspaceId ?? DESIGN_PROJECT_CHAT_WORKSPACE_ID;
 }
 
 /**

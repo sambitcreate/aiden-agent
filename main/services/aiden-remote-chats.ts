@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   parseGenerationTimeline,
@@ -318,6 +319,7 @@ function safeSummaryMetadata(
   if (
     meta.botId !== undefined ||
     workspaceId === ASSISTANT_WORKSPACE_ID ||
+    workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID ||
     !SAFE_ID.test(meta.id) ||
     !SAFE_ID.test(workspaceId) ||
     !Number.isFinite(meta.createdAt) ||
@@ -761,7 +763,11 @@ export class AidenRemoteChatService {
 
   private async chat(chatId: string): Promise<Chat> {
     const result = await this.options.application.get(safeId(chatId, "chat"));
-    if (!result.chat || result.chat.id !== chatId) {
+    if (
+      !result.chat ||
+      result.chat.id !== chatId ||
+      persistedChatWorkspaceId(result.chat.workspaceId) === DESIGN_PROJECT_CHAT_WORKSPACE_ID
+    ) {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     if (result.reconciliation) {
@@ -794,7 +800,10 @@ export class AidenRemoteChatService {
 
   async list(workspaceId?: string): Promise<{ chats: AidenRemoteChatProjection[] }> {
     if (workspaceId) safeId(workspaceId, "workspace");
-    const metadata = await this.options.application.listRegular(workspaceId);
+    if (workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID) return { chats: [] };
+    const metadata = (await this.options.application.listRegular(workspaceId)).filter(
+      (entry) => persistedChatWorkspaceId(entry.workspaceId) !== DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+    );
     const chats = await Promise.all(metadata.map((entry) => this.chat(entry.id)));
     return { chats: chats.map((chat) => this.project(chat)) };
   }
@@ -908,7 +917,10 @@ export class AidenRemoteChatService {
   async classify(chatId: string): Promise<AidenRemoteChatClassification> {
     const id = safeId(chatId, "chat");
     const metadata = (await this.options.application.list()).find((entry) => entry.id === id);
-    if (!metadata) {
+    if (
+      !metadata ||
+      persistedChatWorkspaceId(metadata.workspaceId) === DESIGN_PROJECT_CHAT_WORKSPACE_ID
+    ) {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     if (!metadata.botId) return {};
@@ -1078,7 +1090,16 @@ export class AidenRemoteChatService {
   async rename(chatId: string, revision: string, input: unknown): Promise<AidenRemoteChatProjection> {
     const title = parseTitle(input);
     const updated = await this.options.application.rename(safeId(chatId, "chat"), title, {
-      assertCurrent: (chat) => requireRevision(revision, chat),
+      assertCurrent: (chat) => {
+        if (persistedChatWorkspaceId(chat.workspaceId) === DESIGN_PROJECT_CHAT_WORKSPACE_ID) {
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This Aiden chat no longer exists.",
+            404,
+          );
+        }
+        requireRevision(revision, chat);
+      },
     });
     this.options.notifyChanged?.(chatId);
     return projectAidenRemoteChat(updated);
