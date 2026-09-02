@@ -1,4 +1,6 @@
 import { app, logger } from "../platform.js";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { chatStore } from "./chat-store.js";
@@ -34,7 +36,13 @@ async function loadLegacyDesignChatFacts(
 ): Promise<LegacyDesignChatFacts | undefined> {
   const result = await chatApplicationService.get(chatId);
   const chat = result.chat;
-  if (!chat || chat.botId) return undefined;
+  if (
+    !chat ||
+    chat.botId ||
+    persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID
+  ) {
+    return undefined;
+  }
 
   const artifactAvailability = generativeUiArtifactStore.availability();
   const ordered: LegacyDesignArtifactFact[] = [];

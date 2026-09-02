@@ -65,6 +65,7 @@ const designProjectAppendService = createDesignProjectConnectionService({
   projects: designProjectStore,
   workspaces: workspaceEnvironmentApplicationService,
   runProjectMutation: (operation) => designProjectLifecycle.runProjectMutation(operation),
+  chatWorkspaceId: async (chatId) => (await chatStore.get(chatId))?.workspaceId,
 });
 
 function asString(value: unknown, name: string): string {

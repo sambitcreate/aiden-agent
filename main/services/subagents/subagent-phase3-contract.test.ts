@@ -418,6 +418,10 @@ test("application startup reconciles private runs and worktree deletions before 
   const main = await source("main/index.ts");
   const initialize = main.indexOf("await subagentRunStore.initialize()");
   const recoverDesignProjects = main.indexOf("await designProjectLifecycle.recover()", initialize);
+  const recoverDesignHandoffs = main.indexOf(
+    "await designHandoffApplicationService.reconcileAtStartup()",
+    initialize,
+  );
   const reconcileDeletions = main.indexOf("await reconcilePendingChatDeletions(", initialize);
   const reconcileWorktrees = main.indexOf(
     "await reconcilePendingManagedWorktreeDeletions({",
@@ -431,6 +435,7 @@ test("application startup reconciles private runs and worktree deletions before 
   const startSchedules = main.indexOf("await scheduleService.start()", createWindow);
   assert.ok(initialize >= 0);
   assert.ok(recoverDesignProjects > initialize);
+  assert.ok(recoverDesignHandoffs > initialize);
   assert.ok(reconcileDeletions > initialize);
   assert.ok(reconcileWorktrees > reconcileDeletions);
   assert.ok(finalizeOrphanedJournals > reconcileWorktrees);

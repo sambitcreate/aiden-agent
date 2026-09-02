@@ -29,6 +29,8 @@ class Owner implements RendererDocumentOwner {
   }
 }
 
+const designChatWorkspaceId = async () => "design-projects";
+
 function workspace(id: string, folderPath: string | undefined, permission: Workspace["permission"]): Workspace {
   return { id, name: id, ...(folderPath ? { folderPath } : {}), permission, createdAt: 1, updatedAt: 1 };
 }
@@ -69,6 +71,7 @@ test("Prototype connection resolves a current folder-backed authorized workspace
     projects,
     workspaces: workspaceService,
     runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: designChatWorkspaceId,
   });
   const connected = await service.connect(new Owner(), {
     projectId: prototype.id,
@@ -111,6 +114,7 @@ test("folderless, denied, missing, and unavailable workspaces cannot become auth
     projects,
     workspaces: workspaceService,
     runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: designChatWorkspaceId,
   });
   for (const [workspaceId, message] of [
     ["folderless", /does not have a folder/u],
@@ -162,6 +166,7 @@ test("a Connected App can rebind after W1 is deleted without carrying W1 authori
     projects,
     workspaces: workspaceService,
     runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: designChatWorkspaceId,
     prepareRebind: async (_owner, previous) => { prepared.push(previous.workspaceId!); },
     finalizeRebind: async (previous, connected) => {
       finalized.push(`${previous.workspaceId}->${connected.workspaceId}`);
@@ -191,6 +196,7 @@ test("Prototype generation preflight does not resolve any workspace", async (t) 
     projects,
     workspaces: { run: async () => { throw new Error("workspace resolution is forbidden"); } },
     runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: designChatWorkspaceId,
   });
   assert.deepEqual(await service.preflightGeneration(new Owner(), prototype.id), {
     projectId: prototype.id,
@@ -237,6 +243,7 @@ test("an old Prototype generation claim fails after an intervening W2 connection
     projects,
     workspaces: workspaceService,
     runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: designChatWorkspaceId,
   });
   const oldClaim = await service.preflightGeneration(new Owner(), prototype.id);
   const connected = await service.connect(new Owner(), {
@@ -264,6 +271,7 @@ test("connect and rebind fail while the backing Design conversation is busy", as
     projects,
     workspaces: workspaceService,
     runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: designChatWorkspaceId,
     isChatBusy: (chatId) => chatId === prototype.chatId,
   });
   await assert.rejects(
@@ -294,6 +302,7 @@ test("connected append revalidates current folder permission before persistence"
     projects,
     workspaces: workspaceService,
     runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: designChatWorkspaceId,
   });
   let appended = false;
   await assert.rejects(
@@ -311,6 +320,39 @@ test("connected append revalidates current folder permission before persistence"
       },
     ),
     /does not allow local file access/u,
+  );
+  assert.equal(appended, false);
+});
+
+test("Assistant-owned project rows cannot append a Design prompt", async (t) => {
+  const { projects, workspaceService } = await fixture(t, new Map());
+  const prototype = await projects.create({
+    chatId: "chat:assistant",
+    title: "Forged Assistant project",
+    connectionState: "prototype-only",
+  });
+  const service = createDesignProjectConnectionService({
+    projects,
+    workspaces: workspaceService,
+    runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: async () => "assistant",
+  });
+  let appended = false;
+
+  await assert.rejects(
+    service.runGenerationAppend(
+      new Owner(),
+      {
+        projectId: prototype.id,
+        projectRevision: prototype.revision,
+        chatId: prototype.chatId,
+        connectionState: "prototype-only",
+      },
+      async () => {
+        appended = true;
+      },
+    ),
+    /Assistant conversations cannot back a Design Project/u,
   );
   assert.equal(appended, false);
 });
@@ -337,6 +379,7 @@ test("connected append exposes workspace revocation to the persistence barrier",
         ),
     },
     runProjectMutation: (operation) => operation(),
+    chatWorkspaceId: designChatWorkspaceId,
   });
   await assert.rejects(
     service.runGenerationAppend(

@@ -355,7 +355,12 @@ export function DesignProjectRoute({
   const [error, setError] = React.useState<string>();
 
   React.useLayoutEffect(() => {
-    if (projectUpdate?.id !== projectOrLegacyChatId) return;
+    if (
+      projectUpdate?.id !== projectOrLegacyChatId &&
+      projectUpdate?.chatId !== projectOrLegacyChatId
+    ) {
+      return;
+    }
     latestProjectRef.current = projectUpdate;
     setProject(projectUpdate);
   }, [projectOrLegacyChatId, projectUpdate]);

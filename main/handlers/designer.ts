@@ -74,6 +74,7 @@ const designProjectConnectionService = createDesignProjectConnectionService({
   projects: designProjectStore,
   workspaces: workspaceEnvironmentApplicationService,
   runProjectMutation: (operation) => designProjectLifecycle.runProjectMutation(operation),
+  chatWorkspaceId: async (chatId) => (await chatApplicationService.get(chatId)).chat?.workspaceId,
   isChatBusy: (chatId) => llmClient.isChatBusy(chatId),
   prepareRebind: async (_owner, current) => {
     await sourceDesignPreviewService.stopProject(current.id);

@@ -59,6 +59,10 @@ test("route changes select their sidebar before paint and preserve newer project
   assert.match(layout, /const latestProjectRef = React\.useRef/u);
   assert.match(
     layout,
+    /projectUpdate\?\.id !== projectOrLegacyChatId &&[\s\S]*projectUpdate\?\.chatId !== projectOrLegacyChatId/u,
+  );
+  assert.match(
+    layout,
     /latest\?\.id === opened\.id && latest\.revision > opened\.revision[\s\S]*setProject\(latest\)/u,
   );
 });

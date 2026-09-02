@@ -7,6 +7,8 @@ import {
 import type { WorkspaceEnvironmentDirectory } from "./workspace-environment-application-service.js";
 import type { WorkspaceOperationDocumentOwner } from "./workspace-operation-registry.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 
 export interface DesignProjectGenerationPreflightV1 {
   projectId: string;
@@ -36,6 +38,7 @@ export interface DesignProjectConnectionDependencies {
     ): Promise<T>;
   };
   runProjectMutation<T>(operation: () => Promise<T>): Promise<T>;
+  chatWorkspaceId(chatId: string): Promise<string | undefined>;
   isChatBusy?(chatId: string): boolean;
   prepareRebind?(
     owner: RendererDocumentOwner,
@@ -144,6 +147,14 @@ export function createDesignProjectConnectionService(
           await dependencies.projects.get(claim.projectId),
           claim,
         );
+        if (
+          persistedChatWorkspaceId(await dependencies.chatWorkspaceId(project.chatId)) ===
+          ASSISTANT_WORKSPACE_ID
+        ) {
+          throw new DesignProjectConflictError(
+            "Aiden Assistant conversations cannot back a Design Project.",
+          );
+        }
         if (project.connectionState === "prototype-only") {
           return append(() => true);
         }
