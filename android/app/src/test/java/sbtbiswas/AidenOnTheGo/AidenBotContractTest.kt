@@ -105,6 +105,8 @@ class AidenBotContractTest {
         val fixture = loadSharedContractFixture()
 
         assertEquals(10, fixture.contractRevision)
+        assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
+        assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
         assertTrue(fixture.server.features.contains(AidenRemoteProtocol.CHAT_SUMMARIES_FEATURE))
         val chatSummaries = requireNotNull(fixture.chatSummaries)

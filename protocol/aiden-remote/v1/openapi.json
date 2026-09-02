@@ -3092,6 +3092,66 @@
         }
       }
     },
+    "/memory/settings": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getMemorySettings",
+        "x-aiden-capability": "workspace:read",
+        "responses": {
+          "200": {
+            "description": "Global memory settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateMemorySettings",
+        "x-aiden-capability": "workspace:manage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorySettingsMutation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated global memory settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/scheduled-tasks/settings": {
       "parameters": [
         {
@@ -3969,6 +4029,7 @@
           "id",
           "name",
           "permission",
+          "memoryEnabled",
           "hasFolder",
           "isManagedWorktree",
           "createdAt",
@@ -3988,6 +4049,9 @@
               "ask",
               "none"
             ]
+          },
+          "memoryEnabled": {
+            "type": "boolean"
           },
           "hasFolder": {
             "type": "boolean"
@@ -4120,6 +4184,9 @@
               "ask",
               "none"
             ]
+          },
+          "memoryEnabled": {
+            "type": "boolean"
           },
           "confirmedForeground": {
             "const": true
@@ -7114,6 +7181,38 @@
           },
           "defaultTimezone": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemorySettings": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "revision"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemorySettingsMutation": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "confirmedForeground"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "confirmedForeground": {
+            "const": true
           }
         },
         "additionalProperties": false

@@ -266,3 +266,31 @@ a reserved storage namespace that is never resolved as filesystem authority.
 
 - A renderer-side Design preflight is not a send barrier. Carry its exact project claim into the main append handler, validate it under the project mutation lock, and block relationship changes while the chat turn lease is active; otherwise a cross-window reconnect can still persist a prompt that cannot start.
 - Project-addressed preview IPC is insufficient when the runtime cache is keyed by workspace. Preview sessions and pending source actions must retain project identity so two projects connected to one folder cannot share or revive authority.
+
+## Cross-client global settings
+
+Remote has feature-specific settings routes but no general settings contract.
+An authoritative global preference therefore needs a narrow server-owned
+endpoint; storing it only in iOS or Android would not change Mac agent behavior.
+
+## Worktree verification dependencies
+
+This worktree has no local `node_modules`; `npm run type-check` initially fails
+with `tsc: command not found`, so verification needs the bundled runtime or a
+dependency install before TypeScript suites can run.
+
+Android Gradle also does not discover the installed SDK in this worktree;
+verification needs `ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk`.
+
+The full iOS `AidenRemoteClientTests` target currently has two unrelated
+failures in chat-summary/private-child validation; focused memory tests are
+needed to separate this change from that baseline noise.
+- Verification initially referenced a guessed OpenAPI path; the canonical files are under `protocol/aiden-remote/v1/`.
+- Focused Android tests need Android Studio's bundled JDK because this shell has no default Java runtime.
+- URLProtocol request bodies can arrive through `httpBodyStream`; iOS request tests must use the existing `bodyData` helper.
+- In zsh, a loop variable named `path` overwrites the executable search path; file-by-file commit scripts must use a non-reserved name.
+- Parallel `xcodebuild` invocations share DerivedData and can lock `build.db`; run simulator build and test gates sequentially or isolate derived-data paths.
+- New focused tests can pass locally yet be absent from `npm test`; register every new test script in the CI entry chain.
+- Revision checks around settings writes need an explicit serialized lane; async read-then-write alone permits stale concurrent mutations.
+- Backticks in `gh api -f body=...` are evaluated by zsh before submission; use single-quoted plain text or standard input for review replies.
+- A merged feature does not auto-increment releases; bump both package manifests before merging when the current tag already exists.

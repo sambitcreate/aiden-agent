@@ -12,6 +12,7 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
   assert.equal(parseSettingsSection("scheduledTasks"), "scheduledTasks");
   assert.equal(parseSettingsSection("assistant"), "assistant");
   assert.equal(parseSettingsSection("remoteAccess"), "remoteAccess");
+  assert.equal(parseSettingsSection("memory"), "memory");
   assert.equal(parseSettingsSection("about"), "about");
   assert.equal(parseSettingsSection("unknown"), undefined);
   assert.equal(parseSettingsSection(["modelData"]), undefined);

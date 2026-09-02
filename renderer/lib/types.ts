@@ -231,6 +231,8 @@ export interface Workspace {
   name: string;
   folderPath?: string;
   permission: WorkspacePermission;
+  /** Omitted in older configs; memory is enabled unless explicitly disabled. */
+  memoryEnabled?: boolean;
   managedWorktree?: ManagedWorktree;
   createdAt: number;
   updatedAt: number;
@@ -815,6 +817,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** Omitted in older configs; memory is enabled unless explicitly disabled. */
+  memoryEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;
   scheduledDefaultPermission?: ScheduledTaskPermission;

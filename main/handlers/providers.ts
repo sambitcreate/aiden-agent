@@ -511,6 +511,7 @@ export function registerProviderHandlers(): void {
     if (typeof p.dictationSounds === "boolean") next.dictationSounds = p.dictationSounds;
     if (typeof p.showLocalModelReasoning === "boolean")
       next.showLocalModelReasoning = p.showLocalModelReasoning;
+    if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
     if (typeof p.dictationAccelerator === "string")
       next.dictationAccelerator = p.dictationAccelerator;
     if (

@@ -253,12 +253,15 @@ import {
 import {
   createMemoryExtension,
   authorizeMemoryProposal,
+  authorizeMemoryRemoval,
   memoryMetadataForChat,
   memoryProvenanceForGeneration,
   memoryScopeForChat,
   REMEMBER_MEMORY_TOOL_NAME,
+  FORGET_MEMORY_TOOL_NAME,
 } from "./memory-context.js";
 import { memoryStore } from "./memory-store-main.js";
+import { memoryEnabledForChat } from "./memory-policy.js";
 import { piUpgradeRolloutStore } from "./pi-upgrade-rollout-main.js";
 import {
   piUpgradeBehaviorEnabledAtStartup,
@@ -1963,6 +1966,9 @@ export const llmClient = {
           behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
         });
         if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
+        if (!(await memoryEnabledForChat(configStore, generationChat))) {
+          throw new Error("Durable memory is disabled by the current memory policy.");
+        }
         const scope = memoryScopeForChat(generationChat);
         await memoryStore.replaceChatMetadata(
           scope,
@@ -1976,6 +1982,7 @@ export const llmClient = {
         );
         memoryExtension = await createMemoryExtension({
           store: memoryStore,
+          enabled: () => memoryEnabledForChat(configStore, generationChat),
           scope,
           ...(provenance ? { provenance } : {}),
         });
@@ -2450,7 +2457,9 @@ export const llmClient = {
             const workspaceApproval =
               permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
-            const memoryApproval = context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME;
+            const memoryApproval =
+              context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
+              context.toolCall.name === FORGET_MEMORY_TOOL_NAME;
             const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
@@ -2530,26 +2539,39 @@ export const llmClient = {
             }
             if (memoryApproval) {
               timeline.toolAwaitingApproval(context.toolCall.id);
-              const memoryDecision = await authorizeMemoryProposal(
-                context.args,
-                memoryApprovalContext,
-                async (summary, approvalSignal) => {
-                  const toolCallId = timeline.publicToolCallId(context.toolCall.id);
-                  if (!toolCallId) throw new Error("The tool approval step was not initialized.");
-                  return approvals.request(
-                    {
-                      streamId,
-                      toolCallId,
-                      toolName: context.toolCall.name,
-                      summary,
-                      details: approvalDetails,
-                    },
-                    approvalSignal,
-                    owner.documentId,
-                  );
-                },
-                signal,
-              );
+              const requestMemoryApproval = async (summary: string, approvalSignal?: AbortSignal) => {
+                const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+                if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+                return approvals.request(
+                  {
+                    streamId,
+                    toolCallId,
+                    toolName: context.toolCall.name,
+                    summary,
+                    details: approvalDetails,
+                  },
+                  approvalSignal,
+                  owner.documentId,
+                );
+              };
+              const memoryDecision =
+                context.toolCall.name === FORGET_MEMORY_TOOL_NAME
+                  ? await authorizeMemoryRemoval(
+                      context.args,
+                      memoryApprovalContext,
+                      async (scope, factId) =>
+                        (await memoryStore.list(scope)).find(
+                          (fact) => fact.id === factId && fact.state === "active",
+                        ),
+                      requestMemoryApproval,
+                      signal,
+                    )
+                  : await authorizeMemoryProposal(
+                      context.args,
+                      memoryApprovalContext,
+                      requestMemoryApproval,
+                      signal,
+                    );
               if (!memoryDecision.allowed) {
                 deniedToolCalls.add(context.toolCall.id);
                 if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");

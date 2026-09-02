@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  authorizeMemoryRemoval,
   createMemoryExtension,
   formatAlwaysOnMemory,
   memoryApprovalSummary,
@@ -13,6 +14,7 @@ import {
   parseMemoryProposal,
   RECALL_MEMORY_TOOL_NAME,
   REMEMBER_MEMORY_TOOL_NAME,
+  FORGET_MEMORY_TOOL_NAME,
 } from "./memory-context.js";
 import { MemoryStore } from "./memory-store.js";
 import type { Chat } from "./types.js";
@@ -99,6 +101,7 @@ test("recall is exact-scope and remember writes only after its tool executes", a
   });
   const recall = extension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
   const remember = extension.tools?.find(({ name }) => name === REMEMBER_MEMORY_TOOL_NAME)!;
+  const forget = extension.tools?.find(({ name }) => name === FORGET_MEMORY_TOOL_NAME)!;
 
   const recalled = await recall.execute("recall", { query: "release notes" });
   assert.match(recalled.content[0]?.type === "text" ? recalled.content[0].text : "", /workspace-fact/u);
@@ -114,6 +117,24 @@ test("recall is exact-scope and remember writes only after its tool executes", a
     turnId: "turn-a",
     anchorMessageId: "message-a",
   });
+  await forget.execute("forget", { factId: "workspace-fact" });
+  assert.equal(
+    (await store.list({ kind: "workspace", id: "workspace-a" })).some(({ id }) => id === "workspace-fact"),
+    false,
+  );
+});
+
+test("live policy disables tools retained by an already-running turn", async (t) => {
+  const store = await fixture(t);
+  let enabled = true;
+  const extension = await createMemoryExtension({
+    store,
+    scope: { kind: "workspace", id: "workspace-a" },
+    enabled: async () => enabled,
+  });
+  const recall = extension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
+  enabled = false;
+  await assert.rejects(recall.execute("recall", { query: "anything" }), /disabled/u);
 });
 
 test("headless memory is read-only and cancellation commits no proposed fact", async (t) => {
@@ -198,6 +219,31 @@ test("memory proposal approval copy freezes exact scope, provenance, expiry, and
     () => parseMemoryProposal({ fact: "safe", scope: "bot:other" }, 1_000),
     /unsupported fields/u,
   );
+});
+
+test("memory deletion approval names the exact fact instead of only its citation", async () => {
+  let summary = "";
+  const decision = await authorizeMemoryRemoval(
+    { factId: "fact-old" },
+    {
+      scope: { kind: "workspace", id: "workspace-a" },
+      provenance: {
+        kind: "model_proposal",
+        chatId: "chat-a",
+        turnId: "turn-a",
+        anchorMessageId: "message-a",
+      },
+    },
+    async (_scope, factId) => factId === "fact-old" ? { text: "Use the Wednesday release window." } : undefined,
+    async (value) => {
+      summary = value;
+      return true;
+    },
+  );
+  assert.deepEqual(decision, { allowed: true });
+  assert.match(summary, /Forget exactly: “Use the Wednesday release window\.”/u);
+  assert.match(summary, /Fact: \[memory:fact-old\]/u);
+  assert.match(summary, /permanently removes/u);
 });
 
 test("generation provenance requires an attended durable turn and names the model proposal honestly", () => {

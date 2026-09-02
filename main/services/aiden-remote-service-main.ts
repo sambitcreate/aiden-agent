@@ -33,6 +33,7 @@ import {
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
 import { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
+import { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
 import {
   AidenIdempotencyLedger,
@@ -362,6 +363,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         botFiles: AidenRemoteBotFileService;
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
+        memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
         bots: AidenRemoteBotService;
@@ -643,6 +645,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
           });
+          const memorySettings = new AidenRemoteMemorySettingsService(configStore);
           const speech = new AidenRemoteSpeechService();
           return {
             instanceId,
@@ -654,6 +657,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             botFiles,
             git,
             schedules,
+            memorySettings,
             usage: usageStore,
             speech,
             bots,

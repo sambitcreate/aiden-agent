@@ -37,6 +37,7 @@ async function fixture(options: {
     id: "workspace-1",
     name: "Project",
     permission: "ask" as const,
+    memoryEnabled: true,
     hasFolder: false,
     isManagedWorktree: false,
     createdAt: new Date(1_000).toISOString(),

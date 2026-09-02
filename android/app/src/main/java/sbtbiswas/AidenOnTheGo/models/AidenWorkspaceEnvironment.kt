@@ -38,6 +38,7 @@ data class AidenWorkspace(
     val id: String,
     var name: String,
     var permission: AidenWorkspacePermission,
+    var memoryEnabled: Boolean = true,
     val hasFolder: Boolean = false,
     val isManagedWorktree: Boolean = false,
     val branchName: String? = null,
@@ -52,6 +53,19 @@ data class AidenWorkspace(
 data class AidenWorkspacePatch(
     val name: String? = null,
     val permission: AidenWorkspacePermission? = null,
+    val memoryEnabled: Boolean? = null,
+    val confirmedForeground: Boolean = true
+)
+
+@Serializable
+data class AidenMemorySettings(
+    val enabled: Boolean,
+    val revision: String
+)
+
+@Serializable
+data class AidenMemorySettingsMutation(
+    val enabled: Boolean,
     val confirmedForeground: Boolean = true
 )
 

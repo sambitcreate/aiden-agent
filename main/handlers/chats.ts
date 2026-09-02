@@ -53,18 +53,8 @@ import {
   designProjectLifecycle,
   designProjectStore,
 } from "../services/design-project-store-main.js";
-import { botStore } from "../services/bot-store.js";
-import { selectCanonicalBotChat } from "../services/bot-canonical-chat.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
-import { memoryScopeForChat, parseMemoryProposal } from "../services/memory-context.js";
 import { memoryStore } from "../services/memory-store-main.js";
-import { piUpgradeRolloutStore } from "../services/pi-upgrade-rollout-main.js";
-import {
-  piUpgradeBehaviorEnabledAtStartup,
-  piUpgradeMemoryEligible,
-} from "../services/pi-upgrade-rollout.js";
-import { isPackagedRuntime } from "../runtime-mode.js";
-import { safeMemoryExportFileName, writeAidenMemoryExport } from "../services/memory-export.js";
 import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
 import { todoSnapshotForRenderer, unavailableTodoSnapshot } from "../../renderer/shared/todo.js";
 import { createDesignProjectConnectionService } from "../services/design-project-connection-service.js";
@@ -84,19 +74,6 @@ function asString(value: unknown, name: string): string {
   return value;
 }
 
-async function assertMemoryRollout(
-  chat: Awaited<ReturnType<typeof authoritativeMemoryChat>>,
-): Promise<void> {
-  if (
-    piUpgradeMemoryEligible(await piUpgradeRolloutStore.load(), chat, {
-      development: !isPackagedRuntime(),
-      behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
-    })
-  )
-    return;
-  throw new Error("Durable memory is not enabled for this chat's rollout stage.");
-}
-
 function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): string {
   if (unresolved.includes("could not be recovered")) return recoveredMessage;
   return unresolved.replace(
@@ -105,28 +82,9 @@ function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): 
   );
 }
 
-async function authoritativeMemoryChat(chatId: string) {
-  const chat = await chatStore.get(chatId);
-  if (!chat) throw new Error("This chat is no longer available.");
-  if (chat.botId) {
-    const [bot, canonical] = await Promise.all([
-      botStore.get(chat.botId),
-      chatStore.listByBot(chat.botId).then(selectCanonicalBotChat),
-    ]);
-    if (!bot || bot.archivedAt !== undefined) {
-      throw new Error("This Bot is archived or no longer available.");
-    }
-    if (canonical?.id !== chat.id) {
-      throw new Error("This legacy Bot conversation is read-only.");
-    }
-  }
-  return chat;
-}
-
 export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
-  let memoryExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
     chatApplicationService.listRegular(
@@ -184,100 +142,6 @@ export function registerChatHistoryHandlers(): void {
       () => new Error("Compaction cancellation requires the active application document."),
     );
     return cancelDesktopCompaction(contextLifecycleService, asString(id, "id"), owner.documentId);
-  });
-
-  ipcMain.handle("chats:memoryList", async (event, id: unknown) => {
-    rendererDocumentOwner(
-      event,
-      () => new Error("Memory requires the active application document."),
-    );
-    const chat = await authoritativeMemoryChat(asString(id, "id"));
-    await assertMemoryRollout(chat);
-    const scope = memoryScopeForChat(chat);
-    return { scope, facts: await memoryStore.list(scope) };
-  });
-
-  ipcMain.handle("chats:memoryPut", async (event, id: unknown, input: unknown) => {
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Memory editing requires the active application document."),
-    );
-    const chat = await authoritativeMemoryChat(asString(id, "id"));
-    await assertMemoryRollout(chat);
-    const turn = llmClient.beginChatTurn(chat.id, `memory-edit:${randomUUID()}`, owner.documentId);
-    if (!turn) throw new Error("Finish the active response before editing memory.");
-    try {
-      const proposal = parseMemoryProposal(input);
-      return await memoryStore.put({
-        scope: memoryScopeForChat(chat),
-        text: proposal.text,
-        provenance: { kind: "user_edit", sourceId: `memory-edit-${randomUUID()}` },
-        alwaysOn: proposal.alwaysOn,
-        expiresAt: proposal.expiresAt,
-        supersedesId: proposal.supersedesId,
-        confidence: 1,
-      });
-    } finally {
-      turn.settleAsyncWork();
-      turn.release();
-    }
-  });
-
-  ipcMain.handle("chats:memoryRemove", async (event, id: unknown, factId: unknown) => {
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Memory editing requires the active application document."),
-    );
-    const chat = await authoritativeMemoryChat(asString(id, "id"));
-    await assertMemoryRollout(chat);
-    const turn = llmClient.beginChatTurn(
-      chat.id,
-      `memory-delete:${randomUUID()}`,
-      owner.documentId,
-    );
-    if (!turn) throw new Error("Finish the active response before editing memory.");
-    try {
-      return memoryStore.remove(memoryScopeForChat(chat), asString(factId, "factId"));
-    } finally {
-      turn.settleAsyncWork();
-      turn.release();
-    }
-  });
-
-  ipcMain.handle("chats:memoryExport", async (event, id: unknown) => {
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Memory export requires the active application document."),
-    );
-    const chat = await authoritativeMemoryChat(asString(id, "id"));
-    await assertMemoryRollout(chat);
-    if (memoryExportActive) throw new Error("Another memory export is already in progress.");
-    memoryExportActive = true;
-    let finishExport: (() => void) | null = null;
-    try {
-      finishExport = llmClient.beginChatExport(chat.id);
-      if (!finishExport) {
-        throw new Error("Finish the current response or approval before exporting memory.");
-      }
-      const parent = BrowserWindow.fromWebContents(event.sender);
-      if (!parent || parent.isDestroyed() || owner.isDestroyed()) {
-        throw new Error("The export window is unavailable.");
-      }
-      const scope = memoryScopeForChat(chat);
-      const result = await dialog.showSaveDialog(parent, {
-        title: "Export Aiden memory",
-        defaultPath: safeMemoryExportFileName(scope),
-        filters: [{ name: "Aiden memory", extensions: ["json"] }],
-        properties: ["createDirectory", "showOverwriteConfirmation"],
-      });
-      if (result.canceled || !result.filePath) return { status: "cancelled" as const };
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      await writeAidenMemoryExport(result.filePath, scope, await memoryStore.list(scope));
-      return { status: "saved" as const };
-    } finally {
-      finishExport?.();
-      memoryExportActive = false;
-    }
   });
 
   ipcMain.handle("chats:create", async (event, input: unknown) => {

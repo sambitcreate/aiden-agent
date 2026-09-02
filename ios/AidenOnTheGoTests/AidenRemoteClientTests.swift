@@ -796,6 +796,7 @@ final class AidenRemoteClientTests: XCTestCase {
                 json: """
                 {"workspaces":[{
                   "id":"workspace-1","name":"Aiden Agent","permission":"ask",
+                  "memoryEnabled":false,
                   "hasFolder":true,"isManagedWorktree":false,
                   "repositoryName":"aiden-agent",
                   "git":{"isRepo":true,"branch":"main","uncommitted":2},
@@ -809,7 +810,34 @@ final class AidenRemoteClientTests: XCTestCase {
         let workspaces = try await client.workspaces()
         XCTAssertEqual(workspaces.count, 1)
         XCTAssertEqual(workspaces[0].permission, .ask)
+        XCTAssertFalse(workspaces[0].memoryEnabled)
         XCTAssertEqual(workspaces[0].git?.uncommitted, 2)
+    }
+
+    func testMemorySettingsUseRevisionCheckedForegroundMutation() async throws {
+        let client = makeClient()
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            defer { step += 1 }
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/memory/settings")
+            if step == 0 {
+                XCTAssertEqual(request.httpMethod, "GET")
+                return Self.response(for: request, status: 200, json: #"{"enabled":true,"revision":"rev_memory_1"}"#)
+            }
+            XCTAssertEqual(request.httpMethod, "PATCH")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "rev_memory_1")
+            let body = try Self.bodyData(request)
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(payload["enabled"] as? Bool, false)
+            XCTAssertEqual(payload["confirmedForeground"] as? Bool, true)
+            return Self.response(for: request, status: 200, json: #"{"enabled":false,"revision":"rev_memory_2"}"#)
+        }
+
+        let current = try await client.memorySettings()
+        XCTAssertTrue(current.enabled)
+        let saved = try await client.updateMemorySettings(revision: current.revision, enabled: false)
+        XCTAssertFalse(saved.enabled)
+        XCTAssertEqual(step, 2)
     }
 
     func testBotDetailRoutesCarryMutationHeadersAndAcceptOnlyCanonicalStatuses() async throws {

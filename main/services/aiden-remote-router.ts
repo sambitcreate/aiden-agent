@@ -38,6 +38,7 @@ import type { AidenRemoteFileService } from "./aiden-remote-files.js";
 import type { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
 import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
+import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
@@ -111,6 +112,7 @@ export interface AidenRemoteRouterDependencies {
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+  memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
   speech?: Pick<
     AidenRemoteSpeechService,
@@ -173,6 +175,7 @@ export interface AidenRemoteRouterDependencies {
       | "workspaceFile"
       | "workspaceGit"
       | "scheduledTasks"
+      | "memorySettings"
       | "usage"
       | "speech"
       | "chats"
@@ -1638,6 +1641,26 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.schedules.settings());
+        return;
+      }
+      if (path === "/memory/settings" && request.method === "GET") {
+        requireNoQuery(query);
+        route = "memorySettings";
+        const device = await authenticate(request, dependencies.devices, "workspace:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.memorySettings) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, await dependencies.memorySettings.get());
+        return;
+      }
+      if (path === "/memory/settings" && request.method === "PATCH") {
+        requireNoQuery(query);
+        route = "memorySettings";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "workspace:manage");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.memorySettings) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
+        writeJson(response, 200, await dependencies.memorySettings.update(revision, body));
         return;
       }
       if (path === "/scheduled-tasks/settings" && request.method === "PATCH") {

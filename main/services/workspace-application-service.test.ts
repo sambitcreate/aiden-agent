@@ -101,9 +101,11 @@ test("shared workspace permission updates preserve cancellation and schedule res
   const updated = await application.service.update("workspace-1", {
     name: " Renamed ",
     permission: "none",
+    memoryEnabled: false,
   });
   assert.equal(updated.name, "Renamed");
   assert.equal(updated.permission, "none");
+  assert.equal(updated.memoryEnabled, false);
   assert.deepEqual(application.events, [
     "close-terminal",
     "cancel-generations",

@@ -267,6 +267,7 @@ function isWorkspace(value: unknown): value is Workspace {
     value.id.trim().length > 0 &&
     typeof value.name === "string" &&
     (value.permission === "full" || value.permission === "ask" || value.permission === "none") &&
+    (value.memoryEnabled === undefined || typeof value.memoryEnabled === "boolean") &&
     typeof value.createdAt === "number" &&
     Number.isFinite(value.createdAt) &&
     typeof value.updatedAt === "number" &&
@@ -563,6 +564,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationCleanup",
     "dictationSounds",
     "showLocalModelReasoning",
+    "memoryEnabled",
     "computerUseEnabled",
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",
