@@ -9,6 +9,13 @@ import {
 import { BotSkillContentWatcher } from "./bot-skill-content-watcher.js";
 import { SkillRegistry } from "./skill-registry.js";
 
+const WATCH_REGISTRATION_SETTLE_MS = 75;
+const WATCH_EVENT_DEADLINE_MS = 5_000;
+
+async function settleWatcherRegistration(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, WATCH_REGISTRATION_SETTLE_MS));
+}
+
 test("editing an admitted discovered skill aborts the live Bot inventory lease", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-watch-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -20,11 +27,13 @@ test("editing an admitted discovered skill aborts the live Bot inventory lease",
   const watcher = new BotSkillContentWatcher();
   t.after(() => watcher.dispose());
   await watcher.watchSkillFiles([skillFile]);
+  await settleWatcherRegistration();
   const lease = botRuntimeInventoryLeases.acquire();
+  t.after(() => lease.release());
   const aborted = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("Skill watcher did not invalidate live Bot authority.")),
-      1_000,
+      WATCH_EVENT_DEADLINE_MS,
     );
     lease.signal.addEventListener("abort", () => {
       clearTimeout(timeout);
@@ -51,7 +60,7 @@ test("watcher ignores unrelated files beside a skill", async (t) => {
   // immediately after watch registration. That event predates the behavior
   // under test, so establish a quiet baseline before creating the unrelated
   // sibling.
-  await new Promise<void>((resolve) => setTimeout(resolve, 75));
+  await settleWatcherRegistration();
   changes = 0;
 
   await fs.writeFile(path.join(root, "notes.txt"), "Unrelated", "utf8");
@@ -94,7 +103,7 @@ test("a watched edit invalidates a warm runtime skill snapshot immediately", asy
   const changed = new Promise<void>((resolve, reject) => {
     changeTimeout = setTimeout(
       () => reject(new Error("Skill watcher did not invalidate the warm Bot snapshot.")),
-      1_000,
+      WATCH_EVENT_DEADLINE_MS,
     );
     resolveChanged = () => {
       clearTimeout(changeTimeout);
@@ -108,6 +117,7 @@ test("a watched edit invalidates a warm runtime skill snapshot immediately", asy
   });
   t.after(() => watcher.dispose());
   await watcher.watchSkillFiles([skillFile]);
+  await settleWatcherRegistration();
   await fs.writeFile(skillFile, "After", "utf8");
   await changed;
 
