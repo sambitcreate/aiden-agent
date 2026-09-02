@@ -1192,12 +1192,28 @@ async function createMainWindow(): Promise<void> {
     openExternalUrl(url);
   });
   createdWindow.webContents.on("will-frame-navigate", (event) => {
+    let trustedRendererInitiator = false;
+    try {
+      const rendererUrl = new URL(mainWindowUrl);
+      const initiatorUrl = event.initiator?.url ? new URL(event.initiator.url) : undefined;
+      trustedRendererInitiator =
+        initiatorUrl !== undefined &&
+        (rendererUrl.origin !== "null"
+          ? initiatorUrl.origin === rendererUrl.origin
+          : rendererUrl.protocol === "file:" &&
+            initiatorUrl.protocol === "file:" &&
+            path.dirname(initiatorUrl.pathname) === path.dirname(rendererUrl.pathname));
+    } catch {
+      trustedRendererInitiator = false;
+    }
     if (
       shouldBlockGenerativeUiGuestNavigation({
         isMainFrame: event.isMainFrame,
         frameUrl: event.frame?.url,
         initiatorUrl: event.initiator?.url,
         targetUrl: event.url,
+        trustedRendererInitiator,
+        sourcePreviewFrames: sourceDesignPreviewService.frameNavigationAuthorities(),
       })
     ) {
       event.preventDefault();

@@ -774,6 +774,17 @@ function publicState(session: PreviewSession): SourcePreviewStateV1 {
 
 export class SourceDesignPreviewService {
   private readonly sessions = new Map<string, PreviewSession>();
+  private readonly retiredOrigins = new Set<string>();
+
+  frameNavigationAuthorities(): Array<{ origin: string; active: boolean }> {
+    return [
+      ...[...this.sessions.values()].map((session) => ({
+        origin: `http://127.0.0.1:${session.proxyPort}`,
+        active: !session.terminal && !session.stopping,
+      })),
+      ...[...this.retiredOrigins].map((origin) => ({ origin, active: false })),
+    ];
+  }
 
   private ownedSession(
     owner: RendererDocumentOwner,
@@ -876,6 +887,7 @@ export class SourceDesignPreviewService {
     });
     const { targetPort, proxyPort, capability, transportProof, proxyResources, child } = resources;
     const proxy = proxyResources.server;
+    this.retiredOrigins.delete(`http://127.0.0.1:${proxyPort}`);
     const session: PreviewSession = {
       id: `preview_${randomUUID().replace(/-/gu, "")}`,
       projectId: input.projectId,
@@ -936,6 +948,13 @@ export class SourceDesignPreviewService {
     if (session.stopping) return;
     session.stopping = true;
     this.sessions.delete(session.id);
+    const retiredOrigin = `http://127.0.0.1:${session.proxyPort}`;
+    this.retiredOrigins.add(retiredOrigin);
+    while (this.retiredOrigins.size > 64) {
+      const oldest = this.retiredOrigins.values().next().value as string | undefined;
+      if (!oldest) break;
+      this.retiredOrigins.delete(oldest);
+    }
     terminateOwnedProcess(session.child);
     session.webSocketProxy.close();
     const proxyClosed = new Promise<void>((resolve) => session.proxy.close(() => resolve()));

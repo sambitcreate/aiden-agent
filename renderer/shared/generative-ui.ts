@@ -128,8 +128,36 @@ export function shouldBlockGenerativeUiGuestNavigation(input: {
   frameUrl?: string;
   initiatorUrl?: string;
   targetUrl?: string;
+  trustedRendererInitiator?: boolean;
+  sourcePreviewFrames?: readonly { origin: string; active: boolean }[];
 }): boolean {
   if (input.isMainFrame) return false;
+  const sourceFrames = new Map(
+    (input.sourcePreviewFrames ?? []).map((frame) => [frame.origin, frame.active]),
+  );
+  const origin = (value: string | undefined): string | undefined => {
+    if (!value) return undefined;
+    try {
+      return new URL(value).origin;
+    } catch {
+      return undefined;
+    }
+  };
+  const frameOrigin = origin(input.frameUrl);
+  const initiatorOrigin = origin(input.initiatorUrl);
+  const targetOrigin = origin(input.targetUrl);
+  const sourceInitiatorActive =
+    initiatorOrigin !== undefined && sourceFrames.get(initiatorOrigin) === true;
+  if (sourceInitiatorActive) {
+    return targetOrigin !== initiatorOrigin;
+  }
+  const recognizedSourceFrame = frameOrigin !== undefined && sourceFrames.has(frameOrigin);
+  if (recognizedSourceFrame) {
+    if (input.trustedRendererInitiator) {
+      return targetOrigin === undefined || sourceFrames.get(targetOrigin) !== true;
+    }
+    return sourceFrames.get(frameOrigin) !== true || targetOrigin !== frameOrigin;
+  }
   const initiatedByGuest =
     typeof input.initiatorUrl === "string" &&
     generativeUiPreviewTokenFromUrl(input.initiatorUrl) !== undefined;

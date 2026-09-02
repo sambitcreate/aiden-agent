@@ -82,6 +82,7 @@ test("main prevents a live generative UI guest from navigating its own frame", (
   const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
   assert.match(source, /webContents\.on\("will-frame-navigate"/u);
   assert.match(source, /shouldBlockGenerativeUiGuestNavigation/u);
+  assert.match(source, /sourceDesignPreviewService\.frameNavigationAuthorities\(\)/u);
   assert.match(source, /event\.preventDefault\(\)/u);
 });
 

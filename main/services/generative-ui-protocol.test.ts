@@ -73,3 +73,60 @@ test("a live Generative UI guest cannot navigate its own frame away from contain
     false,
   );
 });
+
+test("source previews stay on their exact live proxy origin", () => {
+  const sourcePreviewFrames = [
+    { origin: "http://127.0.0.1:4100", active: true },
+    { origin: "http://127.0.0.1:4200", active: true },
+    { origin: "http://127.0.0.1:4300", active: false },
+  ];
+  const navigation = (overrides: Partial<Parameters<typeof shouldBlockGenerativeUiGuestNavigation>[0]>) =>
+    shouldBlockGenerativeUiGuestNavigation({
+      isMainFrame: false,
+      frameUrl: "http://127.0.0.1:4100/current",
+      initiatorUrl: "http://127.0.0.1:4100/current",
+      targetUrl: "http://127.0.0.1:4100/next?route=one",
+      sourcePreviewFrames,
+      ...overrides,
+    });
+
+  assert.equal(navigation({}), false, "same-proxy app routing stays available");
+  assert.equal(
+    navigation({ targetUrl: "http://127.0.0.1:4200/" }),
+    true,
+    "a guest cannot jump to another active local preview",
+  );
+  assert.equal(
+    navigation({ targetUrl: "http://127.0.0.1:9999/" }),
+    true,
+    "a guest cannot probe another loopback service",
+  );
+  assert.equal(navigation({ targetUrl: "https://example.com/" }), true);
+  assert.equal(
+    navigation({
+      initiatorUrl: "http://localhost:5173/main-window.html",
+      targetUrl: "http://127.0.0.1:4200/",
+      trustedRendererInitiator: true,
+    }),
+    false,
+    "the trusted renderer can replace a frame with another active preview",
+  );
+  assert.equal(
+    navigation({
+      frameUrl: "http://127.0.0.1:4300/",
+      initiatorUrl: undefined,
+      targetUrl: "http://127.0.0.1:4300/",
+    }),
+    true,
+    "a stopped preview fails closed",
+  );
+  assert.equal(
+    navigation({
+      frameUrl: "http://127.0.0.1:9999/",
+      initiatorUrl: "http://127.0.0.1:9999/",
+      targetUrl: "http://127.0.0.1:9998/",
+    }),
+    false,
+    "unrelated loopback frames keep their existing policy",
+  );
+});
