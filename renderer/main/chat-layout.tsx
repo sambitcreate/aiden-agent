@@ -77,7 +77,7 @@ export function ChatLayout() {
     setDesignProjectOverride(project);
   }, []);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     const routeMode = shellModeForPath(pathname, localStorage.getItem(SHELL_MODE_STORAGE_KEY));
     if (pathname !== "/profile") {
       setMode(routeMode);
@@ -351,10 +351,13 @@ export function DesignProjectRoute({
     onProjectUnavailable,
   } = React.useContext(DesignProjectChangeContext);
   const [project, setProject] = React.useState<DesignProjectSnapshotV1>();
+  const latestProjectRef = React.useRef<DesignProjectSnapshotV1 | undefined>(undefined);
   const [error, setError] = React.useState<string>();
 
-  React.useEffect(() => {
-    if (projectUpdate?.id === projectOrLegacyChatId) setProject(projectUpdate);
+  React.useLayoutEffect(() => {
+    if (projectUpdate?.id !== projectOrLegacyChatId) return;
+    latestProjectRef.current = projectUpdate;
+    setProject(projectUpdate);
   }, [projectOrLegacyChatId, projectUpdate]);
 
   React.useEffect(() => {
@@ -371,8 +374,14 @@ export function DesignProjectRoute({
           void navigate({ to: "/design", replace: true });
           return;
         }
-        setProject(opened);
-        onProjectChange(opened);
+        const latest = latestProjectRef.current;
+        if (latest?.id === opened.id && latest.revision > opened.revision) {
+          setProject(latest);
+        } else {
+          latestProjectRef.current = opened;
+          setProject(opened);
+          onProjectChange(opened);
+        }
         if (opened.id !== projectOrLegacyChatId) {
           void navigate({
             to: "/design/$chatId",

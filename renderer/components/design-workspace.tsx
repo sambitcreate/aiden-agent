@@ -526,7 +526,7 @@ function CanvasToolButton({
         <button
           type="button"
           onClick={onClick}
-          aria-label={label}
+          aria-label={shortcut ? `${label} (${shortcut})` : label}
           aria-keyshortcuts={shortcut}
           aria-pressed={active}
           className={cn(

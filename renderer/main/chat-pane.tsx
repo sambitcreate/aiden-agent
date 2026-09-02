@@ -2512,17 +2512,7 @@ export function ChatPane({
         }
       >
         {presentation === "design" ? (
-          chat.isLoading || providers.isLoading ? (
-            <div
-              className="flex min-h-full items-center justify-center"
-              aria-label="Loading Design"
-            >
-              <Text variant="small" color="secondary">
-                Loading Design…
-              </Text>
-            </div>
-          ) : (
-            <div className="relative flex h-full min-h-0 overflow-hidden">
+          <div className="relative flex h-full min-h-0 overflow-hidden">
               <aside
                 aria-label="Design Project conversation"
                 aria-hidden={!designConversationOpen || undefined}
@@ -2587,26 +2577,38 @@ export function ChatPane({
                 />
               </aside>
               <div className="min-w-0 flex-1">
-                <DesignWorkspaceCanvas
-                  chatId={chatId}
-                  project={designProject}
-                  workspaceId={generationWorkspaceId}
-                  artifacts={designArtifacts}
-                  generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
-                  initialMediaId={initialDesignMediaId}
-                  unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}
-                  targets={designTargets}
-                  sourceSelection={sourceDesignSelection}
-                  selectedImages={designCanvasImages}
-                  onTargetsChange={setDesignTargets}
-                  onSourceSelectionChange={setSourceDesignSelection}
-                  onSelectedImagesChange={setDesignCanvasImages}
-                  onProjectChange={updateDesignProject}
-                  onRequestComposerFocus={focusComposer}
-                />
+                {chat.isLoading || providers.isLoading ? (
+                  <div
+                    className="flex min-h-full items-center justify-center"
+                    aria-label="Loading Design"
+                  >
+                    <Text variant="small" color="secondary">
+                      Loading Design…
+                    </Text>
+                  </div>
+                ) : (
+                  <DesignWorkspaceCanvas
+                    chatId={chatId}
+                    project={designProject}
+                    workspaceId={generationWorkspaceId}
+                    artifacts={designArtifacts}
+                    generating={
+                      isGenerating || isStartingGeneration || detachedGenerationDraining
+                    }
+                    initialMediaId={initialDesignMediaId}
+                    unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}
+                    targets={designTargets}
+                    sourceSelection={sourceDesignSelection}
+                    selectedImages={designCanvasImages}
+                    onTargetsChange={setDesignTargets}
+                    onSourceSelectionChange={setSourceDesignSelection}
+                    onSelectedImagesChange={setDesignCanvasImages}
+                    onProjectChange={updateDesignProject}
+                    onRequestComposerFocus={focusComposer}
+                  />
+                )}
               </div>
             </div>
-          )
         ) : chat.isLoading || providers.isLoading ? (
           <div
             className="flex min-h-full items-center justify-center"

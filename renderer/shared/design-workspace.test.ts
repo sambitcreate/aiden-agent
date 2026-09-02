@@ -193,6 +193,7 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
   assert.match(workspace, /Add up to six local images as visual references\./u);
   assert.match(workspace, /Pan around the canvas without moving artboards\./u);
   assert.match(workspace, /aria-keyshortcuts=\{shortcut\}/u);
+  assert.match(workspace, /aria-label=\{shortcut \? `\$\{label\} \(\$\{shortcut\}\)` : label\}/u);
   assert.match(workspace, /aria-pressed=\{active\}/u);
   assert.doesNotMatch(workspace, /title=\{shortcut \? `\$\{label\}/u);
   const tool = (label: string) => {

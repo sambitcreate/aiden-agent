@@ -85,6 +85,10 @@ test("Design placement moves the same composer into the conversation rail withou
   assert.match(pane, /ref=\{setDesignComposerHost\}[\s\S]{0,180}Design prompt composer/u);
   assert.match(
     pane,
+    /presentation === "design" \? \(\s*<div className="relative flex h-full[\s\S]*ref=\{setDesignComposerHost\}[\s\S]*chat\.isLoading \|\| providers\.isLoading[\s\S]*<DesignWorkspaceCanvas/u,
+  );
+  assert.match(
+    pane,
     /aria-hidden=\{!designConversationOpen \|\| undefined\}[\s\S]{0,120}inert=\{!designConversationOpen \? true : undefined\}/u,
   );
 });

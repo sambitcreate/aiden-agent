@@ -53,3 +53,12 @@ test("compact navigation closes the modal sidebar before revealing its destinati
   assert.match(sidebar, /title="Profile"[\s\S]*closeIfCompact\(\)/u);
   assert.match(sidebar, /title="Settings"[\s\S]*closeIfCompact\(\)/u);
 });
+
+test("route changes select their sidebar before paint and preserve newer project revisions", () => {
+  assert.match(layout, /React\.useLayoutEffect\(\(\) => \{\s*const routeMode/u);
+  assert.match(layout, /const latestProjectRef = React\.useRef/u);
+  assert.match(
+    layout,
+    /latest\?\.id === opened\.id && latest\.revision > opened\.revision[\s\S]*setProject\(latest\)/u,
+  );
+});
