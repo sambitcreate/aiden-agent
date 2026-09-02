@@ -227,7 +227,7 @@ test("terminal Design output remains optimistic behind actionable reconciliation
     "a delayed terminal refresh cannot overwrite a newer renderer project snapshot",
   );
   assert.match(canvas, /<ProjectReconciliationNotice/u);
-  assert.match(canvas, /Retry to finish restoring project history/u);
+  assert.match(canvas, /Retry to finish adding it/u);
   assert.doesNotMatch(canvas, /generated preview remains available/u);
   assert.match(
     canvas,

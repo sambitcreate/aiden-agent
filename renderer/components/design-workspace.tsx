@@ -3828,7 +3828,7 @@ function ProjectReconciliationNotice({
       <div className="min-w-0 flex-1">
         <Text variant="small-strong">Design history needs refresh</Text>
         <Text variant="small" color="secondary">
-          {message} Retry to finish restoring project history.
+          {message} Retry to finish adding it.
         </Text>
       </div>
       {onRetry ? (
