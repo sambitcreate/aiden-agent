@@ -80,7 +80,7 @@ function quoteTerminalFontFamilies(list: string): string {
       if (bare.length === 0) return "";
       if (/^(['"]).*\1$/.test(bare)) return bare;
       if (/^[a-zA-Z][a-zA-Z0-9-]*$/.test(bare)) return bare;
-      return `"${bare.replaceAll('"', "")}"`;
+      return `"${bare.replace(/"/gu, "")}"`;
     })
     .filter((name) => name.length > 0)
     .join(", ");
@@ -288,7 +288,7 @@ export function terminalLinkAtPositionWithRange(
   const segment = wrappedLine.segments.find((value) => value.bufferLineNumber === rowIndex + 1);
   const row = rows[rowIndex];
   if (!segment || !row) return null;
-  const lastSegment = wrappedLine.segments.at(-1);
+  const lastSegment = wrappedLine.segments[wrappedLine.segments.length - 1];
   const lastRow = lastSegment ? rows[lastSegment.bufferLineNumber - 1] : undefined;
   // Ghostty's soft-wrap flag is authoritative: when the last collected row
   // still wraps onward, its continuation is outside the viewport.

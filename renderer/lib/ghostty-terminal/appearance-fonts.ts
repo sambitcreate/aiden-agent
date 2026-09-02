@@ -9,7 +9,7 @@ function quoteFontFamilyName(name: string): string {
   if (bare.length === 0) return "";
   if (/^(['"]).*\1$/u.test(bare)) return bare;
   if (/^[a-zA-Z][a-zA-Z0-9-]*$/u.test(bare)) return bare;
-  return `"${bare.replaceAll('"', "")}"`;
+  return `"${bare.replace(/"/gu, "")}"`;
 }
 
 export function cssFontFamilies(input: string): string | null {
