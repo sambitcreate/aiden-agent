@@ -37,8 +37,29 @@ test("Design turns retain the model backend but use a positive tool and extensio
   assert.match(source, /artifact\.mediaId === target\.mediaId/u);
   assert.match(source, /artifact\.id === target\.artifactId/u);
   assert.match(source, /selected Design canvas item is stale/u);
+  assert.match(source, /selectedTargets\.length === 1 && designProject/u);
+  assert.match(source, /candidate\.artifactMediaIds\?\.includes\(selected\.mediaId\)/u);
+  assert.match(
+    source,
+    /durableArtifact = \{ \.\.\.artifact, revisionOfMediaId: designRevisionAnchor \}/u,
+  );
+  assert.match(source, /await designProjectStore\.get\(designProject\.id\)/u);
   assert.match(source, /priorDesigns/u);
   assert.match(extension, /omitHistoricalDesignHtml/u);
+});
+
+test("legacy migration and append reject Assistant-owned backing chats", () => {
+  const storeMain = readFileSync(new URL("./design-project-store-main.ts", import.meta.url), "utf8");
+  const connection = readFileSync(
+    new URL("./design-project-connection-service.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    storeMain,
+    /persistedChatWorkspaceId\(chat\.workspaceId\) === ASSISTANT_WORKSPACE_ID/u,
+  );
+  assert.match(connection, /await dependencies\.chatWorkspaceId\(project\.chatId\)/u);
+  assert.match(connection, /Aiden Assistant conversations cannot back a Design Project/u);
 });
 
 test("Design picker messages require the exact frame source and main capability", () => {

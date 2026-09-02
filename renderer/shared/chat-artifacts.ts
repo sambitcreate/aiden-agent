@@ -32,6 +32,8 @@ export interface ChatHtmlArtifactV1 {
   size: number;
   /** Opaque app-owned media identity. Never a filesystem path. */
   mediaId: string;
+  /** Main-validated immutable parent used until the project canvas commits this revision. */
+  revisionOfMediaId?: string;
 }
 
 /** Versioned union so future Pi extensions can add GUI artifact kinds safely. */
@@ -50,6 +52,10 @@ export type ChatArtifactEventV1 =
 
 const IMAGE_ARTIFACT_KEYS = new Set(["version", "kind", "attachment"]);
 const HTML_ARTIFACT_KEYS = new Set(["version", "kind", "id", "title", "mimeType", "size", "mediaId"]);
+const HTML_ARTIFACT_WITH_REVISION_KEYS = new Set([
+  ...HTML_ARTIFACT_KEYS,
+  "revisionOfMediaId",
+]);
 const IMAGE_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "data"]);
 const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
@@ -139,7 +145,12 @@ export function parseChatHtmlArtifactV1(value: unknown): ChatHtmlArtifactV1 | un
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const artifact = value as Record<string, unknown>;
   if (
-    !hasExactKeys(artifact, HTML_ARTIFACT_KEYS) ||
+    !hasExactKeys(
+      artifact,
+      artifact.revisionOfMediaId === undefined
+        ? HTML_ARTIFACT_KEYS
+        : HTML_ARTIFACT_WITH_REVISION_KEYS,
+    ) ||
     artifact.version !== CHAT_ARTIFACT_VERSION ||
     artifact.kind !== "html" ||
     typeof artifact.id !== "string" ||
@@ -154,6 +165,19 @@ export function parseChatHtmlArtifactV1(value: unknown): ChatHtmlArtifactV1 | un
   ) {
     return undefined;
   }
+  let revisionOfMediaId: string | undefined;
+  if (artifact.revisionOfMediaId !== undefined) {
+    if (
+      !artifact.mediaId.startsWith("design:") ||
+      typeof artifact.revisionOfMediaId !== "string" ||
+      !artifact.revisionOfMediaId.startsWith("design:") ||
+      !isHtmlArtifactMediaId(artifact.revisionOfMediaId) ||
+      artifact.revisionOfMediaId === artifact.mediaId
+    ) {
+      return undefined;
+    }
+    revisionOfMediaId = artifact.revisionOfMediaId;
+  }
   return {
     version: CHAT_ARTIFACT_VERSION,
     kind: "html",
@@ -162,6 +186,7 @@ export function parseChatHtmlArtifactV1(value: unknown): ChatHtmlArtifactV1 | un
     mimeType: HTML_ARTIFACT_MIME_TYPE,
     size: artifact.size as number,
     mediaId: artifact.mediaId,
+    ...(revisionOfMediaId ? { revisionOfMediaId } : {}),
   };
 }
 

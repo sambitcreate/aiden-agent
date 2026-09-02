@@ -1318,6 +1318,7 @@ async function prepareGeneration(
           >;
         }>
       | undefined;
+    let designRevisionAnchor: string | undefined;
     if (designWorkspace) {
       const selectedTargets = params.designContext?.targets;
       const resolvedDesigns: Array<{
@@ -1348,6 +1349,16 @@ async function prepareGeneration(
             artifact: exactArtifact,
             ...(target.selection ? { selection: target.selection } : {}),
           });
+        }
+        if (selectedTargets.length === 1 && designProject) {
+          const selected = selectedTargets[0]!;
+          const node = designProject.canvas.nodes.find(
+            (candidate) =>
+              candidate.kind === "artboard" &&
+              candidate.lineageId !== undefined &&
+              candidate.artifactMediaIds?.includes(selected.mediaId) === true,
+          );
+          if (node?.lineageId) designRevisionAnchor = selected.mediaId;
         }
       } else {
         let latestDesign: ChatHtmlArtifactV1 | undefined;
@@ -1395,6 +1406,7 @@ async function prepareGeneration(
         designSystemContext = await currentDesignSystemModelContext(designProject, folderPath);
       }
     }
+    let designRevisionMediaId: string | undefined;
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
       workspaceRoot: folderPath,
       artifactNamespace: `${streamId}:html`,
@@ -1405,29 +1417,53 @@ async function prepareGeneration(
       priorDesigns,
       designSystemContext,
       onArtifact: async (artifact, html) => {
+        let durableArtifact = artifact;
+        if (
+          designRevisionAnchor &&
+          (designRevisionMediaId === undefined || designRevisionMediaId === artifact.mediaId)
+        ) {
+          const currentProject = designProject
+            ? await designProjectStore.get(designProject.id)
+            : undefined;
+          const currentNode = currentProject?.canvas.nodes.find(
+            (node) =>
+              node.kind === "artboard" &&
+              node.lineageId !== undefined &&
+              node.artifactMediaIds?.includes(designRevisionAnchor) === true,
+          );
+          if (!currentProject || currentProject.chatId !== params.chatId || !currentNode) {
+            throw new Error(
+              "The selected Design artboard changed before its revision was generated. Select it again and retry.",
+            );
+          }
+          designRevisionMediaId ??= artifact.mediaId;
+          durableArtifact = { ...artifact, revisionOfMediaId: designRevisionAnchor };
+        }
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
           generationId: streamId,
           model: params.model,
-          artifact,
+          artifact: durableArtifact,
           html,
         });
-        const index = displayedHtmlArtifacts.findIndex((item) => item.mediaId === artifact.mediaId);
+        const index = displayedHtmlArtifacts.findIndex(
+          (item) => item.mediaId === durableArtifact.mediaId,
+        );
         if (index >= 0) {
-          displayedHtmlArtifacts[index] = artifact;
+          displayedHtmlArtifacts[index] = durableArtifact;
         } else {
           if (displayedHtmlArtifacts.length >= MAX_HTML_ARTIFACTS_PER_RESPONSE) {
             throw new Error("This response already contains the maximum number of HTML artifacts.");
           }
-          displayedHtmlIds.add(artifact.mediaId);
-          displayedHtmlArtifacts.push(artifact);
+          displayedHtmlIds.add(durableArtifact.mediaId);
+          displayedHtmlArtifacts.push(durableArtifact);
         }
         sendGeneration(streamId, "chat:artifact", {
           streamId,
           event: {
             version: CHAT_ARTIFACT_EVENT_VERSION,
             operation: "present",
-            artifact,
+            artifact: durableArtifact,
           },
         });
         return true;

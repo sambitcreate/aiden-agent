@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { ChatHtmlArtifactV1 } from "./chat-artifacts.js";
 import {
+  durableDesignWorkspaceArtifactGroups,
   groupDesignWorkspaceArtifacts,
   designWorkspaceArtifactPlan,
   isDesignProjectMetadataOnlyUpdate,
@@ -136,6 +137,53 @@ test("same-title artifacts form one ordered artboard revision group", () => {
       ["Account", ["design:account"]],
     ],
   );
+});
+
+test("main-validated model output joins its selected durable lineage without title inference", () => {
+  const first = { artifact: artifact("design:first"), source: "persisted" as const };
+  const revised = {
+    artifact: {
+      ...artifact("design:revision", "b".repeat(64)),
+      title: "A completely different model title",
+      revisionOfMediaId: "design:first",
+    },
+    source: "live" as const,
+  };
+  const current = project({
+    canvas: {
+      viewport: "desktop",
+      flowViewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        {
+          id: "design-artboard:one",
+          kind: "artboard",
+          canonicalOrigin: "generated-artifact",
+          x: 0,
+          y: 0,
+          lineageId: "lineage:one",
+          artifactMediaIds: ["design:first"],
+          activeMediaId: "design:first",
+        },
+      ],
+    },
+  });
+
+  const groups = durableDesignWorkspaceArtifactGroups(current, [first, revised]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.id, "design-artboard:one");
+  assert.deepEqual(
+    groups[0]?.revisions.map(({ artifact: item }) => item.mediaId),
+    ["design:first", "design:revision"],
+  );
+
+  const forged = {
+    ...revised,
+    artifact: {
+      ...revised.artifact,
+      revisionOfMediaId: "design:missing",
+    },
+  };
+  assert.equal(durableDesignWorkspaceArtifactGroups(current, [first, forged]).length, 2);
 });
 
 test("Design selection context is exact, bounded, and rejects duplicate artboards", () => {

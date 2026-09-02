@@ -473,6 +473,21 @@ export class GenerativeUiArtifactStore {
       if (source.length !== wanted.size) {
         throw new Error("Some HTML artifacts could not be copied.");
       }
+      const remappedMediaIds = new Map(
+        source.map((record) => [
+          record.artifact.mediaId,
+          remappedHtmlArtifactMediaId(targetChatId, record.artifact.mediaId),
+        ]),
+      );
+      if (
+        source.some(
+          (record) =>
+            record.artifact.revisionOfMediaId !== undefined &&
+            !remappedMediaIds.has(record.artifact.revisionOfMediaId),
+        )
+      ) {
+        throw new Error("A selected HTML artifact is missing its revision parent.");
+      }
       if (
         !committed &&
         database.records.filter((record) => !record.committed).length + source.length >
@@ -493,8 +508,16 @@ export class GenerativeUiArtifactStore {
         throw new Error("Generative UI artifact staging reached this chat's storage limit.");
       }
       for (const record of source) {
-        const mediaId = remappedHtmlArtifactMediaId(targetChatId, record.artifact.mediaId);
-        const artifact: ChatHtmlArtifactV1 = { ...record.artifact, mediaId };
+        const mediaId = remappedMediaIds.get(record.artifact.mediaId)!;
+        const artifact: ChatHtmlArtifactV1 = {
+          ...record.artifact,
+          mediaId,
+          ...(record.artifact.revisionOfMediaId
+            ? {
+                revisionOfMediaId: remappedMediaIds.get(record.artifact.revisionOfMediaId)!,
+              }
+            : {}),
+        };
         database.records.push({
           ...record,
           chatId: targetChatId,

@@ -41,7 +41,7 @@ import {
 import type { Attachment, Workspace } from "../lib/types";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import {
-  groupDesignWorkspaceArtifacts,
+  durableDesignWorkspaceArtifactGroups,
   isDesignProjectMetadataOnlyUpdate,
   type DesignElementSelectionV1,
   type DesignTurnTargetV1,
@@ -105,44 +105,6 @@ const VIEWPORT_SIZE: Record<DesignViewport, { width: number; height: number }> =
 };
 const MAX_CANVAS_IMAGES = 6;
 const MAX_CANVAS_IMAGE_BYTES = 8 * 1024 * 1024;
-
-function durableArtifactGroups(
-  project: DesignProjectSnapshotV1 | undefined,
-  entries: readonly DesignWorkspaceArtifactEntry[],
-): DesignWorkspaceArtifactGroup[] {
-  if (!project) return groupDesignWorkspaceArtifacts(entries);
-  const byMediaId = new Map(entries.map((entry) => [entry.artifact.mediaId, entry]));
-  const claimed = new Set<string>();
-  const groups: DesignWorkspaceArtifactGroup[] = [];
-  for (const node of project.canvas.nodes) {
-    if (node.kind !== "artboard" || !node.artifactMediaIds) continue;
-    const revisions = node.artifactMediaIds.flatMap((mediaId) => {
-      const entry = byMediaId.get(mediaId);
-      if (!entry) return [];
-      claimed.add(mediaId);
-      return [entry];
-    });
-    if (revisions.length === 0) continue;
-    const active = revisions.find(({ artifact }) => artifact.mediaId === node.activeMediaId);
-    groups.push({
-      id: node.id,
-      title: active?.artifact.title ?? revisions[revisions.length - 1]!.artifact.title,
-      revisions,
-    });
-  }
-  for (const entry of entries) {
-    if (claimed.has(entry.artifact.mediaId)) continue;
-    // The legacy artifact contract contains no lineage fact. Never infer one
-    // from a mutable title: a new committed artifact starts conservatively as
-    // its own durable lineage until an explicit revision operation links it.
-    groups.push({
-      id: `design-artboard:${entry.artifact.id}`,
-      title: entry.artifact.title,
-      revisions: [entry],
-    });
-  }
-  return groups;
-}
 
 interface DesignArtboardData extends Record<string, unknown> {
   kind: "design";
@@ -705,7 +667,8 @@ export function DesignWorkspaceCanvas({
   const lastPersistedCanvasRef = React.useRef(project ? JSON.stringify(project.canvas) : undefined);
   const uploadRef = React.useRef<HTMLInputElement | null>(null);
   const groups = React.useMemo(
-    () => durableArtifactGroups(savedProject, [...artifacts, ...directEditArtifacts]),
+    () =>
+      durableDesignWorkspaceArtifactGroups(savedProject, [...artifacts, ...directEditArtifacts]),
     [artifacts, directEditArtifacts, savedProject],
   );
   const selectedGroup = groups.find(({ id }) => id === selectedGroupId);

@@ -43,6 +43,42 @@ test("chat copies preserve the Design artifact namespace", () => {
   assert.match(remappedHtmlArtifactMediaId("target", "source"), /^[a-f0-9]{64}$/u);
 });
 
+test("Design artifact copies remap revision parents and reject child-only copies", async () => {
+  const root = await storageRoot();
+  const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
+  await store.initialize();
+  const parent = artifact("design:parent");
+  const child = { ...artifact("design:child"), revisionOfMediaId: parent.mediaId };
+  await store.stage({
+    chatId: "source-chat",
+    generationId: "generation-parent",
+    artifact: parent,
+    html: HTML,
+  });
+  await store.stage({
+    chatId: "source-chat",
+    generationId: "generation-child",
+    artifact: child,
+    html: HTML,
+  });
+  await store.commit("source-chat", [parent.mediaId, child.mediaId]);
+
+  const copies = await store.prepareSelectedCopy(
+    "source-chat",
+    "target-chat",
+    [parent.mediaId, child.mediaId],
+  );
+  const copiedParent = copies.find((item) => item.revisionOfMediaId === undefined)!;
+  const copiedChild = copies.find((item) => item.revisionOfMediaId !== undefined)!;
+  assert.equal(copiedChild.revisionOfMediaId, copiedParent.mediaId);
+  assert.notEqual(copiedChild.revisionOfMediaId, parent.mediaId);
+
+  await assert.rejects(
+    store.prepareSelectedCopy("source-chat", "other-chat", [child.mediaId]),
+    /missing its revision parent/u,
+  );
+});
+
 test("staging, commit, recovery, and pending gates", async () => {
   const root = await storageRoot();
   const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });

@@ -304,7 +304,7 @@ test("Design workspace renders inline-only prefixed revisions with bounded prior
   assert.ok(tool);
   assert.match(extension.systemPrompt ?? "", /Design workspace is open/u);
   assert.match(extension.systemPrompt ?? "", /one complete artifact per requested screen/u);
-  assert.match(extension.systemPrompt ?? "", /same title when revising/u);
+  assert.match(extension.systemPrompt ?? "", /Titles are display labels and never define revision history/u);
   assert.doesNotMatch(JSON.stringify(tool.parameters), /workspace-relative/u);
   await assert.rejects(
     tool.execute("path", { title: "Storefront", path: "index.html" }),

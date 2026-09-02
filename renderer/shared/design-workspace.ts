@@ -222,6 +222,62 @@ export function groupDesignWorkspaceArtifacts(
   return groups;
 }
 
+/**
+ * Resolve durable project lineage before falling back to legacy title grouping.
+ * A main-validated artifact hint bridges the crash-safe gap between transcript
+ * commit and the renderer's next canvas revision.
+ */
+export function durableDesignWorkspaceArtifactGroups(
+  project: DesignProjectSnapshotV1 | undefined,
+  entries: readonly DesignWorkspaceArtifactEntry[],
+): DesignWorkspaceArtifactGroup[] {
+  if (!project) return groupDesignWorkspaceArtifacts(entries);
+  const byMediaId = new Map(entries.map((entry) => [entry.artifact.mediaId, entry]));
+  const claimed = new Set<string>();
+  const groupByMediaId = new Map<string, DesignWorkspaceArtifactGroup>();
+  const groups: DesignWorkspaceArtifactGroup[] = [];
+  for (const node of project.canvas.nodes) {
+    if (node.kind !== "artboard" || !node.artifactMediaIds) continue;
+    const revisions = node.artifactMediaIds.flatMap((mediaId) => {
+      const entry = byMediaId.get(mediaId);
+      if (!entry) return [];
+      claimed.add(mediaId);
+      return [entry];
+    });
+    if (revisions.length === 0) continue;
+    const active = revisions.find(({ artifact }) => artifact.mediaId === node.activeMediaId);
+    groups.push({
+      id: node.id,
+      title: active?.artifact.title ?? revisions[revisions.length - 1]!.artifact.title,
+      revisions,
+    });
+    const group = groups[groups.length - 1]!;
+    for (const revision of revisions) groupByMediaId.set(revision.artifact.mediaId, group);
+  }
+  for (const entry of entries) {
+    if (claimed.has(entry.artifact.mediaId)) continue;
+    const group = entry.artifact.revisionOfMediaId
+      ? groupByMediaId.get(entry.artifact.revisionOfMediaId)
+      : undefined;
+    if (group) {
+      group.revisions.push(entry);
+      claimed.add(entry.artifact.mediaId);
+      groupByMediaId.set(entry.artifact.mediaId, group);
+      continue;
+    }
+    // Legacy artifacts have no immutable lineage fact. Never infer one from a
+    // mutable title; unmatched output starts as its own durable artboard.
+    const created = {
+      id: `design-artboard:${entry.artifact.id}`,
+      title: entry.artifact.title,
+      revisions: [entry],
+    };
+    groups.push(created);
+    groupByMediaId.set(entry.artifact.mediaId, created);
+  }
+  return groups;
+}
+
 /** Follow new revisions until the user deliberately pins an older one. */
 export function resolveDesignWorkspaceSelection(
   selectedMediaId: string | null,
