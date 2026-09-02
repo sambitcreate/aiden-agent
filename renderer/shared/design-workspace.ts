@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../lib/types";
 import type { ChatHtmlArtifactV1 } from "./chat-artifacts";
+import type { DesignProjectSnapshotV1 } from "./design-projects";
 
 export const DESIGN_ARTIFACT_MEDIA_ID_PREFIX = "design:" as const;
 export const MAX_DESIGN_CONTEXT_BYTES = 128 * 1024;
@@ -13,6 +14,27 @@ export const MAX_DESIGN_TURN_TARGETS = 5;
 const DESIGN_ARTIFACT_ID = /^[a-f0-9]{64}$/u;
 const DESIGN_ELEMENT_ID = /^[A-Za-z0-9._:-]{1,120}$/u;
 const DESIGN_TAG_NAME = /^[a-z][a-z0-9-]{0,31}$/u;
+
+/** True when a parent refresh only advances record metadata, not canvas/runtime content. */
+export function isDesignProjectMetadataOnlyUpdate(
+  previous: DesignProjectSnapshotV1,
+  next: DesignProjectSnapshotV1,
+): boolean {
+  if (
+    previous.id !== next.id ||
+    previous.chatId !== next.chatId ||
+    previous.workspaceId !== next.workspaceId ||
+    previous.connectionState !== next.connectionState ||
+    previous.previewScriptId !== next.previewScriptId
+  ) {
+    return false;
+  }
+  return (
+    JSON.stringify(previous.canvas) === JSON.stringify(next.canvas) &&
+    JSON.stringify(previous.referenceAssetIds) === JSON.stringify(next.referenceAssetIds) &&
+    JSON.stringify(previous.designSystemBinding) === JSON.stringify(next.designSystemBinding)
+  );
+}
 
 export interface DesignElementSelectionV1 {
   version: typeof DESIGN_ELEMENT_SELECTION_VERSION;

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const canvas = readFileSync(new URL("./design-workspace.tsx", import.meta.url), "utf8");
 const layout = readFileSync(new URL("../main/chat-layout.tsx", import.meta.url), "utf8");
+const sidebar = readFileSync(new URL("./design-project-sidebar.tsx", import.meta.url), "utf8");
 const pane = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
 const handlers = readFileSync(new URL("../../main/handlers/designer.ts", import.meta.url), "utf8");
 const main = readFileSync(new URL("../../main/index.ts", import.meta.url), "utf8");
@@ -18,16 +19,14 @@ test("Design routes migrate legacy chats and open projects by durable identity",
   assert.match(layout, /designerApi[\s\S]*?\.openProject\(projectOrLegacyChatId\)/u);
   assert.match(layout, /opened\.id !== projectOrLegacyChatId/u);
   assert.match(layout, /designProject=\{project\}/u);
-  assert.match(layout, /designerApi\.listProjects\(\)/u);
+  assert.match(sidebar, /designerApi\.listProjects\(\)/u);
 });
 
-test("Prototype creation is workspace-independent while Connected App creation is explicit", () => {
-  assert.match(layout, /connectionState: connection,\s*\.\.\.\(connection === "connected"/u);
-  assert.doesNotMatch(layout, /if \(!activeId\) return;[\s\S]{0,500}designerApi\.createProject/u);
-  assert.match(layout, /Boolean\(workspace\.folderPath\)/u);
-  assert.match(layout, /workspace\.permission !== "none"/u);
-  assert.match(layout, /!workspace\.managedWorktree/u);
-  assert.match(layout, /Start in Aiden's local project storage/u);
+test("Design Project creation is always local-first while connection remains a later action", () => {
+  assert.match(sidebar, /designerApi\.createProject\(\{[\s\S]*connectionState: "prototype-only"/u);
+  assert.doesNotMatch(sidebar, /design-project-origin|connectedWorkspaceId|Connect a local app/u);
+  assert.match(sidebar, /Connect a workspace or Git repository later from the project/u);
+  assert.match(canvas, /designerApi\.connectProject/u);
 });
 
 test("Design generation consumes a main-owned preflight receipt before durable append", () => {
@@ -125,5 +124,8 @@ test("prototype direct-edit Undo is a native one-step control with compact and c
   assert.match(styles, /\.design-direct-edit-undo/u);
   assert.match(styles, /:root\[data-reduce-motion="true"\][\s\S]*\.design-direct-edit-undo/u);
   assert.match(styles, /@media \(max-width: 520px\)[\s\S]*\.design-direct-edit-undo/u);
-  assert.match(styles, /@media \(forced-colors: active\)[\s\S]*\.design-handoff-recovery button:focus-visible/u);
+  assert.match(
+    styles,
+    /@media \(forced-colors: active\)[\s\S]*\.design-handoff-recovery button:focus-visible/u,
+  );
 });

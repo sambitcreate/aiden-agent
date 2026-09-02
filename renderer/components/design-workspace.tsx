@@ -42,6 +42,7 @@ import type { Attachment, Workspace } from "../lib/types";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import {
   groupDesignWorkspaceArtifacts,
+  isDesignProjectMetadataOnlyUpdate,
   type DesignElementSelectionV1,
   type DesignTurnTargetV1,
   type DesignWorkspaceArtifactEntry,
@@ -652,7 +653,9 @@ export function DesignWorkspaceCanvas({
   const [handoffPreview, setHandoffPreview] = React.useState<
     ManagedDesignHandoffPreviewV1 | ExistingDesignHandoffPreviewV1
   >();
-  const [handoffTargetKind, setHandoffTargetKind] = React.useState<"managed" | "existing">("managed");
+  const [handoffTargetKind, setHandoffTargetKind] = React.useState<"managed" | "existing">(
+    "managed",
+  );
   const [handoffWorkspaces, setHandoffWorkspaces] = React.useState<Workspace[]>([]);
   const [handoffWorkspaceId, setHandoffWorkspaceId] = React.useState("");
   const [dirtyCheckoutAcknowledged, setDirtyCheckoutAcknowledged] = React.useState(false);
@@ -661,9 +664,9 @@ export function DesignWorkspaceCanvas({
     Array<{ workspaceId: string; chatId: string; taskId: string; branchLabel: string }>
   >([]);
   const [activeHandoffOperationId, setActiveHandoffOperationId] = React.useState<string>();
-  const [handoffRecoveries, setHandoffRecoveries] = React.useState<
-    DesignHandoffRecoveryViewV1[]
-  >([]);
+  const [handoffRecoveries, setHandoffRecoveries] = React.useState<DesignHandoffRecoveryViewV1[]>(
+    [],
+  );
   const [handoffRecoveriesLoading, setHandoffRecoveriesLoading] = React.useState(false);
   const [handoffRecoveriesError, setHandoffRecoveriesError] = React.useState<string>();
   const [handoffRecoveryBusyId, setHandoffRecoveryBusyId] = React.useState<string>();
@@ -760,10 +763,18 @@ export function DesignWorkspaceCanvas({
   }, [targets]);
 
   React.useEffect(() => {
+    const previousProject = savedProjectRef.current;
+    const preserveTransientEdits = Boolean(
+      previousProject && project && isDesignProjectMetadataOnlyUpdate(previousProject, project),
+    );
     setSavedProject(project);
+    savedProjectRef.current = project;
+    if (preserveTransientEdits) {
+      lastPersistedCanvasRef.current = project ? JSON.stringify(project.canvas) : undefined;
+      return;
+    }
     setDirectEditArtifacts([]);
     setPrototypeDirectEditUndo(undefined);
-    savedProjectRef.current = project;
     setAssetsHydrated(!project);
     if (!project) return;
     setViewport(project.canvas.viewport);
@@ -849,12 +860,17 @@ export function DesignWorkspaceCanvas({
       return;
     }
     let cancelled = false;
-    void designerApi.projectHandoffLinks(savedProject.id).then((links) => {
-      if (!cancelled) setHandoffLinks(links);
-    }).catch(() => {
-      if (!cancelled) setHandoffLinks([]);
-    });
-    return () => { cancelled = true; };
+    void designerApi
+      .projectHandoffLinks(savedProject.id)
+      .then((links) => {
+        if (!cancelled) setHandoffLinks(links);
+      })
+      .catch(() => {
+        if (!cancelled) setHandoffLinks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [savedProject?.id]);
 
   React.useEffect(() => {
@@ -1015,14 +1031,16 @@ export function DesignWorkspaceCanvas({
         action.projectId !== savedProject.id ||
         action.chatId !== chatId ||
         action.workspaceId !== connectedWorkspaceId
-      ) return;
+      )
+        return;
       setDesignerActions((current) => [
         action,
         ...current.filter((candidate) => candidate.id !== action.id),
       ]);
     });
     const offMultifile = designerApi.onMultifileActionChanged(({ action }) => {
-      if (action.projectId !== savedProject?.id || action.workspaceId !== connectedWorkspaceId) return;
+      if (action.projectId !== savedProject?.id || action.workspaceId !== connectedWorkspaceId)
+        return;
       setDismissedMultifileActionId(undefined);
       setMultifileActions((current) => [
         action,
@@ -1109,11 +1127,14 @@ export function DesignWorkspaceCanvas({
     };
   }, [savedProject?.id, sourceSelection]);
 
-  const acceptProjectUpdate = React.useCallback((next: DesignProjectSnapshotV1) => {
-    savedProjectRef.current = next;
-    setSavedProject(next);
-    onProjectChange(next);
-  }, [onProjectChange]);
+  const acceptProjectUpdate = React.useCallback(
+    (next: DesignProjectSnapshotV1) => {
+      savedProjectRef.current = next;
+      setSavedProject(next);
+      onProjectChange(next);
+    },
+    [onProjectChange],
+  );
 
   const openProjectConnection = React.useCallback(async () => {
     if (!savedProjectRef.current || connectionBusy) return;
@@ -1217,7 +1238,15 @@ export function DesignWorkspaceCanvas({
     } finally {
       setDesignSystemBusy(false);
     }
-  }, [acceptProjectUpdate, designCatalogPath, designPackageRoot, designRouteScope, designSystemBusy, designSystemName, designTokenPath]);
+  }, [
+    acceptProjectUpdate,
+    designCatalogPath,
+    designPackageRoot,
+    designRouteScope,
+    designSystemBusy,
+    designSystemName,
+    designTokenPath,
+  ]);
 
   const detachDesignSystem = React.useCallback(async () => {
     const current = savedProjectRef.current;
@@ -1279,7 +1308,8 @@ export function DesignWorkspaceCanvas({
       !current ||
       (current.connectionState === "prototype-only" && !handoffWorkspaceId) ||
       handoffBusy
-    ) return;
+    )
+      return;
     setHandoffBusy(true);
     try {
       const preview =
@@ -1423,7 +1453,13 @@ export function DesignWorkspaceCanvas({
         );
       }
     },
-    [connectedWorkspaceId, onSelectedImagesChange, onSourceSelectionChange, onTargetsChange, sourcePreview],
+    [
+      connectedWorkspaceId,
+      onSelectedImagesChange,
+      onSourceSelectionChange,
+      onTargetsChange,
+      sourcePreview,
+    ],
   );
 
   const startSourcePreview = React.useCallback(
@@ -1813,9 +1849,7 @@ export function DesignWorkspaceCanvas({
               {
                 id: `source-preview:${connectedWorkspaceId ?? "unbound"}`,
                 type: "sourceArtboard",
-                position: positions.get(
-                  `source-preview:${connectedWorkspaceId ?? "unbound"}`,
-                ) ?? {
+                position: positions.get(`source-preview:${connectedWorkspaceId ?? "unbound"}`) ?? {
                   x: 0,
                   y: 0,
                 },
@@ -2319,11 +2353,7 @@ export function DesignWorkspaceCanvas({
         <Button
           size="small"
           variant="accent"
-          disabled={
-            handoffBusy ||
-            !selectedGroupNode?.lineageId ||
-            !selectedMediaId
-          }
+          disabled={handoffBusy || !selectedGroupNode?.lineageId || !selectedMediaId}
           onClick={() => void previewHandoff()}
           aria-label="Continue in workspace"
           title="Create an isolated managed worktree and a normal implementation task"
@@ -2435,7 +2465,7 @@ export function DesignWorkspaceCanvas({
                   control === "alignment"
                     ? "center"
                     : control === "text"
-                      ? selectedDirectEditTarget?.selection?.text ?? "Text"
+                      ? (selectedDirectEditTarget?.selection?.text ?? "Text")
                       : control === "color"
                         ? "--color-action-primary"
                         : control === "width" || control === "height"
@@ -2599,7 +2629,9 @@ export function DesignWorkspaceCanvas({
               />
             </label>
             <Text as="p" variant="small" color="tertiary">
-              Paths are relative to the connected workspace and must stay inside the confirmed package. The package and route labels become part of the reviewed, path-free model context. Add either file or both.
+              Paths are relative to the connected workspace and must stay inside the confirmed
+              package. The package and route labels become part of the reviewed, path-free model
+              context. Add either file or both.
             </Text>
           </div>
         )}
@@ -2627,9 +2659,19 @@ export function DesignWorkspaceCanvas({
         busy={handoffBusy}
         onConfirm={handoffPreview ? beginHandoff : reviewHandoffTarget}
       >
-        <div className="mb-3 grid grid-cols-2 rounded-control bg-control p-1" role="radiogroup" aria-label="Handoff target">
+        <div
+          className="mb-3 grid grid-cols-2 rounded-control bg-control p-1"
+          role="radiogroup"
+          aria-label="Handoff target"
+        >
           {(["managed", "existing"] as const).map((kind) => (
-            <label key={kind} className={cn("flex items-center gap-2 rounded-control px-2 py-1.5 text-small", handoffTargetKind === kind && "bg-list-selection text-primary")}>
+            <label
+              key={kind}
+              className={cn(
+                "flex items-center gap-2 rounded-control px-2 py-1.5 text-small",
+                handoffTargetKind === kind && "bg-list-selection text-primary",
+              )}
+            >
               <input
                 type="radio"
                 name="handoff-target"
@@ -2655,33 +2697,65 @@ export function DesignWorkspaceCanvas({
                 className="h-9 rounded-control border border-separator bg-input px-3 text-regular text-primary outline-none focus:bg-control"
               >
                 {handoffWorkspaces.map((workspace) => (
-                  <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                  <option key={workspace.id} value={workspace.id}>
+                    {workspace.name}
+                  </option>
                 ))}
               </select>
             </label>
             <Text as="p" variant="small" color="secondary">
-              Select an authorized Git workspace. Aiden will review its committed branch before creating an isolated managed worktree; the prototype remains immutable.
+              Select an authorized Git workspace. Aiden will review its committed branch before
+              creating an isolated managed worktree; the prototype remains immutable.
             </Text>
             {handoffWorkspaces.length === 0 ? (
-              <Text as="p" variant="small" color="red">Add a local Git workspace first.</Text>
+              <Text as="p" variant="small" color="red">
+                Add a local Git workspace first.
+              </Text>
             ) : null}
           </div>
         ) : handoffPreview ? (
           <div className="grid gap-3">
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-control bg-control p-3 text-small">
               <dt className="text-tertiary">Repository</dt>
-              <dd className="truncate text-primary">{(handoffPreview.kind === "managed-worktree" ? handoffPreview.source : handoffPreview.target).repositoryLabel}</dd>
+              <dd className="truncate text-primary">
+                {
+                  (handoffPreview.kind === "managed-worktree"
+                    ? handoffPreview.source
+                    : handoffPreview.target
+                  ).repositoryLabel
+                }
+              </dd>
               <dt className="text-tertiary">Committed branch</dt>
-              <dd className="truncate text-primary">{(handoffPreview.kind === "managed-worktree" ? handoffPreview.source : handoffPreview.target).branchLabel}</dd>
+              <dd className="truncate text-primary">
+                {
+                  (handoffPreview.kind === "managed-worktree"
+                    ? handoffPreview.source
+                    : handoffPreview.target
+                  ).branchLabel
+                }
+              </dd>
               <dt className="text-tertiary">New branch</dt>
-              <dd className="text-primary">{handoffPreview.kind === "managed-worktree" ? "Aiden-managed feature branch" : "No new branch"}</dd>
+              <dd className="text-primary">
+                {handoffPreview.kind === "managed-worktree"
+                  ? "Aiden-managed feature branch"
+                  : "No new branch"}
+              </dd>
               <dt className="text-tertiary">Permissions</dt>
               <dd className="text-primary">Ask before source changes</dd>
             </dl>
             {handoffPreview.kind === "existing-workspace" ? (
               <label className="flex gap-3 rounded-control bg-well p-3 text-small text-secondary">
-                <input type="checkbox" checked={existingWorkspaceAcknowledged} onChange={(event) => setExistingWorkspaceAcknowledged(event.currentTarget.checked)} />
-                <span>{handoffPreview.requiredStrongWarningAcknowledgement}. Later approved actions will affect this exact checkout.</span>
+                <input
+                  type="checkbox"
+                  checked={existingWorkspaceAcknowledged}
+                  onChange={(event) =>
+                    setExistingWorkspaceAcknowledged(event.currentTarget.checked)
+                  }
+                />
+                <span>
+                  {handoffPreview.requiredStrongWarningAcknowledgement}. Later approved actions will
+                  affect this exact checkout.
+                </span>
               </label>
             ) : handoffPreview.dirtyCheckout ? (
               <label className="flex gap-3 rounded-control bg-well p-3 text-small text-secondary">
@@ -2709,7 +2783,9 @@ export function DesignWorkspaceCanvas({
               <button
                 key={link.taskId}
                 type="button"
-                onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId: link.chatId } })}
+                onClick={() =>
+                  void navigate({ to: "/chat/$chatId", params: { chatId: link.chatId } })
+                }
                 className="flex items-center justify-between rounded-control bg-control px-3 py-2 text-left text-small text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
                 <span className="truncate">{link.branchLabel}</span>
@@ -2723,11 +2799,24 @@ export function DesignWorkspaceCanvas({
             <Button
               size="small"
               variant="toolbar"
-              onClick={() => void designerApi.cancelHandoff(activeHandoffOperationId).then((result) => {
-                toast.info(result.status === "rolled-back" ? "Handoff cancelled and rolled back." : "Cancellation requested; preserved work remains recoverable.");
-              }).catch((cause: unknown) => {
-                toast.error(cause instanceof Error ? cause.message : "Cancellation could not be requested.");
-              })}
+              onClick={() =>
+                void designerApi
+                  .cancelHandoff(activeHandoffOperationId)
+                  .then((result) => {
+                    toast.info(
+                      result.status === "rolled-back"
+                        ? "Handoff cancelled and rolled back."
+                        : "Cancellation requested; preserved work remains recoverable.",
+                    );
+                  })
+                  .catch((cause: unknown) => {
+                    toast.error(
+                      cause instanceof Error
+                        ? cause.message
+                        : "Cancellation could not be requested.",
+                    );
+                  })
+              }
             >
               Cancel handoff
             </Button>
@@ -2741,9 +2830,7 @@ export function DesignWorkspaceCanvas({
       handoffRecoveries.length > 0 ? (
         <div className="design-canvas-status-stack" aria-label="Design project status">
           {prototypeDirectEditUndo ? (
-            <section
-              className="design-direct-edit-undo flex items-center gap-3 rounded-popover bg-popover px-3 py-2.5 shadow-popover"
-            >
+            <section className="design-direct-edit-undo flex items-center gap-3 rounded-popover bg-popover px-3 py-2.5 shadow-popover">
               <Check className="size-4 shrink-0 text-accent" aria-hidden="true" />
               <div className="min-w-0 flex-1" role="status" aria-live="polite">
                 <Text as="p" variant="small-strong">
@@ -2867,9 +2954,7 @@ export function DesignWorkspaceCanvas({
             )}
             activeTab={inspectorTab}
             source={selectedSource}
-            sourceLoading={Boolean(
-              sourceSelection && !selectedMediaId && connectedSourceLoading,
-            )}
+            sourceLoading={Boolean(sourceSelection && !selectedMediaId && connectedSourceLoading)}
             compareSource={compareSource}
             revisions={revisionSummaries}
             designerActions={designerActionSummaries}
@@ -3060,7 +3145,11 @@ function ProjectConnectionControl({
         onClick={onOpen}
         className="design-canvas-control shadow-control"
       >
-        {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <AppWindow aria-hidden="true" />}
+        {busy ? (
+          <Loader2 className="animate-spin" aria-hidden="true" />
+        ) : (
+          <AppWindow aria-hidden="true" />
+        )}
         {label}
       </Button>
       <Dialog
@@ -3081,10 +3170,7 @@ function ProjectConnectionControl({
               App workspace
             </label>
             <Select value={workspaceId} onValueChange={onWorkspaceChange}>
-              <SelectTrigger
-                id="design-project-connection-workspace"
-                aria-label="App workspace"
-              >
+              <SelectTrigger id="design-project-connection-workspace" aria-label="App workspace">
                 {workspaces.find(({ id }) => id === workspaceId)?.name ?? "Choose a workspace"}
               </SelectTrigger>
               <SelectContent>
@@ -3096,8 +3182,8 @@ function ProjectConnectionControl({
               </SelectContent>
             </Select>
             <Text as="p" variant="small" color="secondary">
-              Generated HTML, CSS, and JavaScript stay in Aiden until you explicitly export or
-              hand off source changes.
+              Generated HTML, CSS, and JavaScript stay in Aiden until you explicitly export or hand
+              off source changes.
             </Text>
           </div>
         ) : (
@@ -3183,7 +3269,9 @@ function SourcePreviewControl({
                   <div className="flex items-center justify-between gap-2">
                     <Text variant="small-strong">{script.label}</Text>
                     {savedScriptId === script.id ? (
-                      <span className="rounded-pill bg-list-selection px-2 py-0.5 text-mini text-secondary">Saved configuration · stopped</span>
+                      <span className="rounded-pill bg-list-selection px-2 py-0.5 text-mini text-secondary">
+                        Saved configuration · stopped
+                      </span>
                     ) : null}
                   </div>
                   <code className="mt-1 block break-all text-mini text-secondary">
@@ -3266,20 +3354,34 @@ function MultifileDesignerActionReview({
     >
       <header className="flex items-start gap-3 border-b border-separator px-4 py-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-control bg-list-selection text-accent">
-          {applied ? <Check className="size-4" aria-hidden="true" /> : <Code2 className="size-4" aria-hidden="true" />}
+          {applied ? (
+            <Check className="size-4" aria-hidden="true" />
+          ) : (
+            <Code2 className="size-4" aria-hidden="true" />
+          )}
         </span>
         <div className="min-w-0 flex-1">
-          <Text variant="small-strong" truncate>{action.label}</Text>
+          <Text variant="small-strong" truncate>
+            {action.label}
+          </Text>
           <Text as="p" variant="small" color="secondary">
             {action.files.length} existing files · atomic rollback and crash recovery
           </Text>
         </div>
         <span className="rounded-control bg-control px-2 py-1 text-mini text-secondary">
-          {action.stage === "recoverable" ? "Recovery needed" : pending ? "Review required" : "Applied"}
+          {action.stage === "recoverable"
+            ? "Recovery needed"
+            : pending
+              ? "Review required"
+              : "Applied"}
         </span>
       </header>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex gap-1 overflow-x-auto border-b border-separator px-3 py-2" role="tablist" aria-label="Changed files">
+        <div
+          className="flex gap-1 overflow-x-auto border-b border-separator px-3 py-2"
+          role="tablist"
+          aria-label="Changed files"
+        >
           {action.files.map((candidate) => (
             <button
               key={candidate.path}
@@ -3299,23 +3401,35 @@ function MultifileDesignerActionReview({
         {file ? (
           <div className="grid min-h-0 flex-1 gap-px overflow-auto bg-separator sm:grid-cols-2">
             <section className="min-w-0 bg-popover p-3" aria-label={`${file.path} before`}>
-              <Text variant="small-strong" color="secondary">Before · {file.beforeSha256.slice(0, 10)}</Text>
-              <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-control bg-control p-2.5 font-mono text-mini text-secondary">{file.before}</pre>
+              <Text variant="small-strong" color="secondary">
+                Before · {file.beforeSha256.slice(0, 10)}
+              </Text>
+              <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-control bg-control p-2.5 font-mono text-mini text-secondary">
+                {file.before}
+              </pre>
             </section>
             <section className="min-w-0 bg-popover p-3" aria-label={`${file.path} after`}>
-              <Text variant="small-strong" color="secondary">After · {file.afterSha256.slice(0, 10)}</Text>
-              <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-control bg-control p-2.5 font-mono text-mini text-primary">{file.after}</pre>
+              <Text variant="small-strong" color="secondary">
+                After · {file.afterSha256.slice(0, 10)}
+              </Text>
+              <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-control bg-control p-2.5 font-mono text-mini text-primary">
+                {file.after}
+              </pre>
             </section>
           </div>
         ) : null}
         {action.recovery ? (
           <div className="border-t border-separator px-4 py-3 text-small text-danger">
-            {action.recovery.conflicts.map((conflict) => `${conflict.path}: ${conflict.reason}`).join(" · ")}
+            {action.recovery.conflicts
+              .map((conflict) => `${conflict.path}: ${conflict.reason}`)
+              .join(" · ")}
           </div>
         ) : null}
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-separator px-4 py-3">
-        <Button size="small" variant="toolbar" disabled={busy} onClick={onLater}>Later</Button>
+        <Button size="small" variant="toolbar" disabled={busy} onClick={onLater}>
+          Later
+        </Button>
         {pending ? (
           <Button size="small" variant="accent" disabled={busy} onClick={onApply}>
             {busy ? <Loader2 className="animate-spin" /> : <Check />}Apply all files

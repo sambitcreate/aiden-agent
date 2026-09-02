@@ -11,10 +11,12 @@ import {
 export function AskUserQuestionComposer({
   prompt,
   submitting = false,
+  placement = "chat",
   onRespond,
 }: {
   prompt: AskUserQuestionPromptV1;
   submitting?: boolean;
+  placement?: "chat" | "design-conversation";
   onRespond(response: AskUserQuestionResponseV1): void | Promise<void>;
 }) {
   const [activeIndex, setActiveIndex] = React.useState(0);
@@ -120,9 +122,20 @@ export function AskUserQuestionComposer({
   };
 
   return (
-    <div className="aiden-dock-inset chat-content-column">
+    <div
+      className={cn(
+        placement === "design-conversation"
+          ? "w-full px-3 pb-3 pt-2"
+          : "aiden-dock-inset chat-content-column",
+      )}
+    >
       <section
-        className="ask-user-question-shell min-h-76 overflow-hidden rounded-[24px] bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
+        className={cn(
+          "ask-user-question-shell overflow-hidden rounded-[24px] bg-popover shadow-composer outline outline-1 outline-field/80",
+          placement === "design-conversation"
+            ? "max-h-[min(70vh,36rem)] overflow-y-auto px-3 py-3"
+            : "min-h-76 px-5 py-4 sm:px-6 sm:py-5",
+        )}
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}
         aria-busy={submitting}
         onKeyDown={handleCardKeyDown}

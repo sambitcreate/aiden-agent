@@ -533,9 +533,9 @@ textarea {
   font: inherit;
 }
 
-/* Aiden uses fill, border, caret, and native state changes instead of focus outlines. */
-:root :where(*):focus,
-:root :where(*):focus-visible {
+/* Text-entry controls use fill, border, and caret changes instead of accent focus outlines. */
+:root :where(input, textarea, [contenteditable="true"]):focus,
+:root :where(input, textarea, [contenteditable="true"]):focus-visible {
   outline: none !important;
 }
 

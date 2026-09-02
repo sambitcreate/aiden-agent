@@ -130,6 +130,10 @@ interface ComposerProps {
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
+  /** Places the same composer state inside the compact Design conversation rail. */
+  placement?: "chat" | "design-conversation";
+  /** Keeps a containing surface visible while private or asynchronous controls need attention. */
+  onVisibilityRequirementChange?: (required: boolean) => void;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
   gitBranch?: string;
@@ -273,6 +277,8 @@ export function Composer({
   canStopGeneration = isGenerating,
   configurationBusy = false,
   inputRef,
+  placement = "chat",
+  onVisibilityRequirementChange,
   workspace,
   gitBranch,
   gitDetached,
@@ -453,6 +459,17 @@ export function Composer({
       localModel: settings.data?.localVoiceModel,
       model: settings.data?.voiceModel,
     },
+  );
+  const requiresVisibleComposer =
+    voice.recording || voice.transcribing || attaching || sending || sessionCommandBusy;
+
+  React.useEffect(() => {
+    onVisibilityRequirementChange?.(requiresVisibleComposer);
+  }, [onVisibilityRequirementChange, requiresVisibleComposer]);
+
+  React.useEffect(
+    () => () => onVisibilityRequirementChange?.(false),
+    [onVisibilityRequirementChange],
   );
 
   React.useLayoutEffect(() => {
@@ -1410,7 +1427,14 @@ export function Composer({
 
   return (
     <>
-      <div className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
+      <div
+        className={cn(
+          "pointer-events-none",
+          placement === "design-conversation"
+            ? "w-full px-3 pb-3 pt-2"
+            : "aiden-dock-inset chat-content-column pb-4 pt-3 sm:pb-5",
+        )}
+      >
         <div className="composer-responsive pointer-events-auto relative isolate">
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
@@ -1480,82 +1504,84 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
-          {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
-          <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
-            {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
-              <WorkspacePicker
-                key={workspaceChangeBlockedReason ? "blocked" : "available"}
-                workspaces={workspaces}
-                activeWorkspaceId={workspace?.id}
-                onSelectWorkspace={onSelectWorkspace}
-                onCreateScratchWorkspace={onCreateScratchWorkspace}
-                blockedReason={workspaceChangeBlockedReason}
-                trigger={
-                  <Button
-                    variant="transparent"
-                    size="small"
-                    className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                    disabled={
-                      isGenerating ||
-                      sending ||
-                      gitOperationBusy ||
-                      Boolean(workspaceChangeBlockedReason)
-                    }
-                    aria-label={
-                      workspaceChangeBlockedReason
-                        ? `Workspace unavailable: ${workspaceChangeBlockedReason}`
-                        : "Choose a workspace"
-                    }
-                  >
-                    <Folder className="size-4 shrink-0" />
-                    <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
-                  </Button>
-                }
-              />
-            ) : (
-              <Button
-                variant="transparent"
-                size="small"
-                className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                onClick={onOpenFolder}
-                disabled={!workspace?.folderPath}
-                aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+          {/* Design Projects are local-first; workspace connection remains a later project action. */}
+          {placement === "chat" ? (
+            <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
+              {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
+                <WorkspacePicker
+                  key={workspaceChangeBlockedReason ? "blocked" : "available"}
+                  workspaces={workspaces}
+                  activeWorkspaceId={workspace?.id}
+                  onSelectWorkspace={onSelectWorkspace}
+                  onCreateScratchWorkspace={onCreateScratchWorkspace}
+                  blockedReason={workspaceChangeBlockedReason}
+                  trigger={
+                    <Button
+                      variant="transparent"
+                      size="small"
+                      className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                      disabled={
+                        isGenerating ||
+                        sending ||
+                        gitOperationBusy ||
+                        Boolean(workspaceChangeBlockedReason)
+                      }
+                      aria-label={
+                        workspaceChangeBlockedReason
+                          ? `Workspace unavailable: ${workspaceChangeBlockedReason}`
+                          : "Choose a workspace"
+                      }
+                    >
+                      <Folder className="size-4 shrink-0" />
+                      <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                    </Button>
+                  }
+                />
+              ) : (
+                <Button
+                  variant="transparent"
+                  size="small"
+                  className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                  onClick={onOpenFolder}
+                  disabled={!workspace?.folderPath}
+                  aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+                >
+                  <Folder className="size-4 shrink-0" />
+                  <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                </Button>
+              )}
+              {/* Execution location — Pi runs locally on this Mac. */}
+              <span
+                className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
+                title="The agent runs locally on this Mac"
               >
-                <Folder className="size-4 shrink-0" />
-                <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
-              </Button>
-            )}
-            {/* Execution location — Pi runs locally on this Mac. */}
-            <span
-              className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-              title="The agent runs locally on this Mac"
-            >
-              <Monitor className="size-4 shrink-0" />
-              Local
-            </span>
-            {gitBranch && workspace?.folderPath ? (
-              <GitBranchPicker
-                key={`git-branch-picker-${worktreeRequest}`}
-                workspaceId={workspace.id}
-                branch={gitBranch}
-                detached={gitDetached}
-                unborn={gitUnborn}
-                disabled={
-                  isGenerating ||
-                  sending ||
-                  attaching ||
-                  permissionSaving ||
-                  Boolean(gitMutationBlockedReason)
-                }
-                disabledReason={gitMutationBlockedReason}
-                onCreateWorktree={onCreateGitWorktree}
-                onBusyChange={onGitOperationBusyChange}
-                worktreeDescription={gitWorktreeDescription}
-                openWorktreeOnMount={worktreeRequest > 0}
-                programmaticReturnFocusRef={inputRef}
-              />
-            ) : null}
-          </div>
+                <Monitor className="size-4 shrink-0" />
+                Local
+              </span>
+              {gitBranch && workspace?.folderPath ? (
+                <GitBranchPicker
+                  key={`git-branch-picker-${worktreeRequest}`}
+                  workspaceId={workspace.id}
+                  branch={gitBranch}
+                  detached={gitDetached}
+                  unborn={gitUnborn}
+                  disabled={
+                    isGenerating ||
+                    sending ||
+                    attaching ||
+                    permissionSaving ||
+                    Boolean(gitMutationBlockedReason)
+                  }
+                  disabledReason={gitMutationBlockedReason}
+                  onCreateWorktree={onCreateGitWorktree}
+                  onBusyChange={onGitOperationBusyChange}
+                  worktreeDescription={gitWorktreeDescription}
+                  openWorktreeOnMount={worktreeRequest > 0}
+                  programmaticReturnFocusRef={inputRef}
+                />
+              ) : null}
+            </div>
+          ) : null}
 
           <div
             className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80"
@@ -1622,7 +1648,10 @@ export function Composer({
             ) : null}
             {designContextItems.length > 0 ? (
               <div
-                className="mb-1.5 flex flex-wrap gap-1.5 px-1.5"
+                className={cn(
+                  "mb-1.5 flex flex-wrap gap-1.5 px-1.5",
+                  placement === "design-conversation" && "max-h-16 overflow-y-auto",
+                )}
                 aria-label="Canvas context for next message"
               >
                 {designContextItems.map((item) => {
@@ -1649,7 +1678,12 @@ export function Composer({
               </div>
             ) : null}
             {attachments.length > 0 ? (
-              <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
+              <div
+                className={cn(
+                  "mb-1.5 flex flex-wrap gap-2 px-1.5",
+                  placement === "design-conversation" && "max-h-20 overflow-y-auto",
+                )}
+              >
                 {attachments.map((a) => (
                   <div
                     key={a.id}

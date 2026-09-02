@@ -23,3 +23,37 @@ test("structured questions fully replace the composer with the reference card", 
   assert.match(styles, /\.ask-user-question-option:focus-visible/u);
   assert.match(styles, /@keyframes ask-user-question-in/u);
 });
+
+test("Design questions stay in the persistent conversation rail and cannot focus while hidden", () => {
+  const pane = source("../main/chat-pane.tsx");
+  const component = source("./ask-user-question-composer.tsx");
+
+  assert.match(component, /placement\?: "chat" \| "design-conversation"/u);
+  assert.match(component, /placement = "chat"/u);
+  assert.match(
+    component,
+    /placement === "design-conversation"\s*\? "w-full px-3 pb-3 pt-2"\s*: "aiden-dock-inset chat-content-column"/u,
+  );
+  assert.match(
+    component,
+    /placement === "design-conversation"\s*\? "max-h-\[min\(70vh,36rem\)\] overflow-y-auto px-3 py-3"/u,
+  );
+  assert.match(
+    pane,
+    /onQuestionnaire: \(prompt\) => \{[\s\S]{0,260}setDesignConversationOpen\(true\);[\s\S]{0,180}setQuestionnaire\(prompt\)/u,
+  );
+  assert.match(
+    pane,
+    /const designComposerMustStayOpen =[\s\S]{0,260}questionnaire[\s\S]{0,260}isGenerating/u,
+  );
+  assert.match(pane, /if \(designComposerMustStayOpen\) setDesignConversationOpen\(true\)/u);
+  assert.match(
+    pane,
+    /ref=\{designConversationToggleRef\}[\s\S]{0,240}disabled=\{designConversationOpen && designComposerMustStayOpen\}/u,
+  );
+  assert.match(
+    pane,
+    /requestAnimationFrame\(\(\) => designConversationToggleRef\.current\?\.focus\(\)\)/u,
+  );
+  assert.match(pane, /onRequestComposerFocus=\{focusComposer\}/u);
+});

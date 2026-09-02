@@ -5,11 +5,13 @@ import type { ChatHtmlArtifactV1 } from "./chat-artifacts.js";
 import {
   groupDesignWorkspaceArtifacts,
   designWorkspaceArtifactPlan,
+  isDesignProjectMetadataOnlyUpdate,
   isDesignHtmlArtifact,
   parseDesignElementSelection,
   parseDesignTurnContext,
   resolveDesignWorkspaceSelection,
 } from "./design-workspace.js";
+import type { DesignProjectSnapshotV1 } from "./design-projects.js";
 
 function artifact(mediaId: string, id = mediaId): ChatHtmlArtifactV1 {
   return {
@@ -22,6 +24,59 @@ function artifact(mediaId: string, id = mediaId): ChatHtmlArtifactV1 {
     mediaId,
   };
 }
+
+function project(overrides: Partial<DesignProjectSnapshotV1> = {}): DesignProjectSnapshotV1 {
+  return {
+    version: 1,
+    id: "project:one",
+    revision: 1,
+    title: "Original",
+    chatId: "chat:one",
+    connectionState: "prototype-only",
+    createdAt: 1,
+    updatedAt: 1,
+    canvas: {
+      viewport: "desktop",
+      flowViewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+    },
+    referenceAssetIds: [],
+    ...overrides,
+  };
+}
+
+test("renaming preserves same-project direct-edit artifacts and undo state", () => {
+  const original = project();
+  assert.equal(
+    isDesignProjectMetadataOnlyUpdate(
+      original,
+      project({ revision: 2, title: "Renamed", updatedAt: 2 }),
+    ),
+    true,
+  );
+  assert.equal(
+    isDesignProjectMetadataOnlyUpdate(
+      original,
+      project({
+        revision: 2,
+        updatedAt: 2,
+        canvas: {
+          ...original.canvas,
+          nodes: [
+            {
+              id: "artboard:one",
+              kind: "artboard",
+              canonicalOrigin: "generated-artifact",
+              x: 0,
+              y: 0,
+            },
+          ],
+        },
+      }),
+    ),
+    false,
+  );
+});
 
 test("Design revisions are namespaced, chronological, and replace live by identity", () => {
   const first = artifact("design:first");
@@ -159,7 +214,10 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
   assert.match(workspace, /What should we design\?/u);
   assert.match(workspace, /data-design-workspace-canvas/u);
   assert.match(workspace, /data-design-preview-stage/u);
-  assert.match(workspace, /setConnectedSource\(undefined\);[\s\S]*setConnectedSourceLoading\(true\)/u);
+  assert.match(
+    workspace,
+    /setConnectedSource\(undefined\);[\s\S]*setConnectedSourceLoading\(true\)/u,
+  );
   assert.match(workspace, /sourceLoading=\{Boolean\(/u);
   assert.match(workspace, /design-canvas-toolbar/u);
   assert.match(workspace, /design-canvas-control/u);
@@ -187,7 +245,9 @@ test("Design is owned by stable routes and never mounts chat-adjacent chrome", (
   );
   assert.match(layout, /pathname\.startsWith\("\/design"\)/u);
   assert.match(layout, /export function DesignIndex\(\)/u);
-  assert.match(layout, /designerApi\.listProjects\(\)/u);
+  assert.match(layout, /<DesignProjectSidebar/u);
+  assert.match(layout, /mode === "design"/u);
+  assert.doesNotMatch(layout, /<DesignProjectLibrary/u);
   assert.match(layout, /export function DesignProjectRoute/u);
   assert.match(layout, /designProject=\{project\}/u);
   assert.match(pane, /presentation\?: "chat" \| "design"/u);

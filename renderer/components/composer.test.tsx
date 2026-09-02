@@ -20,7 +20,7 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   );
   assert.match(
     styles,
-    /:root :where\(\*\):focus,\s*:root :where\(\*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
+    /:root :where\(input, textarea, \[contenteditable="true"\]\):focus,\s*:root :where\(input, textarea, \[contenteditable="true"\]\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
 });
 
@@ -46,6 +46,43 @@ test("composer context controls stay compact without exposing provider copy", ()
   assert.doesNotMatch(modelPicker, /ChevronsUpDown/u);
   assert.doesNotMatch(modelPicker, /Selected model: \$\{selected\.label\} from/u);
   assert.doesNotMatch(modelPicker, /\$\{selected\.label\} · \$\{selected\.providerLabel\}/u);
+});
+
+test("Design placement moves the same composer into the conversation rail without workspace chrome", () => {
+  const composer = source("./composer.tsx");
+  const pane = source("../main/chat-pane.tsx");
+
+  assert.match(composer, /placement\?: "chat" \| "design-conversation"/u);
+  assert.match(composer, /placement = "chat"/u);
+  assert.match(
+    composer,
+    /placement === "design-conversation"\s*\? "w-full px-3 pb-3 pt-2"\s*: "aiden-dock-inset chat-content-column pb-4 pt-3 sm:pb-5"/u,
+  );
+  assert.match(composer, /\{placement === "chat" \? \([\s\S]*<WorkspacePicker/u);
+  assert.match(composer, /<Monitor[\s\S]{0,180}Local/u);
+  assert.match(
+    composer,
+    /voice\.recording \|\| voice\.transcribing \|\| attaching \|\| sending \|\| sessionCommandBusy/u,
+  );
+  assert.match(composer, /onVisibilityRequirementChange\?\.\(requiresVisibleComposer\)/u);
+  assert.match(composer, /placement === "design-conversation" && "max-h-16 overflow-y-auto"/u);
+  assert.match(composer, /placement === "design-conversation" && "max-h-20 overflow-y-auto"/u);
+
+  assert.match(pane, /function ComposerPlacement\([\s\S]*createPortal\(children, host\)/u);
+  assert.match(
+    pane,
+    /<ComposerPlacement design=\{presentation === "design"\} host=\{designComposerHost\}>/u,
+  );
+  assert.match(pane, /placement=\{presentation === "design" \? "design-conversation" : "chat"\}/u);
+  assert.match(
+    pane,
+    /onVisibilityRequirementChange=\{\s*presentation === "design" \? setDesignComposerRequiresVisibility : undefined\s*\}/u,
+  );
+  assert.match(pane, /ref=\{setDesignComposerHost\}[\s\S]{0,180}Design prompt composer/u);
+  assert.match(
+    pane,
+    /aria-hidden=\{!designConversationOpen \|\| undefined\}[\s\S]{0,120}inert=\{!designConversationOpen \? true : undefined\}/u,
+  );
 });
 
 test("composer routes Finder drops and raster paste through the fixed preload bridge", () => {

@@ -4,6 +4,7 @@
 // "ask" mode.
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
@@ -170,20 +171,32 @@ function toolLabel(toolName: string): string {
   return TOOL_LABELS[toolName] ?? toolName.replace(/_/g, " ");
 }
 
+function ComposerPlacement({
+  design,
+  host,
+  children,
+}: React.PropsWithChildren<{ design: boolean; host: HTMLDivElement | null }>) {
+  if (!design) return children;
+  return host ? createPortal(children, host) : null;
+}
+
 export function ChatPane({
   chatId,
   presentation = "chat",
   initialDesignMediaId,
   designProject,
+  onDesignProjectChange,
 }: {
   chatId: string;
   presentation?: "chat" | "design";
   initialDesignMediaId?: string;
   designProject?: DesignProjectSnapshotV1;
+  onDesignProjectChange?: (project: DesignProjectSnapshotV1) => void;
 }) {
   const qc = useQueryClient();
-  const [currentDesignProject, setCurrentDesignProject] =
-    React.useState<DesignProjectSnapshotV1 | undefined>(designProject);
+  const [currentDesignProject, setCurrentDesignProject] = React.useState<
+    DesignProjectSnapshotV1 | undefined
+  >(designProject);
   const navigate = useNavigate();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
@@ -197,6 +210,9 @@ export function ChatPane({
     ReadonlySet<string>
   >(() => new Set());
   const [designConversationOpen, setDesignConversationOpen] = React.useState(true);
+  const [designComposerHost, setDesignComposerHost] = React.useState<HTMLDivElement | null>(null);
+  const [designComposerRequiresVisibility, setDesignComposerRequiresVisibility] =
+    React.useState(false);
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
@@ -248,11 +264,18 @@ export function ChatPane({
         ? "Reconnect this project to an available folder workspace"
         : !currentDesignProject
           ? "This Design Project is unavailable"
-        : "Design workspace";
+          : "Design workspace";
 
   React.useEffect(() => {
     setCurrentDesignProject(designProject);
   }, [designProject]);
+  const updateDesignProject = React.useCallback(
+    (project: DesignProjectSnapshotV1) => {
+      setCurrentDesignProject(project);
+      onDesignProjectChange?.(project);
+    },
+    [onDesignProjectChange],
+  );
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -476,7 +499,12 @@ export function ChatPane({
   const todoSnapshotReadFence = (todoSnapshotReadFenceRef.current ??= new TodoSnapshotReadFence());
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
-  useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const designConversationToggleRef = React.useRef<HTMLButtonElement | null>(null);
+  const focusComposer = React.useCallback(() => {
+    if (presentation === "design") setDesignConversationOpen(true);
+    requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+  }, [presentation]);
+  useCommandHandler("composer.focus", focusComposer);
   const terminalShortcut = useShortcutLabel("terminal.toggle");
   const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
@@ -1121,6 +1149,9 @@ export function ChatPane({
           },
           onQuestionnaire: (prompt) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              // Open in the same render that mounts the questionnaire so its
+              // initial focus never targets controls inside a hidden rail.
+              setDesignConversationOpen(true);
               setQuestionnaireSubmitting(false);
               setQuestionnaire(prompt);
             }
@@ -1972,6 +2003,34 @@ export function ChatPane({
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
+  const designComposerMustStayOpen =
+    presentation === "design" &&
+    Boolean(
+      questionnaire ||
+      pending ||
+      isGenerating ||
+      isStartingGeneration ||
+      detachedGenerationDraining ||
+      designComposerRequiresVisibility,
+    );
+
+  React.useEffect(() => {
+    if (designComposerMustStayOpen) setDesignConversationOpen(true);
+  }, [designComposerMustStayOpen]);
+
+  const closeDesignConversation = React.useCallback(() => {
+    if (designComposerMustStayOpen) return;
+    setDesignConversationOpen(false);
+    requestAnimationFrame(() => designConversationToggleRef.current?.focus());
+  }, [designComposerMustStayOpen]);
+
+  const toggleDesignConversation = React.useCallback(() => {
+    if (designConversationOpen) {
+      closeDesignConversation();
+    } else {
+      setDesignConversationOpen(true);
+    }
+  }, [closeDesignConversation, designConversationOpen]);
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2019,9 +2078,9 @@ export function ChatPane({
     if (pending) return;
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && approvalCardRef.current?.contains(focused)) {
-      composerRef.current?.focus({ preventScroll: true });
+      focusComposer();
     }
-  }, [pending]);
+  }, [focusComposer, pending]);
 
   return (
     <>
@@ -2068,11 +2127,18 @@ export function ChatPane({
         actions={
           presentation === "design" ? (
             <Button
+              ref={designConversationToggleRef}
               variant="toolbar"
               size="small"
-              onClick={() => setDesignConversationOpen((open) => !open)}
+              onClick={toggleDesignConversation}
+              disabled={designConversationOpen && designComposerMustStayOpen}
               aria-label="Toggle project conversation"
               aria-pressed={designConversationOpen}
+              title={
+                designComposerMustStayOpen
+                  ? "Conversation stays open while an active task needs its controls"
+                  : "Toggle project conversation"
+              }
             >
               <MessageCircle />
               Conversation
@@ -2266,175 +2332,182 @@ export function ChatPane({
                 }}
               />
             ) : null}
-            {questionnaire ? (
-              <AskUserQuestionComposer
-                key={questionnaire.promptId}
-                prompt={questionnaire}
-                submitting={questionnaireSubmitting}
-                onRespond={answerQuestionnaire}
-              />
-            ) : (
-              <Composer
-                // Keyed so the draft and attachments stay scoped to one chat. The
-                // route no longer remounts the pane, and Composer owns that text
-                // without a chatId reset of its own.
-                key={chatId}
-                placeholder={
-                  presentation === "design"
-                    ? designArtifacts.length > 0
-                      ? "Describe the next change…"
-                      : "Describe the interface you want to create…"
-                    : undefined
-                }
-                ready={
-                  ready &&
-                  !imageArtifactRecoveryPending &&
-                  !imageArtifactRecoveryUnavailable &&
-                  (presentation !== "design" || !designWorkspaceDisabled)
-                }
-                readinessMessage={
-                  presentation === "design" && designWorkspaceDisabled
-                    ? designWorkspaceTitle
-                    : imageArtifactRecoveryUnavailable
-                      ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
-                      : imageArtifactRecoveryPending
-                        ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
-                        : readinessMessage
-                }
-                hasMessages={hasMessages}
-                chatId={chatId}
-                onSend={handleSend}
-                onStop={handleStop}
-                isGenerating={isGenerating}
-                canStopGeneration={canStopGeneration}
-                configurationBusy={thinkingSaving}
-                inputRef={composerRef}
-                workspace={effectiveWorkspace}
-                gitBranch={git.data?.isRepo ? git.data.branch : undefined}
-                gitDetached={git.data?.detached}
-                gitUnborn={git.data?.unborn}
-                onOpenFolder={openFolder}
-                onChangePermission={changePermission}
-                workspacePickerEnabled={isNewChat}
-                workspaces={workspaces}
-                onSelectWorkspace={moveNewChatToWorkspace}
-                onCreateScratchWorkspace={createScratchWorkspace}
-                onCreateGitWorktree={createGitWorktree}
-                onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
-                gitOperationBusy={environmentPanel.gitOperationBusy}
-                workspaceChangeBlockedReason={
-                  documentAppendReconciliationRequired
-                    ? "Reload Aiden before changing this chat's workspace."
-                    : settingsBlockedReason
-                }
-                gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
-                gitWorktreeDescription={
-                  isNewChat
-                    ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
-                    : "Creates a separate workspace and opens a new chat. This conversation stays here."
-                }
-                visionSupported={visionSupported}
-                designContextItems={presentation === "design" ? designContextItems : undefined}
-                onRemoveDesignContextItem={removeDesignContextItem}
-                computerUse={
-                  computerUseGloballyEnabled
-                    ? {
-                        enabled: chatComputerUseEnabled,
-                        ready: computerUseReady,
-                        checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
-                        saving: computerUseSaving,
-                        detail: computerUseStatusDetail,
-                      }
-                    : undefined
-                }
-                onChangeComputerUse={changeComputerUse}
-                currentChatTitle={chat.data?.title}
-                latestAssistantResponse={latestAssistantResponse}
-                slashNavigationBlockedReason={settingsBlockedReason}
-                sideQuestionBlockedReason={sideQuestionBlockedReason}
-                slashSessionBlockedReason={
-                  documentAppendReconciliationRequired
-                    ? "Reload Aiden before copying this chat."
-                    : imageArtifactRecoveryUnavailable
-                      ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
-                      : imageArtifactRecoveryPending
-                        ? "Delete this chat to discard the unrecovered visual artifact before copying."
-                        : undefined
-                }
-                slashPaletteBlocked={Boolean(pending)}
-                slashActionBusy={isGenerating || isStartingGeneration}
-                onOpenSettings={(section) =>
-                  void navigate({
-                    to: "/settings",
-                    search: section ? { section } : {},
-                  })
-                }
-                onRenameChat={renameChat}
-                onOpenReview={() => environmentPanel.openReview("changes")}
-                sessionChat={chat.data ?? undefined}
-                authenticatedProviders={authenticatedProviders}
-                onCloneChat={() => copyChat()}
-                onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
-                onExportChat={exportChat}
-                onCompactChat={() => chatsApi.compact(chatId)}
-                onCancelCompact={() => chatsApi.cancelCompact(chatId)}
-                onLogoutProvider={logoutProvider}
-                thinkingControl={
-                  googleThinkingSupported ? (
-                    <ThinkingControl
-                      level={googleThinkingLevel}
-                      levels={googleThinkingLevels}
-                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(level) => void changeGoogleThinking(level)}
+            <ComposerPlacement design={presentation === "design"} host={designComposerHost}>
+              {questionnaire ? (
+                <AskUserQuestionComposer
+                  key={questionnaire.promptId}
+                  prompt={questionnaire}
+                  submitting={questionnaireSubmitting}
+                  placement={presentation === "design" ? "design-conversation" : "chat"}
+                  onRespond={answerQuestionnaire}
+                />
+              ) : (
+                <Composer
+                  // Keyed so the draft and attachments stay scoped to one chat. The
+                  // route no longer remounts the pane, and Composer owns that text
+                  // without a chatId reset of its own.
+                  key={chatId}
+                  placeholder={
+                    presentation === "design"
+                      ? designArtifacts.length > 0
+                        ? "Describe the next change…"
+                        : "Describe the interface you want to create…"
+                      : undefined
+                  }
+                  ready={
+                    ready &&
+                    !imageArtifactRecoveryPending &&
+                    !imageArtifactRecoveryUnavailable &&
+                    (presentation !== "design" || !designWorkspaceDisabled)
+                  }
+                  readinessMessage={
+                    presentation === "design" && designWorkspaceDisabled
+                      ? designWorkspaceTitle
+                      : imageArtifactRecoveryUnavailable
+                        ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                        : imageArtifactRecoveryPending
+                          ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
+                          : readinessMessage
+                  }
+                  hasMessages={hasMessages}
+                  chatId={chatId}
+                  onSend={handleSend}
+                  onStop={handleStop}
+                  isGenerating={isGenerating}
+                  canStopGeneration={canStopGeneration}
+                  configurationBusy={thinkingSaving}
+                  inputRef={composerRef}
+                  placement={presentation === "design" ? "design-conversation" : "chat"}
+                  onVisibilityRequirementChange={
+                    presentation === "design" ? setDesignComposerRequiresVisibility : undefined
+                  }
+                  workspace={effectiveWorkspace}
+                  gitBranch={git.data?.isRepo ? git.data.branch : undefined}
+                  gitDetached={git.data?.detached}
+                  gitUnborn={git.data?.unborn}
+                  onOpenFolder={openFolder}
+                  onChangePermission={changePermission}
+                  workspacePickerEnabled={isNewChat}
+                  workspaces={workspaces}
+                  onSelectWorkspace={moveNewChatToWorkspace}
+                  onCreateScratchWorkspace={createScratchWorkspace}
+                  onCreateGitWorktree={createGitWorktree}
+                  onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
+                  gitOperationBusy={environmentPanel.gitOperationBusy}
+                  workspaceChangeBlockedReason={
+                    documentAppendReconciliationRequired
+                      ? "Reload Aiden before changing this chat's workspace."
+                      : settingsBlockedReason
+                  }
+                  gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
+                  gitWorktreeDescription={
+                    isNewChat
+                      ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
+                      : "Creates a separate workspace and opens a new chat. This conversation stays here."
+                  }
+                  visionSupported={visionSupported}
+                  designContextItems={presentation === "design" ? designContextItems : undefined}
+                  onRemoveDesignContextItem={removeDesignContextItem}
+                  computerUse={
+                    computerUseGloballyEnabled
+                      ? {
+                          enabled: chatComputerUseEnabled,
+                          ready: computerUseReady,
+                          checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
+                          saving: computerUseSaving,
+                          detail: computerUseStatusDetail,
+                        }
+                      : undefined
+                  }
+                  onChangeComputerUse={changeComputerUse}
+                  currentChatTitle={chat.data?.title}
+                  latestAssistantResponse={latestAssistantResponse}
+                  slashNavigationBlockedReason={settingsBlockedReason}
+                  sideQuestionBlockedReason={sideQuestionBlockedReason}
+                  slashSessionBlockedReason={
+                    documentAppendReconciliationRequired
+                      ? "Reload Aiden before copying this chat."
+                      : imageArtifactRecoveryUnavailable
+                        ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
+                        : imageArtifactRecoveryPending
+                          ? "Delete this chat to discard the unrecovered visual artifact before copying."
+                          : undefined
+                  }
+                  slashPaletteBlocked={Boolean(pending)}
+                  slashActionBusy={isGenerating || isStartingGeneration}
+                  onOpenSettings={(section) =>
+                    void navigate({
+                      to: "/settings",
+                      search: section ? { section } : {},
+                    })
+                  }
+                  onRenameChat={renameChat}
+                  onOpenReview={() => environmentPanel.openReview("changes")}
+                  sessionChat={chat.data ?? undefined}
+                  authenticatedProviders={authenticatedProviders}
+                  onCloneChat={() => copyChat()}
+                  onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
+                  onExportChat={exportChat}
+                  onCompactChat={() => chatsApi.compact(chatId)}
+                  onCancelCompact={() => chatsApi.cancelCompact(chatId)}
+                  onLogoutProvider={logoutProvider}
+                  thinkingControl={
+                    googleThinkingSupported ? (
+                      <ThinkingControl
+                        level={googleThinkingLevel}
+                        levels={googleThinkingLevels}
+                        canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                        disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                        onChange={(level) => void changeGoogleThinking(level)}
+                      />
+                    ) : codexThinkingSupported ? (
+                      <ThinkingControl
+                        providerLabel="Codex"
+                        level={codexThinkingLevel}
+                        levels={codexThinkingLevels}
+                        disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                        onChange={(level) => void changeCodexThinking(level)}
+                      />
+                    ) : anthropicThinkingSupported ? (
+                      <ThinkingControl
+                        providerLabel="Claude"
+                        level={anthropicThinkingLevel}
+                        levels={anthropicThinkingLevels}
+                        canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                        disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                        onChange={(level) => void changeAnthropicThinking(level)}
+                      />
+                    ) : providerThinkingSupported ? (
+                      <ThinkingControl
+                        providerLabel={selectedProvider?.label ?? "Model"}
+                        level={providerThinkingLevel}
+                        levels={providerThinkingLevels}
+                        canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                        disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                        onChange={(level) => void changeProviderThinking(level)}
+                      />
+                    ) : localReasoningVisibilitySupported ? (
+                      <ReasoningVisibilityControl
+                        visible={showLocalModelReasoning}
+                        disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                        onChange={(visible) => void changeLocalReasoningVisibility(visible)}
+                      />
+                    ) : undefined
+                  }
+                  modelPicker={
+                    <ModelPicker
+                      providers={settings.data ? (providers.data ?? []) : []}
+                      providerId={providerId}
+                      model={model}
+                      onChange={select}
+                      disabled={isGenerating || thinkingSaving}
+                      settingsBlockedReason={settingsBlockedReason}
+                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
                     />
-                  ) : codexThinkingSupported ? (
-                    <ThinkingControl
-                      providerLabel="Codex"
-                      level={codexThinkingLevel}
-                      levels={codexThinkingLevels}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(level) => void changeCodexThinking(level)}
-                    />
-                  ) : anthropicThinkingSupported ? (
-                    <ThinkingControl
-                      providerLabel="Claude"
-                      level={anthropicThinkingLevel}
-                      levels={anthropicThinkingLevels}
-                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(level) => void changeAnthropicThinking(level)}
-                    />
-                  ) : providerThinkingSupported ? (
-                    <ThinkingControl
-                      providerLabel={selectedProvider?.label ?? "Model"}
-                      level={providerThinkingLevel}
-                      levels={providerThinkingLevels}
-                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(level) => void changeProviderThinking(level)}
-                    />
-                  ) : localReasoningVisibilitySupported ? (
-                    <ReasoningVisibilityControl
-                      visible={showLocalModelReasoning}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
-                    />
-                  ) : undefined
-                }
-                modelPicker={
-                  <ModelPicker
-                    providers={settings.data ? (providers.data ?? []) : []}
-                    providerId={providerId}
-                    model={model}
-                    onChange={select}
-                    disabled={isGenerating || thinkingSaving}
-                    settingsBlockedReason={settingsBlockedReason}
-                    hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-                  />
-                }
-              />
-            )}
+                  }
+                />
+              )}
+            </ComposerPlacement>
           </>
         }
       >
@@ -2450,54 +2523,69 @@ export function ChatPane({
             </div>
           ) : (
             <div className="relative flex h-full min-h-0 overflow-hidden">
-              {designConversationOpen ? (
-                <aside
-                  aria-label="Design Project conversation"
-                  className="absolute inset-y-0 left-0 z-40 flex w-full max-w-[22rem] flex-col border-r border-separator bg-sidebar shadow-popover lg:relative lg:z-auto lg:shadow-none"
-                >
-                  <div className="flex items-center justify-between border-b border-separator px-3 py-2">
-                    <div>
-                      <Text variant="small-strong">Conversation</Text>
-                      <Text as="p" variant="small" color="tertiary">
-                        Prompts, decisions, and artifact turns
+              <aside
+                aria-label="Design Project conversation"
+                aria-hidden={!designConversationOpen || undefined}
+                inert={!designConversationOpen ? true : undefined}
+                className={
+                  designConversationOpen
+                    ? "absolute inset-y-0 left-0 z-40 flex w-full max-w-[22rem] flex-col border-r border-separator bg-sidebar shadow-popover lg:relative lg:z-auto lg:shadow-none"
+                    : "hidden"
+                }
+              >
+                <div className="flex items-center justify-between border-b border-separator px-3 py-2">
+                  <div>
+                    <Text variant="small-strong">Conversation</Text>
+                    <Text as="p" variant="small" color="tertiary">
+                      Prompts, decisions, and artifact turns
+                    </Text>
+                  </div>
+                  <Button
+                    size="small"
+                    variant="transparent"
+                    disabled={designComposerMustStayOpen}
+                    onClick={closeDesignConversation}
+                    title={
+                      designComposerMustStayOpen
+                        ? "Finish or stop the active task before hiding Conversation"
+                        : "Hide project conversation"
+                    }
+                  >
+                    Hide
+                  </Button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {messages.length === 0 && displayedStreamingText === null ? (
+                    <div className="p-4">
+                      <Text variant="small" color="secondary">
+                        Start with a prompt from the composer.
                       </Text>
                     </div>
-                    <Button
-                      size="small"
-                      variant="transparent"
-                      onClick={() => setDesignConversationOpen(false)}
-                    >
-                      Hide
-                    </Button>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-auto">
-                    {messages.length === 0 && displayedStreamingText === null ? (
-                      <div className="p-4">
-                        <Text variant="small" color="secondary">
-                          Start with a prompt from the composer.
-                        </Text>
-                      </div>
-                    ) : (
-                      <MessageList
-                        key={`design:${chatId}`}
-                        chatId={chatId}
-                        messages={messages}
-                        streamingText={displayedStreamingText}
-                        streamingReasoning={displayedStreamingReasoning}
-                        streamingArtifacts={displayedStreamingArtifacts}
-                        streamComplete={streamComplete || visibleDetachedProjection !== null}
-                        onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-                        timeline={displayedGenerationTimeline}
-                        liveSubagents={displayedLiveSubagents}
-                        subagentsEnabled={environmentPanel.subagentsEnabled}
-                        onOpenSubagent={environmentPanel.openSubagent}
-                        agentActivity={visibleAgentActivity}
-                        error={error}
-                      />
-                    )}
-                  </div>
-                </aside>
-              ) : null}
+                  ) : (
+                    <MessageList
+                      key={`design:${chatId}`}
+                      chatId={chatId}
+                      messages={messages}
+                      streamingText={displayedStreamingText}
+                      streamingReasoning={displayedStreamingReasoning}
+                      streamingArtifacts={displayedStreamingArtifacts}
+                      streamComplete={streamComplete || visibleDetachedProjection !== null}
+                      onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+                      timeline={displayedGenerationTimeline}
+                      liveSubagents={displayedLiveSubagents}
+                      subagentsEnabled={environmentPanel.subagentsEnabled}
+                      onOpenSubagent={environmentPanel.openSubagent}
+                      agentActivity={visibleAgentActivity}
+                      error={error}
+                    />
+                  )}
+                </div>
+                <div
+                  ref={setDesignComposerHost}
+                  className="shrink-0 border-t border-separator bg-sidebar"
+                  aria-label="Design prompt composer"
+                />
+              </aside>
               <div className="min-w-0 flex-1">
                 <DesignWorkspaceCanvas
                   chatId={chatId}
@@ -2513,8 +2601,8 @@ export function ChatPane({
                   onTargetsChange={setDesignTargets}
                   onSourceSelectionChange={setSourceDesignSelection}
                   onSelectedImagesChange={setDesignCanvasImages}
-                  onProjectChange={setCurrentDesignProject}
-                  onRequestComposerFocus={() => composerRef.current?.focus({ preventScroll: true })}
+                  onProjectChange={updateDesignProject}
+                  onRequestComposerFocus={focusComposer}
                 />
               </div>
             </div>
