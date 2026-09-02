@@ -338,7 +338,7 @@ test("renderer turn tokens cross append and generation IPC without an admission 
   assert.match(ipc, /"chat:start",\s*streamId,\s*params,\s*messageTurnId/u);
   const turn = pane.indexOf("const messageTurnId = createChatTurnId()");
   const append = pane.indexOf("turnId: messageTurnId", turn);
-  const generation = pane.indexOf("runGeneration(messageTurnId)", append);
+  const generation = pane.indexOf("runGeneration(messageTurnId", append);
   assert.ok(turn >= 0 && append > turn && generation > append);
   assert.match(
     assistant,
@@ -444,20 +444,25 @@ test("persisted chat workspace ownership closes generation admission before setu
   ]);
   const chatRead = llm.indexOf("const chat = await chatStore.get(params.chatId)");
   const authority = llm.indexOf("authoritativeChatWorkspaceId(", chatRead);
-  const bindInitialization = llm.indexOf(
-    "initialization.workspaceId = authoritativeWorkspaceId",
+  const designAuthority = llm.indexOf(
+    "authoritativeDesignGenerationWorkspaceId(",
     authority,
   );
+  const bindInitialization = llm.indexOf(
+    "initialization.workspaceId = authoritativeWorkspaceId",
+    designAuthority,
+  );
   const admissionCheck = llm.indexOf(
-    "workspaceMutationGate.isChanging(authoritativeWorkspaceId)",
+    "workspaceMutationGate.isChanging(generationWorkspaceId)",
     bindInitialization,
   );
-  const prepare = llm.indexOf("mode: authoritativeMode", admissionCheck);
+  const prepare = llm.indexOf("workspaceId: generationWorkspaceId", admissionCheck);
   const registerInitialization = llm.indexOf("initializing.set(streamId, initialization)");
   assert.ok(registerInitialization >= 0);
   assert.ok(chatRead > registerInitialization);
   assert.ok(authority > chatRead);
-  assert.ok(bindInitialization > authority);
+  assert.ok(designAuthority > authority);
+  assert.ok(bindInitialization > designAuthority);
   assert.ok(admissionCheck > bindInitialization);
   assert.ok(prepare > admissionCheck);
 

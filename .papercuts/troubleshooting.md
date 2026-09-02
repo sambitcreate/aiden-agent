@@ -1,5 +1,6 @@
 # Troubleshooting
 
+- Source-order contracts that locate `runGeneration(messageTurnId)` or `workspaceMutationGate.isChanging(authoritativeWorkspaceId)` break when Design adds a second validated workspace argument and separates backing-chat storage from generation authority. Match the stable call prefix and assert the explicit `generationWorkspaceId` boundary instead.
 - When another worktree owns port 4143, launching the renderer and `prepare-macos-dev-runtime.mjs --run` under `concurrently -s first` immediately stops the alternate-port Vite server because the macOS launcher exits successfully after detaching Electron. Keep the alternate-port Vite process alive separately, then launch Electron with the matching `AIDEN_RENDERER_URL`.
 - Design project identity and workspace filesystem authority are separate facts. Resolve the durable project by `chatId` before generation: repository-free prototypes may render inline HTML without a folder, while connected projects must still match their exact workspace ID, live root, and permission.
 - `.papercuts/troubleshooting.md` is tracked but also matches an ignore rule; `git add` stages it yet exits nonzero and breaks an `&& git commit` chain. Stage that exact tracked file with `git add -f -- .papercuts/troubleshooting.md` before committing.
