@@ -14,6 +14,7 @@ import {
   type GhosttyCellMetrics,
 } from "./renderer";
 import { isMonospaceFamily } from "./appearance-fonts";
+import "./wasm-assets";
 
 const symbolsFontUrl = new URL("./fonts/SymbolsNerdFontMono-Regular.woff2", import.meta.url).href;
 
