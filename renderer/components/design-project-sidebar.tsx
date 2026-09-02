@@ -1,10 +1,13 @@
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Plus, Settings, UserRound } from "lucide-react";
 import { designerApi } from "../lib/ipc";
+import { queryKeys } from "../lib/queries";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import type { ShellMode } from "../lib/shell-mode";
 import type {
+  DesignArtifactRecoveryPlanV1,
   DesignProjectDeletePlanV1,
   DesignProjectFilter,
   DesignProjectRecordSummaryV1,
@@ -39,6 +42,7 @@ export function DesignProjectSidebar({
   onProjectUnavailable: (projectId: string) => void;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { closeIfCompact } = useSplitViewSidebar();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const appendReconciliationRequired = useAppendReconciliationRequired();
@@ -56,14 +60,18 @@ export function DesignProjectSidebar({
   const [duplicateBusyId, setDuplicateBusyId] = React.useState<string>();
   const [deletePlan, setDeletePlan] = React.useState<DesignProjectDeletePlanV1>();
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  const [recoveryPlan, setRecoveryPlan] = React.useState<DesignArtifactRecoveryPlanV1>();
+  const [recoveryBusyId, setRecoveryBusyId] = React.useState<string>();
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
     try {
       setProjects(await designerApi.listProjects());
       setError(undefined);
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Design Projects are unavailable.");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -75,8 +83,9 @@ export function DesignProjectSidebar({
 
   React.useEffect(() => {
     if (!projectUpdate) return;
+    let cancelled = false;
     const artboards = projectUpdate.canvas.nodes.filter(({ kind }) => kind === "artboard");
-    const summary: DesignProjectRecordSummaryV1 = {
+    const summaryBase = {
       id: projectUpdate.id,
       revision: projectUpdate.revision,
       title: projectUpdate.title,
@@ -88,13 +97,36 @@ export function DesignProjectSidebar({
       ),
       updatedAt: projectUpdate.updatedAt,
       artboardCount: artboards.length,
-      health: "ready",
     };
-    setProjects((current) =>
-      [summary, ...current.filter(({ id }) => id !== summary.id)].sort(
+    setProjects((current) => {
+      const prior = current.find(({ id }) => id === projectUpdate.id);
+      const summary: DesignProjectRecordSummaryV1 = {
+        ...summaryBase,
+        health: prior?.health ?? "ready",
+        ...(prior?.recoveryMessage ? { recoveryMessage: prior.recoveryMessage } : {}),
+        ...(prior?.recoveryAction ? { recoveryAction: prior.recoveryAction } : {}),
+      };
+      return [summary, ...current.filter(({ id }) => id !== summary.id)].sort(
         (left, right) => right.updatedAt - left.updatedAt,
-      ),
-    );
+      );
+    });
+    // A project snapshot intentionally omits health because health requires
+    // semantic reads from main-owned artifact/reference stores. Refresh that
+    // projection after every content revision so a successful repair clears
+    // stale recovery chrome without a remount.
+    void designerApi
+      .listProjects()
+      .then((latest) => {
+        if (!cancelled) setProjects(latest);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setError(cause instanceof Error ? cause.message : "Design Projects are unavailable.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [projectUpdate]);
 
   const openProject = React.useCallback(
@@ -269,6 +301,71 @@ export function DesignProjectSidebar({
     refresh,
   ]);
 
+  const inspectRecovery = React.useCallback(
+    async (projectId: string) => {
+      if (recoveryBusyId) return;
+      setRecoveryBusyId(projectId);
+      try {
+        setRecoveryPlan(await designerApi.inspectArtifactRecovery(projectId));
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "Recovery could not be inspected.");
+      } finally {
+        setRecoveryBusyId(undefined);
+      }
+    },
+    [recoveryBusyId],
+  );
+
+  const confirmRecovery = React.useCallback(async () => {
+    if (!recoveryPlan || recoveryBusyId) return;
+    if (recoveryPlan.status === "regenerate") {
+      setRecoveryPlan(undefined);
+      openProject(recoveryPlan.projectId);
+      return;
+    }
+    setRecoveryBusyId(recoveryPlan.projectId);
+    try {
+      const result = await designerApi.recoverArtifact({
+        projectId: recoveryPlan.projectId,
+        expectedRevision: recoveryPlan.expectedRevision,
+      });
+      if (result.status === "regenerate") {
+        if (result.project) {
+          onProjectChange(result.project);
+          setRecoveryPlan(undefined);
+          if (!(await refresh())) {
+            toast.error(
+              "The repair finished, but the project list could not be refreshed. Retry the project list before regenerating.",
+            );
+            return;
+          }
+        }
+        setRecoveryPlan(result.plan);
+        return;
+      }
+      const project = result.status === "recovered" ? result.project : result.current;
+      onProjectChange(project);
+      setRecoveryPlan(undefined);
+      if (result.status === "recovered") {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.chat(project.chatId) });
+      }
+      await refresh();
+      if (result.status === "recovered") {
+        toast.success(
+          result.operation === "remove-missing-history"
+            ? "Unavailable Design history entry removed."
+            : "Recovered as a new Design revision.",
+        );
+      } else {
+        toast.error("This project changed. Review the latest version and try again.");
+      }
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The revision could not be recovered.");
+    } finally {
+      setRecoveryBusyId(undefined);
+    }
+  }, [onProjectChange, openProject, queryClient, recoveryBusyId, recoveryPlan, refresh]);
+
   return (
     <>
       <Sidebar
@@ -326,7 +423,14 @@ export function DesignProjectSidebar({
           onDuplicateProject={(id) => void duplicateProject(id)}
           onExportProject={(id) => void exportProject(id)}
           onDeleteProject={(id) => void previewDeleteProject(id)}
-          onRepairProject={() => void refresh()}
+          onRepairProject={(id) => {
+            const project = projects.find(({ id: projectId }) => projectId === id);
+            if (project?.recoveryAction === "open-project") {
+              openProject(id);
+              return;
+            }
+            void inspectRecovery(id);
+          }}
           onRetry={() => void refresh()}
         />
       </Sidebar>
@@ -352,6 +456,35 @@ export function DesignProjectSidebar({
           />
         </label>
       </Dialog>
+
+      <AlertDialog
+        open={Boolean(recoveryPlan)}
+        onOpenChange={(open) => {
+          if (!open && !recoveryBusyId) setRecoveryPlan(undefined);
+        }}
+        title={
+          recoveryPlan?.operation === "remove-missing-history"
+            ? "Remove unavailable history entry?"
+            : recoveryPlan?.operation === "remove-missing-artboard"
+              ? "Remove broken artboard?"
+              : recoveryPlan?.status === "recoverable"
+                ? "Recover Design revision?"
+                : "Regenerate this artboard"
+        }
+        description={recoveryPlan?.message}
+        confirmLabel={
+          recoveryPlan?.operation === "remove-missing-history"
+            ? "Remove missing history entry"
+            : recoveryPlan?.operation === "remove-missing-artboard"
+              ? "Remove broken artboard"
+              : recoveryPlan?.status === "recoverable"
+                ? "Recover as new revision"
+                : "Open to regenerate"
+        }
+        busy={Boolean(recoveryBusyId)}
+        keepOpenOnConfirm
+        onConfirm={confirmRecovery}
+      />
 
       <AlertDialog
         open={Boolean(deletePlan)}

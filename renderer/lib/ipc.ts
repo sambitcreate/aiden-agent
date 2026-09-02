@@ -78,6 +78,8 @@ import type {
   DesignProjectGenerationPreflightV1,
   DesignProjectMutationResultV1,
   DesignProjectRecordSummaryV1,
+  DesignArtifactRecoveryPlanV1,
+  DesignArtifactRecoveryResultV1,
   DesignProjectSnapshotV1,
   DesignProjectSourceDocument,
   DesignSystemProjectionV1,
@@ -86,6 +88,7 @@ import type {
   DesignHandoffRunResultV1,
   DesignHandoffRecoveryViewV1,
 } from "../shared/design-projects";
+import type { DesignElementSelectionV1 } from "../shared/design-workspace";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import {
   parseAskUserQuestionPrompt,
@@ -659,8 +662,14 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
-  update: (id: string, patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean }) =>
-    invoke<Workspace>("workspaces:update", id, patch),
+  update: (
+    id: string,
+    patch: {
+      name?: string;
+      permission?: WorkspacePermission;
+      memoryEnabled?: boolean;
+    },
+  ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
@@ -744,16 +753,17 @@ export const designerApi = {
   listProjects: () => invoke<DesignProjectRecordSummaryV1[]>("designer:listProjects"),
   openProject: (projectOrLegacyChatId: string) =>
     invoke<DesignProjectSnapshotV1 | undefined>("designer:openProject", projectOrLegacyChatId),
+  inspectArtifactRecovery: (projectId: string) =>
+    invoke<DesignArtifactRecoveryPlanV1>("designer:inspectArtifactRecovery", projectId),
+  recoverArtifact: (input: { projectId: string; expectedRevision: number }) =>
+    invoke<DesignArtifactRecoveryResultV1>("designer:recoverArtifact", input),
   createProject: (input: {
     title: string;
     connectionState: DesignProjectConnectionState;
     workspaceId?: string;
   }) => invoke<DesignProjectSnapshotV1>("designer:createProject", input),
-  connectProject: (input: {
-    projectId: string;
-    expectedRevision: number;
-    workspaceId: string;
-  }) => invoke<DesignProjectMutationResultV1>("designer:connectProject", input),
+  connectProject: (input: { projectId: string; expectedRevision: number; workspaceId: string }) =>
+    invoke<DesignProjectMutationResultV1>("designer:connectProject", input),
   preflightGeneration: (input: { projectId: string }) =>
     invoke<DesignProjectGenerationPreflightV1>("designer:preflightGeneration", input),
   updateProject: (input: {
@@ -773,10 +783,11 @@ export const designerApi = {
   deleteProject: (input: { id: string; expectedRevision: number }) =>
     invoke<{ status: "deleted" }>("designer:deleteProject", input),
   applyPrototypeDirectEdit: (input: {
+    operationId: string;
     projectId: string;
     lineageId: string;
     mediaId: string;
-    selection: { selector: string; tagName: string; elementId?: string };
+    selection: DesignElementSelectionV1;
     edit: DesignDirectEditV1;
   }) =>
     invoke<{
@@ -801,6 +812,7 @@ export const designerApi = {
       project: DesignProjectSnapshotV1;
     }>("designer:undoPrototypeDirectEdit", input),
   applyConnectedDirectEdit: (input: {
+    operationId: string;
     projectId: string;
     sourceSelectionId: string;
     edit: DesignDirectEditV1;
@@ -816,21 +828,24 @@ export const designerApi = {
     name: string;
     packageRoot: string;
     routeScope: string;
-    sources: Array<{ workspaceRelativePath: string; kind: "tokens-v1" | "catalog-v1" }>;
+    sources: Array<{
+      workspaceRelativePath: string;
+      kind: "tokens-v1" | "catalog-v1";
+    }>;
   }) =>
-    invoke<{ project: DesignProjectSnapshotV1; projection: DesignSystemProjectionV1 }>(
-      "designer:attachDesignSystem",
-      input,
-    ),
+    invoke<{
+      project: DesignProjectSnapshotV1;
+      projection: DesignSystemProjectionV1;
+    }>("designer:attachDesignSystem", input),
   designSystemProjection: (projectId: string) =>
     invoke<DesignSystemProjectionV1 | undefined>("designer:designSystemProjection", projectId),
   designSystemModelContext: (projectId: string) =>
     invoke<unknown>("designer:designSystemModelContext", projectId),
   refreshDesignSystem: (input: { projectId: string; expectedRevision: number }) =>
-    invoke<{ project: DesignProjectSnapshotV1; projection: DesignSystemProjectionV1 }>(
-      "designer:refreshDesignSystem",
-      input,
-    ),
+    invoke<{
+      project: DesignProjectSnapshotV1;
+      projection: DesignSystemProjectionV1;
+    }>("designer:refreshDesignSystem", input),
   detachDesignSystem: (input: { projectId: string; expectedRevision: number }) =>
     invoke<DesignProjectSnapshotV1>("designer:detachDesignSystem", input),
   previewManagedHandoff: (projectId: string, sourceWorkspaceId?: string) =>
@@ -910,12 +925,16 @@ export const designerApi = {
       "designer:readReferenceAsset",
       assetId,
     ),
+  removeMissingReferenceAsset: (input: {
+    projectId: string;
+    expectedRevision: number;
+    assetId: string;
+  }) => invoke<DesignProjectMutationResultV1>("designer:removeMissingReferenceAsset", input),
   previewState: (input: { projectId: string }) =>
     invoke<SourcePreviewStateV1>("designer:previewState", input),
   startPreview: (input: { projectId: string; scriptId: string }) =>
     invoke<SourcePreviewStateV1>("designer:startPreview", input),
-  stopPreview: (input: { projectId: string }) =>
-    invoke<void>("designer:stopPreview", input),
+  stopPreview: (input: { projectId: string }) => invoke<void>("designer:stopPreview", input),
   bindSelection: (input: {
     projectId: string;
     sessionId: string;
@@ -944,7 +963,11 @@ export const designerApi = {
   undoAction: (input: { projectId: string; actionId: string }) =>
     invoke<DesignerActionV1>("designer:undoAction", input),
   onPreviewChanged: (
-    handler: (payload: { projectId: string; workspaceId: string; state: SourcePreviewStateV1 }) => void,
+    handler: (payload: {
+      projectId: string;
+      workspaceId: string;
+      state: SourcePreviewStateV1;
+    }) => void,
   ) => onNotification("designer:preview-changed", handler),
   onActionChanged: (handler: (payload: { action: DesignerActionV1 }) => void) =>
     onNotification("designer:action-changed", handler),
@@ -1034,7 +1057,11 @@ export const chatsApi = {
   waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
   compact: (id: string) =>
     invoke<
-      | { compacted: true; tokensBefore?: number; estimatedTokensAfter?: number }
+      | {
+          compacted: true;
+          tokensBefore?: number;
+          estimatedTokensAfter?: number;
+        }
       | {
           compacted: false;
           reason:
@@ -1098,6 +1125,7 @@ export const chatsApi = {
       accent?: string;
     },
     designStudio = false,
+    liveDesignCandidateGenerationId?: string,
   ) =>
     invoke<{ title: string; src: string; designCapability?: string } | undefined>(
       "chats:htmlArtifactSrcdoc",
@@ -1106,8 +1134,13 @@ export const chatsApi = {
         mediaId,
         theme,
         ...(designStudio ? { designStudio: true } : {}),
+        ...(liveDesignCandidateGenerationId ? { liveDesignCandidateGenerationId } : {}),
       },
     ),
+  resumeDetachedDesignPreview: (streamId: string, chatId: string) =>
+    invoke<boolean>("chats:resumeDetachedDesignPreview", streamId, chatId),
+  suspendDetachedDesignPreview: (streamId: string) =>
+    invoke<boolean>("chats:suspendDetachedDesignPreview", streamId),
   exportHtmlArtifact: (chatId: string, mediaId: string) =>
     invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
       chatId,

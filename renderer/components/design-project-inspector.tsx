@@ -32,6 +32,7 @@ export interface DesignProjectInspectorProps {
   activeTab: DesignProjectInspectorTab;
   source?: DesignProjectSourceDocument;
   sourceLoading?: boolean;
+  sourceError?: string;
   compareSource?: DesignProjectSourceDocument;
   revisions: readonly DesignProjectRevisionSummary[];
   designerActions?: readonly DesignProjectDesignerActionSummary[];
@@ -42,6 +43,7 @@ export interface DesignProjectInspectorProps {
   onFindChange: (query: string) => void;
   onCopySource: (source: DesignProjectSourceDocument) => void;
   onSaveSource: (source: DesignProjectSourceDocument) => void;
+  onRetrySource?: () => void;
   onExportBundle: () => void;
   canExportBundle?: boolean;
   latestExportName?: string;
@@ -139,6 +141,7 @@ export function DesignProjectInspector({
   activeTab,
   source,
   sourceLoading = false,
+  sourceError,
   compareSource,
   revisions,
   designerActions = [],
@@ -149,6 +152,7 @@ export function DesignProjectInspector({
   onFindChange,
   onCopySource,
   onSaveSource,
+  onRetrySource,
   onExportBundle,
   canExportBundle = true,
   latestExportName,
@@ -432,10 +436,20 @@ export function DesignProjectInspector({
             />
           </div>
         ) : (
-          <EmptyState
-            title="Source unavailable"
-            description="Select a generated revision or an authorized connected-app source file."
-          />
+          <div className="grid place-items-center gap-3">
+            <EmptyState
+              title={sourceError ? "Saved source needs reload" : "Source unavailable"}
+              description={
+                sourceError ??
+                "Select a generated revision or an authorized connected-app source file."
+              }
+            />
+            {sourceError && onRetrySource ? (
+              <Button size="small" variant="toolbar" onClick={onRetrySource}>
+                Reload source
+              </Button>
+            ) : null}
+          </div>
         )}
       </section>
 

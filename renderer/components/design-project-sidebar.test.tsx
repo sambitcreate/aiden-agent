@@ -36,6 +36,38 @@ test("Design project state remains available on the index and active-project rou
   assert.match(layout, /activeProjectId=\{designProjectIdFromPath\(pathname\)\}/u);
 });
 
+test("repair is an explicit bounded recovery flow with a truthful regenerate fallback", () => {
+  assert.match(sidebar, /designerApi\.inspectArtifactRecovery\(projectId\)/u);
+  assert.match(sidebar, /designerApi\.recoverArtifact/u);
+  assert.match(sidebar, /Recover as new revision/u);
+  assert.match(sidebar, /Remove missing history entry/u);
+  assert.match(sidebar, /Unavailable Design history entry removed/u);
+  assert.match(sidebar, /Open to regenerate/u);
+  assert.match(sidebar, /project\?\.recoveryAction === "open-project"/u);
+  assert.match(sidebar, /void inspectRecovery\(id\)/u);
+  assert.doesNotMatch(sidebar, /onRepairProject=\{\(\) => void refresh\(\)\}/u);
+  assert.match(
+    sidebar,
+    /project snapshot intentionally omits health[\s\S]*designerApi[\s\S]*\.listProjects\(\)/u,
+  );
+  assert.match(
+    sidebar,
+    /result\.status === "regenerate"[\s\S]*result\.project[\s\S]*onProjectChange\(result\.project\)[\s\S]*setRecoveryPlan\(undefined\)[\s\S]*if \(!\(await refresh\(\)\)\)[\s\S]*return;[\s\S]*setRecoveryPlan\(result\.plan\)/u,
+    "repairing the already-open project applies its removed-artboard snapshot before regeneration",
+  );
+  assert.match(
+    sidebar,
+    /setError\([\s\S]*return false;[\s\S]*The repair finished, but the project list could not be refreshed/u,
+    "a failed authoritative refresh blocks the regenerate plan and exposes a retryable error",
+  );
+  assert.match(sidebar, /useQueryClient\(\)/u);
+  assert.match(
+    sidebar,
+    /result\.status === "recovered"[\s\S]*invalidateQueries\(\{ queryKey: queryKeys\.chat\(project\.chatId\) \}\)[\s\S]*toast\.success/u,
+    "recovery refreshes the exact conversation before reporting success to the active canvas",
+  );
+});
+
 test("sidebar mutations keep the active project authoritative and clear deleted restore targets", () => {
   assert.match(
     sidebar,
@@ -68,10 +100,7 @@ test("route changes select their sidebar before paint and preserve newer project
 });
 
 test("a rejected mode change keeps the compact sidebar open", () => {
-  const switcher = readFileSync(
-    new URL("./workspace-mode-switcher.tsx", import.meta.url),
-    "utf8",
-  );
+  const switcher = readFileSync(new URL("./workspace-mode-switcher.tsx", import.meta.url), "utf8");
   assert.match(switcher, /if \(onModeChange\(nextMode\)\) closeIfCompact\(\)/u);
   assert.match(layout, /if \(nextMode === mode\) return false/u);
   assert.match(layout, /toast\.info\(blockedReason\);\s*return false/u);

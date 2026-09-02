@@ -33,6 +33,7 @@ test("library has loading, empty, filtered-empty, error, and repair states", () 
   assert.match(source, /onRetry/u);
   assert.match(source, /data-health=\{project\.health\}/u);
   assert.match(source, /onRepairProject\(project\.id\)/u);
+  assert.match(source, /project\.recoveryAction === "open-project" \? "Open" : "Repair"/u);
 });
 
 test("library rail and drawer preserve focus while text search keeps a quiet focus treatment", () => {

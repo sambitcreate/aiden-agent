@@ -86,6 +86,26 @@ test("Design placement moves the complete action footer into the conversation ra
     pane,
     /onVisibilityRequirementChange=\{\s*presentation === "design" \? setDesignComposerRequiresVisibility : undefined\s*\}/u,
   );
+  assert.match(pane, /workspace=\{presentation === "design" \? undefined : effectiveWorkspace\}/u);
+  assert.match(
+    pane,
+    /onChangePermission=\{presentation === "design" \? undefined : changePermission\}/u,
+  );
+  assert.match(pane, /workspacePickerEnabled=\{presentation !== "design" && isNewChat\}/u);
+  assert.match(pane, /workspaces=\{presentation === "design" \? \[\] : workspaces\}/u);
+  assert.match(
+    pane,
+    /onCreateGitWorktree=\{presentation === "design" \? undefined : createGitWorktree\}/u,
+  );
+  assert.match(
+    pane,
+    /gitOperationBusy=\{\s*presentation === "design" \? false : environmentPanel\.gitOperationBusy\s*\}/u,
+  );
+  assert.match(pane, /computerUse=\{\s*presentation !== "design" && computerUseGloballyEnabled/u);
+  assert.match(
+    pane,
+    /onChangeComputerUse=\{\s*presentation === "design" \? undefined : changeComputerUse\s*\}/u,
+  );
   assert.match(pane, /ref=\{setDesignFooterHost\}[\s\S]{0,260}Design conversation controls/u);
   assert.match(
     pane,

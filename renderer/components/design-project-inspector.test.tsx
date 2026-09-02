@@ -49,6 +49,9 @@ test("code shortcuts, drawer semantics, empty states, and revision actions remai
   assert.match(source, /event\.key === "Escape" && layout === "drawer" && onClose/u);
   assert.match(source, /Nothing selected/u);
   assert.match(source, /Source unavailable/u);
+  assert.match(source, /Saved source needs reload/u);
+  assert.match(source, /Reload source/u);
+  assert.match(source, /sourceError && onRetrySource/u);
   assert.match(source, /Loading workspace source…/u);
   assert.match(source, /sourceLoading \? \(/u);
   assert.match(source, /role="status" aria-live="polite"/u);

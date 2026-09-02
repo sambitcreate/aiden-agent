@@ -278,7 +278,7 @@ export function DesignProjectLibrary({
                       <Wrench aria-hidden="true" />
                       <span>{project.recoveryMessage ?? "Some project data needs attention."}</span>
                       <button type="button" onClick={() => onRepairProject(project.id)}>
-                        Repair
+                        {project.recoveryAction === "open-project" ? "Open" : "Repair"}
                       </button>
                     </div>
                   ) : null}

@@ -41,9 +41,15 @@ import {
 import type { Attachment, Workspace } from "../lib/types";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import {
+  DesignConnectedDirectEditRetryState,
+  DesignProjectPersistenceBarrier,
+  DesignPrototypeDirectEditRetryState,
   durableDesignWorkspaceArtifactGroups,
   isDesignProjectMetadataOnlyUpdate,
+  resolveDesignArtboardPosition,
+  snapshotDesignTurnTargets,
   type DesignElementSelectionV1,
+  type DesignProjectPersistenceSnapshotV1,
   type DesignTurnTargetV1,
   type DesignWorkspaceArtifactEntry,
   type DesignWorkspaceArtifactGroup,
@@ -111,6 +117,7 @@ interface DesignArtboardData extends Record<string, unknown> {
   chatId: string;
   group: DesignWorkspaceArtifactGroup;
   artifact: ChatHtmlArtifactV1;
+  livePreviewAuthority?: string;
   viewport: DesignViewport;
   mode: CanvasMode;
   target?: DesignTurnTargetV1;
@@ -164,6 +171,7 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
         data.artifact.mediaId,
         htmlArtifactThemeTokensFromDocument(),
         true,
+        data.livePreviewAuthority,
       )
       .then((result) => {
         if (cancelled) return;
@@ -185,7 +193,7 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
     return () => {
       cancelled = true;
     };
-  }, [data.artifact.id, data.artifact.mediaId, data.chatId]);
+  }, [data.artifact.id, data.artifact.mediaId, data.chatId, data.livePreviewAuthority]);
 
   const exportArtifact = React.useCallback(async () => {
     if (exporting) return;
@@ -527,6 +535,10 @@ export function DesignWorkspaceCanvas({
   project,
   workspaceId,
   artifacts,
+  livePreviewAuthority,
+  projectReconciliationError,
+  projectReconciliationBusy = false,
+  onRetryProjectReconciliation,
   generating,
   initialMediaId,
   unavailableMessage,
@@ -538,11 +550,16 @@ export function DesignWorkspaceCanvas({
   onSelectedImagesChange,
   onRequestComposerFocus,
   onProjectChange,
+  onPersistenceBarrierChange,
 }: {
   chatId: string;
   project?: DesignProjectSnapshotV1;
   workspaceId?: string;
   artifacts: readonly DesignWorkspaceArtifactEntry[];
+  livePreviewAuthority?: string;
+  projectReconciliationError?: string;
+  projectReconciliationBusy?: boolean;
+  onRetryProjectReconciliation?: () => void;
   generating: boolean;
   initialMediaId?: string;
   unavailableMessage?: string;
@@ -554,11 +571,16 @@ export function DesignWorkspaceCanvas({
   onSelectedImagesChange: (images: Attachment[]) => void;
   onRequestComposerFocus: () => void;
   onProjectChange: (project: DesignProjectSnapshotV1) => void;
+  onPersistenceBarrierChange?: (
+    barrier: (() => Promise<DesignProjectPersistenceSnapshotV1 | undefined>) | undefined,
+  ) => void;
 }) {
   const navigate = useNavigate();
   const [viewport, setViewport] = React.useState<DesignViewport>("desktop");
   const [mode, setMode] = React.useState<CanvasMode>("select");
   const [activeVersions, setActiveVersions] = React.useState<Record<string, string>>({});
+  const activeVersionsRef = React.useRef(activeVersions);
+  activeVersionsRef.current = activeVersions;
   const [canvasImages, setCanvasImages] = React.useState<Attachment[]>([]);
   const [sourcePreview, setSourcePreview] = React.useState<SourcePreviewStateV1>();
   const [previewSetupOpen, setPreviewSetupOpen] = React.useState(false);
@@ -598,6 +620,12 @@ export function DesignWorkspaceCanvas({
       }
     >
   >({});
+  const [generatedSourceLoadingMediaIds, setGeneratedSourceLoadingMediaIds] = React.useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [generatedSourceErrors, setGeneratedSourceErrors] = React.useState<Record<string, string>>(
+    {},
+  );
   const [connectedSource, setConnectedSource] = React.useState<DesignProjectSourceDocument>();
   const [connectedSourceLoading, setConnectedSourceLoading] = React.useState(false);
   const [designSystemOpen, setDesignSystemOpen] = React.useState(false);
@@ -623,7 +651,12 @@ export function DesignWorkspaceCanvas({
   const [dirtyCheckoutAcknowledged, setDirtyCheckoutAcknowledged] = React.useState(false);
   const [existingWorkspaceAcknowledged, setExistingWorkspaceAcknowledged] = React.useState(false);
   const [handoffLinks, setHandoffLinks] = React.useState<
-    Array<{ workspaceId: string; chatId: string; taskId: string; branchLabel: string }>
+    Array<{
+      workspaceId: string;
+      chatId: string;
+      taskId: string;
+      branchLabel: string;
+    }>
   >([]);
   const [activeHandoffOperationId, setActiveHandoffOperationId] = React.useState<string>();
   const [handoffRecoveries, setHandoffRecoveries] = React.useState<DesignHandoffRecoveryViewV1[]>(
@@ -657,13 +690,21 @@ export function DesignWorkspaceCanvas({
     { id: string; fileName: string } | undefined
   >();
   const [assetsHydrated, setAssetsHydrated] = React.useState(!project);
+  const [missingReferenceAssetIds, setMissingReferenceAssetIds] = React.useState<string[]>([]);
+  const [referenceRepairBusyAssetId, setReferenceRepairBusyAssetId] = React.useState<string>();
   const savedProjectRef = React.useRef(project);
   const flowRef = React.useRef<ReactFlowInstance<StudioNode> | null>(null);
   const flowViewportRef = React.useRef(project?.canvas.flowViewport ?? { x: 0, y: 0, zoom: 1 });
   const assetIdByNodeRef = React.useRef(new Map<string, string>());
   const persistTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const persistInFlightRef = React.useRef(false);
-  const persistAgainRef = React.useRef(false);
+  const persistenceBarrierRef = React.useRef(
+    new DesignProjectPersistenceBarrier<DesignProjectPersistenceSnapshotV1 | undefined>(),
+  );
+  const prototypeDirectEditRetryRef = React.useRef(new DesignPrototypeDirectEditRetryState());
+  const connectedDirectEditRetryRef = React.useRef(new DesignConnectedDirectEditRetryState());
+  const persistAttemptRef = React.useRef<
+    (canvas?: DesignProjectCanvasV1) => Promise<DesignProjectSnapshotV1 | undefined>
+  >(async () => undefined);
   const lastPersistedCanvasRef = React.useRef(project ? JSON.stringify(project.canvas) : undefined);
   const uploadRef = React.useRef<HTMLInputElement | null>(null);
   const groups = React.useMemo(
@@ -690,6 +731,73 @@ export function DesignWorkspaceCanvas({
       target.selection?.elementId &&
       target.selection.selector === `[data-aiden-id="${target.selection.elementId}"]`,
   );
+  const requestedDirectEdit = React.useMemo<DesignDirectEditV1>(() => {
+    const value = directEditValue.trim();
+    return directEditControl === "padding"
+      ? { kind: "spacing", property: "padding", value }
+      : directEditControl === "gap"
+        ? { kind: "spacing", property: "gap", value }
+        : directEditControl === "width"
+          ? { kind: "size", property: "width", value }
+          : directEditControl === "height"
+            ? { kind: "size", property: "height", value }
+            : directEditControl === "alignment"
+              ? {
+                  kind: "alignment",
+                  property: "justify-content",
+                  value: value as "center",
+                }
+              : directEditControl === "radius"
+                ? { kind: "radius", property: "border-radius", value }
+                : directEditControl === "color"
+                  ? {
+                      kind: "color-token",
+                      property: "background-color",
+                      token: value,
+                    }
+                  : { kind: "static-text", text: directEditValue };
+  }, [directEditControl, directEditValue]);
+  const prototypeDirectEditPayload = React.useMemo(
+    () =>
+      !sourceSelection &&
+      savedProject &&
+      selectedGroupNode?.lineageId &&
+      selectedMediaId &&
+      selectedDirectEditTarget?.selection
+        ? {
+            projectId: savedProject.id,
+            lineageId: selectedGroupNode.lineageId,
+            mediaId: selectedMediaId,
+            selection: selectedDirectEditTarget.selection,
+            edit: requestedDirectEdit,
+          }
+        : undefined,
+    [
+      requestedDirectEdit,
+      savedProject,
+      selectedDirectEditTarget?.selection,
+      selectedGroupNode?.lineageId,
+      selectedMediaId,
+      sourceSelection,
+    ],
+  );
+  React.useEffect(() => {
+    prototypeDirectEditRetryRef.current.resetUnless(prototypeDirectEditPayload);
+  }, [prototypeDirectEditPayload]);
+  const connectedDirectEditPayload = React.useMemo(
+    () =>
+      sourceSelection && savedProject
+        ? {
+            projectId: savedProject.id,
+            sourceSelectionId: sourceSelection.id,
+            edit: requestedDirectEdit,
+          }
+        : undefined,
+    [requestedDirectEdit, savedProject, sourceSelection],
+  );
+  React.useEffect(() => {
+    connectedDirectEditRetryRef.current.resetUnless(connectedDirectEditPayload);
+  }, [connectedDirectEditPayload]);
   const generatedCommentTarget = React.useMemo<DesignCommentTargetV1 | undefined>(() => {
     if (!savedProject || !selectedGroupNode?.lineageId || !selectedMediaId) {
       return undefined;
@@ -724,6 +832,13 @@ export function DesignWorkspaceCanvas({
   React.useLayoutEffect(() => {
     targetsRef.current = targets;
   }, [targets]);
+  const publishTargets = React.useCallback(
+    (next: DesignTurnTargetV1[]) => {
+      targetsRef.current = next;
+      onTargetsChange(next);
+    },
+    [onTargetsChange],
+  );
 
   React.useEffect(() => {
     const previousProject = savedProjectRef.current;
@@ -739,6 +854,7 @@ export function DesignWorkspaceCanvas({
     setDirectEditArtifacts([]);
     setPrototypeDirectEditUndo(undefined);
     setAssetsHydrated(!project);
+    setMissingReferenceAssetIds([]);
     if (!project) return;
     setViewport(project.canvas.viewport);
     flowViewportRef.current = project.canvas.flowViewport;
@@ -760,8 +876,9 @@ export function DesignWorkspaceCanvas({
       project.canvas.nodes.flatMap((node) =>
         node.kind === "reference-image" && node.assetId
           ? [
-              designerApi.readReferenceAsset(node.assetId).then((result) =>
-                result
+              designerApi.readReferenceAsset(node.assetId).then((result) => ({
+                assetId: node.assetId!,
+                image: result
                   ? {
                       id: node.id,
                       kind: "image" as const,
@@ -771,14 +888,19 @@ export function DesignWorkspaceCanvas({
                       data: result.data,
                     }
                   : undefined,
-              ),
+              })),
             ]
           : [],
       ),
     )
-      .then((images) => {
+      .then((results) => {
         if (!cancelled) {
-          setCanvasImages(images.filter((image) => image !== undefined));
+          setCanvasImages(results.flatMap(({ image }) => (image === undefined ? [] : [image])));
+          setMissingReferenceAssetIds([
+            ...new Set(
+              results.flatMap(({ assetId, image }) => (image === undefined ? [assetId] : [])),
+            ),
+          ]);
           setAssetsHydrated(true);
         }
       })
@@ -929,34 +1051,82 @@ export function DesignWorkspaceCanvas({
     };
   }, [commentView, commentsOpen, currentCommentTarget, loadComments]);
 
+  const hydrateGeneratedSource = React.useCallback(
+    async (projectId: string, lineageId: string, mediaId: string): Promise<boolean> => {
+      setGeneratedSourceLoadingMediaIds((current) => new Set([...current, mediaId]));
+      setGeneratedSourceErrors((current) => {
+        const next = { ...current };
+        delete next[mediaId];
+        return next;
+      });
+      try {
+        const source = await designerApi.readGeneratedSource(projectId, lineageId, mediaId);
+        setSourceByMediaId((current) => ({ ...current, [mediaId]: source }));
+        return true;
+      } catch (cause) {
+        setSourceByMediaId((current) => {
+          const next = { ...current };
+          delete next[mediaId];
+          return next;
+        });
+        setGeneratedSourceErrors((current) => ({
+          ...current,
+          [mediaId]:
+            cause instanceof Error ? cause.message : "The saved source could not be loaded.",
+        }));
+        return false;
+      } finally {
+        setGeneratedSourceLoadingMediaIds((current) => {
+          const next = new Set(current);
+          next.delete(mediaId);
+          return next;
+        });
+      }
+    },
+    [],
+  );
+
   React.useEffect(() => {
     if (!savedProject || !selectedGroup || !selectedGroupNode?.lineageId) {
       setSourceByMediaId({});
+      setGeneratedSourceErrors({});
+      setGeneratedSourceLoadingMediaIds(new Set());
       return;
     }
     let cancelled = false;
-    void Promise.all(
-      selectedGroup.revisions.map(({ artifact }) =>
-        designerApi.readGeneratedSource(
-          savedProject.id,
-          selectedGroupNode.lineageId!,
-          artifact.mediaId,
-        ),
-      ),
-    )
-      .then((sources) => {
-        if (!cancelled) {
-          setSourceByMediaId(
-            Object.fromEntries(sources.map((source) => [source.revisionId, source])),
-          );
-        }
-      })
-      .catch((cause: unknown) => {
-        if (!cancelled) {
-          setSourceByMediaId({});
-          toast.error(cause instanceof Error ? cause.message : "Source is unavailable.");
-        }
-      });
+    const mediaIds = selectedGroup.revisions.map(({ artifact }) => artifact.mediaId);
+    setSourceByMediaId({});
+    setGeneratedSourceErrors({});
+    setGeneratedSourceLoadingMediaIds(new Set(mediaIds));
+    for (const mediaId of mediaIds) {
+      void designerApi
+        .readGeneratedSource(savedProject.id, selectedGroupNode.lineageId!, mediaId)
+        .then((source) => {
+          if (!cancelled)
+            setSourceByMediaId((current) => ({
+              ...current,
+              [mediaId]: source,
+            }));
+        })
+        .catch((cause: unknown) => {
+          if (!cancelled) {
+            setGeneratedSourceErrors((current) => ({
+              ...current,
+              [mediaId]:
+                cause instanceof Error ? cause.message : "The saved source could not be loaded.",
+            }));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setGeneratedSourceLoadingMediaIds((current) => {
+              const next = new Set(current);
+              next.delete(mediaId);
+              return next;
+            });
+          }
+        });
+    }
     return () => {
       cancelled = true;
     };
@@ -1174,10 +1344,20 @@ export function DesignWorkspaceCanvas({
       } else {
         const sources = [
           ...(designTokenPath.trim()
-            ? [{ workspaceRelativePath: designTokenPath.trim(), kind: "tokens-v1" as const }]
+            ? [
+                {
+                  workspaceRelativePath: designTokenPath.trim(),
+                  kind: "tokens-v1" as const,
+                },
+              ]
             : []),
           ...(designCatalogPath.trim()
-            ? [{ workspaceRelativePath: designCatalogPath.trim(), kind: "catalog-v1" as const }]
+            ? [
+                {
+                  workspaceRelativePath: designCatalogPath.trim(),
+                  kind: "catalog-v1" as const,
+                },
+              ]
             : []),
         ];
         const result = await designerApi.attachDesignSystem({
@@ -1405,7 +1585,7 @@ export function DesignWorkspaceCanvas({
           descriptor,
         });
         onSourceSelectionChange(binding);
-        onTargetsChange([]);
+        publishTargets([]);
         onSelectedImagesChange([]);
       } catch (cause) {
         onSourceSelectionChange(undefined);
@@ -1420,7 +1600,7 @@ export function DesignWorkspaceCanvas({
       connectedWorkspaceId,
       onSelectedImagesChange,
       onSourceSelectionChange,
-      onTargetsChange,
+      publishTargets,
       sourcePreview,
     ],
   );
@@ -1493,58 +1673,38 @@ export function DesignWorkspaceCanvas({
   const applyDirectEdit = React.useCallback(async () => {
     if (
       !savedProject ||
-      (!sourceSelection &&
-        (!selectedGroupNode?.lineageId ||
-          !selectedMediaId ||
-          !selectedDirectEditTarget?.selection)) ||
+      (!connectedDirectEditPayload && !prototypeDirectEditPayload) ||
       directEditBusy
     ) {
       return;
     }
-    const value = directEditValue.trim();
-    const edit: DesignDirectEditV1 =
-      directEditControl === "padding"
-        ? { kind: "spacing", property: "padding", value }
-        : directEditControl === "gap"
-          ? { kind: "spacing", property: "gap", value }
-          : directEditControl === "width"
-            ? { kind: "size", property: "width", value }
-            : directEditControl === "height"
-              ? { kind: "size", property: "height", value }
-              : directEditControl === "alignment"
-                ? { kind: "alignment", property: "justify-content", value: value as "center" }
-                : directEditControl === "radius"
-                  ? { kind: "radius", property: "border-radius", value }
-                  : directEditControl === "color"
-                    ? { kind: "color-token", property: "background-color", token: value }
-                    : { kind: "static-text", text: directEditValue };
     setDirectEditBusy(true);
     try {
-      if (sourceSelection) {
+      if (connectedDirectEditPayload) {
+        const operationId = connectedDirectEditRetryRef.current.operationIdFor(
+          connectedDirectEditPayload,
+        );
         await designerApi.applyConnectedDirectEdit({
-          projectId: savedProject.id,
-          sourceSelectionId: sourceSelection.id,
-          edit,
+          operationId,
+          ...connectedDirectEditPayload,
         });
+        connectedDirectEditRetryRef.current.complete(operationId);
         setDirectEditOpen(false);
         toast.success("Designer Action ready for exact review.");
         return;
       }
-      if (
-        !selectedGroupNode?.lineageId ||
-        !selectedMediaId ||
-        !selectedDirectEditTarget?.selection
-      ) {
+      if (!prototypeDirectEditPayload || !selectedGroupNode) {
         throw new Error("Select one exact generated element before editing it.");
       }
+      const operationId = prototypeDirectEditRetryRef.current.operationIdFor(
+        prototypeDirectEditPayload,
+      );
       const result = await designerApi.applyPrototypeDirectEdit({
-        projectId: savedProject.id,
-        lineageId: selectedGroupNode.lineageId,
-        mediaId: selectedMediaId,
-        selection: selectedDirectEditTarget.selection,
-        edit,
+        operationId,
+        ...prototypeDirectEditPayload,
       });
-      const revertMediaId = selectedMediaId;
+      prototypeDirectEditRetryRef.current.complete(operationId);
+      const revertMediaId = prototypeDirectEditPayload.mediaId;
       acceptProjectUpdate(result.project);
       setDirectEditArtifacts((current) => [
         ...current.filter(({ artifact }) => artifact.mediaId !== result.artifact.mediaId),
@@ -1556,20 +1716,23 @@ export function DesignWorkspaceCanvas({
       }));
       setPrototypeDirectEditUndo({
         undoId: result.undoId,
-        lineageId: selectedGroupNode.lineageId,
+        lineageId: prototypeDirectEditPayload.lineageId,
         nodeId: selectedGroupNode.id,
         editedMediaId: result.artifact.mediaId,
         revertMediaId,
       });
-      const source = await designerApi.readGeneratedSource(
+      const sourceHydrated = await hydrateGeneratedSource(
         result.project.id,
-        selectedGroupNode.lineageId,
+        prototypeDirectEditPayload.lineageId,
         result.artifact.mediaId,
       );
-      setSourceByMediaId((current) => ({ ...current, [result.artifact.mediaId]: source }));
       setDirectEditOpen(false);
-      onTargetsChange([]);
-      toast.success("Created a new immutable Design revision.");
+      publishTargets([]);
+      if (sourceHydrated) {
+        toast.success("Created a new immutable Design revision.");
+      } else {
+        toast.info("Direct edit saved. Reload the Code view to read its source.");
+      }
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "The direct edit could not be proven.");
     } finally {
@@ -1577,15 +1740,13 @@ export function DesignWorkspaceCanvas({
     }
   }, [
     acceptProjectUpdate,
+    connectedDirectEditPayload,
     directEditBusy,
-    directEditControl,
-    directEditValue,
-    onTargetsChange,
+    hydrateGeneratedSource,
+    publishTargets,
+    prototypeDirectEditPayload,
     savedProject,
-    selectedDirectEditTarget?.selection,
     selectedGroupNode,
-    selectedMediaId,
-    sourceSelection,
   ]);
 
   const undoPrototypeDirectEdit = React.useCallback(async () => {
@@ -1610,24 +1771,30 @@ export function DesignWorkspaceCanvas({
         ...versions,
         [undo.nodeId]: result.artifact.mediaId,
       }));
-      const source = await designerApi.readGeneratedSource(
+      const sourceHydrated = await hydrateGeneratedSource(
         result.project.id,
         undo.lineageId,
         result.artifact.mediaId,
       );
-      setSourceByMediaId((sources) => ({
-        ...sources,
-        [result.artifact.mediaId]: source,
-      }));
       setPrototypeDirectEditUndo(undefined);
-      onTargetsChange([]);
-      toast.success("Created a new exact-revert Design revision.");
+      publishTargets([]);
+      if (sourceHydrated) {
+        toast.success("Created a new exact-revert Design revision.");
+      } else {
+        toast.info("Undo saved. Reload the Code view to read its source.");
+      }
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "The direct edit could not be undone.");
     } finally {
       setPrototypeDirectEditUndoBusy(false);
     }
-  }, [acceptProjectUpdate, onTargetsChange, prototypeDirectEditUndo, prototypeDirectEditUndoBusy]);
+  }, [
+    acceptProjectUpdate,
+    hydrateGeneratedSource,
+    prototypeDirectEditUndo,
+    prototypeDirectEditUndoBusy,
+    publishTargets,
+  ]);
 
   const selectElement = React.useCallback(
     (artifact: ChatHtmlArtifactV1, selection: DesignElementSelectionV1, additive: boolean) => {
@@ -1640,7 +1807,7 @@ export function DesignWorkspaceCanvas({
       const next = additive
         ? [...current.filter((item) => item.mediaId !== artifact.mediaId), target].slice(-5)
         : [target];
-      onTargetsChange(next);
+      publishTargets(next);
       const group = groups.find((candidate) =>
         candidate.revisions.some(({ artifact: revision }) => revision.mediaId === artifact.mediaId),
       );
@@ -1651,26 +1818,30 @@ export function DesignWorkspaceCanvas({
         onSourceSelectionChange(undefined);
       }
     },
-    [groups, onSelectedImagesChange, onSourceSelectionChange, onTargetsChange],
+    [groups, onSelectedImagesChange, onSourceSelectionChange, publishTargets],
   );
 
   const changeVersion = React.useCallback(
     (groupId: string, mediaId: string) => {
-      setActiveVersions((current) => ({ ...current, [groupId]: mediaId }));
+      const nextActiveVersions = {
+        ...activeVersionsRef.current,
+        [groupId]: mediaId,
+      };
+      activeVersionsRef.current = nextActiveVersions;
+      setActiveVersions(nextActiveVersions);
       const group = groups.find((candidate) => candidate.id === groupId);
       const artifact = group?.revisions.find(
         (revision) => revision.artifact.mediaId === mediaId,
       )?.artifact;
       if (!artifact) return;
-      onTargetsChange(
-        targetsRef.current.map((target) =>
-          group?.revisions.some((revision) => revision.artifact.mediaId === target.mediaId)
-            ? { mediaId: artifact.mediaId, artifactId: artifact.id }
-            : target,
-        ),
+      const nextTargets = targetsRef.current.map((target) =>
+        group?.revisions.some((revision) => revision.artifact.mediaId === target.mediaId)
+          ? { mediaId: artifact.mediaId, artifactId: artifact.id }
+          : target,
       );
+      publishTargets(nextTargets);
     },
-    [groups, onTargetsChange],
+    [groups, publishTargets],
   );
 
   const buildDurableCanvas = React.useCallback(
@@ -1683,19 +1854,19 @@ export function DesignWorkspaceCanvas({
         if (node.type === "designArtboard") {
           const data = node.data as DesignArtboardData;
           const prior = previous.get(node.id);
-          const artifactMediaIds = data.group.revisions.map(({ artifact }) => artifact.mediaId);
+          // Generated lineage and revision membership are published by main.
+          // The canvas may persist layout and the user's active-version choice,
+          // but it must never infer ownership from streamed renderer artifacts.
+          if (prior?.kind !== "artboard") continue;
+          const requestedActiveMediaId =
+            activeVersionsRef.current[node.id] ?? data.artifact.mediaId;
           durableNodes.push({
-            id: node.id,
-            kind: "artboard" as const,
-            canonicalOrigin: "generated-artifact" as const,
+            ...prior,
             x: node.position.x,
             y: node.position.y,
-            lineageId:
-              prior?.kind === "artboard" && prior.lineageId
-                ? prior.lineageId
-                : `lineage:${data.group.revisions[0]!.artifact.id}`,
-            artifactMediaIds,
-            activeMediaId: data.artifact.mediaId,
+            activeMediaId: prior.artifactMediaIds?.includes(requestedActiveMediaId)
+              ? requestedActiveMediaId
+              : prior.activeMediaId,
           });
           continue;
         }
@@ -1721,10 +1892,7 @@ export function DesignWorkspaceCanvas({
         });
       }
       for (const previousNode of currentProject.canvas.nodes) {
-        if (
-          previousNode.kind === "source-preview" &&
-          !durableNodes.some(({ id }) => id === previousNode.id)
-        ) {
+        if (!durableNodes.some(({ id }) => id === previousNode.id)) {
           durableNodes.push(previousNode);
         }
       }
@@ -1737,19 +1905,14 @@ export function DesignWorkspaceCanvas({
     [viewport],
   );
 
-  const persistCanvas = React.useCallback(async () => {
-    const currentProject = savedProjectRef.current;
-    if (!currentProject) return;
-    if (persistInFlightRef.current) {
-      persistAgainRef.current = true;
-      return;
-    }
-    const canvas = buildDurableCanvas(nodes);
-    if (!canvas) return;
-    const serialized = JSON.stringify(canvas);
-    if (serialized === lastPersistedCanvasRef.current) return;
-    persistInFlightRef.current = true;
-    try {
+  const persistLatestCanvas = React.useCallback(
+    async (canvasSnapshot?: DesignProjectCanvasV1) => {
+      const currentProject = savedProjectRef.current;
+      if (!currentProject) return undefined;
+      const canvas = canvasSnapshot ?? buildDurableCanvas(nodes);
+      if (!canvas) return currentProject;
+      const serialized = JSON.stringify(canvas);
+      if (serialized === lastPersistedCanvasRef.current) return currentProject;
       const result = await designerApi.updateProject({
         id: currentProject.id,
         expectedRevision: currentProject.revision,
@@ -1768,26 +1931,43 @@ export function DesignWorkspaceCanvas({
         acceptProjectUpdate(result.current);
         lastPersistedCanvasRef.current = JSON.stringify(result.current.canvas);
         setNodes([]);
-        toast.error("This canvas changed in another window. The latest version was restored.");
-      } else {
-        acceptProjectUpdate(result.project);
-        lastPersistedCanvasRef.current = serialized;
+        throw new Error(
+          "This canvas changed in another window. The latest version was restored. Select the revision again before sending.",
+        );
       }
-    } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "The canvas could not be saved.");
-    } finally {
-      persistInFlightRef.current = false;
-      if (persistAgainRef.current) {
-        persistAgainRef.current = false;
-        void persistCanvas();
-      }
-    }
-  }, [acceptProjectUpdate, buildDurableCanvas, nodes]);
+      acceptProjectUpdate(result.project);
+      lastPersistedCanvasRef.current = serialized;
+      return result.project;
+    },
+    [acceptProjectUpdate, buildDurableCanvas, nodes],
+  );
+  persistAttemptRef.current = persistLatestCanvas;
+
+  const flushProjectPersistence = React.useCallback(() => {
+    const targetSnapshot = snapshotDesignTurnTargets(targetsRef.current);
+    const canvasSnapshot = buildDurableCanvas(nodes);
+    clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = undefined;
+    return persistenceBarrierRef.current.flush(async () => {
+      const persistedProject = await persistAttemptRef.current(canvasSnapshot);
+      return persistedProject ? { project: persistedProject, targets: targetSnapshot } : undefined;
+    });
+  }, [buildDurableCanvas, nodes]);
+
+  React.useEffect(() => {
+    onPersistenceBarrierChange?.(flushProjectPersistence);
+    return () => onPersistenceBarrierChange?.(undefined);
+  }, [flushProjectPersistence, onPersistenceBarrierChange]);
 
   React.useEffect(() => {
     if (!savedProject || !assetsHydrated) return;
     clearTimeout(persistTimerRef.current);
-    persistTimerRef.current = setTimeout(() => void persistCanvas(), 350);
+    persistTimerRef.current = setTimeout(() => {
+      persistTimerRef.current = undefined;
+      void flushProjectPersistence().catch((cause: unknown) => {
+        toast.error(cause instanceof Error ? cause.message : "The canvas could not be saved.");
+      });
+    }, 350);
     return () => clearTimeout(persistTimerRef.current);
   }, [
     activeVersions,
@@ -1795,17 +1975,27 @@ export function DesignWorkspaceCanvas({
     canvasImages,
     flowSaveRevision,
     nodes,
-    persistCanvas,
+    flushProjectPersistence,
     savedProject,
     viewport,
   ]);
 
   React.useEffect(() => {
     setNodes((current) => {
-      const positions = new Map(
+      const savedPositions = new Map(
         savedProject?.canvas.nodes.map((node) => [node.id, { x: node.x, y: node.y }]) ?? [],
       );
-      for (const node of current) positions.set(node.id, node.position);
+      const currentPositions = new Map(current.map((node) => [node.id, node.position]));
+      const positions = new Map(savedPositions);
+      for (const [nodeId, position] of currentPositions) positions.set(nodeId, position);
+      const positionsByMediaId = new Map<string, { x: number; y: number }>();
+      for (const node of current) {
+        if (node.type !== "designArtboard") continue;
+        const data = node.data as DesignArtboardData;
+        for (const revision of data.group.revisions) {
+          positionsByMediaId.set(revision.artifact.mediaId, node.position);
+        }
+      }
       const sourceNode: SourceArtboardNode[] =
         sourcePreview?.status === "running"
           ? [
@@ -1843,17 +2033,24 @@ export function DesignWorkspaceCanvas({
           group.revisions.some((item) => item.artifact.mediaId === initialMediaId)
             ? initialMediaId
             : undefined);
-        const artifact =
-          group.revisions.find((item) => item.artifact.mediaId === requested)?.artifact ??
-          group.revisions[group.revisions.length - 1]!.artifact;
+        const revision =
+          group.revisions.find((item) => item.artifact.mediaId === requested) ??
+          group.revisions[group.revisions.length - 1]!;
+        const artifact = revision.artifact;
         const target = targets.find((item) => item.mediaId === artifact.mediaId);
         return {
           id: group.id,
           type: "designArtboard",
-          position: positions.get(group.id) ?? {
-            x: sourceOffset + index * (VIEWPORT_SIZE[viewport].width + 120),
-            y: 0,
-          },
+          position: resolveDesignArtboardPosition({
+            groupId: group.id,
+            revisionMediaIds: group.revisions.map(({ artifact: item }) => item.mediaId),
+            positionsByNodeId: currentPositions,
+            positionsByMediaId,
+            fallback: savedPositions.get(group.id) ?? {
+              x: sourceOffset + index * (VIEWPORT_SIZE[viewport].width + 120),
+              y: 0,
+            },
+          }),
           selected: Boolean(target),
           draggable: mode === "select",
           selectable: mode === "select",
@@ -1863,6 +2060,7 @@ export function DesignWorkspaceCanvas({
             chatId,
             group,
             artifact,
+            ...(revision.source === "live" && livePreviewAuthority ? { livePreviewAuthority } : {}),
             viewport,
             mode,
             target,
@@ -1896,6 +2094,7 @@ export function DesignWorkspaceCanvas({
     exportArtifact,
     groups,
     initialMediaId,
+    livePreviewAuthority,
     mode,
     selectElement,
     selectedImages,
@@ -1956,14 +2155,14 @@ export function DesignWorkspaceCanvas({
           },
         );
       }
-      onTargetsChange(nextTargets.slice(0, 5));
+      publishTargets(nextTargets.slice(0, 5));
       if (nextTargets.length > 0) setInspectorOpen(true);
       onSelectedImagesChange(nextImages.slice(0, 5));
       if (!sourceSelected || nextTargets.length > 0 || nextImages.length > 0) {
         onSourceSelectionChange(undefined);
       }
     },
-    [mode, onSelectedImagesChange, onSourceSelectionChange, onTargetsChange],
+    [mode, onSelectedImagesChange, onSourceSelectionChange, publishTargets],
   );
 
   const addImages = React.useCallback(
@@ -1994,13 +2193,49 @@ export function DesignWorkspaceCanvas({
         );
         setCanvasImages((current) => [...current, ...attachments]);
         onSelectedImagesChange(attachments);
-        onTargetsChange([]);
+        publishTargets([]);
         onSourceSelectionChange(undefined);
       } catch (cause) {
         toast.error(cause instanceof Error ? cause.message : "Could not add those images.");
       }
     },
-    [canvasImages.length, onSelectedImagesChange, onSourceSelectionChange, onTargetsChange],
+    [canvasImages.length, onSelectedImagesChange, onSourceSelectionChange, publishTargets],
+  );
+
+  const removeMissingReferenceAsset = React.useCallback(
+    async (assetId: string) => {
+      const current = savedProjectRef.current;
+      if (!current || referenceRepairBusyAssetId) return;
+      setReferenceRepairBusyAssetId(assetId);
+      try {
+        const result = await designerApi.removeMissingReferenceAsset({
+          projectId: current.id,
+          expectedRevision: current.revision,
+          assetId,
+        });
+        if (result.status === "conflict") {
+          acceptProjectUpdate(result.current);
+          toast.error(
+            "This project changed before the missing image could be removed. The latest version was restored.",
+          );
+          return;
+        }
+        acceptProjectUpdate(result.project);
+        setMissingReferenceAssetIds((assetIds) =>
+          assetIds.filter((candidate) => candidate !== assetId),
+        );
+        toast.success("Missing reference image removed.");
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : "The missing reference image could not be removed.",
+        );
+      } finally {
+        setReferenceRepairBusyAssetId(undefined);
+      }
+    },
+    [acceptProjectUpdate, referenceRepairBusyAssetId],
   );
 
   const updateDesignerAction = React.useCallback(
@@ -2010,10 +2245,19 @@ export function DesignWorkspaceCanvas({
       try {
         const updated =
           operation === "apply"
-            ? await designerApi.applyAction({ projectId: savedProject.id, actionId: action.id })
+            ? await designerApi.applyAction({
+                projectId: savedProject.id,
+                actionId: action.id,
+              })
             : operation === "undo"
-              ? await designerApi.undoAction({ projectId: savedProject.id, actionId: action.id })
-              : await designerApi.rejectAction({ projectId: savedProject.id, actionId: action.id });
+              ? await designerApi.undoAction({
+                  projectId: savedProject.id,
+                  actionId: action.id,
+                })
+              : await designerApi.rejectAction({
+                  projectId: savedProject.id,
+                  actionId: action.id,
+                });
         setDesignerActions((current) => [
           updated,
           ...current.filter((candidate) => candidate.id !== updated.id),
@@ -2112,6 +2356,21 @@ export function DesignWorkspaceCanvas({
       fileLabel: `${action.files.length} files`,
     })),
   );
+  const missingReferenceNotice = missingReferenceAssetIds[0] ? (
+    <MissingReferenceRepairNotice
+      count={missingReferenceAssetIds.length}
+      busy={referenceRepairBusyAssetId === missingReferenceAssetIds[0]}
+      onRemove={() => void removeMissingReferenceAsset(missingReferenceAssetIds[0]!)}
+    />
+  ) : null;
+  const projectReconciliationNotice = projectReconciliationError ? (
+    <ProjectReconciliationNotice
+      message={projectReconciliationError}
+      busy={projectReconciliationBusy}
+      offset={Boolean(missingReferenceNotice)}
+      onRetry={onRetryProjectReconciliation}
+    />
+  ) : null;
 
   if (unavailableMessage) {
     return (
@@ -2119,6 +2378,8 @@ export function DesignWorkspaceCanvas({
         className="relative grid h-full place-items-center bg-well px-8"
         aria-label="Design workspace canvas"
       >
+        {missingReferenceNotice}
+        {projectReconciliationNotice}
         {savedProject?.connectionState === "connected" ? (
           <ProjectConnectionControl
             mode="reconnect"
@@ -2148,6 +2409,8 @@ export function DesignWorkspaceCanvas({
         aria-label="Design workspace canvas"
         data-design-workspace-canvas
       >
+        {missingReferenceNotice}
+        {projectReconciliationNotice}
         <CanvasToolRail
           mode={mode}
           onModeChange={setMode}
@@ -2209,6 +2472,8 @@ export function DesignWorkspaceCanvas({
       data-design-preview-stage
       data-canvas-mode={mode}
     >
+      {missingReferenceNotice}
+      {projectReconciliationNotice}
       <ReactFlow<StudioNode>
         nodes={nodes}
         edges={[]}
@@ -2251,7 +2516,7 @@ export function DesignWorkspaceCanvas({
         mode={mode}
         onModeChange={setMode}
         onNewDesign={() => {
-          onTargetsChange([]);
+          publishTargets([]);
           onSelectedImagesChange([]);
           onRequestComposerFocus();
         }}
@@ -2747,7 +3012,10 @@ export function DesignWorkspaceCanvas({
                 key={link.taskId}
                 type="button"
                 onClick={() =>
-                  void navigate({ to: "/chat/$chatId", params: { chatId: link.chatId } })
+                  void navigate({
+                    to: "/chat/$chatId",
+                    params: { chatId: link.chatId },
+                  })
                 }
                 className="flex items-center justify-between rounded-control bg-control px-3 py-2 text-left text-small text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
@@ -2917,7 +3185,18 @@ export function DesignWorkspaceCanvas({
             )}
             activeTab={inspectorTab}
             source={selectedSource}
-            sourceLoading={Boolean(sourceSelection && !selectedMediaId && connectedSourceLoading)}
+            sourceLoading={
+              Boolean(
+                selectedMediaId &&
+                !selectedSource &&
+                generatedSourceLoadingMediaIds.has(selectedMediaId),
+              ) || Boolean(sourceSelection && !selectedMediaId && connectedSourceLoading)
+            }
+            sourceError={
+              selectedMediaId && !selectedSource
+                ? generatedSourceErrors[selectedMediaId]
+                : undefined
+            }
             compareSource={compareSource}
             revisions={revisionSummaries}
             designerActions={designerActionSummaries}
@@ -2947,6 +3226,17 @@ export function DesignWorkspaceCanvas({
                 void exportArtifact(artifact);
               }
             }}
+            onRetrySource={
+              selectedGroupNode?.lineageId && selectedMediaId
+                ? () => {
+                    void hydrateGeneratedSource(
+                      savedProject.id,
+                      selectedGroupNode.lineageId!,
+                      selectedMediaId,
+                    );
+                  }
+                : undefined
+            }
             onExportBundle={() => {
               if (!selectedGroupNode?.lineageId || !selectedMediaId) return;
               void designerApi
@@ -3507,5 +3797,70 @@ function DesignEmptyState({
         {description}
       </Text>
     </div>
+  );
+}
+
+function ProjectReconciliationNotice({
+  message,
+  busy,
+  offset,
+  onRetry,
+}: {
+  message: string;
+  busy: boolean;
+  offset: boolean;
+  onRetry?: () => void;
+}) {
+  return (
+    <section
+      className={cn(
+        "absolute left-16 right-4 z-30 flex flex-col items-stretch gap-3 rounded-popover bg-popover px-3 py-2 shadow-popover sm:left-20 sm:right-auto sm:max-w-md sm:flex-row sm:items-center",
+        offset ? "top-28 sm:top-24" : "top-4",
+      )}
+      role="alert"
+      aria-label="Design history reconciliation"
+    >
+      <div className="min-w-0 flex-1">
+        <Text variant="small-strong">Design history needs refresh</Text>
+        <Text variant="small" color="secondary">
+          {message} The generated preview remains available while you retry.
+        </Text>
+      </div>
+      <Button size="small" variant="toolbar" disabled={busy || !onRetry} onClick={onRetry}>
+        {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
+        Retry
+      </Button>
+    </section>
+  );
+}
+
+function MissingReferenceRepairNotice({
+  count,
+  busy,
+  onRemove,
+}: {
+  count: number;
+  busy: boolean;
+  onRemove: () => void;
+}) {
+  return (
+    <section
+      className="absolute left-16 right-4 top-4 z-30 flex flex-col items-stretch gap-3 rounded-popover bg-popover px-3 py-2 shadow-popover sm:left-20 sm:right-auto sm:max-w-sm sm:flex-row sm:items-center"
+      role="alert"
+      aria-label="Missing reference image"
+    >
+      <div className="min-w-0 flex-1">
+        <Text variant="small-strong">
+          {count === 1 ? "A reference image is missing" : `${count} reference images are missing`}
+        </Text>
+        <Text variant="small" color="secondary">
+          Remove the unavailable image from this project to finish repair.
+        </Text>
+      </div>
+      <Button size="small" variant="toolbar" disabled={busy} onClick={onRemove}>
+        {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <X aria-hidden="true" />}
+        Remove
+      </Button>
+    </section>
   );
 }
