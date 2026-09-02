@@ -103,7 +103,12 @@ test("route changes select their sidebar before paint and preserve newer project
   );
   assert.match(
     layout,
-    /openResult\.designPublication === "retryable"[\s\S]*Reopen this project to retry recovery/u,
+    /setDesignPublication\(openResult\.designPublication\)[\s\S]*openedRouteIdentity !== projectOrLegacyChatId/u,
+  );
+  assert.match(layout, /designPublication=\{designPublication\}/u);
+  assert.match(
+    layout,
+    /onDesignPublicationResolved=\{\(\) => setDesignPublication\(undefined\)\}/u,
   );
   assert.match(sidebar, /const project = openResult\.project/u);
   assert.match(
