@@ -2003,17 +2003,15 @@ export function ChatPane({
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
-  const designHasVisibleTodo =
-    todoSnapshot?.availability === "unavailable" ||
-    todoSnapshot?.tasks.some(
-      (task) => task.status !== "deleted" && task.status !== "completed",
-    );
+  const designHasActiveTodo =
+    todoSnapshot?.availability === "ready" &&
+    todoSnapshot.tasks.some((task) => task.status === "in_progress");
   const designConversationMustStayOpen =
     presentation === "design" &&
     Boolean(
       questionnaire ||
       pending ||
-      designHasVisibleTodo ||
+      designHasActiveTodo ||
       btwView ||
       isGenerating ||
       isStartingGeneration ||
@@ -2200,7 +2198,11 @@ export function ChatPane({
           <DesignFooterPlacement design={presentation === "design"} host={designFooterHost}>
             <EventPresence
               present={Boolean(pending)}
-              className="aiden-dock-inset chat-content-column pb-2"
+              className={
+                presentation === "design"
+                  ? "w-full px-3 pb-2"
+                  : "aiden-dock-inset chat-content-column pb-2"
+              }
             >
               {pending ? (
                 <div>
@@ -2321,6 +2323,7 @@ export function ChatPane({
             {btwView ? (
               <BtwCard
                 view={btwView}
+                placement={presentation === "design" ? "design-conversation" : "chat"}
                 onAsk={(question) => handleSend(question, [], undefined, { btw: true })}
                 onCancel={async () => {
                   if (btwView.requestId !== "pending") {

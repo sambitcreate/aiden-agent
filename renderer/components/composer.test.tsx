@@ -93,7 +93,20 @@ test("Design placement moves the complete action footer into the conversation ra
   );
   assert.match(
     pane,
-    /const designConversationMustStayOpen =[\s\S]{0,440}designHasVisibleTodo[\s\S]{0,140}btwView/u,
+    /const designConversationMustStayOpen =[\s\S]{0,440}designHasActiveTodo[\s\S]{0,140}btwView/u,
+  );
+  assert.match(
+    pane,
+    /const designHasActiveTodo =[\s\S]{0,180}availability === "ready"[\s\S]{0,180}status === "in_progress"/u,
+  );
+  assert.doesNotMatch(pane, /designHasVisibleTodo/u);
+  assert.match(
+    pane,
+    /presentation === "design"\s*\? "w-full px-3 pb-2"\s*: "aiden-dock-inset chat-content-column pb-2"/u,
+  );
+  assert.match(
+    pane,
+    /<BtwCard[\s\S]{0,160}placement=\{presentation === "design" \? "design-conversation" : "chat"\}/u,
   );
   assert.match(
     pane,

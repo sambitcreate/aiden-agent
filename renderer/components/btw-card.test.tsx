@@ -57,6 +57,36 @@ test("BTW starting card disables cancel and close until the cancellable receipt 
   assert.match(markup, /Questions and answers are not added to the transcript/u);
 });
 
+test("BTW card uses compact full-width chrome in the Design conversation rail", () => {
+  const view: BtwLiveView = {
+    requestId: "btw-1",
+    question: "What changed?",
+    answer: "The layout changed.",
+    status: "completed",
+    hasHistory: true,
+    contextTrimmed: false,
+    sequence: 1,
+  };
+  const designMarkup = renderToStaticMarkup(
+    <BtwCard
+      view={view}
+      placement="design-conversation"
+      onAsk={noop}
+      onCancel={noop}
+      onClear={noop}
+      onClose={noop}
+    />,
+  );
+  assert.match(designMarkup, /class="w-full px-3 pb-2"/u);
+  assert.doesNotMatch(designMarkup, /aiden-dock-inset/u);
+  assert.doesNotMatch(designMarkup, /chat-content-column/u);
+
+  const chatMarkup = renderToStaticMarkup(
+    <BtwCard view={view} onAsk={noop} onCancel={noop} onClear={noop} onClose={noop} />,
+  );
+  assert.match(chatMarkup, /aiden-dock-inset chat-content-column pb-2/u);
+});
+
 test("BTW composer dispatch returns before durable chat append", () => {
   const pane = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
   const branch = pane.indexOf("if (options?.btw)");
