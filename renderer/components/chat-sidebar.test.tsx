@@ -56,7 +56,10 @@ test("Agent and Design are peer workspace modes above the mode-specific search",
     switcher,
     /\{ id: "design", label: "Design", description: "Create, iterate, and explore" \}/u,
   );
-  assert.match(switcher, /const selectMode[\s\S]*closeIfCompact\(\)[\s\S]*onModeChange/u);
+  assert.match(
+    switcher,
+    /const selectMode[\s\S]*if \(onModeChange\(nextMode\)\) closeIfCompact\(\)/u,
+  );
   assert.match(switcher, /onSelect=\{\(\) => selectMode\(item\.id\)\}/u);
   assert.ok(ui.indexOf("{header ?") < ui.indexOf("{searchable ?"));
 });
