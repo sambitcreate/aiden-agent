@@ -689,8 +689,14 @@ export interface McpServer {
 }
 
 export type McpPresetAuth =
-  | { kind: "apiKey"; headerName: string; keyLabel: string; keyHelpUrl: string }
-  | { kind: "oauth" };
+  | {
+      kind: "apiKey";
+      headerName: string;
+      keyLabel: string;
+      keyHelpUrl: string;
+      headerValuePrefix?: string;
+    }
+  | { kind: "oauth"; clientName?: string };
 
 /** A built-in MCP provider definition from the main-process catalog. */
 export interface McpPreset {
