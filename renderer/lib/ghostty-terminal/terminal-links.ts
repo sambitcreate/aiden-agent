@@ -113,7 +113,7 @@ function isWindowsPathStyle(value: string): boolean {
 function joinPath(base: string, next: string, separator: "/" | "\\"): string {
   const cleanBase = base.replace(/[\\/]+$/, "");
   if (separator === "\\") {
-    return `${cleanBase}\\${next.replaceAll("/", "\\")}`;
+    return `${cleanBase}\\${next.replace(/\//gu, "\\")}`;
   }
   return `${cleanBase}/${next.replace(/^\/+/, "")}`;
 }
@@ -169,7 +169,7 @@ export function splitPathAndPosition(value: string): {
 export function extractTerminalLinks(line: string): TerminalLinkMatch[] {
   const urlMatches = collectMatches(line, "url", URL_PATTERN, []);
   const pathMatches = collectMatches(line, "path", FILE_PATH_PATTERN, urlMatches);
-  return [...urlMatches, ...pathMatches].toSorted((a, b) => a.start - b.start);
+  return [...urlMatches, ...pathMatches].sort((a, b) => a.start - b.start);
 }
 
 export function isTerminalUrl(value: string): boolean {
