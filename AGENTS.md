@@ -26,7 +26,7 @@ OpenRouter benchmark insights are also manual-only. The live app may contact onl
 
 ## Papercuts
 
-For complex workflows, record concise implementation friction in `.papercuts/troubleshooting.md` as it occurs.
+Papercut notes are machine-local scratch and are intentionally ignored by Git. For complex workflows, record concise implementation friction in `.papercuts/troubleshooting.md` as it occurs, but do not commit the folder or its contents.
 
 ## Tests
 
