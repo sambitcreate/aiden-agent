@@ -53,26 +53,53 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(skills).toBeHidden();
   await composer.fill("");
 
-  const environment = page.getByRole("button", { name: "Show environment" });
-  const environmentSummary = page.getByRole("complementary", {
-    name: "Environment summary",
+  const environment = page.getByRole("button", { name: "Show Environment" });
+  const quickViewToggle = page.locator("[data-quick-view-toggle]");
+  const environmentSurface = page.getByRole("complementary", {
+    name: "Environment work surface",
   });
+  const quickView = page.getByRole("complementary", { name: "Quick View" });
   await expect(environment).toHaveAttribute("aria-pressed", "false");
+  await expect(quickViewToggle).toHaveAttribute("aria-pressed", "false");
   await environment.click();
-  await expect(environmentSummary).toBeVisible();
-  await expect(environmentSummary.getByText("No workspace folder", { exact: true })).toBeVisible();
+  await expect(environmentSurface).toBeVisible();
+  await expect(environmentSurface.getByRole("tab", { name: "Review" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  const reviewPanel = environmentSurface.getByRole("tabpanel", { name: "Review" });
+  await expect(reviewPanel.getByText("No workspace folder", { exact: true })).toBeVisible();
   await expect(
-    environmentSummary.getByText(
+    reviewPanel.getByText(
+      "Choose a local workspace to review file changes beside the conversation.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Hide Environment" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
+  await environmentSurface.getByRole("button", { name: "Show Quick View" }).click();
+  await expect(quickView).toBeVisible();
+  await expect(quickView.getByText("No workspace folder", { exact: true })).toBeVisible();
+  await expect(
+    quickView.getByText(
       "Choose a local workspace to see its environment, changes, and branch.",
       { exact: true },
     ),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Hide environment" })).toHaveAttribute(
+  await expect(quickViewToggle).toHaveAttribute("aria-label", "Hide Quick View");
+  await expect(quickViewToggle).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await expect(quickView).toBeHidden();
+  await expect(environmentSurface).toBeVisible();
+  await expect(page.getByRole("button", { name: "Hide Environment" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await page.getByRole("button", { name: "Hide environment" }).click();
-  await expect(environmentSummary).toBeHidden();
+  await page.getByRole("button", { name: "Hide Environment" }).click();
+  await expect(environmentSurface).toBeHidden();
 
   const terminal = page.getByRole("button", { name: "Show terminal" });
   await expect(terminal).toBeDisabled();

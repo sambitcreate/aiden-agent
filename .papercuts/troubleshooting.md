@@ -253,3 +253,4 @@ owns; reopen the terminal before judging the final live state.
 - Source-regex coverage made the first Quick View split look independent even though both controls still shared one `open + tab` state. Add reducer transition coverage whenever two UI routes are meant to coexist.
 - Simultaneous right-edge surfaces need measured workbench geometry, not window breakpoints; the app sidebar changes the available allocation without changing the window width.
 - Final dev-window automation was unavailable while macOS was locked; the renderer and Electron process launched, but visual acceptance still requires an unlocked desktop.
+- The deterministic Electron E2E still targeted the retired Environment summary role after the toolbar controls split. Keep the smoke test aligned with both public controls so CI verifies the full Environment surface and independent Quick View state.
