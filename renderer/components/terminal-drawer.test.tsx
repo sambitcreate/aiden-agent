@@ -12,8 +12,9 @@ test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
   const csp = source("../../main-window.html");
   const commands = source("../lib/command-system.tsx");
   const packageJson = source("../../package.json");
+  const runtime = source("../lib/ghostty-terminal/runtime.ts");
 
-  assert.match(drawer, /openGhosttySurface/u);
+  assert.match(drawer, /GhosttyTerminalSurface\.create/u);
   assert.match(drawer, /data-command-scope="terminal"/u);
   assert.doesNotMatch(drawer, /@xterm\/xterm/u);
   assert.doesNotMatch(drawer, /from "@xterm\/addon-fit"/u);
@@ -21,6 +22,8 @@ test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
   assert.doesNotMatch(styles, /\.xterm-viewport/u);
   assert.match(csp, /wasm-unsafe-eval/u);
   assert.match(commands, /\.ghostty-screen/u);
+  assert.match(runtime, /vendor\/ghostty-vt\.wasm/u);
+  assert.match(runtime, /vendor\/ghostty-write-pty\.wasm/u);
   assert.doesNotMatch(packageJson, /"@xterm\/xterm"/u);
   assert.doesNotMatch(packageJson, /"@xterm\/addon-fit"/u);
 });

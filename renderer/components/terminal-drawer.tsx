@@ -3,7 +3,8 @@
 // resized, or hidden without leaving the chat.
 
 import * as React from "react";
-import type { GhosttySurfaceHandle } from "../lib/ghostty-terminal/surface";
+import type { GhosttyTerminalSurface } from "../lib/ghostty-terminal/surface";
+import { ghosttyThemeFromCss } from "../lib/ghostty-terminal/theme";
 import {
   Minus,
   PanelBottomClose,
@@ -307,7 +308,7 @@ function TerminalViewport({
   clearEpoch: number;
 }) {
   const hostRef = React.useRef<HTMLDivElement>(null);
-  const surfaceRef = React.useRef<GhosttySurfaceHandle | null>(null);
+  const surfaceRef = React.useRef<GhosttyTerminalSurface | null>(null);
   const resizeTerminalRef = React.useRef<(() => void) | null>(null);
   const onUnavailableRef = React.useRef(onUnavailable);
   onUnavailableRef.current = onUnavailable;
@@ -316,30 +317,33 @@ function TerminalViewport({
     const host = hostRef.current;
     if (!host) return;
     let cancelled = false;
-    let surface: GhosttySurfaceHandle | null = null;
+    let surface: GhosttyTerminalSurface | null = null;
     let cancelData: (() => void) | undefined;
-    let observer: ResizeObserver | undefined;
-    let disposeInput: { dispose: () => void } | undefined;
     const teardown = () => {
       cancelData?.();
       cancelData = undefined;
-      observer?.disconnect();
-      observer = undefined;
-      disposeInput?.dispose();
-      disposeInput = undefined;
       if (surfaceRef.current === surface) surfaceRef.current = null;
       surface?.dispose();
       surface = null;
       resizeTerminalRef.current = null;
     };
-    void import("../lib/ghostty-terminal/surface").then(async ({ openGhosttySurface }) => {
+    void import("../lib/ghostty-terminal/surface").then(async ({ GhosttyTerminalSurface }) => {
       if (cancelled || !hostRef.current) return;
-      const next = await openGhosttySurface(hostRef.current, {
-        cursorBlink: true,
-        fontFamily: terminalFontFamily(),
-        fontSize: terminalFontSize(),
-        lineHeight: 1.25,
-        theme: terminalTheme(),
+      const next = await GhosttyTerminalSurface.create(hostRef.current, {
+        theme: ghosttyThemeFromCss(terminalTheme()),
+        font: { family: terminalFontFamily(), size: terminalFontSize() },
+        onData: (data) => {
+          void terminalApi.write(session.id, data).catch(() => undefined);
+        },
+        onResize: (cols, rows) => {
+          void terminalApi.resize(session.id, cols, rows).catch(() => undefined);
+        },
+        onSelectionChange: () => undefined,
+        beforeKey: (event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
+          return true;
+        },
+        onLinkActivate: () => undefined,
       });
       const mount = hostRef.current;
       if (cancelled || !mount) {
@@ -351,14 +355,11 @@ function TerminalViewport({
       const resize = () => {
         try {
           next.fit();
-          void terminalApi.resize(session.id, next.cols, next.rows).catch(() => undefined);
         } catch {
           // The host can briefly have zero size during drawer animation.
         }
       };
       resizeTerminalRef.current = resize;
-      observer = new ResizeObserver(() => requestAnimationFrame(resize));
-      observer.observe(mount);
       let hydrated = false;
       let lastSequence = 0;
       const queuedData: Array<{ sequence: number; data: string }> = [];
@@ -385,14 +386,12 @@ function TerminalViewport({
           teardown();
           return;
         }
-        if (buffer) next.write(buffer);
+        if (buffer) next.resetAndWrite(buffer);
         lastSequence = sequence;
         hydrated = true;
         for (const event of queuedData) writeData(event);
         resize();
       } catch {
-        // Electron's main process can restart during development. Remove the
-        // renderer-side tab instead of leaving an inert terminal pane behind.
         teardown();
         if (!cancelled) onUnavailableRef.current();
         return;
@@ -401,13 +400,6 @@ function TerminalViewport({
         teardown();
         return;
       }
-      disposeInput = next.onData(
-        (data) => void terminalApi.write(session.id, data).catch(() => undefined),
-      );
-      next.attachCustomKeyEventHandler((event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
-        return true;
-      });
       requestAnimationFrame(resize);
     });
     return () => {
@@ -421,17 +413,15 @@ function TerminalViewport({
   }, [active]);
 
   React.useEffect(() => {
-    if (clearEpoch > 0) surfaceRef.current?.clear();
+    if (clearEpoch > 0) surfaceRef.current?.write("\x1b[2J\x1b[H");
   }, [clearEpoch]);
 
   React.useEffect(() => {
     const updateAppearance = () => {
-      if (!surfaceRef.current) return;
-      surfaceRef.current.setAppearance({
-        theme: terminalTheme(),
-        fontFamily: terminalFontFamily(),
-        fontSize: terminalFontSize(),
-      });
+      const surface = surfaceRef.current;
+      if (!surface) return;
+      surface.setTheme(ghosttyThemeFromCss(terminalTheme()));
+      void surface.setFont({ family: terminalFontFamily(), size: terminalFontSize() });
       requestAnimationFrame(() => resizeTerminalRef.current?.());
     };
     window.addEventListener(APPEARANCE_CHANGE_EVENT, updateAppearance);
@@ -443,7 +433,7 @@ function TerminalViewport({
       ref={hostRef}
       data-command-scope="terminal"
       onMouseDown={onFocus}
-      className="h-full min-h-0 w-full select-text p-2"
+      className="relative h-full min-h-0 w-full overflow-hidden select-text p-2"
     />
   );
 }

@@ -14,11 +14,25 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## Ghostty / libghostty-vt
 
-Aiden's in-app terminal uses a WebAssembly build of Ghostty's `libghostty-vt` parser (`renderer/lib/ghostty-terminal/ghostty-vt.wasm`) with an Aiden-owned canvas host. Ghostty is MIT-licensed.
+Aiden's in-app terminal uses a WebAssembly build of Ghostty's `libghostty-vt`
+(`renderer/lib/ghostty-terminal/vendor/ghostty-vt.wasm`) plus a 112-byte PTY
+callback trampoline. The browser host is adapted from T3 Code's MIT-licensed
+`libghostty-vt` adapter.
 
-Copyright (c) 2024-2026 Mitchell Hashimoto and Ghostty contributors
+Ghostty: Copyright (c) 2024-2026 Mitchell Hashimoto and Ghostty contributors  
+T3 Code adapter: Copyright (c) 2026 T3 Tools Inc.
 
-MIT License. See https://github.com/ghostty-org/ghostty/blob/main/LICENSE
+MIT License. See `renderer/lib/ghostty-terminal/GHOSTTY-LICENSE` and
+https://github.com/pingdotgg/t3code/blob/main/LICENSE
+
+## Symbols Nerd Font Mono
+
+Vendored as `renderer/lib/ghostty-terminal/fonts/SymbolsNerdFontMono-Regular.woff2`
+for terminal prompt glyphs.
+
+Copyright (c) 2014 Ryan L McIntyre
+
+MIT License. See `renderer/lib/ghostty-terminal/fonts/LICENSE`
 
 
 ## Chart.js
