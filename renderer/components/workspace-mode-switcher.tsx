@@ -34,7 +34,7 @@ export function WorkspaceModeSwitcher({
           type="button"
           aria-label={`Current mode: ${label}. Switch mode`}
           style={{ fontSize: "calc(var(--ui-font-size) + var(--ui-font-size))" }}
-          className="no-drag flex h-14 max-w-full cursor-default items-center gap-2 rounded-[22px] bg-control px-4 font-bold leading-none text-primary outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-focus-ring data-[state=open]:bg-control-active"
+          className="no-drag flex h-14 max-w-full cursor-default items-center gap-2 rounded-[10px] border-0 bg-transparent px-1 font-bold leading-none text-primary shadow-none outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <span className="truncate">{label}</span>
           <ChevronDown className="size-5 shrink-0 text-tertiary" aria-hidden="true" />
@@ -46,14 +46,14 @@ export function WorkspaceModeSwitcher({
             key={item.id}
             aria-checked={mode === item.id}
             role="menuitemradio"
-            className="min-h-20 items-center justify-between rounded-[18px] px-4 py-3 outline-none"
+            className="group min-h-20 items-center justify-between rounded-[18px] px-4 py-3 outline-none"
             onSelect={() => selectMode(item.id)}
           >
             <span className="min-w-0">
-              <span className="block text-[18px] font-medium leading-tight text-primary">
+              <span className="block text-[18px] font-medium leading-tight text-primary group-data-[highlighted]:text-accent-foreground">
                 {item.label}
               </span>
-              <span className="mt-1 block text-[15px] leading-snug text-secondary">
+              <span className="mt-1 block text-[15px] leading-snug text-secondary group-data-[highlighted]:text-accent-foreground">
                 {item.description}
               </span>
             </span>

@@ -282,6 +282,17 @@ test("text entry stays quiet while non-text controls retain visible keyboard foc
   assert.match(modeSwitcher, /Create, iterate, and explore/u);
   assert.match(modeSwitcher, /w-80 rounded-\[24px\] p-2/u);
   assert.match(modeSwitcher, /min-h-20[\s\S]*rounded-\[18px\]/u);
+  assert.match(modeSwitcher, /rounded-\[10px\] border-0 bg-transparent px-1[\s\S]*shadow-none/u);
+  assert.doesNotMatch(modeSwitcher, /rounded-\[22px\] bg-control/u);
+  assert.match(modeSwitcher, /className="group min-h-20/u);
+  assert.match(
+    modeSwitcher,
+    /text-primary group-data-\[highlighted\]:text-accent-foreground/u,
+  );
+  assert.match(
+    modeSwitcher,
+    /text-secondary group-data-\[highlighted\]:text-accent-foreground/u,
+  );
   assert.match(modeSwitcher, /focus-visible:ring-2/u);
   assert.doesNotMatch(modeSwitcher, /focus-visible:outline/u);
   assert.match(styles, /--color-support-red-foreground: var\(--support-red-foreground\);/u);
