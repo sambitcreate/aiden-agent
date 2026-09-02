@@ -2003,15 +2003,11 @@ export function ChatPane({
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
   const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
-  const designHasActiveTodo =
-    todoSnapshot?.availability === "ready" &&
-    todoSnapshot.tasks.some((task) => task.status === "in_progress");
   const designConversationMustStayOpen =
     presentation === "design" &&
     Boolean(
       questionnaire ||
       pending ||
-      designHasActiveTodo ||
       btwView ||
       isGenerating ||
       isStartingGeneration ||
@@ -2141,7 +2137,7 @@ export function ChatPane({
               aria-pressed={designConversationOpen}
               title={
                 designConversationMustStayOpen
-                  ? "Conversation stays open while an active task needs its controls"
+                  ? "Conversation stays open while an active interaction needs its controls"
                   : "Toggle project conversation"
               }
             >
@@ -2548,7 +2544,7 @@ export function ChatPane({
                     onClick={closeDesignConversation}
                     title={
                       designConversationMustStayOpen
-                        ? "Finish or stop the active task before hiding Conversation"
+                        ? "Resolve or stop the active interaction before hiding Conversation"
                         : "Hide project conversation"
                     }
                   >
