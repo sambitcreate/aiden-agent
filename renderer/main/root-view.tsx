@@ -35,19 +35,12 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <EnvironmentCommandSystemProvider>
+          <CommandSystemProvider>
             <RootContent />
-          </EnvironmentCommandSystemProvider>
+          </CommandSystemProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
-  );
-}
-
-function EnvironmentCommandSystemProvider({ children }: React.PropsWithChildren) {
-  const { compactModalOpen } = useEnvironmentPanel();
-  return (
-    <CommandSystemProvider applicationModal={compactModalOpen}>{children}</CommandSystemProvider>
   );
 }
 
@@ -115,7 +108,18 @@ function RootContent() {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
       }
-      environmentPanel.toggle("overview");
+      environmentPanel.toggleTools();
+    },
+    workspaceCommands.environment,
+  );
+  useCommandHandler(
+    "quick-view.toggle",
+    () => {
+      if (environmentPanel.gitOperationBusy) {
+        toast.info("Wait for the current Git operation to finish before changing panels.");
+        return;
+      }
+      environmentPanel.toggleQuickView();
     },
     workspaceCommands.environment,
   );
@@ -297,7 +301,7 @@ function RootContent() {
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
       <OnboardingFlow />
-      <AssistantDock interactionBlocked={environmentPanel.compactModalOpen} />
+      <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
     </div>
   );

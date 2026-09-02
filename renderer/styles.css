@@ -1031,6 +1031,12 @@ textarea {
   }
 }
 
+@container chat-toolbar (max-width: 460px) {
+  .open-in-editor-picker {
+    display: none;
+  }
+}
+
 .usage-profile-content {
   container: usage-profile / inline-size;
 }
@@ -1450,10 +1456,10 @@ textarea {
 :root[data-reduce-motion="false"] .chat-title-reveal-character {
   animation: aiden-chat-title-character-in 160ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
-:root[data-reduce-motion="false"] .environment-summary-card[data-state="open"] {
+:root[data-reduce-motion="false"] .quick-view-card[data-state="open"] {
   animation: aiden-environment-summary-in 180ms cubic-bezier(0, 0, 0.2, 1) both;
 }
-:root[data-reduce-motion="false"] .environment-summary-card[data-state="closed"] {
+:root[data-reduce-motion="false"] .quick-view-card[data-state="closed"] {
   animation: aiden-environment-summary-out 120ms ease-in both;
 }
 :root[data-reduce-motion="false"] .app-update-banner[data-state="open"] {

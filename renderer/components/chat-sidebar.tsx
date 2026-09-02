@@ -236,7 +236,7 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
   }, [bannerKey, snapshot.status]);
 
   // Keep the banner mounted through its exit animation, matching Aiden's
-  // environment summary and assistant dock presence primitives.
+  // Quick View and assistant dock presence primitives.
   React.useLayoutEffect(() => {
     if (open) {
       setDisplayedSnapshot(snapshot);

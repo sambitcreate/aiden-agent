@@ -631,13 +631,7 @@ export function TerminalDrawer() {
             style={{ "--terminal-panes": visibleSessions.length } as React.CSSProperties}
           >
             {visibleSessions.map((session) => (
-              <div
-                key={session.id}
-                className={cn(
-                  "min-h-0 min-w-0 bg-popover",
-                  activeId === session.id && "ring-1 ring-inset ring-accent/35",
-                )}
-              >
+              <div key={session.id} className="min-h-0 min-w-0 bg-popover">
                 <TerminalViewport
                   session={session}
                   active={activeId === session.id}

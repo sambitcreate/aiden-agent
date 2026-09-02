@@ -161,7 +161,9 @@ export function slashCommandAvailability(
   }
   if (
     (command.action.kind === "environment" ||
-      (command.action.kind === "command" && command.action.commandId === "environment.toggle")) &&
+      (command.action.kind === "command" &&
+        (command.action.commandId === "environment.toggle" ||
+          command.action.commandId === "quick-view.toggle"))) &&
     context.environmentBlockedReason
   ) {
     return unavailable(context.environmentBlockedReason);
