@@ -33,6 +33,16 @@ function testOwner(documentId: string): RendererDocumentOwner {
   };
 }
 
+async function reloadSourcePreview(
+  page: PlaywrightTestModule.Page,
+  source: string,
+  revision: number,
+): Promise<void> {
+  const url = new URL(source);
+  url.searchParams.set("aidenRevision", String(revision));
+  await page.goto(url.toString());
+}
+
 test("local React preview binds the exact nested element to its JSX range", async ({ page }) => {
   const projectId = "source-designer-project";
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-source-designer-"));
@@ -165,6 +175,10 @@ test("local React preview binds the exact nested element to its JSX range", asyn
     expect(await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8")).toContain(
       ">Saved</span>",
     );
+    // The product advances the source-preview revision after Apply/Undo. Do
+    // the same here instead of depending on Vite to interpret Aiden's
+    // lossless rename/link save sequence as one HMR change on every OS.
+    await reloadSourcePreview(page, state.src, 1);
     await expect(page.getByTestId("exact-child")).toHaveText("Saved");
     const undone = await sourceDesignerActionService.undo(
       owner,
@@ -176,6 +190,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
     expect(await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8")).toContain(
       ">Save</span>",
     );
+    await reloadSourcePreview(page, state.src, 2);
     await expect(page.getByTestId("exact-child")).toHaveText("Save");
 
     const unmapped = page.getByText("Unmapped child", { exact: true });
