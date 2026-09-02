@@ -15,12 +15,14 @@ import {
   parseAttachments,
 } from "../services/attachment-contract.js";
 import { parseChatMessageContent } from "../services/chat-message-contract.js";
+import type { DesignProjectGenerationPreflightV1 } from "../../renderer/shared/design-projects.js";
 
 const MESSAGE_KEYS = new Set(["attachments", "content", "model", "role"]);
 const META_KEYS = new Set([
   "autoTitle",
   "model",
   "providerId",
+  "designPreflight",
   "skillInvocation",
   "turnId",
 ]);
@@ -37,7 +39,52 @@ export interface ParsedChatAppend {
   autoTitle: boolean;
   turnId: string;
   skillReference?: SkillInvocationV1;
+  designPreflight?: DesignProjectGenerationPreflightV1;
   retainedBytes: number;
+}
+
+const DESIGN_PREFLIGHT_KEYS = new Set([
+  "chatId",
+  "connectionState",
+  "projectId",
+  "projectRevision",
+  "workspaceId",
+]);
+
+function parseDesignPreflight(value: unknown): DesignProjectGenerationPreflightV1 | undefined {
+  if (value === undefined) return undefined;
+  const record = recordWithExactKeys(value, DESIGN_PREFLIGHT_KEYS, "Design preflight");
+  const projectId = boundedString(record.projectId, "Design Project identity", 128, 512).value!;
+  const chatId = boundedString(record.chatId, "Design chat identity", 128, 512).value!;
+  const workspaceId = boundedString(
+    record.workspaceId,
+    "Design workspace identity",
+    128,
+    512,
+    true,
+  ).value;
+  if (!Number.isSafeInteger(record.projectRevision) || (record.projectRevision as number) < 1) {
+    throw new Error("Invalid Design Project revision.");
+  }
+  if (
+    record.connectionState !== "prototype-only" &&
+    record.connectionState !== "connected"
+  ) {
+    throw new Error("Invalid Design Project connection state.");
+  }
+  if (
+    (record.connectionState === "prototype-only" && workspaceId !== undefined) ||
+    (record.connectionState === "connected" && workspaceId === undefined)
+  ) {
+    throw new Error("Invalid Design Project workspace binding.");
+  }
+  return {
+    projectId,
+    projectRevision: record.projectRevision as number,
+    chatId,
+    connectionState: record.connectionState,
+    ...(workspaceId ? { workspaceId } : {}),
+  };
 }
 
 function recordWithExactKeys(
@@ -152,6 +199,10 @@ export function parseChatAppend(
     metaRecord.skillInvocation === undefined
       ? undefined
       : parseSkillInvocationV1(metaRecord.skillInvocation);
+  const designPreflight = parseDesignPreflight(metaRecord.designPreflight);
+  if (skillReference && designPreflight) {
+    throw new Error("Design turns cannot invoke a workspace skill.");
+  }
 
   let retainedBytes = FIXED_APPEND_REPRESENTATION_BYTES;
   retainedBytes += parsedChatId.bytes + contentBytes + parsedMessageModel.bytes;
@@ -162,6 +213,12 @@ export function parseChatAppend(
     retainedBytes += Buffer.byteLength(skillReference.invocationId, "utf8");
     retainedBytes += Buffer.byteLength(skillReference.displayName, "utf8");
     retainedBytes += Buffer.byteLength(skillReference.source, "utf8") + 64;
+  }
+  if (designPreflight) {
+    retainedBytes += Buffer.byteLength(
+      `${designPreflight.projectId}${designPreflight.chatId}${designPreflight.workspaceId ?? ""}`,
+      "utf8",
+    ) + 64;
   }
   if (!Number.isSafeInteger(retainedBytes))
     throw new Error("Invalid chat message payload.");
@@ -177,6 +234,7 @@ export function parseChatAppend(
     autoTitle: metaRecord.autoTitle === true,
     turnId,
     skillReference,
+    designPreflight,
     retainedBytes,
   };
 }

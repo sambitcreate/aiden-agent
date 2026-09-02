@@ -135,7 +135,7 @@ test("a committed append is not presented as unsent when generation start later 
     "const handleStop = React.useCallback",
   );
   const append = handleSend.indexOf("await chatsApi.appendMessage(");
-  const start = handleSend.indexOf("await runGeneration(messageTurnId)");
+  const start = handleSend.indexOf("await runGeneration(messageTurnId");
   assert.ok(append >= 0 && start > append);
   assert.match(handleSend, /if \(!started\.ok && mountedRef\.current\) setError/u);
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);

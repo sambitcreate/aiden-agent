@@ -1,5 +1,6 @@
 # Troubleshooting
 
+- Design project identity and workspace filesystem authority are separate facts. Resolve the durable project by `chatId` before generation: repository-free prototypes may render inline HTML without a folder, while connected projects must still match their exact workspace ID, live root, and permission.
 - `.papercuts/troubleshooting.md` is tracked but also matches an ignore rule; `git add` stages it yet exits nonzero and breaks an `&& git commit` chain. Stage that exact tracked file with `git add -f -- .papercuts/troubleshooting.md` before committing.
 - This repository names its TypeScript gate `npm run type-check`; the common `npm run typecheck` spelling exits before checking anything.
 - Impeccable context discovery can report `hasVisualImplementation: false` for a large existing TSX surface when no `DESIGN.md` or surface brief exists. Treat that as missing design documentation, not proof that the target is greenfield; inspect the component and incumbent tokens before choosing a workflow.
@@ -254,3 +255,13 @@ as code gates and the credentialed GitHub release job as the signing gate.
 Merging Design Workspace after the unified sidebar and RPIV runtime landed caused
 semantic conflicts across chat deletion, extensions, and composer chrome. Sync
 `main` before the final implementation batches when shared chat surfaces are active.
+
+## Design project relationship authority
+
+The canvas-save IPC originally carried `connectionState` and `workspaceId`, so an
+ordinary renderer persistence call could bypass Connected App workspace validation.
+Keep relationship changes in a dedicated CAS mutation and give backing Design chats
+a reserved storage namespace that is never resolved as filesystem authority.
+
+- A renderer-side Design preflight is not a send barrier. Carry its exact project claim into the main append handler, validate it under the project mutation lock, and block relationship changes while the chat turn lease is active; otherwise a cross-window reconnect can still persist a prompt that cannot start.
+- Project-addressed preview IPC is insufficient when the runtime cache is keyed by workspace. Preview sessions and pending source actions must retain project identity so two projects connected to one folder cannot share or revive authority.

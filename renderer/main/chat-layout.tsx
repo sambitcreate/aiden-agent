@@ -5,7 +5,19 @@
 import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { AlertDialog, Button, Dialog, SplitView, Text, toast } from "../components/ui";
+import {
+  AlertDialog,
+  Button,
+  Dialog,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  SplitView,
+  Text,
+  toast,
+} from "../components/ui";
 import { ChatSidebar } from "../components/chat-sidebar";
 import { chatsApi, designerApi, onNotification } from "../lib/ipc";
 import {
@@ -170,7 +182,7 @@ export function ChatIndex() {
 
 export function DesignIndex() {
   const navigate = useNavigate();
-  const { activeId, isLoading } = useActiveWorkspace();
+  const { activeId, isLoading, workspaces } = useActiveWorkspace();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const [projects, setProjects] = React.useState<DesignProjectRecordSummaryV1[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -188,6 +200,26 @@ export function DesignIndex() {
   const [deleteBusy, setDeleteBusy] = React.useState(false);
   const [connection, setConnection] =
     React.useState<DesignProjectConnectionState>("prototype-only");
+  const [connectedWorkspaceId, setConnectedWorkspaceId] = React.useState("");
+  const connectedWorkspaces = React.useMemo(
+    () =>
+      workspaces.filter(
+        (workspace) =>
+          Boolean(workspace.folderPath) &&
+          workspace.permission !== "none" &&
+          !workspace.managedWorktree,
+      ),
+    [workspaces],
+  );
+
+  React.useEffect(() => {
+    if (!createOpen || connection !== "connected") return;
+    setConnectedWorkspaceId((current) => {
+      if (connectedWorkspaces.some(({ id }) => id === current)) return current;
+      if (connectedWorkspaces.some(({ id }) => id === activeId)) return activeId ?? "";
+      return connectedWorkspaces[0]?.id ?? "";
+    });
+  }, [activeId, connectedWorkspaces, connection, createOpen]);
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
@@ -213,14 +245,19 @@ export function DesignIndex() {
   );
 
   const createProject = React.useCallback(async () => {
-    if (!activeId || appendReconciliationRequired || createBusy) return;
+    if (
+      appendReconciliationRequired ||
+      createBusy ||
+      (connection === "connected" && !connectedWorkspaceId)
+    ) {
+      return;
+    }
     setCreateBusy(true);
     try {
       const project = await designerApi.createProject({
         title,
-        chatWorkspaceId: activeId,
         connectionState: connection,
-        ...(connection === "connected" ? { connectedWorkspaceId: activeId } : {}),
+        ...(connection === "connected" ? { workspaceId: connectedWorkspaceId } : {}),
       });
       setCreateOpen(false);
       openProject(project.id);
@@ -229,7 +266,7 @@ export function DesignIndex() {
     } finally {
       setCreateBusy(false);
     }
-  }, [activeId, appendReconciliationRequired, connection, createBusy, openProject, title]);
+  }, [appendReconciliationRequired, connectedWorkspaceId, connection, createBusy, openProject, title]);
 
   const beginRenameProject = React.useCallback(
     (projectId: string) => {
@@ -393,9 +430,13 @@ export function DesignIndex() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         title="New Design Project"
-        description="Choose whether this starts as a repository-free prototype or connects to the active local workspace."
+        description="Start in Aiden's local project storage, or explicitly connect a folder-backed app."
         confirmLabel="Create project"
-        confirmDisabled={!title.trim() || !activeId || appendReconciliationRequired}
+        confirmDisabled={
+          !title.trim() ||
+          appendReconciliationRequired ||
+          (connection === "connected" && !connectedWorkspaceId)
+        }
         busy={createBusy}
         onConfirm={createProject}
       >
@@ -415,12 +456,12 @@ export function DesignIndex() {
               [
                 "prototype-only",
                 "Prototype an idea",
-                "Generated revisions never write a repository.",
+                "Self-contained HTML, CSS, and JavaScript stay in Aiden's private local project storage. Export or connect later.",
               ],
               [
                 "connected",
-                "Connect the active app",
-                "Source changes still require exact Designer Action review.",
+                "Connect a local app",
+                "Choose a folder workspace. Source changes still require exact review.",
               ],
             ] as const
           ).map(([value, label, description]) => (
@@ -439,6 +480,31 @@ export function DesignIndex() {
             </label>
           ))}
         </fieldset>
+        {connection === "connected" ? (
+          <div className="mt-4 grid gap-1.5">
+            <label className="text-small-strong" htmlFor="design-connected-workspace">
+              App workspace
+            </label>
+            {connectedWorkspaces.length > 0 ? (
+              <Select value={connectedWorkspaceId} onValueChange={setConnectedWorkspaceId}>
+                <SelectTrigger id="design-connected-workspace" aria-label="App workspace">
+                  <SelectValue placeholder="Choose a folder workspace" />
+                </SelectTrigger>
+                <SelectContent>
+                  {connectedWorkspaces.map((workspace) => (
+                    <SelectItem key={workspace.id} value={workspace.id}>
+                      {workspace.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Text as="p" variant="small" color="secondary" role="status">
+                Add a folder workspace with file access before connecting an app.
+              </Text>
+            )}
+          </div>
+        ) : null}
       </Dialog>
       <AlertDialog
         open={Boolean(deletePlan)}

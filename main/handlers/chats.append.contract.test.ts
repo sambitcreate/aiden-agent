@@ -17,6 +17,10 @@ const projectionSource = fs.readFileSync(
   new URL("../services/visible-chat-projection.ts", import.meta.url),
   "utf8",
 );
+const designConnectionSource = fs.readFileSync(
+  new URL("../services/design-project-connection-service.ts", import.meta.url),
+  "utf8",
+);
 
 test("private canonical Pi protocol never crosses the renderer chat boundary", () => {
   assert.match(
@@ -91,6 +95,7 @@ test("renderer append parser projects an exact bounded envelope", () => {
     autoTitle: false,
     turnId: "turn-1",
     skillReference: undefined,
+    designPreflight: undefined,
     retainedBytes: 273,
   });
 
@@ -116,6 +121,74 @@ test("renderer append parser projects an exact bounded envelope", () => {
       ),
     /only user messages/u,
   );
+});
+
+test("Design append claims are exact, bounded, and internally consistent", () => {
+  const claim = {
+    projectId: "project:one",
+    projectRevision: 4,
+    chatId: "chat-1",
+    connectionState: "connected" as const,
+    workspaceId: "workspace-2",
+  };
+  assert.deepEqual(
+    parseChatAppend("chat-1", validMessage, { ...validMeta, designPreflight: claim })
+      .designPreflight,
+    claim,
+  );
+  assert.throws(
+    () =>
+      parseChatAppend("chat-1", validMessage, {
+        ...validMeta,
+        designPreflight: { ...claim, workspaceId: undefined },
+      }),
+    /workspace binding/u,
+  );
+  assert.throws(
+    () =>
+      parseChatAppend("chat-1", validMessage, {
+        ...validMeta,
+        designPreflight: { ...claim, forgedPath: "/tmp/app" },
+      }),
+    /Invalid Design preflight fields/u,
+  );
+});
+
+test("main classifies Design chats and requires their exact claim before append", () => {
+  const handler = source.slice(
+    source.indexOf('"chats:appendMessage"'),
+    source.indexOf('"chats:htmlArtifactSrcdoc"'),
+  );
+  const chatRead = handler.indexOf("await chatStore.get(chatId)");
+  const classification = handler.indexOf(
+    "workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID",
+    chatRead,
+  );
+  const missingClaim = handler.indexOf("if (isDesignChat && !designPreflight)", classification);
+  const forgedClaim = handler.indexOf("if (!isDesignChat && designPreflight)", classification);
+  const append = handler.indexOf("designProjectAppendService.runGenerationAppend", forgedClaim);
+  assert.ok(chatRead >= 0);
+  assert.ok(classification > chatRead);
+  assert.ok(missingClaim > classification);
+  assert.ok(forgedClaim > missingClaim);
+  assert.ok(append > forgedClaim);
+});
+
+test("connected Design append holds live workspace authority inside the project mutation lane", () => {
+  const method = designConnectionSource.slice(
+    designConnectionSource.indexOf("async runGenerationAppend"),
+    designConnectionSource.indexOf("async connect", designConnectionSource.indexOf("async runGenerationAppend")),
+  );
+  const lock = method.indexOf("dependencies.runProjectMutation");
+  const initialClaim = method.indexOf("assertDesignProjectGenerationClaim", lock);
+  const workspace = method.indexOf("dependencies.workspaces.run", initialClaim);
+  const repeatedClaim = method.indexOf("assertDesignProjectGenerationClaim", workspace);
+  const append = method.indexOf("return append(() => !signal.aborted)", repeatedClaim);
+  assert.ok(lock >= 0);
+  assert.ok(initialClaim > lock);
+  assert.ok(workspace > initialClaim);
+  assert.ok(repeatedClaim > workspace);
+  assert.ok(append > repeatedClaim);
 });
 
 test("renderer append parser bounds every retained selector", () => {

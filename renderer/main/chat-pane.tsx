@@ -32,6 +32,7 @@ import {
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
 import {
   chatsApi,
+  designerApi,
   aidenRemoteApi,
   createChatTurnId,
   settingsApi,
@@ -183,6 +184,8 @@ export function ChatPane({
 }) {
   const qc = useQueryClient();
   const [memoryOpen, setMemoryOpen] = React.useState(false);
+  const [currentDesignProject, setCurrentDesignProject] =
+    React.useState<DesignProjectSnapshotV1 | undefined>(designProject);
   const navigate = useNavigate();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
@@ -199,6 +202,16 @@ export function ChatPane({
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  const connectedDesignWorkspace =
+    currentDesignProject?.connectionState === "connected"
+      ? workspaces.find((workspace) => workspace.id === currentDesignProject.workspaceId)
+      : undefined;
+  const generationWorkspaceId =
+    presentation === "design"
+      ? currentDesignProject?.connectionState === "connected"
+        ? currentDesignProject.workspaceId
+        : undefined
+      : effectiveWorkspaceId;
   const sideQuestionBlockedReason =
     presentation === "design"
       ? "Side questions are not available in Design Projects."
@@ -220,16 +233,28 @@ export function ChatPane({
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
-  const designWorkspaceBlocked =
-    Boolean(chat.data?.botId) || effectiveWorkspace?.permission === "none";
-  const designWorkspaceDisabled = !effectiveWorkspace || designWorkspaceBlocked;
+  const designWorkspaceBlocked = Boolean(chat.data?.botId);
+  const designWorkspaceDisabled =
+    presentation === "design" &&
+    (!currentDesignProject ||
+      designWorkspaceBlocked ||
+      (currentDesignProject.connectionState === "connected" &&
+        (!connectedDesignWorkspace?.folderPath || connectedDesignWorkspace.permission === "none")));
   const designWorkspaceTitle = chat.data?.botId
     ? "Design workspace is unavailable in Bot chats"
-    : effectiveWorkspace?.permission === "none"
-      ? "Give this workspace access before opening Design"
-      : !effectiveWorkspace
-        ? "Choose a workspace before opening Design"
+    : currentDesignProject?.connectionState === "connected" &&
+        connectedDesignWorkspace?.permission === "none"
+      ? "Give the connected app workspace file access before continuing"
+      : currentDesignProject?.connectionState === "connected" &&
+          !connectedDesignWorkspace?.folderPath
+        ? "Reconnect this project to an available folder workspace"
+        : !currentDesignProject
+          ? "This Design Project is unavailable"
         : "Design workspace";
+
+  React.useEffect(() => {
+    setCurrentDesignProject(designProject);
+  }, [designProject]);
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -922,7 +947,7 @@ export function ChatPane({
   }, []);
 
   const runGeneration = React.useCallback(
-    (messageTurnId: string) => {
+    (messageTurnId: string, preparedWorkspaceId = generationWorkspaceId) => {
       const generationIntent = generationIntentRef.current;
       setError(null);
       setIsStoppingGeneration(false);
@@ -978,7 +1003,7 @@ export function ChatPane({
       const handle = startGeneration(
         {
           chatId,
-          workspaceId: effectiveWorkspaceId,
+          workspaceId: preparedWorkspaceId,
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
@@ -1248,7 +1273,7 @@ export function ChatPane({
       clearTextStreaming,
       codexThinkingLevel,
       codexThinkingSupported,
-      effectiveWorkspaceId,
+      generationWorkspaceId,
       environmentPanel.subagentsEnabled,
       googleThinkingLevel,
       googleThinkingSupported,
@@ -1336,6 +1361,27 @@ export function ChatPane({
       if (detachedGenerationDraining) {
         throw new Error("Wait for the previous response to finish saving before sending again.");
       }
+      let preparedWorkspaceId = generationWorkspaceId;
+      let designPreflight: Awaited<ReturnType<typeof designerApi.preflightGeneration>> | undefined;
+      if (design) {
+        if (!currentDesignProject) throw new Error("This Design Project is unavailable.");
+        const preflight = await designerApi.preflightGeneration({
+          projectId: currentDesignProject.id,
+        });
+        if (
+          preflight.projectId !== currentDesignProject.id ||
+          preflight.chatId !== chatId ||
+          preflight.projectRevision !== currentDesignProject.revision ||
+          preflight.connectionState !== currentDesignProject.connectionState ||
+          preflight.workspaceId !== currentDesignProject.workspaceId
+        ) {
+          throw new Error(
+            "This Design Project changed in another window. Reopen it before sending this prompt.",
+          );
+        }
+        preparedWorkspaceId = preflight.workspaceId;
+        designPreflight = preflight;
+      }
       const generationIntent = ++generationIntentRef.current;
       const messageTurnId = createChatTurnId();
       setIsStoppingGeneration(false);
@@ -1356,6 +1402,7 @@ export function ChatPane({
               autoTitle: true,
               turnId: messageTurnId,
               skillInvocation,
+              designPreflight,
             },
           );
         } catch (appendError) {
@@ -1395,7 +1442,7 @@ export function ChatPane({
           setSourceDesignSelection(undefined);
           setDesignCanvasImages([]);
         }
-        const started = await runGeneration(messageTurnId);
+        const started = await runGeneration(messageTurnId, preparedWorkspaceId);
         // The user message crossed its durability barrier in appendMessage.
         // Start rejection is surfaced by the stream callback but cannot turn
         // that committed message back into an unsent composer payload.
@@ -1413,6 +1460,7 @@ export function ChatPane({
     [
       chatId,
       computerUseSaving,
+      currentDesignProject,
       designCanvasImages,
       designTargets,
       detachedGenerationDraining,
@@ -1420,6 +1468,7 @@ export function ChatPane({
       sourceDesignSelection,
       imageArtifactRecoveryPending,
       imageArtifactRecoveryUnavailable,
+      generationWorkspaceId,
       providerId,
       model,
       qc,
@@ -1983,9 +2032,11 @@ export function ChatPane({
         title={
           presentation === "design" ? (
             <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate">{designProject?.title ?? "Design Project"}</span>
+              <span className="truncate">{currentDesignProject?.title ?? "Design Project"}</span>
               <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
-                {designProject?.connectionState === "connected" ? "Connected App" : "Prototype"}
+                {currentDesignProject?.connectionState === "connected"
+                  ? "Connected App"
+                  : "Prototype"}
               </span>
               <span className="hidden text-small font-normal text-tertiary sm:inline">
                 Saved locally
@@ -2464,7 +2515,7 @@ export function ChatPane({
                 <DesignWorkspaceCanvas
                   chatId={chatId}
                   project={designProject}
-                  workspaceId={effectiveWorkspaceId}
+                  workspaceId={generationWorkspaceId}
                   artifacts={designArtifacts}
                   generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
                   initialMediaId={initialDesignMediaId}
@@ -2475,6 +2526,7 @@ export function ChatPane({
                   onTargetsChange={setDesignTargets}
                   onSourceSelectionChange={setSourceDesignSelection}
                   onSelectedImagesChange={setDesignCanvasImages}
+                  onProjectChange={setCurrentDesignProject}
                   onRequestComposerFocus={() => composerRef.current?.focus({ preventScroll: true })}
                 />
               </div>

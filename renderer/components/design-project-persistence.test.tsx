@@ -4,6 +4,7 @@ import test from "node:test";
 
 const canvas = readFileSync(new URL("./design-workspace.tsx", import.meta.url), "utf8");
 const layout = readFileSync(new URL("../main/chat-layout.tsx", import.meta.url), "utf8");
+const pane = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
 const handlers = readFileSync(new URL("../../main/handlers/designer.ts", import.meta.url), "utf8");
 const main = readFileSync(new URL("../../main/index.ts", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
@@ -20,6 +21,25 @@ test("Design routes migrate legacy chats and open projects by durable identity",
   assert.match(layout, /designerApi\.listProjects\(\)/u);
 });
 
+test("Prototype creation is workspace-independent while Connected App creation is explicit", () => {
+  assert.match(layout, /connectionState: connection,\s*\.\.\.\(connection === "connected"/u);
+  assert.doesNotMatch(layout, /if \(!activeId\) return;[\s\S]{0,500}designerApi\.createProject/u);
+  assert.match(layout, /Boolean\(workspace\.folderPath\)/u);
+  assert.match(layout, /workspace\.permission !== "none"/u);
+  assert.match(layout, /!workspace\.managedWorktree/u);
+  assert.match(layout, /Start in Aiden's local project storage/u);
+});
+
+test("Design generation consumes a main-owned preflight receipt before durable append", () => {
+  const preflightIndex = pane.indexOf("designerApi.preflightGeneration");
+  const appendIndex = pane.indexOf("chatsApi.appendMessage", preflightIndex);
+  assert.ok(preflightIndex >= 0);
+  assert.ok(appendIndex > preflightIndex);
+  assert.match(pane, /preflight\.projectId !== currentDesignProject\.id/u);
+  assert.match(pane, /preparedWorkspaceId = preflight\.workspaceId/u);
+  assert.match(pane, /runGeneration\(messageTurnId, preparedWorkspaceId\)/u);
+});
+
 test("canvas persists exact arrangement, device viewport, flow viewport, and active revisions", () => {
   assert.match(canvas, /project\.canvas\.flowViewport/u);
   assert.match(canvas, /instance\.setViewport\(savedProject\.canvas\.flowViewport\)/u);
@@ -30,6 +50,17 @@ test("canvas persists exact arrangement, device viewport, flow viewport, and act
   assert.match(canvas, /lineage:\$\{data\.group\.revisions\[0\]!\.artifact\.id\}/u);
   assert.match(canvas, /setTimeout\(\(\) => void persistCanvas\(\), 350\)/u);
   assert.match(canvas, /result\.status === "conflict"/u);
+});
+
+test("project connection and local preview are separate, state-appropriate actions", () => {
+  assert.match(canvas, /"Connect app…"/u);
+  assert.match(canvas, /"Reconnect app…"/u);
+  assert.match(canvas, /"Start local preview"/u);
+  assert.match(canvas, /"Local preview"/u);
+  assert.match(canvas, /savedProject\?\.connectionState === "prototype-only"/u);
+  assert.match(canvas, /designerApi\.connectProject/u);
+  assert.match(canvas, /Generated HTML, CSS, and JavaScript stay in Aiden/u);
+  assert.doesNotMatch(canvas, /running \? "Local app" : "Connect app"/u);
 });
 
 test("reference images are content-addressed in main and hydrated before canvas writes", () => {

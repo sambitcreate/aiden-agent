@@ -75,6 +75,7 @@ import type {
   DesignProjectConnectionState,
   DesignProjectDeletePlanV1,
   DesignDirectEditV1,
+  DesignProjectGenerationPreflightV1,
   DesignProjectMutationResultV1,
   DesignProjectRecordSummaryV1,
   DesignProjectSnapshotV1,
@@ -763,15 +764,19 @@ export const designerApi = {
     invoke<DesignProjectSnapshotV1 | undefined>("designer:openProject", projectOrLegacyChatId),
   createProject: (input: {
     title: string;
-    chatWorkspaceId: string;
     connectionState: DesignProjectConnectionState;
-    connectedWorkspaceId?: string;
+    workspaceId?: string;
   }) => invoke<DesignProjectSnapshotV1>("designer:createProject", input),
+  connectProject: (input: {
+    projectId: string;
+    expectedRevision: number;
+    workspaceId: string;
+  }) => invoke<DesignProjectMutationResultV1>("designer:connectProject", input),
+  preflightGeneration: (input: { projectId: string }) =>
+    invoke<DesignProjectGenerationPreflightV1>("designer:preflightGeneration", input),
   updateProject: (input: {
     id: string;
     expectedRevision: number;
-    connectionState: DesignProjectConnectionState;
-    workspaceId?: string;
     canvas: DesignProjectCanvasV1;
     referenceAssetIds: string[];
     designSystemBinding?: { id: string; revision: number };
@@ -923,15 +928,19 @@ export const designerApi = {
       "designer:readReferenceAsset",
       assetId,
     ),
-  previewState: (workspaceId: string) =>
-    invoke<SourcePreviewStateV1>("designer:previewState", workspaceId),
-  startPreview: (workspaceId: string, scriptId: string) =>
-    invoke<SourcePreviewStateV1>("designer:startPreview", workspaceId, scriptId),
-  stopPreview: (workspaceId: string) => invoke<void>("designer:stopPreview", workspaceId),
-  bindSelection: (workspaceId: string, sessionId: string, descriptor: SourceElementDescriptorV1) =>
-    invoke<SourceSelectionBindingV1>("designer:bindSelection", workspaceId, sessionId, descriptor),
-  listActions: (chatId: string, workspaceId: string) =>
-    invoke<DesignerActionV1[]>("designer:listActions", chatId, workspaceId),
+  previewState: (input: { projectId: string }) =>
+    invoke<SourcePreviewStateV1>("designer:previewState", input),
+  startPreview: (input: { projectId: string; scriptId: string }) =>
+    invoke<SourcePreviewStateV1>("designer:startPreview", input),
+  stopPreview: (input: { projectId: string }) =>
+    invoke<void>("designer:stopPreview", input),
+  bindSelection: (input: {
+    projectId: string;
+    sessionId: string;
+    descriptor: SourceElementDescriptorV1;
+  }) => invoke<SourceSelectionBindingV1>("designer:bindSelection", input),
+  listActions: (input: { projectId: string }) =>
+    invoke<DesignerActionV1[]>("designer:listActions", input),
   listMultifileActions: (projectId: string) =>
     invoke<SourceDesignerMultifileActionViewV1[]>("designer:listMultifileActions", projectId),
   applyMultifileAction: (projectId: string, actionId: string) =>
@@ -946,13 +955,14 @@ export const designerApi = {
       projectId,
       actionId,
     ),
-  applyAction: (workspaceId: string, actionId: string) =>
-    invoke<DesignerActionV1>("designer:applyAction", workspaceId, actionId),
-  rejectAction: (actionId: string) => invoke<DesignerActionV1>("designer:rejectAction", actionId),
-  undoAction: (workspaceId: string, actionId: string) =>
-    invoke<DesignerActionV1>("designer:undoAction", workspaceId, actionId),
+  applyAction: (input: { projectId: string; actionId: string }) =>
+    invoke<DesignerActionV1>("designer:applyAction", input),
+  rejectAction: (input: { projectId: string; actionId: string }) =>
+    invoke<DesignerActionV1>("designer:rejectAction", input),
+  undoAction: (input: { projectId: string; actionId: string }) =>
+    invoke<DesignerActionV1>("designer:undoAction", input),
   onPreviewChanged: (
-    handler: (payload: { workspaceId: string; state: SourcePreviewStateV1 }) => void,
+    handler: (payload: { projectId: string; workspaceId: string; state: SourcePreviewStateV1 }) => void,
   ) => onNotification("designer:preview-changed", handler),
   onActionChanged: (handler: (payload: { action: DesignerActionV1 }) => void) =>
     onNotification("designer:action-changed", handler),
@@ -1146,6 +1156,7 @@ export const chatsApi = {
       autoTitle?: boolean;
       turnId: string;
       skillInvocation?: SkillInvocationV1;
+      designPreflight?: DesignProjectGenerationPreflightV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>

@@ -49,7 +49,10 @@ import {
 } from "../services/context-lifecycle-adapters.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { DesignProjectDeletionConfirmationRequiredError } from "../services/design-project-lifecycle.js";
-import { designProjectLifecycle } from "../services/design-project-store-main.js";
+import {
+  designProjectLifecycle,
+  designProjectStore,
+} from "../services/design-project-store-main.js";
 import { botStore } from "../services/bot-store.js";
 import { selectCanonicalBotChat } from "../services/bot-canonical-chat.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
@@ -64,6 +67,15 @@ import { isPackagedRuntime } from "../runtime-mode.js";
 import { safeMemoryExportFileName, writeAidenMemoryExport } from "../services/memory-export.js";
 import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
 import { todoSnapshotForRenderer, unavailableTodoSnapshot } from "../../renderer/shared/todo.js";
+import { createDesignProjectConnectionService } from "../services/design-project-connection-service.js";
+import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
+
+const designProjectAppendService = createDesignProjectConnectionService({
+  projects: designProjectStore,
+  workspaces: workspaceEnvironmentApplicationService,
+  runProjectMutation: (operation) => designProjectLifecycle.runProjectMutation(operation),
+});
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -617,6 +629,13 @@ export function registerChatHistoryHandlers(): void {
         chatId,
         confirmation,
         deleteOrdinaryChat: (ordinaryChatId) => chatApplicationService.remove(ordinaryChatId),
+        beforeDesignDelete: (plan) => {
+          if (llmClient.isChatBusy(plan.chatId)) {
+            throw new Error(
+              "Finish or stop the current Design response before deleting this project.",
+            );
+          }
+        },
       });
       return { status: "deleted" as const, kind: result.kind };
     } catch (error) {
@@ -642,6 +661,7 @@ export function registerChatHistoryHandlers(): void {
       autoTitle,
       turnId,
       skillReference,
+      designPreflight,
       retainedBytes,
     } = parsed;
     const owner = rendererDocumentOwner(
@@ -677,16 +697,26 @@ export function registerChatHistoryHandlers(): void {
             ),
           );
         }
-        const authoritativeChat = skillReference ? await chatStore.get(chatId) : undefined;
-        if (skillReference && !authoritativeChat) {
+        const authoritativeChat = await chatStore.get(chatId);
+        if (!authoritativeChat) {
           throw new Error("This chat is no longer available.");
         }
         if (!turn.isActive()) {
           throw new Error("This message turn expired before it could be saved.");
         }
-        const workspaceId = authoritativeChat
-          ? persistedChatWorkspaceId(authoritativeChat.workspaceId)
-          : undefined;
+        const workspaceId = persistedChatWorkspaceId(authoritativeChat.workspaceId);
+        const isDesignChat = workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID;
+        if (isDesignChat && !designPreflight) {
+          throw new Error(
+            "This Design Project changed before the prompt could be saved. Review it and try again.",
+          );
+        }
+        if (!isDesignChat && designPreflight) {
+          throw new Error("Design Project authority cannot be used with this chat.");
+        }
+        if (isDesignChat && skillReference) {
+          throw new Error("Design Project prompts cannot invoke workspace skills.");
+        }
         const skillWorkspaceId = skillReference
           ? requireSkillInvocationWorkspace(workspaceId)
           : undefined;
@@ -705,13 +735,16 @@ export function registerChatHistoryHandlers(): void {
         }
         const userMessageId = randomUUID();
         const isCurrent = () => turn.isActive() && workspaceAdmission?.signal.aborted !== true;
-        const append = (skill?: {
-          provenance: {
-            version: 1;
-            name: string;
-            source: "configured" | "workspace" | "global";
-          };
-        }) =>
+        const append = (
+          skill?: {
+            provenance: {
+              version: 1;
+              name: string;
+              source: "configured" | "workspace" | "global";
+            };
+          },
+          appendIsCurrent: () => boolean = () => true,
+        ) =>
           appendChatMessageWithReconciliation({
             messageId: userMessageId,
             append: () =>
@@ -735,11 +768,23 @@ export function registerChatHistoryHandlers(): void {
                   model: metaModel,
                   autoTitle,
                   expectedWorkspaceId: workspaceId,
-                  isCurrent,
+                  isCurrent: () => isCurrent() && appendIsCurrent(),
                 },
               ),
             recover: () => chatStore.get(chatId),
           });
+        const appendDesignTurn = async () => {
+          if (!designPreflight || designPreflight.chatId !== chatId) {
+            throw new Error(
+              "This Design Project changed before the prompt could be saved. Review it and try again.",
+            );
+          }
+          return designProjectAppendService.runGenerationAppend(
+            owner,
+            designPreflight,
+            (designIsCurrent) => append(undefined, designIsCurrent),
+          );
+        };
         const chat = skillReference
           ? await commitSkillInvocationForAppend(
               {
@@ -758,7 +803,9 @@ export function registerChatHistoryHandlers(): void {
                 append,
               },
             )
-          : await append();
+          : isDesignChat
+            ? await appendDesignTurn()
+            : await append();
         appended = true;
         return chatForRenderer(chat);
       } catch (error) {

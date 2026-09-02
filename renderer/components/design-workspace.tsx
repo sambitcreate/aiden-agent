@@ -49,7 +49,16 @@ import {
 } from "../shared/design-workspace";
 import { chatsApi, designerApi, workspacesApi } from "../lib/ipc";
 import { cn } from "../lib/ui-utils";
-import { Button, Dialog, Text, toast } from "./ui";
+import {
+  Button,
+  Dialog,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  Text,
+  toast,
+} from "./ui";
 import { HtmlArtifactIframe } from "./html-artifact-frame";
 import { htmlArtifactThemeTokensFromDocument } from "../lib/html-artifact-preview";
 import {
@@ -565,6 +574,7 @@ export function DesignWorkspaceCanvas({
   onSourceSelectionChange,
   onSelectedImagesChange,
   onRequestComposerFocus,
+  onProjectChange,
 }: {
   chatId: string;
   project?: DesignProjectSnapshotV1;
@@ -580,6 +590,7 @@ export function DesignWorkspaceCanvas({
   onSourceSelectionChange: (selection: SourceSelectionBindingV1 | undefined) => void;
   onSelectedImagesChange: (images: Attachment[]) => void;
   onRequestComposerFocus: () => void;
+  onProjectChange: (project: DesignProjectSnapshotV1) => void;
 }) {
   const navigate = useNavigate();
   const [viewport, setViewport] = React.useState<DesignViewport>("desktop");
@@ -589,6 +600,10 @@ export function DesignWorkspaceCanvas({
   const [sourcePreview, setSourcePreview] = React.useState<SourcePreviewStateV1>();
   const [previewSetupOpen, setPreviewSetupOpen] = React.useState(false);
   const [previewBusy, setPreviewBusy] = React.useState(false);
+  const [connectionOpen, setConnectionOpen] = React.useState(false);
+  const [connectionBusy, setConnectionBusy] = React.useState(false);
+  const [connectionWorkspaces, setConnectionWorkspaces] = React.useState<Workspace[]>([]);
+  const [connectionWorkspaceId, setConnectionWorkspaceId] = React.useState("");
   const [sourceRevision, setSourceRevision] = React.useState(0);
   const [designerActions, setDesignerActions] = React.useState<DesignerActionV1[]>([]);
   const [actionBusy, setActionBusy] = React.useState(false);
@@ -969,7 +984,7 @@ export function DesignWorkspaceCanvas({
   }, [savedProject?.id, selectedGroupId, selectedGroupNode?.lineageId, selectedRevisionKey]);
 
   React.useEffect(() => {
-    if (!connectedWorkspaceId || unavailableMessage) {
+    if (!connectedWorkspaceId || !savedProject || unavailableMessage) {
       setSourcePreview(undefined);
       setDesignerActions([]);
       setMultifileActions([]);
@@ -977,8 +992,8 @@ export function DesignWorkspaceCanvas({
     }
     let cancelled = false;
     void Promise.all([
-      designerApi.previewState(connectedWorkspaceId),
-      designerApi.listActions(chatId, connectedWorkspaceId),
+      designerApi.previewState({ projectId: savedProject.id }),
+      designerApi.listActions({ projectId: savedProject.id }),
       ...(savedProject ? [designerApi.listMultifileActions(savedProject.id)] : []),
     ])
       .then(([preview, actions, multifile]) => {
@@ -993,10 +1008,14 @@ export function DesignWorkspaceCanvas({
         }
       });
     const offPreview = designerApi.onPreviewChanged((payload) => {
-      if (payload.workspaceId === connectedWorkspaceId) setSourcePreview(payload.state);
+      if (payload.projectId === savedProject.id) setSourcePreview(payload.state);
     });
     const offAction = designerApi.onActionChanged(({ action }) => {
-      if (action.chatId !== chatId || action.workspaceId !== connectedWorkspaceId) return;
+      if (
+        action.projectId !== savedProject.id ||
+        action.chatId !== chatId ||
+        action.workspaceId !== connectedWorkspaceId
+      ) return;
       setDesignerActions((current) => [
         action,
         ...current.filter((candidate) => candidate.id !== action.id),
@@ -1093,7 +1112,66 @@ export function DesignWorkspaceCanvas({
   const acceptProjectUpdate = React.useCallback((next: DesignProjectSnapshotV1) => {
     savedProjectRef.current = next;
     setSavedProject(next);
-  }, []);
+    onProjectChange(next);
+  }, [onProjectChange]);
+
+  const openProjectConnection = React.useCallback(async () => {
+    if (!savedProjectRef.current || connectionBusy) return;
+    setConnectionBusy(true);
+    try {
+      const candidates = (await workspacesApi.list()).filter(
+        (workspace) =>
+          Boolean(workspace.folderPath) &&
+          workspace.permission !== "none" &&
+          !workspace.managedWorktree,
+      );
+      setConnectionWorkspaces(candidates);
+      setConnectionWorkspaceId((selected) =>
+        candidates.some(({ id }) => id === selected)
+          ? selected
+          : (candidates.find(({ id }) => id === savedProjectRef.current?.workspaceId)?.id ??
+            candidates[0]?.id ??
+            ""),
+      );
+      setConnectionOpen(true);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Local app workspaces are unavailable.");
+    } finally {
+      setConnectionBusy(false);
+    }
+  }, [connectionBusy]);
+
+  const connectProject = React.useCallback(async () => {
+    const current = savedProjectRef.current;
+    if (!current || !connectionWorkspaceId || connectionBusy) return;
+    setConnectionBusy(true);
+    try {
+      const result = await designerApi.connectProject({
+        projectId: current.id,
+        expectedRevision: current.revision,
+        workspaceId: connectionWorkspaceId,
+      });
+      if (result.status === "conflict") {
+        acceptProjectUpdate(result.current);
+        throw new Error("This Design Project changed. Review it before connecting again.");
+      }
+      acceptProjectUpdate(result.project);
+      setSourcePreview(undefined);
+      setDesignerActions([]);
+      setMultifileActions([]);
+      onSourceSelectionChange(undefined);
+      setConnectionOpen(false);
+      toast.success(
+        current.connectionState === "prototype-only"
+          ? "Prototype connected. Its conversation and revisions are unchanged."
+          : "Local app connection updated.",
+      );
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The local app could not be connected.");
+    } finally {
+      setConnectionBusy(false);
+    }
+  }, [acceptProjectUpdate, connectionBusy, connectionWorkspaceId, onSourceSelectionChange]);
 
   const updateDesignSystem = React.useCallback(async () => {
     const current = savedProjectRef.current;
@@ -1326,11 +1404,13 @@ export function DesignWorkspaceCanvas({
     async (descriptor: SourceElementDescriptorV1) => {
       if (!connectedWorkspaceId || sourcePreview?.status !== "running") return;
       try {
-        const binding = await designerApi.bindSelection(
-          connectedWorkspaceId,
-          sourcePreview.sessionId,
+        const projectId = savedProjectRef.current?.id;
+        if (!projectId) return;
+        const binding = await designerApi.bindSelection({
+          projectId,
+          sessionId: sourcePreview.sessionId,
           descriptor,
-        );
+        });
         onSourceSelectionChange(binding);
         onTargetsChange([]);
         onSelectedImagesChange([]);
@@ -1356,8 +1436,6 @@ export function DesignWorkspaceCanvas({
           const saved = await designerApi.updateProject({
             id: current.id,
             expectedRevision: current.revision,
-            connectionState: current.connectionState,
-            workspaceId: current.workspaceId,
             canvas: current.canvas,
             referenceAssetIds: current.referenceAssetIds,
             ...(current.designSystemBinding
@@ -1371,7 +1449,9 @@ export function DesignWorkspaceCanvas({
           }
           acceptProjectUpdate(saved.project);
         }
-        const state = await designerApi.startPreview(connectedWorkspaceId, scriptId);
+        const projectId = savedProjectRef.current?.id;
+        if (!projectId) throw new Error("This Design Project is unavailable.");
+        const state = await designerApi.startPreview({ projectId, scriptId });
         setSourcePreview(state);
         setPreviewSetupOpen(false);
         requestAnimationFrame(() => void flowRef.current?.fitView({ padding: 0.18, maxZoom: 0.9 }));
@@ -1388,8 +1468,10 @@ export function DesignWorkspaceCanvas({
     if (!connectedWorkspaceId || previewBusy) return;
     setPreviewBusy(true);
     try {
-      await designerApi.stopPreview(connectedWorkspaceId);
-      setSourcePreview(await designerApi.previewState(connectedWorkspaceId));
+      const projectId = savedProjectRef.current?.id;
+      if (!projectId) throw new Error("This Design Project is unavailable.");
+      await designerApi.stopPreview({ projectId });
+      setSourcePreview(await designerApi.previewState({ projectId }));
       onSourceSelectionChange(undefined);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Could not stop the local app.");
@@ -1464,8 +1546,7 @@ export function DesignWorkspaceCanvas({
         edit,
       });
       const revertMediaId = selectedMediaId;
-      savedProjectRef.current = result.project;
-      setSavedProject(result.project);
+      acceptProjectUpdate(result.project);
       setDirectEditArtifacts((current) => [
         ...current.filter(({ artifact }) => artifact.mediaId !== result.artifact.mediaId),
         { artifact: result.artifact, source: "persisted" },
@@ -1496,6 +1577,7 @@ export function DesignWorkspaceCanvas({
       setDirectEditBusy(false);
     }
   }, [
+    acceptProjectUpdate,
     directEditBusy,
     directEditControl,
     directEditValue,
@@ -1520,8 +1602,7 @@ export function DesignWorkspaceCanvas({
         revertMediaId: undo.revertMediaId,
         undoId: undo.undoId,
       });
-      savedProjectRef.current = result.project;
-      setSavedProject(result.project);
+      acceptProjectUpdate(result.project);
       setDirectEditArtifacts((artifacts) => [
         ...artifacts.filter(({ artifact }) => artifact.mediaId !== result.artifact.mediaId),
         { artifact: result.artifact, source: "persisted" },
@@ -1547,7 +1628,7 @@ export function DesignWorkspaceCanvas({
     } finally {
       setPrototypeDirectEditUndoBusy(false);
     }
-  }, [onTargetsChange, prototypeDirectEditUndo, prototypeDirectEditUndoBusy]);
+  }, [acceptProjectUpdate, onTargetsChange, prototypeDirectEditUndo, prototypeDirectEditUndoBusy]);
 
   const selectElement = React.useCallback(
     (artifact: ChatHtmlArtifactV1, selection: DesignElementSelectionV1, additive: boolean) => {
@@ -1673,8 +1754,6 @@ export function DesignWorkspaceCanvas({
       const result = await designerApi.updateProject({
         id: currentProject.id,
         expectedRevision: currentProject.revision,
-        connectionState: currentProject.connectionState,
-        ...(currentProject.workspaceId ? { workspaceId: currentProject.workspaceId } : {}),
         canvas,
         referenceAssetIds: canvas.nodes.flatMap((node) =>
           node.kind === "reference-image" && node.assetId ? [node.assetId] : [],
@@ -1687,14 +1766,12 @@ export function DesignWorkspaceCanvas({
           : {}),
       });
       if (result.status === "conflict") {
-        savedProjectRef.current = result.current;
-        setSavedProject(result.current);
+        acceptProjectUpdate(result.current);
         lastPersistedCanvasRef.current = JSON.stringify(result.current.canvas);
         setNodes([]);
         toast.error("This canvas changed in another window. The latest version was restored.");
       } else {
-        savedProjectRef.current = result.project;
-        setSavedProject(result.project);
+        acceptProjectUpdate(result.project);
         lastPersistedCanvasRef.current = serialized;
       }
     } catch (cause) {
@@ -1706,7 +1783,7 @@ export function DesignWorkspaceCanvas({
         void persistCanvas();
       }
     }
-  }, [buildDurableCanvas, nodes]);
+  }, [acceptProjectUpdate, buildDurableCanvas, nodes]);
 
   React.useEffect(() => {
     if (!savedProject || !assetsHydrated) return;
@@ -1931,16 +2008,15 @@ export function DesignWorkspaceCanvas({
 
   const updateDesignerAction = React.useCallback(
     async (action: DesignerActionV1, operation: "apply" | "reject" | "undo") => {
-      if (actionBusy) return;
-      if (!connectedWorkspaceId) return;
+      if (actionBusy || !connectedWorkspaceId || !savedProject) return;
       setActionBusy(true);
       try {
         const updated =
           operation === "apply"
-            ? await designerApi.applyAction(connectedWorkspaceId, action.id)
+            ? await designerApi.applyAction({ projectId: savedProject.id, actionId: action.id })
             : operation === "undo"
-              ? await designerApi.undoAction(connectedWorkspaceId, action.id)
-              : await designerApi.rejectAction(action.id);
+              ? await designerApi.undoAction({ projectId: savedProject.id, actionId: action.id })
+              : await designerApi.rejectAction({ projectId: savedProject.id, actionId: action.id });
         setDesignerActions((current) => [
           updated,
           ...current.filter((candidate) => candidate.id !== updated.id),
@@ -1962,7 +2038,7 @@ export function DesignWorkspaceCanvas({
         setActionBusy(false);
       }
     },
-    [actionBusy, connectedWorkspaceId, onSourceSelectionChange],
+    [actionBusy, connectedWorkspaceId, onSourceSelectionChange, savedProject],
   );
 
   const reviewAction =
@@ -2043,9 +2119,22 @@ export function DesignWorkspaceCanvas({
   if (unavailableMessage) {
     return (
       <section
-        className="grid h-full place-items-center bg-well px-8"
+        className="relative grid h-full place-items-center bg-well px-8"
         aria-label="Design workspace canvas"
       >
+        {savedProject?.connectionState === "connected" ? (
+          <ProjectConnectionControl
+            mode="reconnect"
+            open={connectionOpen}
+            busy={connectionBusy}
+            workspaces={connectionWorkspaces}
+            workspaceId={connectionWorkspaceId}
+            onWorkspaceChange={setConnectionWorkspaceId}
+            onOpen={() => void openProjectConnection()}
+            onOpenChange={setConnectionOpen}
+            onConfirm={() => void connectProject()}
+          />
+        ) : null}
         <DesignEmptyState
           title="Design is unavailable here"
           description={unavailableMessage}
@@ -2068,14 +2157,28 @@ export function DesignWorkspaceCanvas({
           onNewDesign={onRequestComposerFocus}
           onUpload={() => uploadRef.current?.click()}
         />
-        <SourcePreviewControl
-          state={sourcePreview}
-          open={previewSetupOpen}
-          busy={previewBusy}
-          onOpenChange={setPreviewSetupOpen}
-          onStart={(scriptId) => void startSourcePreview(scriptId)}
-          onStop={() => void stopSourcePreview()}
-        />
+        {savedProject?.connectionState === "prototype-only" ? (
+          <ProjectConnectionControl
+            mode="connect"
+            open={connectionOpen}
+            busy={connectionBusy}
+            workspaces={connectionWorkspaces}
+            workspaceId={connectionWorkspaceId}
+            onWorkspaceChange={setConnectionWorkspaceId}
+            onOpen={() => void openProjectConnection()}
+            onOpenChange={setConnectionOpen}
+            onConfirm={() => void connectProject()}
+          />
+        ) : savedProject?.connectionState === "connected" ? (
+          <SourcePreviewControl
+            state={sourcePreview}
+            open={previewSetupOpen}
+            busy={previewBusy}
+            onOpenChange={setPreviewSetupOpen}
+            onStart={(scriptId) => void startSourcePreview(scriptId)}
+            onStop={() => void stopSourcePreview()}
+          />
+        ) : null}
         <input
           ref={uploadRef}
           type="file"
@@ -2157,15 +2260,29 @@ export function DesignWorkspaceCanvas({
         }}
         onUpload={() => uploadRef.current?.click()}
       />
-      <SourcePreviewControl
-        state={sourcePreview}
-        open={previewSetupOpen}
-        busy={previewBusy}
-        onOpenChange={setPreviewSetupOpen}
-        onStart={(scriptId) => void startSourcePreview(scriptId)}
-        onStop={() => void stopSourcePreview()}
-        savedScriptId={savedProject?.previewScriptId}
-      />
+      {savedProject?.connectionState === "prototype-only" ? (
+        <ProjectConnectionControl
+          mode="connect"
+          open={connectionOpen}
+          busy={connectionBusy}
+          workspaces={connectionWorkspaces}
+          workspaceId={connectionWorkspaceId}
+          onWorkspaceChange={setConnectionWorkspaceId}
+          onOpen={() => void openProjectConnection()}
+          onOpenChange={setConnectionOpen}
+          onConfirm={() => void connectProject()}
+        />
+      ) : savedProject?.connectionState === "connected" ? (
+        <SourcePreviewControl
+          state={sourcePreview}
+          open={previewSetupOpen}
+          busy={previewBusy}
+          onOpenChange={setPreviewSetupOpen}
+          onStart={(scriptId) => void startSourcePreview(scriptId)}
+          onStop={() => void stopSourcePreview()}
+          savedScriptId={savedProject.previewScriptId}
+        />
+      ) : null}
       <input
         ref={uploadRef}
         type="file"
@@ -2912,6 +3029,87 @@ function CanvasToolRail({
   );
 }
 
+function ProjectConnectionControl({
+  mode,
+  open,
+  busy,
+  workspaces,
+  workspaceId,
+  onWorkspaceChange,
+  onOpen,
+  onOpenChange,
+  onConfirm,
+}: {
+  mode: "connect" | "reconnect";
+  open: boolean;
+  busy: boolean;
+  workspaces: readonly Workspace[];
+  workspaceId: string;
+  onWorkspaceChange: (workspaceId: string) => void;
+  onOpen: () => void;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const label = mode === "connect" ? "Connect app…" : "Reconnect app…";
+  return (
+    <div className="design-source-preview-control absolute right-4 top-16 z-30">
+      <Button
+        size="small"
+        variant="toolbar"
+        disabled={busy}
+        onClick={onOpen}
+        className="design-canvas-control shadow-control"
+      >
+        {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <AppWindow aria-hidden="true" />}
+        {label}
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!busy) onOpenChange(next);
+        }}
+        title={mode === "connect" ? "Connect this prototype" : "Reconnect this Design Project"}
+        description="Choose a folder workspace with file access. Aiden keeps the existing conversation, generated revisions, comments, and canvas in place."
+        confirmLabel={mode === "connect" ? "Connect app" : "Reconnect app"}
+        confirmDisabled={!workspaceId || workspaces.length === 0}
+        busy={busy}
+        onConfirm={onConfirm}
+      >
+        {workspaces.length > 0 ? (
+          <div className="grid gap-2">
+            <label htmlFor="design-project-connection-workspace" className="text-small-strong">
+              App workspace
+            </label>
+            <Select value={workspaceId} onValueChange={onWorkspaceChange}>
+              <SelectTrigger
+                id="design-project-connection-workspace"
+                aria-label="App workspace"
+              >
+                {workspaces.find(({ id }) => id === workspaceId)?.name ?? "Choose a workspace"}
+              </SelectTrigger>
+              <SelectContent>
+                {workspaces.map((workspace) => (
+                  <SelectItem key={workspace.id} value={workspace.id}>
+                    {workspace.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Text as="p" variant="small" color="secondary">
+              Generated HTML, CSS, and JavaScript stay in Aiden until you explicitly export or
+              hand off source changes.
+            </Text>
+          </div>
+        ) : (
+          <Text as="p" variant="small" color="secondary">
+            Add a folder workspace with file access before connecting this project.
+          </Text>
+        )}
+      </Dialog>
+    </div>
+  );
+}
+
 function SourcePreviewControl({
   state,
   open,
@@ -2946,12 +3144,12 @@ function SourcePreviewControl({
         ) : (
           <AppWindow aria-hidden="true" />
         )}
-        {running ? "Local app" : "Connect app"}
+        {running ? "Local preview" : "Start local preview"}
       </Button>
       {open ? (
         <section
           role="dialog"
-          aria-label="Local app preview"
+          aria-label="Local preview"
           className="mt-2 w-[22rem] rounded-popover bg-popover p-3 shadow-popover"
         >
           <div className="flex items-start gap-3">
@@ -2960,7 +3158,7 @@ function SourcePreviewControl({
             </span>
             <div className="min-w-0 flex-1">
               <Text variant="small-strong">
-                {running ? "Source-backed preview" : "Open your local app"}
+                {running ? "Source-backed preview" : "Start local preview"}
               </Text>
               <Text as="p" variant="small" color="secondary" className="mt-1">
                 {running
