@@ -44,7 +44,7 @@ async function expectSourcePreview(
   page: PlaywrightTestModule.Page,
   source: string,
   revision: number,
-  expectedText: string,
+  expectedText: "Save" | "Saved",
 ): Promise<void> {
   const url = new URL(source);
   url.searchParams.set("aidenRevision", String(revision));
@@ -58,7 +58,9 @@ async function expectSourcePreview(
       continue;
     }
     try {
-      await expect(page.getByTestId("exact-child")).toHaveText(expectedText);
+      await expect(page.getByTestId("exact-child")).toHaveText(
+        expectedText === "Save" ? /^Save$/u : /^Saved$/u,
+      );
       return;
     } catch (error) {
       lastError = error;

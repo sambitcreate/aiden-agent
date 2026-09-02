@@ -43,9 +43,10 @@ localized or dynamic text, rich text, computed classes, ambiguous selector/compo
 and repeated literal-definition matches fail closed. Proof facts must report exactly one selector,
 component, and literal definition match.
 
-One validated gesture produces deterministic proposal and undo identities. Replaying the same
-gesture, target, and edit yields the same identities, giving the integration coordinator one
-idempotency key and one future undo record.
+Within one accepted gesture envelope, the proposal and undo identities are deterministic. That
+gives the integration coordinator one idempotency key and one future undo record. A renderer IPC
+retry is a new attended gesture with a newly minted gesture ID; it is not deduplicated against a
+previous ambiguous request.
 
 ## Origin-specific output
 
