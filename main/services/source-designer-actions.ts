@@ -28,6 +28,7 @@ import {
 const MAX_SOURCE_BYTES = 192 * 1024;
 const BINDING_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_ACTIONS = 80;
+const DETERMINISTIC_ACTION_ID = /^action_[a-f0-9]{64}$/u;
 const SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
 const SOURCE_SEARCH_SKIP = new Set([".git", ".next", "build", "dist", "node_modules"]);
 const MAX_SOURCE_SEARCH_ENTRIES = 5_000;
@@ -842,6 +843,8 @@ export class SourceDesignerActionService {
     binding: ResolvedSourceSelection;
     label: string;
     replacement: string;
+    /** Stable identity for renderer-retryable proposals promoted to a durable journal. */
+    actionId?: string;
     preApplyGuard?: () => Promise<boolean>;
   }): DesignerActionV1 {
     if (!validJsxReplacement(input.replacement)) {
@@ -851,7 +854,35 @@ export class SourceDesignerActionService {
       input.binding.source.slice(0, input.binding.start) +
       input.replacement +
       input.binding.source.slice(input.binding.end);
-    const id = `action_${randomUUID().replace(/-/gu, "")}`;
+    if (input.actionId !== undefined && !DETERMINISTIC_ACTION_ID.test(input.actionId)) {
+      throw new Error("Invalid deterministic Designer Action identity.");
+    }
+    const id = input.actionId ?? `action_${randomUUID().replace(/-/gu, "")}`;
+    const label = boundedLabel(input.label);
+    const existing = this.actions.get(id);
+    if (existing) {
+      const exactReplay =
+        existing.ownerDocumentId === input.owner.documentId &&
+        existing.view.status === "pending" &&
+        existing.view.projectId === input.binding.projectId &&
+        existing.view.chatId === input.chatId &&
+        existing.view.workspaceId === input.binding.workspaceId &&
+        existing.view.label === label &&
+        existing.view.path === input.binding.path &&
+        existing.view.selectionLabel === input.binding.selection.label &&
+        existing.view.before === input.binding.snippet &&
+        existing.view.after === input.replacement &&
+        existing.root === input.binding.root &&
+        existing.beforeVersion === input.binding.sourceVersion &&
+        existing.originalSource === input.binding.source &&
+        existing.nextSource === nextSource &&
+        existing.start === input.binding.start &&
+        existing.end === input.binding.end;
+      if (!exactReplay) {
+        throw new Error("Designer Action identity is already bound to another proposal.");
+      }
+      return { ...existing.view };
+    }
     const view: DesignerActionV1 = {
       version: SOURCE_DESIGNER_VERSION,
       id,
@@ -859,7 +890,7 @@ export class SourceDesignerActionService {
       chatId: input.chatId,
       workspaceId: input.binding.workspaceId,
       status: "pending",
-      label: boundedLabel(input.label),
+      label,
       path: input.binding.path,
       selectionLabel: input.binding.selection.label,
       before: input.binding.snippet,
@@ -976,8 +1007,11 @@ export class SourceDesignerActionService {
   /** Remove an in-memory proposal after its exact bytes are durably journaled elsewhere. */
   discardForDurable(owner: RendererDocumentOwner, actionId: string): void {
     const action = this.actions.get(actionId);
+    // A lost IPC response may replay after the first request already promoted
+    // and discarded this transient proposal. The durable journal is the
+    // authority at that point, so absence is the idempotent completed state.
+    if (!action) return;
     if (
-      !action ||
       action.ownerDocumentId !== owner.documentId ||
       action.view.status !== "pending"
     ) {

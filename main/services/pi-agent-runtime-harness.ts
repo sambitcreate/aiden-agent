@@ -12,6 +12,7 @@ import {
   type AgentHarnessStreamOptionsPatch,
   type BeforeToolCallContext,
   type BeforeToolCallResult,
+  type ShouldStopAfterTurnContext,
   formatSkillsForSystemPrompt,
 } from "@earendil-works/pi-agent-core";
 import {
@@ -59,6 +60,7 @@ export type PiHarnessFaultSource =
   | "extension_context"
   | "extension_before_tool"
   | "extension_after_tool"
+  | "extension_stop_after_turn"
   | "extension_before_provider"
   | "extension_provider_payload"
   | "extension_after_provider"
@@ -67,6 +69,7 @@ export type PiHarnessFaultSource =
   | "host_context"
   | "host_before_tool"
   | "host_after_tool"
+  | "host_stop_after_turn"
   | "host_provider_hook"
   | "inference"
   | "host_prepare_turn"
@@ -102,6 +105,10 @@ export interface PiAgentRuntimeExtension {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  shouldStopAfterTurn?: (
+    context: ShouldStopAfterTurnContext,
+    signal?: AbortSignal,
+  ) => boolean | Promise<boolean>;
   beforeProviderRequest?: (
     context: PiProviderRequestContext,
     signal?: AbortSignal,
@@ -316,6 +323,9 @@ function snapshotExtension(extension: PiAgentRuntimeExtension): PiAgentRuntimeEx
       : { transformContext: extension.transformContext }),
     ...(extension.beforeToolCall === undefined ? {} : { beforeToolCall: extension.beforeToolCall }),
     ...(extension.afterToolCall === undefined ? {} : { afterToolCall: extension.afterToolCall }),
+    ...(extension.shouldStopAfterTurn === undefined
+      ? {}
+      : { shouldStopAfterTurn: extension.shouldStopAfterTurn }),
     ...(extension.beforeProviderRequest === undefined
       ? {}
       : { beforeProviderRequest: extension.beforeProviderRequest }),
@@ -1208,6 +1218,42 @@ export class PiAgentRuntimeHarness {
                     isError: current.isError,
                     terminate: current.result.terminate,
                   };
+            }
+          : undefined,
+      shouldStopAfterTurn:
+        options.shouldStopAfterTurn ||
+        extensions.some((extension) => extension.shouldStopAfterTurn)
+          ? async (context, signal) => {
+              try {
+                if (await options.shouldStopAfterTurn?.(context, signal)) return true;
+              } catch (error) {
+                this.policyFault ??= toError(error);
+                this.reportFault({
+                  source: "host_stop_after_turn",
+                  error: toError(error),
+                });
+                // Pi requires this hook not to throw. A broken stop policy must
+                // still end the loop before another context-bearing request.
+                return true;
+              }
+              for (const extension of extensions) {
+                if (!extension.shouldStopAfterTurn) continue;
+                try {
+                  if (
+                    await extension.shouldStopAfterTurn(
+                      cloneAndDeepFreeze(context),
+                      signal,
+                    )
+                  ) {
+                    return true;
+                  }
+                } catch (error) {
+                  this.policyFault ??= toError(error);
+                  reportExtensionFault("extension_stop_after_turn", extension.id, error);
+                  return true;
+                }
+              }
+              return false;
             }
           : undefined,
     });

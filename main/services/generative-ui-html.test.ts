@@ -17,6 +17,7 @@ import {
 } from "../../renderer/shared/design-workspace.js";
 import {
   generativeUiExportDocument,
+  OMITTED_DESIGN_HTML_SENTINEL,
   validateGenerativeUiHtml,
   wrapGenerativeUiHtml,
 } from "./generative-ui-html.js";
@@ -44,6 +45,17 @@ test("wrapper keeps inline head styles from a complete HTML document", () => {
   );
   assert.match(document, /h1\{color:red\}/u);
   assert.match(document, /<h1>Chart<\/h1>/u);
+});
+
+test("the Design HTML omission sentinel can never become artifact content", () => {
+  assert.throws(
+    () => validateGenerativeUiHtml(OMITTED_DESIGN_HTML_SENTINEL),
+    /placeholder cannot be rendered/iu,
+  );
+  assert.throws(
+    () => validateGenerativeUiHtml(`<main>${OMITTED_DESIGN_HTML_SENTINEL}</main>`),
+    /placeholder cannot be rendered/iu,
+  );
 });
 
 test("Design wrapper alone receives the local React Grab selection bridge", () => {

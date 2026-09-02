@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import type { DesignProjectCanvasV1 } from "./design-project-contract.js";
+import {
+  emptyDesignProjectDatabase,
+  parseDesignProjectDatabaseV1,
+  type DesignProjectCanvasV1,
+  type DesignProjectDatabaseV1,
+} from "./design-project-contract.js";
+import { DataStore } from "./data-store.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { inspectDesignProjectHealth } from "./design-project-health.js";
@@ -12,6 +19,7 @@ import { SourceDesignPreviewService } from "./source-design-preview.js";
 import {
   DesignProjectConflictError,
   DesignProjectMigrationBlockedError,
+  DesignProjectPublicationUncertainError,
   DesignProjectRevisionConflictError,
   DesignProjectStore,
   DesignProjectUnavailableError,
@@ -52,6 +60,21 @@ function canvas(): DesignProjectCanvasV1 {
   };
 }
 
+function failpointProjectDataStore(
+  root: string,
+  afterDestinationPublish: () => Promise<void>,
+): DataStore<DesignProjectDatabaseV1> {
+  return new DataStore("design-projects.json", emptyDesignProjectDatabase(), () => root, {
+    normalize: (value) => parseDesignProjectDatabaseV1(value) ?? emptyDesignProjectDatabase(),
+    isSafe: (value) => parseDesignProjectDatabaseV1(value) !== undefined,
+    rejectCorruptWrite: true,
+    rejectUnsafeWrite: true,
+    rejectExternalChanges: true,
+    reloadBeforeWrite: true,
+    afterDestinationPublish,
+  });
+}
+
 // 1x1 opaque PNG. A bounded ancillary chunk makes each fixture content-address unique.
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -72,7 +95,7 @@ function htmlArtifact(mediaId: string, html: string, title: string): ChatHtmlArt
   return {
     version: 1,
     kind: "html",
-    id: mediaId,
+    id: createHash("sha256").update(html).digest("hex"),
     title,
     mimeType: "text/html",
     size: Buffer.byteLength(html, "utf8"),
@@ -144,6 +167,150 @@ test("owner-only store supports create, list, get, update, rename, and CAS", asy
   );
 });
 
+test("generic canvas updates cannot invent or rewrite generated lineage ownership", async (t) => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({ root: () => root });
+  await store.initialize();
+  const project = await store.create({
+    chatId: "chat:immutable-lineage",
+    title: "Immutable lineage",
+    connectionState: "prototype-only",
+    canvas: canvas(),
+    referenceAssetIds: ["asset:reference-a"],
+  });
+  await assert.rejects(
+    store.update({
+      id: project.id,
+      expectedRevision: project.revision,
+      connectionState: project.connectionState,
+      canvas: {
+        ...project.canvas,
+        nodes: project.canvas.nodes.map((node) =>
+          node.kind === "artboard"
+            ? {
+                ...node,
+                artifactMediaIds: [...(node.artifactMediaIds ?? []), "design:forged"],
+                activeMediaId: "design:forged",
+              }
+            : node,
+        ),
+      },
+      referenceAssetIds: project.referenceAssetIds,
+    }),
+    /lineage is immutable/iu,
+  );
+  const moved = await store.update({
+    id: project.id,
+    expectedRevision: project.revision,
+    connectionState: project.connectionState,
+    canvas: {
+      ...project.canvas,
+      nodes: project.canvas.nodes.map((node) => ({ ...node, x: node.x + 12 })),
+    },
+    referenceAssetIds: project.referenceAssetIds,
+  });
+  assert.equal(moved.canvas.nodes[0]?.x, project.canvas.nodes[0]!.x + 12);
+});
+
+test("main-owned missing-artboard repair removes only one exact generated lineage under CAS", async (t) => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({ root: () => root });
+  await store.initialize();
+  const project = await store.create({
+    chatId: "chat:missing-repair",
+    title: "Missing repair",
+    connectionState: "prototype-only",
+    canvas: canvas(),
+    referenceAssetIds: ["asset:reference-a"],
+  });
+  await assert.rejects(
+    store.removeMissingGeneratedArtboard({
+      projectId: project.id,
+      expectedRevision: project.revision,
+      lineageId: "lineage:checkout",
+      activeMediaId: "design:not-active",
+    }),
+    /changed before it could be removed/iu,
+  );
+  const repaired = await store.removeMissingGeneratedArtboard({
+    projectId: project.id,
+    expectedRevision: project.revision,
+    lineageId: "lineage:checkout",
+    activeMediaId: "design:checkout-b",
+  });
+  assert.equal(repaired.revision, project.revision + 1);
+  assert.equal(
+    repaired.canvas.nodes.some(({ kind }) => kind === "artboard"),
+    false,
+  );
+  assert.equal(
+    repaired.canvas.nodes.some(({ kind }) => kind === "reference-image"),
+    true,
+  );
+  await assert.rejects(
+    store.removeMissingGeneratedArtboard({
+      projectId: project.id,
+      expectedRevision: project.revision,
+      lineageId: "lineage:checkout",
+      activeMediaId: "design:checkout-b",
+    }),
+    DesignProjectRevisionConflictError,
+  );
+});
+
+test("main-owned history repair prunes only an exact missing non-active revision", async (t) => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({ root: () => root });
+  await store.initialize();
+  const project = await store.create({
+    chatId: "chat:missing-history",
+    title: "Missing history",
+    connectionState: "prototype-only",
+    canvas: canvas(),
+    referenceAssetIds: ["asset:reference-a"],
+  });
+  await assert.rejects(
+    store.removeMissingGeneratedRevision({
+      projectId: project.id,
+      expectedRevision: project.revision,
+      lineageId: "lineage:checkout",
+      missingMediaId: "design:checkout-b",
+      expectedActiveMediaId: "design:checkout-b",
+    }),
+    /active generated revision cannot be pruned/iu,
+  );
+  await assert.rejects(
+    store.removeMissingGeneratedRevision({
+      projectId: project.id,
+      expectedRevision: project.revision,
+      lineageId: "lineage:checkout",
+      missingMediaId: "design:checkout-a",
+      expectedActiveMediaId: "design:not-active",
+    }),
+    /changed before it could be pruned/iu,
+  );
+  const repaired = await store.removeMissingGeneratedRevision({
+    projectId: project.id,
+    expectedRevision: project.revision,
+    lineageId: "lineage:checkout",
+    missingMediaId: "design:checkout-a",
+    expectedActiveMediaId: "design:checkout-b",
+  });
+  const artboard = repaired.canvas.nodes.find((node) => node.kind === "artboard");
+  assert.deepEqual(artboard?.artifactMediaIds, ["design:checkout-b"]);
+  assert.equal(artboard?.activeMediaId, "design:checkout-b");
+  await assert.rejects(
+    store.removeMissingGeneratedRevision({
+      projectId: project.id,
+      expectedRevision: project.revision,
+      lineageId: "lineage:checkout",
+      missingMediaId: "design:checkout-a",
+      expectedActiveMediaId: "design:checkout-b",
+    }),
+    DesignProjectRevisionConflictError,
+  );
+});
+
 test("create enforces one durable project per chat", async (t) => {
   const root = await temporaryRoot(t);
   let id = 0;
@@ -153,7 +320,11 @@ test("create enforces one durable project per chat", async (t) => {
     mintProjectId: () => `project:${++id}`,
   });
   await store.initialize();
-  await store.create({ chatId: "chat:one", title: "One", connectionState: "prototype-only" });
+  await store.create({
+    chatId: "chat:one",
+    title: "One",
+    connectionState: "prototype-only",
+  });
   await assert.rejects(
     store.create({
       chatId: "chat:one",
@@ -161,6 +332,58 @@ test("create enforces one durable project per chat", async (t) => {
       connectionState: "prototype-only",
     }),
     /already owns/u,
+  );
+});
+
+test("create retains an exact row installed before a durability failure", async (t) => {
+  const root = await temporaryRoot(t);
+  let failPublication = true;
+  const store = new DesignProjectStore({
+    dataStore: failpointProjectDataStore(root, async () => {
+      if (!failPublication) return;
+      failPublication = false;
+      throw new Error("injected directory sync failure");
+    }),
+    now: () => 10,
+    mintProjectId: () => "project:ambiguous-create",
+  });
+  await store.initialize();
+
+  await assert.rejects(
+    store.create({
+      chatId: "chat:ambiguous-create",
+      title: "Ambiguous create",
+      connectionState: "prototype-only",
+    }),
+    DesignProjectPublicationUncertainError,
+  );
+
+  const installed = await store.get("project:ambiguous-create");
+  assert.equal(installed?.chatId, "chat:ambiguous-create");
+  const persisted = parseDesignProjectDatabaseV1(
+    JSON.parse(await readFile(join(root, "design-projects.json"), "utf8")),
+  );
+  assert.deepEqual(persisted?.projects, [installed]);
+});
+
+test("create reports uncertainty when a published row cannot be read safely", async (t) => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({
+    dataStore: failpointProjectDataStore(root, async () => {
+      await writeFile(join(root, "design-projects.json"), "{not-json", "utf8");
+      throw new Error("injected unreadable publication");
+    }),
+    mintProjectId: () => "project:uncertain-create",
+  });
+  await store.initialize();
+
+  await assert.rejects(
+    store.create({
+      chatId: "chat:uncertain-create",
+      title: "Uncertain create",
+      connectionState: "prototype-only",
+    }),
+    DesignProjectPublicationUncertainError,
   );
 });
 
@@ -243,7 +466,10 @@ test("rebind preserves Prototype history but clears old Connected App authority"
   assert.equal(rebound.workspaceId, "workspace-2");
   assert.equal(rebound.previewScriptId, undefined);
   assert.equal(rebound.designSystemBinding, undefined);
-  assert.equal(rebound.canvas.nodes.some(({ kind }) => kind === "source-preview"), false);
+  assert.equal(
+    rebound.canvas.nodes.some(({ kind }) => kind === "source-preview"),
+    false,
+  );
   assert.deepEqual(
     rebound.canvas.nodes.filter(({ kind }) => kind !== "source-preview"),
     connected.canvas.nodes.filter(({ kind }) => kind !== "source-preview"),
@@ -337,6 +563,92 @@ test("duplicate rolls back preparation if source CAS becomes stale", async (t) =
   assert.equal((await store.list()).length, 1);
 });
 
+test("duplicate preserves prepared backing data when an installed row reports failure", async (t) => {
+  const root = await temporaryRoot(t);
+  let failPublication = false;
+  let rolledBack = 0;
+  let id = 0;
+  const duplicatePort: DesignProjectDuplicatePort = {
+    async prepareDuplicate() {
+      return {
+        targetChatId: "chat:ambiguous-copy",
+        artifactMediaIds: [],
+        referenceAssetIds: [],
+        async rollback() {
+          rolledBack += 1;
+        },
+      };
+    },
+  };
+  const store = new DesignProjectStore({
+    dataStore: failpointProjectDataStore(root, async () => {
+      if (!failPublication) return;
+      failPublication = false;
+      throw new Error("injected directory sync failure");
+    }),
+    now: () => 10,
+    mintProjectId: () => `project:${++id}`,
+    duplicatePort,
+  });
+  await store.initialize();
+  const source = await store.create({
+    chatId: "chat:ambiguous-source",
+    title: "Ambiguous source",
+    connectionState: "prototype-only",
+  });
+  failPublication = true;
+
+  await assert.rejects(
+    store.duplicate({ id: source.id, expectedRevision: source.revision }),
+    DesignProjectPublicationUncertainError,
+  );
+
+  assert.equal(rolledBack, 0);
+  assert.equal((await store.getByChatId("chat:ambiguous-copy"))?.title, "Ambiguous source Copy");
+});
+
+test("duplicate does not roll back preparation when publication cannot be classified", async (t) => {
+  const root = await temporaryRoot(t);
+  let corruptPublication = false;
+  let rolledBack = 0;
+  let id = 0;
+  const duplicatePort: DesignProjectDuplicatePort = {
+    async prepareDuplicate() {
+      return {
+        targetChatId: "chat:uncertain-copy",
+        artifactMediaIds: [],
+        referenceAssetIds: [],
+        async rollback() {
+          rolledBack += 1;
+        },
+      };
+    },
+  };
+  const store = new DesignProjectStore({
+    dataStore: failpointProjectDataStore(root, async () => {
+      if (!corruptPublication) return;
+      await writeFile(join(root, "design-projects.json"), "{not-json", "utf8");
+      throw new Error("injected unreadable publication");
+    }),
+    now: () => 10,
+    mintProjectId: () => `project:${++id}`,
+    duplicatePort,
+  });
+  await store.initialize();
+  const source = await store.create({
+    chatId: "chat:uncertain-source",
+    title: "Uncertain source",
+    connectionState: "prototype-only",
+  });
+  corruptPublication = true;
+
+  await assert.rejects(
+    store.duplicate({ id: source.id, expectedRevision: source.revision }),
+    DesignProjectPublicationUncertainError,
+  );
+  assert.equal(rolledBack, 0);
+});
+
 test("delete plans the whole lineage and rejects stale CAS", async (t) => {
   const root = await temporaryRoot(t);
   let id = 0;
@@ -387,7 +699,11 @@ test("delete plans the whole lineage and rejects stale CAS", async (t) => {
   assert.deepEqual(plan.unreferencedReferenceAssetIds, []);
   assert.deepEqual(plan.commentIds, ["comment:a", "comment:b"]);
 
-  const renamed = await store.rename({ id: project.id, expectedRevision: 1, title: "New" });
+  const renamed = await store.rename({
+    id: project.id,
+    expectedRevision: 1,
+    title: "New",
+  });
   await assert.rejects(store.delete(plan), DesignProjectRevisionConflictError);
   const staleDatabasePlan = await store.planDelete({
     id: project.id,
@@ -408,6 +724,46 @@ test("delete plans the whole lineage and rejects stale CAS", async (t) => {
   assert.equal(await store.get(project.id), undefined);
 });
 
+test("delete reconciliation reloads a post-publication disk snapshot instead of trusting its cached predecessor", async (t) => {
+  const root = await temporaryRoot(t);
+  let failPublication = false;
+  const store = new DesignProjectStore({
+    dataStore: failpointProjectDataStore(root, async () => {
+      if (!failPublication) return;
+      failPublication = false;
+      throw new Error("injected directory sync failure");
+    }),
+    mintProjectId: () => "project:ambiguous-delete",
+    now: () => 10,
+  });
+  await store.initialize();
+  const project = await store.create({
+    chatId: "chat:ambiguous-delete",
+    title: "Ambiguous delete",
+    connectionState: "prototype-only",
+  });
+  const plan = await store.planDelete({
+    id: project.id,
+    expectedRevision: project.revision,
+  });
+  assert.equal(await store.reconcileDeletePublication(plan), "present");
+  failPublication = true;
+
+  await assert.rejects(store.delete(plan), /injected directory sync failure/u);
+  assert.equal((await store.get(project.id))?.id, project.id);
+  const disk = parseDesignProjectDatabaseV1(
+    JSON.parse(await readFile(join(root, "design-projects.json"), "utf8")),
+  );
+  assert.equal(disk?.revision, plan.expectedDatabaseRevision + 1);
+  assert.equal(
+    disk?.projects.some(({ id }) => id === project.id),
+    false,
+  );
+
+  assert.equal(await store.reconcileDeletePublication(plan), "deleted");
+  assert.equal(await store.get(project.id), undefined);
+});
+
 test("a main-store restart restores 20 artboards, 10 hydrated references, preview configuration, and repair health", async (t) => {
   const root = await temporaryRoot(t);
   const workspaceRoot = join(root, "connected-workspace");
@@ -418,8 +774,14 @@ test("a main-store restart restores 20 artboards, 10 hydrated references, previe
     "utf8",
   );
   const chatId = "chat:restart-proof";
-  const artifacts = new GenerativeUiArtifactStore({ root: () => root, now: () => 122 });
-  const references = new DesignReferenceAssetStore({ root: () => root, now: () => 122 });
+  const artifacts = new GenerativeUiArtifactStore({
+    root: () => root,
+    now: () => 122,
+  });
+  const references = new DesignReferenceAssetStore({
+    root: () => root,
+    now: () => 122,
+  });
   await artifacts.initialize();
   await references.initialize();
   const referenceRecords = await Promise.all(
@@ -495,9 +857,16 @@ test("a main-store restart restores 20 artboards, 10 hydrated references, previe
   });
 
   // Fresh instances model a lost renderer and main process reading only atomic disk state.
-  const restarted = new DesignProjectStore({ root: () => root, now: () => 999 });
-  const restartedArtifacts = new GenerativeUiArtifactStore({ root: () => root });
-  const restartedReferences = new DesignReferenceAssetStore({ root: () => root });
+  const restarted = new DesignProjectStore({
+    root: () => root,
+    now: () => 999,
+  });
+  const restartedArtifacts = new GenerativeUiArtifactStore({
+    root: () => root,
+  });
+  const restartedReferences = new DesignReferenceAssetStore({
+    root: () => root,
+  });
   await restarted.initialize();
   await restartedArtifacts.initialize();
   await restartedReferences.initialize();
@@ -515,7 +884,10 @@ test("a main-store restart restores 20 artboards, 10 hydrated references, previe
         expected: referencePng(index),
       })),
     ).then((values) =>
-      values.map(({ id, bytes, expected }) => ({ id, hydrated: bytes?.equals(expected) })),
+      values.map(({ id, bytes, expected }) => ({
+        id,
+        hydrated: bytes?.equals(expected),
+      })),
     ),
     referenceRecords.map(({ id }) => ({ id, hydrated: true })),
   );
@@ -525,8 +897,8 @@ test("a main-store restart restores 20 artboards, 10 hydrated references, previe
   assert.deepEqual(
     await inspectDesignProjectHealth(restored, {
       hasReferenceAsset: async (assetId) => Boolean(await restartedReferences.read(assetId)),
-      hasArtifact: async (ownedChatId, mediaId) =>
-        Boolean(await restartedArtifacts.artifactFor(ownedChatId, mediaId)),
+      artifactSource: (ownedChatId, mediaId) =>
+        restartedArtifacts.committedSourceFor(ownedChatId, mediaId),
     }),
     { health: "ready" },
   );
@@ -561,13 +933,13 @@ test("a main-store restart restores 20 artboards, 10 hydrated references, previe
   assert.deepEqual(
     await inspectDesignProjectHealth(restored, {
       hasReferenceAsset: async (assetId) => Boolean(await restartedReferences.read(assetId)),
-      hasArtifact: async (ownedChatId, mediaId) =>
-        Boolean(await restartedArtifacts.artifactFor(ownedChatId, mediaId)),
+      artifactSource: (ownedChatId, mediaId) =>
+        restartedArtifacts.committedSourceFor(ownedChatId, mediaId),
     }),
     {
       health: "needs-repair",
-      recoveryMessage:
-        "A saved reference image is missing. Open the project to remove or replace it.",
+      recoveryMessage: "A saved reference image is missing. Open the project to remove it safely.",
+      recoveryAction: "open-project",
     },
   );
 });
@@ -796,7 +1168,10 @@ test("named migration fixtures have one explicit deterministic outcome", async (
         });
       },
     };
-    const first = new DesignProjectStore({ root: () => root, legacySource: source });
+    const first = new DesignProjectStore({
+      root: () => root,
+      legacySource: source,
+    });
     await first.initialize();
     await assert.rejects(
       first.getOrMigrateLegacyChat("chat:fixture-interrupted"),
@@ -804,7 +1179,10 @@ test("named migration fixtures have one explicit deterministic outcome", async (
     );
     assert.deepEqual(await first.list(), []);
 
-    const restarted = new DesignProjectStore({ root: () => root, legacySource: source });
+    const restarted = new DesignProjectStore({
+      root: () => root,
+      legacySource: source,
+    });
     await restarted.initialize();
     const migrated = await restarted.getOrMigrateLegacyChat("chat:fixture-interrupted");
     assert.equal(migrated?.chatId, "chat:fixture-interrupted");

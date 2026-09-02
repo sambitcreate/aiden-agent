@@ -25,7 +25,13 @@ import {
 
 type DesignProjectPort = Pick<
   DesignProjectStore,
-  "duplicate" | "planDelete" | "delete" | "get" | "getByChatId" | "list"
+  | "duplicate"
+  | "planDelete"
+  | "delete"
+  | "reconcileDeletePublication"
+  | "get"
+  | "getByChatId"
+  | "list"
 >;
 
 export interface DesignProjectDuplicateChatPort {
@@ -408,12 +414,15 @@ export function createDesignProjectLifecycleCoordinator(
       } catch (error) {
         // DataStore publication is atomic, but an I/O error can make the caller
         // uncertain whether publication completed. Resolve that ambiguity from
-        // the authoritative row before deciding rollback versus roll-forward.
-        const current = await options.projectStore.get(plan.projectId);
-        if (current) {
+        // a fresh disk snapshot before deciding rollback versus roll-forward.
+        // A cached predecessor must never revoke the journal after the delete
+        // was already published to disk.
+        const publication = await options.projectStore.reconcileDeletePublication(plan);
+        if (publication === "present") {
           await options.journal.remove(created.operationId);
           throw error;
         }
+        if (publication === "uncertain") throw error;
       }
       let committed = created;
       try {
@@ -436,12 +445,19 @@ export function createDesignProjectLifecycleCoordinator(
       await options.duplicatePort.recover(record);
       return;
     }
-    const current = await options.projectStore.get(record.plan.projectId);
-    if (current) {
-      // The row is the commit boundary. If it remains, no cascade authority was
-      // published, even when the process stopped with a `planned` record.
-      await options.journal.remove(record.operationId);
-      return;
+    if (record.stage === "planned") {
+      // Absence by project ID is not publication proof: the database may have
+      // been externally replaced while the foreground delete outcome was
+      // uncertain. Reuse the exact revision/chat proof before granting cascade
+      // authority after restart.
+      const publication = await options.projectStore.reconcileDeletePublication(record.plan);
+      if (publication === "present") {
+        await options.journal.remove(record.operationId);
+        return;
+      }
+      if (publication === "uncertain") {
+        throw new Error("Design Project deletion publication is still uncertain.");
+      }
     }
     await finishDelete(record);
   };

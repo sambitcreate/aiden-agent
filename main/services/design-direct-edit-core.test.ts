@@ -4,10 +4,27 @@ import test from "node:test";
 import {
   parseDesignDirectEdit,
   parseDesignDirectEditTarget,
+  parseRendererDirectEditGestureId,
+  parseRendererPrototypeGestureId,
   proposeDesignDirectEdit,
   type DesignDirectEditProofV1,
   type DesignDirectEditTargetV1,
 } from "./design-direct-edit-core.js";
+
+test("renderer prototype gesture IDs accept only canonical bounded UUID v4 identities", () => {
+  const valid = "gesture:550e8400-e29b-41d4-a716-446655440000";
+  assert.equal(parseRendererDirectEditGestureId(valid), valid);
+  assert.equal(parseRendererPrototypeGestureId(valid), valid);
+  for (const invalid of [
+    "gesture:one",
+    "gesture:550e8400-e29b-11d4-a716-446655440000",
+    "gesture:550E8400-E29B-41D4-A716-446655440000",
+    `${valid}:extra`,
+    "550e8400-e29b-41d4-a716-446655440000",
+  ]) {
+    assert.equal(parseRendererPrototypeGestureId(invalid), undefined);
+  }
+});
 
 const PROOF: DesignDirectEditProofV1 = {
   selectorMatchCount: 1,

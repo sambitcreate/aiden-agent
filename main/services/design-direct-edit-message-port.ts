@@ -1,19 +1,10 @@
-import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import {
+  sameChatHtmlArtifactDescriptor,
+  type ChatHtmlArtifactV1,
+} from "../../renderer/shared/chat-artifacts.js";
 import type { chatStore } from "./chat-store.js";
 
 type DirectEditChatStore = Pick<typeof chatStore, "appendMessage" | "get">;
-
-function exactArtifact(left: ChatHtmlArtifactV1, right: ChatHtmlArtifactV1): boolean {
-  return (
-    left.version === right.version &&
-    left.kind === right.kind &&
-    left.id === right.id &&
-    left.title === right.title &&
-    left.mimeType === right.mimeType &&
-    left.size === right.size &&
-    left.mediaId === right.mediaId
-  );
-}
 
 export function createDesignDirectEditMessagePort(store: DirectEditChatStore) {
   return {
@@ -29,7 +20,7 @@ export function createDesignDirectEditMessagePort(store: DirectEditChatStore) {
         .flatMap((message) => message.htmlArtifacts ?? [])
         .find(({ mediaId }) => mediaId === input.artifact.mediaId);
       if (prior) {
-        if (!exactArtifact(prior, input.artifact)) {
+        if (!sameChatHtmlArtifactDescriptor(prior, input.artifact)) {
           throw new Error("The direct-edit artifact identity conflicts with chat history.");
         }
         return;

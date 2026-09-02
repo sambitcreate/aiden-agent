@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { ChatHtmlArtifactV1 } from "./chat-artifacts.js";
 import {
+  DesignConnectedDirectEditRetryState,
+  DesignProjectPersistenceBarrier,
+  DesignPrototypeDirectEditRetryState,
+  designProjectClaimsArtifacts,
   durableDesignWorkspaceArtifactGroups,
   groupDesignWorkspaceArtifacts,
   designWorkspaceArtifactPlan,
@@ -11,6 +15,8 @@ import {
   parseDesignElementSelection,
   parseDesignTurnContext,
   resolveDesignWorkspaceSelection,
+  resolveDesignArtboardPosition,
+  snapshotDesignTurnTargets,
 } from "./design-workspace.js";
 import type { DesignProjectSnapshotV1 } from "./design-projects.js";
 
@@ -45,6 +51,104 @@ function project(overrides: Partial<DesignProjectSnapshotV1> = {}): DesignProjec
     ...overrides,
   };
 }
+
+test("an immediate send barrier preserves the synchronously selected historical target", async () => {
+  const barrier = new DesignProjectPersistenceBarrier<{
+    project: DesignProjectSnapshotV1;
+    targets: ReturnType<typeof snapshotDesignTurnTargets>;
+  }>();
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const events: string[] = [];
+  const latest = { mediaId: "design:N", artifactId: "n".repeat(64) };
+  const historical = { mediaId: "design:H", artifactId: "h".repeat(64) };
+  let currentTargets = [latest];
+  const first = barrier.flush(async () => {
+    events.push("existing-save-started");
+    await firstGate;
+    events.push("existing-save-finished");
+    return { project: project({ revision: 2 }), targets: snapshotDesignTurnTargets([latest]) };
+  });
+  await Promise.resolve();
+
+  currentTargets = [historical];
+  const targetSnapshot = snapshotDesignTurnTargets(currentTargets);
+  const immediateSend = barrier.flush(async () => {
+    events.push(`saved-${targetSnapshot[0]?.mediaId}`);
+    return { project: project({ revision: 3 }), targets: targetSnapshot };
+  });
+  currentTargets = [latest];
+  await Promise.resolve();
+  assert.deepEqual(events, ["existing-save-started"]);
+
+  releaseFirst();
+  assert.equal((await first).targets[0]?.mediaId, "design:N");
+  assert.equal((await immediateSend).targets[0]?.mediaId, "design:H");
+  assert.deepEqual(events, ["existing-save-started", "existing-save-finished", "saved-design:H"]);
+});
+
+test("prototype direct-edit retries retain one operation and reset on payload change or success", () => {
+  const operationIds = [
+    "gesture:550e8400-e29b-41d4-a716-446655440000",
+    "gesture:550e8400-e29b-41d4-a716-446655440001",
+    "gesture:550e8400-e29b-41d4-a716-446655440002",
+  ];
+  const retries = new DesignPrototypeDirectEditRetryState(() => operationIds.shift()!);
+  const payload = {
+    projectId: "project:one",
+    lineageId: "lineage:one",
+    mediaId: "design:base",
+    selection: {
+      version: 1,
+      tagName: "button",
+      label: "Save",
+      selector: '[data-aiden-id="save"]',
+      elementId: "save",
+    },
+    edit: { kind: "spacing", property: "padding", value: "16px" },
+  } as const;
+
+  const first = retries.operationIdFor(payload);
+  assert.equal(retries.operationIdFor(structuredClone(payload)), first);
+  retries.resetUnless({ ...payload, edit: { ...payload.edit, value: "20px" } });
+  const changed = retries.operationIdFor({
+    ...payload,
+    edit: { ...payload.edit, value: "20px" },
+  });
+  assert.notEqual(changed, first);
+  retries.complete(changed);
+  assert.notEqual(
+    retries.operationIdFor({ ...payload, edit: { ...payload.edit, value: "20px" } }),
+    changed,
+  );
+});
+
+test("connected direct-edit retries retain one operation until durable acknowledgement", () => {
+  const operationIds = [
+    "gesture:550e8400-e29b-41d4-a716-446655440010",
+    "gesture:550e8400-e29b-41d4-a716-446655440011",
+    "gesture:550e8400-e29b-41d4-a716-446655440012",
+  ];
+  const retries = new DesignConnectedDirectEditRetryState(() => operationIds.shift()!);
+  const payload = {
+    projectId: "project:one",
+    sourceSelectionId: "selection:one",
+    edit: { kind: "spacing", property: "padding", value: "16px" },
+  } as const;
+
+  const first = retries.operationIdFor(payload);
+  assert.equal(retries.operationIdFor(structuredClone(payload)), first);
+  retries.resetUnless({ ...payload, sourceSelectionId: "selection:two" });
+  const changed = retries.operationIdFor({ ...payload, sourceSelectionId: "selection:two" });
+  assert.notEqual(changed, first);
+  retries.complete(changed);
+  assert.notEqual(
+    retries.operationIdFor({ ...payload, sourceSelectionId: "selection:two" }),
+    changed,
+  );
+});
 
 test("renaming preserves same-project direct-edit artifacts and undo state", () => {
   const original = project();
@@ -184,6 +288,65 @@ test("main-validated model output joins its selected durable lineage without tit
     },
   };
   assert.equal(durableDesignWorkspaceArtifactGroups(current, [first, forged]).length, 2);
+  assert.equal(
+    durableDesignWorkspaceArtifactGroups(current, [first, { ...forged, source: "persisted" }])
+      .length,
+    1,
+    "a persisted but unpublished revision never reappears in project history",
+  );
+});
+
+test("optimistic Design revisions remain pending until the project snapshot claims every media ID", () => {
+  const first = artifact("design:first");
+  const second = artifact("design:second");
+  const current = project({
+    canvas: {
+      viewport: "desktop",
+      flowViewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        {
+          id: "design-artboard:one",
+          kind: "artboard",
+          canonicalOrigin: "generated-artifact",
+          x: 0,
+          y: 0,
+          lineageId: "lineage:one",
+          artifactMediaIds: [first.mediaId],
+          activeMediaId: first.mediaId,
+        },
+      ],
+    },
+  });
+
+  assert.equal(designProjectClaimsArtifacts(current, [first]), true);
+  assert.equal(designProjectClaimsArtifacts(current, [first, second]), false);
+});
+
+test("publication migrates a dragged provisional position to the durable artboard identity", () => {
+  const dragged = { x: 1840, y: 96 };
+  const sourceOffset = 1200 + 120;
+  const fallback = { x: sourceOffset + (1200 + 120), y: 0 };
+  assert.deepEqual(
+    resolveDesignArtboardPosition({
+      groupId: "design-artboard:durable",
+      revisionMediaIds: ["design:new"],
+      positionsByNodeId: new Map([["design-artboard:provisional", dragged]]),
+      positionsByMediaId: new Map([["design:new", dragged]]),
+      fallback,
+    }),
+    dragged,
+  );
+  assert.deepEqual(
+    resolveDesignArtboardPosition({
+      groupId: "design-artboard:unseen",
+      revisionMediaIds: ["design:unseen"],
+      positionsByNodeId: new Map(),
+      positionsByMediaId: new Map(),
+      fallback,
+    }),
+    fallback,
+    "an unseen artboard still honors the connected-source offset fallback",
+  );
 });
 
 test("Design selection context is exact, bounded, and rejects duplicate artboards", () => {
@@ -267,7 +430,7 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
     workspace,
     /setConnectedSource\(undefined\);[\s\S]*setConnectedSourceLoading\(true\)/u,
   );
-  assert.match(workspace, /sourceLoading=\{Boolean\(/u);
+  assert.match(workspace, /sourceLoading=\{\s*Boolean\(/u);
   assert.match(workspace, /design-canvas-toolbar/u);
   assert.match(workspace, /design-canvas-control/u);
   assert.match(styles, /\.design-canvas-control:focus-visible/u);

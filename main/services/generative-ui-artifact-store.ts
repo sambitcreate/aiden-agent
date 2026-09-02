@@ -12,6 +12,10 @@ import {
 import { DESIGN_ARTIFACT_MEDIA_ID_PREFIX } from "../../renderer/shared/design-workspace.js";
 import { displayedAssistantHtmlUsage } from "./generative-ui-extension.js";
 import { validateGenerativeUiHtml } from "./generative-ui-html.js";
+import {
+  parseDesignGeneratedRevisionOwnershipV1,
+  type DesignGeneratedRevisionOwnershipV1,
+} from "./design-generated-revision-contract.js";
 
 const STORE_VERSION = 1 as const;
 const STORE_FILE = "generative-ui-artifacts.json";
@@ -28,10 +32,12 @@ const REQUIRED_RECORD_KEYS = new Set([
   "committed",
   "stagedAt",
 ]);
-const OPTIONAL_RECORD_KEYS = new Set(["model"]);
+const OPTIONAL_RECORD_KEYS = new Set(["model", "designOwnership", "designPublication"]);
 const DATABASE_KEYS = new Set(["version", "revision", "records"]);
 
-interface StagedHtmlArtifact {
+export type DesignArtifactPublicationState = "candidate" | "eligible" | "published" | "suppressed";
+
+export interface StagedHtmlArtifact {
   version: typeof STORE_VERSION;
   chatId: string;
   generationId: string;
@@ -40,6 +46,8 @@ interface StagedHtmlArtifact {
   html: string;
   committed: boolean;
   stagedAt: number;
+  designOwnership?: DesignGeneratedRevisionOwnershipV1;
+  designPublication?: DesignArtifactPublicationState;
 }
 
 interface GenerativeUiArtifactDatabase {
@@ -75,6 +83,41 @@ export interface CommittedGenerativeUiSource {
   html: string;
   createdAt: number;
   model?: string;
+}
+
+export interface CommittedGenerativeUiRecoverySource extends CommittedGenerativeUiSource {
+  chatId: string;
+  generationId: string;
+  designOwnership?: DesignGeneratedRevisionOwnershipV1;
+  designPublication?: DesignArtifactPublicationState;
+}
+
+export type MissingArtifactGuardResult<R> =
+  | { status: "completed"; value: R }
+  | { status: "artifact-present" };
+
+export type DamagedArtifactGuardResult<R> =
+  | { status: "completed"; value: R }
+  | { status: "artifact-changed" }
+  | { status: "artifact-valid" };
+
+export function designArtifactRecoveryFingerprint(
+  source: Pick<
+    StagedHtmlArtifact,
+    "generationId" | "artifact" | "html" | "designOwnership" | "designPublication"
+  >,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        generationId: source.generationId,
+        artifact: source.artifact,
+        html: source.html,
+        designOwnership: source.designOwnership ?? null,
+        designPublication: source.designPublication ?? null,
+      }),
+    )
+    .digest("hex");
 }
 
 function emptyDatabase(): GenerativeUiArtifactDatabase {
@@ -135,6 +178,24 @@ function parseRecord(value: unknown): StagedHtmlArtifact | undefined {
   }
   const artifact = parseChatHtmlArtifactV1(record.artifact);
   if (!artifact) return undefined;
+  const designOwnership =
+    record.designOwnership === undefined
+      ? undefined
+      : parseDesignGeneratedRevisionOwnershipV1(record.designOwnership, artifact);
+  const designPublication =
+    record.designPublication === "candidate" ||
+    record.designPublication === "eligible" ||
+    record.designPublication === "published" ||
+    record.designPublication === "suppressed"
+      ? record.designPublication
+      : undefined;
+  if (
+    (record.designOwnership !== undefined && !designOwnership) ||
+    (record.designPublication !== undefined && !designPublication) ||
+    Boolean(designOwnership) !== Boolean(designPublication)
+  ) {
+    return undefined;
+  }
   if (record.html.includes("\0") || Buffer.byteLength(record.html, "utf8") !== artifact.size) {
     return undefined;
   }
@@ -148,6 +209,7 @@ function parseRecord(value: unknown): StagedHtmlArtifact | undefined {
     html: record.html,
     committed: record.committed,
     stagedAt: record.stagedAt,
+    ...(designOwnership ? { designOwnership, designPublication: designPublication! } : {}),
   };
 }
 
@@ -189,6 +251,21 @@ function createDataStore(
     rejectCorruptWrite: true,
     rejectUnsafeWrite: true,
   });
+}
+
+function artifactContentIsValid(record: StagedHtmlArtifact): boolean {
+  if (
+    record.artifact.id !== createHash("sha256").update(record.html).digest("hex") ||
+    record.artifact.size !== Buffer.byteLength(record.html, "utf8")
+  ) {
+    return false;
+  }
+  try {
+    validateGenerativeUiHtml(record.html);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export class GenerativeUiArtifactStore {
@@ -241,6 +318,7 @@ export class GenerativeUiArtifactStore {
     model?: string;
     artifact: ChatHtmlArtifactV1;
     html: string;
+    designOwnership?: DesignGeneratedRevisionOwnershipV1;
   }): Promise<"inserted" | "replaced" | "existing"> {
     this.requireAvailable();
     const parsed = parseRecord({
@@ -248,6 +326,7 @@ export class GenerativeUiArtifactStore {
       ...input,
       committed: false,
       stagedAt: this.now(),
+      ...(input.designOwnership ? { designPublication: "candidate" as const } : {}),
     });
     if (!parsed) throw new Error("Invalid generative-ui artifact staging payload.");
     validateGenerativeUiHtml(parsed.html);
@@ -300,6 +379,114 @@ export class GenerativeUiArtifactStore {
     });
   }
 
+  /**
+   * Stage a deterministic recovery revision while retaining the damaged row
+   * whenever capacity permits. At a hard record or byte boundary, the exact
+   * committed row proven damaged is pruned in the same artifact-store write so
+   * recovery never needs transient quota headroom.
+   */
+  async stageRecoveryReplacement(input: {
+    chatId: string;
+    generationId: string;
+    model?: string;
+    artifact: ChatHtmlArtifactV1;
+    html: string;
+    designOwnership: DesignGeneratedRevisionOwnershipV1;
+    damagedMediaId: string;
+  }): Promise<"inserted" | "replaced" | "existing"> {
+    this.requireAvailable();
+    if (!boundedIdentity(input.damagedMediaId)) {
+      throw new Error("Invalid Design recovery artifact identity.");
+    }
+    const parsed = parseRecord({
+      version: STORE_VERSION,
+      chatId: input.chatId,
+      generationId: input.generationId,
+      ...(input.model ? { model: input.model } : {}),
+      artifact: input.artifact,
+      html: input.html,
+      committed: false,
+      stagedAt: this.now(),
+      designOwnership: input.designOwnership,
+      designPublication: "candidate" as const,
+    });
+    if (
+      !parsed ||
+      parsed.artifact.revisionOfMediaId !== input.damagedMediaId ||
+      parsed.designOwnership?.kind !== "revision" ||
+      parsed.designOwnership.baseMediaId !== input.damagedMediaId
+    ) {
+      throw new Error("Invalid Design recovery artifact staging payload.");
+    }
+    validateGenerativeUiHtml(parsed.html);
+    return this.data.update((database) => {
+      const existing = database.records.find(
+        (record) => record.artifact.mediaId === parsed.artifact.mediaId,
+      );
+      if (existing) {
+        if (
+          existing.chatId === parsed.chatId &&
+          existing.generationId === parsed.generationId &&
+          existing.html === parsed.html &&
+          JSON.stringify(existing.artifact) === JSON.stringify(parsed.artifact) &&
+          JSON.stringify(existing.designOwnership) === JSON.stringify(parsed.designOwnership)
+        ) {
+          return "existing" as const;
+        }
+        throw new Error("Generative UI artifact identity was reused.");
+      }
+      const damagedIndex = database.records.findIndex(
+        (record) =>
+          record.chatId === parsed.chatId &&
+          record.artifact.mediaId === input.damagedMediaId,
+      );
+      const damaged = damagedIndex < 0 ? undefined : database.records[damagedIndex]!;
+      if (
+        damaged &&
+        (!damaged.committed ||
+          artifactContentIsValid(damaged) ||
+          (damaged.designOwnership !== undefined &&
+            (damaged.designOwnership.projectId !== parsed.designOwnership!.projectId ||
+              damaged.designOwnership.lineageId !== parsed.designOwnership!.lineageId)))
+      ) {
+        throw new Error("The Design recovery source is not an exact damaged artifact.");
+      }
+      if (database.records.filter((record) => !record.committed).length >= MAX_UNCOMMITTED_ARTIFACTS) {
+        throw new Error("Generative UI artifact staging is at capacity.");
+      }
+      const chatRecords = database.records.filter((record) => record.chatId === parsed.chatId);
+      const chatBytes = chatRecords.reduce((total, record) => total + record.artifact.size, 0);
+      const storeBytes = database.records.reduce(
+        (total, record) => total + record.artifact.size,
+        0,
+      );
+      const mustPruneDamaged =
+        Boolean(damaged) &&
+        (database.records.length >= MAX_STORE_RECORDS ||
+          chatRecords.length >= MAX_HTML_ARTIFACTS_PER_CHAT ||
+          chatBytes + parsed.artifact.size > MAX_HTML_ARTIFACT_BYTES_PER_CHAT ||
+          storeBytes + parsed.artifact.size > MAX_STORE_BYTES);
+      const removedRecords = mustPruneDamaged ? 1 : 0;
+      const removedBytes = mustPruneDamaged ? damaged!.artifact.size : 0;
+      if (database.records.length + 1 - removedRecords > MAX_STORE_RECORDS) {
+        throw new Error("Generative UI artifact storage is at capacity.");
+      }
+      if (chatRecords.length + 1 - removedRecords > MAX_HTML_ARTIFACTS_PER_CHAT) {
+        throw new Error("This chat has reached its HTML artifact limit.");
+      }
+      if (chatBytes + parsed.artifact.size - removedBytes > MAX_HTML_ARTIFACT_BYTES_PER_CHAT) {
+        throw new Error("Generative UI artifact staging reached this chat's storage limit.");
+      }
+      if (storeBytes + parsed.artifact.size - removedBytes > MAX_STORE_BYTES) {
+        throw new Error("Generative UI artifact storage reached its byte limit.");
+      }
+      if (mustPruneDamaged) database.records.splice(damagedIndex, 1);
+      database.records.push(parsed);
+      database.revision += 1;
+      return mustPruneDamaged ? ("replaced" as const) : ("inserted" as const);
+    });
+  }
+
   async commit(chatId: string, mediaIds: readonly string[]): Promise<void> {
     this.requireAvailable();
     if (!boundedIdentity(chatId) || mediaIds.some((id) => !boundedIdentity(id))) {
@@ -317,6 +504,135 @@ export class GenerativeUiArtifactStore {
         return { ...record, committed: true };
       });
       if (changed) database.revision += 1;
+    });
+  }
+
+  async setDesignPublicationState(
+    chatId: string,
+    mediaIds: readonly string[],
+    from: readonly DesignArtifactPublicationState[],
+    to: DesignArtifactPublicationState,
+  ): Promise<void> {
+    this.requireAvailable();
+    if (
+      !boundedIdentity(chatId) ||
+      mediaIds.length === 0 ||
+      mediaIds.some((id) => !boundedIdentity(id)) ||
+      from.length === 0
+    ) {
+      throw new Error("Invalid Design artifact publication transition.");
+    }
+    const ids = new Set(mediaIds);
+    if (ids.size !== mediaIds.length) {
+      throw new Error("Invalid Design artifact publication transition.");
+    }
+    await this.data.update((database) => {
+      const matched = database.records.filter(
+        (record) => record.chatId === chatId && ids.has(record.artifact.mediaId),
+      );
+      if (
+        matched.length !== ids.size ||
+        matched.some(
+          (record) =>
+            !record.designOwnership ||
+            !record.designPublication ||
+            !from.includes(record.designPublication),
+        )
+      ) {
+        throw new Error("Design artifact publication state changed.");
+      }
+      for (const record of matched) record.designPublication = to;
+      database.revision += 1;
+    });
+  }
+
+  async designPublicationRecords(
+    states: readonly DesignArtifactPublicationState[],
+    input?: { chatId?: string; mediaIds?: readonly string[] },
+  ): Promise<StagedHtmlArtifact[]> {
+    this.requireAvailable();
+    if (states.length === 0) return [];
+    if (input?.chatId !== undefined && !boundedIdentity(input.chatId)) {
+      throw new Error("Invalid Design artifact chat identity.");
+    }
+    const mediaIds = input?.mediaIds ? new Set(input.mediaIds) : undefined;
+    if (mediaIds && [...mediaIds].some((id) => !boundedIdentity(id))) {
+      throw new Error("Invalid Design artifact media identity.");
+    }
+    return structuredClone(
+      (await this.data.load()).records.filter(
+        (record) =>
+          record.designOwnership !== undefined &&
+          record.designPublication !== undefined &&
+          states.includes(record.designPublication) &&
+          (input?.chatId === undefined || record.chatId === input.chatId) &&
+          (!mediaIds || mediaIds.has(record.artifact.mediaId)),
+      ),
+    );
+  }
+
+  /**
+   * Linearize a main-owned project repair against artifact staging/commit.
+   * A committed or still-pending exact row preserves project membership. Only
+   * a truly absent row permits the project CAS, while the artifact writer queue
+   * remains held until that CAS finishes.
+   */
+  async withMissingArtifactGuard<R>(
+    chatId: string,
+    mediaId: string,
+    operation: () => Promise<R>,
+  ): Promise<MissingArtifactGuardResult<R>> {
+    this.requireAvailable();
+    if (!boundedIdentity(chatId) || !boundedIdentity(mediaId)) {
+      throw new Error("Invalid Design artifact guard identity.");
+    }
+    return this.data.withSerializedSnapshot(async (database) => {
+      const exact = database.records.filter(
+        (record) => record.chatId === chatId && record.artifact.mediaId === mediaId,
+      );
+      if (exact.length > 1) throw new Error("Design artifact identity is ambiguous.");
+      if (exact.length === 1) return { status: "artifact-present" as const };
+      return { status: "completed" as const, value: await operation() };
+    });
+  }
+
+  /**
+   * Linearize a project repair against the exact committed artifact inspected
+   * as damaged. The project CAS runs only while that same fingerprint remains
+   * present and invalid; a repaired, replaced, pending, or removed row fails closed.
+   */
+  async withDamagedArtifactGuard<R>(
+    input: {
+      chatId: string;
+      mediaId: string;
+      expectedFingerprint: string;
+      allowValidContent?: boolean;
+    },
+    operation: () => Promise<R>,
+  ): Promise<DamagedArtifactGuardResult<R>> {
+    this.requireAvailable();
+    if (
+      !boundedIdentity(input.chatId) ||
+      !boundedIdentity(input.mediaId) ||
+      !/^[a-f0-9]{64}$/u.test(input.expectedFingerprint)
+    ) {
+      throw new Error("Invalid Design damaged-artifact guard identity.");
+    }
+    return this.data.withSerializedSnapshot(async (database) => {
+      const exact = database.records.filter(
+        (record) => record.chatId === input.chatId && record.artifact.mediaId === input.mediaId,
+      );
+      if (exact.length !== 1 || !exact[0]!.committed) {
+        return { status: "artifact-changed" as const };
+      }
+      const source = exact[0]!;
+      if (designArtifactRecoveryFingerprint(source) !== input.expectedFingerprint) {
+        return { status: "artifact-changed" as const };
+      }
+      if (artifactContentIsValid(source) && input.allowValidContent !== true) {
+        return { status: "artifact-valid" as const };
+      }
+      return { status: "completed" as const, value: await operation() };
     });
   }
 
@@ -370,6 +686,36 @@ export class GenerativeUiArtifactStore {
     )?.artifact;
   }
 
+  /**
+   * Read only an exact uncommitted Design candidate for the active generation
+   * preview path. Persisted preview and export must use committedSourceFor or
+   * committedRecoverySourceFor instead.
+   */
+  async liveDesignCandidateSourceFor(input: {
+    chatId: string;
+    mediaId: string;
+    generationId: string;
+  }): Promise<StagedHtmlArtifact | undefined> {
+    this.requireAvailable();
+    if (
+      !boundedIdentity(input.chatId) ||
+      !boundedIdentity(input.mediaId) ||
+      !boundedIdentity(input.generationId)
+    ) {
+      return undefined;
+    }
+    const record = (await this.data.load()).records.find(
+      (item) =>
+        item.chatId === input.chatId &&
+        item.artifact.mediaId === input.mediaId &&
+        item.generationId === input.generationId &&
+        !item.committed &&
+        item.designOwnership !== undefined &&
+        item.designPublication === "candidate",
+    );
+    return record ? structuredClone(record) : undefined;
+  }
+
   async committedSourceFor(
     chatId: string,
     mediaId: string,
@@ -385,6 +731,32 @@ export class GenerativeUiArtifactStore {
           html: record.html,
           createdAt: record.stagedAt,
           ...(record.model ? { model: record.model } : {}),
+        }
+      : undefined;
+  }
+
+  /** Main-only recovery metadata. Callers must never project this over IPC. */
+  async committedRecoverySourceFor(
+    chatId: string,
+    mediaId: string,
+  ): Promise<CommittedGenerativeUiRecoverySource | undefined> {
+    this.requireAvailable();
+    if (!boundedIdentity(chatId) || !boundedIdentity(mediaId)) return undefined;
+    const record = (await this.data.load()).records.find(
+      (item) => item.chatId === chatId && item.artifact.mediaId === mediaId && item.committed,
+    );
+    return record
+      ? {
+          chatId: record.chatId,
+          generationId: record.generationId,
+          artifact: structuredClone(record.artifact),
+          html: record.html,
+          createdAt: record.stagedAt,
+          ...(record.model ? { model: record.model } : {}),
+          ...(record.designOwnership
+            ? { designOwnership: structuredClone(record.designOwnership) }
+            : {}),
+          ...(record.designPublication ? { designPublication: record.designPublication } : {}),
         }
       : undefined;
   }
@@ -508,6 +880,9 @@ export class GenerativeUiArtifactStore {
         throw new Error("Generative UI artifact staging reached this chat's storage limit.");
       }
       for (const record of source) {
+        const copyable = { ...record };
+        delete copyable.designOwnership;
+        delete copyable.designPublication;
         const mediaId = remappedMediaIds.get(record.artifact.mediaId)!;
         const artifact: ChatHtmlArtifactV1 = {
           ...record.artifact,
@@ -519,7 +894,7 @@ export class GenerativeUiArtifactStore {
             : {}),
         };
         database.records.push({
-          ...record,
+          ...copyable,
           chatId: targetChatId,
           generationId: committed ? record.generationId : copyGenerationId(sourceChatId),
           artifact,

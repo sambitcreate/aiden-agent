@@ -53,3 +53,28 @@ test("the production chat adapter rejects a conflicting deterministic media iden
     /conflicts/iu,
   );
 });
+
+test("the production chat adapter rejects every mismatched descriptor field", async () => {
+  const mismatches: ChatHtmlArtifactV1[] = [
+    { ...artifact, revisionOfMediaId: `design:${"d".repeat(64)}` },
+    { ...artifact, title: "Different title" },
+    { ...artifact, mimeType: "application/xhtml+xml" as "text/html" },
+    { ...artifact, size: artifact.size + 1 },
+  ];
+  for (const prior of mismatches) {
+    const port = createDesignDirectEditMessagePort({
+      async get() {
+        return {
+          messages: [{ role: "assistant", content: "", htmlArtifacts: [prior] }],
+        } as never;
+      },
+      async appendMessage() {
+        assert.fail("a conflicting artifact must not be appended");
+      },
+    });
+    await assert.rejects(
+      port.ensureArtifactMessage({ chatId: "chat:one", artifact, createdAt: 10 }),
+      /conflicts/iu,
+    );
+  }
+});

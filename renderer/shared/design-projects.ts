@@ -57,7 +57,49 @@ export interface DesignProjectRecordSummaryV1 {
   artboardCount: number;
   health: "ready" | "needs-repair";
   recoveryMessage?: string;
+  recoveryAction?: "recover-artifact" | "open-project";
 }
+
+export type DesignArtifactRecoveryReason =
+  | "omitted-html"
+  | "corrupt-artifact"
+  | "missing-artifact"
+  | "journal-unavailable"
+  | "no-valid-journal-revision";
+
+export type DesignArtifactRecoveryOperation =
+  | "recover-revision"
+  | "remove-missing-artboard"
+  | "remove-missing-history"
+  | "open-to-regenerate";
+
+/** Bounded recovery state. Artifact source and journal details never cross IPC. */
+export interface DesignArtifactRecoveryPlanV1 {
+  version: 1;
+  projectId: string;
+  expectedRevision: number;
+  status: "recoverable" | "regenerate";
+  operation: DesignArtifactRecoveryOperation;
+  reason: DesignArtifactRecoveryReason;
+  message: string;
+}
+
+export type DesignArtifactRecoveryResultV1 =
+  | {
+      status: "recovered";
+      operation: "recover-revision" | "remove-missing-history";
+      project: DesignProjectSnapshotV1;
+    }
+  | {
+      status: "conflict";
+      current: DesignProjectSnapshotV1;
+    }
+  | {
+      status: "regenerate";
+      plan: DesignArtifactRecoveryPlanV1;
+      /** Present when recovery changed the project before regeneration. */
+      project?: DesignProjectSnapshotV1;
+    };
 
 export type DesignProjectMutationResultV1 =
   | { status: "updated"; project: DesignProjectSnapshotV1 }
@@ -143,6 +185,7 @@ export interface DesignProjectSummary {
   artboardCount: number;
   health: DesignProjectHealth;
   recoveryMessage?: string;
+  recoveryAction?: "recover-artifact" | "open-project";
 }
 
 export interface DesignProjectSourceDocument {

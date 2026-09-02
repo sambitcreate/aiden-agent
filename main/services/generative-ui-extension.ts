@@ -17,6 +17,7 @@ import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import {
   htmlArtifactByteLength,
+  OMITTED_DESIGN_HTML_SENTINEL,
   requireGenerativeUiTitle,
   validateGenerativeUiHtml,
 } from "./generative-ui-html.js";
@@ -33,15 +34,28 @@ export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 import { RENDER_ARTIFACT_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 
 export const GENERATIVE_UI_TOOL_NAME = RENDER_ARTIFACT_TOOL_NAME;
+export const MAX_DESIGN_RENDER_ARTIFACT_INVOCATIONS_PER_TURN =
+  MAX_HTML_ARTIFACTS_PER_RESPONSE * 2;
+export const MAX_DESIGN_RENDER_ARTIFACT_REPLACEMENTS_PER_TURN =
+  MAX_HTML_ARTIFACTS_PER_RESPONSE;
 
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 const HTML_EXTENSIONS = new Set([".html", ".htm"]);
-const OMITTED_DESIGN_HTML =
-  "[Previous Design HTML omitted by Aiden; the bounded current revision is supplied separately.]";
 
 /** Keep durable tool-call history structurally valid without redispatching old HTML to providers. */
 function omitHistoricalDesignHtml(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map((message) => {
+  let currentUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      currentUserIndex = index;
+      break;
+    }
+  }
+  return messages.map((message, index) => {
+    // Pi calls transformContext again after each tool result. Tool calls after
+    // the latest user message belong to the in-flight turn and must retain
+    // their exact arguments for a valid multi-step continuation.
+    if (currentUserIndex >= 0 && index > currentUserIndex) return message;
     if (message.role !== "assistant") return message;
     let changed = false;
     const content = message.content.map((part) => {
@@ -63,7 +77,7 @@ function omitHistoricalDesignHtml(messages: AgentMessage[]): AgentMessage[] {
         ...part,
         arguments: {
           ...(title ? { title } : {}),
-          html: OMITTED_DESIGN_HTML,
+          html: OMITTED_DESIGN_HTML_SENTINEL,
         },
       };
     });
@@ -261,6 +275,9 @@ export function createGenerativeUiExtensionRuntime(options: GenerativeUiExtensio
   const artifactNamespace = options.artifactNamespace ?? randomUUID();
   let displayedCount = 0;
   let displayedBytes = 0;
+  let designInvocationAttempts = 0;
+  let designReplacementAttempts = 0;
+  let designRenderBudgetExhausted = false;
   let serial = Promise.resolve();
   const titlesInGeneration = new Map<string, { mediaId: string; size: number }>();
 
@@ -315,6 +332,20 @@ export function createGenerativeUiExtensionRuntime(options: GenerativeUiExtensio
         });
         await previous;
         try {
+          if (designWorkspace) {
+            designInvocationAttempts += 1;
+            if (
+              designInvocationAttempts > MAX_DESIGN_RENDER_ARTIFACT_INVOCATIONS_PER_TURN
+            ) {
+              designRenderBudgetExhausted = true;
+              throw new Error(
+                `Design render_artifact reached its ${MAX_DESIGN_RENDER_ARTIFACT_INVOCATIONS_PER_TURN}-call limit for this turn.`,
+              );
+            }
+            if (designInvocationAttempts === MAX_DESIGN_RENDER_ARTIFACT_INVOCATIONS_PER_TURN) {
+              designRenderBudgetExhausted = true;
+            }
+          }
           if (signal?.aborted) throw new Error("Artifact rendering was cancelled.");
           const input = params as { title?: unknown; html?: unknown; path?: unknown };
           const title = requireGenerativeUiTitle(input.title);
@@ -363,6 +394,17 @@ export function createGenerativeUiExtensionRuntime(options: GenerativeUiExtensio
           }
           const size = htmlArtifactByteLength(html);
           const replacing = titlesInGeneration.get(title);
+          if (designWorkspace && replacing) {
+            designReplacementAttempts += 1;
+            if (
+              designReplacementAttempts > MAX_DESIGN_RENDER_ARTIFACT_REPLACEMENTS_PER_TURN
+            ) {
+              designRenderBudgetExhausted = true;
+              throw new Error(
+                `Design render_artifact reached its ${MAX_DESIGN_RENDER_ARTIFACT_REPLACEMENTS_PER_TURN}-replacement limit for this turn.`,
+              );
+            }
+          }
           const nextBytes = displayedBytes - (replacing?.size ?? 0) + size;
           if (!replacing) {
             if (displayedCount >= MAX_HTML_ARTIFACTS_PER_RESPONSE) {
@@ -443,6 +485,7 @@ export function createGenerativeUiExtensionRuntime(options: GenerativeUiExtensio
       tools: [tool],
       ...(designWorkspace
         ? {
+            shouldStopAfterTurn: () => designRenderBudgetExhausted,
             transformContext: async (messages: AgentMessage[]) => {
               const scrubbedMessages = omitHistoricalDesignHtml(messages);
               const priorDesigns: readonly {

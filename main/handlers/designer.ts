@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, logger, shell } from "../platform.js";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
@@ -28,7 +28,10 @@ import {
   parseDesignProjectCanvasV1,
   type DesignProjectSnapshotV1,
 } from "../services/design-project-contract.js";
-import { DesignProjectRevisionConflictError } from "../services/design-project-store.js";
+import {
+  DesignProjectPublicationUncertainError,
+  DesignProjectRevisionConflictError,
+} from "../services/design-project-store.js";
 import { buildDesignProjectExportBundle } from "../services/design-project-export-core.js";
 import { writeDesignProjectExport } from "../services/design-project-export.js";
 import { designProjectExportHistoryStore } from "../services/design-project-export-history.js";
@@ -45,7 +48,11 @@ import {
 } from "../services/design-system-attachment-service-main.js";
 import { designHandoffApplicationService } from "../services/design-handoff-application-service-main.js";
 import { designDirectEditService } from "../services/design-direct-edit-service-main.js";
-import { parseDesignDirectEdit } from "../services/design-direct-edit-core.js";
+import {
+  parseDesignDirectEdit,
+  parseRendererDirectEditGestureId,
+  parseRendererPrototypeGestureId,
+} from "../services/design-direct-edit-core.js";
 import {
   listSourceDesignerMultifileActions,
   sourceDesignerMultifileAction,
@@ -53,6 +60,9 @@ import {
   sourceDesignerMultifileJournal,
 } from "../services/source-designer-multifile-main.js";
 import { inspectDesignProjectHealth } from "../services/design-project-health.js";
+import { isUsablePublishedDesignSource } from "../services/design-artifact-source-authority.js";
+import { designArtifactRecoveryService } from "../services/design-artifact-recovery-main.js";
+import { DesignReferenceRecoveryService } from "../services/design-reference-recovery.js";
 import { llmClient } from "../services/llm-client.js";
 import {
   assertSameConnectedDesignProjectBinding,
@@ -93,6 +103,11 @@ const designProjectConnectionService = createDesignProjectConnectionService({
   },
 });
 
+const designReferenceRecoveryService = new DesignReferenceRecoveryService({
+  projects: designProjectStore,
+  assets: designReferenceAssetStore,
+});
+
 async function designHandoffPacket(
   project: DesignProjectSnapshotV1,
   lineageIdValue: unknown,
@@ -108,14 +123,23 @@ async function designHandoffPacket(
       node.artifactMediaIds?.includes(mediaId),
   );
   if (!artboard) throw new Error("Select a generated Design revision before continuing.");
-  const source = await generativeUiArtifactStore.committedSourceFor(project.chatId, mediaId);
+  const source = await generativeUiArtifactStore.committedRecoverySourceFor(
+    project.chatId,
+    mediaId,
+  );
   if (!source) throw new Error("The selected Design revision is unavailable.");
+  if (!isUsablePublishedDesignSource(project, source)) {
+    throw new Error("The selected Design revision is damaged. Repair it before continuing.");
+  }
   const bytes = Buffer.from(source.html, "utf8");
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const commentView = await designCommentStore.listProject(project.id);
   const designDecisions = commentView.comments
     .filter(({ status }) => status === "resolved")
-    .map(({ id, body }) => ({ id, summary: body.replace(/\s+/gu, " ").trim().slice(0, 500) }))
+    .map(({ id, body }) => ({
+      id,
+      summary: body.replace(/\s+/gu, " ").trim().slice(0, 500),
+    }))
     .filter(
       ({ summary }) =>
         summary.length > 0 &&
@@ -203,7 +227,12 @@ async function designSystemExtractionInput(
               ? ("catalog-v1" as const)
               : undefined;
           if (!kind) throw new Error("Reattach this design system to verify its source schema.");
-          return { sourceId, workspaceRelativePath, kind, reviewed: true as const };
+          return {
+            sourceId,
+            workspaceRelativePath,
+            kind,
+            reviewed: true as const,
+          };
         })
       : undefined);
   if (input) {
@@ -392,8 +421,14 @@ async function requireOwnedCommentTarget(
   if (!elementId || target.element.selector !== `[data-aiden-id="${elementId}"]`) {
     throw new Error("Generated comments require one stable data-aiden-id element target.");
   }
-  const source = await generativeUiArtifactStore.committedSourceFor(project.chatId, target.mediaId);
+  const source = await generativeUiArtifactStore.committedRecoverySourceFor(
+    project.chatId,
+    target.mediaId,
+  );
   if (!source) throw new Error("That generated revision is unavailable.");
+  if (!isUsablePublishedDesignSource(project, source)) {
+    throw new Error("That generated revision is damaged. Repair it before adding comments.");
+  }
   const artifactId = createHash("sha256").update(source.html, "utf8").digest("hex");
   if (artifactId !== target.source.artifactId) {
     throw new Error("That comment target changed before it could be saved.");
@@ -545,8 +580,8 @@ export function registerDesignerHandlers(): void {
         if (!project) throw new Error("A Design Project changed while it was being listed.");
         const health = await inspectDesignProjectHealth(project, {
           hasReferenceAsset: async (assetId) => availableAssets.has(assetId),
-          hasArtifact: async (chatId, mediaId) =>
-            Boolean(await generativeUiArtifactStore.artifactFor(chatId, mediaId)),
+          artifactSource: (chatId, mediaId) =>
+            generativeUiArtifactStore.committedRecoverySourceFor(chatId, mediaId),
         });
         return {
           ...projectSummary(project),
@@ -562,6 +597,22 @@ export function registerDesignerHandlers(): void {
     return (
       (await designProjectStore.get(identity)) ??
       (await designProjectStore.getOrMigrateLegacyChat(identity))
+    );
+  });
+
+  ipcMain.handle("designer:inspectArtifactRecovery", async (event, identityValue: unknown) => {
+    ownerFor(event);
+    return designArtifactRecoveryService.inspect(projectId(identityValue));
+  });
+
+  ipcMain.handle("designer:recoverArtifact", async (event, inputValue: unknown) => {
+    ownerFor(event);
+    const input = exactRecord(inputValue, new Set(["projectId", "expectedRevision"]));
+    return designProjectLifecycle.runProjectMutation(() =>
+      designArtifactRecoveryService.recover(
+        projectId(input.projectId),
+        projectRevision(input.expectedRevision),
+      ),
     );
   });
 
@@ -585,7 +636,9 @@ export function registerDesignerHandlers(): void {
           }),
         );
       } catch (error) {
+        if (!(error instanceof DesignProjectPublicationUncertainError)) {
         await chatApplicationService.remove(chat.id);
+        }
         throw error;
       }
     };
@@ -617,10 +670,7 @@ export function registerDesignerHandlers(): void {
   ipcMain.handle("designer:preflightGeneration", async (event, inputValue: unknown) => {
     const owner = ownerFor(event);
     const input = parseDesignProjectPreflightParams(inputValue);
-    return designProjectConnectionService.preflightGeneration(
-      owner,
-      input.projectId,
-    );
+    return designProjectConnectionService.preflightGeneration(owner, input.projectId);
   });
 
   ipcMain.handle("designer:updateProject", async (event, inputValue: unknown) => {
@@ -723,7 +773,9 @@ export function registerDesignerHandlers(): void {
       },
       (plan) => {
         if (llmClient.isChatBusy(plan.chatId)) {
-          throw new Error("Finish or stop the current Design response before deleting this project.");
+          throw new Error(
+            "Finish or stop the current Design response before deleting this project.",
+          );
         }
       },
     );
@@ -734,8 +786,10 @@ export function registerDesignerHandlers(): void {
     ownerFor(event);
     const input = exactRecord(
       inputValue,
-      new Set(["projectId", "lineageId", "mediaId", "selection", "edit"]),
+      new Set(["operationId", "projectId", "lineageId", "mediaId", "selection", "edit"]),
     );
+    const operationId = parseRendererPrototypeGestureId(input.operationId);
+    if (!operationId) throw new Error("Invalid Design direct-edit operation identity.");
     const project = await designProjectStore.get(projectId(input.projectId));
     if (!project) throw new Error("Design Project was not found.");
     const lineageId = projectId(input.lineageId);
@@ -744,12 +798,17 @@ export function registerDesignerHandlers(): void {
       (candidate) =>
         candidate.kind === "artboard" &&
         candidate.lineageId === lineageId &&
-        candidate.activeMediaId === mediaId &&
         candidate.artifactMediaIds?.includes(mediaId),
     );
     if (!node) throw new Error("The selected Design revision is stale.");
-    const source = await generativeUiArtifactStore.committedSourceFor(project.chatId, mediaId);
+    const source = await generativeUiArtifactStore.committedRecoverySourceFor(
+      project.chatId,
+      mediaId,
+    );
     if (!source) throw new Error("The selected Design revision is unavailable.");
+    if (!isUsablePublishedDesignSource(project, source)) {
+      throw new Error("The selected Design revision is damaged. Repair it before editing.");
+    }
     const selection = parseDesignElementSelection(input.selection);
     const edit = parseDesignDirectEdit(input.edit);
     if (
@@ -761,7 +820,7 @@ export function registerDesignerHandlers(): void {
     }
     return designProjectLifecycle.runProjectMutation(() =>
       designDirectEditService.applyPrototype({
-        gestureId: `gesture:${randomUUID()}`,
+        gestureId: operationId,
         target: {
           origin: "prototype",
           projectId: project.id,
@@ -808,7 +867,12 @@ export function registerDesignerHandlers(): void {
 
   ipcMain.handle("designer:applyConnectedDirectEdit", async (event, inputValue: unknown) => {
     const owner = ownerFor(event);
-    const input = exactRecord(inputValue, new Set(["projectId", "sourceSelectionId", "edit"]));
+    const input = exactRecord(
+      inputValue,
+      new Set(["operationId", "projectId", "sourceSelectionId", "edit"]),
+    );
+    const operationId = parseRendererDirectEditGestureId(input.operationId);
+    if (!operationId) throw new Error("Invalid Design direct-edit operation identity.");
     const project = await designProjectStore.get(projectId(input.projectId));
     if (!project?.workspaceId || project.connectionState !== "connected") {
       throw new Error("This Design Project is not connected to a workspace.");
@@ -827,7 +891,7 @@ export function registerDesignerHandlers(): void {
       owner,
       chatId: project.chatId,
       sourceSelectionId,
-      gestureId: `gesture:${randomUUID()}`,
+      gestureId: operationId,
       target: {
         origin: "connected-app",
         projectId: project.id,
@@ -922,7 +986,11 @@ export function registerDesignerHandlers(): void {
       sourceDesignerActionService.discardForDurable(owner, result.action.id);
       const action = await sourceDesignerMultifileAction(project.id, record.actionId);
       owner.send("designer:multifile-action-changed", { action });
-      return { kind: "durable-designer-action" as const, proposalId: result.proposalId, action };
+      return {
+        kind: "durable-designer-action" as const,
+        proposalId: result.proposalId,
+        action,
+      };
     } catch (error) {
       sourceDesignerActionService.discardForDurable(owner, result.action.id);
       throw error;
@@ -961,7 +1029,10 @@ export function registerDesignerHandlers(): void {
           workspaceId: project.workspaceId,
           canvas: project.canvas,
           referenceAssetIds: project.referenceAssetIds,
-          designSystemBinding: { id: attachment.attachmentId, revision: attachment.revision },
+          designSystemBinding: {
+            id: attachment.attachmentId,
+            revision: attachment.revision,
+          },
         }),
       );
       const projection = await withDesignSystemWorkspace(owner, updated, selection, (reviewed) =>
@@ -1020,7 +1091,10 @@ export function registerDesignerHandlers(): void {
         workspaceId: project.workspaceId,
         canvas: project.canvas,
         referenceAssetIds: project.referenceAssetIds,
-        designSystemBinding: { id: attachment.attachmentId, revision: attachment.revision },
+        designSystemBinding: {
+          id: attachment.attachmentId,
+          revision: attachment.revision,
+        },
       }),
     );
     const projection = await withDesignSystemWorkspace(owner, updated, selection, (reviewed) =>
@@ -1134,7 +1208,9 @@ export function registerDesignerHandlers(): void {
         expectedCommittedHead: preview.expectedCommittedHead,
         dirtyCheckout: preview.dirtyCheckout,
         ...(preview.dirtyCheckout && input.dirtyCheckoutAcknowledged
-          ? { dirtyCheckoutAcknowledgement: preview.requiredDirtyCheckoutAcknowledgement! }
+          ? {
+              dirtyCheckoutAcknowledgement: preview.requiredDirtyCheckoutAcknowledgement!,
+            }
           : {}),
       },
     });
@@ -1235,8 +1311,16 @@ export function registerDesignerHandlers(): void {
       if (!node?.artifactMediaIds?.includes(mediaId)) {
         throw new Error("That source revision does not belong to this Design Project.");
       }
-      const source = await generativeUiArtifactStore.committedSourceFor(project.chatId, mediaId);
+      const source = await generativeUiArtifactStore.committedRecoverySourceFor(
+        project.chatId,
+        mediaId,
+      );
       if (!source) throw new Error("That generated source revision is unavailable.");
+      if (!isUsablePublishedDesignSource(project, source)) {
+        throw new Error(
+          "That generated source revision is damaged. Repair it before viewing code.",
+        );
+      }
       const hash = createHash("sha256").update(source.html, "utf8").digest("hex");
       return {
         filename: "index.html",
@@ -1304,8 +1388,14 @@ export function registerDesignerHandlers(): void {
       if (!node?.artifactMediaIds?.includes(mediaId)) {
         throw new Error("That source revision does not belong to this Design Project.");
       }
-      const source = await generativeUiArtifactStore.committedSourceFor(project.chatId, mediaId);
+      const source = await generativeUiArtifactStore.committedRecoverySourceFor(
+        project.chatId,
+        mediaId,
+      );
       if (!source) throw new Error("That generated source revision is unavailable.");
+      if (!isUsablePublishedDesignSource(project, source)) {
+        throw new Error("That generated source revision is damaged. Repair it before exporting.");
+      }
       const references = await Promise.all(
         project.referenceAssetIds.map(async (assetId) => {
           const stored = await designReferenceAssetStore.read(assetId);
@@ -1431,20 +1521,32 @@ export function registerDesignerHandlers(): void {
     return result ? { asset: result.asset, data: result.bytes.toString("base64") } : undefined;
   });
 
+  ipcMain.handle("designer:removeMissingReferenceAsset", async (event, inputValue: unknown) => {
+    ownerFor(event);
+    const input = exactRecord(inputValue, new Set(["projectId", "expectedRevision", "assetId"]));
+    return designProjectLifecycle.runProjectMutation(() =>
+      designReferenceRecoveryService.removeMissing({
+        projectId: projectId(input.projectId),
+        expectedRevision: projectRevision(input.expectedRevision),
+        assetId: string(input.assetId, "Design reference image identity", 64),
+      }),
+    );
+  });
+
   ipcMain.handle("designer:previewState", async (event, inputValue: unknown) => {
     const owner = ownerFor(event);
     const { projectId: requestedProjectId } = parseDesignProjectPreviewParams(inputValue);
     return designProjectLifecycle.runProjectMutation(async () => {
       const project = await requireConnectedProject(requestedProjectId);
-      return workspaceEnvironmentApplicationService.run(owner, project.workspaceId!, async (resolved) => {
+      return workspaceEnvironmentApplicationService.run(
+        owner,
+        project.workspaceId!,
+        async (resolved) => {
         const current = await requireConnectedProject(requestedProjectId);
         assertSameConnectedDesignProjectBinding(current, project);
-        return sourceDesignPreviewService.state(
-          owner,
-          project.id,
-          resolved.folderPath,
+          return sourceDesignPreviewService.state(owner, project.id, resolved.folderPath);
+        },
         );
-      });
     });
   });
 
@@ -1457,9 +1559,7 @@ export function registerDesignerHandlers(): void {
     });
   });
 
-  ipcMain.handle(
-    "designer:startPreview",
-    async (event, inputValue: unknown) => {
+  ipcMain.handle("designer:startPreview", async (event, inputValue: unknown) => {
       const owner = ownerFor(event);
       const input = parseDesignProjectStartPreviewParams(inputValue);
       return designProjectLifecycle.runProjectMutation(async () => {
@@ -1506,13 +1606,10 @@ export function registerDesignerHandlers(): void {
           admission.release();
           throw error;
         }
+    });
       });
-    },
-  );
 
-  ipcMain.handle(
-    "designer:bindSelection",
-    async (event, inputValue: unknown) => {
+  ipcMain.handle("designer:bindSelection", async (event, inputValue: unknown) => {
       const owner = ownerFor(event);
       const input = parseDesignProjectBindSelectionParams(inputValue);
       const descriptor = parseSourceElementDescriptor(input.descriptor);
@@ -1529,14 +1626,11 @@ export function registerDesignerHandlers(): void {
             input.sessionId,
             descriptor,
           );
+      });
         });
       });
-    },
-  );
 
-  ipcMain.handle(
-    "designer:listActions",
-    async (event, inputValue: unknown) => {
+  ipcMain.handle("designer:listActions", async (event, inputValue: unknown) => {
       const owner = ownerFor(event);
       const { projectId: requestedProjectId } = parseDesignProjectPreviewParams(inputValue);
       return designProjectLifecycle.runProjectMutation(async () => {
@@ -1547,9 +1641,8 @@ export function registerDesignerHandlers(): void {
           project.chatId,
           project.workspaceId,
         );
+    });
       });
-    },
-  );
 
   ipcMain.handle("designer:listMultifileActions", async (event, projectIdValue: unknown) => {
     ownerFor(event);
@@ -1692,9 +1785,7 @@ export function registerDesignerHandlers(): void {
     },
   );
 
-  ipcMain.handle(
-    "designer:applyAction",
-    async (event, inputValue: unknown) => {
+  ipcMain.handle("designer:applyAction", async (event, inputValue: unknown) => {
       const owner = ownerFor(event);
       const input = parseDesignProjectActionParams(inputValue);
       return designProjectLifecycle.runProjectMutation(async () => {
@@ -1715,9 +1806,8 @@ export function registerDesignerHandlers(): void {
             );
           },
         );
+    });
       });
-    },
-  );
 
   ipcMain.handle("designer:rejectAction", async (event, inputValue: unknown) => {
     const owner = ownerFor(event);
@@ -1729,9 +1819,7 @@ export function registerDesignerHandlers(): void {
     });
   });
 
-  ipcMain.handle(
-    "designer:undoAction",
-    async (event, inputValue: unknown) => {
+  ipcMain.handle("designer:undoAction", async (event, inputValue: unknown) => {
       const owner = ownerFor(event);
       const input = parseDesignProjectActionParams(inputValue);
       return designProjectLifecycle.runProjectMutation(async () => {
@@ -1752,7 +1840,6 @@ export function registerDesignerHandlers(): void {
             );
           },
         );
+    });
       });
-    },
-  );
 }

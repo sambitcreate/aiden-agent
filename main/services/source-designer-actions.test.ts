@@ -95,6 +95,23 @@ test("project cascade inspection and deletion are chat-scoped, idempotent, and f
   assert.equal(service.deleteChatActions("chat:one", [first.id]), 0);
   assert.deepEqual(service.inspectChatActionIds("chat:two"), [other.id]);
 
+  const stableInput = {
+    owner,
+    chatId: "chat:stable",
+    binding,
+    actionId: `action_${"b".repeat(64)}`,
+    label: "Stable retry",
+    replacement: "<button>Stable</button>",
+  };
+  const stable = service.propose(stableInput);
+  assert.deepEqual(service.propose(stableInput), stable);
+  assert.throws(
+    () => service.propose({ ...stableInput, replacement: "<button>Conflict</button>" }),
+    /another proposal/u,
+  );
+  service.discardForDurable(owner, stable.id);
+  assert.doesNotThrow(() => service.discardForDurable(owner, stable.id));
+
   const later = service.propose({
     owner,
     chatId: "chat:one",

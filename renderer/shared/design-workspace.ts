@@ -1,6 +1,6 @@
 import type { ChatMessage } from "../lib/types";
 import type { ChatHtmlArtifactV1 } from "./chat-artifacts";
-import type { DesignProjectSnapshotV1 } from "./design-projects";
+import type { DesignDirectEditV1, DesignProjectSnapshotV1 } from "./design-projects";
 
 export const DESIGN_ARTIFACT_MEDIA_ID_PREFIX = "design:" as const;
 export const MAX_DESIGN_CONTEXT_BYTES = 128 * 1024;
@@ -50,6 +50,134 @@ export interface DesignTurnTargetV1 {
   mediaId: string;
   artifactId: string;
   selection?: DesignElementSelectionV1;
+}
+
+export interface DesignPrototypeDirectEditRetryPayloadV1 {
+  projectId: string;
+  lineageId: string;
+  mediaId: string;
+  selection: DesignElementSelectionV1;
+  edit: DesignDirectEditV1;
+}
+
+export interface DesignConnectedDirectEditRetryPayloadV1 {
+  projectId: string;
+  sourceSelectionId: string;
+  edit: DesignDirectEditV1;
+}
+
+/** Stable canonical identity for exactly one renderer-owned prototype edit payload. */
+export function designPrototypeDirectEditRetryKey(
+  input: DesignPrototypeDirectEditRetryPayloadV1,
+): string {
+  return JSON.stringify([
+    input.projectId,
+    input.lineageId,
+    input.mediaId,
+    input.selection.version,
+    input.selection.tagName,
+    input.selection.label,
+    input.selection.selector,
+    input.selection.elementId ?? null,
+    input.selection.role ?? null,
+    input.selection.text ?? null,
+    input.edit,
+  ]);
+}
+
+/** Stable canonical identity for exactly one renderer-owned connected edit payload. */
+export function designConnectedDirectEditRetryKey(
+  input: DesignConnectedDirectEditRetryPayloadV1,
+): string {
+  return JSON.stringify([input.projectId, input.sourceSelectionId, input.edit]);
+}
+
+class DesignDirectEditRetryState<Input> {
+  private pending: { key: string; operationId: string } | undefined;
+
+  constructor(
+    private readonly keyFor: (input: Input) => string,
+    private readonly createOperationId: () => string,
+  ) {}
+
+  operationIdFor(input: Input): string {
+    const key = this.keyFor(input);
+    if (this.pending?.key === key) return this.pending.operationId;
+    const operationId = this.createOperationId();
+    this.pending = { key, operationId };
+    return operationId;
+  }
+
+  resetUnless(input: Input | undefined): void {
+    if (!input || this.pending?.key !== this.keyFor(input)) this.pending = undefined;
+  }
+
+  complete(operationId: string): void {
+    if (this.pending?.operationId === operationId) this.pending = undefined;
+  }
+}
+
+/** Retains one operation ID across failures and clears it on payload change or success. */
+export class DesignPrototypeDirectEditRetryState {
+  private readonly state: DesignDirectEditRetryState<DesignPrototypeDirectEditRetryPayloadV1>;
+
+  constructor(createOperationId: () => string = () => `gesture:${globalThis.crypto.randomUUID()}`) {
+    this.state = new DesignDirectEditRetryState(
+      designPrototypeDirectEditRetryKey,
+      createOperationId,
+    );
+  }
+
+  operationIdFor(input: DesignPrototypeDirectEditRetryPayloadV1): string {
+    return this.state.operationIdFor(input);
+  }
+
+  resetUnless(input: DesignPrototypeDirectEditRetryPayloadV1 | undefined): void {
+    this.state.resetUnless(input);
+  }
+
+  complete(operationId: string): void {
+    this.state.complete(operationId);
+  }
+}
+
+/** Retains one connected-edit operation ID through an ambiguous renderer retry. */
+export class DesignConnectedDirectEditRetryState {
+  private readonly state: DesignDirectEditRetryState<DesignConnectedDirectEditRetryPayloadV1>;
+
+  constructor(createOperationId: () => string = () => `gesture:${globalThis.crypto.randomUUID()}`) {
+    this.state = new DesignDirectEditRetryState(
+      designConnectedDirectEditRetryKey,
+      createOperationId,
+    );
+  }
+
+  operationIdFor(input: DesignConnectedDirectEditRetryPayloadV1): string {
+    return this.state.operationIdFor(input);
+  }
+
+  resetUnless(input: DesignConnectedDirectEditRetryPayloadV1 | undefined): void {
+    this.state.resetUnless(input);
+  }
+
+  complete(operationId: string): void {
+    this.state.complete(operationId);
+  }
+}
+
+/** One exact renderer selection paired with the project revision durably saved by main. */
+export interface DesignProjectPersistenceSnapshotV1 {
+  project: DesignProjectSnapshotV1;
+  targets: DesignTurnTargetV1[];
+}
+
+export function snapshotDesignTurnTargets(
+  targets: readonly DesignTurnTargetV1[],
+): DesignTurnTargetV1[] {
+  return targets.map((target) => ({
+    ...target,
+    ...(target.selection ? { selection: { ...target.selection } } : {}),
+  }));
 }
 
 /** Ephemeral renderer-to-main context for one attended Design generation. */
@@ -168,8 +296,61 @@ export interface DesignWorkspaceArtifactGroup {
   revisions: DesignWorkspaceArtifactEntry[];
 }
 
+export interface DesignCanvasPosition {
+  x: number;
+  y: number;
+}
+
+/** Preserve a live node's position when publication replaces its provisional node identity. */
+export function resolveDesignArtboardPosition(input: {
+  groupId: string;
+  revisionMediaIds: readonly string[];
+  positionsByNodeId: ReadonlyMap<string, DesignCanvasPosition>;
+  positionsByMediaId: ReadonlyMap<string, DesignCanvasPosition>;
+  fallback: DesignCanvasPosition;
+}): DesignCanvasPosition {
+  const exact = input.positionsByNodeId.get(input.groupId);
+  if (exact) return exact;
+  for (const mediaId of input.revisionMediaIds) {
+    const migrated = input.positionsByMediaId.get(mediaId);
+    if (migrated) return migrated;
+  }
+  return input.fallback;
+}
+
+/** Serialize canvas writes so an explicit send barrier observes every earlier save. */
+export class DesignProjectPersistenceBarrier<T> {
+  private inFlight: Promise<T> | undefined;
+
+  async flush(operation: () => Promise<T>): Promise<T> {
+    while (this.inFlight) await this.inFlight;
+    const current = operation();
+    this.inFlight = current;
+    try {
+      return await current;
+    } finally {
+      if (this.inFlight === current) this.inFlight = undefined;
+    }
+  }
+}
+
 export function isDesignHtmlArtifact(artifact: ChatHtmlArtifactV1): boolean {
   return artifact.mediaId.startsWith(DESIGN_ARTIFACT_MEDIA_ID_PREFIX);
+}
+
+/** True only when the authoritative project snapshot owns every optimistic revision. */
+export function designProjectClaimsArtifacts(
+  project: DesignProjectSnapshotV1,
+  artifacts: readonly ChatHtmlArtifactV1[],
+): boolean {
+  const ownedMediaIds = new Set(
+    project.canvas.nodes.flatMap((node) =>
+      node.kind === "artboard" ? (node.artifactMediaIds ?? []) : [],
+    ),
+  );
+  return artifacts.every(
+    (artifact) => !isDesignHtmlArtifact(artifact) || ownedMediaIds.has(artifact.mediaId),
+  );
 }
 
 /**
@@ -256,6 +437,12 @@ export function durableDesignWorkspaceArtifactGroups(
   }
   for (const entry of entries) {
     if (claimed.has(entry.artifact.mediaId)) continue;
+    // Persisted Design artifacts become visible only through the main-owned
+    // project snapshot. Failed, cancelled, stale-CAS, and crash-orphaned rows
+    // may remain in the backing transcript for audit/recovery, but they are not
+    // project history. Live entries may render optimistically until main
+    // publishes and the renderer refreshes the project revision.
+    if (entry.source !== "live") continue;
     const group = entry.artifact.revisionOfMediaId
       ? groupByMediaId.get(entry.artifact.revisionOfMediaId)
       : undefined;

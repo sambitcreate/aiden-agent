@@ -60,6 +60,7 @@ import { todoSnapshotForRenderer, unavailableTodoSnapshot } from "../../renderer
 import { createDesignProjectConnectionService } from "../services/design-project-connection-service.js";
 import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
 import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
+import { designLivePreviewAuthority } from "../services/design-live-preview-authority-main.js";
 
 const designProjectAppendService = createDesignProjectConnectionService({
   projects: designProjectStore,
@@ -101,9 +102,7 @@ export function registerChatHistoryHandlers(): void {
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
-    listAgentChats(
-      typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,
-    ),
+    listAgentChats(typeof workspaceId === "string" && workspaceId ? workspaceId : undefined),
   );
 
   ipcMain.handle("chats:get", async (_event, id: unknown) =>
@@ -704,7 +703,7 @@ export function registerChatHistoryHandlers(): void {
   });
 
   ipcMain.handle("chats:htmlArtifactSrcdoc", async (event, input: unknown) => {
-    rendererDocumentOwner(
+    const owner = rendererDocumentOwner(
       event,
       () => new Error("HTML artifact preview requires the active application document."),
     );
@@ -714,12 +713,52 @@ export function registerChatHistoryHandlers(): void {
     const record = input as Record<string, unknown>;
     const chatId = asString(record.chatId, "chatId");
     const mediaId = asString(record.mediaId, "mediaId");
+    const designStudio = record.designStudio === true;
+    const requestedLiveGeneration =
+      typeof record.liveDesignCandidateGenerationId === "string"
+        ? record.liveDesignCandidateGenerationId
+        : undefined;
+    const liveDesignCandidateGenerationId =
+      designStudio &&
+      requestedLiveGeneration &&
+      designLivePreviewAuthority.allows({
+        streamId: requestedLiveGeneration,
+        documentId: owner.documentId,
+        chatId,
+        mediaId,
+      })
+        ? requestedLiveGeneration
+        : undefined;
     return wrapStoredHtmlArtifact({
       chatId,
       mediaId,
       theme: record.theme,
-      designStudio: record.designStudio === true,
+      designStudio,
+      ...(liveDesignCandidateGenerationId ? { liveDesignCandidateGenerationId } : {}),
     });
+  });
+
+  ipcMain.handle(
+    "chats:resumeDetachedDesignPreview",
+    (event, streamIdValue: unknown, chatIdValue: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Detached Design preview requires the active application document."),
+      );
+      return llmClient.resumeDetachedDesignPreview(
+        asString(streamIdValue, "streamId"),
+        asString(chatIdValue, "chatId"),
+        owner.documentId,
+      );
+    },
+  );
+
+  ipcMain.handle("chats:suspendDetachedDesignPreview", (event, streamIdValue: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Detached Design preview requires the active application document."),
+    );
+    return llmClient.detachRenderer(asString(streamIdValue, "streamId"), owner.documentId);
   });
 
   ipcMain.handle("chats:exportHtmlArtifact", async (event, input: unknown) => {

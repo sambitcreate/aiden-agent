@@ -57,6 +57,25 @@ export function authoritativeDesignGenerationWorkspaceId(
 }
 
 /**
+ * Design capability is derived from durable chat/project ownership. The
+ * renderer flag is only a stale-request guard and can neither grant nor remove
+ * Design's restricted tool profile.
+ */
+export function authoritativeChatDesignMode(
+  persistedWorkspaceId: string | undefined,
+  requestedDesign: boolean | undefined,
+  project: DesignProjectSnapshotV1 | undefined,
+): boolean {
+  const authoritative =
+    project !== undefined ||
+    persistedChatWorkspaceId(persistedWorkspaceId) === DESIGN_PROJECT_CHAT_WORKSPACE_ID;
+  if ((requestedDesign === true) !== authoritative) {
+    throw new Error("This chat's Design mode changed before generation started.");
+  }
+  return authoritative;
+}
+
+/**
  * Attended Assistant authority comes from the persisted chat, never from a
  * renderer-selected mode flag. Main-only background modes remain explicit
  * because their capability profile is created by the scheduler, not IPC.

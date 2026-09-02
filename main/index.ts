@@ -85,7 +85,10 @@ import { subagentsEnabled } from "./services/subagents/feature-flag.js";
 import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
-import { designReferenceAssetStore } from "./services/design-reference-asset-store.js";
+import {
+  designReferenceAssetStore,
+  pruneUnreferencedDesignAssetsAtStartup,
+} from "./services/design-reference-asset-store.js";
 import {
   designProjectLifecycle,
   designProjectStore,
@@ -94,6 +97,7 @@ import { designProjectExportHistoryStore } from "./services/design-project-expor
 import { designCommentStore } from "./services/design-comment-store-main.js";
 import { designSystemSnapshotStore } from "./services/design-system-attachment-service-main.js";
 import { designHandoffApplicationService } from "./services/design-handoff-application-service-main.js";
+import { designGeneratedRevisionService } from "./services/design-generated-revision-service-main.js";
 import { recoverSourceDesignerMultifileActions } from "./services/source-designer-multifile-main.js";
 import {
   registerGenerativeUiProtocol,
@@ -1635,6 +1639,26 @@ if (!ownsSingleInstanceLock) {
       // service must tombstone private subagent history first.
       await subagentRunStore.initialize();
       await designProjectLifecycle.recover();
+      if (designReferenceAssetStore.availability().available) {
+        try {
+          const recovered = await pruneUnreferencedDesignAssetsAtStartup({
+            assets: designReferenceAssetStore,
+            projects: designProjectStore,
+          });
+          if (recovered.status === "completed" && recovered.removed > 0) {
+            logger.info(
+              "design-project",
+              `Removed ${recovered.removed} unowned Design reference image${recovered.removed === 1 ? "" : "s"}.`,
+            );
+          }
+        } catch (error) {
+          logger.warn(
+            "design-project",
+            "Could not confirm unowned Design reference image cleanup; recovery will retry next launch.",
+            error,
+          );
+        }
+      }
       await recoverSourceDesignerMultifileActions(designProjectStore);
       const handoffRecovery = await designHandoffApplicationService.reconcileAtStartup();
       if (handoffRecovery.failures.length > 0) {
@@ -1745,8 +1769,23 @@ if (!ownsSingleInstanceLock) {
       }
       if (generativeUiArtifactAvailability.available) {
         try {
+          const eligibleDesignRecords =
+            await generativeUiArtifactStore.designPublicationRecords(["eligible"]);
+          const eligibleDesignChats = (
+            await Promise.all(
+              [...new Set(eligibleDesignRecords.map((record) => record.chatId))].map((chatId) =>
+                chatStore.get(chatId),
+              ),
+            )
+          ).filter((chat): chat is Chat => chat !== null);
+          await designGeneratedRevisionService.reconcileAtStartup(eligibleDesignChats);
           for (const record of await generativeUiArtifactStore.pending()) {
-            if (!record.generationId.startsWith("direct-edit:")) continue;
+            if (
+              !record.generationId.startsWith("direct-edit:") &&
+              !record.generationId.startsWith("direct-edit-revert:")
+            ) {
+              continue;
+            }
             const project = await designProjectStore.getByChatId(record.chatId);
             const linked = project?.canvas.nodes.some(
               (node) =>

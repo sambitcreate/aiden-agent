@@ -3,15 +3,25 @@ import { afterEach, test } from "node:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import {
+  createFauxCore,
+  fauxAssistantMessage,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
 import {
   designArtifactUsesDesignSystem,
   createGenerativeUiExtension,
   GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
+  MAX_DESIGN_RENDER_ARTIFACT_INVOCATIONS_PER_TURN,
+  MAX_DESIGN_RENDER_ARTIFACT_REPLACEMENTS_PER_TURN,
   shouldEnableDesignWorkspace,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
+import { OMITTED_DESIGN_HTML_SENTINEL } from "./generative-ui-html.js";
+import { PiAgentRuntimeHarness, type PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 
 test("design-system golden validation requires a visible named token or reviewed component", () => {
   const context = {
@@ -48,6 +58,60 @@ async function workspace(): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-genui-"));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+function assistantRenderCall(id: string, title: string, html: string): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id,
+        name: GENERATIVE_UI_TOOL_NAME,
+        arguments: { title, html },
+      },
+    ],
+    api: "openai-responses",
+    provider: "openai",
+    model: "test-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+}
+
+function extensionHarness(
+  extension: PiAgentRuntimeExtension,
+  responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
+) {
+  const core = createFauxCore({
+    provider: `aiden-generative-ui-${Math.random().toString(36).slice(2)}`,
+  });
+  core.setResponses(responses);
+  const harness = new PiAgentRuntimeHarness({
+    extensions: [extension],
+    convertToLlm: (messages) =>
+      messages.filter(
+        (message) =>
+          message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+      ),
+    streamFn: core.streamSimple,
+    initialState: {
+      systemPrompt: "Design test",
+      thinkingLevel: "off",
+      tools: [],
+      messages: [],
+      model: core.getModel(),
+    },
+  });
+  return { core, harness };
 }
 
 test("ordinary and Design artifact gates preserve their separate authority boundaries", () => {
@@ -368,6 +432,219 @@ test("Design workspace renders inline-only prefixed revisions with bounded prior
       : "",
     "Make the hero quieter",
   );
+});
+
+test("Design context scrubs committed HTML but preserves an in-flight tool continuation", async () => {
+  const emitted: ChatHtmlArtifactV1[] = [];
+  const extension = createGenerativeUiExtension({
+    designWorkspaceThisTurn: true,
+    priorDesign: {
+      title: "Storefront",
+      html: '<main data-aiden-id="stored-revision">Stored revision</main>',
+    },
+    onArtifact: (artifact) => {
+      emitted.push(artifact);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  const currentHtml = '<main data-aiden-id="current-revision">Current valid revision</main>';
+  await tool.execute("current-render", { title: "Storefront", html: currentHtml });
+
+  const historicalCanary = "COMMITTED_HTML_MUST_BE_SCRUBBED";
+  const messages: AgentMessage[] = [
+    assistantRenderCall(
+      "historical-render",
+      "Storefront",
+      `<main>${historicalCanary}</main>`,
+    ),
+    { role: "user", content: "Refine the selected screen", timestamp: 2 },
+    assistantRenderCall("current-render", "Storefront", currentHtml),
+    {
+      role: "toolResult",
+      toolCallId: "current-render",
+      toolName: GENERATIVE_UI_TOOL_NAME,
+      content: [{ type: "text", text: "Rendered the current revision." }],
+      isError: false,
+      timestamp: 3,
+    },
+  ];
+  const transformed = await extension.transformContext?.(messages);
+  const serialized = JSON.stringify(transformed);
+
+  assert.equal(emitted.length, 1);
+  assert.doesNotMatch(serialized, new RegExp(historicalCanary, "u"));
+  assert.equal(serialized.includes(OMITTED_DESIGN_HTML_SENTINEL), true);
+  assert.match(serialized, /stored-revision/u);
+  assert.match(serialized, /current-revision/u);
+  const inFlight = transformed?.find(
+    (message) =>
+      message.role === "assistant" &&
+      message.content.some((part) => part.type === "toolCall" && part.id === "current-render"),
+  );
+  assert.equal(inFlight?.role, "assistant");
+  if (inFlight?.role !== "assistant") throw new Error("Missing in-flight assistant message.");
+  const currentCall = inFlight.content.find(
+    (part) => part.type === "toolCall" && part.id === "current-render",
+  );
+  assert.equal(
+    currentCall?.type === "toolCall" &&
+      typeof currentCall.arguments === "object" &&
+      currentCall.arguments !== null &&
+      "html" in currentCall.arguments
+      ? currentCall.arguments.html
+      : undefined,
+    currentHtml,
+  );
+});
+
+test("Design rejects the omission sentinel before presentation and bounds failed call loops", async () => {
+  let emitted = 0;
+  const extension = createGenerativeUiExtension({
+    designWorkspaceThisTurn: true,
+    onArtifact: () => {
+      emitted += 1;
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  for (let index = 0; index < MAX_DESIGN_RENDER_ARTIFACT_INVOCATIONS_PER_TURN; index += 1) {
+    await assert.rejects(
+      tool.execute(`placeholder-${index}`, {
+        title: "Storefront",
+        html: `<main>${OMITTED_DESIGN_HTML_SENTINEL}</main>`,
+      }),
+      /placeholder cannot be rendered/iu,
+    );
+  }
+  await assert.rejects(
+    tool.execute("placeholder-over-budget", {
+      title: "Storefront",
+      html: "<main>Valid but too late</main>",
+    }),
+    /call limit for this turn/iu,
+  );
+  assert.equal(emitted, 0);
+});
+
+test("Design replacement exhaustion stops the full agent loop before another provider turn", async () => {
+  const renderedHtml: string[] = [];
+  const extension = createGenerativeUiExtension({
+    designWorkspaceThisTurn: true,
+    onArtifact: (_artifact, html) => {
+      renderedHtml.push(html);
+    },
+  });
+  const toolTurns = Array.from(
+    { length: MAX_DESIGN_RENDER_ARTIFACT_REPLACEMENTS_PER_TURN + 2 },
+    (_, index) =>
+      fauxAssistantMessage(
+        [
+          fauxToolCall(
+            GENERATIVE_UI_TOOL_NAME,
+            {
+              title: "Checkout",
+              html: `<main>Revision ${index + 1}</main>`,
+            },
+            { id: `render-${index}` },
+          ),
+        ],
+        { stopReason: "toolUse" },
+      ),
+  );
+  const { core, harness } = extensionHarness(extension, [
+    ...toolTurns,
+    fauxAssistantMessage("must not be requested"),
+  ]);
+
+  await harness.prompt("Keep revising the checkout forever");
+
+  assert.equal(core.state.callCount, toolTurns.length);
+  assert.equal(
+    renderedHtml.length,
+    1 + MAX_DESIGN_RENDER_ARTIFACT_REPLACEMENTS_PER_TURN,
+  );
+  const finalMessage = harness.state.messages[harness.state.messages.length - 1];
+  assert.equal(finalMessage?.role, "toolResult");
+  assert.equal(finalMessage?.role === "toolResult" ? finalMessage.isError : false, true);
+});
+
+test("Design full agent loop still completes a four-screen response", async () => {
+  const renderedTitles: string[] = [];
+  const extension = createGenerativeUiExtension({
+    designWorkspaceThisTurn: true,
+    onArtifact: (artifact) => {
+      renderedTitles.push(artifact.title);
+    },
+  });
+  const screenCalls = Array.from({ length: 4 }, (_, index) =>
+    fauxToolCall(
+      GENERATIVE_UI_TOOL_NAME,
+      {
+        title: `Screen ${index + 1}`,
+        html: `<main>Screen ${index + 1}</main>`,
+      },
+      { id: `screen-${index}` },
+    ),
+  );
+  const { core, harness } = extensionHarness(extension, [
+    fauxAssistantMessage(screenCalls, { stopReason: "toolUse" }),
+    fauxAssistantMessage("Four screens are ready."),
+  ]);
+
+  await harness.prompt("Create four screens");
+
+  assert.equal(core.state.callCount, 2);
+  assert.deepEqual(renderedTitles, ["Screen 1", "Screen 2", "Screen 3", "Screen 4"]);
+  assert.equal(harness.state.messages[harness.state.messages.length - 1]?.role, "assistant");
+});
+
+test("Design supports four screens while bounding same-title replacement loops", async () => {
+  const screens: ChatHtmlArtifactV1[] = [];
+  const fourScreenExtension = createGenerativeUiExtension({
+    designWorkspaceThisTurn: true,
+    onArtifact: (artifact) => {
+      screens.push(artifact);
+    },
+  });
+  const fourScreenTool = fourScreenExtension.tools?.[0];
+  assert.ok(fourScreenTool);
+  for (let index = 0; index < 4; index += 1) {
+    await fourScreenTool.execute(`screen-${index}`, {
+      title: `Screen ${index + 1}`,
+      html: `<main>Screen ${index + 1}</main>`,
+    });
+  }
+  assert.equal(screens.length, 4);
+
+  const replacements: ChatHtmlArtifactV1[] = [];
+  const replacementExtension = createGenerativeUiExtension({
+    designWorkspaceThisTurn: true,
+    onArtifact: (artifact) => {
+      replacements.push(artifact);
+    },
+  });
+  const replacementTool = replacementExtension.tools?.[0];
+  assert.ok(replacementTool);
+  await replacementTool.execute("initial", {
+    title: "Checkout",
+    html: "<main>Initial</main>",
+  });
+  for (let index = 0; index < MAX_DESIGN_RENDER_ARTIFACT_REPLACEMENTS_PER_TURN; index += 1) {
+    await replacementTool.execute(`replacement-${index}`, {
+      title: "Checkout",
+      html: `<main>Replacement ${index + 1}</main>`,
+    });
+  }
+  await assert.rejects(
+    replacementTool.execute("replacement-over-budget", {
+      title: "Checkout",
+      html: "<main>Unbounded replacement</main>",
+    }),
+    /replacement limit for this turn/iu,
+  );
+  assert.equal(replacements.length, 1 + MAX_DESIGN_RENDER_ARTIFACT_REPLACEMENTS_PER_TURN);
+  assert.equal(new Set(replacements.map(({ mediaId }) => mediaId)).size, 1);
 });
 
 test("Design context carries multiple exact artboards and a bounded element descriptor", async () => {

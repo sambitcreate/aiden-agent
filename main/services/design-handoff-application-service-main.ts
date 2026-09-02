@@ -8,6 +8,7 @@ import { DesignHandoffJournalStore } from "./design-handoff-journal-store.js";
 import { designProjectStore } from "./design-project-store-main.js";
 import { designReferenceAssetStore } from "./design-reference-asset-store.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import { isUsablePublishedDesignSource } from "./design-generation-context.js";
 import { gitPushCapability, gitReview } from "./git.js";
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
 import { workspaceEnvironmentApplicationService } from "./workspace-environment-application-service-main.js";
@@ -77,11 +78,14 @@ export const designHandoffApplicationService = createDesignHandoffApplicationSer
       if (packet.referenceAssetIds.some((assetId) => !availableAssets.has(assetId))) {
         throw new Error("A Design handoff reference asset is unavailable.");
       }
-      const source = await generativeUiArtifactStore.committedSourceFor(
+      const source = await generativeUiArtifactStore.committedRecoverySourceFor(
         project.chatId,
         packet.source.revisionId,
       );
       if (!source) throw new Error("The selected Design source revision is unavailable.");
+      if (!isUsablePublishedDesignSource(project, source)) {
+        throw new Error("The selected Design source revision is damaged and must be repaired.");
+      }
       const bytes = Buffer.from(source.html, "utf8");
       const hash = createHash("sha256").update(bytes).digest("hex");
       if (bytes.byteLength !== packet.source.byteSize || hash !== packet.source.sha256) {

@@ -36,6 +36,23 @@ export interface ChatHtmlArtifactV1 {
   revisionOfMediaId?: string;
 }
 
+/** Exact durable identity, metadata, and lineage binding for one HTML artifact. */
+export function sameChatHtmlArtifactDescriptor(
+  left: ChatHtmlArtifactV1,
+  right: ChatHtmlArtifactV1,
+): boolean {
+  return (
+    left.version === right.version &&
+    left.kind === right.kind &&
+    left.id === right.id &&
+    left.title === right.title &&
+    left.mimeType === right.mimeType &&
+    left.size === right.size &&
+    left.mediaId === right.mediaId &&
+    left.revisionOfMediaId === right.revisionOfMediaId
+  );
+}
+
 /** Versioned union so future Pi extensions can add GUI artifact kinds safely. */
 export type ChatArtifactV1 = ChatImageArtifactV1 | ChatHtmlArtifactV1;
 
@@ -51,11 +68,16 @@ export type ChatArtifactEventV1 =
     };
 
 const IMAGE_ARTIFACT_KEYS = new Set(["version", "kind", "attachment"]);
-const HTML_ARTIFACT_KEYS = new Set(["version", "kind", "id", "title", "mimeType", "size", "mediaId"]);
-const HTML_ARTIFACT_WITH_REVISION_KEYS = new Set([
-  ...HTML_ARTIFACT_KEYS,
-  "revisionOfMediaId",
+const HTML_ARTIFACT_KEYS = new Set([
+  "version",
+  "kind",
+  "id",
+  "title",
+  "mimeType",
+  "size",
+  "mediaId",
 ]);
+const HTML_ARTIFACT_WITH_REVISION_KEYS = new Set([...HTML_ARTIFACT_KEYS, "revisionOfMediaId"]);
 const IMAGE_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "data"]);
 const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
@@ -97,7 +119,9 @@ function base64Value(code: number): number | undefined {
   return undefined;
 }
 
-function parseChatImageArtifactV1(artifact: Record<string, unknown>): ChatImageArtifactV1 | undefined {
+function parseChatImageArtifactV1(
+  artifact: Record<string, unknown>,
+): ChatImageArtifactV1 | undefined {
   if (
     !hasExactKeys(artifact, IMAGE_ARTIFACT_KEYS) ||
     artifact.version !== CHAT_ARTIFACT_VERSION ||

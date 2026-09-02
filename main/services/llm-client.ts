@@ -234,6 +234,7 @@ import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { ChatDeletionGate } from "./chat-deletion-gate.js";
 import {
   authoritativeDesignGenerationWorkspaceId,
+  authoritativeChatDesignMode,
   authoritativeChatGenerationMode,
   authoritativeChatWorkspaceId,
 } from "./chat-workspace-authority.js";
@@ -289,6 +290,7 @@ import {
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import { designLivePreviewAuthority } from "./design-live-preview-authority-main.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import {
   isDesignHtmlArtifact,
@@ -297,6 +299,22 @@ import {
 import { sourceDesignerActionService } from "./source-designer-actions.js";
 import { createSourceDesignerExtensionRuntime } from "./source-designer-extension.js";
 import { designProjectStore } from "./design-project-store-main.js";
+import {
+  isUsablePublishedDesignSource,
+  latestActiveDesignArtifact,
+  projectOwnsDesignMedia,
+  requireCommittedDesignContextHtml,
+} from "./design-generation-context.js";
+import {
+  decideDesignGenerationPublication,
+  settleDecidedDesignGeneration,
+} from "./design-generation-publication.js";
+import { designGeneratedRevisionService } from "./design-generated-revision-service-main.js";
+import {
+  DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION,
+  newArtboardOwnership,
+  type DesignGeneratedRevisionOwnershipV1,
+} from "./design-generated-revision-contract.js";
 import { currentDesignSystemModelContext } from "./design-system-attachment-service-main.js";
 import { designHandoffApplicationService } from "./design-handoff-application-service-main.js";
 import {
@@ -618,6 +636,14 @@ async function buildSystemPrompt(
   );
 }
 
+async function buildNonDesignAgentTools(
+  designWorkspace: boolean,
+  context: Parameters<typeof buildAgentTools>[0],
+) {
+  if (designWorkspace) return [];
+  return buildAgentTools(context);
+}
+
 async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
@@ -710,13 +736,16 @@ async function prepareGeneration(
   if (handoffPacket) {
     const project = await designProjectStore.get(handoffPacket.projectId);
     const source = project
-      ? await generativeUiArtifactStore.committedSourceFor(
+      ? await generativeUiArtifactStore.committedRecoverySourceFor(
           project.chatId,
           handoffPacket.source.revisionId,
         )
       : undefined;
     if (!project || !source) {
       throw new Error("The Design handoff context is stale or unavailable.");
+    }
+    if (!isUsablePublishedDesignSource(project, source)) {
+      throw new Error("The Design handoff source is damaged and must be repaired.");
     }
     const sourceBytes = Buffer.from(source.html, "utf8");
     if (
@@ -782,7 +811,7 @@ async function prepareGeneration(
     throw new Error("Design workspace is unavailable for this conversation.");
   }
   const git =
-    folderPath && (!botContext || botContext.admission.authority.files.botHome)
+    !designWorkspace && folderPath && (!botContext || botContext.admission.authority.files.botHome)
       ? await gitInfo(folderPath)
       : { isRepo: false };
   // The resolved runtime model is the connection-bound capability authority.
@@ -1061,7 +1090,7 @@ async function prepareGeneration(
         )
       : new Set<string>();
   let tools = (
-    await buildAgentTools({
+    await buildNonDesignAgentTools(designWorkspace, {
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       skillSnapshot,
@@ -1302,6 +1331,7 @@ async function prepareGeneration(
         messages: chat.messages,
       });
     }
+    if (designWorkspace) await designGeneratedRevisionService.reconcilePersistedChat(chat);
     const pendingHtmlAfterReconcile = await generativeUiArtifactStore.usageByChat(params.chatId);
     if (pendingHtmlAfterReconcile.count > 0) {
       throw new Error(
@@ -1329,6 +1359,11 @@ async function prepareGeneration(
       }> = [];
       if (selectedTargets) {
         for (const target of selectedTargets) {
+          if (!projectOwnsDesignMedia(designProject, target.mediaId)) {
+            throw new Error(
+              "A selected Design canvas item is stale. Select the artboard again and retry.",
+            );
+          }
           let exactArtifact: ChatHtmlArtifactV1 | undefined;
           for (const message of chat.messages) {
             if (message.role !== "assistant") continue;
@@ -1361,13 +1396,7 @@ async function prepareGeneration(
           if (node?.lineageId) designRevisionAnchor = selected.mediaId;
         }
       } else {
-        let latestDesign: ChatHtmlArtifactV1 | undefined;
-        for (let messageIndex = chat.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-          const message = chat.messages[messageIndex];
-          if (message?.role !== "assistant") continue;
-          latestDesign = [...(message.htmlArtifacts ?? [])].reverse().find(isDesignHtmlArtifact);
-          if (latestDesign) break;
-        }
+        const latestDesign = latestActiveDesignArtifact(chat, designProject);
         if (latestDesign) resolvedDesigns.push({ artifact: latestDesign });
       }
       const totalSelectedBytes = resolvedDesigns.reduce(
@@ -1380,15 +1409,11 @@ async function prepareGeneration(
       if (resolvedDesigns.length > 0) {
         priorDesigns = [];
         for (const item of resolvedDesigns) {
-          const html = await generativeUiArtifactStore.htmlFor(
+          const source = await generativeUiArtifactStore.committedRecoverySourceFor(
             params.chatId,
             item.artifact.mediaId,
           );
-          if (!html) {
-            throw new Error(
-              "A selected Design canvas item is no longer available. Select it again and retry.",
-            );
-          }
+          const html = requireCommittedDesignContextHtml(item.artifact, source, designProject);
           priorDesigns.push({
             title: item.artifact.title,
             html,
@@ -1418,6 +1443,7 @@ async function prepareGeneration(
       designSystemContext,
       onArtifact: async (artifact, html) => {
         let durableArtifact = artifact;
+        let designOwnership: DesignGeneratedRevisionOwnershipV1 | undefined;
         if (
           designRevisionAnchor &&
           (designRevisionMediaId === undefined || designRevisionMediaId === artifact.mediaId)
@@ -1438,6 +1464,16 @@ async function prepareGeneration(
           }
           designRevisionMediaId ??= artifact.mediaId;
           durableArtifact = { ...artifact, revisionOfMediaId: designRevisionAnchor };
+          designOwnership = {
+            version: DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION,
+            kind: "revision",
+            projectId: currentProject.id,
+            lineageId: currentNode.lineageId!,
+            baseMediaId: designRevisionAnchor,
+          };
+        } else if (designWorkspace) {
+          if (!designProject) throw new Error("The Design Project is unavailable.");
+          designOwnership = newArtboardOwnership(designProject.id, artifact.mediaId);
         }
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
@@ -1445,7 +1481,16 @@ async function prepareGeneration(
           model: params.model,
           artifact: durableArtifact,
           html,
+          ...(designOwnership ? { designOwnership } : {}),
         });
+        if (designOwnership) {
+          designLivePreviewAuthority.grant({
+            streamId,
+            documentId: owner.documentId,
+            chatId: params.chatId,
+            mediaId: durableArtifact.mediaId,
+          });
+        }
         const index = displayedHtmlArtifacts.findIndex(
           (item) => item.mediaId === durableArtifact.mediaId,
         );
@@ -1627,6 +1672,13 @@ export const llmClient = {
       throw new Error("This message turn expired before generation could start.");
     }
     options.onTurnAccepted?.();
+    if (params.design === true) {
+      designLivePreviewAuthority.admitStream({
+        streamId,
+        documentId: owner.documentId,
+        chatId: params.chatId,
+      });
+    }
     initialization.removeOwnerInvalidation = owner.onInvalidated(() => {
       this.detachRenderer(streamId, owner.documentId);
     });
@@ -1669,6 +1721,12 @@ export const llmClient = {
       }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
+      const designProject = await designProjectStore.getByChatId(chat.id);
+      const authoritativeDesign = authoritativeChatDesignMode(
+        chat.workspaceId,
+        params.design,
+        designProject,
+      );
       authoritativeBot = await resolveBotForGeneration(chat, authoritativeMode, (botId) =>
         botStore.get(botId),
       );
@@ -1729,15 +1787,15 @@ export const llmClient = {
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
-      const authoritativeWorkspaceId = params.design
+      const authoritativeWorkspaceId = authoritativeDesign
         ? persistedChatWorkspaceId(chat.workspaceId)
         : authoritativeChatWorkspaceId(chat.workspaceId, params.workspaceId);
-      const generationWorkspaceId = params.design
+      const generationWorkspaceId = authoritativeDesign
         ? authoritativeDesignGenerationWorkspaceId(
             chat.workspaceId,
             params.workspaceId,
             chat.id,
-            await designProjectStore.getByChatId(chat.id),
+            designProject,
           )
         : authoritativeWorkspaceId;
       initialization.workspaceId = authoritativeWorkspaceId;
@@ -1765,6 +1823,7 @@ export const llmClient = {
           ...params,
           workspaceId: generationWorkspaceId,
           mode: authoritativeMode,
+          ...(authoritativeDesign ? { design: true as const } : { design: undefined }),
         },
         chat,
         botContext,
@@ -1778,6 +1837,7 @@ export const llmClient = {
         options,
       );
     } catch (error) {
+      designLivePreviewAuthority.revokeStream(streamId);
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
         await persistInitializationTerminal("cancelled", initialization.cancellationOrigin);
         sendGeneration(streamId, "chat:done", {
@@ -1812,6 +1872,7 @@ export const llmClient = {
     }
     const generationChat = authoritativeChat;
     if (!generationChat) {
+      designLivePreviewAuthority.revokeStream(streamId);
       throw new Error("This chat is no longer available.");
     }
     const {
@@ -1908,6 +1969,17 @@ export const llmClient = {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
       try {
+        const designMediaIds =
+          params.design === true ? displayedHtmlArtifacts.map((artifact) => artifact.mediaId) : [];
+        // This durable decision precedes the chat append. Startup publishes an
+        // eligible row only with exact transcript proof; every other terminal
+        // artifact remains outside project history.
+        const publishDesignRevisions = await decideDesignGenerationPublication({
+          chatId: params.chatId,
+          mediaIds: designMediaIds,
+          completed: finalTimeline.status === "completed",
+          revisions: designGeneratedRevisionService,
+        });
         // The inspector store is authoritative. Never announce terminal chat
         // completion before every accepted child snapshot is durable.
         await subagentSupervisor?.flush();
@@ -1951,17 +2023,36 @@ export const llmClient = {
             );
           }
         }
+        let designPublicationPending = false;
         if (displayedHtmlArtifacts.length > 0) {
           try {
-            await generativeUiArtifactStore.commit(
-              params.chatId,
-              displayedHtmlArtifacts.map((artifact) => artifact.mediaId),
-            );
+            if (params.design === true) {
+              const publication = await settleDecidedDesignGeneration({
+                chatId: params.chatId,
+                mediaIds: designMediaIds,
+                publish: publishDesignRevisions,
+                artifacts: generativeUiArtifactStore,
+                revisions: designGeneratedRevisionService,
+              });
+              if (publication.pending) {
+                designPublicationPending = publishDesignRevisions;
+                logger.warn(
+                  "pi",
+                  `Design revision publication remains pending for stream ${streamId}.`,
+                  publication.cause,
+                );
+              }
+            } else {
+              await generativeUiArtifactStore.commit(
+                params.chatId,
+                displayedHtmlArtifacts.map((artifact) => artifact.mediaId),
+              );
+            }
           } catch (error) {
             logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
           }
         }
-        return { chat, error: undefined, messageId };
+        return { chat, error: undefined, messageId, designPublicationPending };
       } catch (error) {
         logger.error("pi", `Could not persist response for stream ${streamId}`, error);
         return {
@@ -2573,7 +2664,10 @@ export const llmClient = {
             }
             if (memoryApproval) {
               timeline.toolAwaitingApproval(context.toolCall.id);
-              const requestMemoryApproval = async (summary: string, approvalSignal?: AbortSignal) => {
+              const requestMemoryApproval = async (
+                summary: string,
+                approvalSignal?: AbortSignal,
+              ) => {
                 const toolCallId = timeline.publicToolCallId(context.toolCall.id);
                 if (!toolCallId) throw new Error("The tool approval step was not initialized.");
                 return approvals.request(
@@ -2857,6 +2951,7 @@ export const llmClient = {
         }
       });
     } catch (error) {
+      designLivePreviewAuthority.revokeStream(streamId);
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       await computerUse?.close().catch(() => {});
@@ -2894,6 +2989,7 @@ export const llmClient = {
     }
     const agent = candidate;
     if (!agent || !piSession) {
+      designLivePreviewAuthority.revokeStream(streamId);
       await persistInitializationTerminal("failed");
       endLoadMonitor(initialization, streamId, false);
       releaseGenerationSkillReservation(initialization);
@@ -3093,6 +3189,7 @@ export const llmClient = {
       });
       releaseGenerationSkillReservation(activeGeneration);
       releaseGenerationBotAuthority(activeGeneration);
+      designLivePreviewAuthority.revokeStream(streamId);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
@@ -3253,6 +3350,16 @@ export const llmClient = {
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
             });
+          } else if (persisted.designPublicationPending) {
+            sendGeneration(streamId, "chat:error", {
+              streamId,
+              message:
+                "The response was saved, but its Design revision could not be added to the canvas. Reopen the project to retry recovery, or generate it again.",
+              content: full || undefined,
+              reasoning: reasoning || undefined,
+              timeline: finalTimeline,
+              chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
+            });
           } else {
             sendGeneration(streamId, "chat:done", {
               streamId,
@@ -3287,6 +3394,7 @@ export const llmClient = {
         } finally {
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);
+          designLivePreviewAuthority.revokeStream(streamId);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
@@ -3327,10 +3435,12 @@ export const llmClient = {
       return false;
     }
     if (initialization?.rendererDetached || generation?.rendererDetached) {
+      designLivePreviewAuthority.suspendStream(streamId, owner.documentId);
       return false;
     }
     if (initialization) initialization.rendererDetached = true;
     if (generation) generation.rendererDetached = true;
+    designLivePreviewAuthority.suspendStream(streamId, owner.documentId);
     const runtimeOwner = generation ?? initialization;
     if (!runtimeOwner) return false;
     endLoadMonitor(runtimeOwner, streamId, false);
@@ -3339,6 +3449,23 @@ export const llmClient = {
     questionnaires.detachStream(streamId);
     logger.info("pi", `Renderer detached from generation ${streamId}; work remains main-owned.`);
     return true;
+  },
+
+  /** Restore only the suspended preview capability owned by this exact document and chat. */
+  resumeDetachedDesignPreview(streamId: string, chatId: string, ownerDocumentId: string): boolean {
+    const runtime = active.get(streamId) ?? initializing.get(streamId);
+    if (
+      !runtime?.rendererDetached ||
+      runtime.chatId !== chatId ||
+      runtime.owner.documentId !== ownerDocumentId
+    ) {
+      return false;
+    }
+    return designLivePreviewAuthority.resumeStream({
+      streamId,
+      chatId,
+      documentId: ownerDocumentId,
+    });
   },
 
   cancel(

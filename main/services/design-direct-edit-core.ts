@@ -5,6 +5,8 @@ export const MAX_DESIGN_DIRECT_EDIT_BYTES = 96 * 1024;
 export const MAX_DESIGN_DIRECT_EDIT_PREIMAGE_BYTES = 64 * 1024;
 
 const SAFE_ID = /^[A-Za-z0-9._:@+-]{1,256}$/u;
+const RENDERER_DIRECT_EDIT_GESTURE_ID =
+  /^gesture:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const SAFE_HASH = /^[a-f0-9]{64}$/u;
 const SAFE_SELECTOR_TAG = /^[a-z][a-z0-9-]{0,31}$/u;
 const SAFE_TOKEN = /^--[a-z][a-z0-9-]{0,62}$/u;
@@ -492,6 +494,16 @@ export function parseDesignDirectEdit(
   }
   return undefined;
 }
+
+/** Renderer-owned retry identity. Only canonical random UUID v4 gestures cross IPC. */
+export function parseRendererDirectEditGestureId(value: unknown): string | undefined {
+  return typeof value === "string" && RENDERER_DIRECT_EDIT_GESTURE_ID.test(value)
+    ? value
+    : undefined;
+}
+
+/** @deprecated Use the origin-neutral direct-edit parser. */
+export const parseRendererPrototypeGestureId = parseRendererDirectEditGestureId;
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;

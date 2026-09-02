@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   authoritativeDesignGenerationWorkspaceId,
+  authoritativeChatDesignMode,
   authoritativeChatGenerationMode,
   authoritativeChatWorkspaceId,
   persistedChatReferencesSubagentRun,
@@ -139,6 +140,28 @@ test("Design generation rejects forged chats, stale renderer roots, and invalid 
   );
 });
 
+test("persisted Design ownership cannot be downgraded or renderer-forged", () => {
+  const project = designProject();
+  assert.equal(
+    authoritativeChatDesignMode(DESIGN_PROJECT_CHAT_WORKSPACE_ID, true, project),
+    true,
+  );
+  assert.equal(authoritativeChatDesignMode("legacy-workspace", true, project), true);
+  assert.throws(
+    () => authoritativeChatDesignMode(DESIGN_PROJECT_CHAT_WORKSPACE_ID, undefined, project),
+    /Design mode changed/u,
+  );
+  assert.throws(
+    () => authoritativeChatDesignMode("legacy-workspace", undefined, project),
+    /Design mode changed/u,
+  );
+  assert.throws(
+    () => authoritativeChatDesignMode("workspace-a", true, undefined),
+    /Design mode changed/u,
+  );
+  assert.equal(authoritativeChatDesignMode("workspace-a", undefined, undefined), false);
+});
+
 test("persisted chat identity is authoritative for attended Assistant mode", () => {
   assert.equal(authoritativeChatGenerationMode("assistant", undefined), "assistant");
   assert.equal(authoritativeChatGenerationMode("assistant", "assistant"), "assistant");
@@ -166,8 +189,9 @@ test("generation uses the persisted Assistant mode for handoff, tools, and promp
   );
   assert.match(
     startSource,
-    /\{\s*\.\.\.params,\s*workspaceId: generationWorkspaceId,\s*mode: authoritativeMode,?\s*\}/u,
+    /\{\s*\.\.\.params,\s*workspaceId: generationWorkspaceId,\s*mode: authoritativeMode,\s*\.\.\.\(authoritativeDesign \? \{ design: true as const \} : \{ design: undefined \}\),?\s*\}/u,
   );
+  assert.match(startSource, /authoritativeChatDesignMode\(/u);
   assert.match(startSource, /authoritativeMode === "assistant"/u);
   assert.doesNotMatch(startSource, /params\.mode\s*===/u);
 });

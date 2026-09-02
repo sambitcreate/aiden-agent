@@ -48,3 +48,33 @@ test("serializes full config mutations so a delayed write cannot resurrect stale
     await store.load(),
   );
 });
+
+test("serialized snapshots hold later writers without publishing a no-op write", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-data-store-guard-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "state.json");
+  const store = new DataStore("state.json", { count: 0 }, () => directory);
+  await store.save({ count: 1 });
+  const before = await fs.readFile(file, "utf8");
+  const guardStarted = deferred<void>();
+  const releaseGuard = deferred<void>();
+  let writerStarted = false;
+  const guarded = store.withSerializedSnapshot(async (snapshot) => {
+    assert.equal(snapshot.count, 1);
+    guardStarted.resolve();
+    await releaseGuard.promise;
+    return "guarded";
+  });
+  await guardStarted.promise;
+  const writer = store.update((draft) => {
+    writerStarted = true;
+    draft.count = 2;
+  });
+  await Promise.resolve();
+  assert.equal(writerStarted, false, "the writer stays behind the read guard");
+  assert.equal(await fs.readFile(file, "utf8"), before, "the read guard never writes");
+  releaseGuard.resolve();
+  assert.equal(await guarded, "guarded");
+  await writer;
+  assert.equal((await store.load()).count, 2);
+});

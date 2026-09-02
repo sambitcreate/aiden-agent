@@ -45,6 +45,16 @@ export interface DesignReferenceAssetStoreOptions {
   dataStore?: DataStore<DesignReferenceAssetDatabaseV1>;
 }
 
+export interface DesignReferenceAssetProjectInventory {
+  availability(): { available: true } | { available: false; reason: string };
+  list(): Promise<Array<{ id: string }>>;
+  get(id: string): Promise<{ referenceAssetIds: readonly string[] } | undefined>;
+}
+
+export type MissingReferenceAssetGuardResult<R> =
+  | { status: "asset-present" }
+  | { status: "completed"; value: R };
+
 function exactKeys(value: Record<string, unknown>, expected: ReadonlySet<string>): boolean {
   const keys = Object.keys(value);
   return keys.length === expected.size && keys.every((key) => expected.has(key));
@@ -260,6 +270,25 @@ export class DesignReferenceAssetStore {
     return { asset: descriptor(record), bytes: Buffer.from(record.data, "base64") };
   }
 
+  /**
+   * Linearize a main-owned project repair against reference uploads. Only a
+   * truly absent content identity permits the project CAS, while the asset
+   * writer queue remains held until that CAS finishes.
+   */
+  async withMissingAssetGuard<R>(
+    id: string,
+    operation: () => Promise<R>,
+  ): Promise<MissingReferenceAssetGuardResult<R>> {
+    this.requireAvailable();
+    if (!ASSET_ID.test(id)) throw new Error("Invalid Design reference image guard identity.");
+    return this.data.withSerializedSnapshot(async (database) => {
+      if (database.records.some((record) => record.id === id)) {
+        return { status: "asset-present" as const };
+      }
+      return { status: "completed" as const, value: await operation() };
+    });
+  }
+
   async collectGarbage(liveIds: ReadonlySet<string>): Promise<number> {
     this.requireAvailable();
     if ([...liveIds].some((id) => !ASSET_ID.test(id))) {
@@ -301,6 +330,29 @@ export class DesignReferenceAssetStore {
       return removed;
     });
   }
+}
+
+/**
+ * Startup-only sweep after project lifecycle recovery and before any renderer
+ * can upload. A content identity remains live when any persisted project owns
+ * it, so deduplicated assets shared by multiple projects are retained.
+ */
+export async function pruneUnreferencedDesignAssetsAtStartup(input: {
+  assets: Pick<DesignReferenceAssetStore, "collectGarbage">;
+  projects: DesignReferenceAssetProjectInventory;
+}): Promise<{ status: "completed"; removed: number } | { status: "skipped"; reason: string }> {
+  const availability = input.projects.availability();
+  if (!availability.available) return { status: "skipped", reason: availability.reason };
+  const summaries = await input.projects.list();
+  const snapshots = await Promise.all(summaries.map(({ id }) => input.projects.get(id)));
+  const liveIds = new Set<string>();
+  for (const snapshot of snapshots) {
+    if (!snapshot) {
+      throw new Error("Design Project inventory changed during reference image recovery.");
+    }
+    for (const assetId of snapshot.referenceAssetIds) liveIds.add(assetId);
+  }
+  return { status: "completed", removed: await input.assets.collectGarbage(liveIds) };
 }
 
 export const designReferenceAssetStore = new DesignReferenceAssetStore();

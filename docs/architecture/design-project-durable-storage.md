@@ -43,6 +43,12 @@ Artifact titles are display metadata and must not define history. Each generated
 
 Artifact media IDs may belong to only one lineage and one project. Rename, new revision, selection, history comparison, and export use lineage identity rather than title. Duplicate creates new node and lineage IDs while remapping every immutable artifact revision.
 
+Generated revisions cross three durable stores through a main-owned publication protocol. The Generative UI record stages validated `{ projectId, lineageId }` ownership beside the immutable media ID. A selected-artboard revision additionally records its exact active base media ID; a new-artboard lineage and node ID are deterministic hashes of project and media identity. The renderer never supplies or reconstructs this ownership from a title.
+
+During generation the record remains a candidate. Only a successfully completed terminal turn marks it eligible before the assistant-message append. After that append is durable, main commits the blob, atomically appends it to the project lineage, advances `activeMediaId`, and marks the ownership published. Failed, cancelled, interrupted, or incomplete turns are suppressed and cannot mutate project history. A selected revision uses semantic compare-and-swap: if its exact base is no longer active, publication fails without replacing the newer active revision.
+
+Startup recovery inspects eligible records before generic interrupted-artifact recovery. It publishes only when the exact full artifact descriptor—including content ID, media ID, title, MIME type, byte size, and revision parent—is already present in a durable assistant message; an eligible record without that proof is suppressed. A crash after project publication but before the final marker is safe because replay recognizes an already-owned media ID and never rolls a lineage back from a newer active revision. Legacy artifact records without ownership fields remain readable, and legacy chat migration installs their conservative project ownership as described below.
+
 ### Persistence and bounds
 
 Main owns `design-projects.json` under Electron `userData`. The `DataStore` writes it atomically with mode `0600`, rejects corrupt or unsupported input, detects external replacement, and refuses writes while the original file is unsafe. Renderer state is never authoritative.
@@ -85,6 +91,8 @@ Deletion is deliberately split:
 3. the project-store delete primitive removes only the project row and returns the same plan.
 
 The coordinator journals the exact plan before asking the store to consume it. Any project-database change invalidates the plan, including a concurrent project beginning to reference the same content-addressed asset. The primitive is not, by itself, permission to delete another store. Integration must not expose it directly to renderer IPC before the recoverable coordinator exists.
+
+Removing a missing reference uses the asset store's serialized snapshot guard around the project CAS. An upload already admitted to the asset writer queue therefore restores the content identity first and makes repair fail closed instead of detaching a newly available reference.
 
 ## Consequences
 

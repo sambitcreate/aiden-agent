@@ -301,6 +301,44 @@ test("trusted extension snapshots compose Pi tools and prompt resources exactly 
   assert.throws(() => registry.register({ id: "trusted-fixture" }), /identities must be unique/u);
 });
 
+test("extension stop policies end a completed tool turn before another provider request", async () => {
+  let stopChecks = 0;
+  const tool: AgentTool = {
+    name: "bounded_work",
+    label: "Bounded work",
+    description: "Complete one bounded operation.",
+    parameters: Type.Object({}),
+    execute: async () => ({
+      content: [{ type: "text", text: "completed" }],
+      details: null,
+    }),
+  };
+  const { core, harness } = testHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("must not be requested"),
+    ],
+    {
+      initialState: { tools: [tool] },
+      extensions: [
+        {
+          id: "bounded-loop",
+          shouldStopAfterTurn: ({ toolResults }) => {
+            stopChecks += 1;
+            return toolResults.length === 1;
+          },
+        },
+      ],
+    },
+  );
+
+  await harness.prompt("run once");
+
+  assert.equal(stopChecks, 1);
+  assert.equal(core.state.callCount, 1);
+  assert.equal(harness.state.messages[harness.state.messages.length - 1]?.role, "toolResult");
+});
+
 test("passive observers cannot mutate tool results or delay Pi settlement", async () => {
   const tool: AgentTool = {
     name: "stable_result",

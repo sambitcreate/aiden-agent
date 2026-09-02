@@ -4,8 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { Chat } from "./types.js";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
-import type { DesignProjectDeletePlanV1, DesignProjectStore } from "./design-project-store.js";
+import {
+  emptyDesignProjectDatabase,
+  parseDesignProjectDatabaseV1,
+  type DesignProjectDatabaseV1,
+  type DesignProjectSnapshotV1,
+} from "./design-project-contract.js";
+import {
+  DesignProjectPublicationUncertainError,
+  type DesignProjectDeletePlanV1,
+  DesignProjectStore,
+} from "./design-project-store.js";
+import { DataStore } from "./data-store.js";
 import {
   DesignProjectLifecycleJournalStore,
   designProjectLifecycleOperationId,
@@ -285,6 +295,232 @@ test("restart removes a prepared duplicate when its project row never committed"
   assert.deepEqual(await journal.list(), []);
 });
 
+test("ambiguous duplicate publication retains its installed row, backing chat, and journal", async (t) => {
+  const root = await temporaryRoot(t);
+  const journal = new DesignProjectLifecycleJournalStore(() => root);
+  const chats = new Map<string, Chat>();
+  let failPublication = false;
+  const data = new DataStore<DesignProjectDatabaseV1>(
+    "design-projects.json",
+    emptyDesignProjectDatabase(),
+    () => root,
+    {
+      normalize: (value) => parseDesignProjectDatabaseV1(value) ?? emptyDesignProjectDatabase(),
+      isSafe: (value) => parseDesignProjectDatabaseV1(value) !== undefined,
+      rejectCorruptWrite: true,
+      rejectUnsafeWrite: true,
+      rejectExternalChanges: true,
+      reloadBeforeWrite: true,
+      async afterDestinationPublish() {
+        if (!failPublication) return;
+        failPublication = false;
+        throw new Error("injected directory sync failure");
+      },
+    },
+  );
+  let projects!: DesignProjectStore;
+  const duplicate = new RecoverableDesignProjectDuplicatePort(
+    {
+      get(id) {
+        return projects.get(id);
+      },
+    },
+    {
+      async get(id) {
+        return structuredClone(chats.get(id) ?? null);
+      },
+      async copyVisibleHistory(input) {
+        const source = chats.get(input.sourceChatId);
+        if (!source || !input.targetChatId) throw new Error("missing test chat");
+        const copy = { ...structuredClone(source), id: input.targetChatId };
+        await input.beforeInstall?.(copy);
+        chats.set(copy.id, copy);
+        return copy;
+      },
+      async rename(id, title) {
+        const chat = chats.get(id);
+        if (!chat) throw new Error("missing test chat");
+        chat.title = title;
+        return structuredClone(chat);
+      },
+      async remove(id) {
+        chats.delete(id);
+      },
+    },
+    {
+      async prepareSelectedCopy() {
+        return [];
+      },
+      async commit() {},
+      async deleteChat() {},
+    },
+    journal,
+    () => 10,
+  );
+  let id = 0;
+  projects = new DesignProjectStore({
+    dataStore: data,
+    duplicatePort: duplicate,
+    mintProjectId: () => `project:${++id}`,
+    now: () => 10,
+  });
+  await projects.initialize();
+  chats.set("chat:ambiguous-source", {
+    id: "chat:ambiguous-source",
+    title: "Ambiguous source",
+    createdAt: 1,
+    updatedAt: 1,
+    messages: [],
+  });
+  const source = await projects.create({
+    chatId: "chat:ambiguous-source",
+    title: "Ambiguous source",
+    connectionState: "prototype-only",
+  });
+  const coordinator = createDesignProjectLifecycleCoordinator({
+    projectStore: projects,
+    duplicatePort: duplicate,
+    journal,
+    cascade: {
+      async deleteChat() {},
+      async deleteComments() {},
+      async deleteDesignerActions() {},
+      async deleteReferenceAssets() {},
+    },
+  });
+  failPublication = true;
+
+  await assert.rejects(
+    coordinator.duplicate({ id: source.id, expectedRevision: source.revision }),
+    DesignProjectPublicationUncertainError,
+  );
+
+  const pending = (await journal.list())[0];
+  assert.equal(pending?.kind, "duplicate");
+  if (!pending || pending.kind !== "duplicate") throw new Error("missing duplicate journal");
+  const installed = await projects.getByChatId(pending.targetChatId);
+  assert.equal(installed?.title, "Ambiguous source Copy");
+  assert.equal(chats.has(pending.targetChatId), true);
+});
+
+test("ambiguous delete publication uses fresh disk authority and resumes its cascade after restart", async (t) => {
+  const root = await temporaryRoot(t);
+  let failPublication = false;
+  const data = new DataStore<DesignProjectDatabaseV1>(
+    "design-projects.json",
+    emptyDesignProjectDatabase(),
+    () => root,
+    {
+      normalize: (value) => parseDesignProjectDatabaseV1(value) ?? emptyDesignProjectDatabase(),
+      isSafe: (value) => parseDesignProjectDatabaseV1(value) !== undefined,
+      rejectCorruptWrite: true,
+      rejectUnsafeWrite: true,
+      rejectExternalChanges: true,
+      reloadBeforeWrite: true,
+      async afterDestinationPublish() {
+        if (!failPublication) return;
+        failPublication = false;
+        throw new Error("injected directory sync failure");
+      },
+    },
+  );
+  const projects = new DesignProjectStore({
+    dataStore: data,
+    mintProjectId: () => "project:ambiguous-delete",
+    now: () => 10,
+  });
+  await projects.initialize();
+  const project = await projects.create({
+    chatId: "chat:ambiguous-delete",
+    title: "Ambiguous delete",
+    connectionState: "prototype-only",
+  });
+  const journal = new DesignProjectLifecycleJournalStore(() => root);
+  const duplicateFor = (
+    projectStore: DesignProjectStore,
+    lifecycleJournal: DesignProjectLifecycleJournalStore,
+  ) =>
+    new RecoverableDesignProjectDuplicatePort(
+      projectStore,
+      {
+        async get() {
+          return null;
+        },
+        async copyVisibleHistory() {
+          throw new Error("unused");
+        },
+        async rename() {
+          throw new Error("unused");
+        },
+        async remove() {},
+      },
+      {
+        async prepareSelectedCopy() {
+          return [];
+        },
+        async commit() {},
+        async deleteChat() {},
+      },
+      lifecycleJournal,
+    );
+  const events: string[] = [];
+  let failChat = true;
+  const cascade = {
+    async deleteComments() {
+      events.push("comments:delete");
+    },
+    async deleteDesignerActions() {
+      events.push("actions:delete");
+    },
+    async deleteChat() {
+      events.push("chat:delete");
+      if (failChat) throw new Error("injected chat failure");
+    },
+    async deleteReferenceAssets() {
+      events.push("assets:delete");
+    },
+  };
+  const coordinator = createDesignProjectLifecycleCoordinator({
+    projectStore: projects,
+    duplicatePort: duplicateFor(projects, journal),
+    journal,
+    cascade,
+  });
+  const plan = await projects.planDelete({ id: project.id, expectedRevision: project.revision });
+  failPublication = true;
+
+  await assert.rejects(coordinator.deletePlan(plan), /injected chat failure/u);
+  assert.equal(await projects.get(project.id), undefined);
+  const disk = parseDesignProjectDatabaseV1(
+    JSON.parse(await readFile(join(root, "design-projects.json"), "utf8")),
+  );
+  assert.equal(
+    disk?.projects.some(({ id }) => id === project.id),
+    false,
+  );
+  assert.equal((await journal.list())[0]?.kind, "delete");
+  assert.deepEqual(events, ["comments:delete", "actions:delete", "chat:delete"]);
+
+  const restartedProjects = new DesignProjectStore({ root: () => root });
+  await restartedProjects.initialize();
+  const restartedJournal = new DesignProjectLifecycleJournalStore(() => root);
+  failChat = false;
+  const restarted = createDesignProjectLifecycleCoordinator({
+    projectStore: restartedProjects,
+    duplicatePort: duplicateFor(restartedProjects, restartedJournal),
+    journal: restartedJournal,
+    cascade,
+  });
+  await restarted.recover();
+  assert.deepEqual(events.slice(-4), [
+    "comments:delete",
+    "actions:delete",
+    "chat:delete",
+    "assets:delete",
+  ]);
+  assert.deepEqual(await restartedJournal.list(), []);
+});
+
 test("delete commits the project row first, retains recovery on failure, and rolls forward after restart", async (t) => {
   const root = await temporaryRoot(t);
   const journal = new DesignProjectLifecycleJournalStore(() => root);
@@ -502,6 +738,9 @@ test("a stale delete plan leaves preflighted durable actions unchanged", async (
       async delete() {
         throw new Error("delete plan changed");
       },
+      async reconcileDeletePublication() {
+        return "present" as const;
+      },
       async get() {
         return sourceProject;
       },
@@ -523,6 +762,49 @@ test("a stale delete plan leaves preflighted durable actions unchanged", async (
   await assert.rejects(coordinator.deletePlan(plan), /delete plan changed/u);
   assert.equal(durableActionState, "prepared");
   assert.deepEqual(await journal.list(), []);
+});
+
+test("an uncertain delete publication retains its lifecycle recovery authority", async (t) => {
+  const root = await temporaryRoot(t);
+  const journal = new DesignProjectLifecycleJournalStore(() => root);
+  const plan = deletePlan();
+  let cascadeCalls = 0;
+  const coordinator = createDesignProjectLifecycleCoordinator({
+    projectStore: {
+      async delete() {
+        throw new Error("injected unknown publication");
+      },
+      async reconcileDeletePublication() {
+        return "uncertain" as const;
+      },
+    } as unknown as DesignProjectStore,
+    duplicatePort: {} as RecoverableDesignProjectDuplicatePort,
+    journal,
+    cascade: {
+      async deleteDesignerActions() {
+        cascadeCalls += 1;
+      },
+      async deleteChat() {
+        cascadeCalls += 1;
+      },
+      async deleteComments() {
+        cascadeCalls += 1;
+      },
+      async deleteReferenceAssets() {
+        cascadeCalls += 1;
+      },
+    },
+  });
+
+  await assert.rejects(coordinator.deletePlan(plan), /injected unknown publication/u);
+  assert.equal(cascadeCalls, 0);
+  const pending = (await journal.list())[0];
+  assert.equal(pending?.kind, "delete");
+  assert.equal(pending?.stage, "planned");
+
+  await assert.rejects(coordinator.recover(), /publication is still uncertain/u);
+  assert.equal(cascadeCalls, 0);
+  assert.equal((await journal.list())[0]?.operationId, pending?.operationId);
 });
 
 test("restart-safe chat cascade skips an already absent payload", async () => {

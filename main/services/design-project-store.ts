@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { DataStore } from "./data-store.js";
 import {
   DESIGN_PROJECT_SNAPSHOT_VERSION,
@@ -14,6 +15,10 @@ import {
   type DesignProjectConnectionState,
   type DesignProjectSnapshotV1,
 } from "./design-project-contract.js";
+import {
+  generatedDesignNodeId,
+  type OwnedDesignGeneratedRevisionV1,
+} from "./design-generated-revision-contract.js";
 
 const STORE_FILE = "design-projects.json";
 const LEGACY_ARTIFACT_PREFIX = "design:";
@@ -58,6 +63,19 @@ export class DesignProjectMigrationBlockedError extends Error {
   }
 }
 
+/**
+ * The project file may contain the requested row, but a failed fresh read made
+ * that publication impossible to classify. Callers must retain any prepared
+ * backing data for startup recovery instead of deleting a possibly live owner.
+ */
+export class DesignProjectPublicationUncertainError extends Error {
+  constructor(cause: unknown) {
+    super("Design Project publication could not be reconciled safely.");
+    this.name = "DesignProjectPublicationUncertainError";
+    (this as Error & { cause?: unknown }).cause = cause;
+  }
+}
+
 export interface DesignProjectSummaryV1 {
   id: string;
   revision: number;
@@ -98,6 +116,35 @@ export interface ConnectDesignProjectInput {
   expectedRevision: number;
   workspaceId: string;
 }
+
+export interface PublishDesignGeneratedRevisionsInput {
+  projectId: string;
+  chatId: string;
+  revisions: readonly OwnedDesignGeneratedRevisionV1[];
+}
+
+export interface RemoveMissingGeneratedArtboardInput {
+  projectId: string;
+  expectedRevision: number;
+  lineageId: string;
+  activeMediaId: string;
+}
+
+export interface RemoveMissingGeneratedRevisionInput {
+  projectId: string;
+  expectedRevision: number;
+  lineageId: string;
+  missingMediaId: string;
+  expectedActiveMediaId: string;
+}
+
+export interface RemoveMissingReferenceAssetInput {
+  projectId: string;
+  expectedRevision: number;
+  assetId: string;
+}
+
+export type DesignProjectDeletePublicationState = "deleted" | "present" | "uncertain";
 
 export interface LegacyDesignArtifactFact {
   mediaId: string;
@@ -238,6 +285,33 @@ function requireCurrent(
     throw new DesignProjectRevisionConflictError(project.revision);
   }
   return { index, project };
+}
+
+function assertImmutableArtboardOwnership(
+  current: DesignProjectCanvasV1,
+  requested: DesignProjectCanvasV1,
+): void {
+  const currentArtboards = current.nodes.filter((node) => node.kind === "artboard");
+  const requestedArtboards = requested.nodes.filter((node) => node.kind === "artboard");
+  if (currentArtboards.length !== requestedArtboards.length) {
+    throw new DesignProjectConflictError(
+      "Generated artboards can be changed only by a main-owned Design operation.",
+    );
+  }
+  const requestedById = new Map(requestedArtboards.map((node) => [node.id, node]));
+  for (const existing of currentArtboards) {
+    const next = requestedById.get(existing.id);
+    if (
+      !next ||
+      next.canonicalOrigin !== existing.canonicalOrigin ||
+      next.lineageId !== existing.lineageId ||
+      JSON.stringify(next.artifactMediaIds) !== JSON.stringify(existing.artifactMediaIds)
+    ) {
+      throw new DesignProjectConflictError(
+        "Generated artboard lineage is immutable outside a main-owned Design operation.",
+      );
+    }
+  }
 }
 
 function summary(project: DesignProjectSnapshotV1): DesignProjectSummaryV1 {
@@ -459,6 +533,24 @@ export class DesignProjectStore {
       : { available: true };
   }
 
+  private async reconcilePublishedSnapshot(
+    expected: DesignProjectSnapshotV1,
+  ): Promise<"installed" | "absent" | "uncertain"> {
+    try {
+      await this.data.reload();
+      if ((await this.data.loadedFromCorruptFile()) || (await this.data.loadedFromUnsafeFile())) {
+        return "uncertain";
+      }
+      const database = await this.data.load();
+      const sameIdentity = database.projects.find((project) => project.id === expected.id);
+      if (sameIdentity && isDeepStrictEqual(sameIdentity, expected)) return "installed";
+      const sameChat = database.projects.find((project) => project.chatId === expected.chatId);
+      return sameIdentity || sameChat ? "uncertain" : "absent";
+    } catch {
+      return "uncertain";
+    }
+  }
+
   async list(): Promise<DesignProjectSummaryV1[]> {
     this.requireAvailable();
     return (await this.data.load()).projects
@@ -505,7 +597,8 @@ export class DesignProjectStore {
       ...(input.designSystemBinding ? { designSystemBinding: input.designSystemBinding } : {}),
       ...(input.previewScriptId ? { previewScriptId: input.previewScriptId } : {}),
     });
-    return this.data.update((database) => {
+    try {
+      return await this.data.update((database) => {
       if (database.projects.length >= MAX_DESIGN_PROJECTS) {
         throw new DesignProjectConflictError("Design Project storage is at capacity.");
       }
@@ -519,6 +612,14 @@ export class DesignProjectStore {
       database.revision += 1;
       return clone(snapshot);
     });
+    } catch (error) {
+      if (error instanceof DesignProjectConflictError) throw error;
+      const publication = await this.reconcilePublishedSnapshot(snapshot);
+      if (publication !== "absent") {
+        throw new DesignProjectPublicationUncertainError(error);
+      }
+      throw error;
+    }
   }
 
   async update(input: UpdateDesignProjectInput): Promise<DesignProjectSnapshotV1> {
@@ -527,6 +628,7 @@ export class DesignProjectStore {
     const expectedRevision = requireRevision(input.expectedRevision);
     return this.data.update((database) => {
       const { index, project } = requireCurrent(database, id, expectedRevision);
+      assertImmutableArtboardOwnership(project.canvas, input.canvas);
       const base: Record<string, unknown> = { ...project };
       delete base.workspaceId;
       delete base.designSystemBinding;
@@ -542,9 +644,284 @@ export class DesignProjectStore {
         ...(input.designSystemBinding === undefined
           ? {}
           : { designSystemBinding: input.designSystemBinding }),
-        ...(input.connectionState === "connected" && (input.previewScriptId ?? project.previewScriptId)
-          ? { previewScriptId: input.previewScriptId ?? project.previewScriptId }
+        ...(input.connectionState === "connected" &&
+        (input.previewScriptId ?? project.previewScriptId)
+          ? {
+              previewScriptId: input.previewScriptId ?? project.previewScriptId,
+            }
           : {}),
+      });
+      database.projects[index] = updated;
+      database.revision += 1;
+      return clone(updated);
+    });
+  }
+
+  /**
+   * Remove one exact generated artboard after a main-owned caller has proven
+   * that none of its revision bytes remain usable. Renderer canvas updates are
+   * deliberately unable to perform this ownership mutation.
+   */
+  async removeMissingGeneratedArtboard(
+    input: RemoveMissingGeneratedArtboardInput,
+  ): Promise<DesignProjectSnapshotV1> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    const lineageId = requireIdentity(input.lineageId, "lineage identity");
+    const activeMediaId = requireIdentity(input.activeMediaId, "artifact identity");
+    return this.data.update((database) => {
+      const { index, project } = requireCurrent(database, projectId, expectedRevision);
+      const matches = project.canvas.nodes.filter(
+        (node) =>
+          node.kind === "artboard" &&
+          node.canonicalOrigin === "generated-artifact" &&
+          node.lineageId === lineageId &&
+          node.activeMediaId === activeMediaId &&
+          node.artifactMediaIds?.includes(activeMediaId) === true,
+      );
+      if (matches.length !== 1) {
+        throw new DesignProjectConflictError(
+          "The missing generated artboard changed before it could be removed.",
+        );
+      }
+      const updated = requireSnapshot({
+        ...project,
+        revision: project.revision + 1,
+        updatedAt: monotonicTimestamp(this.now, project.updatedAt),
+        canvas: {
+          ...project.canvas,
+          nodes: project.canvas.nodes.filter((node) => node !== matches[0]),
+        },
+      });
+      database.projects[index] = updated;
+      database.revision += 1;
+      return clone(updated);
+    });
+  }
+
+  /**
+   * Prune one exact non-active media identity whose bytes are gone while
+   * retaining the lineage's valid active revision and every extant artifact.
+   * This is main-only ownership repair; generic canvas updates cannot remove
+   * generated history.
+   */
+  async removeMissingGeneratedRevision(
+    input: RemoveMissingGeneratedRevisionInput,
+  ): Promise<DesignProjectSnapshotV1> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    const lineageId = requireIdentity(input.lineageId, "lineage identity");
+    const missingMediaId = requireIdentity(input.missingMediaId, "missing artifact identity");
+    const expectedActiveMediaId = requireIdentity(
+      input.expectedActiveMediaId,
+      "active artifact identity",
+    );
+    if (missingMediaId === expectedActiveMediaId) {
+      throw new DesignProjectConflictError("An active generated revision cannot be pruned.");
+    }
+    return this.data.update((database) => {
+      const { index, project } = requireCurrent(database, projectId, expectedRevision);
+      const matches = project.canvas.nodes.filter(
+        (node) =>
+          node.kind === "artboard" &&
+          node.canonicalOrigin === "generated-artifact" &&
+          node.lineageId === lineageId &&
+          node.activeMediaId === expectedActiveMediaId &&
+          node.artifactMediaIds?.includes(expectedActiveMediaId) === true &&
+          node.artifactMediaIds.filter((mediaId) => mediaId === missingMediaId).length === 1,
+      );
+      if (matches.length !== 1) {
+        throw new DesignProjectConflictError(
+          "The missing generated revision changed before it could be pruned.",
+        );
+      }
+      const target = matches[0]!;
+      const updated = requireSnapshot({
+        ...project,
+        revision: project.revision + 1,
+        updatedAt: monotonicTimestamp(this.now, project.updatedAt),
+        canvas: {
+          ...project.canvas,
+          nodes: project.canvas.nodes.map((node) =>
+            node === target
+              ? {
+                  ...node,
+                  artifactMediaIds: node.artifactMediaIds!.filter(
+                    (mediaId) => mediaId !== missingMediaId,
+                  ),
+                }
+              : node,
+          ),
+        },
+      });
+      database.projects[index] = updated;
+      database.revision += 1;
+      return clone(updated);
+    });
+  }
+
+  /**
+   * Remove every canvas node for one exact missing reference identity. The
+   * caller must prove the immutable asset is absent before entering this CAS.
+   */
+  async removeMissingReferenceAsset(
+    input: RemoveMissingReferenceAssetInput,
+  ): Promise<DesignProjectSnapshotV1> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    const assetId = requireIdentity(input.assetId, "reference asset identity");
+    return this.data.update((database) => {
+      const { index, project } = requireCurrent(database, projectId, expectedRevision);
+      const matches = project.canvas.nodes.filter(
+        (node) =>
+          node.kind === "reference-image" &&
+          node.canonicalOrigin === "reference-asset" &&
+          node.assetId === assetId,
+      );
+      if (matches.length === 0 || !project.referenceAssetIds.includes(assetId)) {
+        throw new DesignProjectConflictError(
+          "The missing reference image changed before it could be removed.",
+        );
+      }
+      const nodes = project.canvas.nodes.filter((node) => !matches.includes(node));
+      const referenceAssetIds = [
+        ...new Set(
+          nodes.flatMap((node) =>
+            node.kind === "reference-image" && node.assetId ? [node.assetId] : [],
+          ),
+        ),
+      ];
+      const updated = requireSnapshot({
+        ...project,
+        revision: project.revision + 1,
+        updatedAt: monotonicTimestamp(this.now, project.updatedAt),
+        canvas: { ...project.canvas, nodes },
+        referenceAssetIds,
+      });
+      database.projects[index] = updated;
+      database.revision += 1;
+      return clone(updated);
+    });
+  }
+
+  /**
+   * Publish immutable generated bytes into their main-owned project lineages.
+   * This mutation is semantic-CAS: a revision may advance only while its exact
+   * base remains active. Retrying an already-published identity is idempotent
+   * and never rolls an artboard back from a newer active revision.
+   */
+  async publishGeneratedRevisions(
+    input: PublishDesignGeneratedRevisionsInput,
+  ): Promise<DesignProjectSnapshotV1> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const chatId = requireIdentity(input.chatId, "chat identity");
+    if (input.revisions.length === 0) {
+      throw new DesignProjectConflictError("No generated Design revisions were provided.");
+    }
+    const mediaIds = new Set<string>();
+    const lineageIds = new Set<string>();
+    for (const revision of input.revisions) {
+      requireIdentity(revision.mediaId, "artifact identity");
+      requireIdentity(revision.ownership.projectId, "artifact project identity");
+      requireIdentity(revision.ownership.lineageId, "artifact lineage identity");
+      if (
+        !revision.mediaId.startsWith(LEGACY_ARTIFACT_PREFIX) ||
+        revision.ownership.projectId !== projectId ||
+        mediaIds.has(revision.mediaId) ||
+        lineageIds.has(revision.ownership.lineageId)
+      ) {
+        throw new DesignProjectConflictError("Generated Design revision ownership is invalid.");
+      }
+      if (revision.ownership.kind === "revision") {
+        requireIdentity(revision.ownership.baseMediaId, "base artifact identity");
+        if (!revision.ownership.baseMediaId.startsWith(LEGACY_ARTIFACT_PREFIX)) {
+          throw new DesignProjectConflictError("Generated Design revision base is invalid.");
+        }
+      }
+      mediaIds.add(revision.mediaId);
+      lineageIds.add(revision.ownership.lineageId);
+    }
+    return this.data.update((database) => {
+      const index = database.projects.findIndex((project) => project.id === projectId);
+      const project = database.projects[index];
+      if (!project) throw new DesignProjectNotFoundError();
+      if (project.chatId !== chatId) {
+        throw new DesignProjectConflictError(
+          "Generated Design revisions do not belong to this project chat.",
+        );
+      }
+      for (const revision of input.revisions) {
+        const mediaOwner = database.projects.flatMap((candidate) =>
+          candidate.canvas.nodes.filter(
+            (node) => node.artifactMediaIds?.includes(revision.mediaId) === true,
+          ),
+        );
+        if (mediaOwner.length > 0) {
+          const exact = project.canvas.nodes.find(
+            (node) =>
+              node.kind === "artboard" &&
+              node.lineageId === revision.ownership.lineageId &&
+              node.artifactMediaIds?.includes(revision.mediaId) === true,
+          );
+          if (!exact || mediaOwner.length !== 1) {
+            throw new DesignProjectConflictError(
+              "Generated Design revision identity is already owned elsewhere.",
+            );
+          }
+        }
+      }
+      let changed = false;
+      const nodes = clone(project.canvas.nodes);
+      for (const revision of input.revisions) {
+        const alreadyPublished = nodes.find(
+          (node) =>
+            node.kind === "artboard" &&
+            node.lineageId === revision.ownership.lineageId &&
+            node.artifactMediaIds?.includes(revision.mediaId) === true,
+        );
+        if (alreadyPublished) continue;
+        const lineage = nodes.find(
+          (node) => node.kind === "artboard" && node.lineageId === revision.ownership.lineageId,
+        );
+        if (revision.ownership.kind === "revision") {
+          if (
+            !lineage ||
+            lineage.activeMediaId !== revision.ownership.baseMediaId ||
+            lineage.artifactMediaIds?.includes(revision.ownership.baseMediaId) !== true
+          ) {
+            throw new DesignProjectRevisionConflictError(project.revision);
+          }
+          lineage.artifactMediaIds = [...(lineage.artifactMediaIds ?? []), revision.mediaId];
+          lineage.activeMediaId = revision.mediaId;
+          changed = true;
+          continue;
+        }
+        if (lineage) {
+          throw new DesignProjectConflictError("Generated Design lineage identity was reused.");
+        }
+        const artboardIndex = nodes.filter((node) => node.kind === "artboard").length;
+        nodes.push({
+          id: generatedDesignNodeId(project.id, revision.ownership.lineageId),
+          kind: "artboard",
+          canonicalOrigin: "generated-artifact",
+          x: artboardIndex * (LEGACY_ARTBOARD_WIDTH + LEGACY_ARTBOARD_GAP),
+          y: 0,
+          lineageId: revision.ownership.lineageId,
+          artifactMediaIds: [revision.mediaId],
+          activeMediaId: revision.mediaId,
+        });
+        changed = true;
+      }
+      if (!changed) return clone(project);
+      const updated = requireSnapshot({
+        ...project,
+        revision: project.revision + 1,
+        updatedAt: monotonicTimestamp(this.now, project.updatedAt),
+        canvas: { ...project.canvas, nodes },
       });
       database.projects[index] = updated;
       database.revision += 1;
@@ -568,10 +945,7 @@ export class DesignProjectStore {
       if (project.connectionState === "connected" && project.workspaceId === workspaceId) {
         throw new DesignProjectConflictError("This Design Project is already connected.");
       }
-      if (
-        project.connectionState !== "prototype-only" &&
-        project.connectionState !== "connected"
-      ) {
+      if (project.connectionState !== "prototype-only" && project.connectionState !== "connected") {
         throw new DesignProjectConflictError("This Design Project cannot be connected.");
       }
       const base: Record<string, unknown> = { ...project };
@@ -643,7 +1017,7 @@ export class DesignProjectStore {
       targetProjectId,
       targetTitle,
     });
-    let committed = false;
+    let rollback = true;
     try {
       const targetChatId = requireIdentity(prepared.targetChatId, "duplicate chat identity");
       const artifactSources = new Set(
@@ -667,7 +1041,9 @@ export class DesignProjectStore {
             ...node,
             id: remappedNodeId(targetProjectId, node.id),
             ...(node.lineageId
-              ? { lineageId: remappedLineageId(targetProjectId, node.lineageId) }
+              ? {
+                  lineageId: remappedLineageId(targetProjectId, node.lineageId),
+                }
               : {}),
             ...(node.artifactMediaIds
               ? {
@@ -682,6 +1058,7 @@ export class DesignProjectStore {
         },
         referenceAssetIds: source.referenceAssetIds.map((assetId) => assetMap.get(assetId)),
       });
+      try {
       const installed = await this.data.update((database) => {
         requireCurrent(database, id, expectedRevision);
         if (database.projects.length >= MAX_DESIGN_PROJECTS) {
@@ -697,10 +1074,24 @@ export class DesignProjectStore {
         database.revision += 1;
         return clone(duplicate);
       });
-      committed = true;
+        rollback = false;
       return installed;
+      } catch (error) {
+        if (
+          error instanceof DesignProjectConflictError ||
+          error instanceof DesignProjectRevisionConflictError
+        ) {
+          throw error;
+        }
+        const publication = await this.reconcilePublishedSnapshot(duplicate);
+        if (publication !== "absent") {
+          rollback = false;
+          throw new DesignProjectPublicationUncertainError(error);
+        }
+        throw error;
+      }
     } finally {
-      if (!committed) await prepared.rollback();
+      if (rollback) await prepared.rollback();
     }
   }
 
@@ -739,6 +1130,39 @@ export class DesignProjectStore {
       commentIds: safeCascadeIds(related.commentIds, "comment"),
       designerActionIds: safeCascadeIds(related.designerActionIds, "Designer Action"),
     };
+  }
+
+  /**
+   * Resolve an unknown delete response from a fresh disk snapshot. The exact
+   * database revision proves that an absent row came from this one planned
+   * deletion; every other absent outcome retains lifecycle recovery authority.
+   */
+  async reconcileDeletePublication(
+    plan: DesignProjectDeletePlanV1,
+  ): Promise<DesignProjectDeletePublicationState> {
+    this.requireAvailable();
+    const projectId = requireIdentity(plan.projectId, "identity");
+    const chatId = requireIdentity(plan.chatId, "chat identity");
+    if (!Number.isSafeInteger(plan.expectedDatabaseRevision) || plan.expectedDatabaseRevision < 0) {
+      throw new Error("Invalid Design Project database revision.");
+    }
+    try {
+      await this.data.reload();
+      if ((await this.data.loadedFromCorruptFile()) || (await this.data.loadedFromUnsafeFile())) {
+        return "uncertain";
+      }
+      const database = await this.data.load();
+      if (database.projects.some((project) => project.id === projectId)) return "present";
+      if (
+        database.revision !== plan.expectedDatabaseRevision + 1 ||
+        database.projects.some((project) => project.chatId === chatId)
+      ) {
+        return "uncertain";
+      }
+      return "deleted";
+    } catch {
+      return "uncertain";
+    }
   }
 
   /**

@@ -24,6 +24,9 @@ const HTML_DATA_URL = /data\s*:\s*text\/html/iu;
 const LINK_TAG = /<\s*link\b/iu;
 const HTTP_SRC = /\bsrc\s*=\s*["']?\s*https?:\/\//iu;
 
+export const OMITTED_DESIGN_HTML_SENTINEL =
+  "[Previous Design HTML omitted by Aiden; the bounded current revision is supplied separately.]";
+
 export interface GenerativeUiThemeTokens {
   colorScheme: "light" | "dark";
   canvas: string;
@@ -63,6 +66,9 @@ export function validateGenerativeUiHtml(html: string): Buffer {
   }
   if (html.includes("\0")) {
     throw new Error("Artifact HTML cannot contain NUL bytes.");
+  }
+  if (html.includes(OMITTED_DESIGN_HTML_SENTINEL)) {
+    throw new Error("Aiden's omitted Design HTML placeholder cannot be rendered as an artifact.");
   }
   const bytes = Buffer.from(html, "utf8");
   if (bytes.byteLength > MAX_HTML_ARTIFACT_BYTES) {
