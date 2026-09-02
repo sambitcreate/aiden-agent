@@ -25,7 +25,9 @@ test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
   assert.match(csp, /wasm-unsafe-eval/u);
   assert.match(commands, /\.ghostty-screen/u);
   assert.match(runtime, /import\("\.\/wasm-assets"\)/u);
+  assert.match(runtime, /`\.\/vendor\/\$\{filename\}`/u);
   assert.doesNotMatch(runtime, /new URL\("\.\/vendor\/ghostty-vt\.wasm"/u);
+  assert.doesNotMatch(runtime, /new URL\("\.", import\.meta\.url\)/u);
   assert.match(wasmAssets, /new URL\("\.\/vendor\/ghostty-vt\.wasm", import\.meta\.url\)/u);
   assert.match(wasmAssets, /new URL\("\.\/vendor\/ghostty-write-pty\.wasm", import\.meta\.url\)/u);
   assert.match(source("../../vite.config.ts"), /assetsInlineLimit/u);
