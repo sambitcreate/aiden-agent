@@ -33,14 +33,38 @@ function testOwner(documentId: string): RendererDocumentOwner {
   };
 }
 
-async function reloadSourcePreview(
+function isViteReloadNavigationAbort(error: unknown, target: URL): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes(`page.goto: net::ERR_ABORTED at ${target.toString()}`)
+  );
+}
+
+async function expectSourcePreview(
   page: PlaywrightTestModule.Page,
   source: string,
   revision: number,
+  expectedText: string,
 ): Promise<void> {
   const url = new URL(source);
   url.searchParams.set("aidenRevision", String(revision));
-  await page.goto(url.toString());
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await page.goto(url.toString());
+    } catch (error) {
+      if (!isViteReloadNavigationAbort(error, url)) throw error;
+      lastError = error;
+      continue;
+    }
+    try {
+      await expect(page.getByTestId("exact-child")).toHaveText(expectedText);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 test("local React preview binds the exact nested element to its JSX range", async ({ page }) => {
@@ -87,8 +111,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
   expect(state.status).toBe("running");
   if (state.status !== "running") return;
   try {
-    await page.goto(state.src);
-    await expect(page.getByTestId("exact-child")).toHaveText("Save");
+    await expectSourcePreview(page, state.src, 0, "Save");
     expect(
       await page.evaluate(() => ({
         primitives: Boolean(
@@ -178,8 +201,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
     // The product advances the source-preview revision after Apply/Undo. Do
     // the same here instead of depending on Vite to interpret Aiden's
     // lossless rename/link save sequence as one HMR change on every OS.
-    await reloadSourcePreview(page, state.src, 1);
-    await expect(page.getByTestId("exact-child")).toHaveText("Saved");
+    await expectSourcePreview(page, state.src, 1, "Saved");
     const undone = await sourceDesignerActionService.undo(
       owner,
       action.id,
@@ -190,8 +212,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
     expect(await fs.readFile(path.join(fixtureRoot, "src/main.tsx"), "utf8")).toContain(
       ">Save</span>",
     );
-    await reloadSourcePreview(page, state.src, 2);
-    await expect(page.getByTestId("exact-child")).toHaveText("Save");
+    await expectSourcePreview(page, state.src, 2, "Save");
 
     const unmapped = page.getByText("Unmapped child", { exact: true });
     const unmappedDescriptorPromise = page.evaluate(
