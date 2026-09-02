@@ -150,7 +150,7 @@ test("a selected artboard advances only from its exact active base", async (t) =
   );
 });
 
-test("failed and in-flight candidates never replace the last good revision", async (t) => {
+test("failed candidates are discarded without replacing the last good revision", async (t) => {
   const { projects, artifacts, service } = await fixture(t);
   const project = await projects.create({
     chatId: "chat:failed",
@@ -192,8 +192,8 @@ test("failed and in-flight candidates never replace the last good revision", asy
     failed.mediaId,
   );
   assert.equal((await projects.get(project.id))?.canvas.nodes[0]?.activeMediaId, "design:good");
-  await artifacts.commit(project.chatId, [failed.mediaId]);
-  await service.suppressCandidates(project.chatId, [failed.mediaId]);
+  await service.discardCandidates(project.chatId, "generation:failed", [failed.mediaId]);
+  assert.equal(await artifacts.htmlFor(project.chatId, failed.mediaId), undefined);
   assert.equal((await projects.get(project.id))?.canvas.nodes[0]?.activeMediaId, "design:good");
 });
 
@@ -240,13 +240,10 @@ test("startup publishes only an eligible candidate whose exact chat artifact per
     (await restartedArtifacts.designPublicationRecords(["published"]))[0]?.artifact.mediaId,
     persisted.mediaId,
   );
-  assert.equal(
-    (await restartedArtifacts.designPublicationRecords(["suppressed"]))[0]?.artifact.mediaId,
-    absent.mediaId,
-  );
+  assert.equal(await restartedArtifacts.htmlFor(project.chatId, absent.mediaId), undefined);
 });
 
-test("startup suppresses eligible rows when any persisted descriptor field differs", async (t) => {
+test("startup discards uncommitted eligible rows when any persisted descriptor field differs", async (t) => {
   const { projects, artifacts, service } = await fixture(t);
   const project = await projects.create({
     chatId: "chat:descriptor-mismatch",
@@ -286,15 +283,10 @@ test("startup suppresses eligible rows when any persisted descriptor field diffe
   ]);
 
   assert.deepEqual((await projects.get(project.id))?.canvas.nodes, []);
-  assert.deepEqual(
-    (await artifacts.designPublicationRecords(["suppressed"]))
-      .map((record) => record.artifact.mediaId)
-      .sort(),
-    items.map((item) => item.mediaId).sort(),
-  );
+  assert.deepEqual(await artifacts.designPublicationRecords(["eligible", "suppressed"]), []);
 });
 
-test("startup suppresses interrupted candidates even if generic recovery later commits them", async (t) => {
+test("startup discards interrupted candidates before generic recovery can advertise them", async (t) => {
   const { projects, artifacts, service } = await fixture(t);
   const project = await projects.create({
     chatId: "chat:interrupted-candidate",
@@ -311,14 +303,225 @@ test("startup suppresses interrupted candidates even if generic recovery later c
   });
 
   await service.reconcileAtStartup([]);
-  await artifacts.commit(project.chatId, [item.mediaId]);
+  let appended = false;
+  await artifacts.recover([{ id: project.chatId, messages: [] }], async () => {
+    appended = true;
+  });
 
   assert.equal((await artifacts.designPublicationRecords(["candidate"])).length, 0);
-  assert.equal(
-    (await artifacts.designPublicationRecords(["suppressed"]))[0]?.artifact.mediaId,
-    item.mediaId,
-  );
+  assert.equal(await artifacts.htmlFor(project.chatId, item.mediaId), undefined);
+  assert.equal(appended, false);
   assert.equal((await projects.get(project.id))?.canvas.nodes.length, 0);
+});
+
+test("failed candidate cleanup requires exact generation ownership", async (t) => {
+  const { projects, artifacts, service } = await fixture(t);
+  const project = await projects.create({
+    chatId: "chat:exact-cleanup",
+    title: "Exact cleanup",
+    connectionState: "prototype-only",
+  });
+  const item = artifact("design:exact-cleanup", "Exact cleanup");
+  await artifacts.stage({
+    chatId: project.chatId,
+    generationId: "generation:owner",
+    artifact: item,
+    html: HTML,
+    designOwnership: newArtboardOwnership(project.id, item.mediaId),
+  });
+  await assert.rejects(
+    service.discardCandidates(project.chatId, "generation:other", [item.mediaId]),
+    /not owned/iu,
+  );
+  assert.equal(await artifacts.htmlFor(project.chatId, item.mediaId), HTML);
+  await service.discardCandidates(project.chatId, "generation:owner", [item.mediaId]);
+  assert.equal(await artifacts.htmlFor(project.chatId, item.mediaId), undefined);
+});
+
+test("startup isolates one failed Design cleanup from later chats", async (t) => {
+  const { projects, artifacts } = await fixture(t);
+  const failedProject = await projects.create({
+    chatId: "chat:cleanup-fails",
+    title: "Cleanup fails",
+    connectionState: "prototype-only",
+  });
+  const healthyProject = await projects.create({
+    chatId: "chat:cleanup-continues",
+    title: "Cleanup continues",
+    connectionState: "prototype-only",
+  });
+  const failed = artifact("design:cleanup-fails", "Cleanup fails");
+  const healthy = artifact("design:cleanup-continues", "Cleanup continues");
+  for (const [project, item] of [
+    [failedProject, failed],
+    [healthyProject, healthy],
+  ] as const) {
+    await artifacts.stage({
+      chatId: project.chatId,
+      generationId: `generation:${project.id}`,
+      artifact: item,
+      html: HTML,
+      designOwnership: newArtboardOwnership(project.id, item.mediaId),
+    });
+  }
+  const warnings: string[] = [];
+  const service = new DesignGeneratedRevisionService({
+    projects,
+    artifacts: {
+      commit: artifacts.commit.bind(artifacts),
+      designPublicationRecords: artifacts.designPublicationRecords.bind(artifacts),
+      setDesignPublicationState: artifacts.setDesignPublicationState.bind(artifacts),
+      discardPending: async (input) => {
+        if (input.chatId === failedProject.chatId) throw new Error("cleanup unavailable");
+        return artifacts.discardPending(input);
+      },
+    },
+    onWarning: (message) => warnings.push(message),
+  });
+
+  await service.reconcileAtStartup([]);
+
+  assert.equal(await artifacts.htmlFor(failedProject.chatId, failed.mediaId), HTML);
+  assert.equal(await artifacts.htmlFor(healthyProject.chatId, healthy.mediaId), undefined);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /chat:cleanup-fails/u);
+});
+
+test("foreground reconciliation never deletes a live generation candidate", async (t) => {
+  const { projects, artifacts } = await fixture(t);
+  const project = await projects.create({
+    chatId: "chat:live-candidate",
+    title: "Live candidate",
+    connectionState: "prototype-only",
+  });
+  const item = artifact("design:live-candidate", "Live candidate");
+  await artifacts.stage({
+    chatId: project.chatId,
+    generationId: "generation:live",
+    artifact: item,
+    html: HTML,
+    designOwnership: newArtboardOwnership(project.id, item.mediaId),
+  });
+  const service = new DesignGeneratedRevisionService({
+    projects,
+    artifacts,
+    isGenerationActive: (generationId) => generationId === "generation:live",
+  });
+
+  await service.reconcilePersistedChat({ id: project.chatId, messages: [] });
+
+  assert.equal(await artifacts.htmlFor(project.chatId, item.mediaId), HTML);
+  assert.equal((await artifacts.designPublicationRecords(["candidate"])).length, 1);
+});
+
+test("foreground reconciliation never deletes a live eligible generation before transcript durability", async (t) => {
+  const { projects, artifacts } = await fixture(t);
+  const project = await projects.create({
+    chatId: "chat:live-eligible",
+    title: "Live eligible",
+    connectionState: "prototype-only",
+  });
+  const item = artifact("design:live-eligible", "Live eligible");
+  await artifacts.stage({
+    chatId: project.chatId,
+    generationId: "generation:live-eligible",
+    artifact: item,
+    html: HTML,
+    designOwnership: newArtboardOwnership(project.id, item.mediaId),
+  });
+  await artifacts.setDesignPublicationState(
+    project.chatId,
+    [item.mediaId],
+    ["candidate"],
+    "eligible",
+  );
+  const service = new DesignGeneratedRevisionService({
+    projects,
+    artifacts,
+    isGenerationActive: (generationId) => generationId === "generation:live-eligible",
+  });
+
+  const result = await service.reconcilePersistedChat({ id: project.chatId, messages: [] });
+
+  assert.deepEqual(result, {});
+  assert.equal(await artifacts.htmlFor(project.chatId, item.mediaId), HTML);
+  assert.equal((await artifacts.designPublicationRecords(["eligible"])).length, 1);
+});
+
+test("foreground reconciliation reports durable eligibility after publication remains unresolved", async (t) => {
+  const { projects, artifacts } = await fixture(t);
+  const project = await projects.create({
+    chatId: "chat:unresolved-eligible",
+    title: "Unresolved eligible",
+    connectionState: "prototype-only",
+  });
+  const item = artifact("design:unresolved-eligible", "Unresolved eligible");
+  await artifacts.stage({
+    chatId: project.chatId,
+    generationId: "generation:unresolved-eligible",
+    artifact: item,
+    html: HTML,
+    designOwnership: newArtboardOwnership(project.id, item.mediaId),
+  });
+  await artifacts.setDesignPublicationState(
+    project.chatId,
+    [item.mediaId],
+    ["candidate"],
+    "eligible",
+  );
+  const service = new DesignGeneratedRevisionService({
+    projects: {
+      async publishGeneratedRevisions() {
+        throw new Error("publication unavailable");
+      },
+    },
+    artifacts,
+  });
+
+  const result = await service.reconcilePersistedChat({
+    id: project.chatId,
+    messages: [{ role: "assistant", htmlArtifacts: [item] }],
+  });
+
+  assert.deepEqual(result, { designPublication: "retryable" });
+  assert.equal((await artifacts.designPublicationRecords(["eligible"])).length, 1);
+});
+
+test("route re-entry never publishes older eligible history while the Design chat is generating", async (t) => {
+  const { projects, artifacts } = await fixture(t);
+  const project = await projects.create({
+    chatId: "chat:route-reentry",
+    title: "Route re-entry",
+    connectionState: "prototype-only",
+  });
+  const older = artifact("design:older-eligible", "Older eligible");
+  await artifacts.stage({
+    chatId: project.chatId,
+    generationId: "generation:older",
+    artifact: older,
+    html: HTML,
+    designOwnership: newArtboardOwnership(project.id, older.mediaId),
+  });
+  await artifacts.setDesignPublicationState(
+    project.chatId,
+    [older.mediaId],
+    ["candidate"],
+    "eligible",
+  );
+  const service = new DesignGeneratedRevisionService({
+    projects,
+    artifacts,
+    isChatGenerationActive: (chatId) => chatId === project.chatId,
+  });
+
+  const result = await service.reconcilePersistedChat({
+    id: project.chatId,
+    messages: [{ role: "assistant", htmlArtifacts: [older] }],
+  });
+
+  assert.deepEqual(result, {});
+  assert.equal((await projects.get(project.id))?.canvas.nodes.length, 0);
+  assert.equal((await artifacts.designPublicationRecords(["eligible"])).length, 1);
 });
 
 test("unknown project-store failure keeps eligibility for deterministic retry", async (t) => {

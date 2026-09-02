@@ -13,6 +13,8 @@ test("live Design preview authority is exact and revoked with its generation", (
   authority.grant(grant);
   authority.grant({ ...grant, mediaId: "design:two" });
 
+  assert.equal(authority.hasStream(grant.streamId), true);
+  assert.equal(authority.hasChat(grant.chatId), true);
   assert.equal(authority.allows(grant), true);
   assert.equal(authority.allows({ ...grant, mediaId: "design:two" }), true);
   assert.equal(authority.allows({ ...grant, documentId: "document:other" }), false);
@@ -21,6 +23,8 @@ test("live Design preview authority is exact and revoked with its generation", (
   assert.equal(authority.allows({ ...grant, mediaId: "design:other" }), false);
 
   authority.revokeStream(grant.streamId);
+  assert.equal(authority.hasStream(grant.streamId), false);
+  assert.equal(authority.hasChat(grant.chatId), false);
   assert.equal(authority.allows(grant), false);
 });
 
@@ -57,6 +61,7 @@ test("a detached stream resumes only for its original document and chat", () => 
   assert.equal(authority.suspendStream(grant.streamId, "document:other"), false);
   assert.equal(authority.allows(grant), true);
   assert.equal(authority.suspendStream(grant.streamId, grant.documentId), true);
+  assert.equal(authority.hasChat(grant.chatId), true);
   assert.equal(authority.allows(grant), false);
   authority.grant({ ...grant, mediaId: "design:two" });
   assert.equal(

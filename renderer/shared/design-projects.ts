@@ -45,6 +45,12 @@ export interface DesignProjectSnapshotV1 {
   previewScriptId?: string;
 }
 
+/** Transient main-owned state returned when opening a durable Design Project. */
+export interface DesignProjectOpenResultV1 {
+  project: DesignProjectSnapshotV1;
+  designPublication?: "retryable";
+}
+
 export interface DesignProjectRecordSummaryV1 {
   id: string;
   revision: number;

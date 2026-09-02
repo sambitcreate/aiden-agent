@@ -244,6 +244,33 @@ test("staging, commit, recovery, and pending gates", async () => {
   assert.equal(await store.htmlFor("chat-1", "media-1"), HTML);
 });
 
+test("generic recovery never advertises or commits Design-owned candidates", async () => {
+  const root = await storageRoot();
+  const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
+  await store.initialize();
+  const design = artifact("design:pending");
+  const ordinary = artifact("ordinary-pending");
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "generation:design",
+    artifact: design,
+    html: HTML,
+    designOwnership: newArtboardOwnership("project:design", design.mediaId),
+  });
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "generation:ordinary",
+    artifact: ordinary,
+    html: HTML,
+  });
+  const recovered: ChatHtmlArtifactV1[][] = [];
+  await store.recover([{ id: "chat-1", messages: [] }], async (message) => {
+    recovered.push(message.htmlArtifacts);
+  });
+  assert.deepEqual(recovered, [[ordinary]]);
+  assert.equal((await store.pending())[0]?.artifact.mediaId, design.mediaId);
+});
+
 test("an exact failed coordinator can discard only its own pending artifact", async () => {
   const root = await storageRoot();
   const store = new GenerativeUiArtifactStore({ root: () => root, now: () => 42 });
@@ -255,6 +282,16 @@ test("an exact failed coordinator can discard only its own pending artifact", as
     artifact: item,
     html: HTML,
   });
+
+  await assert.rejects(
+    store.discardPending({
+      chatId: "chat-1",
+      generationId: "direct-edit-1",
+      mediaId: item.mediaId,
+      expectedDesignPublication: ["candidate"],
+    }),
+    /not owned/iu,
+  );
 
   await assert.rejects(
     store.discardPending({

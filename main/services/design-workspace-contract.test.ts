@@ -184,9 +184,26 @@ test("optimistic Design preview has a live-only source lane while stored reads s
 
 test("Design terminal publication is decided before chat durability and published only after commit", () => {
   const source = readFileSync(new URL("./llm-client.ts", import.meta.url), "utf8");
+  const prompt = source.indexOf("await questionnaires.request(");
   const decide = source.indexOf("await decideDesignGenerationPublication({");
   const append = source.indexOf("await chatStore.appendMessage(", decide);
   const settle = source.indexOf("await settleDecidedDesignGeneration({", append);
-  assert.ok(decide >= 0 && decide < append);
+  assert.ok(prompt >= 0 && prompt < decide);
+  assert.ok(decide < append);
   assert.ok(append < settle);
+  assert.match(source, /kind: "design-cancel-draft"/u);
+  assert.match(source, /shouldPromptToKeepCancelledDesignDraft/u);
+  assert.match(source, /generationId: streamId/u);
+  assert.match(source, /htmlArtifacts: persistedHtmlArtifacts/u);
+  assert.match(source, /if \(params\.design === true && publishDesignRevisions\)/u);
+  assert.match(source, /else if \(params\.design !== true\)/u);
+  assert.match(source, /if \(finalError && !wasCancelled\)/u);
+  assert.match(
+    source,
+    /if \(initialization\?\.cancelRequested \|\| generation\?\.cancelRequested\)[\s\S]{0,700}questionnaires\.detachStream\(streamId\)/u,
+  );
+  assert.match(
+    source,
+    /if \(origin === "user_stop"\) questionnaires\.cancelStream\(streamId\);\s+else questionnaires\.detachStream\(streamId\)/u,
+  );
 });

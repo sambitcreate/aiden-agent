@@ -80,6 +80,19 @@ export class DesignLivePreviewAuthority {
     );
   }
 
+  /** Main-only lifecycle check used to keep reconciliation away from live candidates. */
+  hasStream(streamId: string): boolean {
+    return this.records.has(streamId);
+  }
+
+  /** Includes suspended streams so route re-entry cannot race detached generation ownership. */
+  hasChat(chatId: string): boolean {
+    for (const record of this.records.values()) {
+      if (record.chatId === chatId) return true;
+    }
+    return false;
+  }
+
   /** Revoke document access without discarding the main-owned staged-media set. */
   suspendStream(streamId: string, documentId: string): boolean {
     const record = this.records.get(streamId);

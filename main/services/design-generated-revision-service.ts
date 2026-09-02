@@ -22,9 +22,15 @@ export interface DesignGeneratedRevisionServiceDependencies {
   projects: Pick<DesignProjectStore, "publishGeneratedRevisions">;
   artifacts: Pick<
     GenerativeUiArtifactStore,
-    "commit" | "designPublicationRecords" | "setDesignPublicationState"
+    "commit" | "designPublicationRecords" | "discardPending" | "setDesignPublicationState"
   >;
+  isGenerationActive?: (generationId: string) => boolean;
+  isChatGenerationActive?: (chatId: string) => boolean;
   onWarning?: (message: string, error: unknown) => void;
+}
+
+export interface DesignGeneratedRevisionReconciliationResult {
+  designPublication?: "retryable";
 }
 
 function exactArtifactPersisted(
@@ -42,9 +48,9 @@ function exactArtifactPersisted(
 
 /**
  * Coordinates the recoverable cross-store publication of generated Design
- * revisions. Candidate HTML may remain visible in a failed transcript, but it
- * never advances an artboard unless a successful terminal path first marks it
- * eligible and its exact assistant message crosses the chat durability barrier.
+ * revisions. Failed candidate HTML is discarded rather than advertised in the
+ * transcript. Successful output and explicitly kept partial drafts advance an
+ * artboard only after eligibility and the exact chat durability barrier.
  */
 export class DesignGeneratedRevisionService {
   constructor(private readonly dependencies: DesignGeneratedRevisionServiceDependencies) {}
@@ -67,6 +73,70 @@ export class DesignGeneratedRevisionService {
       ["candidate", "eligible", "suppressed"],
       "suppressed",
     );
+  }
+
+  async discardCandidates(
+    chatId: string,
+    generationId: string,
+    mediaIds: readonly string[],
+  ): Promise<void> {
+    if (mediaIds.length === 0) return;
+    if (new Set(mediaIds).size !== mediaIds.length) {
+      throw new Error("Generated Design candidate identity is ambiguous.");
+    }
+    for (const mediaId of mediaIds) {
+      await this.dependencies.artifacts.discardPending({
+        chatId,
+        generationId,
+        mediaId,
+        expectedDesignPublication: ["candidate", "suppressed"],
+      });
+    }
+  }
+
+  private async discardUncommitted(
+    records: Awaited<
+      ReturnType<
+        DesignGeneratedRevisionServiceDependencies["artifacts"]["designPublicationRecords"]
+      >
+    >,
+    expectedDesignPublication: readonly ("candidate" | "eligible" | "suppressed")[],
+  ): Promise<void> {
+    for (const record of records) {
+      await this.dependencies.artifacts.discardPending({
+        chatId: record.chatId,
+        generationId: record.generationId,
+        mediaId: record.artifact.mediaId,
+        expectedDesignPublication,
+      });
+    }
+  }
+
+  private async reconcileInterruptedCandidates(
+    chatId: string,
+    records: Awaited<
+      ReturnType<
+        DesignGeneratedRevisionServiceDependencies["artifacts"]["designPublicationRecords"]
+      >
+    >,
+  ): Promise<void> {
+    if (this.dependencies.isChatGenerationActive?.(chatId)) return;
+    const interrupted = records.filter(
+      (record) =>
+        !isDesignArtifactRecoveryGenerationId(record.generationId) &&
+        !this.dependencies.isGenerationActive?.(record.generationId),
+    );
+    await this.discardUncommitted(
+      interrupted.filter((record) => !record.committed),
+      ["candidate", "suppressed"],
+    );
+    const committed = interrupted.filter((record) => record.committed);
+    if (committed.length > 0) {
+      await this.suppressCandidates(
+        chatId,
+        committed.map((record) => record.artifact.mediaId),
+      );
+    }
   }
 
   async publishEligible(chatId: string, mediaIds: readonly string[]): Promise<void> {
@@ -133,13 +203,29 @@ export class DesignGeneratedRevisionService {
     }
     for (const generation of generations.values()) {
       const first = generation[0]!;
-      const chat = chatById.get(first.chatId);
-      const mediaIds = generation.map((record) => record.artifact.mediaId);
-      if (!chat || generation.some((record) => !exactArtifactPersisted(chat, record.artifact))) {
-        await this.suppressCandidates(first.chatId, mediaIds);
+      if (
+        this.dependencies.isChatGenerationActive?.(first.chatId) ||
+        this.dependencies.isGenerationActive?.(first.generationId)
+      ) {
         continue;
       }
       try {
+        const chat = chatById.get(first.chatId);
+        const mediaIds = generation.map((record) => record.artifact.mediaId);
+        if (!chat || generation.some((record) => !exactArtifactPersisted(chat, record.artifact))) {
+          await this.discardUncommitted(
+            generation.filter((record) => !record.committed),
+            ["eligible"],
+          );
+          const committed = generation.filter((record) => record.committed);
+          if (committed.length > 0) {
+            await this.suppressCandidates(
+              first.chatId,
+              committed.map((record) => record.artifact.mediaId),
+            );
+          }
+          continue;
+        }
         await this.dependencies.artifacts.commit(first.chatId, mediaIds);
         await this.publishEligible(first.chatId, mediaIds);
       } catch (error) {
@@ -151,36 +237,50 @@ export class DesignGeneratedRevisionService {
     }
   }
 
-  async reconcilePersistedChat(chat: DesignRevisionRecoveryChat): Promise<void> {
-    const candidates = await this.dependencies.artifacts.designPublicationRecords(["candidate"], {
-      chatId: chat.id,
-    });
-    const interruptedCandidates = candidates.filter(
-      (record) => !isDesignArtifactRecoveryGenerationId(record.generationId),
+  async reconcilePersistedChat(
+    chat: DesignRevisionRecoveryChat,
+  ): Promise<DesignGeneratedRevisionReconciliationResult> {
+    if (this.dependencies.isChatGenerationActive?.(chat.id)) return {};
+    const candidates = await this.dependencies.artifacts.designPublicationRecords(
+      ["candidate", "suppressed"],
+      { chatId: chat.id },
     );
-    if (interruptedCandidates.length > 0) {
-      await this.suppressCandidates(
-        chat.id,
-        interruptedCandidates.map((record) => record.artifact.mediaId),
-      );
-    }
+    await this.reconcileInterruptedCandidates(chat.id, candidates);
     const eligible = await this.dependencies.artifacts.designPublicationRecords(["eligible"], {
       chatId: chat.id,
     });
     await this.reconcileRecords(eligible, new Map([[chat.id, chat]]));
+    const unresolved = await this.dependencies.artifacts.designPublicationRecords(["eligible"], {
+      chatId: chat.id,
+    });
+    if (this.dependencies.isChatGenerationActive?.(chat.id)) return {};
+    return unresolved.some(
+      (record) => !this.dependencies.isGenerationActive?.(record.generationId),
+    )
+      ? { designPublication: "retryable" }
+      : {};
   }
 
   async reconcileAtStartup(chats: readonly DesignRevisionRecoveryChat[]): Promise<void> {
-    const candidates = await this.dependencies.artifacts.designPublicationRecords(["candidate"]);
-    const candidateIdsByChat = new Map<string, string[]>();
+    const candidates = await this.dependencies.artifacts.designPublicationRecords([
+      "candidate",
+      "suppressed",
+    ]);
+    const candidatesByChat = new Map<string, typeof candidates>();
     for (const record of candidates) {
-      if (isDesignArtifactRecoveryGenerationId(record.generationId)) continue;
-      const mediaIds = candidateIdsByChat.get(record.chatId) ?? [];
-      mediaIds.push(record.artifact.mediaId);
-      candidateIdsByChat.set(record.chatId, mediaIds);
+      const group = candidatesByChat.get(record.chatId) ?? [];
+      group.push(record);
+      candidatesByChat.set(record.chatId, group);
     }
-    for (const [chatId, mediaIds] of candidateIdsByChat) {
-      await this.suppressCandidates(chatId, mediaIds);
+    for (const [chatId, records] of candidatesByChat) {
+      try {
+        await this.reconcileInterruptedCandidates(chatId, records);
+      } catch (error) {
+        this.dependencies.onWarning?.(
+          `Could not clean interrupted Design revisions for ${chatId}.`,
+          error,
+        );
+      }
     }
     const eligible = await this.dependencies.artifacts.designPublicationRecords(["eligible"]);
     await this.reconcileRecords(eligible, new Map(chats.map((chat) => [chat.id, chat])));

@@ -115,6 +115,7 @@ import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
+  acknowledgeDetachedDesignPublication,
   detachedTextStreamingRemaining,
   detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
@@ -136,6 +137,7 @@ import {
 } from "../shared/chat-artifacts";
 import {
   DESIGN_TURN_CONTEXT_VERSION,
+  DesignOperationFence,
   designProjectClaimsArtifacts,
   designSelectionDisplayLabel,
   designWorkspaceArtifactPlan,
@@ -149,9 +151,10 @@ import {
   type SourceDesignTurnContextV1,
   type SourceSelectionBindingV1,
 } from "../shared/source-designer";
-import type {
-  AskUserQuestionPromptV1,
-  AskUserQuestionResponseV1,
+import {
+  discardsCancelledDesignDraft,
+  type AskUserQuestionPromptV1,
+  type AskUserQuestionResponseV1,
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
@@ -191,24 +194,31 @@ export function ChatPane({
   presentation = "chat",
   initialDesignMediaId,
   designProject,
+  designPublication,
+  onDesignPublicationResolved,
   onDesignProjectChange,
 }: {
   chatId: string;
   presentation?: "chat" | "design";
   initialDesignMediaId?: string;
   designProject?: DesignProjectSnapshotV1;
+  designPublication?: "retryable";
+  onDesignPublicationResolved?: () => void;
   onDesignProjectChange?: (project: DesignProjectSnapshotV1) => void;
 }) {
   const qc = useQueryClient();
   const [currentDesignProject, setCurrentDesignProject] = React.useState<
     DesignProjectSnapshotV1 | undefined
   >(designProject);
+  const currentDesignProjectRef = React.useRef(currentDesignProject);
+  currentDesignProjectRef.current = currentDesignProject;
   const [designProjectReconciliation, setDesignProjectReconciliation] = React.useState<{
     projectId: string;
     artifacts: ChatHtmlArtifactV1[];
     message: string;
     retrying: boolean;
   }>();
+  const designOperationFenceRef = React.useRef(new DesignOperationFence());
   const designPersistenceBarrierRef = React.useRef<
     (() => Promise<DesignProjectPersistenceSnapshotV1 | undefined>) | undefined
   >(undefined);
@@ -282,6 +292,7 @@ export function ChatPane({
           : "Design workspace";
 
   React.useEffect(() => {
+    currentDesignProjectRef.current = designProject;
     setCurrentDesignProject(designProject);
   }, [designProject]);
   const updateDesignProject = React.useCallback(
@@ -681,6 +692,26 @@ export function ChatPane({
     setDecidingApprovalId(null);
   }, [chatId]);
 
+  // Project open can discover durable publication work without having an
+  // optimistic artifact payload in this renderer. Seed the same inline
+  // reconciliation state used by terminal handoffs before the composer paints.
+  React.useLayoutEffect(() => {
+    if (presentation !== "design" || designPublication !== "retryable" || !designProject) {
+      return;
+    }
+    setDesignProjectReconciliation((current) =>
+      current?.projectId === designProject.id
+        ? current
+        : {
+            projectId: designProject.id,
+            artifacts: [],
+            message:
+              "Design history contains a saved revision waiting to be added to this project.",
+            retrying: false,
+          },
+    );
+  }, [chatId, designProject?.id, designPublication, presentation]);
+
   React.useEffect(() => {
     let current = true;
     const ticket = todoSnapshotReadFence.beginInitialRead(chatId);
@@ -709,6 +740,121 @@ export function ChatPane({
     messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
   const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
+  React.useEffect(() => {
+    if (
+      presentation !== "design" ||
+      !currentDesignProject ||
+      !detachedProjection?.designPublication
+    ) {
+      return;
+    }
+    const artifactsByMediaId = new Map<string, ChatHtmlArtifactV1>();
+    for (const artifact of detachedProjection.artifacts.filter(isChatHtmlArtifact)) {
+      artifactsByMediaId.set(artifact.mediaId, artifact);
+    }
+    const terminalMessage = messages[messages.length - 1];
+    if (terminalMessage?.role === "assistant") {
+      for (const artifact of terminalMessage.htmlArtifacts ?? []) {
+        artifactsByMediaId.set(artifact.mediaId, artifact);
+      }
+    }
+    const artifacts = [...artifactsByMediaId.values()];
+    const acknowledge = () =>
+      acknowledgeDetachedDesignPublication({
+        streamId: detachedProjection.streamId,
+        chatId,
+        workspaceId: detachedProjection.workspaceId,
+      });
+    const handoffToReconciliation = (message: string) => {
+      setDesignProjectReconciliation((current) => {
+        if (current?.projectId !== currentDesignProject.id) {
+          return {
+            projectId: currentDesignProject.id,
+            artifacts,
+            message,
+            retrying: false,
+          };
+        }
+        const byMediaId = new Map(
+          current.artifacts.map((artifact) => [artifact.mediaId, artifact] as const),
+        );
+        for (const artifact of artifacts) byMediaId.set(artifact.mediaId, artifact);
+        return {
+          ...current,
+          artifacts: [...byMediaId.values()],
+          message: current.artifacts.length > 0 ? current.message : message,
+        };
+      });
+      acknowledge();
+    };
+    if (detachedProjection.designPublication === "retryable") {
+      handoffToReconciliation(
+        "The Design revision is saved and waiting to be added to project history.",
+      );
+      return;
+    }
+    if (artifacts.length === 0 || designProjectClaimsArtifacts(currentDesignProject, artifacts)) {
+      acknowledge();
+      return;
+    }
+    const operation = designOperationFenceRef.current.tryAcquire("design-terminal-publication");
+    if (!operation) return;
+    let current = true;
+    void designerApi
+      .openProject(currentDesignProject.id)
+      .then((openResult) => {
+        if (!current || chatIdRef.current !== chatId) return;
+        const project = openResult?.project;
+        const latest = currentDesignProjectRef.current;
+        if (!project || !designProjectClaimsArtifacts(project, artifacts)) {
+          handoffToReconciliation(
+            "The Design revision was published, but the latest project snapshot could not be loaded.",
+          );
+          return;
+        }
+        if (
+          latest?.id === project.id &&
+          latest.revision > project.revision &&
+          !designProjectClaimsArtifacts(latest, artifacts)
+        ) {
+          handoffToReconciliation(
+            "The Design revision was published, but a newer local project snapshot still needs to be refreshed.",
+          );
+          return;
+        }
+        if (!latest || latest.id !== project.id || latest.revision <= project.revision) {
+          updateDesignProject(project);
+        }
+        if (openResult.designPublication === "retryable") {
+          handoffToReconciliation(
+            "Design history still contains a saved revision waiting to be added to this project.",
+          );
+          return;
+        }
+        acknowledge();
+      })
+      .catch((cause: unknown) => {
+        if (!current || chatIdRef.current !== chatId) return;
+        handoffToReconciliation(
+          cause instanceof Error
+            ? cause.message
+            : "The published Design revision could not be loaded.",
+        );
+      })
+      .finally(() => {
+        designOperationFenceRef.current.release(operation);
+      });
+    return () => {
+      current = false;
+    };
+  }, [
+    chatId,
+    currentDesignProject,
+    detachedProjection,
+    messages,
+    presentation,
+    updateDesignProject,
+  ]);
   React.useEffect(() => {
     setResumedDetachedDesignPreviewStreamId(undefined);
     if (!visibleDetachedStreamId || presentation !== "design") return;
@@ -765,8 +911,10 @@ export function ChatPane({
     () =>
       streamingArtifacts.length > 0
         ? streamingArtifacts
-        : (visibleDetachedProjection?.artifacts ?? []),
-    [streamingArtifacts, visibleDetachedProjection?.artifacts],
+        : ((detachedProjection?.designPublication
+            ? detachedProjection.artifacts
+            : visibleDetachedProjection?.artifacts) ?? []),
+    [detachedProjection, streamingArtifacts, visibleDetachedProjection?.artifacts],
   );
   const liveDesignArtifacts = React.useMemo(() => {
     const byMediaId = new Map<string, ChatHtmlArtifactV1>();
@@ -782,6 +930,13 @@ export function ChatPane({
     () => designWorkspaceArtifactPlan(messages, liveDesignArtifacts),
     [liveDesignArtifacts, messages],
   );
+  const persistedDesignMediaIds = React.useMemo(
+    () =>
+      currentDesignProject?.canvas.nodes.flatMap((node) =>
+        node.kind === "artboard" ? (node.artifactMediaIds ?? []) : [],
+      ) ?? [],
+    [currentDesignProject],
+  );
   const liveDesignPreviewAuthority =
     streamingArtifacts.length > 0
       ? streamingArtifactGenerationId
@@ -790,18 +945,30 @@ export function ChatPane({
         : undefined;
   const retryDesignProjectReconciliation = React.useCallback(async () => {
     const pending = designProjectReconciliation;
-    if (!pending || pending.retrying) return;
+    if (!pending || pending.retrying || generationRef.current) return;
+    const operation = designOperationFenceRef.current.tryAcquire("design-reconciliation");
+    if (!operation) return;
     setDesignProjectReconciliation({ ...pending, retrying: true });
     try {
-      const project = await designerApi.openProject(pending.projectId);
+      const openResult = await designerApi.openProject(pending.projectId);
+      const project = openResult?.project;
       if (chatIdRef.current !== chatId) return;
-      if (!project || !designProjectClaimsArtifacts(project, pending.artifacts)) {
+      if (
+        !project ||
+        openResult.designPublication === "retryable" ||
+        !designProjectClaimsArtifacts(project, pending.artifacts)
+      ) {
         throw new Error(
           "The generated revision is still being reconciled. Retry after it finishes saving.",
         );
       }
       updateDesignProject(project);
+      onDesignPublicationResolved?.();
       setDesignProjectReconciliation(undefined);
+      setStreamingArtifacts([]);
+      streamingArtifactsRef.current = [];
+      setStreamingArtifactGenerationId(undefined);
+      setError(null);
     } catch (cause) {
       if (chatIdRef.current !== chatId) return;
       setDesignProjectReconciliation((current) =>
@@ -816,8 +983,10 @@ export function ChatPane({
             }
           : current,
       );
+    } finally {
+      designOperationFenceRef.current.release(operation);
     }
-  }, [chatId, designProjectReconciliation, updateDesignProject]);
+  }, [chatId, designProjectReconciliation, onDesignPublicationResolved, updateDesignProject]);
   const designContextItems = React.useMemo(
     () => [
       ...(sourceDesignSelection
@@ -1282,9 +1451,11 @@ export function ChatPane({
               streamingArtifactsRef.current.filter(isChatHtmlArtifact);
             if (design && currentDesignProject) {
               try {
-                const publishedProject = await designerApi.openProject(currentDesignProject.id);
+                const openResult = await designerApi.openProject(currentDesignProject.id);
+                const publishedProject = openResult?.project;
                 if (
                   publishedProject &&
+                  openResult.designPublication !== "retryable" &&
                   designProjectClaimsArtifacts(publishedProject, optimisticDesignArtifacts) &&
                   mountedRef.current &&
                   generationIntentRef.current === generationIntent
@@ -1348,7 +1519,14 @@ export function ChatPane({
               setQuestionnaireSubmitting(false);
             }
           },
-          onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
+          onError: (
+            message,
+            partialContent,
+            finalTimeline,
+            updatedChat,
+            finalReasoning,
+            designPublication,
+          ) => {
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
@@ -1382,6 +1560,23 @@ export function ChatPane({
                 qc.setQueryData(queryKeys.chat(chatId), updatedChat);
                 void qc.invalidateQueries({ queryKey: queryKeys.chats });
               }
+              if (designPublication === "suppressed") {
+                setDesignProjectReconciliation(undefined);
+                setStreamingArtifacts([]);
+                streamingArtifactsRef.current = [];
+              } else if (
+                designPublication === "retryable" &&
+                currentDesignProject &&
+                streamingArtifactsRef.current.some(isChatHtmlArtifact)
+              ) {
+                setDesignProjectReconciliation({
+                  projectId: currentDesignProject.id,
+                  artifacts: streamingArtifactsRef.current.filter(isChatHtmlArtifact),
+                  message:
+                    "The Design revision is saved and waiting to be added to project history.",
+                  retrying: false,
+                });
+              }
               if (partial) {
                 setStreamingText(resolvedPartialContent);
                 setStreamComplete(true);
@@ -1401,7 +1596,10 @@ export function ChatPane({
                 setHasUnpersistedResponse(
                   Boolean((partial || hasUnpersistedArtifact) && !updatedChat),
                 );
-                if (updatedChat) {
+                if (
+                  designPublication === "suppressed" ||
+                  (updatedChat && designPublication !== "retryable")
+                ) {
                   setStreamingArtifacts([]);
                   streamingArtifactsRef.current = [];
                 }
@@ -1533,110 +1731,131 @@ export function ChatPane({
       if (detachedGenerationDraining) {
         throw new Error("Wait for the previous response to finish saving before sending again.");
       }
-      let preparedWorkspaceId = generationWorkspaceId;
-      let designPreflight: Awaited<ReturnType<typeof designerApi.preflightGeneration>> | undefined;
-      if (design) {
-        if (!currentDesignProject) throw new Error("This Design Project is unavailable.");
-        const persistenceBarrier = designPersistenceBarrierRef.current;
-        if (!persistenceBarrier) {
-          throw new Error("Wait for the Design canvas to finish loading before sending.");
-        }
-        const persistenceSnapshot = await persistenceBarrier();
-        if (!persistenceSnapshot || persistenceSnapshot.project.id !== currentDesignProject.id) {
-          throw new Error("The Design canvas could not be saved before sending.");
-        }
-        const persistedProject = persistenceSnapshot.project;
-        selectedTargets = persistenceSnapshot.targets;
-        const preflight = await designerApi.preflightGeneration({
-          projectId: persistedProject.id,
-        });
-        if (
-          preflight.projectId !== persistedProject.id ||
-          preflight.chatId !== chatId ||
-          preflight.projectRevision !== persistedProject.revision ||
-          preflight.connectionState !== persistedProject.connectionState ||
-          preflight.workspaceId !== persistedProject.workspaceId
-        ) {
-          throw new Error(
-            "This Design Project changed in another window. Reopen it before sending this prompt.",
-          );
-        }
-        preparedWorkspaceId = preflight.workspaceId;
-        designPreflight = preflight;
+      if (
+        design &&
+        (designProjectReconciliation || detachedProjection?.designPublication !== undefined)
+      ) {
+        throw new Error("Refresh Design history before sending another prompt.");
       }
-      const generationIntent = ++generationIntentRef.current;
-      const messageTurnId = createChatTurnId();
-      setIsStoppingGeneration(false);
-      setIsStartingGeneration(true);
+      const designOperation = design
+        ? designOperationFenceRef.current.tryAcquire("design-generation")
+        : undefined;
+      if (design && !designOperation) {
+        throw new Error("Wait for Design history to finish refreshing before sending.");
+      }
       try {
-        let updated: Chat;
-        try {
-          updated = await chatsApi.appendMessage(
-            chatId,
-            {
-              role: "user",
-              content: text,
-              attachments: submittedAttachments.length ? submittedAttachments : undefined,
-            },
-            {
-              providerId,
-              model,
-              autoTitle: true,
-              turnId: messageTurnId,
-              skillInvocation,
-              designPreflight,
-            },
-          );
-        } catch (appendError) {
-          if (isAppendReconciliationRequired(appendError)) {
-            setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
-            void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
-          }
-          throw appendError;
-        }
-        qc.setQueryData(queryKeys.chat(chatId), updated);
-        void qc.invalidateQueries({ queryKey: queryKeys.chats });
-        if (generationIntentRef.current !== generationIntent) {
-          try {
-            await chatsApi.abandonTurn(chatId, messageTurnId);
-          } catch (error) {
-            if (mountedRef.current) {
-              setError(error instanceof Error ? error.message : String(error));
-            }
-          }
-          return;
-        }
-        designTurnRef.current = design;
-        visualizeTurnRef.current = options?.visualize === true && !design;
-        designContextTurnRef.current =
-          design && !selectedSource && selectedTargets.length > 0
-            ? { version: DESIGN_TURN_CONTEXT_VERSION, targets: selectedTargets }
-            : undefined;
-        sourceDesignContextTurnRef.current =
-          design && selectedSource
-            ? {
-                version: SOURCE_DESIGNER_VERSION,
-                selectionId: selectedSource.id,
-              }
-            : undefined;
+        let preparedWorkspaceId = generationWorkspaceId;
+        let designPreflight:
+          | Awaited<ReturnType<typeof designerApi.preflightGeneration>>
+          | undefined;
         if (design) {
-          setDesignTargets([]);
-          setSourceDesignSelection(undefined);
-          setDesignCanvasImages([]);
+          if (!currentDesignProject) throw new Error("This Design Project is unavailable.");
+          const persistenceBarrier = designPersistenceBarrierRef.current;
+          if (!persistenceBarrier) {
+            throw new Error("Wait for the Design canvas to finish loading before sending.");
+          }
+          const persistenceSnapshot = await persistenceBarrier();
+          if (!persistenceSnapshot || persistenceSnapshot.project.id !== currentDesignProject.id) {
+            throw new Error("The Design canvas could not be saved before sending.");
+          }
+          const persistedProject = persistenceSnapshot.project;
+          selectedTargets = persistenceSnapshot.targets;
+          const preflight = await designerApi.preflightGeneration({
+            projectId: persistedProject.id,
+          });
+          if (
+            preflight.projectId !== persistedProject.id ||
+            preflight.chatId !== chatId ||
+            preflight.projectRevision !== persistedProject.revision ||
+            preflight.connectionState !== persistedProject.connectionState ||
+            preflight.workspaceId !== persistedProject.workspaceId
+          ) {
+            throw new Error(
+              "This Design Project changed in another window. Reopen it before sending this prompt.",
+            );
+          }
+          preparedWorkspaceId = preflight.workspaceId;
+          designPreflight = preflight;
         }
-        const started = await runGeneration(messageTurnId, preparedWorkspaceId);
-        // The user message crossed its durability barrier in appendMessage.
-        // Start rejection is surfaced by the stream callback but cannot turn
-        // that committed message back into an unsent composer payload.
-        if (!started.ok && mountedRef.current) setError(started.error.message);
+        const generationIntent = ++generationIntentRef.current;
+        const messageTurnId = createChatTurnId();
+        setIsStoppingGeneration(false);
+        setIsStartingGeneration(true);
+        try {
+          let updated: Chat;
+          try {
+            updated = await chatsApi.appendMessage(
+              chatId,
+              {
+                role: "user",
+                content: text,
+                attachments: submittedAttachments.length ? submittedAttachments : undefined,
+              },
+              {
+                providerId,
+                model,
+                autoTitle: true,
+                turnId: messageTurnId,
+                skillInvocation,
+                designPreflight,
+              },
+            );
+          } catch (appendError) {
+            if (isAppendReconciliationRequired(appendError)) {
+              setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
+              void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+            }
+            throw appendError;
+          }
+          qc.setQueryData(queryKeys.chat(chatId), updated);
+          void qc.invalidateQueries({ queryKey: queryKeys.chats });
+          if (generationIntentRef.current !== generationIntent) {
+            try {
+              await chatsApi.abandonTurn(chatId, messageTurnId);
+            } catch (error) {
+              if (mountedRef.current) {
+                setError(error instanceof Error ? error.message : String(error));
+              }
+            }
+            return;
+          }
+          designTurnRef.current = design;
+          visualizeTurnRef.current = options?.visualize === true && !design;
+          designContextTurnRef.current =
+            design && !selectedSource && selectedTargets.length > 0
+              ? {
+                  version: DESIGN_TURN_CONTEXT_VERSION,
+                  targets: selectedTargets,
+                }
+              : undefined;
+          sourceDesignContextTurnRef.current =
+            design && selectedSource
+              ? {
+                  version: SOURCE_DESIGNER_VERSION,
+                  selectionId: selectedSource.id,
+                }
+              : undefined;
+          if (design) {
+            setDesignTargets([]);
+            setSourceDesignSelection(undefined);
+            setDesignCanvasImages([]);
+          }
+          const started = await runGeneration(messageTurnId, preparedWorkspaceId);
+          // The user message crossed its durability barrier in appendMessage.
+          // Start rejection is surfaced by the stream callback but cannot turn
+          // that committed message back into an unsent composer payload.
+          if (!started.ok && mountedRef.current) setError(started.error.message);
+        } finally {
+          if (
+            mountedRef.current &&
+            chatIdRef.current === chatId &&
+            generationIntentRef.current === generationIntent
+          ) {
+            setIsStartingGeneration(false);
+          }
+        }
       } finally {
-        if (
-          mountedRef.current &&
-          chatIdRef.current === chatId &&
-          generationIntentRef.current === generationIntent
-        ) {
-          setIsStartingGeneration(false);
-        }
+        if (designOperation) designOperationFenceRef.current.release(designOperation);
       }
     },
     [
@@ -1644,7 +1863,9 @@ export function ChatPane({
       computerUseSaving,
       currentDesignProject,
       designCanvasImages,
+      designProjectReconciliation,
       designTargets,
+      detachedProjection,
       detachedGenerationDraining,
       presentation,
       sourceDesignSelection,
@@ -1747,7 +1968,15 @@ export function ChatPane({
       setQuestionnaireSubmitting(true);
       try {
         await chatsApi.answerQuestionnaire(questionnaire.promptId, response);
-        if (chatIdRef.current === chatId) setQuestionnaire(null);
+        if (chatIdRef.current === chatId) {
+          if (discardsCancelledDesignDraft(questionnaire, response)) {
+            setStreamingArtifacts([]);
+            streamingArtifactsRef.current = [];
+            setDesignProjectReconciliation(undefined);
+          }
+          setQuestionnaire(null);
+          focusComposer();
+        }
       } catch (questionError) {
         if (chatIdRef.current !== chatId) return;
         toast.error(
@@ -1757,7 +1986,7 @@ export function ChatPane({
         if (chatIdRef.current === chatId) setQuestionnaireSubmitting(false);
       }
     },
-    [chatId, questionnaire, questionnaireSubmitting],
+    [chatId, focusComposer, questionnaire, questionnaireSubmitting],
   );
 
   const openFolder = React.useCallback(() => {
@@ -2536,7 +2765,11 @@ export function ChatPane({
                 onStop={handleStop}
                 isGenerating={isGenerating}
                 canStopGeneration={canStopGeneration}
-                configurationBusy={thinkingSaving}
+                configurationBusy={
+                  thinkingSaving ||
+                  designProjectReconciliation !== undefined ||
+                  detachedProjection?.designPublication !== undefined
+                }
                 inputRef={composerRef}
                 placement={presentation === "design" ? "design-conversation" : "chat"}
                 onVisibilityRequirementChange={
@@ -2731,6 +2964,7 @@ export function ChatPane({
                     streamingText={displayedStreamingText}
                     streamingReasoning={displayedStreamingReasoning}
                     streamingArtifacts={displayedStreamingArtifacts}
+                    persistedDesignMediaIds={persistedDesignMediaIds}
                     streamComplete={streamComplete || visibleDetachedProjection !== null}
                     onStreamHandoffComplete={() => streamHandoffRef.current?.()}
                     timeline={displayedGenerationTimeline}
@@ -2767,7 +3001,14 @@ export function ChatPane({
                   livePreviewAuthority={liveDesignPreviewAuthority}
                   projectReconciliationError={designProjectReconciliation?.message}
                   projectReconciliationBusy={designProjectReconciliation?.retrying === true}
-                  onRetryProjectReconciliation={() => void retryDesignProjectReconciliation()}
+                  projectReconciliationHasPreview={
+                    (designProjectReconciliation?.artifacts.length ?? 0) > 0
+                  }
+                  onRetryProjectReconciliation={
+                    isGenerating || isStartingGeneration || detachedGenerationDraining
+                      ? undefined
+                      : () => void retryDesignProjectReconciliation()
+                  }
                   generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
                   initialMediaId={initialDesignMediaId}
                   unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}

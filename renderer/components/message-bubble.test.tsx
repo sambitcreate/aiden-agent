@@ -199,6 +199,31 @@ test("HTML artifact reconciliation keeps one stable transcript key across handof
   assert.equal(persistedOnly[0]?.anchor, "message:assistant-html");
 });
 
+test("Design transcript cards expose only revisions owned by the current project", () => {
+  const owned = htmlArtifact("design:owned", "html-owned");
+  const suppressed = htmlArtifact("design:suppressed", "html-suppressed");
+  const ordinary = htmlArtifact("ordinary", "html-ordinary");
+  const message = {
+    id: "assistant-design",
+    role: "assistant" as const,
+    content: "Done.",
+    createdAt: 1,
+    htmlArtifacts: [owned, suppressed, ordinary],
+  };
+
+  const plan = htmlArtifactTranscriptPlan(
+    [message],
+    [],
+    false,
+    new Set([owned.mediaId]),
+  );
+
+  assert.deepEqual(
+    plan.map((entry) => entry.artifact.mediaId),
+    [owned.mediaId, ordinary.mediaId],
+  );
+});
+
 test("a same-title replace keeps one card and the persisted copy returns after handoff", () => {
   // The live replace carries the same mediaId with new content, so exactly one
   // card renders; once the streaming row unmounts the persisted card returns.

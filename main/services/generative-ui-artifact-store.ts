@@ -645,12 +645,15 @@ export class GenerativeUiArtifactStore {
     chatId: string;
     generationId: string;
     mediaId: string;
+    expectedDesignPublication?: readonly DesignArtifactPublicationState[];
   }): Promise<"discarded" | "missing"> {
     this.requireAvailable();
     if (
       !boundedIdentity(input.chatId) ||
       !boundedIdentity(input.generationId) ||
-      !boundedIdentity(input.mediaId)
+      !boundedIdentity(input.mediaId) ||
+      (input.expectedDesignPublication !== undefined &&
+        input.expectedDesignPublication.length === 0)
     ) {
       throw new Error("Invalid generative-ui artifact discard identity.");
     }
@@ -660,7 +663,14 @@ export class GenerativeUiArtifactStore {
       );
       if (index < 0) return "missing" as const;
       const record = database.records[index]!;
-      if (record.committed || record.generationId !== input.generationId) {
+      if (
+        record.committed ||
+        record.generationId !== input.generationId ||
+        (input.expectedDesignPublication !== undefined &&
+          (!record.designOwnership ||
+            !record.designPublication ||
+            !input.expectedDesignPublication.includes(record.designPublication)))
+      ) {
         throw new Error("The HTML artifact is not owned by this pending operation.");
       }
       database.records.splice(index, 1);
@@ -927,7 +937,10 @@ export class GenerativeUiArtifactStore {
     if (persistedIds.size === 0) return;
     const pending = (await this.data.load()).records.filter(
       (record) =>
-        record.chatId === chat.id && !record.committed && persistedIds.has(record.artifact.mediaId),
+        record.chatId === chat.id &&
+        !record.committed &&
+        record.designOwnership === undefined &&
+        persistedIds.has(record.artifact.mediaId),
     );
     if (pending.length === 0) return;
     await this.commit(
@@ -936,13 +949,16 @@ export class GenerativeUiArtifactStore {
     );
   }
 
+  /** Generic recovery never grants transcript authority to Design-owned candidates. */
   async recover(
     chats: readonly GenerativeUiArtifactRecoveryChat[],
     append: (message: RecoveredHtmlMessage) => Promise<void>,
   ): Promise<void> {
     this.requireAvailable();
     const chatById = new Map(chats.map((chat) => [chat.id, chat]));
-    const records = await this.pending();
+    const records = (await this.pending()).filter(
+      (record) => record.designOwnership === undefined,
+    );
     const recordsByChat = new Map<string, StagedHtmlArtifact[]>();
     for (const record of records) {
       const group = recordsByChat.get(record.chatId) ?? [];
@@ -964,7 +980,9 @@ export class GenerativeUiArtifactStore {
           continue;
         }
         await this.reconcilePersisted(chat);
-        const remaining = (await this.pending()).filter((record) => record.chatId === chatId);
+        const remaining = (await this.pending()).filter(
+          (record) => record.chatId === chatId && record.designOwnership === undefined,
+        );
         if (remaining.length === 0) continue;
         const persistedUsage = displayedAssistantHtmlUsage(chat.messages);
         const recoveryBytes = remaining.reduce((total, record) => total + record.artifact.size, 0);

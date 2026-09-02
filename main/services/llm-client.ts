@@ -306,8 +306,11 @@ import {
   requireCommittedDesignContextHtml,
 } from "./design-generation-context.js";
 import {
+  classifyDesignGenerationPublicationFailure,
   decideDesignGenerationPublication,
+  keepCancelledDesignDraft,
   settleDecidedDesignGeneration,
+  shouldPromptToKeepCancelledDesignDraft,
 } from "./design-generation-publication.js";
 import { designGeneratedRevisionService } from "./design-generated-revision-service-main.js";
 import {
@@ -1971,15 +1974,61 @@ export const llmClient = {
       try {
         const designMediaIds =
           params.design === true ? displayedHtmlArtifacts.map((artifact) => artifact.mediaId) : [];
+        const keepCancelledDraft = shouldPromptToKeepCancelledDesignDraft({
+          design: params.design === true,
+          interactiveOwner: owner.id !== 0,
+          artifactCount: designMediaIds.length,
+          status: finalTimeline.status,
+          cancellationOrigin: finalTimeline.cancellationOrigin,
+        })
+          ? keepCancelledDesignDraft(
+              await questionnaires.request(
+                {
+                  streamId,
+                  toolCallId: `design-cancel-draft:${streamId}`,
+                  kind: "design-cancel-draft",
+                  questions: [
+                    {
+                      header: "Partial design",
+                      question: "Would you like to keep the partial design generated so far?",
+                      multiSelect: false,
+                      options: [
+                        {
+                          label: "Keep draft",
+                          description: "Save the partial design to this project's canvas.",
+                        },
+                        {
+                          label: "Discard",
+                          description: "Remove the partial design and keep the canvas unchanged.",
+                        },
+                      ],
+                    },
+                  ],
+                },
+                owner.documentId,
+              ),
+            )
+          : false;
         // This durable decision precedes the chat append. Startup publishes an
         // eligible row only with exact transcript proof; every other terminal
         // artifact remains outside project history.
-        const publishDesignRevisions = await decideDesignGenerationPublication({
+        const designPublicationDecision = await decideDesignGenerationPublication({
           chatId: params.chatId,
+          generationId: streamId,
           mediaIds: designMediaIds,
-          completed: finalTimeline.status === "completed",
+          completed: finalTimeline.status === "completed" || keepCancelledDraft,
           revisions: designGeneratedRevisionService,
         });
+        const publishDesignRevisions = designPublicationDecision.publish;
+        if (designPublicationDecision.cleanupPending) {
+          logger.warn(
+            "pi",
+            `Failed Design candidates remain pending cleanup for stream ${streamId}.`,
+            designPublicationDecision.cause,
+          );
+        }
+        const persistedHtmlArtifacts =
+          params.design === true && !publishDesignRevisions ? [] : displayedHtmlArtifacts;
         // The inspector store is authoritative. Never announce terminal chat
         // completion before every accepted child snapshot is durable.
         await subagentSupervisor?.flush();
@@ -1998,7 +2047,7 @@ export const llmClient = {
                 : undefined,
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
-            htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
+            htmlArtifacts: persistedHtmlArtifacts.length > 0 ? persistedHtmlArtifacts : undefined,
           },
           {
             providerId: params.providerId,
@@ -2023,10 +2072,10 @@ export const llmClient = {
             );
           }
         }
-        let designPublicationPending = false;
+        let designPublicationFailure: "retryable" | "suppressed" | undefined;
         if (displayedHtmlArtifacts.length > 0) {
           try {
-            if (params.design === true) {
+            if (params.design === true && publishDesignRevisions) {
               const publication = await settleDecidedDesignGeneration({
                 chatId: params.chatId,
                 mediaIds: designMediaIds,
@@ -2035,14 +2084,30 @@ export const llmClient = {
                 revisions: designGeneratedRevisionService,
               });
               if (publication.pending) {
-                designPublicationPending = publishDesignRevisions;
+                designPublicationFailure = "retryable";
+                try {
+                  const eligible = await generativeUiArtifactStore.designPublicationRecords(
+                    ["eligible"],
+                    { chatId: params.chatId, mediaIds: designMediaIds },
+                  );
+                  designPublicationFailure = classifyDesignGenerationPublicationFailure(
+                    designMediaIds,
+                    eligible.map((record) => record.artifact.mediaId),
+                  );
+                } catch (classificationError) {
+                  logger.warn(
+                    "pi",
+                    `Could not classify Design revision publication failure for stream ${streamId}; preserving retry eligibility.`,
+                    classificationError,
+                  );
+                }
                 logger.warn(
                   "pi",
                   `Design revision publication remains pending for stream ${streamId}.`,
                   publication.cause,
                 );
               }
-            } else {
+            } else if (params.design !== true) {
               await generativeUiArtifactStore.commit(
                 params.chatId,
                 displayedHtmlArtifacts.map((artifact) => artifact.mediaId),
@@ -2052,7 +2117,7 @@ export const llmClient = {
             logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
           }
         }
-        return { chat, error: undefined, messageId, designPublicationPending };
+        return { chat, error: undefined, messageId, designPublicationFailure };
       } catch (error) {
         logger.error("pi", `Could not persist response for stream ${streamId}`, error);
         return {
@@ -3292,7 +3357,7 @@ export const llmClient = {
             retryExhausted: runtimeOutcome.providerFailure?.retryExhausted ?? false,
           });
         }
-        if (finalError) {
+        if (finalError && !wasCancelled) {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(
             full,
@@ -3350,11 +3415,14 @@ export const llmClient = {
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
             });
-          } else if (persisted.designPublicationPending) {
+          } else if (persisted.designPublicationFailure) {
             sendGeneration(streamId, "chat:error", {
               streamId,
               message:
-                "The response was saved, but its Design revision could not be added to the canvas. Reopen the project to retry recovery, or generate it again.",
+                persisted.designPublicationFailure === "suppressed"
+                  ? "The response was saved, but its Design revision conflicted with newer project history and was not added. The existing canvas was preserved; generate again from the latest project state."
+                  : "The response was saved, but its Design revision could not be added to the canvas. Refresh or reopen the project to retry recovery before sending another prompt.",
+              designPublication: persisted.designPublicationFailure,
               content: full || undefined,
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
@@ -3479,7 +3547,18 @@ export const llmClient = {
     if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
       return false;
     }
-    if (initialization?.cancelRequested || generation?.cancelRequested) return false;
+    if (initialization?.cancelRequested || generation?.cancelRequested) {
+      // A later lifecycle boundary must be able to supersede a user Stop
+      // while its Design draft question is pending (or before it is created).
+      // Marking the stronger origin prevents a future question; detaching the
+      // questionnaire lane settles one that is already visible.
+      if (origin === "user_stop") return false;
+      if (initialization?.cancelRequested) initialization.cancellationOrigin = origin;
+      if (generation?.cancelRequested) generation.cancellationOrigin = origin;
+      questionnaires.detachStream(streamId);
+      logger.info("pi", `Generation ${streamId} cancellation escalated (${origin}).`);
+      return true;
+    }
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.cancellationOrigin = origin;
@@ -3496,6 +3575,8 @@ export const llmClient = {
     }
     subagentRuntimeRegistry.abortGeneration(streamId);
     approvals.cancelStream(streamId);
+    if (origin === "user_stop") questionnaires.cancelStream(streamId);
+    else questionnaires.detachStream(streamId);
     logger.info("pi", `Generation ${streamId} cancellation requested (${origin}).`);
     return true;
   },

@@ -352,6 +352,8 @@ export function DesignProjectRoute({
     onProjectUnavailable,
   } = React.useContext(DesignProjectChangeContext);
   const [project, setProject] = React.useState<DesignProjectSnapshotV1>();
+  const [openedRouteIdentity, setOpenedRouteIdentity] = React.useState<string>();
+  const [designPublication, setDesignPublication] = React.useState<"retryable">();
   const latestProjectRef = React.useRef<DesignProjectSnapshotV1 | undefined>(undefined);
   const [error, setError] = React.useState<string>();
 
@@ -369,17 +371,22 @@ export function DesignProjectRoute({
   React.useEffect(() => {
     let cancelled = false;
     setProject(undefined);
+    setOpenedRouteIdentity(undefined);
+    setDesignPublication(undefined);
     setError(undefined);
     void designerApi
       .openProject(projectOrLegacyChatId)
-      .then((opened) => {
+      .then((openResult) => {
         if (cancelled) return;
-        if (!opened) {
+        if (!openResult) {
           onProjectUnavailable(projectOrLegacyChatId);
           toast.error("That Design Project is no longer available.");
           void navigate({ to: "/design", replace: true });
           return;
         }
+        const opened = openResult.project;
+        setOpenedRouteIdentity(projectOrLegacyChatId);
+        setDesignPublication(openResult.designPublication);
         const latest = latestProjectRef.current;
         if (latest?.id === opened.id && latest.revision > opened.revision) {
           setProject(latest);
@@ -414,7 +421,7 @@ export function DesignProjectRoute({
       </div>
     );
   }
-  if (!project) {
+  if (!project || openedRouteIdentity !== projectOrLegacyChatId) {
     return (
       <div className="grid h-full place-items-center p-6" role="status">
         <Text color="secondary">Opening Design Project…</Text>
@@ -427,6 +434,8 @@ export function DesignProjectRoute({
       presentation="design"
       initialDesignMediaId={initialMediaId}
       designProject={project}
+      designPublication={designPublication}
+      onDesignPublicationResolved={() => setDesignPublication(undefined)}
       onDesignProjectChange={onProjectChange}
     />
   );

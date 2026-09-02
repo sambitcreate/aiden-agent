@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  acknowledgeDetachedDesignPublication,
   detachedLifecycleChatProjection,
   detachedTextStreamingRemaining,
   fallbackDetachedLifecycleStream,
@@ -17,9 +18,10 @@ import {
   waitForDetachedLifecycleSettlement,
 } from "./chat-terminal-sync.js";
 import type { Chat } from "./types.js";
+import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts.js";
 import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs.js";
 
-function chat(id: string, content: string): Chat {
+function chat(id: string, content: string, htmlArtifacts?: ChatHtmlArtifactV1[]): Chat {
   return {
     id,
     title: id,
@@ -32,8 +34,21 @@ function chat(id: string, content: string): Chat {
         role: "assistant",
         content,
         createdAt: 2,
+        ...(htmlArtifacts ? { htmlArtifacts } : {}),
       },
     ],
+  };
+}
+
+function designArtifact(mediaId: string): ChatHtmlArtifactV1 {
+  return {
+    version: 1,
+    kind: "html",
+    id: "a".repeat(64),
+    title: "Partial design",
+    mimeType: "text/html",
+    size: 20,
+    mediaId,
   };
 }
 
@@ -123,6 +138,116 @@ test("a revisited chat retains and advances its detached answer and subagent pro
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
   assert.equal(isDetachedLifecycleChatDraining("chat-a", "workspace-1"), false);
+  unsubscribe();
+});
+
+test("detached retryable Design publication survives terminal cache settlement until adopted", () => {
+  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => {
+      const handlers = listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    () => undefined,
+  );
+  const owner = detached("stream-design-retry");
+  const artifact = designArtifact("design:retryable");
+  rememberDetachedLifecycleStream(owner, {
+    content: "",
+    reasoning: "",
+    timeline: null,
+    artifacts: [artifact],
+    subagents: [],
+  });
+
+  for (const handler of listeners.get("chat:error") ?? []) {
+    handler({
+      streamId: owner.streamId,
+      chat: chat(owner.chatId, "saved"),
+      designPublication: "retryable",
+    });
+  }
+
+  assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), false);
+  const retained = detachedLifecycleChatProjection(owner.chatId, owner.workspaceId);
+  assert.equal(retained?.designPublication, "retryable");
+  assert.equal(retained?.artifacts[0]?.kind, "html");
+  assert.equal(
+    acknowledgeDetachedDesignPublication({ ...owner, chatId: "chat:other" }),
+    false,
+  );
+  assert.equal(acknowledgeDetachedDesignPublication(owner), true);
+  assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId), null);
+  unsubscribe();
+});
+
+test("successful detached Design publication survives cache settlement for a project refresh", () => {
+  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => {
+      const handlers = listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    () => undefined,
+  );
+  const owner = detached("stream-design-published");
+  const artifact = designArtifact("design:published");
+  rememberDetachedLifecycleStream(owner, {
+    content: "Published design",
+    reasoning: "",
+    timeline: null,
+    artifacts: [],
+    subagents: [],
+  });
+
+  for (const handler of listeners.get("chat:done") ?? []) {
+    handler({
+      streamId: owner.streamId,
+      chat: chat(owner.chatId, "saved", [artifact]),
+    });
+  }
+
+  assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), false);
+  const retained = detachedLifecycleChatProjection(owner.chatId, owner.workspaceId);
+  assert.equal(retained?.designPublication, "published");
+  assert.deepEqual(retained?.artifacts, [artifact]);
+  assert.equal(acknowledgeDetachedDesignPublication(owner), true);
+  assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId), null);
+  unsubscribe();
+});
+
+test("failed detached output cannot claim a successful Design publication handoff", () => {
+  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => {
+      const handlers = listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    () => undefined,
+  );
+  const owner = detached("stream-design-failed");
+  rememberDetachedLifecycleStream(owner, {
+    content: "Failed design",
+    reasoning: "",
+    timeline: null,
+    artifacts: [designArtifact("design:failed")],
+    subagents: [],
+  });
+
+  for (const handler of listeners.get("chat:error") ?? []) {
+    handler({
+      streamId: owner.streamId,
+      chat: chat(owner.chatId, "failed", [designArtifact("design:failed")]),
+    });
+  }
+
+  assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId), null);
   unsubscribe();
 });
 

@@ -16,6 +16,7 @@ import {
 } from "../services/design-reference-asset-store.js";
 import { parseSourceElementDescriptor } from "../../renderer/shared/source-designer.js";
 import { parseDesignElementSelection } from "../../renderer/shared/design-workspace.js";
+import type { DesignProjectOpenResultV1 } from "../../renderer/shared/design-projects.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
 import {
@@ -62,6 +63,7 @@ import {
 import { inspectDesignProjectHealth } from "../services/design-project-health.js";
 import { isUsablePublishedDesignSource } from "../services/design-artifact-source-authority.js";
 import { designArtifactRecoveryService } from "../services/design-artifact-recovery-main.js";
+import { designGeneratedRevisionService } from "../services/design-generated-revision-service-main.js";
 import { DesignReferenceRecoveryService } from "../services/design-reference-recovery.js";
 import { llmClient } from "../services/llm-client.js";
 import {
@@ -594,9 +596,28 @@ export function registerDesignerHandlers(): void {
   ipcMain.handle("designer:openProject", async (event, identityValue: unknown) => {
     ownerFor(event);
     const identity = projectId(identityValue);
-    return (
-      (await designProjectStore.get(identity)) ??
-      (await designProjectStore.getOrMigrateLegacyChat(identity))
+    return designProjectLifecycle.runProjectMutation(
+      async (): Promise<DesignProjectOpenResultV1 | undefined> => {
+        const project =
+          (await designProjectStore.get(identity)) ??
+          (await designProjectStore.getOrMigrateLegacyChat(identity));
+        if (!project) return undefined;
+        const { chat } = await chatApplicationService.get(project.chatId);
+        let designPublication: DesignProjectOpenResultV1["designPublication"];
+        if (chat) {
+          // The append path holds this same lane from claim validation through
+          // user-message durability. Re-checking busy state inside it closes the
+          // preflight-to-generation handoff window, including detached owners.
+          if (!llmClient.isChatBusy(project.chatId)) {
+            ({ designPublication } =
+              await designGeneratedRevisionService.reconcilePersistedChat(chat));
+          }
+        }
+        const current = await designProjectStore.get(project.id);
+        return current
+          ? { project: current, ...(designPublication ? { designPublication } : {}) }
+          : undefined;
+      },
     );
   });
 

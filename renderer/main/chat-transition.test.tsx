@@ -186,9 +186,14 @@ test("terminal chat snapshots reach cache before visual stream handoff awaits", 
 
 test("a persisted provider failure replaces the transient stream error", () => {
   const pane = source("./chat-pane.tsx");
-  const terminal = between(
+  const generation = between(
     pane,
-    "onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {",
+    "const runGeneration = React.useCallback(",
+    "const handleSend = React.useCallback(",
+  );
+  const terminal = between(
+    generation,
+    "onError: (",
     "messageTurnId,",
   );
   assert.match(terminal, /updatedChat\?\.messages\[updatedChat\.messages\.length - 1\]/u);

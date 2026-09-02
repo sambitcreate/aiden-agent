@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { ChatHtmlArtifactV1 } from "./chat-artifacts.js";
 import {
+  DesignOperationFence,
   DesignConnectedDirectEditRetryState,
   DesignProjectPersistenceBarrier,
   DesignPrototypeDirectEditRetryState,
@@ -52,6 +53,23 @@ function project(overrides: Partial<DesignProjectSnapshotV1> = {}): DesignProjec
   };
 }
 
+test("Design history recovery and generation admission cannot overlap", () => {
+  const fence = new DesignOperationFence();
+  const recovery = fence.tryAcquire("recovery");
+  assert.ok(recovery);
+  assert.equal(fence.busy, true);
+  assert.equal(fence.tryAcquire("generation"), undefined);
+
+  fence.release(Symbol("stale"));
+  assert.equal(fence.busy, true, "an unrelated completion cannot release the active operation");
+  fence.release(recovery);
+
+  const generation = fence.tryAcquire("generation");
+  assert.ok(generation);
+  fence.release(generation);
+  assert.equal(fence.busy, false);
+});
+
 test("an immediate send barrier preserves the synchronously selected historical target", async () => {
   const barrier = new DesignProjectPersistenceBarrier<{
     project: DesignProjectSnapshotV1;
@@ -87,6 +105,47 @@ test("an immediate send barrier preserves the synchronously selected historical 
   assert.equal((await first).targets[0]?.mediaId, "design:N");
   assert.equal((await immediateSend).targets[0]?.mediaId, "design:H");
   assert.deepEqual(events, ["existing-save-started", "existing-save-finished", "saved-design:H"]);
+});
+
+test("a queued send recomputes against the project revision produced by the earlier save", async () => {
+  const barrier = new DesignProjectPersistenceBarrier<{
+    project: DesignProjectSnapshotV1;
+    targets: ReturnType<typeof snapshotDesignTurnTargets>;
+  }>();
+  let releaseDebounce!: () => void;
+  const debounceGate = new Promise<void>((resolve) => {
+    releaseDebounce = resolve;
+  });
+  let latestProject = project({ revision: 1 });
+  let latestCanvasX = 10;
+  let sendBaseRevision: number | undefined;
+  let sentCanvasX: number | undefined;
+  const debounce = barrier.flush(async () => {
+    await debounceGate;
+    latestProject = project({ revision: 2 });
+    return { project: latestProject, targets: [] };
+  });
+  await Promise.resolve();
+
+  const sendTargets = snapshotDesignTurnTargets([
+    { mediaId: "design:H", artifactId: "h".repeat(64) },
+  ]);
+  const send = barrier.flush(async () => {
+    sendBaseRevision = latestProject.revision;
+    sentCanvasX = latestCanvasX;
+    latestProject = project({ revision: latestProject.revision + 1 });
+    return { project: latestProject, targets: sendTargets };
+  });
+  assert.equal(sendBaseRevision, undefined, "send has not rebuilt before the debounce settles");
+  latestCanvasX = 40;
+
+  releaseDebounce();
+  await debounce;
+  const result = await send;
+  assert.equal(sendBaseRevision, 2);
+  assert.equal(sentCanvasX, 40, "send reads the latest canvas state after acquiring the barrier");
+  assert.equal(result.project.revision, 3);
+  assert.equal(result.targets[0]?.mediaId, "design:H");
 });
 
 test("prototype direct-edit retries retain one operation and reset on payload change or success", () => {

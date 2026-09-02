@@ -95,7 +95,20 @@ test("route changes select their sidebar before paint and preserve newer project
   );
   assert.match(
     layout,
+    /const opened = openResult\.project/u,
+  );
+  assert.match(
+    layout,
     /latest\?\.id === opened\.id && latest\.revision > opened\.revision[\s\S]*setProject\(latest\)/u,
+  );
+  assert.match(
+    layout,
+    /openResult\.designPublication === "retryable"[\s\S]*Reopen this project to retry recovery/u,
+  );
+  assert.match(sidebar, /const project = openResult\.project/u);
+  assert.match(
+    sidebar,
+    /openResult\.designPublication === "retryable"[\s\S]*Reopen this project to retry recovery/u,
   );
 });
 

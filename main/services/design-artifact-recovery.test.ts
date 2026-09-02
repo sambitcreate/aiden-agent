@@ -852,7 +852,12 @@ test("generation reconciliation preserves a quota-pruned exact recovery candidat
   assert.equal(setup.records.has(setup.mediaId), false);
 
   const generationReconciliation = new DesignGeneratedRevisionService({
-    artifacts: setup.dependencies.artifacts,
+    artifacts: {
+      ...setup.dependencies.artifacts,
+      async discardPending() {
+        assert.fail("an exact recovery candidate must not be discarded by generation reconciliation");
+      },
+    },
     projects: {
       async publishGeneratedRevisions() {
         assert.fail("a recovery candidate must not be published by generation reconciliation");

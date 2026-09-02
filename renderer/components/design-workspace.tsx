@@ -538,6 +538,7 @@ export function DesignWorkspaceCanvas({
   livePreviewAuthority,
   projectReconciliationError,
   projectReconciliationBusy = false,
+  projectReconciliationHasPreview = false,
   onRetryProjectReconciliation,
   generating,
   initialMediaId,
@@ -559,6 +560,7 @@ export function DesignWorkspaceCanvas({
   livePreviewAuthority?: string;
   projectReconciliationError?: string;
   projectReconciliationBusy?: boolean;
+  projectReconciliationHasPreview?: boolean;
   onRetryProjectReconciliation?: () => void;
   generating: boolean;
   initialMediaId?: string;
@@ -683,6 +685,8 @@ export function DesignWorkspaceCanvas({
   }>();
   const [prototypeDirectEditUndoBusy, setPrototypeDirectEditUndoBusy] = React.useState(false);
   const [nodes, setNodes] = React.useState<StudioNode[]>([]);
+  const nodesRef = React.useRef(nodes);
+  nodesRef.current = nodes;
   const [savedProject, setSavedProject] = React.useState(project);
   const connectedWorkspaceId =
     savedProject?.connectionState === "connected" ? savedProject.workspaceId : undefined;
@@ -1945,14 +1949,17 @@ export function DesignWorkspaceCanvas({
 
   const flushProjectPersistence = React.useCallback(() => {
     const targetSnapshot = snapshotDesignTurnTargets(targetsRef.current);
-    const canvasSnapshot = buildDurableCanvas(nodes);
     clearTimeout(persistTimerRef.current);
     persistTimerRef.current = undefined;
     return persistenceBarrierRef.current.flush(async () => {
+      // An earlier debounce save may advance savedProjectRef while this flush
+      // waits. Rebuild only after acquiring the barrier so immutable ownership
+      // and expectedRevision both come from that latest persisted project.
+      const canvasSnapshot = buildDurableCanvas(nodesRef.current);
       const persistedProject = await persistAttemptRef.current(canvasSnapshot);
       return persistedProject ? { project: persistedProject, targets: targetSnapshot } : undefined;
     });
-  }, [buildDurableCanvas, nodes]);
+  }, [buildDurableCanvas]);
 
   React.useEffect(() => {
     onPersistenceBarrierChange?.(flushProjectPersistence);
@@ -2367,6 +2374,7 @@ export function DesignWorkspaceCanvas({
     <ProjectReconciliationNotice
       message={projectReconciliationError}
       busy={projectReconciliationBusy}
+      previewAvailable={projectReconciliationHasPreview}
       offset={Boolean(missingReferenceNotice)}
       onRetry={onRetryProjectReconciliation}
     />
@@ -3803,11 +3811,13 @@ function DesignEmptyState({
 function ProjectReconciliationNotice({
   message,
   busy,
+  previewAvailable,
   offset,
   onRetry,
 }: {
   message: string;
   busy: boolean;
+  previewAvailable: boolean;
   offset: boolean;
   onRetry?: () => void;
 }) {
@@ -3823,13 +3833,18 @@ function ProjectReconciliationNotice({
       <div className="min-w-0 flex-1">
         <Text variant="small-strong">Design history needs refresh</Text>
         <Text variant="small" color="secondary">
-          {message} The generated preview remains available while you retry.
+          {message}{" "}
+          {previewAvailable
+            ? "The generated preview remains available while you retry."
+            : "Retry to finish restoring project history."}
         </Text>
       </div>
-      <Button size="small" variant="toolbar" disabled={busy || !onRetry} onClick={onRetry}>
-        {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
-        Retry
-      </Button>
+      {onRetry ? (
+        <Button size="small" variant="toolbar" disabled={busy} onClick={onRetry}>
+          {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
+          Retry
+        </Button>
+      ) : null}
     </section>
   );
 }

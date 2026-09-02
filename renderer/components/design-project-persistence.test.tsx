@@ -22,8 +22,22 @@ const directEditService = readFileSync(
 
 test("Design routes migrate legacy chats and open projects by durable identity", () => {
   assert.match(layout, /designerApi[\s\S]*?\.openProject\(projectOrLegacyChatId\)/u);
+  assert.match(layout, /const opened = openResult\.project/u);
+  assert.match(layout, /setOpenedRouteIdentity\(projectOrLegacyChatId\)/u);
+  assert.match(layout, /setDesignPublication\(openResult\.designPublication\)/u);
   assert.match(layout, /opened\.id !== projectOrLegacyChatId/u);
   assert.match(layout, /designProject=\{project\}/u);
+  assert.match(layout, /designPublication=\{designPublication\}/u);
+  assert.match(
+    layout,
+    /onDesignPublicationResolved=\{\(\) => setDesignPublication\(undefined\)\}/u,
+  );
+  assert.doesNotMatch(layout, /Reopen this project to retry recovery/u);
+  assert.match(
+    layout,
+    /if \(!project \|\| openedRouteIdentity !== projectOrLegacyChatId\)/u,
+    "cached sidebar snapshots cannot expose the composer before authoritative project-open recovery",
+  );
   assert.match(sidebar, /designerApi\.listProjects\(\)/u);
 });
 
@@ -69,6 +83,16 @@ test("canvas persists layout and active selection without inferring generated ow
     /const targetSnapshot = snapshotDesignTurnTargets\(targetsRef\.current\);[\s\S]*persistenceBarrierRef\.current\.flush/u,
     "the send barrier captures H synchronously before waiting for an older save",
   );
+  const persistenceFlush = canvas.indexOf("persistenceBarrierRef.current.flush(async () =>");
+  const canvasRebuild = canvas.indexOf(
+    "const canvasSnapshot = buildDurableCanvas(nodesRef.current)",
+    persistenceFlush,
+  );
+  assert.ok(
+    persistenceFlush >= 0 && canvasRebuild > persistenceFlush,
+    "the queued send rebuilds the latest canvas only after earlier persistence finishes",
+  );
+  assert.match(canvas, /const nodesRef = React\.useRef\(nodes\);\s+nodesRef\.current = nodes;/u);
   assert.match(
     canvas,
     /const nextTargets = targetsRef\.current\.map[\s\S]*publishTargets\(nextTargets\)/u,
@@ -122,6 +146,11 @@ test("detached optimistic previews explicitly resume and suspend exact main-owne
 test("terminal Design output remains optimistic behind actionable reconciliation until claimed", () => {
   assert.match(
     pane,
+    /designPublication !== "retryable"[\s\S]{0,300}setDesignProjectReconciliation\(\(current\) =>[\s\S]{0,200}current\?\.projectId === designProject\.id[\s\S]{0,250}artifacts: \[\]/u,
+    "route-open retryability seeds the inline reconciliation notice without replacing richer state",
+  );
+  assert.match(
+    pane,
     /designProjectClaimsArtifacts\(publishedProject, optimisticDesignArtifacts\)/u,
   );
   assert.match(
@@ -131,9 +160,109 @@ test("terminal Design output remains optimistic behind actionable reconciliation
   assert.match(pane, /designProjectReconciliation\?\.artifacts \?\? \[\]/u);
   assert.match(pane, /retryDesignProjectReconciliation/u);
   assert.match(pane, /if \(chatIdRef\.current !== chatId\) return;/u);
+  assert.match(
+    pane,
+    /updateDesignProject\(project\);\s+onDesignPublicationResolved\?\.\(\);\s+setDesignProjectReconciliation\(undefined\);\s+setStreamingArtifacts\(\[\]\);\s+streamingArtifactsRef\.current = \[\];\s+setStreamingArtifactGenerationId\(undefined\);\s+setError\(null\);/u,
+    "successful retry hands the preview to durable project history and clears its stale failure",
+  );
+  assert.ok(
+    pane.indexOf(
+      'openResult.designPublication === "retryable"',
+      pane.indexOf("const pending = designProjectReconciliation"),
+    ) < pane.indexOf("onDesignPublicationResolved?.()"),
+    "retryable durable state is never cleared before main reports it resolved",
+  );
+  assert.match(pane, /designOperationFenceRef\.current\.tryAcquire\("design-reconciliation"\)/u);
+  assert.match(pane, /designOperationFenceRef\.current\.tryAcquire\("design-generation"\)/u);
+  assert.match(
+    pane,
+    /configurationBusy=\{[\s\S]{0,180}designProjectReconciliation !== undefined \|\|[\s\S]{0,120}detachedProjection\?\.designPublication !== undefined/u,
+  );
+  assert.match(
+    pane,
+    /designProjectReconciliation \|\| detachedProjection\?\.designPublication !== undefined/u,
+  );
+  assert.match(
+    pane,
+    /detachedProjection\.designPublication === "retryable"[\s\S]{0,300}handoffToReconciliation/u,
+    "detached retryable publication is adopted before its bounded projection is acknowledged",
+  );
+  assert.ok(
+    pane.indexOf('detachedProjection.designPublication === "retryable"') <
+      pane.indexOf("designProjectClaimsArtifacts(currentDesignProject, artifacts)"),
+    "durable retry eligibility stays blocked even when the project write itself already landed",
+  );
+  const terminalRefresh = pane.indexOf('tryAcquire("design-terminal-publication")');
+  const terminalOpen = pane.indexOf(".openProject(currentDesignProject.id)", terminalRefresh);
+  const terminalClaim = pane.indexOf(
+    "designProjectClaimsArtifacts(project, artifacts)",
+    terminalOpen,
+  );
+  const terminalUpdate = pane.indexOf("updateDesignProject(project)", terminalClaim);
+  const terminalAcknowledgement = pane.indexOf("acknowledge();", terminalUpdate);
+  assert.ok(
+    terminalRefresh >= 0 &&
+      terminalOpen > terminalRefresh &&
+      terminalClaim > terminalOpen &&
+      terminalUpdate > terminalClaim &&
+      terminalAcknowledgement > terminalUpdate,
+    "successful detached publication refreshes durable project authority before acknowledgement",
+  );
+  assert.match(
+    pane,
+    /openResult\.designPublication === "retryable"[\s\S]{0,300}handoffToReconciliation/u,
+    "a durable retryable result remains an actionable blocked reconciliation",
+  );
+  assert.match(
+    pane,
+    /latest\.revision > project\.revision[\s\S]{0,500}newer local project snapshot still needs to be refreshed/u,
+    "a delayed terminal refresh cannot overwrite a newer renderer project snapshot",
+  );
   assert.match(canvas, /<ProjectReconciliationNotice/u);
   assert.match(canvas, /The generated preview remains available while you retry/u);
+  assert.match(canvas, /Retry to finish restoring project history/u);
+  assert.match(
+    pane,
+    /projectReconciliationHasPreview=\{[\s\S]{0,100}designProjectReconciliation\?\.artifacts\.length/u,
+    "a durable route-open retry does not claim that an absent optimistic preview is visible",
+  );
+  assert.match(
+    canvas,
+    /\{onRetry \? \([\s\S]{0,300}<Button[\s\S]{0,200}Retry[\s\S]{0,80}: null\}/u,
+    "Retry is hidden rather than exposed as a dead control while generation owns the lane",
+  );
   assert.match(canvas, /aria-label="Design history reconciliation"/u);
+});
+
+test("terminal semantic publication conflicts discard optimism and never advertise retry", () => {
+  assert.match(llmClient, /designPublicationFailure: "retryable" \| "suppressed"/u);
+  assert.match(llmClient, /designPublication: persisted\.designPublicationFailure/u);
+  assert.match(llmClient, /conflicted with newer project history and was not added/u);
+  assert.match(pane, /if \(designPublication === "suppressed"\) \{/u);
+  assert.match(
+    pane,
+    /setDesignProjectReconciliation\(undefined\);\s+setStreamingArtifacts\(\[\]\);\s+streamingArtifactsRef\.current = \[\];/u,
+  );
+  assert.match(
+    pane,
+    /designPublication === "retryable"[\s\S]{0,500}setDesignProjectReconciliation/u,
+  );
+  assert.match(
+    pane,
+    /updatedChat && designPublication !== "retryable"/u,
+    "retryable publication keeps the optimistic preview until explicit reconciliation",
+  );
+  assert.match(
+    handlers,
+    /designer:openProject[\s\S]{0,300}runProjectMutation[\s\S]{0,300}getOrMigrateLegacyChat\(identity\)[\s\S]{0,500}!llmClient\.isChatBusy\(project\.chatId\)[\s\S]{0,200}reconcilePersistedChat/u,
+    "route recovery shares the append mutation lane and rechecks detached generation ownership",
+  );
+  assert.doesNotMatch(handlers, /\(await designProjectStore\.get\(project\.id\)\) \?\? project/u);
+  assert.match(
+    handlers,
+    /reconcilePersistedChat\(chat\)[\s\S]{0,300}project: current[\s\S]{0,120}designPublication/u,
+    "project open reports durable retry eligibility after its reconciliation attempt",
+  );
 });
 
 test("durable publication migrates provisional artboard positions through immutable media identity", () => {

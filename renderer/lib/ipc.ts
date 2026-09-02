@@ -77,6 +77,7 @@ import type {
   DesignDirectEditV1,
   DesignProjectGenerationPreflightV1,
   DesignProjectMutationResultV1,
+  DesignProjectOpenResultV1,
   DesignProjectRecordSummaryV1,
   DesignArtifactRecoveryPlanV1,
   DesignArtifactRecoveryResultV1,
@@ -752,7 +753,7 @@ export const designerApi = {
   },
   listProjects: () => invoke<DesignProjectRecordSummaryV1[]>("designer:listProjects"),
   openProject: (projectOrLegacyChatId: string) =>
-    invoke<DesignProjectSnapshotV1 | undefined>("designer:openProject", projectOrLegacyChatId),
+    invoke<DesignProjectOpenResultV1 | undefined>("designer:openProject", projectOrLegacyChatId),
   inspectArtifactRecovery: (projectId: string) =>
     invoke<DesignArtifactRecoveryPlanV1>("designer:inspectArtifactRecovery", projectId),
   recoverArtifact: (input: { projectId: string; expectedRevision: number }) =>
@@ -1292,6 +1293,7 @@ interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  designPublication?: "retryable" | "suppressed";
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -1359,6 +1361,7 @@ export interface StreamCallbacks {
     timeline?: GenerationTimeline,
     chat?: Chat,
     reasoning?: string,
+    designPublication?: "retryable" | "suppressed",
   ) => void;
   onTimeline?: (timeline: GenerationTimeline) => void;
   onArtifactEvent?: (event: ChatArtifactEventV1) => void;
@@ -1438,7 +1441,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
-      callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
+      callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning, p.designPublication);
       dispose();
     }),
   );

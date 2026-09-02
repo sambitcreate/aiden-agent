@@ -785,6 +785,8 @@ export interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  /** Main-owned Design publication outcome; suppressed is terminal and must not be retried. */
+  designPublication?: "retryable" | "suppressed";
 }
 export const MAX_CONFIG_ID_LENGTH = 256;
 export const MAX_PROVIDER_BASE_URL_LENGTH = 4_096;

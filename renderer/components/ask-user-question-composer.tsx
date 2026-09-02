@@ -30,6 +30,7 @@ export function AskUserQuestionComposer({
   const firstOptionRef = React.useRef<HTMLButtonElement | null>(null);
   const customRef = React.useRef<HTMLTextAreaElement | null>(null);
   const question = prompt.questions[activeIndex]!;
+  const isDesignDraftDecision = prompt.kind === "design-cancel-draft";
   const answer = answers.get(activeIndex);
   const customDraft = customDrafts.get(activeIndex) ?? "";
 
@@ -150,6 +151,7 @@ export function AskUserQuestionComposer({
           <div
             className="flex shrink-0 items-center gap-1 text-secondary"
             aria-label="Question navigation"
+            hidden={isDesignDraftDecision}
           >
             <button
               type="button"
@@ -227,7 +229,7 @@ export function AskUserQuestionComposer({
           })}
         </div>
 
-        <div className="mt-3 flex min-h-12 items-end gap-3">
+        <div className="mt-3 flex min-h-12 items-end gap-3" hidden={isDesignDraftDecision}>
           <div className="min-w-0 flex-1">
             {customOpen ? (
               <div className="flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">

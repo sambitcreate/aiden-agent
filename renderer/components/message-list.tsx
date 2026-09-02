@@ -69,6 +69,8 @@ interface MessageListProps {
   streamingReasoning: string | null;
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
   streamingArtifacts?: readonly ChatArtifactV1[];
+  /** Project-owned Design revisions that may be actionable from persisted transcript cards. */
+  persistedDesignMediaIds?: readonly string[];
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
   timeline: GenerationTimeline | null;
@@ -220,6 +222,7 @@ export function MessageList({
   streamingText,
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
+  persistedDesignMediaIds,
   streamComplete,
   onStreamHandoffComplete,
   timeline,
@@ -255,6 +258,11 @@ export function MessageList({
     () => streamingArtifacts.filter(isChatHtmlArtifact),
     [streamingArtifacts],
   );
+  const persistedDesignMediaIdSet = React.useMemo(
+    () =>
+      persistedDesignMediaIds === undefined ? undefined : new Set(persistedDesignMediaIds),
+    [persistedDesignMediaIds],
+  );
   const streamingRowVisible = Boolean(
     timeline ||
     liveSubagents.length > 0 ||
@@ -264,8 +272,14 @@ export function MessageList({
     liveHtmlArtifacts.length > 0,
   );
   const htmlArtifactPlan = React.useMemo(
-    () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
-    [liveHtmlArtifacts, messages, streamingRowVisible],
+    () =>
+      htmlArtifactTranscriptPlan(
+        messages,
+        liveHtmlArtifacts,
+        streamingRowVisible,
+        persistedDesignMediaIdSet,
+      ),
+    [liveHtmlArtifacts, messages, persistedDesignMediaIdSet, streamingRowVisible],
   );
   const htmlArtifactsByAnchor = React.useMemo(() => {
     const entries = new Map<string, HtmlArtifactTranscriptEntry[]>();

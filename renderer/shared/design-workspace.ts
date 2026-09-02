@@ -15,6 +15,26 @@ const DESIGN_ARTIFACT_ID = /^[a-f0-9]{64}$/u;
 const DESIGN_ELEMENT_ID = /^[A-Za-z0-9._:-]{1,120}$/u;
 const DESIGN_TAG_NAME = /^[a-z][a-z0-9-]{0,31}$/u;
 
+/** Serializes project-history recovery with generation preflight and admission. */
+export class DesignOperationFence {
+  private active?: symbol;
+
+  tryAcquire(label: string): symbol | undefined {
+    if (this.active) return undefined;
+    const token = Symbol(label);
+    this.active = token;
+    return token;
+  }
+
+  release(token: symbol): void {
+    if (this.active === token) this.active = undefined;
+  }
+
+  get busy(): boolean {
+    return this.active !== undefined;
+  }
+}
+
 /** True when a parent refresh only advances record metadata, not canvas/runtime content. */
 export function isDesignProjectMetadataOnlyUpdate(
   previous: DesignProjectSnapshotV1,

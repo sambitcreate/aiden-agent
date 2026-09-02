@@ -203,8 +203,14 @@ export function DesignProjectSidebar({
 
   const exportProject = React.useCallback(async (projectId: string) => {
     try {
-      const project = await designerApi.openProject(projectId);
-      if (!project) throw new Error("That Design Project is no longer available.");
+      const openResult = await designerApi.openProject(projectId);
+      if (!openResult) throw new Error("That Design Project is no longer available.");
+      const project = openResult.project;
+      if (openResult.designPublication === "retryable") {
+        toast.info(
+          "Design history is still being reconciled. Reopen this project to retry recovery.",
+        );
+      }
       const artboard = project.canvas.nodes.find(
         (node) =>
           node.kind === "artboard" &&
