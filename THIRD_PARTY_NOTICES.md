@@ -12,6 +12,15 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## Ghostty / libghostty-vt
+
+Aiden's in-app terminal uses a WebAssembly build of Ghostty's `libghostty-vt` parser (`renderer/lib/ghostty-terminal/ghostty-vt.wasm`) with an Aiden-owned canvas host. Ghostty is MIT-licensed.
+
+Copyright (c) 2024-2026 Mitchell Hashimoto and Ghostty contributors
+
+MIT License. See https://github.com/ghostty-org/ghostty/blob/main/LICENSE
+
+
 ## Chart.js
 
 Chart.js is vendored into `resources/generative-ui` for sandboxed Generative UI artifacts.

@@ -21,7 +21,7 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   const hideTerminal = drawer.getByRole("button", { name: "Hide terminal" });
   await expect(hideTerminal).toBeVisible();
 
-  await drawer.locator(".xterm-screen").click();
+  await drawer.locator(".ghostty-screen").click();
   await page.keyboard.type("echo $((314159+271828)); pwd");
   await page.keyboard.press("Enter");
 
