@@ -473,7 +473,7 @@ test("persisted history seeds a reopened terminal buffer", async () => {
 
   const session = await service.create("workspace-1", "/tmp", owner.owner);
   // The restored history is available via snapshot, so the renderer can
-  // re-hydrate xterm with the prior session's output.
+  // re-hydrate the Ghostty surface with the prior session's output.
   const snapshot = service.snapshot(session.id, owner.owner);
   assert.equal(snapshot.buffer, "prior output\n");
   await service.flushHistory();
