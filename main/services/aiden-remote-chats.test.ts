@@ -50,6 +50,7 @@ function fixture(
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
+    isDesignProjectChat?: (chatId: string) => boolean | Promise<boolean>;
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -201,6 +202,9 @@ function fixture(
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
+    ...(fixtureOptions.isDesignProjectChat
+      ? { isDesignProjectChat: fixtureOptions.isDesignProjectChat }
+      : {}),
     notifyChanged: () => { notifications += 1; },
   });
   return {
@@ -651,6 +655,32 @@ test("Design backing conversations are absent from every generic Remote chat pat
   assert.equal(app.begins(), 0);
   assert.equal(app.starts(), 0);
   assert.equal(app.notifications(), 0);
+});
+
+test("migrated Design conversations stay private even in a legacy workspace namespace", async () => {
+  const app = fixture(chat({ workspaceId: "workspace-1" }), {
+    isDesignProjectChat: (chatId) => chatId === "chat-1",
+  });
+  const revision = projectAidenRemoteChat(app.current()!).revision;
+  const isNotFound = (error: unknown) =>
+    (error as { code?: string; status?: number }).code === "not_found" &&
+    (error as { status?: number }).status === 404;
+
+  assert.deepEqual(await app.service.list(), { chats: [] });
+  assert.deepEqual(await app.service.list("workspace-1"), { chats: [] });
+  assert.deepEqual((await app.service.listSummaries()).summaries, []);
+  await assert.rejects(app.service.get("chat-1"), isNotFound);
+  await assert.rejects(app.service.classify("chat-1"), isNotFound);
+  await assert.rejects(app.service.rename("chat-1", revision, { title: "Hidden" }), isNotFound);
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "migrated-design-turn-0001", {
+      text: "Hello",
+    }),
+    isNotFound,
+  );
+  assert.equal(app.appends(), 0);
+  assert.equal(app.begins(), 0);
+  assert.equal(app.starts(), 0);
 });
 
 test("chat classification reads only main-owned metadata before payload access", async () => {

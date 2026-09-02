@@ -237,7 +237,6 @@ import {
   authoritativeChatGenerationMode,
   authoritativeChatWorkspaceId,
 } from "./chat-workspace-authority.js";
-import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
@@ -1694,10 +1693,9 @@ export const llmClient = {
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
-      const authoritativeWorkspaceId = authoritativeChatWorkspaceId(
-        chat.workspaceId,
-        params.design ? DESIGN_PROJECT_CHAT_WORKSPACE_ID : params.workspaceId,
-      );
+      const authoritativeWorkspaceId = params.design
+        ? persistedChatWorkspaceId(chat.workspaceId)
+        : authoritativeChatWorkspaceId(chat.workspaceId, params.workspaceId);
       const generationWorkspaceId = params.design
         ? authoritativeDesignGenerationWorkspaceId(
             chat.workspaceId,

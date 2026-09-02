@@ -569,7 +569,9 @@ export function registerChatHistoryHandlers(): void {
           throw new Error("This message turn expired before it could be saved.");
         }
         const workspaceId = persistedChatWorkspaceId(authoritativeChat.workspaceId);
-        const isDesignChat = workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID;
+        const isDesignChat =
+          workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID ||
+          (await designProjectStore.getByChatId(chatId)) !== undefined;
         if (isDesignChat && !designPreflight) {
           throw new Error(
             "This Design Project changed before the prompt could be saved. Review it and try again.",

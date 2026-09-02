@@ -35,6 +35,7 @@ function summaryService(
     now?: () => number;
     active?: Set<string>;
     pending?: Set<string>;
+    designProjectChats?: Set<string>;
     cursorSecretByte?: number;
   } = {},
 ) {
@@ -77,6 +78,7 @@ function summaryService(
     summaryCursorSecret: Buffer.alloc(32, options.cursorSecretByte ?? 7),
     isTitlePending: (id) => options.pending?.has(id) === true,
     activeChatIds: () => [...(options.active ?? [])],
+    isDesignProjectChat: (id) => options.designProjectChats?.has(id) === true,
   });
   return {
     service,
@@ -169,6 +171,32 @@ test("summary pages are transcript-free, deterministic, and exclude reserved cha
     "updatedAt",
     "workspaceId",
   ]);
+});
+
+test("summary pages exclude migrated Design projects with legacy workspace metadata", async () => {
+  const designProjectChats = new Set(["chat-design"]);
+  const fixture = summaryService(
+    [metadata("chat-design", 3_000), metadata("chat-regular", 2_000)],
+    { designProjectChats },
+  );
+
+  const page = await fixture.service.listSummaries();
+  assert.deepEqual(page.summaries.map(({ id }) => id), ["chat-regular"]);
+  assert.equal(fixture.payloadReads(), 0);
+});
+
+test("a frozen summary cursor hides a chat claimed by a Design Project before replay", async () => {
+  const designProjectChats = new Set<string>();
+  const fixture = summaryService(
+    [metadata("chat-a", 3_000), metadata("chat-b", 2_000)],
+    { designProjectChats },
+  );
+  const first = await fixture.service.listSummaries(1);
+  designProjectChats.add("chat-b");
+
+  const second = await fixture.service.listSummaries(1, first.nextCursor);
+  assert.deepEqual(second.summaries, []);
+  assert.deepEqual(await fixture.service.listSummaries(1, first.nextCursor), second);
 });
 
 test("equal timestamps use ordinal chat ID ordering", async () => {

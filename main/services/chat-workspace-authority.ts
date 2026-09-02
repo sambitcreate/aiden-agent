@@ -35,11 +35,12 @@ export function authoritativeDesignGenerationWorkspaceId(
   chatId: string,
   project: DesignProjectSnapshotV1 | undefined,
 ): string {
-  if (persistedChatWorkspaceId(persistedWorkspaceId) !== DESIGN_PROJECT_CHAT_WORKSPACE_ID) {
-    throw new Error("This chat is not a Design Project conversation.");
-  }
   if (!project || project.chatId !== chatId) {
     throw new Error("This Design Project conversation is unavailable.");
+  }
+  const storageWorkspaceId = persistedChatWorkspaceId(persistedWorkspaceId);
+  if (storageWorkspaceId === ASSISTANT_WORKSPACE_ID) {
+    throw new Error("This chat is not a Design Project conversation.");
   }
   const connectedWorkspaceId =
     project.connectionState === "connected" ? project.workspaceId : undefined;

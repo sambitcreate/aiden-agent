@@ -65,7 +65,16 @@ test("Design storage identity stays separate from Prototype and Connected App ge
   );
   assert.equal(
     authoritativeDesignGenerationWorkspaceId(
-      DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+      "legacy-workspace",
+      undefined,
+      "chat:design",
+      designProject(),
+    ),
+    DESIGN_PROJECT_CHAT_WORKSPACE_ID,
+  );
+  assert.equal(
+    authoritativeDesignGenerationWorkspaceId(
+      "legacy-workspace",
       "workspace-2",
       "chat:design",
       designProject({
@@ -81,7 +90,7 @@ test("Design generation rejects forged chats, stale renderer roots, and invalid 
   assert.throws(
     () =>
       authoritativeDesignGenerationWorkspaceId(
-        "workspace-1",
+        "assistant",
         undefined,
         "chat:design",
         designProject(),

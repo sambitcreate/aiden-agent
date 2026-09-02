@@ -164,12 +164,17 @@ test("main classifies Design chats and requires their exact claim before append"
     "workspaceId === DESIGN_PROJECT_CHAT_WORKSPACE_ID",
     chatRead,
   );
+  const migratedClassification = handler.indexOf(
+    "await designProjectStore.getByChatId(chatId)",
+    classification,
+  );
   const missingClaim = handler.indexOf("if (isDesignChat && !designPreflight)", classification);
   const forgedClaim = handler.indexOf("if (!isDesignChat && designPreflight)", classification);
   const append = handler.indexOf("designProjectAppendService.runGenerationAppend", forgedClaim);
   assert.ok(chatRead >= 0);
   assert.ok(classification > chatRead);
-  assert.ok(missingClaim > classification);
+  assert.ok(migratedClassification > classification);
+  assert.ok(missingClaim > migratedClassification);
   assert.ok(forgedClaim > missingClaim);
   assert.ok(append > forgedClaim);
 });
