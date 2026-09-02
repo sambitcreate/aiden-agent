@@ -59,6 +59,7 @@ const VITE_HTTP_QUERY_KEYS = [
 
 interface PreviewSession {
   id: string;
+  projectId: string;
   workspaceId: string;
   root: string;
   owner: RendererDocumentOwner;
@@ -85,6 +86,7 @@ type SourcePreviewRuntimeAdapter = VitePreviewRuntimeAdapter | NextPreviewRuntim
 export interface SourcePreviewAuthority {
   root: string;
   sessionId: string;
+  projectId: string;
   workspaceId: string;
   ownerDocumentId: string;
 }
@@ -775,11 +777,11 @@ export class SourceDesignPreviewService {
 
   private ownedSession(
     owner: RendererDocumentOwner,
-    workspaceId: string,
+    projectId: string,
   ): PreviewSession | undefined {
     return [...this.sessions.values()].find(
       (session) =>
-        session.owner.documentId === owner.documentId && session.workspaceId === workspaceId,
+        session.owner.documentId === owner.documentId && session.projectId === projectId,
     );
   }
 
@@ -792,6 +794,7 @@ export class SourceDesignPreviewService {
     session.admission.release();
     if (!session.owner.isDestroyed()) {
       session.owner.send("designer:preview-changed", {
+        projectId: session.projectId,
         workspaceId: session.workspaceId,
         state: publicState(session),
       });
@@ -800,10 +803,10 @@ export class SourceDesignPreviewService {
 
   async state(
     owner: RendererDocumentOwner,
-    workspaceId: string,
+    projectId: string,
     root: string,
   ): Promise<SourcePreviewStateV1> {
-    const session = this.ownedSession(owner, workspaceId);
+    const session = this.ownedSession(owner, projectId);
     if (session) return publicState(session);
     const scripts = await detectSourcePreviewScripts(root);
     return scripts.length > 0
@@ -818,11 +821,12 @@ export class SourceDesignPreviewService {
   async start(input: {
     owner: RendererDocumentOwner;
     admission: WorkspaceOperationAdmission;
+    projectId: string;
     workspaceId: string;
     root: string;
     scriptId: string;
   }): Promise<SourcePreviewStateV1> {
-    const existing = this.ownedSession(input.owner, input.workspaceId);
+    const existing = this.ownedSession(input.owner, input.projectId);
     if (existing && !existing.terminal) {
       input.admission.release();
       return publicState(existing);
@@ -874,6 +878,7 @@ export class SourceDesignPreviewService {
     const proxy = proxyResources.server;
     const session: PreviewSession = {
       id: `preview_${randomUUID().replace(/-/gu, "")}`,
+      projectId: input.projectId,
       workspaceId: input.workspaceId,
       root: input.root,
       owner: input.owner,
@@ -914,9 +919,17 @@ export class SourceDesignPreviewService {
     }
   }
 
-  async stop(owner: RendererDocumentOwner, workspaceId: string): Promise<void> {
-    const session = this.ownedSession(owner, workspaceId);
+  async stop(owner: RendererDocumentOwner, projectId: string): Promise<void> {
+    const session = this.ownedSession(owner, projectId);
     if (session) await this.stopSession(session);
+  }
+
+  async stopProject(projectId: string): Promise<void> {
+    await Promise.all(
+      [...this.sessions.values()]
+        .filter((session) => session.projectId === projectId)
+        .map((session) => this.stopSession(session)),
+    );
   }
 
   private async stopSession(session: PreviewSession): Promise<void> {
@@ -937,6 +950,7 @@ export class SourceDesignPreviewService {
 
   authority(
     ownerDocumentId: string,
+    projectId: string,
     workspaceId: string,
     sessionId: string,
   ): SourcePreviewAuthority | undefined {
@@ -944,10 +958,12 @@ export class SourceDesignPreviewService {
     return session &&
       !session.terminal &&
       session.owner.documentId === ownerDocumentId &&
+      session.projectId === projectId &&
       session.workspaceId === workspaceId
       ? {
           root: session.root,
           sessionId: session.id,
+          projectId: session.projectId,
           workspaceId: session.workspaceId,
           ownerDocumentId: session.owner.documentId,
         }

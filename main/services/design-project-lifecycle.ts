@@ -392,8 +392,12 @@ export function createDesignProjectLifecycleCoordinator(
     await clearAfterCommit(record.operationId);
   };
 
-  const deletePlan = (plan: DesignProjectDeletePlanV1): Promise<void> =>
+  const deletePlan = (
+    plan: DesignProjectDeletePlanV1,
+    beforeDelete?: (plan: DesignProjectDeletePlanV1) => void | Promise<void>,
+  ): Promise<void> =>
     serialized(async () => {
+      await beforeDelete?.(plan);
       await options.cascade.prepareDesignerActions?.(plan.chatId, plan.designerActionIds);
       const created = await options.journal.create(deleteRecord(plan, timestamp(now)));
       if (created.kind !== "delete") {
@@ -466,14 +470,18 @@ export function createDesignProjectLifecycleCoordinator(
 
     deletePlan,
 
-    async deleteProject(input: Parameters<DesignProjectPort["planDelete"]>[0]): Promise<void> {
-      return deletePlan(await options.projectStore.planDelete(input));
+    async deleteProject(
+      input: Parameters<DesignProjectPort["planDelete"]>[0],
+      beforeDelete?: (plan: DesignProjectDeletePlanV1) => void | Promise<void>,
+    ): Promise<void> {
+      return deletePlan(await options.projectStore.planDelete(input), beforeDelete);
     },
 
     async routeChatDeletion(input: {
       chatId: string;
       confirmation?: DesignProjectDeleteConfirmationV1;
       deleteOrdinaryChat(chatId: string): Promise<void>;
+      beforeDesignDelete?: (plan: DesignProjectDeletePlanV1) => void | Promise<void>;
     }): Promise<{ kind: "ordinary-chat" } | { kind: "design-project"; projectId: string }> {
       const project = await options.projectStore.getByChatId(input.chatId);
       if (!project) {
@@ -490,7 +498,7 @@ export function createDesignProjectLifecycleCoordinator(
       ) {
         throw new DesignProjectDeletionConfirmationRequiredError(plan);
       }
-      await deletePlan(plan);
+      await deletePlan(plan, input.beforeDesignDelete);
       return { kind: "design-project", projectId: project.id };
     },
 

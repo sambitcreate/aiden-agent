@@ -285,6 +285,7 @@ test("application shutdown waits until the owned preview process group is gone",
         cancel: (reason) => controller.abort(reason),
         release: () => undefined,
       },
+      projectId: "source-preview-shutdown-project",
       workspaceId: "source-preview-shutdown-workspace",
       root,
       scriptId: "dev",
@@ -306,6 +307,115 @@ test("application shutdown waits until the owned preview process group is gone",
       processGroupExists = (error as NodeJS.ErrnoException).code !== "ESRCH";
     }
     assert.equal(processGroupExists, false);
+  } finally {
+    await sourceDesignPreviewService.shutdown();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preview sessions isolate two Design Projects connected to one workspace", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-source-preview-projects-"));
+  const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+  try {
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ scripts: { dev: "vite" }, dependencies: {} }),
+    );
+    await fs.writeFile(path.join(root, "index.html"), "<!doctype html><main>Ready</main>");
+    await fs.symlink(path.join(repositoryRoot, "node_modules"), path.join(root, "node_modules"));
+    const owner = {
+      id: 1,
+      documentId: "source-preview-project-isolation",
+      isDestroyed: () => false,
+      send: () => undefined,
+      onInvalidated: () => () => undefined,
+    };
+    const admission = () => {
+      const controller = new AbortController();
+      return {
+        signal: controller.signal,
+        cancel: (reason?: unknown) => controller.abort(reason),
+        release: () => undefined,
+      };
+    };
+    const first = await sourceDesignPreviewService.start({
+      owner,
+      admission: admission(),
+      projectId: "project:first",
+      workspaceId: "workspace:shared",
+      root,
+      scriptId: "dev",
+    });
+    const second = await sourceDesignPreviewService.start({
+      owner,
+      admission: admission(),
+      projectId: "project:second",
+      workspaceId: "workspace:shared",
+      root,
+      scriptId: "dev",
+    });
+    const otherOwner = { ...owner, id: 2, documentId: "source-preview-other-owner" };
+    const otherOwnerSameProject = await sourceDesignPreviewService.start({
+      owner: otherOwner,
+      admission: admission(),
+      projectId: "project:first",
+      workspaceId: "workspace:shared",
+      root,
+      scriptId: "dev",
+    });
+    assert.equal(first.status, "running");
+    assert.equal(second.status, "running");
+    assert.equal(otherOwnerSameProject.status, "running");
+    if (
+      first.status !== "running" ||
+      second.status !== "running" ||
+      otherOwnerSameProject.status !== "running"
+    ) return;
+    assert.notEqual(first.sessionId, second.sessionId);
+    assert.ok(
+      sourceDesignPreviewService.authority(
+        owner.documentId,
+        "project:first",
+        "workspace:shared",
+        first.sessionId,
+      ),
+    );
+    assert.equal(
+      sourceDesignPreviewService.authority(
+        owner.documentId,
+        "project:second",
+        "workspace:shared",
+        first.sessionId,
+      ),
+      undefined,
+    );
+    await sourceDesignPreviewService.stopProject("project:first");
+    assert.equal(
+      sourceDesignPreviewService.authority(
+        owner.documentId,
+        "project:first",
+        "workspace:shared",
+        first.sessionId,
+      ),
+      undefined,
+    );
+    assert.equal(
+      sourceDesignPreviewService.authority(
+        otherOwner.documentId,
+        "project:first",
+        "workspace:shared",
+        otherOwnerSameProject.sessionId,
+      ),
+      undefined,
+    );
+    assert.ok(
+      sourceDesignPreviewService.authority(
+        owner.documentId,
+        "project:second",
+        "workspace:shared",
+        second.sessionId,
+      ),
+    );
   } finally {
     await sourceDesignPreviewService.shutdown();
     await fs.rm(root, { recursive: true, force: true });

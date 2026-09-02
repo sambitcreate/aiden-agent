@@ -302,6 +302,7 @@ export class SourceDesignerActionService {
 
   async bind(
     owner: RendererDocumentOwner,
+    projectId: string,
     workspaceId: string,
     sessionId: string,
     descriptor: SourceElementDescriptorV1,
@@ -309,6 +310,7 @@ export class SourceDesignerActionService {
     this.prune();
     const authority = sourceDesignPreviewService.authority(
       owner.documentId,
+      projectId,
       workspaceId,
       sessionId,
     );
@@ -340,6 +342,7 @@ export class SourceDesignerActionService {
     const binding: ResolvedSourceSelection = {
       version: SOURCE_DESIGNER_VERSION,
       id,
+      projectId,
       sessionId,
       workspaceId,
       path: relative,
@@ -724,6 +727,7 @@ export class SourceDesignerActionService {
     const binding: ResolvedSourceSelection = {
       version: SOURCE_DESIGNER_VERSION,
       id: input.selectionId,
+      projectId: "durable-authority-proof",
       sessionId: "durable-authority-proof",
       workspaceId: input.workspaceId,
       path: input.path,
@@ -762,7 +766,12 @@ export class SourceDesignerActionService {
       !binding ||
       binding.ownerDocumentId !== owner.documentId ||
       binding.workspaceId !== workspaceId ||
-      !sourceDesignPreviewService.authority(owner.documentId, workspaceId, binding.sessionId)
+      !sourceDesignPreviewService.authority(
+        owner.documentId,
+        binding.projectId,
+        workspaceId,
+        binding.sessionId,
+      )
     ) {
       throw new Error("The selected source element is stale. Select it again and retry.");
     }
@@ -846,6 +855,7 @@ export class SourceDesignerActionService {
     const view: DesignerActionV1 = {
       version: SOURCE_DESIGNER_VERSION,
       id,
+      projectId: input.binding.projectId,
       chatId: input.chatId,
       workspaceId: input.binding.workspaceId,
       status: "pending",
@@ -874,11 +884,17 @@ export class SourceDesignerActionService {
     return view;
   }
 
-  list(owner: RendererDocumentOwner, chatId: string, workspaceId: string): DesignerActionV1[] {
+  list(
+    owner: RendererDocumentOwner,
+    projectId: string,
+    chatId: string,
+    workspaceId: string,
+  ): DesignerActionV1[] {
     return [...this.actions.values()]
       .filter(
         (action) =>
           action.ownerDocumentId === owner.documentId &&
+          action.view.projectId === projectId &&
           action.view.chatId === chatId &&
           action.view.workspaceId === workspaceId,
       )

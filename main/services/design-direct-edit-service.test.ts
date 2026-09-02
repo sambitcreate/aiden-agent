@@ -311,6 +311,7 @@ test("one connected gesture produces one pending Designer Action from the live b
   const binding: ResolvedSourceSelection = {
     version: 1,
     id: "selection:one",
+    projectId: "project:one",
     sessionId: "session:one",
     workspaceId: "workspace:one",
     path: "src/App.tsx",
@@ -373,6 +374,7 @@ test("one connected gesture produces one pending Designer Action from the live b
         return {
           version: 1,
           id: "action:one",
+          projectId: binding.projectId,
           chatId: input.chatId,
           workspaceId: binding.workspaceId,
           status: "pending",

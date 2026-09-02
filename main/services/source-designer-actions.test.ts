@@ -52,6 +52,7 @@ test("project cascade inspection and deletion are chat-scoped, idempotent, and f
   const binding: ResolvedSourceSelection = {
     version: 1,
     id: "selection:one",
+    projectId: "project:one",
     sessionId: "session:one",
     workspaceId: "workspace:one",
     path: "src/App.tsx",
@@ -86,6 +87,9 @@ test("project cascade inspection and deletion are chat-scoped, idempotent, and f
     label: "Update Other",
     replacement: "<button>Other</button>",
   });
+  assert.equal(first.projectId, "project:one");
+  assert.deepEqual(service.list(owner, "project:one", "chat:one", "workspace:one"), [first]);
+  assert.deepEqual(service.list(owner, "project:two", "chat:one", "workspace:one"), []);
   assert.deepEqual(service.inspectChatActionIds("chat:one"), [first.id]);
   assert.equal(service.deleteChatActions("chat:one", [first.id]), 1);
   assert.equal(service.deleteChatActions("chat:one", [first.id]), 0);
@@ -119,6 +123,7 @@ test("durable connected proof rejects a cross-file second component use after re
     const binding: ResolvedSourceSelection = {
       version: 1,
       id: "selection:proof",
+      projectId: "project:proof",
       sessionId: "session:proof",
       workspaceId: "workspace:proof",
       path: "src/Panel.tsx",

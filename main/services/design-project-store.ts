@@ -93,6 +93,12 @@ export interface UpdateDesignProjectInput {
   previewScriptId?: string;
 }
 
+export interface ConnectDesignProjectInput {
+  id: string;
+  expectedRevision: number;
+  workspaceId: string;
+}
+
 export interface LegacyDesignArtifactFact {
   mediaId: string;
 }
@@ -543,6 +549,51 @@ export class DesignProjectStore {
       database.projects[index] = updated;
       database.revision += 1;
       return clone(updated);
+    });
+  }
+
+  /**
+   * Convert a Prototype to a Connected App without rewriting its conversation,
+   * canvas, immutable artifact history, references, or project identity.
+   * Workspace eligibility is intentionally checked by the main-owned
+   * connection service immediately before this CAS mutation.
+   */
+  async connect(input: ConnectDesignProjectInput): Promise<DesignProjectSnapshotV1> {
+    this.requireAvailable();
+    const id = requireIdentity(input.id, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    const workspaceId = requireIdentity(input.workspaceId, "workspace identity");
+    return this.data.update((database) => {
+      const { index, project } = requireCurrent(database, id, expectedRevision);
+      if (project.connectionState === "connected" && project.workspaceId === workspaceId) {
+        throw new DesignProjectConflictError("This Design Project is already connected.");
+      }
+      if (
+        project.connectionState !== "prototype-only" &&
+        project.connectionState !== "connected"
+      ) {
+        throw new DesignProjectConflictError("This Design Project cannot be connected.");
+      }
+      const base: Record<string, unknown> = { ...project };
+      // These records are proven against one exact workspace authority. A
+      // rebind preserves prototype history but must not carry any old source
+      // capability, preview command, or design-system attachment into W2.
+      delete base.designSystemBinding;
+      delete base.previewScriptId;
+      const connected = requireSnapshot({
+        ...base,
+        revision: project.revision + 1,
+        updatedAt: monotonicTimestamp(this.now, project.updatedAt),
+        connectionState: "connected",
+        workspaceId,
+        canvas: {
+          ...project.canvas,
+          nodes: project.canvas.nodes.filter(({ kind }) => kind !== "source-preview"),
+        },
+      });
+      database.projects[index] = connected;
+      database.revision += 1;
+      return clone(connected);
     });
   }
 

@@ -34,6 +34,7 @@ function testOwner(documentId: string): RendererDocumentOwner {
 }
 
 test("local React preview binds the exact nested element to its JSX range", async ({ page }) => {
+  const projectId = "source-designer-project";
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-source-designer-"));
   await fs.cp(fixtureTemplateRoot, fixtureRoot, { recursive: true });
   await fs.rm(path.join(fixtureRoot, "node_modules"), { recursive: true, force: true });
@@ -68,6 +69,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
       cancel: (reason) => controller.abort(reason),
       release: () => undefined,
     },
+    projectId,
     workspaceId: "source-designer-fixture",
     root: fixtureRoot,
     scriptId: "dev",
@@ -128,6 +130,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
 
     const binding = await sourceDesignerActionService.bind(
       owner,
+      projectId,
       "source-designer-fixture",
       state.sessionId,
       descriptor,
@@ -202,6 +205,7 @@ test("local React preview binds the exact nested element to its JSX range", asyn
       () =>
         sourceDesignerActionService.bind(
           owner,
+          projectId,
           "source-designer-fixture",
           state.sessionId,
           unmappedDescriptor,
@@ -209,13 +213,14 @@ test("local React preview binds the exact nested element to its JSX range", asyn
       /could not bind that exact element/u,
     );
   } finally {
-    await sourceDesignPreviewService.stop(owner, "source-designer-fixture");
+    await sourceDesignPreviewService.stop(owner, projectId);
     await new Promise<void>((resolve) => sibling.close(() => resolve()));
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
 });
 
 test("live source binding rejects a custom component rendered more than once", async ({ page }) => {
+  const projectId = "source-designer-repeated-project";
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-source-designer-repeat-"));
   await fs.cp(fixtureTemplateRoot, fixtureRoot, { recursive: true });
   await fs.rm(path.join(fixtureRoot, "node_modules"), { recursive: true, force: true });
@@ -244,6 +249,7 @@ test("live source binding rejects a custom component rendered more than once", a
       cancel: (reason) => controller.abort(reason),
       release: () => undefined,
     },
+    projectId,
     workspaceId: "source-designer-repeated-fixture",
     root: fixtureRoot,
     scriptId: "dev",
@@ -283,6 +289,7 @@ test("live source binding rejects a custom component rendered more than once", a
       () =>
         sourceDesignerActionService.bind(
           owner,
+          projectId,
           "source-designer-repeated-fixture",
           state.sessionId,
           { ...descriptor, selectorMatchCount: 1 },
@@ -290,7 +297,7 @@ test("live source binding rejects a custom component rendered more than once", a
       /one exact runtime\/source instance/u,
     );
   } finally {
-    await sourceDesignPreviewService.stop(owner, "source-designer-repeated-fixture");
+    await sourceDesignPreviewService.stop(owner, projectId);
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
 });

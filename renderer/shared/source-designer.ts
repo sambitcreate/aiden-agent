@@ -54,6 +54,7 @@ export interface SourceElementDescriptorV1 {
 export interface SourceSelectionBindingV1 {
   version: typeof SOURCE_DESIGNER_VERSION;
   id: string;
+  projectId: string;
   sessionId: string;
   workspaceId: string;
   path: string;
@@ -76,6 +77,7 @@ export type DesignerActionStatus = "pending" | "applied" | "rejected" | "undone"
 export interface DesignerActionV1 {
   version: typeof SOURCE_DESIGNER_VERSION;
   id: string;
+  projectId: string;
   chatId: string;
   workspaceId: string;
   status: DesignerActionStatus;

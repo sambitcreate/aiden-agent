@@ -164,6 +164,93 @@ test("create enforces one durable project per chat", async (t) => {
   );
 });
 
+test("connect preserves Prototype identity, chat, artboards, references, and history under CAS", async (t) => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({
+    root: () => root,
+    now: () => 100,
+    mintProjectId: () => "project:connect",
+  });
+  await store.initialize();
+  const prototype = await store.create({
+    chatId: "chat:connect",
+    title: "Checkout",
+    connectionState: "prototype-only",
+    canvas: canvas(),
+    referenceAssetIds: ["asset:reference-a"],
+  });
+  const connected = await store.connect({
+    id: prototype.id,
+    expectedRevision: prototype.revision,
+    workspaceId: "workspace-1",
+  });
+  assert.equal(connected.id, prototype.id);
+  assert.equal(connected.chatId, prototype.chatId);
+  assert.equal(connected.title, prototype.title);
+  assert.deepEqual(connected.canvas, prototype.canvas);
+  assert.deepEqual(connected.referenceAssetIds, prototype.referenceAssetIds);
+  assert.equal(connected.createdAt, prototype.createdAt);
+  assert.equal(connected.connectionState, "connected");
+  assert.equal(connected.workspaceId, "workspace-1");
+  assert.equal(connected.revision, prototype.revision + 1);
+  await assert.rejects(
+    store.connect({
+      id: prototype.id,
+      expectedRevision: prototype.revision,
+      workspaceId: "workspace-2",
+    }),
+    DesignProjectRevisionConflictError,
+  );
+});
+
+test("rebind preserves Prototype history but clears old Connected App authority", async (t) => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({
+    root: () => root,
+    now: () => 100,
+    mintProjectId: () => "project:rebind",
+  });
+  await store.initialize();
+  const connected = await store.create({
+    chatId: "chat:rebind",
+    title: "Checkout",
+    connectionState: "connected",
+    workspaceId: "workspace-1",
+    previewScriptId: "dev",
+    designSystemBinding: { id: "design-system:one", revision: 2 },
+    canvas: {
+      ...canvas(),
+      nodes: [
+        ...canvas().nodes,
+        {
+          id: "source-preview:one",
+          kind: "source-preview",
+          canonicalOrigin: "connected-app",
+          x: 100,
+          y: 200,
+        },
+      ],
+    },
+    referenceAssetIds: ["asset:reference-a"],
+  });
+  const rebound = await store.connect({
+    id: connected.id,
+    expectedRevision: connected.revision,
+    workspaceId: "workspace-2",
+  });
+  assert.equal(rebound.id, connected.id);
+  assert.equal(rebound.chatId, connected.chatId);
+  assert.equal(rebound.workspaceId, "workspace-2");
+  assert.equal(rebound.previewScriptId, undefined);
+  assert.equal(rebound.designSystemBinding, undefined);
+  assert.equal(rebound.canvas.nodes.some(({ kind }) => kind === "source-preview"), false);
+  assert.deepEqual(
+    rebound.canvas.nodes.filter(({ kind }) => kind !== "source-preview"),
+    connected.canvas.nodes.filter(({ kind }) => kind !== "source-preview"),
+  );
+  assert.deepEqual(rebound.referenceAssetIds, connected.referenceAssetIds);
+});
+
 test("duplicate remaps complete artifact history, assets, nodes, and lineage", async (t) => {
   const root = await temporaryRoot(t);
   let id = 0;
@@ -453,7 +540,7 @@ test("a main-store restart restores 20 artboards, 10 hydrated references, previe
       send: () => undefined,
       onInvalidated: () => () => undefined,
     },
-    restored.workspaceId!,
+    restored.id,
     workspaceRoot,
   );
   assert.equal(previewState.status, "ready", "saved configuration never restores a process");
