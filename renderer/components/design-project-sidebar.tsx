@@ -219,7 +219,7 @@ export function DesignProjectSidebar({
           node.artifactMediaIds?.includes(node.activeMediaId),
       );
       if (!artboard?.lineageId || !artboard.activeMediaId) {
-        throw new Error("Add a generated artboard before exporting this project.");
+        throw new Error("Add a generated Screen before exporting this project.");
       }
       const result = await designerApi.exportProjectBundle(
         project.id,
@@ -472,17 +472,17 @@ export function DesignProjectSidebar({
           recoveryPlan?.operation === "remove-missing-history"
             ? "Remove unavailable history entry?"
             : recoveryPlan?.operation === "remove-missing-artboard"
-              ? "Remove broken artboard?"
+              ? "Remove broken Screen?"
               : recoveryPlan?.status === "recoverable"
                 ? "Recover Design revision?"
-                : "Regenerate this artboard"
+                : "Regenerate this Screen"
         }
         description={recoveryPlan?.message}
         confirmLabel={
           recoveryPlan?.operation === "remove-missing-history"
             ? "Remove missing history entry"
             : recoveryPlan?.operation === "remove-missing-artboard"
-              ? "Remove broken artboard"
+              ? "Remove broken Screen"
               : recoveryPlan?.status === "recoverable"
                 ? "Recover as new revision"
                 : "Open to regenerate"

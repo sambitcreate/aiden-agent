@@ -15,7 +15,7 @@ import {
 } from "../lib/assistant-message-presentation";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
-import type { ChatArtifactV1 } from "../shared/chat-artifacts";
+import type { ChatArtifactV1, ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { HtmlArtifactFrame } from "./html-artifact-frame";
 import { DesignArtifactCard } from "./design-artifact-card";
@@ -62,6 +62,10 @@ function useMinimumPresence(present: boolean, minimumMs: number): boolean {
 
 interface MessageListProps {
   chatId: string;
+  /** Stable Design Project route identity for transcript artifact navigation. */
+  designProjectId?: string;
+  onShowDesignArtifact?: (artifact: ChatHtmlArtifactV1) => void;
+  designArtifactRevisionLabels?: Readonly<Record<string, string>>;
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
@@ -218,6 +222,9 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
 
 export function MessageList({
   chatId,
+  designProjectId,
+  onShowDesignArtifact,
+  designArtifactRevisionLabels,
   messages,
   streamingText,
   streamingReasoning,
@@ -259,8 +266,7 @@ export function MessageList({
     [streamingArtifacts],
   );
   const persistedDesignMediaIdSet = React.useMemo(
-    () =>
-      persistedDesignMediaIds === undefined ? undefined : new Set(persistedDesignMediaIds),
+    () => (persistedDesignMediaIds === undefined ? undefined : new Set(persistedDesignMediaIds)),
     [persistedDesignMediaIds],
   );
   const streamingRowVisible = Boolean(
@@ -350,6 +356,9 @@ export function MessageList({
         <DesignArtifactCard
           key={entry.key}
           chatId={chatId}
+          projectId={designProjectId}
+          onShowOnCanvas={onShowDesignArtifact}
+          revisionLabel={designArtifactRevisionLabels?.[entry.artifact.mediaId]}
           artifact={entry.artifact}
           version={
             htmlArtifactPlan

@@ -55,12 +55,12 @@ test("project filtering is case-insensitive, stable, and keeps mixed projects vi
   );
 });
 
-test("project labels keep origin and artboard grammar explicit", () => {
+test("project labels keep origin and Screen grammar explicit", () => {
   assert.equal(designProjectOriginLabel("prototype-only", true), "Prototype");
   assert.equal(designProjectOriginLabel("connected", false), "Connected App");
   assert.equal(designProjectOriginLabel("connected", true), "Prototype + Connected App");
-  assert.equal(designProjectArtboardLabel(1), "1 artboard");
-  assert.equal(designProjectArtboardLabel(2), "2 artboards");
+  assert.equal(designProjectArtboardLabel(1), "1 screen");
+  assert.equal(designProjectArtboardLabel(2), "2 screens");
 });
 
 test("source helpers preserve blank lines and count non-overlapping find matches", () => {

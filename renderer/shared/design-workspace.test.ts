@@ -13,9 +13,11 @@ import {
   designWorkspaceArtifactPlan,
   isDesignProjectMetadataOnlyUpdate,
   isDesignHtmlArtifact,
+  missingDurableDesignWorkspaceScreens,
   parseDesignElementSelection,
   parseDesignTurnContext,
   resolveDesignWorkspaceSelection,
+  resolveDurableDesignActiveMediaId,
   resolveDesignArtboardPosition,
   snapshotDesignTurnTargets,
 } from "./design-workspace.js";
@@ -146,6 +148,26 @@ test("a queued send recomputes against the project revision produced by the earl
   assert.equal(sentCanvasX, 40, "send reads the latest canvas state after acquiring the barrier");
   assert.equal(result.project.revision, 3);
   assert.equal(result.targets[0]?.mediaId, "design:H");
+});
+
+test("a failed save does not poison the queued persistence retry", async () => {
+  const barrier = new DesignProjectPersistenceBarrier<string>();
+  let rejectFirst!: (cause: Error) => void;
+  const gate = new Promise<never>((_resolve, reject) => {
+    rejectFirst = reject;
+  });
+  const first = barrier.flush(() => gate);
+  await Promise.resolve();
+  let retryRan = false;
+  const retry = barrier.flush(async () => {
+    retryRan = true;
+    return "recovered";
+  });
+
+  rejectFirst(new Error("conflict"));
+  await assert.rejects(first, /conflict/);
+  assert.equal(await retry, "recovered");
+  assert.equal(retryRan, true);
 });
 
 test("prototype direct-edit retries retain one operation and reset on payload change or success", () => {
@@ -282,6 +304,25 @@ test("selection follows latest until an older revision is explicitly pinned", ()
   );
 });
 
+test("canvas saves preserve an unavailable authoritative active revision", () => {
+  assert.equal(
+    resolveDurableDesignActiveMediaId({
+      artifactMediaIds: ["missing-active", "available-history"],
+      priorActiveMediaId: "missing-active",
+      requestedActiveMediaId: undefined,
+    }),
+    "missing-active",
+  );
+  assert.equal(
+    resolveDurableDesignActiveMediaId({
+      artifactMediaIds: ["missing-active", "available-history"],
+      priorActiveMediaId: "missing-active",
+      requestedActiveMediaId: "available-history",
+    }),
+    "available-history",
+  );
+});
+
 test("same-title artifacts form one ordered artboard revision group", () => {
   const checkoutOne = { artifact: artifact("design:first"), source: "persisted" as const };
   const checkoutTwo = { artifact: artifact("design:second"), source: "persisted" as const };
@@ -352,6 +393,53 @@ test("main-validated model output joins its selected durable lineage without tit
       .length,
     1,
     "a persisted but unpublished revision never reappears in project history",
+  );
+});
+
+test("durable Screens without an available artifact remain visible as recovery placeholders", () => {
+  const current = project({
+    canvas: {
+      viewport: "desktop",
+      flowViewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        {
+          id: "screen:healthy",
+          kind: "artboard",
+          canonicalOrigin: "generated-artifact",
+          x: 10,
+          y: 20,
+          lineageId: "lineage:healthy",
+          artifactMediaIds: ["design:healthy"],
+          activeMediaId: "design:healthy",
+        },
+        {
+          id: "screen:missing",
+          kind: "artboard",
+          canonicalOrigin: "generated-artifact",
+          x: 30,
+          y: 40,
+          lineageId: "lineage:missing",
+          artifactMediaIds: ["design:missing"],
+          activeMediaId: "design:missing",
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(
+    missingDurableDesignWorkspaceScreens(current, [
+      { artifact: artifact("design:healthy"), source: "persisted" },
+    ]),
+    [
+      {
+        id: "screen:missing",
+        lineageId: "lineage:missing",
+        activeMediaId: "design:missing",
+        artifactMediaIds: ["design:missing"],
+        x: 30,
+        y: 40,
+      },
+    ],
   );
 });
 
@@ -450,7 +538,11 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
   assert.match(workspace, /HtmlArtifactIframe/u);
   assert.match(workspace, /ReactFlow/u);
   assert.match(workspace, /CanvasToolRail/u);
-  assert.match(workspace, /Visual edits/u);
+  assert.match(workspace, /label="Pick element"/u);
+  assert.match(workspace, /label="Explore"/u);
+  assert.match(workspace, /label="Refine"/u);
+  assert.match(workspace, /label="Preview"/u);
+  assert.match(workspace, /label="Export"/u);
   assert.match(workspace, /Add reference image/u);
   assert.match(workspace, /TooltipPrimitive\.Root/u);
   assert.match(workspace, /TooltipPrimitive\.Trigger asChild/u);
@@ -458,10 +550,10 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
   assert.match(workspace, /TooltipPrimitive\.Content/u);
   assert.match(workspace, /Select and move items on the canvas\./u);
   assert.match(workspace, /Pick an element in a generated screen or running app\./u);
-  assert.match(workspace, /Use the interface without selecting its elements\./u);
-  assert.match(workspace, /Focus the prompt to describe another screen or flow\./u);
+  assert.match(workspace, /Use the selected Screen without selecting its elements\./u);
+  assert.match(workspace, /Clear context and describe a new Screen or direction set\./u);
   assert.match(workspace, /Add up to six local images as visual references\./u);
-  assert.match(workspace, /Pan around the canvas without moving artboards\./u);
+  assert.match(workspace, /Pan around the canvas without moving Screens\./u);
   assert.match(workspace, /aria-keyshortcuts=\{shortcut\}/u);
   assert.match(workspace, /aria-label=\{shortcut \? `\$\{label\} \(\$\{shortcut\}\)` : label\}/u);
   assert.match(workspace, /aria-pressed=\{active\}/u);
@@ -474,10 +566,12 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
     return workspace.slice(start, end);
   };
   assert.match(tool("Select"), /active=\{mode === "select"\}/u);
-  assert.match(tool("Visual edits"), /active=\{mode === "inspect"\}/u);
+  assert.match(tool("Pick element"), /active=\{mode === "inspect"\}/u);
   assert.match(tool("Preview"), /active=\{mode === "preview"\}/u);
   assert.match(tool("Hand"), /active=\{mode === "hand"\}/u);
-  assert.doesNotMatch(tool("New design"), /active=/u);
+  assert.doesNotMatch(tool("Explore"), /active=/u);
+  assert.match(tool("Refine"), /disabled=\{!canRefine\}/u);
+  assert.match(tool("Export"), /disabled=\{!canExport\}/u);
   assert.doesNotMatch(tool("Add reference image"), /active=/u);
   assert.match(workspace, /"desktop"/u);
   assert.match(workspace, /"tablet"/u);
@@ -500,7 +594,14 @@ test("renderer uses a full-canvas route, one sandbox preview, and compact transc
   assert.match(messages, /isDesignHtmlArtifact/u);
   assert.match(messages, /DesignArtifactCard/u);
   assert.match(card, /Design version/u);
+  assert.match(card, /Show on canvas/u);
+  assert.doesNotMatch(card, /Open workspace/u);
   assert.match(card, /to: "\/design\/\$chatId"/u);
+  assert.match(card, /designArtifactNavigationTarget/u);
+  assert.match(card, /chatId: target\.routeProjectId/u);
+  assert.match(card, /search: target\.search/u);
+  assert.match(card, /data-design-artifact-id=\{artifact\.id\}/u);
+  assert.match(messages, /projectId=\{designProjectId\}/u);
 });
 
 test("Design is owned by stable routes and never mounts chat-adjacent chrome", () => {
@@ -512,8 +613,10 @@ test("Design is owned by stable routes and never mounts chat-adjacent chrome", (
   assert.match(router, /path: "\/design\/\$chatId"/u);
   assert.match(
     router,
-    /<DesignProjectRoute projectOrLegacyChatId=\{chatId\} initialMediaId=\{artifact\}/u,
+    /<DesignProjectRoute[\s\S]*projectOrLegacyChatId=\{chatId\}[\s\S]*initialMediaId=\{artifact\}[\s\S]*initialArtifactId=\{artifactId\}/u,
   );
+  assert.match(pane, /designProjectId=\{currentDesignProject\?\.id\}/u);
+  assert.match(pane, /initialArtifactId=\{initialDesignArtifactId\}/u);
   assert.match(layout, /pathname\.startsWith\("\/design"\)/u);
   assert.match(layout, /export function DesignIndex\(\)/u);
   assert.match(layout, /<DesignProjectSidebar/u);

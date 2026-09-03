@@ -316,6 +316,39 @@ export interface DesignWorkspaceArtifactGroup {
   revisions: DesignWorkspaceArtifactEntry[];
 }
 
+export interface DesignWorkspaceMissingScreen {
+  id: string;
+  lineageId?: string;
+  activeMediaId?: string;
+  artifactMediaIds: readonly string[];
+  x: number;
+  y: number;
+}
+
+/** Durable Screens remain spatially visible even while every artifact descriptor is unavailable. */
+export function missingDurableDesignWorkspaceScreens(
+  project: DesignProjectSnapshotV1 | undefined,
+  entries: readonly DesignWorkspaceArtifactEntry[],
+): DesignWorkspaceMissingScreen[] {
+  if (!project) return [];
+  const available = new Set(entries.map(({ artifact }) => artifact.mediaId));
+  return project.canvas.nodes.flatMap((node) => {
+    if (node.kind !== "artboard") return [];
+    const artifactMediaIds = node.artifactMediaIds ?? [];
+    if (artifactMediaIds.some((mediaId) => available.has(mediaId))) return [];
+    return [
+      {
+        id: node.id,
+        ...(node.lineageId ? { lineageId: node.lineageId } : {}),
+        ...(node.activeMediaId ? { activeMediaId: node.activeMediaId } : {}),
+        artifactMediaIds,
+        x: node.x,
+        y: node.y,
+      },
+    ];
+  });
+}
+
 export interface DesignCanvasPosition {
   x: number;
   y: number;
@@ -343,7 +376,14 @@ export class DesignProjectPersistenceBarrier<T> {
   private inFlight: Promise<T> | undefined;
 
   async flush(operation: () => Promise<T>): Promise<T> {
-    while (this.inFlight) await this.inFlight;
+    while (this.inFlight) {
+      try {
+        await this.inFlight;
+      } catch {
+        // A failed predecessor must not poison a queued retry. The owner
+        // reconciles its state before the queued operation runs.
+      }
+    }
     const current = operation();
     this.inFlight = current;
     try {
@@ -496,4 +536,20 @@ export function resolveDesignWorkspaceSelection(
   return entries.some((entry) => entry.artifact.mediaId === selectedMediaId)
     ? selectedMediaId
     : latest;
+}
+
+/** Preserve main-owned active identity unless a requested replacement belongs to the lineage. */
+export function resolveDurableDesignActiveMediaId({
+  artifactMediaIds,
+  priorActiveMediaId,
+  requestedActiveMediaId,
+}: {
+  artifactMediaIds: readonly string[] | undefined;
+  priorActiveMediaId: string | undefined;
+  requestedActiveMediaId: string | undefined;
+}): string | undefined {
+  if (requestedActiveMediaId && artifactMediaIds?.includes(requestedActiveMediaId)) {
+    return requestedActiveMediaId;
+  }
+  return priorActiveMediaId;
 }

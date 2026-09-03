@@ -45,8 +45,10 @@ import {
   DesignProjectPersistenceBarrier,
   DesignPrototypeDirectEditRetryState,
   durableDesignWorkspaceArtifactGroups,
+  missingDurableDesignWorkspaceScreens,
   isDesignProjectMetadataOnlyUpdate,
   resolveDesignArtboardPosition,
+  resolveDurableDesignActiveMediaId,
   snapshotDesignTurnTargets,
   type DesignElementSelectionV1,
   type DesignProjectPersistenceSnapshotV1,
@@ -54,6 +56,23 @@ import {
   type DesignWorkspaceArtifactEntry,
   type DesignWorkspaceArtifactGroup,
 } from "../shared/design-workspace";
+import {
+  EMPTY_DESIGN_WORKBENCH_SELECTION,
+  beginDesignFlowSelectionSync,
+  clearDesignSelectionLayer,
+  consumeDesignFlowSelectionReport,
+  designDisplayedScreenRevision,
+  designPrimaryScreenSelection,
+  designSelectionContextOrder,
+  designSelectionTurnTargets,
+  reduceDesignWorkbenchSelection,
+  sameDesignSelectedNodeIds,
+  sameDesignWorkbenchSelectionState,
+  type DesignSelectionSource,
+  type DesignFlowSelectionSync,
+  type DesignWorkbenchSelection,
+  type DesignWorkbenchSelectionState,
+} from "../shared/design-selection";
 import { chatsApi, designerApi, workspacesApi } from "../lib/ipc";
 import { cn } from "../lib/ui-utils";
 import {
@@ -93,6 +112,7 @@ import type {
   ExistingDesignHandoffPreviewV1,
 } from "../shared/design-projects";
 import { DesignProjectInspector } from "./design-project-inspector";
+import { DesignScreenNavigator, type DesignScreenNavigatorItem } from "./design-screen-navigator";
 import { DesignCommentsPanel } from "./design-comments-panel";
 import { DesignHandoffRecoveryPanel } from "./design-handoff-recovery";
 import type {
@@ -149,10 +169,18 @@ interface SourceArtboardData extends Record<string, unknown> {
   onExitInspect: () => void;
 }
 
+interface MissingScreenNodeData extends Record<string, unknown> {
+  kind: "missing-screen";
+  title: string;
+  viewport: DesignViewport;
+  onRetry?: () => void;
+}
+
 type DesignArtboardNode = Node<DesignArtboardData, "designArtboard">;
 type DesignImageNode = Node<ImageNodeData, "designImage">;
 type SourceArtboardNode = Node<SourceArtboardData, "sourceArtboard">;
-type StudioNode = DesignArtboardNode | DesignImageNode | SourceArtboardNode;
+type MissingScreenNode = Node<MissingScreenNodeData, "missingScreen">;
+type StudioNode = DesignArtboardNode | DesignImageNode | SourceArtboardNode | MissingScreenNode;
 
 function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode>) {
   const [preview, setPreview] = React.useState<{
@@ -215,8 +243,9 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
         selected && "ring-2 ring-accent ring-offset-2 ring-offset-well",
       )}
       style={{ width: size.width, height: size.height + 38 }}
-      aria-label={`${data.artifact.title} design artboard`}
+      aria-label={`${data.artifact.title} Design Screen`}
       data-design-artboard={data.artifact.mediaId}
+      tabIndex={-1}
     >
       <NodeToolbar
         isVisible={selected}
@@ -370,7 +399,7 @@ function SourceArtboardNodeView({ data, selected }: NodeProps<SourceArtboardNode
         selected && "ring-2 ring-accent ring-offset-2 ring-offset-well",
       )}
       style={{ width: size.width, height: size.height + 38 }}
-      aria-label={`${data.title} source-backed artboard`}
+      aria-label={`${data.title} connected app preview`}
       data-source-design-artboard
     >
       <NodeToolbar
@@ -445,11 +474,47 @@ function DesignImageNodeView({ data, selected }: NodeProps<DesignImageNode>) {
 }
 
 const DesignImageNodeMemo = React.memo(DesignImageNodeView);
+
+function MissingScreenNodeView({ data }: NodeProps<MissingScreenNode>) {
+  const size = VIEWPORT_SIZE[data.viewport];
+  return (
+    <article
+      className="grid overflow-hidden rounded-card bg-popover shadow-popover"
+      style={{ width: size.width, height: size.height + 38 }}
+      aria-label={`${data.title} unavailable Design Screen`}
+      data-design-screen-state="unavailable"
+    >
+      <header className="flex h-[38px] items-center border-b border-separator px-3">
+        <Text variant="small-strong">{data.title}</Text>
+      </header>
+      <div className="grid place-items-center bg-control px-8 text-center">
+        <div className="max-w-sm">
+          <Text as="h3" variant="strong">
+            Screen preview unavailable
+          </Text>
+          <Text as="p" variant="small" color="secondary" className="mt-2">
+            This Screen is still saved in the project, but its artifact needs history recovery.
+          </Text>
+          {data.onRetry ? (
+            <Button size="small" variant="toolbar" className="mt-3" onClick={data.onRetry}>
+              Retry history recovery
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+const MissingScreenNodeMemo = React.memo(MissingScreenNodeView);
 const NODE_TYPES: NodeTypes = {
   designArtboard: DesignArtboardNodeMemo,
   designImage: DesignImageNodeMemo,
   sourceArtboard: SourceArtboardNodeMemo,
+  missingScreen: MissingScreenNodeMemo,
 };
+const EMPTY_STUDIO_EDGES: [] = [];
+const STUDIO_FIT_VIEW_OPTIONS = { padding: 0.18, maxZoom: 0.9 } as const;
 
 function canvasImageAttachment(file: File): Promise<Attachment> {
   return new Promise((resolve, reject) => {
@@ -480,6 +545,7 @@ function CanvasToolButton({
   description,
   shortcut,
   active,
+  disabled = false,
   onClick,
   children,
 }: {
@@ -487,6 +553,7 @@ function CanvasToolButton({
   description: string;
   shortcut?: string;
   active?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -495,6 +562,7 @@ function CanvasToolButton({
       <TooltipPrimitive.Trigger asChild>
         <button
           type="button"
+          disabled={disabled}
           onClick={onClick}
           aria-label={shortcut ? `${label} (${shortcut})` : label}
           aria-keyshortcuts={shortcut}
@@ -502,6 +570,7 @@ function CanvasToolButton({
           className={cn(
             "design-canvas-control grid size-9 place-items-center rounded-control text-secondary transition-colors duration-150 hover:bg-list-hover hover:text-primary",
             active && "bg-list-selection text-accent",
+            disabled && "opacity-40",
           )}
         >
           {children}
@@ -541,13 +610,16 @@ export function DesignWorkspaceCanvas({
   onRetryProjectReconciliation,
   generating,
   initialMediaId,
+  initialArtifactId,
+  artifactShowRequest,
+  contextRemovalRequest,
   unavailableMessage,
   targets,
   sourceSelection,
-  selectedImages,
   onTargetsChange,
   onSourceSelectionChange,
   onSelectedImagesChange,
+  onContextOrderChange,
   onRequestComposerFocus,
   onProjectChange,
   onPersistenceBarrierChange,
@@ -562,13 +634,16 @@ export function DesignWorkspaceCanvas({
   onRetryProjectReconciliation?: () => void;
   generating: boolean;
   initialMediaId?: string;
+  initialArtifactId?: string;
+  artifactShowRequest?: { mediaId: string; artifactId: string; requestId: number };
+  contextRemovalRequest?: { id: string; requestId: number };
   unavailableMessage?: string;
   targets: readonly DesignTurnTargetV1[];
   sourceSelection?: SourceSelectionBindingV1;
-  selectedImages: readonly Attachment[];
   onTargetsChange: (targets: DesignTurnTargetV1[]) => void;
   onSourceSelectionChange: (selection: SourceSelectionBindingV1 | undefined) => void;
   onSelectedImagesChange: (images: Attachment[]) => void;
+  onContextOrderChange: (keys: string[]) => void;
   onRequestComposerFocus: () => void;
   onProjectChange: (project: DesignProjectSnapshotV1) => void;
   onPersistenceBarrierChange?: (
@@ -578,10 +653,14 @@ export function DesignWorkspaceCanvas({
   const navigate = useNavigate();
   const [viewport, setViewport] = React.useState<DesignViewport>("desktop");
   const [mode, setMode] = React.useState<CanvasMode>("select");
+  const modeRef = React.useRef(mode);
+  modeRef.current = mode;
   const [activeVersions, setActiveVersions] = React.useState<Record<string, string>>({});
   const activeVersionsRef = React.useRef(activeVersions);
   activeVersionsRef.current = activeVersions;
   const [canvasImages, setCanvasImages] = React.useState<Attachment[]>([]);
+  const canvasImagesRef = React.useRef(canvasImages);
+  canvasImagesRef.current = canvasImages;
   const [sourcePreview, setSourcePreview] = React.useState<SourcePreviewStateV1>();
   const [previewSetupOpen, setPreviewSetupOpen] = React.useState(false);
   const [previewBusy, setPreviewBusy] = React.useState(false);
@@ -608,7 +687,14 @@ export function DesignWorkspaceCanvas({
   const [inspectorTab, setInspectorTab] = React.useState<DesignProjectInspectorTab>("preview");
   const [inspectorFind, setInspectorFind] = React.useState("");
   const [comparisonMediaId, setComparisonMediaId] = React.useState<string>();
-  const [selectedGroupId, setSelectedGroupId] = React.useState<string>();
+  const [screenNavigatorOpen, setScreenNavigatorOpen] = React.useState(false);
+  const [makeCurrentBusy, setMakeCurrentBusy] = React.useState(false);
+  const [selectionState, setSelectionState] = React.useState<DesignWorkbenchSelectionState>(
+    EMPTY_DESIGN_WORKBENCH_SELECTION,
+  );
+  const selectionStateRef = React.useRef(selectionState);
+  selectionStateRef.current = selectionState;
+  const flowSelectionSyncRef = React.useRef<DesignFlowSelectionSync | null>(null);
   const [sourceByMediaId, setSourceByMediaId] = React.useState<
     Record<
       string,
@@ -695,6 +781,9 @@ export function DesignWorkspaceCanvas({
   const [missingReferenceAssetIds, setMissingReferenceAssetIds] = React.useState<string[]>([]);
   const [referenceRepairBusyAssetId, setReferenceRepairBusyAssetId] = React.useState<string>();
   const savedProjectRef = React.useRef(project);
+  const workbenchRef = React.useRef<HTMLElement | null>(null);
+  const [workbenchWidth, setWorkbenchWidth] = React.useState(0);
+  const [canvasAnnouncement, setCanvasAnnouncement] = React.useState("");
   const flowRef = React.useRef<ReactFlowInstance<StudioNode> | null>(null);
   const flowViewportRef = React.useRef(project?.canvas.flowViewport ?? { x: 0, y: 0, zoom: 1 });
   const assetIdByNodeRef = React.useRef(new Map<string, string>());
@@ -709,20 +798,93 @@ export function DesignWorkspaceCanvas({
   >(async () => undefined);
   const lastPersistedCanvasRef = React.useRef(project ? JSON.stringify(project.canvas) : undefined);
   const uploadRef = React.useRef<HTMLInputElement | null>(null);
+  const screenNavigatorTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const inspectorOpenerRef = React.useRef<HTMLElement | null>(null);
   const groups = React.useMemo(
     () =>
       durableDesignWorkspaceArtifactGroups(savedProject, [...artifacts, ...directEditArtifacts]),
     [artifacts, directEditArtifacts, savedProject],
   );
+  const missingScreens = React.useMemo(
+    () =>
+      missingDurableDesignWorkspaceScreens(savedProject, [...artifacts, ...directEditArtifacts]),
+    [artifacts, directEditArtifacts, savedProject],
+  );
+  const durableScreenCount = groups.length + missingScreens.length;
+  const compactInspector = workbenchWidth > 0 && workbenchWidth < 760;
+
+  React.useLayoutEffect(() => {
+    const workbench = workbenchRef.current;
+    if (!workbench) return;
+    const updateWidth = () => setWorkbenchWidth(workbench.getBoundingClientRect().width);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(workbench);
+    return () => observer.disconnect();
+  }, [canvasImages.length, durableScreenCount, sourcePreview?.status, unavailableMessage]);
+  const primaryScreenSelection = designPrimaryScreenSelection(selectionState);
+  const selectedGroupId = primaryScreenSelection?.nodeId;
   const selectedGroup = groups.find(({ id }) => id === selectedGroupId);
   const selectedGroupNode = savedProject?.canvas.nodes.find(
     (node) => node.kind === "artboard" && node.id === selectedGroupId,
   );
-  const selectedMediaId = selectedGroup
-    ? (activeVersions[selectedGroup.id] ??
-      selectedGroupNode?.activeMediaId ??
-      selectedGroup.revisions[selectedGroup.revisions.length - 1]?.artifact.mediaId)
+  const selectedMediaId = primaryScreenSelection
+    ? designDisplayedScreenRevision(primaryScreenSelection).mediaId
     : undefined;
+  const selectedArtifact = selectedGroup?.revisions.find(
+    ({ artifact }) => artifact.mediaId === selectedMediaId,
+  )?.artifact;
+  const navigatorScreens = React.useMemo<DesignScreenNavigatorItem[]>(
+    () =>
+      groups.flatMap((group) => {
+        const node = savedProject?.canvas.nodes.find(
+          (candidate) => candidate.kind === "artboard" && candidate.id === group.id,
+        );
+        if (!node?.lineageId) return [];
+        const activeMediaId =
+          activeVersions[group.id] ??
+          node.activeMediaId ??
+          group.revisions[group.revisions.length - 1]?.artifact.mediaId;
+        const activeIndex = group.revisions.findIndex(
+          ({ artifact }) => artifact.mediaId === activeMediaId,
+        );
+        const activeArtifact = group.revisions[activeIndex]?.artifact;
+        if (!activeArtifact) return [];
+        const selected = selectionState.selections.find(
+          (selection) => selection.kind === "screen" && selection.nodeId === group.id,
+        );
+        const previewRevision = selected?.kind === "screen" ? selected.previewRevision : undefined;
+        const previewIndex = previewRevision
+          ? group.revisions.findIndex(
+              ({ artifact }) =>
+                artifact.mediaId === previewRevision.mediaId &&
+                artifact.id === previewRevision.artifactId,
+            )
+          : -1;
+        return [
+          {
+            nodeId: group.id,
+            lineageId: node.lineageId,
+            title: group.title,
+            activeRevision: {
+              mediaId: activeArtifact.mediaId,
+              artifactId: activeArtifact.id,
+              label: `Revision ${activeIndex + 1}`,
+            },
+            ...(previewRevision && previewIndex >= 0
+              ? {
+                  previewRevision: {
+                    mediaId: previewRevision.mediaId,
+                    artifactId: previewRevision.artifactId,
+                    label: `Revision ${previewIndex + 1}`,
+                  },
+                }
+              : {}),
+          },
+        ];
+      }),
+    [activeVersions, groups, savedProject, selectionState.selections],
+  );
   const selectedSource = selectedMediaId ? sourceByMediaId[selectedMediaId] : connectedSource;
   const compareSource = comparisonMediaId ? sourceByMediaId[comparisonMediaId] : undefined;
   const selectedRevisionKey =
@@ -763,6 +925,7 @@ export function DesignWorkspaceCanvas({
     () =>
       !sourceSelection &&
       savedProject &&
+      !primaryScreenSelection?.previewRevision &&
       selectedGroupNode?.lineageId &&
       selectedMediaId &&
       selectedDirectEditTarget?.selection
@@ -776,6 +939,7 @@ export function DesignWorkspaceCanvas({
         : undefined,
     [
       requestedDirectEdit,
+      primaryScreenSelection?.previewRevision,
       savedProject,
       selectedDirectEditTarget?.selection,
       selectedGroupNode?.lineageId,
@@ -842,6 +1006,137 @@ export function DesignWorkspaceCanvas({
     [onTargetsChange],
   );
 
+  const commitSelection = React.useCallback(
+    (next: DesignWorkbenchSelectionState, syncFlow = true) => {
+      if (sameDesignWorkbenchSelectionState(selectionStateRef.current, next)) return;
+      if (
+        syncFlow &&
+        !sameDesignSelectedNodeIds(
+          selectionStateRef.current,
+          next.selections.map(({ nodeId }) => nodeId),
+        )
+      ) {
+        flowSelectionSyncRef.current = beginDesignFlowSelectionSync(
+          selectionStateRef.current.selections.map(({ nodeId }) => nodeId),
+          next.selections.map(({ nodeId }) => nodeId),
+        );
+      }
+      selectionStateRef.current = next;
+      setSelectionState(next);
+      publishTargets(designSelectionTurnTargets(next));
+      const selectedReferenceNodeIds = new Set(
+        next.selections.flatMap((selection) =>
+          selection.kind === "reference" ? [selection.nodeId] : [],
+        ),
+      );
+      onSelectedImagesChange(
+        canvasImagesRef.current.filter((attachment) => selectedReferenceNodeIds.has(attachment.id)),
+      );
+      if (!next.selections.some((selection) => selection.kind === "connected-preview")) {
+        onSourceSelectionChange(undefined);
+      }
+      onContextOrderChange(designSelectionContextOrder(next));
+    },
+    [onContextOrderChange, onSelectedImagesChange, onSourceSelectionChange, publishTargets],
+  );
+  const commitSelectionRef = React.useRef(commitSelection);
+  commitSelectionRef.current = commitSelection;
+
+  const focusScreenOnCanvas = React.useCallback(
+    (group: DesignWorkspaceArtifactGroup, mediaId: string) => {
+      const revisionIndex = group.revisions.findIndex(
+        ({ artifact }) => artifact.mediaId === mediaId,
+      );
+      setCanvasAnnouncement(
+        `${group.title}, Revision ${Math.max(1, revisionIndex + 1)} selected on canvas.`,
+      );
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const escapedMediaId = CSS.escape(mediaId);
+          const target = workbenchRef.current?.querySelector<HTMLElement>(
+            `[data-design-artboard="${escapedMediaId}"]`,
+          );
+          (target ?? workbenchRef.current)?.focus({ preventScroll: true });
+        });
+      });
+    },
+    [],
+  );
+
+  const selectScreenRevision = React.useCallback(
+    ({
+      group,
+      mediaId,
+      source,
+      additive = false,
+      historical = false,
+      center = false,
+    }: {
+      group: DesignWorkspaceArtifactGroup;
+      mediaId: string;
+      source: DesignSelectionSource;
+      additive?: boolean;
+      historical?: boolean;
+      center?: boolean;
+    }) => {
+      const node = savedProjectRef.current?.canvas.nodes.find(
+        (candidate) => candidate.kind === "artboard" && candidate.id === group.id,
+      );
+      if (!node?.lineageId) return false;
+      const activeMediaId =
+        activeVersionsRef.current[group.id] ??
+        node.activeMediaId ??
+        group.revisions[group.revisions.length - 1]?.artifact.mediaId;
+      const activeArtifact = group.revisions.find(
+        ({ artifact }) => artifact.mediaId === activeMediaId,
+      )?.artifact;
+      const requestedArtifact = group.revisions.find(
+        ({ artifact }) => artifact.mediaId === mediaId,
+      )?.artifact;
+      if (!activeArtifact || !requestedArtifact) return false;
+
+      let next = reduceDesignWorkbenchSelection(selectionStateRef.current, {
+        type: "select",
+        selection: {
+          kind: "screen",
+          nodeId: group.id,
+          lineageId: node.lineageId,
+          activeRevision: {
+            mediaId: activeArtifact.mediaId,
+            artifactId: activeArtifact.id,
+          },
+        },
+        additive,
+        source,
+      });
+      if (historical || requestedArtifact.mediaId !== activeArtifact.mediaId) {
+        next = reduceDesignWorkbenchSelection(next, {
+          type: "preview-screen-revision",
+          lineageId: node.lineageId,
+          revision: {
+            mediaId: requestedArtifact.mediaId,
+            artifactId: requestedArtifact.id,
+          },
+          source,
+        });
+      }
+      commitSelection(next);
+      setInspectorOpen(center && compactInspector ? false : true);
+      setCommentsOpen(false);
+      if (center) {
+        requestAnimationFrame(() => {
+          const flow = flowRef.current;
+          if (!flow) return;
+          const flowNode = flow?.getNode(group.id);
+          if (flowNode) void flow.fitView({ nodes: [flowNode], padding: 0.18, maxZoom: 0.9 });
+        });
+        focusScreenOnCanvas(group, requestedArtifact.mediaId);
+      }
+      return true;
+    },
+    [commitSelection, compactInspector, focusScreenOnCanvas],
+  );
+
   React.useEffect(() => {
     const previousProject = savedProjectRef.current;
     const preserveTransientEdits = Boolean(
@@ -855,6 +1150,9 @@ export function DesignWorkspaceCanvas({
     }
     setDirectEditArtifacts([]);
     setPrototypeDirectEditUndo(undefined);
+    if (previousProject?.id !== project?.id) {
+      commitSelection(EMPTY_DESIGN_WORKBENCH_SELECTION);
+    }
     setAssetsHydrated(!project);
     setMissingReferenceAssetIds([]);
     if (!project) return;
@@ -866,13 +1164,13 @@ export function DesignWorkspaceCanvas({
         node.kind === "reference-image" && node.assetId ? [[node.id, node.assetId]] : [],
       ),
     );
-    setActiveVersions(
-      Object.fromEntries(
-        project.canvas.nodes.flatMap((node) =>
-          node.kind === "artboard" && node.activeMediaId ? [[node.id, node.activeMediaId]] : [],
-        ),
+    const restoredActiveVersions = Object.fromEntries(
+      project.canvas.nodes.flatMap((node) =>
+        node.kind === "artboard" && node.activeMediaId ? [[node.id, node.activeMediaId]] : [],
       ),
     );
+    activeVersionsRef.current = restoredActiveVersions;
+    setActiveVersions(restoredActiveVersions);
     let cancelled = false;
     void Promise.all(
       project.canvas.nodes.flatMap((node) =>
@@ -897,7 +1195,11 @@ export function DesignWorkspaceCanvas({
     )
       .then((results) => {
         if (!cancelled) {
-          setCanvasImages(results.flatMap(({ image }) => (image === undefined ? [] : [image])));
+          const hydratedImages = results.flatMap(({ image }) =>
+            image === undefined ? [] : [image],
+          );
+          canvasImagesRef.current = hydratedImages;
+          setCanvasImages(hydratedImages);
           setMissingReferenceAssetIds([
             ...new Set(
               results.flatMap(({ assetId, image }) => (image === undefined ? [assetId] : [])),
@@ -914,7 +1216,69 @@ export function DesignWorkspaceCanvas({
     return () => {
       cancelled = true;
     };
-  }, [project]);
+  }, [commitSelection, project]);
+
+  React.useEffect(() => {
+    if (!savedProject || selectionStateRef.current.selections.length === 0) return;
+    const reconciledSelections = selectionStateRef.current.selections.flatMap(
+      (selection): DesignWorkbenchSelection[] => {
+        if (selection.kind !== "screen") return [selection];
+        const node = savedProject.canvas.nodes.find(
+          (candidate) => candidate.kind === "artboard" && candidate.id === selection.nodeId,
+        );
+        const group = groups.find((candidate) => candidate.id === selection.nodeId);
+        if (!node?.lineageId || !group) return [];
+        const activeMediaId =
+          activeVersions[selection.nodeId] ??
+          node.activeMediaId ??
+          group.revisions[group.revisions.length - 1]?.artifact.mediaId;
+        const activeArtifact = group.revisions.find(
+          ({ artifact }) => artifact.mediaId === activeMediaId,
+        )?.artifact;
+        if (!activeArtifact) return [];
+        const previewArtifact = selection.previewRevision
+          ? group.revisions.find(
+              ({ artifact }) =>
+                artifact.mediaId === selection.previewRevision?.mediaId &&
+                artifact.id === selection.previewRevision.artifactId,
+            )?.artifact
+          : undefined;
+        const displayedArtifact = previewArtifact ?? activeArtifact;
+        return [
+          {
+            ...selection,
+            lineageId: node.lineageId,
+            activeRevision: {
+              mediaId: activeArtifact.mediaId,
+              artifactId: activeArtifact.id,
+            },
+            ...(previewArtifact
+              ? {
+                  previewRevision: {
+                    mediaId: previewArtifact.mediaId,
+                    artifactId: previewArtifact.id,
+                  },
+                }
+              : { previewRevision: undefined }),
+            ...(selection.element &&
+            selection.element.revision.mediaId === displayedArtifact.mediaId &&
+            selection.element.revision.artifactId === displayedArtifact.id
+              ? { element: selection.element }
+              : { element: undefined }),
+          },
+        ];
+      },
+    );
+    const next = reduceDesignWorkbenchSelection(selectionStateRef.current, {
+      type: "replace",
+      selections: reconciledSelections,
+      source: selectionStateRef.current.lastSource ?? "project-open",
+      ...(selectionStateRef.current.primaryKey
+        ? { primaryKey: selectionStateRef.current.primaryKey }
+        : {}),
+    });
+    if (JSON.stringify(next) !== JSON.stringify(selectionStateRef.current)) commitSelection(next);
+  }, [activeVersions, commitSelection, groups, savedProject]);
 
   const loadHandoffRecoveries = React.useCallback(async (projectId: string) => {
     setHandoffRecoveriesLoading(true);
@@ -1587,10 +1951,22 @@ export function DesignWorkspaceCanvas({
           descriptor,
         });
         onSourceSelectionChange(binding);
-        publishTargets([]);
+        commitSelection(
+          reduceDesignWorkbenchSelection(selectionStateRef.current, {
+            type: "select",
+            selection: {
+              kind: "connected-preview",
+              nodeId: `source-preview:${connectedWorkspaceId}`,
+              previewId: `source-preview:${connectedWorkspaceId}`,
+            },
+            additive: false,
+            source: "canvas",
+          }),
+        );
         onSelectedImagesChange([]);
       } catch (cause) {
         onSourceSelectionChange(undefined);
+        commitSelection(EMPTY_DESIGN_WORKBENCH_SELECTION);
         toast.error(
           cause instanceof Error
             ? cause.message
@@ -1600,9 +1976,9 @@ export function DesignWorkspaceCanvas({
     },
     [
       connectedWorkspaceId,
+      commitSelection,
       onSelectedImagesChange,
       onSourceSelectionChange,
-      publishTargets,
       sourcePreview,
     ],
   );
@@ -1654,12 +2030,20 @@ export function DesignWorkspaceCanvas({
       await designerApi.stopPreview({ projectId });
       setSourcePreview(await designerApi.previewState({ projectId }));
       onSourceSelectionChange(undefined);
+      const next = reduceDesignWorkbenchSelection(selectionStateRef.current, {
+        type: "replace",
+        selections: selectionStateRef.current.selections.filter(
+          (selection) => selection.kind !== "connected-preview",
+        ),
+        source: "canvas",
+      });
+      commitSelection(next);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Could not stop the local app.");
     } finally {
       setPreviewBusy(false);
     }
-  }, [connectedWorkspaceId, onSourceSelectionChange, previewBusy]);
+  }, [commitSelection, connectedWorkspaceId, onSourceSelectionChange, previewBusy]);
 
   const exportArtifact = React.useCallback(
     async (artifact: ChatHtmlArtifactV1) => {
@@ -1712,10 +2096,19 @@ export function DesignWorkspaceCanvas({
         ...current.filter(({ artifact }) => artifact.mediaId !== result.artifact.mediaId),
         { artifact: result.artifact, source: "persisted" },
       ]);
-      setActiveVersions((current) => ({
-        ...current,
+      const nextActiveVersions = {
+        ...activeVersionsRef.current,
         [selectedGroupNode.id]: result.artifact.mediaId,
-      }));
+      };
+      activeVersionsRef.current = nextActiveVersions;
+      setActiveVersions(nextActiveVersions);
+      commitSelection(
+        reduceDesignWorkbenchSelection(selectionStateRef.current, {
+          type: "sync-screen-active-revision",
+          lineageId: prototypeDirectEditPayload.lineageId,
+          revision: { mediaId: result.artifact.mediaId, artifactId: result.artifact.id },
+        }),
+      );
       setPrototypeDirectEditUndo({
         undoId: result.undoId,
         lineageId: prototypeDirectEditPayload.lineageId,
@@ -1729,7 +2122,6 @@ export function DesignWorkspaceCanvas({
         result.artifact.mediaId,
       );
       setDirectEditOpen(false);
-      publishTargets([]);
       if (sourceHydrated) {
         toast.success("Created a new immutable Design revision.");
       } else {
@@ -1742,10 +2134,10 @@ export function DesignWorkspaceCanvas({
     }
   }, [
     acceptProjectUpdate,
+    commitSelection,
     connectedDirectEditPayload,
     directEditBusy,
     hydrateGeneratedSource,
-    publishTargets,
     prototypeDirectEditPayload,
     savedProject,
     selectedGroupNode,
@@ -1769,17 +2161,25 @@ export function DesignWorkspaceCanvas({
         ...artifacts.filter(({ artifact }) => artifact.mediaId !== result.artifact.mediaId),
         { artifact: result.artifact, source: "persisted" },
       ]);
-      setActiveVersions((versions) => ({
-        ...versions,
+      const nextActiveVersions = {
+        ...activeVersionsRef.current,
         [undo.nodeId]: result.artifact.mediaId,
-      }));
+      };
+      activeVersionsRef.current = nextActiveVersions;
+      setActiveVersions(nextActiveVersions);
+      commitSelection(
+        reduceDesignWorkbenchSelection(selectionStateRef.current, {
+          type: "sync-screen-active-revision",
+          lineageId: undo.lineageId,
+          revision: { mediaId: result.artifact.mediaId, artifactId: result.artifact.id },
+        }),
+      );
       const sourceHydrated = await hydrateGeneratedSource(
         result.project.id,
         undo.lineageId,
         result.artifact.mediaId,
       );
       setPrototypeDirectEditUndo(undefined);
-      publishTargets([]);
       if (sourceHydrated) {
         toast.success("Created a new exact-revert Design revision.");
       } else {
@@ -1792,58 +2192,64 @@ export function DesignWorkspaceCanvas({
     }
   }, [
     acceptProjectUpdate,
+    commitSelection,
     hydrateGeneratedSource,
     prototypeDirectEditUndo,
     prototypeDirectEditUndoBusy,
-    publishTargets,
   ]);
 
   const selectElement = React.useCallback(
     (artifact: ChatHtmlArtifactV1, selection: DesignElementSelectionV1, additive: boolean) => {
-      const target: DesignTurnTargetV1 = {
-        mediaId: artifact.mediaId,
-        artifactId: artifact.id,
-        selection,
-      };
-      const current = targetsRef.current;
-      const next = additive
-        ? [...current.filter((item) => item.mediaId !== artifact.mediaId), target].slice(-5)
-        : [target];
-      publishTargets(next);
       const group = groups.find((candidate) =>
         candidate.revisions.some(({ artifact: revision }) => revision.mediaId === artifact.mediaId),
       );
-      setSelectedGroupId(group?.id);
-      setInspectorOpen(Boolean(group));
+      const node = savedProjectRef.current?.canvas.nodes.find(
+        (candidate) => candidate.kind === "artboard" && candidate.id === group?.id,
+      );
+      if (!group || !node?.lineageId) return;
+      const activeMediaId =
+        activeVersionsRef.current[group.id] ?? node.activeMediaId ?? artifact.mediaId;
+      const activeArtifact =
+        group.revisions.find((revision) => revision.artifact.mediaId === activeMediaId)?.artifact ??
+        artifact;
+      let next = reduceDesignWorkbenchSelection(selectionStateRef.current, {
+        type: "select",
+        selection: {
+          kind: "screen",
+          nodeId: group.id,
+          lineageId: node.lineageId,
+          activeRevision: { mediaId: activeArtifact.mediaId, artifactId: activeArtifact.id },
+          ...(artifact.mediaId !== activeArtifact.mediaId
+            ? { previewRevision: { mediaId: artifact.mediaId, artifactId: artifact.id } }
+            : {}),
+        },
+        additive,
+        source: "canvas",
+      });
+      next = reduceDesignWorkbenchSelection(next, {
+        type: "select-screen-element",
+        lineageId: node.lineageId,
+        revision: { mediaId: artifact.mediaId, artifactId: artifact.id },
+        selection,
+        source: "canvas",
+      });
+      commitSelection(next);
+      setInspectorOpen(true);
       if (!additive) {
         onSelectedImagesChange([]);
         onSourceSelectionChange(undefined);
       }
     },
-    [groups, onSelectedImagesChange, onSourceSelectionChange, publishTargets],
+    [commitSelection, groups, onSelectedImagesChange, onSourceSelectionChange],
   );
 
-  const changeVersion = React.useCallback(
+  const previewVersion = React.useCallback(
     (groupId: string, mediaId: string) => {
-      const nextActiveVersions = {
-        ...activeVersionsRef.current,
-        [groupId]: mediaId,
-      };
-      activeVersionsRef.current = nextActiveVersions;
-      setActiveVersions(nextActiveVersions);
       const group = groups.find((candidate) => candidate.id === groupId);
-      const artifact = group?.revisions.find(
-        (revision) => revision.artifact.mediaId === mediaId,
-      )?.artifact;
-      if (!artifact) return;
-      const nextTargets = targetsRef.current.map((target) =>
-        group?.revisions.some((revision) => revision.artifact.mediaId === target.mediaId)
-          ? { mediaId: artifact.mediaId, artifactId: artifact.id }
-          : target,
-      );
-      publishTargets(nextTargets);
+      if (!group) return;
+      selectScreenRevision({ group, mediaId, source: "history", historical: true });
     },
-    [groups, publishTargets],
+    [groups, selectScreenRevision],
   );
 
   const buildDurableCanvas = React.useCallback(
@@ -1853,6 +2259,13 @@ export function DesignWorkspaceCanvas({
       const previous = new Map(currentProject.canvas.nodes.map((node) => [node.id, node]));
       const durableNodes: DesignProjectCanvasV1["nodes"] = [];
       for (const node of currentNodes) {
+        if (node.type === "missingScreen") {
+          const prior = previous.get(node.id);
+          if (prior?.kind === "artboard") {
+            durableNodes.push({ ...prior, x: node.position.x, y: node.position.y });
+          }
+          continue;
+        }
         if (node.type === "designArtboard") {
           const data = node.data as DesignArtboardData;
           const prior = previous.get(node.id);
@@ -1861,14 +2274,16 @@ export function DesignWorkspaceCanvas({
           // but it must never infer ownership from streamed renderer artifacts.
           if (prior?.kind !== "artboard") continue;
           const requestedActiveMediaId =
-            activeVersionsRef.current[node.id] ?? data.artifact.mediaId;
+            activeVersionsRef.current[node.id] ?? prior.activeMediaId ?? data.artifact.mediaId;
           durableNodes.push({
             ...prior,
             x: node.position.x,
             y: node.position.y,
-            activeMediaId: prior.artifactMediaIds?.includes(requestedActiveMediaId)
-              ? requestedActiveMediaId
-              : prior.activeMediaId,
+            activeMediaId: resolveDurableDesignActiveMediaId({
+              artifactMediaIds: prior.artifactMediaIds,
+              priorActiveMediaId: prior.activeMediaId,
+              requestedActiveMediaId,
+            }),
           });
           continue;
         }
@@ -1959,6 +2374,52 @@ export function DesignWorkspaceCanvas({
     });
   }, [buildDurableCanvas]);
 
+  const makeSelectedRevisionCurrent = React.useCallback(async () => {
+    const selected = designPrimaryScreenSelection(selectionStateRef.current);
+    if (!selected?.previewRevision || makeCurrentBusy) return;
+    const priorActiveVersions = activeVersionsRef.current;
+    const nextActiveVersions = {
+      ...priorActiveVersions,
+      [selected.nodeId]: selected.previewRevision.mediaId,
+    };
+    setMakeCurrentBusy(true);
+    activeVersionsRef.current = nextActiveVersions;
+    setActiveVersions(nextActiveVersions);
+    try {
+      const persisted = await flushProjectPersistence();
+      const persistedNode = persisted?.project.canvas.nodes.find(
+        (node) => node.kind === "artboard" && node.id === selected.nodeId,
+      );
+      if (persistedNode?.activeMediaId !== selected.previewRevision.mediaId) {
+        throw new Error("Aiden could not verify the current Screen revision was saved.");
+      }
+      commitSelection(
+        reduceDesignWorkbenchSelection(selectionStateRef.current, {
+          type: "sync-screen-active-revision",
+          lineageId: selected.lineageId,
+          revision: selected.previewRevision,
+        }),
+      );
+      toast.success("Current Screen revision saved.");
+    } catch (cause) {
+      const current = savedProjectRef.current;
+      const restoredActiveVersions = current
+        ? Object.fromEntries(
+            current.canvas.nodes.flatMap((node) =>
+              node.kind === "artboard" && node.activeMediaId ? [[node.id, node.activeMediaId]] : [],
+            ),
+          )
+        : priorActiveVersions;
+      activeVersionsRef.current = restoredActiveVersions;
+      setActiveVersions(restoredActiveVersions);
+      toast.error(
+        cause instanceof Error ? cause.message : "The current Screen revision could not be saved.",
+      );
+    } finally {
+      setMakeCurrentBusy(false);
+    }
+  }, [commitSelection, flushProjectPersistence, makeCurrentBusy]);
+
   React.useEffect(() => {
     onPersistenceBarrierChange?.(flushProjectPersistence);
     return () => onPersistenceBarrierChange?.(undefined);
@@ -2032,10 +2493,20 @@ export function DesignWorkspaceCanvas({
           : [];
       const sourceOffset = sourceNode.length > 0 ? VIEWPORT_SIZE[viewport].width + 120 : 0;
       const designNodes: DesignArtboardNode[] = groups.map((group, index) => {
+        const selectedScreen = selectionState.selections.find(
+          (selection) => selection.kind === "screen" && selection.nodeId === group.id,
+        );
         const requested =
+          (selectedScreen?.kind === "screen"
+            ? designDisplayedScreenRevision(selectedScreen).mediaId
+            : undefined) ??
           activeVersions[group.id] ??
           (initialMediaId &&
-          group.revisions.some((item) => item.artifact.mediaId === initialMediaId)
+          group.revisions.some(
+            (item) =>
+              item.artifact.mediaId === initialMediaId &&
+              (initialArtifactId === undefined || item.artifact.id === initialArtifactId),
+          )
             ? initialMediaId
             : undefined);
         const revision =
@@ -2056,7 +2527,7 @@ export function DesignWorkspaceCanvas({
               y: 0,
             },
           }),
-          selected: Boolean(target),
+          selected: selectedScreen?.kind === "screen",
           draggable: mode === "select",
           selectable: mode === "select",
           dragHandle: ".design-artboard-drag-handle",
@@ -2071,7 +2542,7 @@ export function DesignWorkspaceCanvas({
             target,
             onElementSelect: selectElement,
             onExitInspect: () => setMode("select"),
-            onVersionChange: changeVersion,
+            onVersionChange: previewVersion,
             onExport: (item) => void exportArtifact(item),
           },
         };
@@ -2083,26 +2554,47 @@ export function DesignWorkspaceCanvas({
           x: index * 560,
           y: VIEWPORT_SIZE[viewport].height + 220,
         },
-        selected: selectedImages.some((item) => item.id === attachment.id),
+        selected: selectionState.selections.some(
+          (selection) => selection.kind === "reference" && selection.nodeId === attachment.id,
+        ),
         draggable: mode === "select",
         selectable: mode === "select",
         data: { kind: "image", attachment },
       }));
-      return [...sourceNode, ...designNodes, ...imageNodes];
+      const missingNodes: MissingScreenNode[] = missingScreens.map((screen, index) => ({
+        id: screen.id,
+        type: "missingScreen",
+        position: positions.get(screen.id) ?? {
+          x: sourceOffset + (groups.length + index) * (VIEWPORT_SIZE[viewport].width + 120),
+          y: 0,
+        },
+        draggable: mode === "select",
+        selectable: false,
+        data: {
+          kind: "missing-screen",
+          title: `Screen ${groups.length + index + 1}`,
+          viewport,
+          ...(onRetryProjectReconciliation ? { onRetry: onRetryProjectReconciliation } : {}),
+        },
+      }));
+      return [...sourceNode, ...designNodes, ...missingNodes, ...imageNodes];
     });
   }, [
     activeVersions,
     bindSourceSelection,
     canvasImages,
-    changeVersion,
     chatId,
     exportArtifact,
     groups,
+    initialArtifactId,
     initialMediaId,
     livePreviewAuthority,
+    missingScreens,
     mode,
+    onRetryProjectReconciliation,
+    previewVersion,
     selectElement,
-    selectedImages,
+    selectionState,
     sourcePreview,
     sourceRevision,
     sourceSelection,
@@ -2112,8 +2604,121 @@ export function DesignWorkspaceCanvas({
     workspaceId,
   ]);
 
+  const handledInitialSelectionRef = React.useRef<string | undefined>(undefined);
+  React.useEffect(() => {
+    if (!savedProject || !initialMediaId) return;
+    const requestKey = `${savedProject.id}\0${initialMediaId}\0${initialArtifactId ?? "legacy"}`;
+    if (handledInitialSelectionRef.current === requestKey) return;
+    const group = groups.find((candidate) =>
+      candidate.revisions.some(
+        ({ artifact }) =>
+          artifact.mediaId === initialMediaId &&
+          (initialArtifactId === undefined || artifact.id === initialArtifactId),
+      ),
+    );
+    if (!group) {
+      if (generating || projectReconciliationBusy) return;
+      handledInitialSelectionRef.current = requestKey;
+      toast.error(
+        initialArtifactId
+          ? "That saved Screen revision changed or is no longer part of this project."
+          : "That saved Screen revision is no longer part of this project.",
+      );
+      return;
+    }
+    const selected = selectScreenRevision({
+      group,
+      mediaId: initialMediaId,
+      source: "conversation",
+      historical: true,
+      center: true,
+    });
+    if (!selected) return;
+    handledInitialSelectionRef.current = requestKey;
+    setMode("select");
+  }, [
+    generating,
+    groups,
+    initialArtifactId,
+    initialMediaId,
+    projectReconciliationBusy,
+    savedProject,
+    selectScreenRevision,
+  ]);
+
+  const handledArtifactShowRequestRef = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (
+      !savedProject ||
+      !artifactShowRequest ||
+      handledArtifactShowRequestRef.current === artifactShowRequest.requestId
+    ) {
+      return;
+    }
+    const group = groups.find((candidate) =>
+      candidate.revisions.some(
+        ({ artifact }) =>
+          artifact.mediaId === artifactShowRequest.mediaId &&
+          artifact.id === artifactShowRequest.artifactId,
+      ),
+    );
+    if (!group) {
+      if (generating || projectReconciliationBusy) return;
+      handledArtifactShowRequestRef.current = artifactShowRequest.requestId;
+      toast.error("That saved Screen revision is no longer part of this project.");
+      return;
+    }
+    const selected = selectScreenRevision({
+      group,
+      mediaId: artifactShowRequest.mediaId,
+      source: "conversation",
+      historical: true,
+      center: true,
+    });
+    if (!selected) return;
+    handledArtifactShowRequestRef.current = artifactShowRequest.requestId;
+    setMode("select");
+  }, [
+    artifactShowRequest,
+    generating,
+    groups,
+    projectReconciliationBusy,
+    savedProject,
+    selectScreenRevision,
+  ]);
+
+  const handledContextRemovalRequestRef = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (
+      !contextRemovalRequest ||
+      handledContextRemovalRequestRef.current === contextRemovalRequest.requestId
+    ) {
+      return;
+    }
+    handledContextRemovalRequestRef.current = contextRemovalRequest.requestId;
+    const { id } = contextRemovalRequest;
+    const next = reduceDesignWorkbenchSelection(selectionStateRef.current, {
+      type: "replace",
+      selections: selectionStateRef.current.selections.filter((selection) => {
+        if (id === "all") return false;
+        if (id.startsWith("target:") && selection.kind === "screen") {
+          return designDisplayedScreenRevision(selection).mediaId !== id.slice("target:".length);
+        }
+        if (id.startsWith("image:") && selection.kind === "reference") {
+          return selection.nodeId !== id.slice("image:".length);
+        }
+        if (id.startsWith("source:") && selection.kind === "connected-preview") return false;
+        return true;
+      }),
+      source: "composer",
+    });
+    commitSelection(next);
+    if (!designPrimaryScreenSelection(next)) setInspectorOpen(false);
+  }, [commitSelection, contextRemovalRequest]);
+
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       const target = event.target;
       if (
         target instanceof HTMLInputElement ||
@@ -2122,52 +2727,142 @@ export function DesignWorkspaceCanvas({
         (target instanceof HTMLElement && target.isContentEditable)
       )
         return;
-      if (event.key.toLowerCase() === "v") setMode("select");
-      if (event.key.toLowerCase() === "h") setMode("hand");
-      if (event.key.toLowerCase() === "e") setMode("inspect");
+      const canvasOwnsFocus =
+        target === workbenchRef.current ||
+        (target instanceof Element && Boolean(target.closest(".aiden-design-flow")));
+      if (!canvasOwnsFocus) return;
+      if (event.key === "Escape") {
+        const next = clearDesignSelectionLayer(selectionStateRef.current);
+        if (next !== selectionStateRef.current) {
+          event.preventDefault();
+          commitSelection(next);
+          if (next.selections.length === 0) setInspectorOpen(false);
+        }
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const shortcut = event.key.toLowerCase();
+      if (shortcut === "v" || shortcut === "h" || shortcut === "e") {
+        event.preventDefault();
+        setMode(shortcut === "v" ? "select" : shortcut === "h" ? "hand" : "inspect");
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [commitSelection]);
 
   const onNodesChange = React.useCallback((changes: NodeChange<StudioNode>[]) => {
     setNodes((current) => applyNodeChanges(changes, current));
   }, []);
 
+  const onCanvasMoveEnd = React.useCallback(
+    (
+      _event: MouseEvent | TouchEvent | null,
+      nextViewport: { x: number; y: number; zoom: number },
+    ) => {
+      flowViewportRef.current = nextViewport;
+      setFlowSaveRevision((current) => current + 1);
+    },
+    [],
+  );
+
   const onSelectionChange = React.useCallback(
     ({ nodes: selectedNodes }: { nodes: StudioNode[] }) => {
-      if (mode !== "select") return;
-      const nextTargets: DesignTurnTargetV1[] = [];
-      const nextImages: Attachment[] = [];
-      const existingTargets = new Map(targetsRef.current.map((target) => [target.mediaId, target]));
-      let sourceSelected = false;
+      if (modeRef.current !== "select") return;
+      const reportedNodeIds = selectedNodes.map(({ id }) => id);
+      const flowSync = consumeDesignFlowSelectionReport(
+        flowSelectionSyncRef.current,
+        reportedNodeIds,
+      );
+      flowSelectionSyncRef.current = flowSync.pending;
+      if (flowSync.ignore) {
+        return;
+      }
+      if (sameDesignSelectedNodeIds(selectionStateRef.current, reportedNodeIds)) {
+        return;
+      }
+      const selectedNodeIds = new Set(reportedNodeIds);
+      const retainedSelections = selectionStateRef.current.selections.filter((selection) =>
+        selectedNodeIds.has(selection.nodeId),
+      );
+      const retainedNodeIds = new Set(retainedSelections.map(({ nodeId }) => nodeId));
+      let nextSelection = reduceDesignWorkbenchSelection(selectionStateRef.current, {
+        type: "replace",
+        selections: retainedSelections,
+        source: "canvas",
+        ...(selectionStateRef.current.primaryKey
+          ? { primaryKey: selectionStateRef.current.primaryKey }
+          : {}),
+      });
       for (const node of selectedNodes) {
         if (node.type === "designImage") {
-          nextImages.push((node.data as ImageNodeData).attachment);
+          if (retainedNodeIds.has(node.id)) continue;
+          const assetId = assetIdByNodeRef.current.get(node.id);
+          if (assetId) {
+            nextSelection = reduceDesignWorkbenchSelection(nextSelection, {
+              type: "select",
+              selection: { kind: "reference", nodeId: node.id, assetId },
+              additive: true,
+              source: "canvas",
+            });
+          }
           continue;
         }
         if (node.type === "sourceArtboard") {
-          sourceSelected = true;
+          if (retainedNodeIds.has(node.id)) continue;
+          nextSelection = reduceDesignWorkbenchSelection(nextSelection, {
+            type: "select",
+            selection: {
+              kind: "connected-preview",
+              nodeId: node.id,
+              previewId: node.id,
+            },
+            additive: true,
+            source: "canvas",
+          });
           continue;
         }
+        if (node.type === "missingScreen") continue;
+        if (retainedNodeIds.has(node.id)) continue;
         const designData = node.data as DesignArtboardData;
-        setSelectedGroupId(designData.group.id);
-        const existing = existingTargets.get(designData.artifact.mediaId);
-        nextTargets.push(
-          existing ?? {
-            mediaId: designData.artifact.mediaId,
-            artifactId: designData.artifact.id,
-          },
+        const projectNode = savedProjectRef.current?.canvas.nodes.find(
+          (candidate) => candidate.kind === "artboard" && candidate.id === designData.group.id,
         );
+        if (!projectNode?.lineageId) continue;
+        const activeMediaId =
+          activeVersionsRef.current[designData.group.id] ??
+          projectNode.activeMediaId ??
+          designData.artifact.mediaId;
+        const activeArtifact =
+          designData.group.revisions.find(({ artifact }) => artifact.mediaId === activeMediaId)
+            ?.artifact ?? designData.artifact;
+        nextSelection = reduceDesignWorkbenchSelection(nextSelection, {
+          type: "select",
+          selection: {
+            kind: "screen",
+            nodeId: designData.group.id,
+            lineageId: projectNode.lineageId,
+            activeRevision: {
+              mediaId: activeArtifact.mediaId,
+              artifactId: activeArtifact.id,
+            },
+            ...(designData.artifact.mediaId !== activeArtifact.mediaId
+              ? {
+                  previewRevision: {
+                    mediaId: designData.artifact.mediaId,
+                    artifactId: designData.artifact.id,
+                  },
+                }
+              : {}),
+          },
+          additive: true,
+          source: "canvas",
+        });
       }
-      publishTargets(nextTargets.slice(0, 5));
-      if (nextTargets.length > 0) setInspectorOpen(true);
-      onSelectedImagesChange(nextImages.slice(0, 5));
-      if (!sourceSelected || nextTargets.length > 0 || nextImages.length > 0) {
-        onSourceSelectionChange(undefined);
-      }
+      commitSelectionRef.current(nextSelection, false);
+      if (designSelectionTurnTargets(nextSelection).length > 0) setInspectorOpen(true);
     },
-    [mode, onSelectedImagesChange, onSourceSelectionChange, publishTargets],
+    [],
   );
 
   const addImages = React.useCallback(
@@ -2196,15 +2891,31 @@ export function DesignWorkspaceCanvas({
             return { ...attachment, id: nodeId };
           }),
         );
-        setCanvasImages((current) => [...current, ...attachments]);
-        onSelectedImagesChange(attachments);
-        publishTargets([]);
+        const nextCanvasImages = [...canvasImagesRef.current, ...attachments];
+        canvasImagesRef.current = nextCanvasImages;
+        setCanvasImages(nextCanvasImages);
+        let nextSelection = EMPTY_DESIGN_WORKBENCH_SELECTION;
+        for (const attachment of attachments) {
+          const assetId = assetIdByNodeRef.current.get(attachment.id);
+          if (!assetId) continue;
+          nextSelection = reduceDesignWorkbenchSelection(nextSelection, {
+            type: "select",
+            selection: {
+              kind: "reference",
+              nodeId: attachment.id,
+              assetId,
+            },
+            additive: true,
+            source: "canvas",
+          });
+        }
+        commitSelection(nextSelection);
         onSourceSelectionChange(undefined);
       } catch (cause) {
         toast.error(cause instanceof Error ? cause.message : "Could not add those images.");
       }
     },
-    [canvasImages.length, onSelectedImagesChange, onSourceSelectionChange, publishTargets],
+    [canvasImages.length, commitSelection, onSourceSelectionChange],
   );
 
   const removeMissingReferenceAsset = React.useCallback(
@@ -2323,19 +3034,69 @@ export function DesignWorkspaceCanvas({
     },
     [multifileBusy, onSourceSelectionChange, savedProject],
   );
+  const durableActiveMediaId = selectedGroup
+    ? (activeVersions[selectedGroup.id] ??
+      selectedGroupNode?.activeMediaId ??
+      selectedGroup.revisions[selectedGroup.revisions.length - 1]?.artifact.mediaId)
+    : undefined;
   const revisionSummaries: DesignProjectRevisionSummary[] =
     selectedGroup?.revisions.map(({ artifact }, index) => {
       const source = sourceByMediaId[artifact.mediaId];
       return {
         id: artifact.mediaId,
         lineageId: selectedGroupNode?.lineageId ?? `unavailable:${artifact.id}`,
-        label: artifact.title || `Revision ${index + 1}`,
+        label: `Revision ${index + 1}`,
         createdAt: source?.createdAt ?? savedProject?.createdAt ?? 0,
         provenance: source?.provenance ?? "Generated by Aiden",
         ...(source?.model ? { model: source.model } : {}),
-        active: artifact.mediaId === selectedMediaId,
+        active: artifact.mediaId === durableActiveMediaId,
+        previewed: artifact.mediaId === selectedMediaId,
       };
     }) ?? [];
+
+  const closeInspector = React.useCallback(() => {
+    setInspectorOpen(false);
+    const opener = inspectorOpenerRef.current;
+    inspectorOpenerRef.current = null;
+    if (opener?.isConnected) {
+      requestAnimationFrame(() => opener.focus({ preventScroll: true }));
+      return;
+    }
+    const selected = designPrimaryScreenSelection(selectionStateRef.current);
+    const revision = selected ? designDisplayedScreenRevision(selected) : undefined;
+    const group = selected
+      ? groups.find((candidate) => candidate.id === selected.nodeId)
+      : undefined;
+    if (group && revision) focusScreenOnCanvas(group, revision.mediaId);
+    else requestAnimationFrame(() => workbenchRef.current?.focus({ preventScroll: true }));
+  }, [focusScreenOnCanvas, groups]);
+  const closeScreenNavigator = React.useCallback((restoreFocus = true) => {
+    setScreenNavigatorOpen(false);
+    if (restoreFocus) {
+      requestAnimationFrame(() =>
+        screenNavigatorTriggerRef.current?.focus({ preventScroll: true }),
+      );
+    }
+  }, []);
+  const returnToCurrentRevision = React.useCallback(() => {
+    const selected = designPrimaryScreenSelection(selectionStateRef.current);
+    if (!selected?.previewRevision) return;
+    commitSelection(
+      reduceDesignWorkbenchSelection(selectionStateRef.current, {
+        type: "clear-screen-preview",
+        lineageId: selected.lineageId,
+        source: "history",
+      }),
+    );
+    setCanvasAnnouncement("Returned to the current Screen revision.");
+  }, [commitSelection]);
+  const refineFromSelectedRevision = React.useCallback(() => {
+    const selected = designPrimaryScreenSelection(selectionStateRef.current);
+    if (!selected) return;
+    setInspectorOpen(false);
+    setCanvasAnnouncement("Historical revision selected as the exact Refine starting point.");
+    onRequestComposerFocus();
+  }, [onRequestComposerFocus]);
   const designerActionSummaries: DesignProjectDesignerActionSummary[] = designerActions.map(
     (action) => ({
       id: action.id,
@@ -2380,6 +3141,8 @@ export function DesignWorkspaceCanvas({
   if (unavailableMessage) {
     return (
       <section
+        ref={workbenchRef}
+        tabIndex={-1}
         className="relative grid h-full place-items-center bg-well px-8"
         aria-label="Design workspace canvas"
       >
@@ -2407,9 +3170,15 @@ export function DesignWorkspaceCanvas({
     );
   }
 
-  if (groups.length === 0 && canvasImages.length === 0 && sourcePreview?.status !== "running") {
+  if (
+    durableScreenCount === 0 &&
+    canvasImages.length === 0 &&
+    sourcePreview?.status !== "running"
+  ) {
     return (
       <section
+        ref={workbenchRef}
+        tabIndex={-1}
         className="relative grid h-full min-h-[32rem] place-items-center overflow-hidden bg-well px-8"
         aria-label="Design workspace canvas"
         data-design-workspace-canvas
@@ -2419,7 +3188,11 @@ export function DesignWorkspaceCanvas({
         <CanvasToolRail
           mode={mode}
           onModeChange={setMode}
-          onNewDesign={onRequestComposerFocus}
+          onExplore={onRequestComposerFocus}
+          onRefine={onRequestComposerFocus}
+          canRefine={false}
+          onExport={() => undefined}
+          canExport={false}
           onUpload={() => uploadRef.current?.click()}
         />
         {savedProject?.connectionState === "prototype-only" ? (
@@ -2460,7 +3233,7 @@ export function DesignWorkspaceCanvas({
           title={generating ? "Building your first interface…" : "What should we design?"}
           description={
             generating
-              ? "Aiden is turning your brief into responsive artboards on the canvas."
+              ? "Aiden is turning your brief into responsive Screens on the canvas."
               : "Describe one screen or a whole flow below. You can also add reference images to the canvas."
           }
           generating={generating}
@@ -2471,17 +3244,25 @@ export function DesignWorkspaceCanvas({
 
   return (
     <section
+      ref={workbenchRef}
+      tabIndex={-1}
       className="relative h-full min-h-[32rem] w-full min-w-0 overflow-hidden bg-well text-primary"
       aria-label="Design workspace canvas"
       data-design-workspace-canvas
       data-design-preview-stage
       data-canvas-mode={mode}
+      data-design-inspector-layout={
+        inspectorOpen ? (compactInspector ? "sheet" : "rail") : "closed"
+      }
     >
+      <p className="sr-only" role="status" aria-live="polite">
+        {canvasAnnouncement}
+      </p>
       {missingReferenceNotice}
       {projectReconciliationNotice}
       <ReactFlow<StudioNode>
         nodes={nodes}
-        edges={[]}
+        edges={EMPTY_STUDIO_EDGES}
         nodeTypes={NODE_TYPES}
         onNodesChange={onNodesChange}
         onSelectionChange={onSelectionChange}
@@ -2493,12 +3274,9 @@ export function DesignWorkspaceCanvas({
             requestAnimationFrame(() => void instance.fitView({ padding: 0.18, maxZoom: 0.9 }));
           }
         }}
-        onMoveEnd={(_event, nextViewport) => {
-          flowViewportRef.current = nextViewport;
-          setFlowSaveRevision((current) => current + 1);
-        }}
+        onMoveEnd={onCanvasMoveEnd}
         fitView={!savedProject}
-        fitViewOptions={{ padding: 0.18, maxZoom: 0.9 }}
+        fitViewOptions={STUDIO_FIT_VIEW_OPTIONS}
         minZoom={0.12}
         maxZoom={2}
         panOnDrag={mode === "hand"}
@@ -2520,11 +3298,20 @@ export function DesignWorkspaceCanvas({
       <CanvasToolRail
         mode={mode}
         onModeChange={setMode}
-        onNewDesign={() => {
-          publishTargets([]);
+        onExplore={() => {
+          commitSelection(EMPTY_DESIGN_WORKBENCH_SELECTION);
           onSelectedImagesChange([]);
+          onSourceSelectionChange(undefined);
+          setInspectorOpen(false);
+          setCommentsOpen(false);
           onRequestComposerFocus();
         }}
+        onRefine={refineFromSelectedRevision}
+        canRefine={Boolean(primaryScreenSelection)}
+        onExport={() => {
+          if (selectedArtifact) void exportArtifact(selectedArtifact);
+        }}
+        canExport={Boolean(selectedArtifact)}
         onUpload={() => uploadRef.current?.click()}
       />
       {savedProject?.connectionState === "prototype-only" ? (
@@ -2563,7 +3350,23 @@ export function DesignWorkspaceCanvas({
         }}
       />
 
-      <div className="design-canvas-toolbar absolute right-4 top-4 z-20 flex items-center gap-1 rounded-popover bg-popover p-1 shadow-control">
+      <div className="design-canvas-toolbar absolute right-4 top-4 z-40 flex items-center gap-1 rounded-popover bg-popover p-1 shadow-control">
+        <Button
+          ref={screenNavigatorTriggerRef}
+          size="small"
+          variant="transparent"
+          onClick={() => {
+            if (screenNavigatorOpen) closeScreenNavigator();
+            else setScreenNavigatorOpen(true);
+          }}
+          title="Browse and center a saved Screen"
+          aria-expanded={screenNavigatorOpen}
+          aria-controls="design-screen-navigator"
+          data-design-screen-count={durableScreenCount}
+        >
+          <PanelsTopLeft aria-hidden="true" /> Screens · {durableScreenCount}
+        </Button>
+        <span className="mx-1 h-5 w-px bg-separator" aria-hidden="true" />
         {(["desktop", "tablet", "phone"] as const).map((id) => {
           const Icon = id === "desktop" ? Monitor : id === "tablet" ? Tablet : Smartphone;
           return (
@@ -2571,7 +3374,7 @@ export function DesignWorkspaceCanvas({
               key={id}
               type="button"
               aria-pressed={viewport === id}
-              aria-label={`${id} artboards`}
+              aria-label={`Preview Screens at ${id} width`}
               onClick={() => setViewport(id)}
               className={cn(
                 "design-canvas-control grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary",
@@ -2597,16 +3400,21 @@ export function DesignWorkspaceCanvas({
         </Button>
         <button
           type="button"
-          disabled={!selectedDirectEditTarget && !sourceSelection}
+          disabled={
+            (!selectedDirectEditTarget && !sourceSelection) ||
+            Boolean(primaryScreenSelection?.previewRevision)
+          }
           onClick={() => setDirectEditOpen(true)}
           className="design-canvas-control grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary disabled:opacity-40"
           aria-label="Edit selected element"
           title={
-            sourceSelection
-              ? "Create a reviewable Designer Action for this exact connected element"
-              : selectedDirectEditTarget
-                ? "Create a literal, immutable revision for this element"
-                : "Select one stable element in a generated artboard"
+            primaryScreenSelection?.previewRevision
+              ? "Make this revision current before editing it directly"
+              : sourceSelection
+                ? "Create a reviewable Designer Action for this exact connected element"
+                : selectedDirectEditTarget
+                  ? "Create a literal, immutable revision for this element"
+                  : "Select one stable element in a generated Screen"
           }
         >
           <SlidersHorizontal className="size-4" aria-hidden="true" />
@@ -2615,8 +3423,12 @@ export function DesignWorkspaceCanvas({
           type="button"
           aria-pressed={inspectorOpen}
           disabled={!selectedGroup && !sourceSelection}
-          onClick={() => {
-            setInspectorOpen((open) => !open);
+          onClick={(event) => {
+            if (inspectorOpen) closeInspector();
+            else {
+              inspectorOpenerRef.current = event.currentTarget;
+              setInspectorOpen(true);
+            }
             setCommentsOpen(false);
           }}
           className="design-canvas-control grid size-8 place-items-center rounded-control text-secondary hover:bg-list-hover hover:text-primary disabled:opacity-40"
@@ -2667,6 +3479,38 @@ export function DesignWorkspaceCanvas({
         </button>
         {generating ? (
           <Loader2 className="mx-2 size-4 animate-spin text-secondary" aria-label="Generating" />
+        ) : null}
+        {screenNavigatorOpen ? (
+          <div id="design-screen-navigator" className="absolute right-0 top-full mt-2">
+            <DesignScreenNavigator
+              screens={navigatorScreens}
+              unavailableScreens={missingScreens.map((screen, index) => ({
+                nodeId: screen.id,
+                title: `Screen ${groups.length + index + 1}`,
+              }))}
+              selectedLineageId={primaryScreenSelection?.lineageId}
+              selectedMediaId={selectedMediaId}
+              autoFocusSearch
+              onSelectScreen={(target) => {
+                const group = groups.find((candidate) => candidate.id === target.nodeId);
+                if (!group) return;
+                const exact = group.revisions.some(
+                  ({ artifact }) =>
+                    artifact.mediaId === target.mediaId && artifact.id === target.artifactId,
+                );
+                if (!exact) return;
+                selectScreenRevision({
+                  group,
+                  mediaId: target.mediaId,
+                  source: "screen-navigator",
+                  historical: target.mode === "historical",
+                  center: true,
+                });
+                closeScreenNavigator(false);
+              }}
+              onClose={() => closeScreenNavigator()}
+            />
+          </div>
         ) : null}
       </div>
 
@@ -3172,8 +4016,15 @@ export function DesignWorkspaceCanvas({
                   candidate.kind === "artboard" && candidate.lineageId === target.lineageId,
               );
               if (!node) return;
-              setSelectedGroupId(node.id);
-              changeVersion(node.id, target.mediaId);
+              const group = groups.find((candidate) => candidate.id === node.id);
+              if (!group) return;
+              selectScreenRevision({
+                group,
+                mediaId: target.mediaId,
+                source: "inspector",
+                historical: true,
+                center: true,
+              });
             }}
             onRetry={() => void loadComments()}
             onClose={() => setCommentsOpen(false)}
@@ -3181,7 +4032,10 @@ export function DesignWorkspaceCanvas({
         </div>
       ) : null}
       {inspectorOpen && savedProject ? (
-        <div className="absolute inset-y-0 right-0 z-40">
+        <div
+          className="absolute inset-y-0 right-0 z-40"
+          data-design-inspector-surface={compactInspector ? "sheet" : "rail"}
+        >
           <DesignProjectInspector
             selectionTitle={selectedGroup?.title ?? sourceSelection?.selection.label}
             connectionState={savedProject.connectionState}
@@ -3203,6 +4057,8 @@ export function DesignWorkspaceCanvas({
                 : undefined
             }
             compareSource={compareSource}
+            previewingHistoricalRevision={Boolean(primaryScreenSelection?.previewRevision)}
+            makeRevisionCurrentBusy={makeCurrentBusy}
             revisions={revisionSummaries}
             designerActions={designerActionSummaries}
             preview={
@@ -3214,7 +4070,7 @@ export function DesignWorkspaceCanvas({
               </div>
             }
             findQuery={inspectorFind}
-            layout="drawer"
+            layout={compactInspector ? "drawer" : "rail"}
             onTabChange={setInspectorTab}
             onFindChange={setInspectorFind}
             onCopySource={(source) => {
@@ -3279,9 +4135,17 @@ export function DesignWorkspaceCanvas({
             }
             onSelectRevision={(lineageId, revisionId) => {
               if (lineageId === selectedGroupNode?.lineageId && selectedGroup) {
-                changeVersion(selectedGroup.id, revisionId);
+                selectScreenRevision({
+                  group: selectedGroup,
+                  mediaId: revisionId,
+                  source: "history",
+                  historical: true,
+                });
               }
             }}
+            onMakeRevisionCurrent={makeSelectedRevisionCurrent}
+            onReturnToCurrentRevision={returnToCurrentRevision}
+            onRefineFromRevision={refineFromSelectedRevision}
             onCompareRevision={(lineageId, revisionId) => {
               if (lineageId !== selectedGroupNode?.lineageId) return;
               setComparisonMediaId(revisionId);
@@ -3294,7 +4158,7 @@ export function DesignWorkspaceCanvas({
                 toast.info("Use the exact Designer Action review on the canvas.");
               }
             }}
-            onClose={() => setInspectorOpen(false)}
+            onClose={closeInspector}
           />
         </div>
       ) : null}
@@ -3305,12 +4169,20 @@ export function DesignWorkspaceCanvas({
 function CanvasToolRail({
   mode,
   onModeChange,
-  onNewDesign,
+  onExplore,
+  onRefine,
+  canRefine,
+  onExport,
+  canExport,
   onUpload,
 }: {
   mode: CanvasMode;
   onModeChange: (mode: CanvasMode) => void;
-  onNewDesign: () => void;
+  onExplore: () => void;
+  onRefine: () => void;
+  canRefine: boolean;
+  onExport: () => void;
+  canExport: boolean;
   onUpload: () => void;
 }) {
   return (
@@ -3328,7 +4200,16 @@ function CanvasToolRail({
         <MousePointer2 className="size-4" aria-hidden="true" />
       </CanvasToolButton>
       <CanvasToolButton
-        label="Visual edits"
+        label="Hand"
+        description="Pan around the canvas without moving Screens."
+        shortcut="H"
+        active={mode === "hand"}
+        onClick={() => onModeChange("hand")}
+      >
+        <Hand className="size-4" aria-hidden="true" />
+      </CanvasToolButton>
+      <CanvasToolButton
+        label="Pick element"
         description="Pick an element in a generated screen or running app."
         shortcut="E"
         active={mode === "inspect"}
@@ -3338,7 +4219,7 @@ function CanvasToolRail({
       </CanvasToolButton>
       <CanvasToolButton
         label="Preview"
-        description="Use the interface without selecting its elements."
+        description="Use the selected Screen without selecting its elements."
         active={mode === "preview"}
         onClick={() => onModeChange("preview")}
       >
@@ -3346,11 +4227,27 @@ function CanvasToolRail({
       </CanvasToolButton>
       <span className="my-1 h-px w-6 bg-separator" aria-hidden="true" />
       <CanvasToolButton
-        label="New design"
-        description="Focus the prompt to describe another screen or flow."
-        onClick={onNewDesign}
+        label="Explore"
+        description="Clear context and describe a new Screen or direction set."
+        onClick={onExplore}
       >
         <Plus className="size-4" aria-hidden="true" />
+      </CanvasToolButton>
+      <CanvasToolButton
+        label="Refine"
+        description="Continue from the exact selected Screen revision."
+        disabled={!canRefine}
+        onClick={onRefine}
+      >
+        <SlidersHorizontal className="size-4" aria-hidden="true" />
+      </CanvasToolButton>
+      <CanvasToolButton
+        label="Export"
+        description="Save the exact selected Screen as a standalone artifact."
+        disabled={!canExport}
+        onClick={onExport}
+      >
+        <Download className="size-4" aria-hidden="true" />
       </CanvasToolButton>
       <CanvasToolButton
         label="Add reference image"
@@ -3358,15 +4255,6 @@ function CanvasToolRail({
         onClick={onUpload}
       >
         <ImagePlus className="size-4" aria-hidden="true" />
-      </CanvasToolButton>
-      <CanvasToolButton
-        label="Hand"
-        description="Pan around the canvas without moving artboards."
-        shortcut="H"
-        active={mode === "hand"}
-        onClick={() => onModeChange("hand")}
-      >
-        <Hand className="size-4" aria-hidden="true" />
       </CanvasToolButton>
     </nav>
   );

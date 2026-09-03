@@ -323,6 +323,12 @@ body {
   justify-content: flex-end;
 }
 
+.design-source-preview-control {
+  top: auto !important;
+  right: 4rem;
+  bottom: 1rem;
+}
+
 .design-canvas-status-stack {
   position: absolute;
   z-index: 25;
@@ -398,7 +404,7 @@ body {
 @media (max-width: 400px) {
   .design-source-preview-control {
     right: 0.5rem;
-    top: 5.75rem;
+    bottom: 7rem;
   }
 }
 

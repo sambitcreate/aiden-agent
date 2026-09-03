@@ -303,6 +303,7 @@ export interface DesignProjectRevisionSummary {
   provenance: string;
   model?: string;
   active?: boolean;
+  previewed?: boolean;
 }
 
 export interface DesignProjectDesignerActionSummary {
@@ -322,7 +323,7 @@ export function designProjectOriginLabel(
 }
 
 export function designProjectArtboardLabel(count: number): string {
-  return `${count} ${count === 1 ? "artboard" : "artboards"}`;
+  return `${count} ${count === 1 ? "screen" : "screens"}`;
 }
 
 export function filterDesignProjects(
