@@ -6,7 +6,12 @@ import test from "node:test";
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 
-import { initDiagnosticJournal, writeDiagnosticEvent, writeDiagnosticEventSync, flushDiagnosticJournal } from "./diagnostic-journal.js";
+import {
+  initDiagnosticJournal,
+  writeDiagnosticEvent,
+  writeDiagnosticEventSync,
+  flushDiagnosticJournal,
+} from "./diagnostic-journal.js";
 import { initDiagnosticHealth } from "./diagnostic-health.js";
 import {
   flushSubagentRuntimeDiagnostics,
@@ -24,7 +29,9 @@ import {
 
 const gunzipAsync = promisify(gunzip);
 
-async function fixture(run: (root: string, logs: string, dumps: string) => Promise<void>): Promise<void> {
+async function fixture(
+  run: (root: string, logs: string, dumps: string) => Promise<void>,
+): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-support-"));
   const logs = path.join(root, "logs");
   const dumps = path.join(root, "dumps");
@@ -45,7 +52,11 @@ function app() {
 
 test("status reports bounded local evidence without exposing file paths", async () => {
   await fixture(async (_root, logs, dumps) => {
-    initDiagnosticJournal({ targetPath: path.join(logs, "aiden.log"), profile: "production", sessionId: "session-test" });
+    initDiagnosticJournal({
+      targetPath: path.join(logs, "aiden.log"),
+      profile: "production",
+      sessionId: "session-test",
+    });
     writeDiagnosticEvent({ level: "warn", area: "renderer", event: "renderer-unresponsive" });
     await flushDiagnosticJournal();
     const status = await diagnosticSupportStatus({ logsPath: logs, crashDumpsPath: dumps });
@@ -70,8 +81,17 @@ test("status reports corrupt journal and health evidence as a sink failure", asy
 
 test("export is manifest-first, projects subagent identifiers, and validates its round trip", async () => {
   await fixture(async (root, logs, dumps) => {
-    initDiagnosticJournal({ targetPath: path.join(logs, "aiden.log"), profile: "production", sessionId: "session-test" });
-    writeDiagnosticEvent({ level: "error", area: "providers", event: "provider-failed", code: "provider-failed" });
+    initDiagnosticJournal({
+      targetPath: path.join(logs, "aiden.log"),
+      profile: "production",
+      sessionId: "session-test",
+    });
+    writeDiagnosticEvent({
+      level: "error",
+      area: "providers",
+      event: "provider-failed",
+      code: "provider-failed",
+    });
     await flushDiagnosticJournal();
     initSubagentRuntimeDiagnostics(path.join(logs, "subagent-runtime.log"));
     await fs.writeFile(
@@ -98,11 +118,21 @@ test("export is manifest-first, projects subagent identifiers, and validates its
       tempRoot: root,
       now: () => new Date("2026-08-27T13:00:00.000Z"),
     });
-    assert.deepEqual(manifest.included, { generalRecords: 2, subagentRecords: 1, healthDays: 0, crashDumps: 0 });
+    assert.deepEqual(manifest.included, {
+      generalRecords: 2,
+      subagentRecords: 1,
+      healthDays: 0,
+      crashDumps: 0,
+    });
     assert.equal((await fs.stat(destination)).mode & 0o777, 0o600);
-    const bundle = JSON.parse((await gunzipAsync(await fs.readFile(destination))).toString("utf8")) as DiagnosticExportBundle;
+    const bundle = JSON.parse(
+      (await gunzipAsync(await fs.readFile(destination))).toString("utf8"),
+    ) as DiagnosticExportBundle;
     const text = JSON.stringify(bundle);
-    assert.doesNotMatch(text, /private-diagnostic-id|private-run-id|private-provider-id|private-model-id|private detail/u);
+    assert.doesNotMatch(
+      text,
+      /private-diagnostic-id|private-run-id|private-provider-id|private-model-id|private detail/u,
+    );
     assert.match(text, /provider_failure/u);
   });
 });
@@ -113,21 +143,35 @@ test("an export after a long idle period sweeps expired general fatal and subage
     const ninthDay = new Date("2026-08-09T00:00:00.001Z");
     const journal = path.join(logs, "aiden.log");
     initDiagnosticJournal({ targetPath: journal, profile: "production", now: () => firstDay });
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 1 },
+    });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 1 },
+    });
     await flushDiagnosticJournal();
 
     const subagent = path.join(logs, "subagent-runtime.log");
     initSubagentRuntimeDiagnostics(subagent);
-    await fs.writeFile(subagent, `${JSON.stringify({
-      at: firstDay.toISOString(),
-      diagnosticId: "SA-expired",
-      providerId: "custom:test",
-      modelId: "test-model",
-      failure: "provider",
-      attempts: 1,
-      diagnostics: [{ stage: "provider", code: "provider_failure" }],
-    })}\n`, { mode: 0o600 });
+    await fs.writeFile(
+      subagent,
+      `${JSON.stringify({
+        at: firstDay.toISOString(),
+        diagnosticId: "SA-expired",
+        providerId: "custom:test",
+        modelId: "test-model",
+        failure: "provider",
+        attempts: 1,
+        diagnostics: [{ stage: "provider", code: "provider_failure" }],
+      })}\n`,
+      { mode: 0o600 },
+    );
     await fs.utimes(subagent, firstDay, firstDay);
 
     const destination = path.join(root, "idle-export.json.gz");
@@ -142,7 +186,9 @@ test("an export after a long idle period sweeps expired general fatal and subage
     });
     assert.equal(manifest.included.generalRecords, 0);
     assert.equal(manifest.included.subagentRecords, 0);
-    const bundle = JSON.parse((await gunzipAsync(await fs.readFile(destination))).toString("utf8")) as DiagnosticExportBundle;
+    const bundle = JSON.parse(
+      (await gunzipAsync(await fs.readFile(destination))).toString("utf8"),
+    ) as DiagnosticExportBundle;
     assert.doesNotMatch(JSON.stringify(bundle), /SA-expired|"sequence":1/u);
   });
 });
@@ -236,13 +282,16 @@ test("startup pruning enforces crash dump age and count without reading dump con
       const at = new Date(Date.now() - index * 1_000);
       await fs.utimes(file, at, at);
     }
-    await fs.writeFile(path.join(dumps, "oversized.dmp"), Buffer.alloc(16 * 1024 * 1024 + 1), { mode: 0o644 });
+    await fs.writeFile(path.join(dumps, "oversized.dmp"), Buffer.alloc(16 * 1024 * 1024 + 1), {
+      mode: 0o644,
+    });
     await pruneExpiredDiagnosticCrashDumps(dumps);
     const retained = (await fs.readdir(dumps)).filter((name) => name.endsWith(".dmp"));
     assert.equal(retained.length, 3);
     assert.equal(retained.includes("stale.dmp"), false);
     assert.equal(retained.includes("oversized.dmp"), false);
-    for (const name of retained) assert.equal((await fs.stat(path.join(dumps, name))).mode & 0o777, 0o600);
+    for (const name of retained)
+      assert.equal((await fs.stat(path.join(dumps, name))).mode & 0o777, 0o600);
   });
 });
 
@@ -262,9 +311,16 @@ test("unknown records and symlinked sources fail closed or stay excluded", async
       app: app(),
       tempRoot: root,
     });
-    assert.doesNotMatch((await gunzipAsync(await fs.readFile(destination))).toString("utf8"), /outside/u);
+    assert.doesNotMatch(
+      (await gunzipAsync(await fs.readFile(destination))).toString("utf8"),
+      /outside/u,
+    );
 
-    await fs.writeFile(path.join(logs, "aiden.log"), `${JSON.stringify({ unknown: true })}\n`, "utf8");
+    await fs.writeFile(
+      path.join(logs, "aiden.log"),
+      `${JSON.stringify({ unknown: true })}\n`,
+      "utf8",
+    );
     await assert.rejects(
       createDiagnosticExport({
         logsPath: logs,
@@ -281,8 +337,8 @@ test("unknown records and symlinked sources fail closed or stay excluded", async
       path.join(logs, "aiden.log"),
       `${JSON.stringify({
         version: 1,
-        at: "2026-08-27T12:00:00.000Z",
         sessionId: "session-forged",
+        at: new Date().toISOString(),
         level: "error",
         area: "app",
         event: "app-failed",
@@ -309,23 +365,30 @@ test("subagent export rejects open-string categorical fields", async () => {
     initDiagnosticJournal({ targetPath: path.join(logs, "aiden.log"), profile: "production" });
     const subagent = path.join(logs, "subagent-runtime.log");
     initSubagentRuntimeDiagnostics(subagent);
-    await fs.writeFile(subagent, `${JSON.stringify({
-      at: "2026-08-27T12:00:00.000Z",
-      diagnosticId: "SA-forged",
-      providerId: "private",
-      modelId: "private",
-      failure: "plaintext-private-value",
-      attempts: 1,
-      diagnostics: [],
-    })}\n`, { mode: 0o600 });
-    await assert.rejects(createDiagnosticExport({
-      logsPath: logs,
-      crashDumpsPath: dumps,
-      destination: path.join(root, "forged-subagent.json.gz"),
-      includeCrashDumps: false,
-      app: app(),
-      tempRoot: root,
-    }), /unknown record/u);
+    await fs.writeFile(
+      subagent,
+      `${JSON.stringify({
+        at: new Date().toISOString(),
+        diagnosticId: "SA-forged",
+        providerId: "private",
+        modelId: "private",
+        failure: "plaintext-private-value",
+        attempts: 1,
+        diagnostics: [],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    await assert.rejects(
+      createDiagnosticExport({
+        logsPath: logs,
+        crashDumpsPath: dumps,
+        destination: path.join(root, "forged-subagent.json.gz"),
+        includeCrashDumps: false,
+        app: app(),
+        tempRoot: root,
+      }),
+      /unknown record/u,
+    );
   });
 });
 
@@ -419,7 +482,9 @@ test("concurrent crash pruning and status tolerate disappearing dumps", async ()
       await fs.utimes(dump, old, old);
     }
     await Promise.all([
-      ...Array.from({ length: 20 }, () => diagnosticSupportStatus({ logsPath: logs, crashDumpsPath: dumps })),
+      ...Array.from({ length: 20 }, () =>
+        diagnosticSupportStatus({ logsPath: logs, crashDumpsPath: dumps }),
+      ),
       ...Array.from({ length: 10 }, () => pruneExpiredDiagnosticCrashDumps(dumps)),
     ]);
   });
