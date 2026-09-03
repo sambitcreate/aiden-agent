@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(new URL("./design-project-library.tsx", import.meta.url), "utf8");
+const sidebarSource = readFileSync(
+  new URL("./design-project-sidebar.tsx", import.meta.url),
+  "utf8",
+);
 const inspectorSource = readFileSync(
   new URL("./design-project-inspector.tsx", import.meta.url),
   "utf8",
@@ -34,6 +38,22 @@ test("library has loading, empty, filtered-empty, error, and repair states", () 
   assert.match(source, /data-health=\{project\.health\}/u);
   assert.match(source, /onRepairProject\(project\.id\)/u);
   assert.match(source, /project\.recoveryAction === "open-project" \? "Open" : "Repair"/u);
+});
+
+test("new projects are created immediately with a guarded local-first default title", () => {
+  assert.match(sidebarSource, /createInFlightRef\.current/u);
+  assert.match(
+    sidebarSource,
+    /if \(appendReconciliationRequired \|\| createInFlightRef\.current\) return/u,
+  );
+  assert.match(sidebarSource, /designerApi\.createProject\(\)/u);
+  assert.match(sidebarSource, /title=\{createBusy \? "Creating…" : "New Project"\}/u);
+  assert.match(sidebarSource, /onClick=\{\(\) => void createProject\(\)\}/u);
+  assert.doesNotMatch(sidebarSource, /title="New Design Project"/u);
+  assert.match(sidebarSource, /title="Rename Design Project"/u);
+  assert.match(source, /disabled=\{createDisabled \|\| createBusy\}/u);
+  assert.match(source, /aria-busy=\{createBusy \|\| undefined\}/u);
+  assert.match(sidebarSource, /createDisabled=\{appendReconciliationRequired\}/u);
 });
 
 test("library rail and drawer preserve focus while text search keeps a quiet focus treatment", () => {

@@ -26,9 +26,10 @@ import {
 import {
   isDesignProjectOpaqueId,
   normalizeDesignProjectTitle,
-  parseDesignProjectCanvasV1,
-  type DesignProjectSnapshotV1,
+  type DesignProjectSnapshot as DesignProjectSnapshotV1,
 } from "../services/design-project-contract.js";
+import { parseDesignProjectCanvasForV2Update } from "../services/design-project-contract-v2.js";
+import { normalizeDesignScreenPresentationV2 } from "../services/design-project-v2-policy.js";
 import {
   DesignProjectPublicationUncertainError,
   DesignProjectRevisionConflictError,
@@ -639,38 +640,28 @@ export function registerDesignerHandlers(): void {
 
   ipcMain.handle("designer:createProject", async (event, inputValue: unknown) => {
     const owner = ownerFor(event);
-    const input = parseDesignProjectCreateParams(inputValue);
-    const { title } = input;
-    const state = input.connectionState;
-    const connectedWorkspaceId = input.workspaceId;
-    const create = async (signal?: AbortSignal) => {
+    parseDesignProjectCreateParams(inputValue);
+    const title = "Untitled Design";
+    const create = async () => {
       const chat = await chatApplicationService.createDesignConversation({ title }, owner);
       if (!chat) throw new Error("Aiden could not create the Design Project conversation.");
       try {
-        if (signal?.aborted) throw signal.reason;
         return await designProjectLifecycle.runProjectMutation(() =>
           designProjectStore.create({
             chatId: chat.id,
             title,
-            connectionState: state,
-            ...(connectedWorkspaceId ? { workspaceId: connectedWorkspaceId } : {}),
+            titleOrigin: "blank",
+            connectionState: "prototype-only",
           }),
         );
       } catch (error) {
         if (!(error instanceof DesignProjectPublicationUncertainError)) {
-        await chatApplicationService.remove(chat.id);
+          await chatApplicationService.remove(chat.id);
         }
         throw error;
       }
     };
-    if (!connectedWorkspaceId) {
-      return create();
-    }
-    return workspaceEnvironmentApplicationService.run(
-      owner,
-      connectedWorkspaceId,
-      async (_resolved, signal) => create(signal),
-    );
+    return create();
   });
 
   ipcMain.handle("designer:connectProject", async (event, inputValue: unknown) => {
@@ -697,37 +688,92 @@ export function registerDesignerHandlers(): void {
   ipcMain.handle("designer:updateProject", async (event, inputValue: unknown) => {
     ownerFor(event);
     const input = parseDesignProjectContentUpdateEnvelope(inputValue);
-    const canvas = parseDesignProjectCanvasV1(input.canvas);
-    if (!canvas || !Array.isArray(input.referenceAssetIds)) {
+    const canvas = parseDesignProjectCanvasForV2Update(input.canvas);
+    if (!canvas) {
       throw new Error("Invalid Design Project canvas.");
     }
-    const referenceAssetIds = input.referenceAssetIds.map(projectId);
     const requestedProjectId = projectId(input.id);
     try {
       const project = await designProjectLifecycle.runProjectMutation(async () => {
-        await requireStoredReferenceAssets(referenceAssetIds);
-        const current = await designProjectStore.get(requestedProjectId);
-        if (!current) throw new Error("Design Project was not found.");
         return designProjectStore.update({
           id: requestedProjectId,
           expectedRevision: projectRevision(input.expectedRevision),
-          connectionState: current.connectionState,
-          ...(current.workspaceId ? { workspaceId: current.workspaceId } : {}),
           canvas,
-          referenceAssetIds,
-          ...(input.designSystemBinding === undefined
-            ? {}
-            : {
-                designSystemBinding: exactRecord(
-                  input.designSystemBinding,
-                  new Set(["id", "revision"]),
-                ) as unknown as DesignProjectSnapshotV1["designSystemBinding"],
-              }),
-          ...(input.previewScriptId === undefined
-            ? {}
-            : { previewScriptId: projectId(input.previewScriptId) }),
         });
       });
+      return { status: "updated" as const, project };
+    } catch (error) {
+      if (!(error instanceof DesignProjectRevisionConflictError)) throw error;
+      const current = await designProjectStore.get(requestedProjectId);
+      if (!current) throw error;
+      return { status: "conflict" as const, current };
+    }
+  });
+
+  ipcMain.handle("designer:setActiveRevision", async (event, inputValue: unknown) => {
+    ownerFor(event);
+    const input = exactRecord(
+      inputValue,
+      new Set(["id", "expectedRevision", "lineageId", "mediaId"]),
+    );
+    const requestedProjectId = projectId(input.id);
+    try {
+      const project = await designProjectLifecycle.runProjectMutation(() =>
+        designProjectStore.setActiveRevision({
+          id: requestedProjectId,
+          expectedRevision: projectRevision(input.expectedRevision),
+          lineageId: projectId(input.lineageId),
+          mediaId: projectId(input.mediaId),
+        }),
+      );
+      return { status: "updated" as const, project };
+    } catch (error) {
+      if (!(error instanceof DesignProjectRevisionConflictError)) throw error;
+      const current = await designProjectStore.get(requestedProjectId);
+      if (!current) throw error;
+      return { status: "conflict" as const, current };
+    }
+  });
+
+  ipcMain.handle("designer:setScreenPresentation", async (event, inputValue: unknown) => {
+    ownerFor(event);
+    const input = exactRecord(
+      inputValue,
+      new Set(["id", "expectedRevision", "lineageId", "presentation"]),
+    );
+    const requestedProjectId = projectId(input.id);
+    const presentation = normalizeDesignScreenPresentationV2(input.presentation);
+    if (!presentation) throw new Error("Invalid Design Screen presentation.");
+    try {
+      const project = await designProjectLifecycle.runProjectMutation(() =>
+        designProjectStore.setScreenPresentation({
+          id: requestedProjectId,
+          expectedRevision: projectRevision(input.expectedRevision),
+          lineageId: projectId(input.lineageId),
+          presentation,
+        }),
+      );
+      return { status: "updated" as const, project };
+    } catch (error) {
+      if (!(error instanceof DesignProjectRevisionConflictError)) throw error;
+      const current = await designProjectStore.get(requestedProjectId);
+      if (!current) throw error;
+      return { status: "conflict" as const, current };
+    }
+  });
+
+  ipcMain.handle("designer:setPreviewScript", async (event, inputValue: unknown) => {
+    ownerFor(event);
+    const input = exactRecord(inputValue, new Set(["id", "expectedRevision", "previewScriptId"]));
+    const requestedProjectId = projectId(input.id);
+    try {
+      const project = await designProjectLifecycle.runProjectMutation(() =>
+        designProjectStore.setPreviewScript({
+          id: requestedProjectId,
+          expectedRevision: projectRevision(input.expectedRevision),
+          previewScriptId: projectId(input.previewScriptId),
+        }),
+      );
       return { status: "updated" as const, project };
     } catch (error) {
       if (!(error instanceof DesignProjectRevisionConflictError)) throw error;
@@ -1043,14 +1089,10 @@ export function registerDesignerHandlers(): void {
     );
     try {
       const updated = await designProjectLifecycle.runProjectMutation(() =>
-        designProjectStore.update({
+        designProjectStore.setDesignSystemBinding({
           id: project.id,
           expectedRevision: project.revision,
-          connectionState: project.connectionState,
-          workspaceId: project.workspaceId,
-          canvas: project.canvas,
-          referenceAssetIds: project.referenceAssetIds,
-          designSystemBinding: {
+          binding: {
             id: attachment.attachmentId,
             revision: attachment.revision,
           },
@@ -1105,14 +1147,10 @@ export function registerDesignerHandlers(): void {
       ),
     );
     const updated = await designProjectLifecycle.runProjectMutation(() =>
-      designProjectStore.update({
+      designProjectStore.setDesignSystemBinding({
         id: project.id,
         expectedRevision: project.revision,
-        connectionState: project.connectionState,
-        workspaceId: project.workspaceId,
-        canvas: project.canvas,
-        referenceAssetIds: project.referenceAssetIds,
-        designSystemBinding: {
+        binding: {
           id: attachment.attachmentId,
           revision: attachment.revision,
         },
@@ -1134,13 +1172,9 @@ export function registerDesignerHandlers(): void {
       throw new DesignProjectRevisionConflictError(project.revision);
     }
     const updated = await designProjectLifecycle.runProjectMutation(() =>
-      designProjectStore.update({
+      designProjectStore.setDesignSystemBinding({
         id: project.id,
         expectedRevision: project.revision,
-        connectionState: project.connectionState,
-        workspaceId: project.workspaceId,
-        canvas: project.canvas,
-        referenceAssetIds: project.referenceAssetIds,
       }),
     );
     await designSystemAttachmentService.detach(
@@ -1534,6 +1568,35 @@ export function registerDesignerHandlers(): void {
     });
   });
 
+  ipcMain.handle("designer:attachReferenceAsset", async (event, inputValue: unknown) => {
+    ownerFor(event);
+    const input = exactRecord(
+      inputValue,
+      new Set(["projectId", "expectedRevision", "nodeId", "assetId", "x", "y"]),
+    );
+    const requestedProjectId = projectId(input.projectId);
+    const assetId = string(input.assetId, "Design reference image identity", 64);
+    await requireStoredReferenceAssets([assetId]);
+    try {
+      const project = await designProjectLifecycle.runProjectMutation(() =>
+        designProjectStore.attachReferenceAsset({
+          id: requestedProjectId,
+          expectedRevision: projectRevision(input.expectedRevision),
+          nodeId: projectId(input.nodeId),
+          assetId,
+          x: input.x as number,
+          y: input.y as number,
+        }),
+      );
+      return { status: "updated" as const, project };
+    } catch (error) {
+      if (!(error instanceof DesignProjectRevisionConflictError)) throw error;
+      const current = await designProjectStore.get(requestedProjectId);
+      if (!current) throw error;
+      return { status: "conflict" as const, current };
+    }
+  });
+
   ipcMain.handle("designer:readReferenceAsset", async (event, assetIdValue: unknown) => {
     ownerFor(event);
     const result = await designReferenceAssetStore.read(
@@ -1563,11 +1626,11 @@ export function registerDesignerHandlers(): void {
         owner,
         project.workspaceId!,
         async (resolved) => {
-        const current = await requireConnectedProject(requestedProjectId);
-        assertSameConnectedDesignProjectBinding(current, project);
+          const current = await requireConnectedProject(requestedProjectId);
+          assertSameConnectedDesignProjectBinding(current, project);
           return sourceDesignPreviewService.state(owner, project.id, resolved.folderPath);
         },
-        );
+      );
     });
   });
 
@@ -1581,89 +1644,89 @@ export function registerDesignerHandlers(): void {
   });
 
   ipcMain.handle("designer:startPreview", async (event, inputValue: unknown) => {
-      const owner = ownerFor(event);
-      const input = parseDesignProjectStartPreviewParams(inputValue);
-      return designProjectLifecycle.runProjectMutation(async () => {
-        const project = await requireConnectedProject(input.projectId);
-        const workspaceId = project.workspaceId;
-        if (workspaceMutationGate.isChanging(workspaceId)) {
-          throw new Error("The workspace is changing. Try again in a moment.");
+    const owner = ownerFor(event);
+    const input = parseDesignProjectStartPreviewParams(inputValue);
+    return designProjectLifecycle.runProjectMutation(async () => {
+      const project = await requireConnectedProject(input.projectId);
+      const workspaceId = project.workspaceId;
+      if (workspaceMutationGate.isChanging(workspaceId)) {
+        throw new Error("The workspace is changing. Try again in a moment.");
+      }
+      const admission = admitOwnedWorkspaceOperation(
+        workspaceOperationRegistry,
+        owner,
+        workspaceId,
+      );
+      try {
+        if (
+          owner.isDestroyed() ||
+          admission.signal.aborted ||
+          workspaceMutationGate.isChanging(workspaceId)
+        ) {
+          throw new Error("The workspace changed before the preview could start.");
         }
-        const admission = admitOwnedWorkspaceOperation(
-          workspaceOperationRegistry,
+        const resolved = await workspaceEnvironmentApplicationService.resolve(workspaceId, true);
+        if (!resolved) throw new Error("The workspace folder is unavailable.");
+        const current = await requireConnectedProject(input.projectId);
+        assertSameConnectedDesignProjectBinding(current, project);
+        if (
+          owner.isDestroyed() ||
+          admission.signal.aborted ||
+          workspaceMutationGate.isChanging(workspaceId)
+        ) {
+          throw new Error("The workspace changed before the preview could start.");
+        }
+        // The preview service owns and releases this admission for the full
+        // lifetime of the child process after a successful start.
+        return await sourceDesignPreviewService.start({
           owner,
+          admission,
+          projectId: project.id,
           workspaceId,
-        );
-        try {
-          if (
-            owner.isDestroyed() ||
-            admission.signal.aborted ||
-            workspaceMutationGate.isChanging(workspaceId)
-          ) {
-            throw new Error("The workspace changed before the preview could start.");
-          }
-          const resolved = await workspaceEnvironmentApplicationService.resolve(workspaceId, true);
-          if (!resolved) throw new Error("The workspace folder is unavailable.");
-          const current = await requireConnectedProject(input.projectId);
-          assertSameConnectedDesignProjectBinding(current, project);
-          if (
-            owner.isDestroyed() ||
-            admission.signal.aborted ||
-            workspaceMutationGate.isChanging(workspaceId)
-          ) {
-            throw new Error("The workspace changed before the preview could start.");
-          }
-          // The preview service owns and releases this admission for the full
-          // lifetime of the child process after a successful start.
-          return await sourceDesignPreviewService.start({
-            owner,
-            admission,
-            projectId: project.id,
-            workspaceId,
-            root: resolved.folderPath,
-            scriptId: input.scriptId,
-          });
-        } catch (error) {
-          admission.release();
-          throw error;
-        }
+          root: resolved.folderPath,
+          scriptId: input.scriptId,
+        });
+      } catch (error) {
+        admission.release();
+        throw error;
+      }
     });
-      });
+  });
 
   ipcMain.handle("designer:bindSelection", async (event, inputValue: unknown) => {
-      const owner = ownerFor(event);
-      const input = parseDesignProjectBindSelectionParams(inputValue);
-      const descriptor = parseSourceElementDescriptor(input.descriptor);
-      if (!descriptor) throw new Error("The selected element context is invalid.");
-      return designProjectLifecycle.runProjectMutation(async () => {
-        const project = await requireConnectedProject(input.projectId);
-        return workspaceEnvironmentApplicationService.run(owner, project.workspaceId, async () => {
-          const current = await requireConnectedProject(input.projectId);
-          assertSameConnectedDesignProjectBinding(current, project);
-          return sourceDesignerActionService.bind(
-            owner,
-            project.id,
-            project.workspaceId,
-            input.sessionId,
-            descriptor,
-          );
-      });
-        });
-      });
-
-  ipcMain.handle("designer:listActions", async (event, inputValue: unknown) => {
-      const owner = ownerFor(event);
-      const { projectId: requestedProjectId } = parseDesignProjectPreviewParams(inputValue);
-      return designProjectLifecycle.runProjectMutation(async () => {
-        const project = await requireConnectedProject(requestedProjectId);
-        return sourceDesignerActionService.list(
+    const owner = ownerFor(event);
+    const input = parseDesignProjectBindSelectionParams(inputValue);
+    const descriptor = parseSourceElementDescriptor(input.descriptor);
+    if (!descriptor) throw new Error("The selected element context is invalid.");
+    return designProjectLifecycle.runProjectMutation(async () => {
+      const project = await requireConnectedProject(input.projectId);
+      return workspaceEnvironmentApplicationService.run(owner, project.workspaceId, async () => {
+        const current = await requireConnectedProject(input.projectId);
+        assertSameConnectedDesignProjectBinding(current, project);
+        return sourceDesignerActionService.bind(
           owner,
           project.id,
-          project.chatId,
           project.workspaceId,
+          input.sessionId,
+          descriptor,
         );
-    });
       });
+    });
+  });
+
+  ipcMain.handle("designer:listActions", async (event, inputValue: unknown) => {
+    const owner = ownerFor(event);
+    const { projectId: requestedProjectId } = parseDesignProjectPreviewParams(inputValue);
+    return designProjectLifecycle.runProjectMutation(async () => {
+      const project = await requireConnectedProject(requestedProjectId);
+      return sourceDesignerActionService.list(
+        owner,
+        project.id,
+        project.chatId,
+        project.workspaceId,
+      );
+    });
+  });
 
   ipcMain.handle("designer:listMultifileActions", async (event, projectIdValue: unknown) => {
     ownerFor(event);
@@ -1807,28 +1870,28 @@ export function registerDesignerHandlers(): void {
   );
 
   ipcMain.handle("designer:applyAction", async (event, inputValue: unknown) => {
-      const owner = ownerFor(event);
-      const input = parseDesignProjectActionParams(inputValue);
-      return designProjectLifecycle.runProjectMutation(async () => {
-        const project = await requireConnectedProject(input.projectId);
-        requireProjectAction(owner, project, input.actionId);
-        return workspaceEnvironmentApplicationService.run(
-          owner,
-          project.workspaceId,
-          async (resolved, signal) => {
-            const current = await requireConnectedProject(input.projectId);
-            assertSameConnectedDesignProjectBinding(current, project);
-            requireProjectAction(owner, current, input.actionId);
-            return sourceDesignerActionService.apply(
-              owner,
-              input.actionId,
-              resolved.folderPath,
-              signal,
-            );
-          },
-        );
+    const owner = ownerFor(event);
+    const input = parseDesignProjectActionParams(inputValue);
+    return designProjectLifecycle.runProjectMutation(async () => {
+      const project = await requireConnectedProject(input.projectId);
+      requireProjectAction(owner, project, input.actionId);
+      return workspaceEnvironmentApplicationService.run(
+        owner,
+        project.workspaceId,
+        async (resolved, signal) => {
+          const current = await requireConnectedProject(input.projectId);
+          assertSameConnectedDesignProjectBinding(current, project);
+          requireProjectAction(owner, current, input.actionId);
+          return sourceDesignerActionService.apply(
+            owner,
+            input.actionId,
+            resolved.folderPath,
+            signal,
+          );
+        },
+      );
     });
-      });
+  });
 
   ipcMain.handle("designer:rejectAction", async (event, inputValue: unknown) => {
     const owner = ownerFor(event);
@@ -1841,26 +1904,26 @@ export function registerDesignerHandlers(): void {
   });
 
   ipcMain.handle("designer:undoAction", async (event, inputValue: unknown) => {
-      const owner = ownerFor(event);
-      const input = parseDesignProjectActionParams(inputValue);
-      return designProjectLifecycle.runProjectMutation(async () => {
-        const project = await requireConnectedProject(input.projectId);
-        requireProjectAction(owner, project, input.actionId);
-        return workspaceEnvironmentApplicationService.run(
-          owner,
-          project.workspaceId,
-          async (resolved, signal) => {
-            const current = await requireConnectedProject(input.projectId);
-            assertSameConnectedDesignProjectBinding(current, project);
-            requireProjectAction(owner, current, input.actionId);
-            return sourceDesignerActionService.undo(
-              owner,
-              input.actionId,
-              resolved.folderPath,
-              signal,
-            );
-          },
-        );
+    const owner = ownerFor(event);
+    const input = parseDesignProjectActionParams(inputValue);
+    return designProjectLifecycle.runProjectMutation(async () => {
+      const project = await requireConnectedProject(input.projectId);
+      requireProjectAction(owner, project, input.actionId);
+      return workspaceEnvironmentApplicationService.run(
+        owner,
+        project.workspaceId,
+        async (resolved, signal) => {
+          const current = await requireConnectedProject(input.projectId);
+          assertSameConnectedDesignProjectBinding(current, project);
+          requireProjectAction(owner, current, input.actionId);
+          return sourceDesignerActionService.undo(
+            owner,
+            input.actionId,
+            resolved.folderPath,
+            signal,
+          );
+        },
+      );
     });
-      });
+  });
 }

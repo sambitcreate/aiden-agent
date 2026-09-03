@@ -19,7 +19,7 @@ import { TerminalDrawer } from "../components/terminal-drawer";
 import { EnvironmentWorkbench, useEnvironmentPanel } from "../components/environment-panel";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
-import type { DesignProjectSnapshotV1 } from "../shared/design-projects";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "../shared/design-projects";
 import { DesignProjectSidebar } from "../components/design-project-sidebar";
 import {
   agentReturnTarget,
@@ -341,9 +341,11 @@ export function DesignIndex() {
 export function DesignProjectRoute({
   projectOrLegacyChatId,
   initialMediaId,
+  initialArtifactId,
 }: {
   projectOrLegacyChatId: string;
   initialMediaId?: string;
+  initialArtifactId?: string;
 }) {
   const navigate = useNavigate();
   const {
@@ -356,6 +358,10 @@ export function DesignProjectRoute({
   const [designPublication, setDesignPublication] = React.useState<"retryable" | "suppressed">();
   const latestProjectRef = React.useRef<DesignProjectSnapshotV1 | undefined>(undefined);
   const [error, setError] = React.useState<string>();
+  const routeCallbacksRef = React.useRef({ navigate, onProjectChange, onProjectUnavailable });
+  routeCallbacksRef.current = { navigate, onProjectChange, onProjectUnavailable };
+  const initialArtifactSearchRef = React.useRef({ initialMediaId, initialArtifactId });
+  initialArtifactSearchRef.current = { initialMediaId, initialArtifactId };
 
   React.useLayoutEffect(() => {
     if (
@@ -379,9 +385,9 @@ export function DesignProjectRoute({
       .then((openResult) => {
         if (cancelled) return;
         if (!openResult) {
-          onProjectUnavailable(projectOrLegacyChatId);
+          routeCallbacksRef.current.onProjectUnavailable(projectOrLegacyChatId);
           toast.error("That Design Project is no longer available.");
-          void navigate({ to: "/design", replace: true });
+          void routeCallbacksRef.current.navigate({ to: "/design", replace: true });
           return;
         }
         const opened = openResult.project;
@@ -393,13 +399,21 @@ export function DesignProjectRoute({
         } else {
           latestProjectRef.current = opened;
           setProject(opened);
-          onProjectChange(opened);
+          routeCallbacksRef.current.onProjectChange(opened);
         }
         if (opened.id !== projectOrLegacyChatId) {
-          void navigate({
+          const requestedArtifact = initialArtifactSearchRef.current;
+          void routeCallbacksRef.current.navigate({
             to: "/design/$chatId",
             params: { chatId: opened.id },
-            search: initialMediaId ? { artifact: initialMediaId } : {},
+            search: requestedArtifact.initialMediaId
+              ? {
+                  artifact: requestedArtifact.initialMediaId,
+                  ...(requestedArtifact.initialArtifactId
+                    ? { artifactId: requestedArtifact.initialArtifactId }
+                    : {}),
+                }
+              : {},
             replace: true,
           });
         }
@@ -412,7 +426,7 @@ export function DesignProjectRoute({
     return () => {
       cancelled = true;
     };
-  }, [initialMediaId, navigate, onProjectChange, onProjectUnavailable, projectOrLegacyChatId]);
+  }, [projectOrLegacyChatId]);
 
   if (error) {
     return (
@@ -433,6 +447,7 @@ export function DesignProjectRoute({
       chatId={project.chatId}
       presentation="design"
       initialDesignMediaId={initialMediaId}
+      initialDesignArtifactId={initialArtifactId}
       designProject={project}
       designPublication={designPublication}
       onDesignPublicationResolved={() => setDesignPublication(undefined)}

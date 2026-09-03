@@ -42,10 +42,26 @@ test("Design routes migrate legacy chats and open projects by durable identity",
   assert.match(sidebar, /designerApi\.listProjects\(\)/u);
 });
 
+test("same-project artifact search changes stay inside the mounted Design canvas", () => {
+  const routeStart = layout.indexOf("export function DesignProjectRoute");
+  const openEffectStart = layout.indexOf("React.useEffect(() => {", routeStart);
+  const openEffectEnd = layout.indexOf("\n\n  if (error)", openEffectStart);
+  assert.ok(routeStart >= 0 && openEffectStart > routeStart && openEffectEnd > openEffectStart);
+  const openEffect = layout.slice(openEffectStart, openEffectEnd);
+
+  assert.match(openEffect, /\}, \[projectOrLegacyChatId\]\);/u);
+  assert.match(
+    layout,
+    /initialArtifactSearchRef\.current = \{ initialMediaId, initialArtifactId \}/u,
+  );
+  assert.match(openEffect, /const requestedArtifact = initialArtifactSearchRef\.current/u);
+  assert.match(layout, /initialDesignMediaId=\{initialMediaId\}/u);
+  assert.match(layout, /initialDesignArtifactId=\{initialArtifactId\}/u);
+});
+
 test("Design Project creation is always local-first while connection remains a later action", () => {
-  assert.match(sidebar, /designerApi\.createProject\(\{[\s\S]*connectionState: "prototype-only"/u);
+  assert.match(sidebar, /designerApi\.createProject\(\)/u);
   assert.doesNotMatch(sidebar, /design-project-origin|connectedWorkspaceId|Connect a local app/u);
-  assert.match(sidebar, /Connect a workspace or Git repository later from the project/u);
   assert.match(canvas, /designerApi\.connectProject/u);
 });
 
@@ -59,14 +75,17 @@ test("Design generation consumes a main-owned preflight receipt before durable a
   assert.match(pane, /runGeneration\(messageTurnId, preparedWorkspaceId\)/u);
 });
 
-test("canvas persists layout and active selection without inferring generated ownership", () => {
+test("canvas persists layout while active selection uses a dedicated main-owned mutation", () => {
   assert.match(canvas, /project\.canvas\.flowViewport/u);
   assert.match(canvas, /instance\.setViewport\(savedProject\.canvas\.flowViewport\)/u);
   assert.match(canvas, /onMoveEnd=/u);
   assert.match(canvas, /designerApi\.updateProject/u);
   assert.match(canvas, /expectedRevision: currentProject\.revision/u);
   assert.match(canvas, /if \(prior\?\.kind !== "artboard"\) continue/u);
-  assert.match(canvas, /\.\.\.prior,[\s\S]*prior\.artifactMediaIds\?\.includes/u);
+  assert.match(
+    canvas,
+    /durableNodes\.push\(\{\s*\.\.\.prior,\s*x: node\.position\.x,\s*y: node\.position\.y/u,
+  );
   assert.doesNotMatch(canvas, /lineage:\$\{data\.group\.revisions\[0\]!\.artifact\.id\}/u);
   assert.match(canvas, /setTimeout\(\(\) => \{[\s\S]*void flushProjectPersistence\(\)\.catch/u);
   assert.match(canvas, /result\.status === "conflict"/u);
@@ -74,11 +93,13 @@ test("canvas persists layout and active selection without inferring generated ow
   assert.match(pane, /updateDesignProject\(publishedProject\)/u);
   assert.match(pane, /project=\{currentDesignProject\}/u);
   assert.match(canvas, /onPersistenceBarrierChange\?\.\(flushProjectPersistence\)/u);
-  assert.match(
-    canvas,
-    /activeVersionsRef\.current\[node\.id\] \?\? data\.artifact\.mediaId/u,
-    "same-tick persistence reads the selected historical revision synchronously",
-  );
+  assert.match(canvas, /designerApi\.setActiveRevision\(\{/u);
+  assert.match(canvas, /persistedNode\?\.activeMediaId !== selected\.previewRevision\.mediaId/u);
+  assert.match(canvas, /designSelectionTurnTargets\(next\)/u);
+  assert.match(canvas, /type: "preview-screen-revision"/u);
+  assert.match(canvas, /const makeSelectedRevisionCurrent/u);
+  assert.match(canvas, /type: "sync-screen-active-revision"/u);
+  assert.match(canvas, /previewingHistoricalRevision=\{Boolean/u);
   assert.match(
     canvas,
     /const targetSnapshot = snapshotDesignTurnTargets\(targetsRef\.current\);[\s\S]*persistenceBarrierRef\.current\.flush/u,
@@ -96,8 +117,8 @@ test("canvas persists layout and active selection without inferring generated ow
   assert.match(canvas, /const nodesRef = React\.useRef\(nodes\);\s+nodesRef\.current = nodes;/u);
   assert.match(
     canvas,
-    /const nextTargets = targetsRef\.current\.map[\s\S]*publishTargets\(nextTargets\)/u,
-    "selecting historical H updates the synchronous target authority",
+    /const commitSelection[\s\S]*selectionStateRef\.current = next;[\s\S]*publishTargets\(designSelectionTurnTargets\(next\)\)/u,
+    "selecting historical H updates the synchronous target projection",
   );
   const flushIndex = pane.indexOf("await persistenceBarrier()");
   const preflightIndex = pane.indexOf("designerApi.preflightGeneration", flushIndex);

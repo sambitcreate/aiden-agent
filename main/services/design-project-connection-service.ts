@@ -1,4 +1,4 @@
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import {
   DesignProjectConflictError,
   DesignProjectNotFoundError,
@@ -31,19 +31,13 @@ export interface DesignProjectConnectionDependencies {
     run<T>(
       owner: WorkspaceOperationDocumentOwner,
       workspaceId: string,
-      operation: (
-        resolved: WorkspaceEnvironmentDirectory,
-        signal: AbortSignal,
-      ) => Promise<T>,
+      operation: (resolved: WorkspaceEnvironmentDirectory, signal: AbortSignal) => Promise<T>,
     ): Promise<T>;
   };
   runProjectMutation<T>(operation: () => Promise<T>): Promise<T>;
   chatWorkspaceId(chatId: string): Promise<string | undefined>;
   isChatBusy?(chatId: string): boolean;
-  prepareRebind?(
-    owner: RendererDocumentOwner,
-    current: DesignProjectSnapshotV1,
-  ): Promise<void>;
+  prepareRebind?(owner: RendererDocumentOwner, current: DesignProjectSnapshotV1): Promise<void>;
   finalizeRebind?(
     previous: DesignProjectSnapshotV1,
     connected: DesignProjectSnapshotV1,
@@ -77,9 +71,7 @@ export function assertDesignProjectGenerationClaim(
   return current;
 }
 
-function requireProject(
-  project: DesignProjectSnapshotV1 | undefined,
-): DesignProjectSnapshotV1 {
+function requireProject(project: DesignProjectSnapshotV1 | undefined): DesignProjectSnapshotV1 {
   if (!project) throw new DesignProjectNotFoundError();
   return project;
 }

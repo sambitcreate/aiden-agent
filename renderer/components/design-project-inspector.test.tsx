@@ -33,11 +33,53 @@ test("code surface provides line numbers, find, provenance, copy, save, and bund
   assert.match(source, /source\.provenance/u);
   assert.match(source, /Read-only workspace source · Designer Action required/u);
   assert.match(source, /design-project-line-number/u);
-  assert.match(styles, /grid-template-columns: 48px minmax\(max-content, 1fr\)/u);
+  assert.match(styles, /grid-template-columns: 48px auto/u);
   assert.match(styles, /\.design-project-source mark[\s\S]*var\(--accent\)/u);
   for (const kind of ["comment", "keyword", "string", "number", "title", "variable"]) {
     assert.match(styles, new RegExp(`\\.design-project-syntax-${kind}`));
   }
+});
+
+test("code rail contains long source and keeps status surfaces in normal flow", () => {
+  assert.match(source, /const sourceState = source/u);
+  assert.match(source, /data-source-state=\{sourceState\}/u);
+  assert.match(source, /aria-busy=\{sourceState === "loading" \? true : undefined\}/u);
+  assert.match(source, /className="design-project-inspector-state"/u);
+  assert.match(source, /role=\{sourceState === "stale" \? "alert" : undefined\}/u);
+  assert.match(source, /aria-atomic="true"/u);
+  assert.match(source, /placement="inline"/u);
+
+  const drawerRule =
+    [...styles.matchAll(/\.design-project-inspector\[data-layout="drawer"\] \{([^}]*)\}/gu)]
+      .map((match) => match[1] ?? "")
+      .find((rule) => rule.includes("contain: inline-size")) ?? "";
+  assert.match(drawerRule, /width: 100%;/u);
+  assert.match(drawerRule, /max-width: 100%;/u);
+  assert.match(drawerRule, /contain: inline-size;/u);
+  assert.match(
+    styles,
+    /\[data-design-workspace-canvas\][\s\S]*:has\(> \.design-project-inspector\[data-layout="drawer"\]\)[\s\S]*width: min\(520px, 100%\);/u,
+  );
+  assert.match(
+    styles,
+    /\.design-project-inspector-panel \{[\s\S]*min-width: 0;[\s\S]*min-height: 0;/u,
+  );
+  assert.match(
+    styles,
+    /\.design-project-source \{[\s\S]*max-width: 100%;[\s\S]*min-width: 0;[\s\S]*overflow: auto;/u,
+  );
+  assert.match(
+    styles,
+    /\.design-project-source ol \{[\s\S]*width: max-content;[\s\S]*min-width: 100%;/u,
+  );
+  const stateRule = styles.match(/\.design-project-inspector-state \{([^}]*)\}/u)?.[1] ?? "";
+  assert.match(stateRule, /display: grid;/u);
+  assert.match(stateRule, /overflow: auto;/u);
+  assert.doesNotMatch(stateRule, /position:\s*(?:absolute|fixed)/u);
+  assert.match(styles, /\.design-project-source-footer \{[\s\S]*flex-wrap: wrap;/u);
+  assert.match(styles, /\.design-project-source-footer \{[\s\S]*box-sizing: border-box;/u);
+  assert.match(styles, /\.design-project-source-footer \{[\s\S]*max-height: min\(28%, 120px\);/u);
+  assert.match(styles, /\.design-project-source-footer > span[\s\S]*overflow-wrap: anywhere;/u);
 });
 
 test("code shortcuts, drawer semantics, empty states, and revision actions remain explicit", () => {
@@ -52,10 +94,22 @@ test("code shortcuts, drawer semantics, empty states, and revision actions remai
   assert.match(source, /Saved source needs reload/u);
   assert.match(source, /Reload source/u);
   assert.match(source, /sourceError && onRetrySource/u);
-  assert.match(source, /Loading workspace source…/u);
-  assert.match(source, /sourceLoading \? \(/u);
-  assert.match(source, /role="status" aria-live="polite"/u);
+  assert.match(source, /Loading source…/u);
+  assert.match(source, /exact saved revision or authorized connected element/u);
+  assert.match(source, /sourceState === "loading" \? \(/u);
+  assert.match(source, /role="status"/u);
+  assert.match(source, /aria-live="polite"/u);
   assert.match(source, /No saved revisions/u);
+  assert.match(source, /Previewing Revision/u);
+  assert.match(source, /this Screen currently uses Revision/u);
+  assert.match(source, /Return to current/u);
+  assert.match(source, /Refine from this/u);
+  assert.match(source, /Make current/u);
+  assert.match(source, /event\.stopPropagation\(\)/u);
+  assert.match(source, /!element\.closest\("\[hidden\], \[inert\], \[aria-hidden='true'\]"\)/u);
+  assert.match(source, /aria-modal=\{layout === "drawer" \? true/u);
+  assert.match(source, /aria-pressed=\{revision\.previewed === true\}/u);
+  assert.match(styles, /\.design-project-revision\[data-previewed="true"\]/u);
   assert.match(source, /key=\{`\$\{revision\.lineageId\}:\$\{revision\.id\}`\}/u);
   assert.match(source, /data-lineage-id=\{revision\.lineageId\}/u);
   assert.match(source, /Generated revisions/u);

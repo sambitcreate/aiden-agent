@@ -1,3 +1,9 @@
+import type {
+  DesignProjectCanvasV2,
+  DesignProjectDatabaseV2,
+  DesignProjectSnapshotV2,
+} from "../../renderer/shared/design-projects.js";
+
 export const DESIGN_PROJECT_SNAPSHOT_VERSION = 1 as const;
 export const DESIGN_PROJECT_DATABASE_VERSION = 1 as const;
 
@@ -88,7 +94,7 @@ export interface DesignProjectCanvasV1 {
 }
 
 export interface DesignProjectSnapshotV1 {
-  version: typeof DESIGN_PROJECT_SNAPSHOT_VERSION;
+  version: 1;
   id: string;
   revision: number;
   title: string;
@@ -108,10 +114,15 @@ export interface DesignProjectSnapshotV1 {
 }
 
 export interface DesignProjectDatabaseV1 {
-  version: typeof DESIGN_PROJECT_DATABASE_VERSION;
+  version: 1;
   revision: number;
   projects: DesignProjectSnapshotV1[];
 }
+
+/** Explicit persistence compatibility while V1 is dual-read into canonical V2. */
+export type DesignProjectSnapshot = DesignProjectSnapshotV1 | DesignProjectSnapshotV2;
+export type DesignProjectDatabase = DesignProjectDatabaseV1 | DesignProjectDatabaseV2;
+export type DesignProjectCanvas = DesignProjectCanvasV1 | DesignProjectCanvasV2;
 
 function exactKeys(
   value: Record<string, unknown>,
@@ -120,7 +131,7 @@ function exactKeys(
 ): boolean {
   return (
     Object.keys(value).every((key) => allowed.has(key)) &&
-    [...required].every((key) => key in value)
+    [...required].every((key) => Object.prototype.hasOwnProperty.call(value, key))
   );
 }
 
@@ -340,7 +351,8 @@ export function parseDesignProjectSnapshotV1(value: unknown): DesignProjectSnaps
     !safeRevision(snapshot.revision) ||
     !isDesignProjectOpaqueId(snapshot.chatId) ||
     (snapshot.workspaceId !== undefined && !isDesignProjectOpaqueId(snapshot.workspaceId)) ||
-    (snapshot.previewScriptId !== undefined && !isDesignProjectOpaqueId(snapshot.previewScriptId)) ||
+    (snapshot.previewScriptId !== undefined &&
+      !isDesignProjectOpaqueId(snapshot.previewScriptId)) ||
     (snapshot.connectionState !== "prototype-only" && snapshot.connectionState !== "connected") ||
     !safeTimestamp(snapshot.createdAt) ||
     !safeTimestamp(snapshot.updatedAt) ||

@@ -471,7 +471,11 @@ test("an exact eligible active revision finalizes a post-project publication ide
   const result = await service.recover("project:recovery", plan.expectedRevision);
   assert.equal(result.status, "recovered");
   assert.equal(source.designPublication, "published");
-  assert.deepEqual(setup.getProject(), before, "the already-published project snapshot is unchanged");
+  assert.deepEqual(
+    setup.getProject(),
+    before,
+    "the already-published project snapshot is unchanged",
+  );
   const retry = await service.recover("project:recovery", plan.expectedRevision);
   assert.equal(retry.status, "recovered");
   assert.deepEqual(setup.getProject(), before);
@@ -511,8 +515,7 @@ for (const metadataDamage of ["suppressed", "ownership-mismatch"] as const) {
     source.designOwnership = {
       version: 1,
       kind: "revision",
-      projectId:
-        metadataDamage === "ownership-mismatch" ? "project:other" : setup.getProject().id,
+      projectId: metadataDamage === "ownership-mismatch" ? "project:other" : setup.getProject().id,
       lineageId: "lineage:recovery",
       baseMediaId: "design:base",
     };
@@ -855,7 +858,9 @@ test("generation reconciliation preserves a quota-pruned exact recovery candidat
     artifacts: {
       ...setup.dependencies.artifacts,
       async discardPending() {
-        assert.fail("an exact recovery candidate must not be discarded by generation reconciliation");
+        assert.fail(
+          "an exact recovery candidate must not be discarded by generation reconciliation",
+        );
       },
     },
     projects: {
@@ -881,7 +886,10 @@ test("generation reconciliation preserves a quota-pruned exact recovery candidat
   assert.equal(retryPlan.status, "recoverable");
   const result = await restarted.recover("project:recovery", retryPlan.expectedRevision);
   assert.equal(result.status, "recovered");
-  assert.equal(setup.records.get(setup.getProject().canvas.nodes[0]!.activeMediaId!)?.html, VALID_HTML);
+  assert.equal(
+    setup.records.get(setup.getProject().canvas.nodes[0]!.activeMediaId!)?.html,
+    VALID_HTML,
+  );
 });
 
 test("a completed recovery for artboard A never shadows a later recovery for broken artboard B", async () => {

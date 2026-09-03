@@ -7,6 +7,10 @@ import {
   parseShellMode,
   shellModeForPath,
 } from "./shell-mode.js";
+import {
+  designArtifactNavigationTarget,
+  parseDesignArtifactRouteSearch,
+} from "./design-artifact-navigation.js";
 
 test("route authority selects Design without changing shared Profile mode", () => {
   assert.equal(shellModeForPath("/design", "agent"), "design");
@@ -36,4 +40,62 @@ test("Design restoration keeps one bounded project identity", () => {
   assert.equal(parseRememberedDesignProject("%"), undefined);
   assert.equal(parseRememberedDesignProject("x".repeat(257)), undefined);
   assert.equal(parseRememberedDesignProject("ｅ"), undefined);
+});
+
+test("Design artifact navigation carries an exact project and immutable revision descriptor", () => {
+  assert.deepEqual(
+    designArtifactNavigationTarget({
+      legacyChatId: "chat:legacy",
+      projectId: "design-project:one",
+      artifact: { mediaId: "design:screen-one:revision-two", id: "a".repeat(64) },
+    }),
+    {
+      routeProjectId: "design-project:one",
+      search: {
+        artifact: "design:screen-one:revision-two",
+        artifactId: "a".repeat(64),
+      },
+    },
+  );
+  assert.equal(
+    designArtifactNavigationTarget({
+      legacyChatId: "chat:legacy",
+      artifact: { mediaId: "design:legacy", id: "b".repeat(64) },
+    }).routeProjectId,
+    "chat:legacy",
+  );
+});
+
+test("Design artifact route search preserves legacy links and validates exact descriptors", () => {
+  assert.deepEqual(parseDesignArtifactRouteSearch({ artifact: "design:legacy" }), {
+    artifact: "design:legacy",
+  });
+  assert.deepEqual(
+    parseDesignArtifactRouteSearch({
+      artifact: "design:screen-one:revision-two",
+      artifactId: "A".repeat(64),
+    }),
+    {
+      artifact: "design:screen-one:revision-two",
+      artifactId: "a".repeat(64),
+    },
+  );
+  assert.deepEqual(
+    parseDesignArtifactRouteSearch({ artifact: "design:screen", artifactId: "not-a-hash" }),
+    {},
+  );
+  assert.deepEqual(
+    parseDesignArtifactRouteSearch({ artifact: "design:screen", artifactId: null }),
+    {},
+  );
+  assert.deepEqual(
+    parseDesignArtifactRouteSearch({ artifact: "design:screen", artifactId: "" }),
+    {},
+  );
+  assert.deepEqual(
+    parseDesignArtifactRouteSearch({ artifact: "design:screen", artifactId: undefined }),
+    {},
+  );
+  assert.deepEqual(parseDesignArtifactRouteSearch({ artifactId: "a".repeat(64) }), {});
+  assert.deepEqual(parseDesignArtifactRouteSearch({ artifact: "design:/escape" }), {});
 });

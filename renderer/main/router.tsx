@@ -15,6 +15,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
 import { BotChatRoute as BotChatRouteView } from "./bot-chat-route";
 import { parseSettingsSearch } from "../lib/settings-section";
+import { parseDesignArtifactRouteSearch } from "../lib/design-artifact-navigation";
 
 const rootRoute = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -68,14 +69,17 @@ const designIndexRoute = createRoute({
 const designRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/design/$chatId",
-  validateSearch: (search: Record<string, unknown>): { artifact?: string } =>
-    typeof search.artifact === "string" && search.artifact.startsWith("design:")
-      ? { artifact: search.artifact }
-      : {},
+  validateSearch: parseDesignArtifactRouteSearch,
   component: function DesignRoute() {
     const { chatId } = designRoute.useParams();
-    const { artifact } = designRoute.useSearch();
-    return <DesignProjectRoute projectOrLegacyChatId={chatId} initialMediaId={artifact} />;
+    const { artifact, artifactId } = designRoute.useSearch();
+    return (
+      <DesignProjectRoute
+        projectOrLegacyChatId={chatId}
+        initialMediaId={artifact}
+        initialArtifactId={artifactId}
+      />
+    );
   },
   staticData: { title: "Design" },
 });

@@ -8,6 +8,7 @@ import {
   FileDown,
   FolderOpen,
   GitCompareArrows,
+  Loader2,
   Search,
   X,
 } from "lucide-react";
@@ -34,6 +35,8 @@ export interface DesignProjectInspectorProps {
   sourceLoading?: boolean;
   sourceError?: string;
   compareSource?: DesignProjectSourceDocument;
+  previewingHistoricalRevision?: boolean;
+  makeRevisionCurrentBusy?: boolean;
   revisions: readonly DesignProjectRevisionSummary[];
   designerActions?: readonly DesignProjectDesignerActionSummary[];
   preview?: React.ReactNode;
@@ -49,6 +52,9 @@ export interface DesignProjectInspectorProps {
   latestExportName?: string;
   onRevealExport?: () => void;
   onSelectRevision: (lineageId: string, revisionId: string) => void;
+  onMakeRevisionCurrent?: () => void;
+  onReturnToCurrentRevision?: () => void;
+  onRefineFromRevision?: () => void;
   onSelectDesignerAction?: (actionId: string) => void;
   onCompareRevision?: (lineageId: string, revisionId: string) => void;
   onCloseComparison?: () => void;
@@ -143,6 +149,8 @@ export function DesignProjectInspector({
   sourceLoading = false,
   sourceError,
   compareSource,
+  previewingHistoricalRevision = false,
+  makeRevisionCurrentBusy = false,
   revisions,
   designerActions = [],
   preview,
@@ -158,6 +166,9 @@ export function DesignProjectInspector({
   latestExportName,
   onRevealExport,
   onSelectRevision,
+  onMakeRevisionCurrent,
+  onReturnToCurrentRevision,
+  onRefineFromRevision,
   onSelectDesignerAction,
   onCompareRevision,
   onCloseComparison,
@@ -165,7 +176,9 @@ export function DesignProjectInspector({
   formatTimestamp = defaultFormatTimestamp,
 }: DesignProjectInspectorProps) {
   const titleId = React.useId();
+  const panelRef = React.useRef<HTMLElement | null>(null);
   const findRef = React.useRef<HTMLInputElement | null>(null);
+  const closeRef = React.useRef<HTMLButtonElement | null>(null);
   const sourceLines = React.useMemo(
     () => (source ? designProjectSourceLines(source.content) : []),
     [source],
@@ -174,6 +187,16 @@ export function DesignProjectInspector({
     () => (source ? countDesignProjectSourceMatches(source.content, findQuery) : 0),
     [findQuery, source],
   );
+  const sourceState = source
+    ? "ready"
+    : sourceLoading
+      ? "loading"
+      : sourceError
+        ? "stale"
+        : "unavailable";
+  const currentRevisionNumber = revisions.findIndex((revision) => revision.active) + 1;
+  const previewRevisionNumber =
+    revisions.findIndex((revision) => revision.previewed && !revision.active) + 1;
 
   const moveTab = React.useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>, tab: DesignProjectInspectorTab) => {
@@ -197,8 +220,32 @@ export function DesignProjectInspector({
     (event: React.KeyboardEvent<HTMLElement>) => {
       if (event.key === "Escape" && layout === "drawer" && onClose) {
         event.preventDefault();
+        event.stopPropagation();
         onClose();
         return;
+      }
+      if (event.key === "Tab" && layout === "drawer") {
+        const focusable = Array.from(
+          panelRef.current?.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+          ) ?? [],
+        ).filter(
+          (element) =>
+            !element.closest("[hidden], [inert], [aria-hidden='true']") &&
+            getComputedStyle(element).visibility !== "hidden" &&
+            getComputedStyle(element).display !== "none",
+        );
+        if (focusable && focusable.length > 0) {
+          const first = focusable[0]!;
+          const last = focusable[focusable.length - 1]!;
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
       }
       if (activeTab !== "code" || !source) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "f") {
@@ -213,12 +260,19 @@ export function DesignProjectInspector({
     [activeTab, layout, onClose, onSaveSource, source],
   );
 
+  React.useEffect(() => {
+    if (layout !== "drawer") return;
+    const frame = requestAnimationFrame(() => closeRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [layout]);
+
   return (
     <aside
+      ref={panelRef}
       className="design-project-inspector"
       data-layout={layout}
       aria-labelledby={titleId}
-      aria-modal={layout === "drawer" ? false : undefined}
+      aria-modal={layout === "drawer" ? true : undefined}
       role={layout === "drawer" ? "dialog" : undefined}
       onKeyDown={onKeyDown}
     >
@@ -230,7 +284,7 @@ export function DesignProjectInspector({
           <Text variant="small" color="tertiary">
             {connectionState
               ? designProjectOriginLabel(connectionState, hasPrototypeArtboards)
-              : "Select an artboard to inspect"}
+              : "Select a Screen to inspect"}
           </Text>
         </div>
         <div className="design-project-panel-actions">
@@ -253,8 +307,9 @@ export function DesignProjectInspector({
           >
             <Download aria-hidden="true" /> Export bundle
           </Button>
-          {layout === "drawer" && onClose ? (
+          {onClose ? (
             <Button
+              ref={closeRef}
               iconOnly
               size="small"
               variant="transparent"
@@ -289,6 +344,38 @@ export function DesignProjectInspector({
         })}
       </div>
 
+      {previewingHistoricalRevision ? (
+        <div className="design-project-history-preview" role="status">
+          <span>
+            Previewing Revision {previewRevisionNumber || "?"}; this Screen currently uses Revision{" "}
+            {currentRevisionNumber || "?"}.
+          </span>
+          <div className="flex flex-wrap items-center gap-1">
+            {onReturnToCurrentRevision ? (
+              <Button size="small" variant="transparent" onClick={onReturnToCurrentRevision}>
+                Return to current
+              </Button>
+            ) : null}
+            {onRefineFromRevision ? (
+              <Button size="small" variant="toolbar" onClick={onRefineFromRevision}>
+                Refine from this
+              </Button>
+            ) : null}
+            {onMakeRevisionCurrent ? (
+              <Button
+                size="small"
+                variant="toolbar"
+                disabled={makeRevisionCurrentBusy}
+                onClick={onMakeRevisionCurrent}
+              >
+                {makeRevisionCurrentBusy ? <Loader2 className="animate-spin" /> : null}
+                Make current
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <section
         id={`${titleId}-preview-panel`}
         role="tabpanel"
@@ -304,7 +391,7 @@ export function DesignProjectInspector({
             description={
               selectionTitle
                 ? "Choose an available revision or reload its preview."
-                : "Select an artboard on the canvas to preview it."
+                : "Select a Screen on the canvas to preview it."
             }
           />
         )}
@@ -314,6 +401,8 @@ export function DesignProjectInspector({
         id={`${titleId}-code-panel`}
         role="tabpanel"
         aria-labelledby={`${titleId}-code-tab`}
+        aria-busy={sourceState === "loading" ? true : undefined}
+        data-source-state={sourceState}
         hidden={activeTab !== "code"}
         className="design-project-inspector-panel design-project-code-panel"
       >
@@ -428,16 +517,26 @@ export function DesignProjectInspector({
               </span>
             </footer>
           </>
-        ) : sourceLoading ? (
-          <div role="status" aria-live="polite">
+        ) : sourceState === "loading" ? (
+          <div
+            className="design-project-inspector-state"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             <EmptyState
-              title="Loading workspace source…"
-              description="Reading the exact connected element as a read-only source view. Changes require a Designer Action."
+              placement="inline"
+              title="Loading source…"
+              description="Reading the exact saved revision or authorized connected element as a read-only source view."
             />
           </div>
         ) : (
-          <div className="grid place-items-center gap-3">
+          <div
+            className="design-project-inspector-state"
+            role={sourceState === "stale" ? "alert" : undefined}
+          >
             <EmptyState
+              placement="inline"
               title={sourceError ? "Saved source needs reload" : "Source unavailable"}
               description={
                 sourceError ??
@@ -477,11 +576,17 @@ export function DesignProjectInspector({
                         type="button"
                         className="design-project-revision"
                         aria-current={revision.active ? "true" : undefined}
+                        aria-pressed={revision.previewed === true}
+                        data-previewed={revision.previewed || undefined}
                         onClick={() => onSelectRevision(revision.lineageId, revision.id)}
                       >
                         <Clock3 aria-hidden="true" />
                         <span>
                           <strong>{revision.label}</strong>
+                          {revision.active ? <small>Current revision</small> : null}
+                          {revision.previewed && !revision.active ? (
+                            <small>Previewing</small>
+                          ) : null}
                           <small>{formatTimestamp(revision.createdAt)}</small>
                           <small>
                             {revision.provenance}

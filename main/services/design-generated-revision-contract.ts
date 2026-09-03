@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { isDesignProjectOpaqueId } from "./design-project-contract.js";
+import {
+  DEFAULT_NEW_DESIGN_SCREEN_PRESENTATION,
+  normalizeDesignScreenPresentationV2,
+  type DesignScreenPresentationV2,
+} from "./design-project-v2-policy.js";
 
 export const DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION = 1 as const;
 export const DESIGN_ARTIFACT_RECOVERY_GENERATION_PREFIX = "journal-recovery:" as const;
@@ -22,6 +27,7 @@ export type DesignGeneratedRevisionOwnershipV1 =
       kind: "new-artboard";
       projectId: string;
       lineageId: string;
+      presentation?: DesignScreenPresentationV2;
     }
   | {
       version: typeof DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION;
@@ -34,6 +40,8 @@ export type DesignGeneratedRevisionOwnershipV1 =
 export interface OwnedDesignGeneratedRevisionV1 {
   mediaId: string;
   ownership: DesignGeneratedRevisionOwnershipV1;
+  /** Main-validated artifact title candidate; never used as identity or ownership. */
+  candidateTitle?: string;
 }
 
 function digest(parts: readonly string[]): string {
@@ -53,12 +61,14 @@ export function generatedDesignNodeId(projectId: string, lineageId: string): str
 export function newArtboardOwnership(
   projectId: string,
   mediaId: string,
+  presentation: DesignScreenPresentationV2 = DEFAULT_NEW_DESIGN_SCREEN_PRESENTATION,
 ): DesignGeneratedRevisionOwnershipV1 {
   return {
     version: DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION,
     kind: "new-artboard",
     projectId,
     lineageId: generatedDesignLineageId(projectId, mediaId),
+    presentation,
   };
 }
 
@@ -79,9 +89,16 @@ export function parseDesignGeneratedRevisionOwnershipV1(
     return undefined;
   }
   if (record.kind === "new-artboard") {
+    const presentation =
+      record.presentation === undefined
+        ? undefined
+        : normalizeDesignScreenPresentationV2(record.presentation);
     if (
-      keys.length !== 4 ||
-      keys.some((key) => !["version", "kind", "projectId", "lineageId"].includes(key)) ||
+      (keys.length !== 4 && keys.length !== 5) ||
+      keys.some(
+        (key) => !["version", "kind", "projectId", "lineageId", "presentation"].includes(key),
+      ) ||
+      (record.presentation !== undefined && !presentation) ||
       artifact.revisionOfMediaId !== undefined ||
       record.lineageId !== generatedDesignLineageId(record.projectId, artifact.mediaId)
     ) {
@@ -92,6 +109,7 @@ export function parseDesignGeneratedRevisionOwnershipV1(
       kind: "new-artboard",
       projectId: record.projectId,
       lineageId: record.lineageId,
+      ...(presentation ? { presentation } : {}),
     };
   }
   if (

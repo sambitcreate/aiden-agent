@@ -1,8 +1,4 @@
-import {
-  isDesignProjectOpaqueId,
-  normalizeDesignProjectTitle,
-  type DesignProjectConnectionState,
-} from "../services/design-project-contract.js";
+import { isDesignProjectOpaqueId } from "../services/design-project-contract.js";
 
 function exactRecord(
   value: unknown,
@@ -49,34 +45,9 @@ function boundedString(value: unknown, label: string, max: number): string {
   return value;
 }
 
-function connectionState(value: unknown): DesignProjectConnectionState {
-  if (value !== "prototype-only" && value !== "connected") {
-    throw new Error("Invalid Design Project connection state.");
-  }
-  return value;
-}
-
-export function parseDesignProjectCreateParams(value: unknown): {
-  title: string;
-  connectionState: DesignProjectConnectionState;
-  workspaceId?: string;
-} {
-  const input = exactRecord(
-    value,
-    new Set(["title", "connectionState", "workspaceId"]),
-    new Set(["title", "connectionState"]),
-  );
-  const title = normalizeDesignProjectTitle(input.title);
-  if (!title) throw new Error("Invalid Design Project title.");
-  const state = connectionState(input.connectionState);
-  const workspaceId = input.workspaceId === undefined ? undefined : opaqueId(input.workspaceId);
-  if (
-    (state === "prototype-only" && workspaceId !== undefined) ||
-    (state === "connected" && workspaceId === undefined)
-  ) {
-    throw new Error("Invalid Design Project workspace connection.");
-  }
-  return { title, connectionState: state, ...(workspaceId ? { workspaceId } : {}) };
+export function parseDesignProjectCreateParams(value: unknown): Record<string, never> {
+  exactRecord(value, new Set());
+  return {};
 }
 
 export function parseDesignProjectConnectParams(value: unknown): {
@@ -84,10 +55,7 @@ export function parseDesignProjectConnectParams(value: unknown): {
   expectedRevision: number;
   workspaceId: string;
 } {
-  const input = exactRecord(
-    value,
-    new Set(["projectId", "expectedRevision", "workspaceId"]),
-  );
+  const input = exactRecord(value, new Set(["projectId", "expectedRevision", "workspaceId"]));
   return {
     projectId: opaqueId(input.projectId),
     expectedRevision: revision(input.expectedRevision),
@@ -105,18 +73,7 @@ export function parseDesignProjectPreflightParams(value: unknown): { projectId: 
  * A workspace binding may only be created by designer:connectProject.
  */
 export function parseDesignProjectContentUpdateEnvelope(value: unknown): Record<string, unknown> {
-  return exactRecord(
-    value,
-    new Set([
-      "id",
-      "expectedRevision",
-      "canvas",
-      "referenceAssetIds",
-      "designSystemBinding",
-      "previewScriptId",
-    ]),
-    new Set(["id", "expectedRevision", "canvas", "referenceAssetIds"]),
-  );
+  return exactRecord(value, new Set(["id", "expectedRevision", "canvas"]));
 }
 
 export function parseDesignProjectPreviewParams(value: unknown): { projectId: string } {

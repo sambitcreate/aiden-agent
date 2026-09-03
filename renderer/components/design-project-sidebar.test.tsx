@@ -10,7 +10,7 @@ test("Design replaces the Agent sidebar with its own complete project navigation
   assert.match(layout, /mode === "design" \? \([\s\S]*<DesignProjectSidebar/u);
   assert.match(layout, /\) : \([\s\S]*<ChatSidebar/u);
   assert.match(sidebar, /searchPlaceholder="Search projects…"/u);
-  assert.match(sidebar, /title="New Project"/u);
+  assert.match(sidebar, /title=\{createBusy \? "Creating…" : "New Project"\}/u);
   assert.match(sidebar, /title="Profile"/u);
   assert.match(sidebar, /title="Settings"/u);
   assert.match(library, /label: "All"/u);
@@ -19,12 +19,10 @@ test("Design replaces the Agent sidebar with its own complete project navigation
 });
 
 test("new projects start local and do not ask for workspace or Git authority", () => {
-  assert.match(
-    sidebar,
-    /designerApi\.createProject\(\{[\s\S]*title: nextTitle,[\s\S]*connectionState: "prototype-only"/u,
-  );
+  assert.match(sidebar, /designerApi\.createProject\(\)/u);
   assert.doesNotMatch(sidebar, /connectedWorkspaceId|design-project-origin|App workspace/u);
-  assert.match(sidebar, /Connect a workspace or Git repository later from the project/u);
+  assert.doesNotMatch(sidebar, /title="New Design Project"|createOpen/u);
+  assert.match(sidebar, /title="Rename Design Project"/u);
 });
 
 test("Design project state remains available on the index and active-project routes", () => {
@@ -93,10 +91,7 @@ test("route changes select their sidebar before paint and preserve newer project
     layout,
     /projectUpdate\?\.id !== projectOrLegacyChatId &&[\s\S]*projectUpdate\?\.chatId !== projectOrLegacyChatId/u,
   );
-  assert.match(
-    layout,
-    /const opened = openResult\.project/u,
-  );
+  assert.match(layout, /const opened = openResult\.project/u);
   assert.match(
     layout,
     /latest\?\.id === opened\.id && latest\.revision > opened\.revision[\s\S]*setProject\(latest\)/u,

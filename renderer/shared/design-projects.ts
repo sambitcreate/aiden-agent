@@ -45,9 +45,104 @@ export interface DesignProjectSnapshotV1 {
   previewScriptId?: string;
 }
 
+export type DesignProjectTitlePolicyV2 =
+  | { state: "auto-eligible" }
+  | { state: "auto-applied"; sourceLineageId: string; sourceMediaId: string }
+  | { state: "manual" };
+
+/** `unknown` preserves legacy intent instead of guessing app versus web from frame size. */
+export type DesignScreenSurfaceV2 = "app" | "web" | "unknown";
+export type DesignScreenFramePresetV2 = "phone" | "tablet" | "desktop" | "custom";
+
+export interface DesignScreenFrameV2 {
+  preset: DesignScreenFramePresetV2;
+  width: number;
+  height: number;
+}
+
+export interface DesignScreenPresentationV2 {
+  surface: DesignScreenSurfaceV2;
+  frame: DesignScreenFrameV2;
+}
+
+interface DesignProjectCanvasNodeBaseV2 {
+  id: string;
+  x: number;
+  y: number;
+}
+
+export interface DesignProjectArtboardNodeV2 extends DesignProjectCanvasNodeBaseV2 {
+  kind: "artboard";
+  canonicalOrigin: "generated-artifact";
+  lineageId: string;
+  artifactMediaIds: string[];
+  activeMediaId: string;
+  presentation: DesignScreenPresentationV2;
+  assetId?: never;
+}
+
+export interface DesignProjectReferenceNodeV2 extends DesignProjectCanvasNodeBaseV2 {
+  kind: "reference-image";
+  canonicalOrigin: "reference-asset";
+  assetId: string;
+  lineageId?: never;
+  artifactMediaIds?: never;
+  activeMediaId?: never;
+  presentation?: never;
+}
+
+export interface DesignProjectSourcePreviewNodeV2 extends DesignProjectCanvasNodeBaseV2 {
+  kind: "source-preview";
+  canonicalOrigin: "connected-app";
+  assetId?: never;
+  lineageId?: never;
+  artifactMediaIds?: never;
+  activeMediaId?: never;
+  presentation?: never;
+}
+
+export type DesignProjectCanvasNodeV2 =
+  | DesignProjectArtboardNodeV2
+  | DesignProjectReferenceNodeV2
+  | DesignProjectSourcePreviewNodeV2;
+
+export interface DesignProjectCanvasV2 {
+  /** Project-wide preview preference; each Screen owns its semantic frame. */
+  viewport: DesignProjectViewport;
+  flowViewport: { x: number; y: number; zoom: number };
+  nodes: DesignProjectCanvasNodeV2[];
+}
+
+export interface DesignProjectSnapshotV2 {
+  version: 2;
+  id: string;
+  revision: number;
+  title: string;
+  titlePolicy: DesignProjectTitlePolicyV2;
+  chatId: string;
+  workspaceId?: string;
+  connectionState: DesignProjectConnectionState;
+  createdAt: number;
+  updatedAt: number;
+  canvas: DesignProjectCanvasV2;
+  referenceAssetIds: string[];
+  designSystemBinding?: { id: string; revision: number };
+  previewScriptId?: string;
+}
+
+export interface DesignProjectDatabaseV2 {
+  version: 2;
+  revision: number;
+  projects: DesignProjectSnapshotV2[];
+}
+
+/** Explicit compatibility envelopes used only while persisted/wire V1 is dual-read. */
+export type DesignProjectCanvas = DesignProjectCanvasV1 | DesignProjectCanvasV2;
+export type DesignProjectSnapshot = DesignProjectSnapshotV1 | DesignProjectSnapshotV2;
+
 /** Transient main-owned state returned when opening a durable Design Project. */
 export interface DesignProjectOpenResultV1 {
-  project: DesignProjectSnapshotV1;
+  project: DesignProjectSnapshot;
   designPublication?: "retryable" | "suppressed";
 }
 
@@ -94,22 +189,22 @@ export type DesignArtifactRecoveryResultV1 =
   | {
       status: "recovered";
       operation: "recover-revision" | "remove-missing-history";
-      project: DesignProjectSnapshotV1;
+      project: DesignProjectSnapshot;
     }
   | {
       status: "conflict";
-      current: DesignProjectSnapshotV1;
+      current: DesignProjectSnapshot;
     }
   | {
       status: "regenerate";
       plan: DesignArtifactRecoveryPlanV1;
       /** Present when recovery changed the project before regeneration. */
-      project?: DesignProjectSnapshotV1;
+      project?: DesignProjectSnapshot;
     };
 
 export type DesignProjectMutationResultV1 =
-  | { status: "updated"; project: DesignProjectSnapshotV1 }
-  | { status: "conflict"; current: DesignProjectSnapshotV1 };
+  | { status: "updated"; project: DesignProjectSnapshot }
+  | { status: "conflict"; current: DesignProjectSnapshot };
 
 export interface DesignProjectGenerationPreflightV1 {
   projectId: string;
@@ -303,6 +398,7 @@ export interface DesignProjectRevisionSummary {
   provenance: string;
   model?: string;
   active?: boolean;
+  previewed?: boolean;
 }
 
 export interface DesignProjectDesignerActionSummary {
@@ -322,7 +418,7 @@ export function designProjectOriginLabel(
 }
 
 export function designProjectArtboardLabel(count: number): string {
-  return `${count} ${count === 1 ? "artboard" : "artboards"}`;
+  return `${count} ${count === 1 ? "screen" : "screens"}`;
 }
 
 export function filterDesignProjects(

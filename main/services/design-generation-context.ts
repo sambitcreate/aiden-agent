@@ -3,7 +3,7 @@ import {
   type ChatHtmlArtifactV1,
 } from "../../renderer/shared/chat-artifacts.js";
 import { isDesignHtmlArtifact } from "../../renderer/shared/design-workspace.js";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import {
   isValidDesignArtifactSource,
   projectOwnsPublishedDesignSource,

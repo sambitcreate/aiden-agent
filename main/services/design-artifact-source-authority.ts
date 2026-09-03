@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import { validateGenerativeUiHtml } from "./generative-ui-html.js";
 import type {
   CommittedGenerativeUiRecoverySource,
@@ -97,5 +97,7 @@ export function isUsableLiveDesignCandidateSource(
   project: DesignProjectSnapshotV1 | undefined,
   source: StagedHtmlArtifact | undefined,
 ): source is StagedHtmlArtifact {
-  return isValidDesignArtifactSource(source) && projectOwnsLiveDesignCandidateSource(project, source);
+  return (
+    isValidDesignArtifactSource(source) && projectOwnsLiveDesignCandidateSource(project, source)
+  );
 }

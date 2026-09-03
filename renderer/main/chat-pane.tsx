@@ -64,7 +64,8 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
 import { DesignWorkspaceCanvas } from "../components/design-workspace";
-import type { DesignProjectSnapshotV1 } from "../shared/design-projects";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "../shared/design-projects";
+import { orderDesignContextItems } from "../shared/design-selection";
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -195,6 +196,7 @@ export function ChatPane({
   chatId,
   presentation = "chat",
   initialDesignMediaId,
+  initialDesignArtifactId,
   designProject,
   designPublication,
   onDesignPublicationResolved,
@@ -203,6 +205,7 @@ export function ChatPane({
   chatId: string;
   presentation?: "chat" | "design";
   initialDesignMediaId?: string;
+  initialDesignArtifactId?: string;
   designProject?: DesignProjectSnapshotV1;
   designPublication?: "retryable" | "suppressed";
   onDesignPublicationResolved?: () => void;
@@ -544,6 +547,16 @@ export function ChatPane({
   const [sourceDesignSelection, setSourceDesignSelection] =
     React.useState<SourceSelectionBindingV1>();
   const [designCanvasImages, setDesignCanvasImages] = React.useState<Attachment[]>([]);
+  const [designContextOrder, setDesignContextOrder] = React.useState<string[]>([]);
+  const [designContextRemovalRequest, setDesignContextRemovalRequest] = React.useState<{
+    id: string;
+    requestId: number;
+  }>();
+  const [designArtifactShowRequest, setDesignArtifactShowRequest] = React.useState<{
+    mediaId: string;
+    artifactId: string;
+    requestId: number;
+  }>();
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const todoSnapshotReadFenceRef = React.useRef<TodoSnapshotReadFence | null>(null);
@@ -1044,8 +1057,8 @@ export function ChatPane({
     onDesignPublicationResolved,
     updateDesignProject,
   ]);
-  const designContextItems = React.useMemo(
-    () => [
+  const designContextItems = React.useMemo(() => {
+    const items = [
       ...(sourceDesignSelection
         ? [
             {
@@ -1060,12 +1073,24 @@ export function ChatPane({
           (entry) =>
             entry.artifact.mediaId === target.mediaId && entry.artifact.id === target.artifactId,
         )?.artifact;
+        const screenNode = currentDesignProject?.canvas.nodes.find(
+          (node) => node.kind === "artboard" && node.artifactMediaIds?.includes(target.mediaId),
+        );
+        const revisionIndex = screenNode?.artifactMediaIds?.indexOf(target.mediaId) ?? -1;
+        const revisionState = screenNode
+          ? screenNode.activeMediaId === target.mediaId
+            ? "current"
+            : "historical"
+          : undefined;
+        const screenLabel = `${artifact?.title ?? "Selected Screen"}${
+          revisionIndex >= 0 ? ` · Revision ${revisionIndex + 1}` : ""
+        }${revisionState ? ` · ${revisionState}` : ""}`;
         return {
           id: `target:${target.mediaId}`,
           kind: target.selection ? ("element" as const) : ("design" as const),
           label: target.selection
-            ? designSelectionDisplayLabel(target.selection)
-            : (artifact?.title ?? "Selected design"),
+            ? `${designSelectionDisplayLabel(target.selection)} · ${screenLabel}`
+            : screenLabel,
         };
       }),
       ...designCanvasImages.map((attachment) => ({
@@ -1073,10 +1098,31 @@ export function ChatPane({
         kind: "image" as const,
         label: attachment.name,
       })),
-    ],
-    [designArtifacts, designCanvasImages, designTargets, sourceDesignSelection],
-  );
+    ];
+    return orderDesignContextItems(items, designContextOrder);
+  }, [
+    currentDesignProject?.canvas.nodes,
+    designArtifacts,
+    designCanvasImages,
+    designContextOrder,
+    designTargets,
+    sourceDesignSelection,
+  ]);
+  const designArtifactRevisionLabels = React.useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const node of currentDesignProject?.canvas.nodes ?? []) {
+      if (node.kind !== "artboard") continue;
+      for (const [index, mediaId] of (node.artifactMediaIds ?? []).entries()) {
+        labels[mediaId] = `Revision ${index + 1}`;
+      }
+    }
+    return labels;
+  }, [currentDesignProject?.canvas.nodes]);
   const removeDesignContextItem = React.useCallback((id: string) => {
+    setDesignContextRemovalRequest((current) => ({
+      id,
+      requestId: (current?.requestId ?? 0) + 1,
+    }));
     if (id.startsWith("target:")) {
       const mediaId = id.slice("target:".length);
       setDesignTargets((current) => current.filter((target) => target.mediaId !== mediaId));
@@ -1910,6 +1956,10 @@ export function ChatPane({
             setDesignTargets([]);
             setSourceDesignSelection(undefined);
             setDesignCanvasImages([]);
+            setDesignContextRemovalRequest((current) => ({
+              id: "all",
+              requestId: (current?.requestId ?? 0) + 1,
+            }));
           }
           const started = await runGeneration(messageTurnId, preparedWorkspaceId);
           // The user message crossed its durability barrier in appendMessage.
@@ -3031,6 +3081,16 @@ export function ChatPane({
                   <MessageList
                     key={`design:${chatId}`}
                     chatId={chatId}
+                    designProjectId={currentDesignProject?.id}
+                    onShowDesignArtifact={(artifact) => {
+                      setDesignArtifactShowRequest((current) => ({
+                        mediaId: artifact.mediaId,
+                        artifactId: artifact.id,
+                        requestId: (current?.requestId ?? 0) + 1,
+                      }));
+                      if (!designConversationMustStayOpen) setDesignConversationOpen(false);
+                    }}
+                    designArtifactRevisionLabels={designArtifactRevisionLabels}
                     messages={messages}
                     streamingText={displayedStreamingText}
                     streamingReasoning={displayedStreamingReasoning}
@@ -3079,13 +3139,16 @@ export function ChatPane({
                   }
                   generating={isGenerating || isStartingGeneration || detachedGenerationDraining}
                   initialMediaId={initialDesignMediaId}
+                  initialArtifactId={initialDesignArtifactId}
+                  artifactShowRequest={designArtifactShowRequest}
+                  contextRemovalRequest={designContextRemovalRequest}
                   unavailableMessage={designWorkspaceDisabled ? designWorkspaceTitle : undefined}
                   targets={designTargets}
                   sourceSelection={sourceDesignSelection}
-                  selectedImages={designCanvasImages}
                   onTargetsChange={setDesignTargets}
                   onSourceSelectionChange={setSourceDesignSelection}
                   onSelectedImagesChange={setDesignCanvasImages}
+                  onContextOrderChange={setDesignContextOrder}
                   onProjectChange={updateDesignProject}
                   onPersistenceBarrierChange={registerDesignPersistenceBarrier}
                   onRequestComposerFocus={focusComposer}

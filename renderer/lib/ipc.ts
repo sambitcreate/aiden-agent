@@ -72,7 +72,6 @@ import type {
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type {
   DesignProjectCanvasV1,
-  DesignProjectConnectionState,
   DesignProjectDeletePlanV1,
   DesignDirectEditV1,
   DesignProjectGenerationPreflightV1,
@@ -81,7 +80,8 @@ import type {
   DesignProjectRecordSummaryV1,
   DesignArtifactRecoveryPlanV1,
   DesignArtifactRecoveryResultV1,
-  DesignProjectSnapshotV1,
+  DesignProjectSnapshot as DesignProjectSnapshotV1,
+  DesignScreenPresentationV2,
   DesignProjectSourceDocument,
   DesignSystemProjectionV1,
   ManagedDesignHandoffPreviewV1,
@@ -758,23 +758,27 @@ export const designerApi = {
     invoke<DesignArtifactRecoveryPlanV1>("designer:inspectArtifactRecovery", projectId),
   recoverArtifact: (input: { projectId: string; expectedRevision: number }) =>
     invoke<DesignArtifactRecoveryResultV1>("designer:recoverArtifact", input),
-  createProject: (input: {
-    title: string;
-    connectionState: DesignProjectConnectionState;
-    workspaceId?: string;
-  }) => invoke<DesignProjectSnapshotV1>("designer:createProject", input),
+  createProject: () => invoke<DesignProjectSnapshotV1>("designer:createProject", {}),
   connectProject: (input: { projectId: string; expectedRevision: number; workspaceId: string }) =>
     invoke<DesignProjectMutationResultV1>("designer:connectProject", input),
   preflightGeneration: (input: { projectId: string }) =>
     invoke<DesignProjectGenerationPreflightV1>("designer:preflightGeneration", input),
-  updateProject: (input: {
+  updateProject: (input: { id: string; expectedRevision: number; canvas: DesignProjectCanvasV1 }) =>
+    invoke<DesignProjectMutationResultV1>("designer:updateProject", input),
+  setActiveRevision: (input: {
     id: string;
     expectedRevision: number;
-    canvas: DesignProjectCanvasV1;
-    referenceAssetIds: string[];
-    designSystemBinding?: { id: string; revision: number };
-    previewScriptId?: string;
-  }) => invoke<DesignProjectMutationResultV1>("designer:updateProject", input),
+    lineageId: string;
+    mediaId: string;
+  }) => invoke<DesignProjectMutationResultV1>("designer:setActiveRevision", input),
+  setScreenPresentation: (input: {
+    id: string;
+    expectedRevision: number;
+    lineageId: string;
+    presentation: DesignScreenPresentationV2;
+  }) => invoke<DesignProjectMutationResultV1>("designer:setScreenPresentation", input),
+  setPreviewScript: (input: { id: string; expectedRevision: number; previewScriptId: string }) =>
+    invoke<DesignProjectMutationResultV1>("designer:setPreviewScript", input),
   renameProject: (input: { id: string; expectedRevision: number; title: string }) =>
     invoke<DesignProjectMutationResultV1>("designer:renameProject", input),
   duplicateProject: (input: { id: string; expectedRevision: number; title?: string }) =>
@@ -921,6 +925,14 @@ export const designerApi = {
     invoke<boolean>("designer:revealProjectExport", projectId, exportId),
   putReferenceAsset: (input: { name: string; mimeType: string; data: string }) =>
     invoke<DesignReferenceAssetV1>("designer:putReferenceAsset", input),
+  attachReferenceAsset: (input: {
+    projectId: string;
+    expectedRevision: number;
+    nodeId: string;
+    assetId: string;
+    x: number;
+    y: number;
+  }) => invoke<DesignProjectMutationResultV1>("designer:attachReferenceAsset", input),
   readReferenceAsset: (assetId: string) =>
     invoke<{ asset: DesignReferenceAssetV1; data: string } | undefined>(
       "designer:readReferenceAsset",
