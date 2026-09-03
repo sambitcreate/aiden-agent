@@ -8,10 +8,11 @@ import type {
 } from "../../renderer/shared/design-projects.js";
 import { HTML_ARTIFACT_MIME_TYPE } from "../../renderer/shared/generative-ui.js";
 import { DESIGN_ARTIFACT_MEDIA_ID_PREFIX } from "../../renderer/shared/design-workspace.js";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import {
   DesignProjectRevisionConflictError,
-  type DesignProjectStore,
+  type RemoveMissingGeneratedArtboardInput,
+  type RemoveMissingGeneratedRevisionInput,
 } from "./design-project-store.js";
 import {
   DESIGN_ARTIFACT_RECOVERY_GENERATION_PREFIX,
@@ -40,10 +41,15 @@ export interface DesignArtifactRecoverySource {
 }
 
 export interface DesignArtifactRecoveryDependencies {
-  projects: Pick<
-    DesignProjectStore,
-    "get" | "removeMissingGeneratedArtboard" | "removeMissingGeneratedRevision"
-  >;
+  projects: {
+    get(id: string): Promise<DesignProjectSnapshotV1 | undefined>;
+    removeMissingGeneratedArtboard(
+      input: RemoveMissingGeneratedArtboardInput,
+    ): Promise<DesignProjectSnapshotV1>;
+    removeMissingGeneratedRevision(
+      input: RemoveMissingGeneratedRevisionInput,
+    ): Promise<DesignProjectSnapshotV1>;
+  };
   artifacts: Pick<
     GenerativeUiArtifactStore,
     | "stage"
@@ -354,7 +360,9 @@ export class DesignArtifactRecoveryService {
         })),
       );
       const valid = new Set(
-        records.filter(({ source }) => sourceIsUsable(project, source)).map(({ mediaId }) => mediaId),
+        records
+          .filter(({ source }) => sourceIsUsable(project, source))
+          .map(({ mediaId }) => mediaId),
       );
       const repaired = new Set<string>();
       let changed = true;
@@ -381,7 +389,10 @@ export class DesignArtifactRecoveryService {
             : source
               ? "corrupt-artifact"
               : "missing-artifact";
-        if (sourceIsUsable(project, source) || (repaired.has(mediaId) && mediaId !== active?.mediaId)) {
+        if (
+          sourceIsUsable(project, source) ||
+          (repaired.has(mediaId) && mediaId !== active?.mediaId)
+        ) {
           continue;
         }
         return {

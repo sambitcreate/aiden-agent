@@ -60,9 +60,8 @@ test("same-project artifact search changes stay inside the mounted Design canvas
 });
 
 test("Design Project creation is always local-first while connection remains a later action", () => {
-  assert.match(sidebar, /designerApi\.createProject\(\{[\s\S]*connectionState: "prototype-only"/u);
+  assert.match(sidebar, /designerApi\.createProject\(\)/u);
   assert.doesNotMatch(sidebar, /design-project-origin|connectedWorkspaceId|Connect a local app/u);
-  assert.match(sidebar, /Connect a workspace or Git repository later from the project/u);
   assert.match(canvas, /designerApi\.connectProject/u);
 });
 
@@ -76,7 +75,7 @@ test("Design generation consumes a main-owned preflight receipt before durable a
   assert.match(pane, /runGeneration\(messageTurnId, preparedWorkspaceId\)/u);
 });
 
-test("canvas persists layout and active selection without inferring generated ownership", () => {
+test("canvas persists layout while active selection uses a dedicated main-owned mutation", () => {
   assert.match(canvas, /project\.canvas\.flowViewport/u);
   assert.match(canvas, /instance\.setViewport\(savedProject\.canvas\.flowViewport\)/u);
   assert.match(canvas, /onMoveEnd=/u);
@@ -85,7 +84,7 @@ test("canvas persists layout and active selection without inferring generated ow
   assert.match(canvas, /if \(prior\?\.kind !== "artboard"\) continue/u);
   assert.match(
     canvas,
-    /\.\.\.prior,[\s\S]*resolveDurableDesignActiveMediaId\(\{[\s\S]*priorActiveMediaId: prior\.activeMediaId/u,
+    /durableNodes\.push\(\{\s*\.\.\.prior,\s*x: node\.position\.x,\s*y: node\.position\.y/u,
   );
   assert.doesNotMatch(canvas, /lineage:\$\{data\.group\.revisions\[0\]!\.artifact\.id\}/u);
   assert.match(canvas, /setTimeout\(\(\) => \{[\s\S]*void flushProjectPersistence\(\)\.catch/u);
@@ -94,11 +93,8 @@ test("canvas persists layout and active selection without inferring generated ow
   assert.match(pane, /updateDesignProject\(publishedProject\)/u);
   assert.match(pane, /project=\{currentDesignProject\}/u);
   assert.match(canvas, /onPersistenceBarrierChange\?\.\(flushProjectPersistence\)/u);
-  assert.match(
-    canvas,
-    /const requestedActiveMediaId =\s+activeVersionsRef\.current\[node\.id\] \?\? prior\.activeMediaId \?\? data\.artifact\.mediaId/u,
-    "same-tick persistence preserves main-owned active identity unless the user chooses a revision",
-  );
+  assert.match(canvas, /designerApi\.setActiveRevision\(\{/u);
+  assert.match(canvas, /persistedNode\?\.activeMediaId !== selected\.previewRevision\.mediaId/u);
   assert.match(canvas, /designSelectionTurnTargets\(next\)/u);
   assert.match(canvas, /type: "preview-screen-revision"/u);
   assert.match(canvas, /const makeSelectedRevisionCurrent/u);

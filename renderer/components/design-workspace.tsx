@@ -48,7 +48,6 @@ import {
   missingDurableDesignWorkspaceScreens,
   isDesignProjectMetadataOnlyUpdate,
   resolveDesignArtboardPosition,
-  resolveDurableDesignActiveMediaId,
   snapshotDesignTurnTargets,
   type DesignElementSelectionV1,
   type DesignProjectPersistenceSnapshotV1,
@@ -105,7 +104,7 @@ import type {
   DesignProjectInspectorTab,
   DesignProjectRevisionSummary,
   DesignProjectSourceDocument,
-  DesignProjectSnapshotV1,
+  DesignProjectSnapshot as DesignProjectSnapshotV1,
   DesignSystemProjectionV1,
   DesignHandoffRecoveryViewV1,
   ManagedDesignHandoffPreviewV1,
@@ -1990,14 +1989,9 @@ export function DesignWorkspaceCanvas({
       try {
         const current = savedProjectRef.current;
         if (current?.connectionState === "connected") {
-          const saved = await designerApi.updateProject({
+          const saved = await designerApi.setPreviewScript({
             id: current.id,
             expectedRevision: current.revision,
-            canvas: current.canvas,
-            referenceAssetIds: current.referenceAssetIds,
-            ...(current.designSystemBinding
-              ? { designSystemBinding: current.designSystemBinding }
-              : {}),
             previewScriptId: scriptId,
           });
           if (saved.status === "conflict") {
@@ -2267,23 +2261,15 @@ export function DesignWorkspaceCanvas({
           continue;
         }
         if (node.type === "designArtboard") {
-          const data = node.data as DesignArtboardData;
           const prior = previous.get(node.id);
           // Generated lineage and revision membership are published by main.
-          // The canvas may persist layout and the user's active-version choice,
-          // but it must never infer ownership from streamed renderer artifacts.
+          // The generic canvas channel persists layout only and must never
+          // infer ownership or active revision from renderer state.
           if (prior?.kind !== "artboard") continue;
-          const requestedActiveMediaId =
-            activeVersionsRef.current[node.id] ?? prior.activeMediaId ?? data.artifact.mediaId;
           durableNodes.push({
             ...prior,
             x: node.position.x,
             y: node.position.y,
-            activeMediaId: resolveDurableDesignActiveMediaId({
-              artifactMediaIds: prior.artifactMediaIds,
-              priorActiveMediaId: prior.activeMediaId,
-              requestedActiveMediaId,
-            }),
           });
           continue;
         }
@@ -2334,15 +2320,6 @@ export function DesignWorkspaceCanvas({
         id: currentProject.id,
         expectedRevision: currentProject.revision,
         canvas,
-        referenceAssetIds: canvas.nodes.flatMap((node) =>
-          node.kind === "reference-image" && node.assetId ? [node.assetId] : [],
-        ),
-        ...(currentProject.designSystemBinding
-          ? { designSystemBinding: currentProject.designSystemBinding }
-          : {}),
-        ...(currentProject.previewScriptId
-          ? { previewScriptId: currentProject.previewScriptId }
-          : {}),
       });
       if (result.status === "conflict") {
         acceptProjectUpdate(result.current);
@@ -2378,21 +2355,35 @@ export function DesignWorkspaceCanvas({
     const selected = designPrimaryScreenSelection(selectionStateRef.current);
     if (!selected?.previewRevision || makeCurrentBusy) return;
     const priorActiveVersions = activeVersionsRef.current;
-    const nextActiveVersions = {
-      ...priorActiveVersions,
-      [selected.nodeId]: selected.previewRevision.mediaId,
-    };
     setMakeCurrentBusy(true);
-    activeVersionsRef.current = nextActiveVersions;
-    setActiveVersions(nextActiveVersions);
     try {
       const persisted = await flushProjectPersistence();
-      const persistedNode = persisted?.project.canvas.nodes.find(
+      if (!persisted) throw new Error("This Design Project is unavailable.");
+      const result = await designerApi.setActiveRevision({
+        id: persisted.project.id,
+        expectedRevision: persisted.project.revision,
+        lineageId: selected.lineageId,
+        mediaId: selected.previewRevision.mediaId,
+      });
+      if (result.status === "conflict") {
+        acceptProjectUpdate(result.current);
+        throw new Error(
+          "This project changed. Select the revision again before making it current.",
+        );
+      }
+      acceptProjectUpdate(result.project);
+      const persistedNode = result.project.canvas.nodes.find(
         (node) => node.kind === "artboard" && node.id === selected.nodeId,
       );
       if (persistedNode?.activeMediaId !== selected.previewRevision.mediaId) {
         throw new Error("Aiden could not verify the current Screen revision was saved.");
       }
+      const nextActiveVersions = {
+        ...activeVersionsRef.current,
+        [selected.nodeId]: selected.previewRevision.mediaId,
+      };
+      activeVersionsRef.current = nextActiveVersions;
+      setActiveVersions(nextActiveVersions);
       commitSelection(
         reduceDesignWorkbenchSelection(selectionStateRef.current, {
           type: "sync-screen-active-revision",
@@ -2418,7 +2409,7 @@ export function DesignWorkspaceCanvas({
     } finally {
       setMakeCurrentBusy(false);
     }
-  }, [commitSelection, flushProjectPersistence, makeCurrentBusy]);
+  }, [acceptProjectUpdate, commitSelection, flushProjectPersistence, makeCurrentBusy]);
 
   React.useEffect(() => {
     onPersistenceBarrierChange?.(flushProjectPersistence);
@@ -2878,19 +2869,35 @@ export function DesignWorkspaceCanvas({
       }
       try {
         const rawAttachments = await Promise.all(accepted.map(canvasImageAttachment));
-        const attachments = await Promise.all(
-          rawAttachments.map(async (attachment) => {
-            if (!attachment.data) throw new Error(`Could not persist ${attachment.name}.`);
-            const asset = await designerApi.putReferenceAsset({
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              data: attachment.data,
-            });
-            const nodeId = `reference-node:${crypto.randomUUID()}`;
-            assetIdByNodeRef.current.set(nodeId, asset.id);
-            return { ...attachment, id: nodeId };
-          }),
-        );
+        const attachments: Attachment[] = [];
+        for (const [index, attachment] of rawAttachments.entries()) {
+          if (!attachment.data) throw new Error(`Could not persist ${attachment.name}.`);
+          const asset = await designerApi.putReferenceAsset({
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            data: attachment.data,
+          });
+          const nodeId = `reference-node:${crypto.randomUUID()}`;
+          const current = savedProjectRef.current;
+          if (!current) throw new Error("This Design Project is unavailable.");
+          const attached = await designerApi.attachReferenceAsset({
+            projectId: current.id,
+            expectedRevision: current.revision,
+            nodeId,
+            assetId: asset.id,
+            x: (canvasImagesRef.current.length + index) * 560,
+            y: VIEWPORT_SIZE[viewport].height + 220,
+          });
+          if (attached.status === "conflict") {
+            acceptProjectUpdate(attached.current);
+            throw new Error(
+              "This project changed while references were added. The latest version was restored.",
+            );
+          }
+          acceptProjectUpdate(attached.project);
+          assetIdByNodeRef.current.set(nodeId, asset.id);
+          attachments.push({ ...attachment, id: nodeId });
+        }
         const nextCanvasImages = [...canvasImagesRef.current, ...attachments];
         canvasImagesRef.current = nextCanvasImages;
         setCanvasImages(nextCanvasImages);
@@ -2915,7 +2922,7 @@ export function DesignWorkspaceCanvas({
         toast.error(cause instanceof Error ? cause.message : "Could not add those images.");
       }
     },
-    [canvasImages.length, commitSelection, onSourceSelectionChange],
+    [acceptProjectUpdate, canvasImages.length, commitSelection, onSourceSelectionChange, viewport],
   );
 
   const removeMissingReferenceAsset = React.useCallback(

@@ -1,5 +1,5 @@
 import { chatStore } from "./chat-store.js";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import { createDesignDirectEditMessagePort } from "./design-direct-edit-message-port.js";
 import { DesignDirectEditService } from "./design-direct-edit-service.js";
 import { designProjectStore } from "./design-project-store-main.js";

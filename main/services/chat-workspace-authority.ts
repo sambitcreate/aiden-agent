@@ -4,7 +4,7 @@ import {
 } from "../../renderer/shared/chat-workspace.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import type { ChatStartParams } from "./types.js";
 
 export { persistedChatWorkspaceId };
@@ -84,14 +84,10 @@ export function authoritativeChatGenerationMode(
   persistedWorkspaceId: string | undefined,
   requestedMode: ChatStartParams["mode"],
 ): ChatStartParams["mode"] {
-  if (
-    requestedMode === "assistant-unattended" ||
-    requestedMode === "assistant-automation"
-  ) {
+  if (requestedMode === "assistant-unattended" || requestedMode === "assistant-automation") {
     return requestedMode;
   }
-  const isAssistantChat =
-    persistedChatWorkspaceId(persistedWorkspaceId) === ASSISTANT_WORKSPACE_ID;
+  const isAssistantChat = persistedChatWorkspaceId(persistedWorkspaceId) === ASSISTANT_WORKSPACE_ID;
   if (isAssistantChat) return "assistant";
   if (requestedMode === "assistant") {
     throw new Error("This chat is not an Aiden Assistant chat.");

@@ -11,7 +11,7 @@ import type {
   DesignProjectDeletePlanV1,
   DesignProjectFilter,
   DesignProjectRecordSummaryV1,
-  DesignProjectSnapshotV1,
+  DesignProjectSnapshot as DesignProjectSnapshotV1,
 } from "../shared/design-projects";
 import { DesignProjectLibrary } from "./design-project-library";
 import { WorkspaceModeSwitcher } from "./workspace-mode-switcher";
@@ -51,9 +51,8 @@ export function DesignProjectSidebar({
   const [error, setError] = React.useState<string>();
   const [query, setQuery] = React.useState("");
   const [filter, setFilter] = React.useState<DesignProjectFilter>("all");
-  const [createOpen, setCreateOpen] = React.useState(false);
   const [createBusy, setCreateBusy] = React.useState(false);
-  const [title, setTitle] = React.useState("Untitled Design");
+  const createInFlightRef = React.useRef(false);
   const [renameProjectId, setRenameProjectId] = React.useState<string>();
   const [renameTitle, setRenameTitle] = React.useState("");
   const [renameBusy, setRenameBusy] = React.useState(false);
@@ -137,29 +136,21 @@ export function DesignProjectSidebar({
     [closeIfCompact, navigate],
   );
 
-  const beginCreateProject = React.useCallback(() => {
-    setTitle("Untitled Design");
-    setCreateOpen(true);
-  }, []);
-
   const createProject = React.useCallback(async () => {
-    const nextTitle = title.trim();
-    if (appendReconciliationRequired || createBusy || !nextTitle) return;
+    if (appendReconciliationRequired || createInFlightRef.current) return;
+    createInFlightRef.current = true;
     setCreateBusy(true);
     try {
-      const project = await designerApi.createProject({
-        title: nextTitle,
-        connectionState: "prototype-only",
-      });
-      setCreateOpen(false);
+      const project = await designerApi.createProject();
       await refresh();
       openProject(project.id);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Aiden could not create the project.");
     } finally {
+      createInFlightRef.current = false;
       setCreateBusy(false);
     }
-  }, [appendReconciliationRequired, createBusy, openProject, refresh, title]);
+  }, [appendReconciliationRequired, openProject, refresh]);
 
   const beginRenameProject = React.useCallback(
     (projectId: string) => {
@@ -408,9 +399,9 @@ export function DesignProjectSidebar({
         <div className="px-2.5 pb-2">
           <SidebarListItem
             icon={<Plus />}
-            title="New Project"
-            disabled={appendReconciliationRequired}
-            onClick={beginCreateProject}
+            title={createBusy ? "Creating…" : "New Project"}
+            disabled={appendReconciliationRequired || createBusy}
+            onClick={() => void createProject()}
           />
         </div>
         <DesignProjectLibrary
@@ -423,7 +414,9 @@ export function DesignProjectSidebar({
           error={error}
           onQueryChange={setQuery}
           onFilterChange={setFilter}
-          onCreateProject={beginCreateProject}
+          createBusy={createBusy}
+          createDisabled={appendReconciliationRequired}
+          onCreateProject={() => void createProject()}
           onOpenProject={openProject}
           onRenameProject={beginRenameProject}
           onDuplicateProject={(id) => void duplicateProject(id)}
@@ -440,28 +433,6 @@ export function DesignProjectSidebar({
           onRetry={() => void refresh()}
         />
       </Sidebar>
-
-      <Dialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        title="New Design Project"
-        description="Projects start in Aiden's private local storage. Connect a workspace or Git repository later from the project."
-        confirmLabel="Create project"
-        confirmDisabled={!title.trim() || appendReconciliationRequired}
-        busy={createBusy}
-        onConfirm={createProject}
-      >
-        <label className="grid gap-1 text-small-strong">
-          Project name
-          <input
-            autoFocus
-            value={title}
-            maxLength={160}
-            onChange={(event) => setTitle(event.currentTarget.value)}
-            className="h-9 rounded-control border border-separator bg-input px-3 text-regular text-primary outline-none focus:bg-control"
-          />
-        </label>
-      </Dialog>
 
       <AlertDialog
         open={Boolean(recoveryPlan)}

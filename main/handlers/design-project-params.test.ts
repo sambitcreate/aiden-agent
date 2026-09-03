@@ -11,42 +11,18 @@ import {
   parseDesignProjectStartPreviewParams,
 } from "./design-project-params.js";
 
-test("Design Project creation separates Prototype storage from Connected App authority", () => {
-  assert.deepEqual(
-    parseDesignProjectCreateParams({ title: " Checkout ", connectionState: "prototype-only" }),
-    { title: "Checkout", connectionState: "prototype-only" },
-  );
-  assert.deepEqual(
-    parseDesignProjectCreateParams({
-      title: "Checkout",
-      connectionState: "connected",
-      workspaceId: "workspace-1",
-    }),
-    { title: "Checkout", connectionState: "connected", workspaceId: "workspace-1" },
-  );
-  assert.throws(
-    () =>
-      parseDesignProjectCreateParams({
-        title: "Forged Prototype",
-        connectionState: "prototype-only",
-        workspaceId: "workspace-1",
-      }),
-    /workspace connection/u,
-  );
-  assert.throws(
-    () => parseDesignProjectCreateParams({ title: "Missing", connectionState: "connected" }),
-    /workspace connection/u,
-  );
-  assert.throws(
-    () =>
-      parseDesignProjectCreateParams({
-        title: "Legacy authority",
-        connectionState: "connected",
-        chatWorkspaceId: "workspace-1",
-        connectedWorkspaceId: "workspace-1",
-      }),
-    /invalid design project request/iu,
-  );
+test("Design Project creation is a main-owned blank local operation", () => {
+  assert.deepEqual(parseDesignProjectCreateParams({}), {});
+  for (const request of [
+    { title: "Checkout" },
+    { connectionState: "connected" },
+    { workspaceId: "workspace-1" },
+  ]) {
+    assert.throws(
+      () => parseDesignProjectCreateParams(request),
+      /invalid design project request/iu,
+    );
+  }
 });
 
 test("connection and preflight IPC accept identities, never paths", () => {
@@ -77,18 +53,20 @@ test("generic content updates reject forged workspace bindings and transitions",
     id: "project:one",
     expectedRevision: 2,
     canvas: { viewport: "desktop", flowViewport: { x: 0, y: 0, zoom: 1 }, nodes: [] },
-    referenceAssetIds: [],
   };
   assert.deepEqual(parseDesignProjectContentUpdateEnvelope(update), update);
-  assert.throws(
-    () =>
-      parseDesignProjectContentUpdateEnvelope({
-        ...update,
-        connectionState: "connected",
-        workspaceId: "forged-workspace",
-      }),
-    /invalid design project request/iu,
-  );
+  for (const claim of [
+    { connectionState: "connected" },
+    { workspaceId: "forged-workspace" },
+    { referenceAssetIds: ["asset:forged"] },
+    { designSystemBinding: { id: "design-system:forged", revision: 1 } },
+    { previewScriptId: "forged" },
+  ]) {
+    assert.throws(
+      () => parseDesignProjectContentUpdateEnvelope({ ...update, ...claim }),
+      /invalid design project request/iu,
+    );
+  }
 });
 
 test("source preview IPC is project-bound and rejects renderer workspace claims", () => {

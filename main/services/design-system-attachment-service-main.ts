@@ -1,7 +1,7 @@
 import { DesignSystemAttachmentService } from "./design-system-attachment-service.js";
 import { DesignSystemSnapshotStore } from "./design-system-snapshot-store.js";
 import * as fs from "node:fs/promises";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 
 export const designSystemSnapshotStore = new DesignSystemSnapshotStore();
 export const designSystemAttachmentService = new DesignSystemAttachmentService(

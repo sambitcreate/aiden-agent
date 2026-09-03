@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { Chat } from "./types.js";
+import { type DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import {
-  emptyDesignProjectDatabase,
-  parseDesignProjectDatabaseV1,
-  type DesignProjectDatabaseV1,
-  type DesignProjectSnapshotV1,
-} from "./design-project-contract.js";
+  designProjectDatabaseV2StorePolicy,
+  emptyDesignProjectDatabaseV2,
+  parseDesignProjectDatabaseV2,
+  type DesignProjectDatabaseV2,
+} from "./design-project-contract-v2.js";
 import {
   DesignProjectPublicationUncertainError,
   type DesignProjectDeletePlanV1,
@@ -300,13 +301,14 @@ test("ambiguous duplicate publication retains its installed row, backing chat, a
   const journal = new DesignProjectLifecycleJournalStore(() => root);
   const chats = new Map<string, Chat>();
   let failPublication = false;
-  const data = new DataStore<DesignProjectDatabaseV1>(
+  const policy = designProjectDatabaseV2StorePolicy();
+  const data = new DataStore<DesignProjectDatabaseV2>(
     "design-projects.json",
-    emptyDesignProjectDatabase(),
+    emptyDesignProjectDatabaseV2(),
     () => root,
     {
-      normalize: (value) => parseDesignProjectDatabaseV1(value) ?? emptyDesignProjectDatabase(),
-      isSafe: (value) => parseDesignProjectDatabaseV1(value) !== undefined,
+      normalize: policy.normalize,
+      isSafe: policy.isSafe,
       rejectCorruptWrite: true,
       rejectUnsafeWrite: true,
       rejectExternalChanges: true,
@@ -406,13 +408,14 @@ test("ambiguous duplicate publication retains its installed row, backing chat, a
 test("ambiguous delete publication uses fresh disk authority and resumes its cascade after restart", async (t) => {
   const root = await temporaryRoot(t);
   let failPublication = false;
-  const data = new DataStore<DesignProjectDatabaseV1>(
+  const policy = designProjectDatabaseV2StorePolicy();
+  const data = new DataStore<DesignProjectDatabaseV2>(
     "design-projects.json",
-    emptyDesignProjectDatabase(),
+    emptyDesignProjectDatabaseV2(),
     () => root,
     {
-      normalize: (value) => parseDesignProjectDatabaseV1(value) ?? emptyDesignProjectDatabase(),
-      isSafe: (value) => parseDesignProjectDatabaseV1(value) !== undefined,
+      normalize: policy.normalize,
+      isSafe: policy.isSafe,
       rejectCorruptWrite: true,
       rejectUnsafeWrite: true,
       rejectExternalChanges: true,
@@ -491,7 +494,7 @@ test("ambiguous delete publication uses fresh disk authority and resumes its cas
 
   await assert.rejects(coordinator.deletePlan(plan), /injected chat failure/u);
   assert.equal(await projects.get(project.id), undefined);
-  const disk = parseDesignProjectDatabaseV1(
+  const disk = parseDesignProjectDatabaseV2(
     JSON.parse(await readFile(join(root, "design-projects.json"), "utf8")),
   );
   assert.equal(

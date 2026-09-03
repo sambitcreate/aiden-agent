@@ -64,7 +64,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
 import { DesignWorkspaceCanvas } from "../components/design-workspace";
-import type { DesignProjectSnapshotV1 } from "../shared/design-projects";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "../shared/design-projects";
 import { orderDesignContextItems } from "../shared/design-selection";
 import { EventPresence } from "../components/event-presence";
 import {

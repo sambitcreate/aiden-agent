@@ -4,12 +4,13 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { type DesignProjectCanvasV1 } from "./design-project-contract.js";
 import {
-  emptyDesignProjectDatabase,
-  parseDesignProjectDatabaseV1,
-  type DesignProjectCanvasV1,
-  type DesignProjectDatabaseV1,
-} from "./design-project-contract.js";
+  designProjectDatabaseV2StorePolicy,
+  emptyDesignProjectDatabaseV2,
+  parseDesignProjectDatabaseV2,
+  type DesignProjectDatabaseV2,
+} from "./design-project-contract-v2.js";
 import { DataStore } from "./data-store.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
@@ -63,10 +64,11 @@ function canvas(): DesignProjectCanvasV1 {
 function failpointProjectDataStore(
   root: string,
   afterDestinationPublish: () => Promise<void>,
-): DataStore<DesignProjectDatabaseV1> {
-  return new DataStore("design-projects.json", emptyDesignProjectDatabase(), () => root, {
-    normalize: (value) => parseDesignProjectDatabaseV1(value) ?? emptyDesignProjectDatabase(),
-    isSafe: (value) => parseDesignProjectDatabaseV1(value) !== undefined,
+): DataStore<DesignProjectDatabaseV2> {
+  const policy = designProjectDatabaseV2StorePolicy();
+  return new DataStore("design-projects.json", emptyDesignProjectDatabaseV2(), () => root, {
+    normalize: policy.normalize,
+    isSafe: policy.isSafe,
     rejectCorruptWrite: true,
     rejectUnsafeWrite: true,
     rejectExternalChanges: true,
@@ -134,9 +136,7 @@ test("owner-only store supports create, list, get, update, rename, and CAS", asy
   const updated = await store.update({
     id: created.id,
     expectedRevision: created.revision,
-    connectionState: created.connectionState,
     canvas: moved,
-    referenceAssetIds: created.referenceAssetIds,
   });
   assert.equal(updated.revision, 2);
   assert.equal(updated.updatedAt, 101, "timestamps remain monotonic when the wall clock stalls");
@@ -146,9 +146,7 @@ test("owner-only store supports create, list, get, update, rename, and CAS", asy
     store.update({
       id: created.id,
       expectedRevision: created.revision,
-      connectionState: created.connectionState,
       canvas: moved,
-      referenceAssetIds: created.referenceAssetIds,
     }),
     (error: unknown) =>
       error instanceof DesignProjectRevisionConflictError && error.currentRevision === 2,
@@ -167,6 +165,249 @@ test("owner-only store supports create, list, get, update, rename, and CAS", asy
   );
 });
 
+test("canonical V2 writes preserve Screen semantics and use dedicated CAS operations", async (t) => {
+  const root = await temporaryRoot(t);
+  let now = 100;
+  const store = new DesignProjectStore({
+    root: () => root,
+    now: () => ++now,
+    mintProjectId: () => "project:v2-semantics",
+  });
+  await store.initialize();
+  const blank = await store.create({
+    chatId: "chat:v2-semantics",
+    title: "Untitled Design",
+    titleOrigin: "blank",
+    connectionState: "prototype-only",
+    canvas: {
+      viewport: "phone",
+      flowViewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+    },
+  });
+  assert.equal(blank.version, 2);
+  assert.deepEqual(blank.titlePolicy, { state: "auto-eligible" });
+
+  const first = await store.publishGeneratedRevisions({
+    projectId: blank.id,
+    chatId: blank.chatId,
+    revisions: [
+      {
+        mediaId: "design:first",
+        candidateTitle: "Checkout flow",
+        ownership: {
+          version: 1,
+          kind: "new-artboard",
+          projectId: blank.id,
+          lineageId: "lineage:first",
+          presentation: {
+            surface: "web",
+            frame: { preset: "desktop", width: 1_200, height: 760 },
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(first.title, "Checkout flow");
+  assert.deepEqual(first.titlePolicy, {
+    state: "auto-applied",
+    sourceLineageId: "lineage:first",
+    sourceMediaId: "design:first",
+  });
+  assert.deepEqual(first.canvas.nodes[0]?.presentation, {
+    surface: "web",
+    frame: { preset: "desktop", width: 1_200, height: 760 },
+  });
+  assert.equal(first.canvas.viewport, "phone", "preview preference remains independent");
+
+  const framed = await store.setScreenPresentation({
+    id: first.id,
+    expectedRevision: first.revision,
+    lineageId: "lineage:first",
+    presentation: {
+      surface: "web",
+      frame: { preset: "custom", width: 1_440, height: 900 },
+    },
+  });
+  const requested = structuredClone(framed.canvas);
+  const requestedScreen = requested.nodes[0];
+  if (requestedScreen?.kind !== "artboard") throw new Error("Screen fixture missing.");
+  requestedScreen.presentation = {
+    surface: "app",
+    frame: { preset: "phone", width: 390, height: 844 },
+  };
+  await assert.rejects(
+    store.update({
+      id: framed.id,
+      expectedRevision: framed.revision,
+      canvas: requested,
+    }),
+    /semantics.*immutable/iu,
+  );
+  const movedCanvas = structuredClone(framed.canvas);
+  movedCanvas.nodes[0]!.x += 24;
+  const layoutOnly = await store.update({
+    id: framed.id,
+    expectedRevision: framed.revision,
+    canvas: movedCanvas,
+  });
+  assert.deepEqual(layoutOnly.canvas.nodes[0]?.presentation, framed.canvas.nodes[0]?.presentation);
+
+  const secondRevision = await store.publishGeneratedRevisions({
+    projectId: layoutOnly.id,
+    chatId: layoutOnly.chatId,
+    revisions: [
+      {
+        mediaId: "design:second",
+        ownership: {
+          version: 1,
+          kind: "revision",
+          projectId: layoutOnly.id,
+          lineageId: "lineage:first",
+          baseMediaId: "design:first",
+        },
+      },
+    ],
+  });
+  const forgedActiveCanvas = structuredClone(secondRevision.canvas);
+  const forgedActiveScreen = forgedActiveCanvas.nodes[0];
+  if (forgedActiveScreen?.kind !== "artboard") throw new Error("Screen fixture missing.");
+  forgedActiveScreen.activeMediaId = "design:first";
+  await assert.rejects(
+    store.update({
+      id: secondRevision.id,
+      expectedRevision: secondRevision.revision,
+      canvas: forgedActiveCanvas,
+    }),
+    /semantics.*immutable/iu,
+  );
+  const restoredFirst = await store.setActiveRevision({
+    id: secondRevision.id,
+    expectedRevision: secondRevision.revision,
+    lineageId: "lineage:first",
+    mediaId: "design:first",
+  });
+  assert.equal(restoredFirst.canvas.nodes[0]?.activeMediaId, "design:first");
+  await assert.rejects(
+    store.setActiveRevision({
+      id: restoredFirst.id,
+      expectedRevision: restoredFirst.revision,
+      lineageId: "lineage:first",
+      mediaId: "design:unowned",
+    }),
+    DesignProjectConflictError,
+  );
+
+  const disk = parseDesignProjectDatabaseV2(
+    JSON.parse(await readFile(join(root, "design-projects.json"), "utf8")),
+  );
+  assert.equal(disk?.projects[0]?.version, 2);
+});
+
+test("an unusable first Screen title consumes automatic eligibility permanently", async (t) => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({
+    root: () => root,
+    mintProjectId: () => "project:title-consumed",
+  });
+  await store.initialize();
+  const blank = await store.create({
+    chatId: "chat:title-consumed",
+    title: "Untitled Design",
+    titleOrigin: "blank",
+    connectionState: "prototype-only",
+  });
+  const first = await store.publishGeneratedRevisions({
+    projectId: blank.id,
+    chatId: blank.chatId,
+    revisions: [
+      {
+        mediaId: "design:invalid-title",
+        candidateTitle: "bad\nname",
+        ownership: {
+          version: 1,
+          kind: "new-artboard",
+          projectId: blank.id,
+          lineageId: "lineage:invalid-title",
+        },
+      },
+    ],
+  });
+  assert.equal(first.title, "Untitled Design");
+  assert.deepEqual(first.titlePolicy, { state: "manual" });
+
+  const removed = await store.removeMissingGeneratedArtboard({
+    projectId: first.id,
+    expectedRevision: first.revision,
+    lineageId: "lineage:invalid-title",
+    activeMediaId: "design:invalid-title",
+  });
+  const later = await store.publishGeneratedRevisions({
+    projectId: removed.id,
+    chatId: removed.chatId,
+    revisions: [
+      {
+        mediaId: "design:later-valid",
+        candidateTitle: "Later valid title",
+        ownership: {
+          version: 1,
+          kind: "new-artboard",
+          projectId: removed.id,
+          lineageId: "lineage:later-valid",
+        },
+      },
+    ],
+  });
+  assert.equal(later.title, "Untitled Design");
+  assert.deepEqual(later.titlePolicy, { state: "manual" });
+});
+
+test("V1 stores dual-read losslessly and canonicalize on the next mutation", async (t) => {
+  const root = await temporaryRoot(t);
+  const legacy = {
+    version: 1 as const,
+    revision: 4,
+    projects: [
+      {
+        version: 1 as const,
+        id: "project:legacy",
+        revision: 7,
+        title: "Legacy title",
+        chatId: "chat:legacy",
+        connectionState: "prototype-only" as const,
+        createdAt: 10,
+        updatedAt: 20,
+        canvas: canvas(),
+        referenceAssetIds: ["asset:reference-a"],
+      },
+    ],
+  };
+  await writeFile(join(root, "design-projects.json"), JSON.stringify(legacy), "utf8");
+  const store = new DesignProjectStore({ root: () => root, now: () => 30 });
+  await store.initialize();
+  const migrated = await store.get("project:legacy");
+  assert.ok(migrated);
+  assert.equal(migrated.version, 2);
+  assert.equal(migrated.revision, 7);
+  assert.equal(migrated.title, "Legacy title");
+  assert.deepEqual(migrated.titlePolicy, { state: "manual" });
+  assert.deepEqual(migrated.canvas.nodes[0]?.presentation, {
+    surface: "unknown",
+    frame: { preset: "desktop", width: 1_200, height: 760 },
+  });
+  const renamed = await store.rename({
+    id: migrated.id,
+    expectedRevision: migrated.revision,
+    title: "Renamed legacy title",
+  });
+  assert.equal(renamed.revision, 8);
+  const disk = parseDesignProjectDatabaseV2(
+    JSON.parse(await readFile(join(root, "design-projects.json"), "utf8")),
+  );
+  assert.equal(disk?.revision, 5);
+  assert.equal(disk?.projects[0]?.title, "Renamed legacy title");
+});
+
 test("generic canvas updates cannot invent or rewrite generated lineage ownership", async (t) => {
   const root = await temporaryRoot(t);
   const store = new DesignProjectStore({ root: () => root });
@@ -182,7 +423,6 @@ test("generic canvas updates cannot invent or rewrite generated lineage ownershi
     store.update({
       id: project.id,
       expectedRevision: project.revision,
-      connectionState: project.connectionState,
       canvas: {
         ...project.canvas,
         nodes: project.canvas.nodes.map((node) =>
@@ -195,19 +435,16 @@ test("generic canvas updates cannot invent or rewrite generated lineage ownershi
             : node,
         ),
       },
-      referenceAssetIds: project.referenceAssetIds,
     }),
-    /lineage is immutable/iu,
+    /semantics.*lineage.*immutable/iu,
   );
   const moved = await store.update({
     id: project.id,
     expectedRevision: project.revision,
-    connectionState: project.connectionState,
     canvas: {
       ...project.canvas,
       nodes: project.canvas.nodes.map((node) => ({ ...node, x: node.x + 12 })),
     },
-    referenceAssetIds: project.referenceAssetIds,
   });
   assert.equal(moved.canvas.nodes[0]?.x, project.canvas.nodes[0]!.x + 12);
 });
@@ -360,7 +597,7 @@ test("create retains an exact row installed before a durability failure", async 
 
   const installed = await store.get("project:ambiguous-create");
   assert.equal(installed?.chatId, "chat:ambiguous-create");
-  const persisted = parseDesignProjectDatabaseV1(
+  const persisted = parseDesignProjectDatabaseV2(
     JSON.parse(await readFile(join(root, "design-projects.json"), "utf8")),
   );
   assert.deepEqual(persisted?.projects, [installed]);
@@ -475,6 +712,52 @@ test("rebind preserves Prototype history but clears old Connected App authority"
     connected.canvas.nodes.filter(({ kind }) => kind !== "source-preview"),
   );
   assert.deepEqual(rebound.referenceAssetIds, connected.referenceAssetIds);
+});
+
+test("preview setup publishes the exact Connected App node through a dedicated CAS mutation", async (t) => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({
+    root: () => root,
+    mintProjectId: () => "project:preview-node",
+  });
+  await store.initialize();
+  const project = await store.create({
+    chatId: "chat:preview-node",
+    title: "Preview node",
+    connectionState: "connected",
+    workspaceId: "workspace:preview-node",
+  });
+
+  const configured = await store.setPreviewScript({
+    id: project.id,
+    expectedRevision: project.revision,
+    previewScriptId: "dev",
+  });
+  assert.equal(configured.previewScriptId, "dev");
+  assert.deepEqual(configured.canvas.nodes, [
+    {
+      id: "source-preview:workspace:preview-node",
+      kind: "source-preview",
+      canonicalOrigin: "connected-app",
+      x: 0,
+      y: 0,
+    },
+  ]);
+  await assert.rejects(
+    store.setPreviewScript({
+      id: project.id,
+      expectedRevision: project.revision,
+      previewScriptId: "preview",
+    }),
+    DesignProjectRevisionConflictError,
+  );
+
+  const unchanged = await store.setPreviewScript({
+    id: configured.id,
+    expectedRevision: configured.revision,
+    previewScriptId: "dev",
+  });
+  assert.deepEqual(unchanged, configured);
 });
 
 test("duplicate remaps complete artifact history, assets, nodes, and lineage", async (t) => {
@@ -751,7 +1034,7 @@ test("delete reconciliation reloads a post-publication disk snapshot instead of 
 
   await assert.rejects(store.delete(plan), /injected directory sync failure/u);
   assert.equal((await store.get(project.id))?.id, project.id);
-  const disk = parseDesignProjectDatabaseV1(
+  const disk = parseDesignProjectDatabaseV2(
     JSON.parse(await readFile(join(root, "design-projects.json"), "utf8")),
   );
   assert.equal(disk?.revision, plan.expectedDatabaseRevision + 1);
@@ -872,7 +1155,7 @@ test("a main-store restart restores 20 artboards, 10 hydrated references, previe
   await restartedReferences.initialize();
   const restored = await restarted.get(created.id);
   assert.ok(restored);
-  assert.deepEqual(restored?.canvas, exactCanvas);
+  assert.deepEqual(restored?.canvas, created.canvas);
   assert.deepEqual(restored?.referenceAssetIds, created.referenceAssetIds);
   assert.equal(restored?.revision, created.revision);
   assert.equal(restored?.previewScriptId, "dev");
@@ -1068,25 +1351,9 @@ test("named migration fixtures have one explicit deterministic outcome", async (
     await store.initialize();
     const migrated = await store.getOrMigrateLegacyChat("chat:fixture-mixed");
     assert.ok(migrated);
-    const mixed = await store.update({
+    const mixed = await store.setPreviewScript({
       id: migrated.id,
       expectedRevision: migrated.revision,
-      connectionState: migrated.connectionState,
-      workspaceId: migrated.workspaceId,
-      canvas: {
-        ...migrated.canvas,
-        nodes: [
-          ...migrated.canvas.nodes,
-          {
-            id: "source-preview:fixture-mixed",
-            kind: "source-preview",
-            canonicalOrigin: "connected-app",
-            x: -1_320,
-            y: 0,
-          },
-        ],
-      },
-      referenceAssetIds: [],
       previewScriptId: "dev",
     });
     assert.deepEqual(mixed.canvas.nodes.map(({ canonicalOrigin }) => canonicalOrigin).sort(), [
@@ -1094,6 +1361,10 @@ test("named migration fixtures have one explicit deterministic outcome", async (
       "generated-artifact",
     ]);
     assert.equal(mixed.previewScriptId, "dev");
+    assert.equal(
+      mixed.canvas.nodes.find(({ kind }) => kind === "source-preview")?.id,
+      "source-preview:workspace:fixture-mixed",
+    );
   });
 
   await t.test("copied-chat", async (t) => {
@@ -1194,6 +1465,7 @@ test("corrupt and unsafe stores stay unavailable without overwriting original by
   for (const [name, contents] of [
     ["corrupt", "{not-json"],
     ["unsafe", JSON.stringify({ version: 1, revision: 0, projects: [], extra: true })],
+    ["future", JSON.stringify({ version: 3, revision: 0, projects: [] })],
   ] as const) {
     await t.test(name, async (t) => {
       const root = await temporaryRoot(t);

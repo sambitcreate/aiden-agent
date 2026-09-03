@@ -16,7 +16,8 @@ import {
   transformConnectedDirectEdit,
   transformPrototypeDirectEdit,
 } from "./design-direct-edit-transforms.js";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshotV2 } from "./design-project-contract-v2.js";
 import {
   DesignProjectConflictError,
   DesignProjectRevisionConflictError,
@@ -236,14 +237,14 @@ export class DesignDirectEditService {
   }
 
   private async completePrototypePublication(input: {
-    project: DesignProjectSnapshotV1;
+    project: DesignProjectSnapshotV2;
     generationId: string;
     artifact: ChatHtmlArtifactV1;
     html: string;
     lineageId: string;
     baseMediaId: string;
     model?: string;
-  }): Promise<DesignProjectSnapshotV1> {
+  }): Promise<DesignProjectSnapshotV2> {
     let record = await this.publicationRecord({
       chatId: input.project.chatId,
       generationId: input.generationId,
@@ -280,6 +281,7 @@ export class DesignDirectEditService {
             {
               mediaId: input.artifact.mediaId,
               ownership: record.designOwnership!,
+              candidateTitle: input.artifact.title,
             },
           ],
         });
@@ -383,12 +385,12 @@ export class DesignDirectEditService {
         });
       } else {
         // Compatibility for revisions published by the legacy coordinator.
-      await this.dependencies.messages.ensureArtifactMessage({
-        chatId: project.chatId,
-        artifact,
-        createdAt: this.now(),
-      });
-      await this.dependencies.artifacts.commit(project.chatId, [mediaId]);
+        await this.dependencies.messages.ensureArtifactMessage({
+          chatId: project.chatId,
+          artifact,
+          createdAt: this.now(),
+        });
+        await this.dependencies.artifacts.commit(project.chatId, [mediaId]);
       }
       return {
         kind: "prototype-revision",
@@ -524,12 +526,12 @@ export class DesignDirectEditService {
           baseMediaId: input.editedMediaId,
         });
       } else {
-      await this.dependencies.messages.ensureArtifactMessage({
-        chatId: project.chatId,
-        artifact,
-        createdAt: this.now(),
-      });
-      await this.dependencies.artifacts.commit(project.chatId, [mediaId]);
+        await this.dependencies.messages.ensureArtifactMessage({
+          chatId: project.chatId,
+          artifact,
+          createdAt: this.now(),
+        });
+        await this.dependencies.artifacts.commit(project.chatId, [mediaId]);
       }
       return { kind: "prototype-revision", proposalId, undoId: input.undoId, artifact, project };
     }

@@ -1,6 +1,9 @@
 import type { ChatMessage } from "../lib/types";
 import type { ChatHtmlArtifactV1 } from "./chat-artifacts";
-import type { DesignDirectEditV1, DesignProjectSnapshotV1 } from "./design-projects";
+import type {
+  DesignDirectEditV1,
+  DesignProjectSnapshot as DesignProjectSnapshotV1,
+} from "./design-projects";
 
 export const DESIGN_ARTIFACT_MEDIA_ID_PREFIX = "design:" as const;
 export const MAX_DESIGN_CONTEXT_BYTES = 128 * 1024;

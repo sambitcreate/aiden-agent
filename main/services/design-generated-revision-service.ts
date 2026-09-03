@@ -168,6 +168,7 @@ export class DesignGeneratedRevisionService {
         revisions: records.map((record) => ({
           mediaId: record.artifact.mediaId,
           ownership: record.designOwnership!,
+          candidateTitle: record.artifact.title,
         })),
       });
       await this.dependencies.artifacts.setDesignPublicationState(
@@ -261,14 +262,10 @@ export class DesignGeneratedRevisionService {
       chatId: chat.id,
     });
     if (this.dependencies.isChatGenerationActive?.(chat.id)) return {};
-    if (
-      unresolved.some((record) => !this.dependencies.isGenerationActive?.(record.generationId))
-    ) {
+    if (unresolved.some((record) => !this.dependencies.isGenerationActive?.(record.generationId))) {
       return { designPublication: "retryable" };
     }
-    return reconciliation.semanticConflictSuppressed
-      ? { designPublication: "suppressed" }
-      : {};
+    return reconciliation.semanticConflictSuppressed ? { designPublication: "suppressed" } : {};
   }
 
   async reconcileAtStartup(chats: readonly DesignRevisionRecoveryChat[]): Promise<void> {

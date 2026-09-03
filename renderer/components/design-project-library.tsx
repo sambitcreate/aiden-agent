@@ -41,6 +41,8 @@ export interface DesignProjectLibraryProps {
   loading?: boolean;
   error?: string;
   layout?: "rail" | "drawer" | "sidebar";
+  createBusy?: boolean;
+  createDisabled?: boolean;
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: DesignProjectFilter) => void;
   onCreateProject: () => void;
@@ -118,6 +120,8 @@ export function DesignProjectLibrary({
   loading = false,
   error,
   layout = "rail",
+  createBusy = false,
+  createDisabled = false,
   onQueryChange,
   onFilterChange,
   onCreateProject,
@@ -167,8 +171,19 @@ export function DesignProjectLibrary({
             </Text>
           </div>
           <div className="design-project-panel-actions">
-            <Button size="small" variant="accent" onClick={onCreateProject}>
-              <Plus aria-hidden="true" /> New project
+            <Button
+              size="small"
+              variant="accent"
+              disabled={createDisabled || createBusy}
+              aria-busy={createBusy || undefined}
+              onClick={onCreateProject}
+            >
+              {createBusy ? (
+                <Loader2 className="animate-spin" aria-hidden="true" />
+              ) : (
+                <Plus aria-hidden="true" />
+              )}{" "}
+              {createBusy ? "Creating…" : "New project"}
             </Button>
             {layout === "drawer" && onClose ? (
               <Button

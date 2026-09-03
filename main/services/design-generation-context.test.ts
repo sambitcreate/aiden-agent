@@ -139,7 +139,10 @@ test("live candidate preview authority is pending-only and exact to its project 
   };
 
   assert.equal(isUsableLiveDesignCandidateSource(project(), candidate), true);
-  assert.equal(isUsableLiveDesignCandidateSource(project(), { ...candidate, committed: true }), false);
+  assert.equal(
+    isUsableLiveDesignCandidateSource(project(), { ...candidate, committed: true }),
+    false,
+  );
   assert.equal(
     isUsableLiveDesignCandidateSource(project(), {
       ...candidate,
@@ -188,10 +191,7 @@ test("legacy Design rows fall back only when exact project membership is unannot
 
 test("provider Design context requires committed exact and semantically valid bytes", () => {
   const expected = artifact("design:owned");
-  assert.equal(
-    requireCommittedDesignContextHtml(expected, recoverySource(expected)),
-    HTML,
-  );
+  assert.equal(requireCommittedDesignContextHtml(expected, recoverySource(expected)), HTML);
   assert.throws(
     () => requireCommittedDesignContextHtml(expected, undefined),
     /no longer available/iu,
@@ -218,10 +218,7 @@ test("provider Design context rejects exact committed bytes until project public
   const expected = artifact("design:owned");
   const eligible = recoverySource(expected, "eligible");
   const owner = project(expected.mediaId, eligible.designOwnership!.lineageId);
-  assert.throws(
-    () => requireCommittedDesignContextHtml(expected, eligible, owner),
-    /damaged/iu,
-  );
+  assert.throws(() => requireCommittedDesignContextHtml(expected, eligible, owner), /damaged/iu);
   assert.equal(
     requireCommittedDesignContextHtml(expected, recoverySource(expected, "published"), owner),
     HTML,

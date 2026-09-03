@@ -1,4 +1,4 @@
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import {
   isValidDesignArtifactSource,
   projectOwnsPublishedDesignSource,

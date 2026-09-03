@@ -19,7 +19,7 @@ import { TerminalDrawer } from "../components/terminal-drawer";
 import { EnvironmentWorkbench, useEnvironmentPanel } from "../components/environment-panel";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
-import type { DesignProjectSnapshotV1 } from "../shared/design-projects";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "../shared/design-projects";
 import { DesignProjectSidebar } from "../components/design-project-sidebar";
 import {
   agentReturnTarget,

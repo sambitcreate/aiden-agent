@@ -17,12 +17,11 @@ test("Design Studio exposes a coherent keyboard-accessible blank workbench", asy
   await page.getByRole("button", { name: /^Current mode: Agent/u }).click();
   await page.getByRole("menuitemradio", { name: /Design.*Create, iterate, and explore/u }).click();
   await page.getByRole("button", { name: "New Project" }).click();
-  const dialog = page.getByRole("dialog", { name: "New Design Project" });
-  await dialog.getByLabel("Project name").fill("Phase 1 E2E");
-  await dialog.getByRole("button", { name: "Create project" }).click();
+  await expect(page.getByRole("dialog", { name: "New Design Project" })).toHaveCount(0);
 
   const canvas = page.getByRole("region", { name: "Design workspace canvas" });
   await expect(canvas).toBeVisible();
+  await expect(page.getByRole("main").getByText("Untitled Design", { exact: true })).toBeVisible();
   const tools = page.getByRole("navigation", { name: "Canvas tools" });
   await expect(tools.getByRole("button", { name: "Select (V)" })).toHaveAttribute(
     "aria-pressed",

@@ -142,10 +142,7 @@ test("Design generation rejects forged chats, stale renderer roots, and invalid 
 
 test("persisted Design ownership cannot be downgraded or renderer-forged", () => {
   const project = designProject();
-  assert.equal(
-    authoritativeChatDesignMode(DESIGN_PROJECT_CHAT_WORKSPACE_ID, true, project),
-    true,
-  );
+  assert.equal(authoritativeChatDesignMode(DESIGN_PROJECT_CHAT_WORKSPACE_ID, true, project), true);
   assert.equal(authoritativeChatDesignMode("legacy-workspace", true, project), true);
   assert.throws(
     () => authoritativeChatDesignMode(DESIGN_PROJECT_CHAT_WORKSPACE_ID, undefined, project),

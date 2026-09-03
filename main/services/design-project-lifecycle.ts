@@ -14,7 +14,7 @@ import type {
   DesignProjectStore,
   PreparedDesignProjectDuplicate,
 } from "./design-project-store.js";
-import type { DesignProjectSnapshotV1 } from "./design-project-contract.js";
+import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "./design-project-contract.js";
 import {
   designProjectLifecycleOperationId,
   type DesignProjectDeleteLifecycleRecordV1,
@@ -143,7 +143,9 @@ function duplicateRecord(input: {
  */
 export class RecoverableDesignProjectDuplicatePort implements DesignProjectDuplicatePort {
   constructor(
-    private readonly projectStore: Pick<DesignProjectStore, "get">,
+    private readonly projectStore: {
+      get(id: string): Promise<DesignProjectSnapshotV1 | undefined>;
+    },
     private readonly chats: DesignProjectDuplicateChatPort,
     private readonly artifacts: DesignProjectDuplicateArtifactPort,
     private readonly journal: DesignProjectLifecycleJournalPort,

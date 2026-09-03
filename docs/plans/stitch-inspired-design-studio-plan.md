@@ -1,6 +1,6 @@
 # Stitch-Inspired Design Studio Plan
 
-Status: Active — Phase 1 complete; Phase 2 implementation in progress
+Status: Active — Phases 1–2 complete; Phase 3 implementation in progress
 Date: 2026-09-03
 Branch: `feature/stitch-design-studio`
 Predecessor: [Design Workspace Durable Projects and Handoff](completed/design-workspace-claude-alignment-plan.md)
@@ -19,7 +19,7 @@ Preserve Aiden's main-owned storage, immutable revisions, semantic compare-and-s
 ## Delivery status
 
 - [x] Phase 1 — coherent selection, canvas recovery, inspector layout, terminology, and responsive workbench
-- [ ] Phase 2 — Project V2, title policy, per-screen surface semantics, and migration
+- [x] Phase 2 — Project V2, title policy, per-screen surface semantics, and migration
 - [ ] Phase 3 — durable generation intents, Explore, single-screen Refine, direction sets, and cancellation recovery
 - [ ] Phase 4 — project-local Design Language and hardened deterministic `DESIGN.md`
 - [ ] Phase 5 — bounded prototype graph and host verification
