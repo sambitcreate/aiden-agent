@@ -577,7 +577,22 @@ export function resolveThemeTokens(
   const sidebar = variant.preset === "custom"
     ? mixHex(background, foreground, 0.025 + contrast * (light ? 0.025 : 0.045))
     : palette.sidebar;
-  const textSurfaces = [background, sidebar, raised] as const;
+  // Use the same rounded alphas for contrast correction and emitted CSS,
+  // including the system Increase Contrast increment.
+  const controlAlpha = Number((0.055 + contrast * 0.065).toFixed(3));
+  const inputAlpha = Number((0.035 + contrast * 0.035).toFixed(3));
+  const wellAlpha = Number((0.018 + contrast * 0.024).toFixed(3));
+  const controlTint = mixHex(background, foreground, controlAlpha);
+  const selectionTint = mixHex(background, variant.accent, light ? 0.12 : 0.18);
+  const wellTint = mixHex(raised, foreground, wellAlpha);
+  const textSurfaces = [
+    background,
+    sidebar,
+    raised,
+    controlTint,
+    selectionTint,
+    wellTint,
+  ] as const;
   const toolbarIcon = contrastCorrectColor(
     mixHex(foreground, "#FFFFFF", light ? 0.3 : 0.08),
     textSurfaces,
@@ -589,28 +604,27 @@ export function resolveThemeTokens(
       ? mixHex(background, foreground, light ? 0.64 : 0.7)
       : palette.secondary,
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const textSecondary = contrastCorrectColor(
     mixHex(secondaryBase, foreground, 0.28),
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const textTertiary = contrastCorrectColor(
     mixHex(secondaryBase, foreground, 0.14),
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const textQuaternary = contrastCorrectColor(
     secondaryBase,
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
-  const controlAlpha = 0.055 + contrast * 0.065;
   const borderAlpha = 0.09 + contrast * 0.12;
   const accentForeground = colorContrastRatio(variant.accent, "#FFFFFF")
     >= colorContrastRatio(variant.accent, "#000000")
@@ -630,25 +644,25 @@ export function resolveThemeTokens(
   const supportRed = contrastCorrectColor(
     palette.danger,
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const supportGreen = contrastCorrectColor(
     palette.success,
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const supportWarning = contrastCorrectColor(
     palette.warning,
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const syntaxKeyword = contrastCorrectColor(
     light ? "#C83349" : "#FF7F8D",
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const syntaxString = contrastCorrectColor(
@@ -656,7 +670,7 @@ export function resolveThemeTokens(
       ? mixHex("#176B58", variant.accent, 0.12)
       : mixHex("#8CE0C6", variant.accent, 0.12),
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const syntaxNumber = contrastCorrectColor(
@@ -664,7 +678,7 @@ export function resolveThemeTokens(
       ? mixHex("#2D5BA7", variant.accent, 0.22)
       : mixHex("#92BFFF", variant.accent, 0.24),
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const syntaxTitle = contrastCorrectColor(
@@ -672,17 +686,33 @@ export function resolveThemeTokens(
       ? mixHex("#7546A8", variant.accent, 0.12)
       : mixHex("#D4A8FF", variant.accent, 0.12),
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
   const syntaxVariable = contrastCorrectColor(
     light ? "#C45C19" : "#FFB06B",
     textSurfaces,
-    4.5,
+    4.75,
     [foreground, variant.accent],
   );
 
+  // Colored status text is corrected against its own translucent fill, not
+  // just the canvas. Keep hue where possible without relying on an outline.
+  const statusTokens: Record<string, string> = {};
+  for (const [tone, color] of Object.entries({
+    accent: variant.accent, red: supportRed, green: supportGreen, warning: supportWarning,
+  })) {
+    statusTokens[`--status-${tone}-surface`] = alphaHex(color, 0.08);
+    statusTokens[`--status-${tone}`] = contrastCorrectColor(
+      mixHex(color, foreground, 0.35),
+      textSurfaces.map((surface) => mixHex(surface, color, 0.08)),
+      4.75,
+      [foreground],
+    );
+  }
+
   return {
+    ...statusTokens,
     "--text-primary": foreground,
     "--toolbar-icon": toolbarIcon,
     "--text-secondary": textSecondary,
@@ -695,8 +725,8 @@ export function resolveThemeTokens(
     "--surface-control": alphaHex(foreground, controlAlpha),
     "--surface-control-hover": alphaHex(foreground, controlAlpha + 0.045),
     "--surface-control-active": alphaHex(foreground, controlAlpha + 0.1),
-    "--surface-input": alphaHex(foreground, 0.035 + contrast * 0.035),
-    "--surface-well": alphaHex(foreground, 0.018 + contrast * 0.024),
+    "--surface-input": alphaHex(foreground, inputAlpha),
+    "--surface-well": alphaHex(foreground, wellAlpha),
     "--surface-list-hover": alphaHex(foreground, 0.035 + contrast * 0.04),
     "--surface-list-selection": alphaHex(variant.accent, light ? 0.12 : 0.18),
     "--border-field": alphaHex(foreground, borderAlpha),
@@ -706,7 +736,7 @@ export function resolveThemeTokens(
     "--accent-hover": accentHover,
     "--accent-active": accentActive,
     "--focus-ring": contrastCorrectColor(
-      variant.accent,
+      foreground,
       textSurfaces,
       3,
       [foreground],
@@ -733,7 +763,7 @@ export function resolveThemeTokens(
     "--terminal-black": contrastCorrectColor(
       mixHex(background, foreground, light ? 0.18 : 0.1),
       textSurfaces,
-      4.5,
+      4.75,
       [foreground, variant.accent],
     ),
     "--terminal-red": supportRed,
@@ -742,25 +772,25 @@ export function resolveThemeTokens(
     "--terminal-blue": contrastCorrectColor(
       mixHex(variant.accent, light ? "#233C75" : "#D8E7FF", 0.22),
       textSurfaces,
-      4.5,
+      4.75,
       [foreground, variant.accent],
     ),
     "--terminal-magenta": contrastCorrectColor(
       light ? "#895A9D" : "#DCBAFF",
       textSurfaces,
-      4.5,
+      4.75,
       [foreground, variant.accent],
     ),
     "--terminal-cyan": contrastCorrectColor(
       light ? "#367D8C" : "#91E9EE",
       textSurfaces,
-      4.5,
+      4.75,
       [foreground, variant.accent],
     ),
     "--terminal-white": contrastCorrectColor(
       light ? "#DDE2E8" : foreground,
       textSurfaces,
-      4.5,
+      4.75,
       [foreground, variant.accent],
     ),
     "--theme-canvas": background,

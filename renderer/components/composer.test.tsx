@@ -20,7 +20,11 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   );
   assert.match(
     styles,
-    /:root :where\(\*\):focus,\s*:root :where\(\*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
+    /:root :where\(input, textarea\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
+  );
+  assert.match(
+    styles,
+    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: 2px !important;/u,
   );
 });
 
@@ -31,8 +35,11 @@ test("composer context controls stay compact without exposing provider copy", ()
   assert.match(composer, /group\/access relative h-8 w-34/u);
   assert.match(composer, /role="radiogroup"\s*aria-label="Workspace access"/u);
   assert.match(composer, /absolute bottom-full left-0/u);
-  assert.match(composer, /group-hover\/access:visible/u);
-  assert.match(composer, /group-focus-within\/access:visible/u);
+  assert.doesNotMatch(composer, /group-hover\/access:visible/u);
+  assert.doesNotMatch(composer, /group-focus-within\/access:visible/u);
+  assert.match(composer, /aria-expanded=\{permissionMenuOpen\}/u);
+  assert.match(composer, /aria-controls=\{permissionOptionsId\}/u);
+  assert.doesNotMatch(composer, /aria-haspopup=\{true\}/u);
   assert.match(composer, /group-data-\[open=true\]\/access:visible/u);
   assert.match(composer, /bg-control\/80/u);
   assert.match(composer, /selected\s*\? "bg-popover shadow-control"/u);
@@ -97,7 +104,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
     composer,
     /aria-activedescendant=\{\s*slashSession \? effectiveActiveSlashId : undefined\s*\}/u,
   );
-  assert.doesNotMatch(composer, /aria-expanded=/u);
+  assert.doesNotMatch(composer.slice(composer.indexOf("<Textarea"), composer.indexOf("/>", composer.indexOf("<Textarea"))), /aria-expanded=/u);
   assert.match(composer, /if \(slashPaletteBlocked\) dismissSlash\(\)/u);
   assert.match(composer, /event\.key === "Escape"/u);
   assert.match(composer, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/u);

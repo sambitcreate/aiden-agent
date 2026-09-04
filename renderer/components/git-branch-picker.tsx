@@ -319,7 +319,7 @@ export function GitBranchPicker({
             </div>
             {branches.error ? (
               <div
-                className="mx-2 mt-2 flex items-center justify-between gap-2 rounded-control bg-support-red/[0.08] px-2 py-1.5 text-small text-support-red"
+                className="mx-2 mt-2 flex items-center justify-between gap-2 rounded-control bg-status-red-surface px-2 py-1.5 text-small text-status-red"
                 role="status"
               >
                 <span className="min-w-0">
@@ -330,7 +330,7 @@ export function GitBranchPicker({
                 <button
                   type="button"
                   onClick={() => void branches.refetch()}
-                  className="shrink-0 rounded-control px-1.5 py-0.5 text-small-strong outline-none hover:bg-support-red/10 focus-visible:bg-list-selection focus-visible:outline-none"
+                  className="shrink-0 rounded-control px-1.5 py-0.5 text-small-strong outline-none hover:bg-status-red-surface focus-visible:bg-list-selection focus-visible:outline-none"
                 >
                   Try again
                 </button>

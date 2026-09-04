@@ -149,7 +149,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
                   <span
                     className={
                       task.status === "in_progress"
-                        ? "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-accent/10 text-accent"
+                        ? "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-status-accent-surface text-status-accent"
                         : task.status === "completed"
                           ? "mt-0.5 grid size-5 shrink-0 place-items-center text-tertiary"
                           : "mt-0.5 grid size-5 shrink-0 place-items-center text-secondary"

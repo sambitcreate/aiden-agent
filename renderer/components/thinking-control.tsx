@@ -31,7 +31,7 @@ export function ThinkingControl<TLevel extends GenerationThinkingLevel>({
         role="radiogroup"
         aria-label={`${providerLabel} thinking level`}
         aria-disabled={disabled || undefined}
-        className="absolute bottom-0 right-0 z-20 flex min-w-18 flex-col items-stretch overflow-hidden rounded-[16px] bg-transparent p-0.5 transition-[background-color,box-shadow] duration-150 ease-out group-hover/thinking:bg-control/80 group-hover/thinking:shadow-control-hover group-focus-within/thinking:bg-control/80 group-focus-within/thinking:shadow-control-hover"
+        className="absolute bottom-0 right-0 z-20 flex min-w-18 flex-col items-stretch overflow-hidden rounded-dialog bg-transparent p-0.5 transition-[background-color,box-shadow] duration-150 ease-out group-hover/thinking:bg-control/80 group-hover/thinking:shadow-control-hover group-focus-within/thinking:bg-control/80 group-focus-within/thinking:shadow-control-hover"
       >
         {levels.map((value, index) => {
           const selected = value === level;

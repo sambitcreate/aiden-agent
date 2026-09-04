@@ -812,7 +812,7 @@ export function OnboardingFlow() {
                 src={APP_ICON_URL}
                 className="size-14"
               />
-              <Text as="h1" variant="heading1" className="mt-5 block text-[20px] leading-6">
+              <Text as="h1" variant="heading1" className="mt-5 block text-heading2">
                 Set up Aiden
               </Text>
               <Text as="p" variant="small" color="secondary" className="mt-2 block leading-5">
@@ -827,7 +827,7 @@ export function OnboardingFlow() {
                   className={`flex items-center gap-2 ${itemIndex <= index ? "text-primary" : "text-tertiary"}`}
                 >
                   <span
-                    className={`grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${itemIndex <= index ? "bg-accent text-accent-foreground" : "bg-control"}`}
+                    className={`grid size-5 shrink-0 place-items-center rounded-full text-mini font-semibold ${itemIndex <= index ? "bg-accent text-accent-foreground" : "bg-control"}`}
                   >
                     {itemIndex < index ? <Check className="size-3" /> : itemIndex + 1}
                   </span>
@@ -876,8 +876,8 @@ export function OnboardingFlow() {
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5 max-[520px]:px-4"
           >
             {onboardingLoadError ? (
-              <div role="alert" className="mb-4 rounded-card border border-red/30 bg-red/5 p-3">
-                <Text variant="small" color="red">
+              <div role="alert" className="mb-4 rounded-card bg-status-red-surface p-3">
+                <Text variant="small" color="red" className="text-status-red">
                   {onboardingLoadError}
                 </Text>
                 <Button
@@ -909,7 +909,7 @@ export function OnboardingFlow() {
                       as="h2"
                       tabIndex={-1}
                       variant="heading1"
-                      className="block text-[20px] leading-6 outline-none"
+                      className="block text-heading2 outline-none"
                     >
                       What should Aiden call you?
                     </Text>
@@ -945,7 +945,7 @@ export function OnboardingFlow() {
                   className="mt-6 rounded-card border border-separator bg-well p-4 shadow-control motion-reduce:transition-none"
                 >
                   <div className="flex items-start gap-3">
-                    <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-accent/10 text-accent">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-status-accent-surface text-status-accent">
                       <Globe2 aria-hidden="true" className="size-4.5" />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -1026,7 +1026,7 @@ export function OnboardingFlow() {
                       as="h2"
                       tabIndex={-1}
                       variant="heading1"
-                      className="block text-[20px] leading-6 outline-none"
+                      className="block text-heading2 outline-none"
                     >
                       Add a model provider
                     </Text>
@@ -1237,7 +1237,7 @@ export function OnboardingFlow() {
                       as="h2"
                       tabIndex={-1}
                       variant="heading1"
-                      className="block text-[20px] leading-6 outline-none"
+                      className="block text-heading2 outline-none"
                     >
                       Everything Aiden brings together
                     </Text>
@@ -1265,7 +1265,7 @@ export function OnboardingFlow() {
                           <Text id={headingId} as="h3" variant="small-strong" color="secondary">
                             {group.title}
                           </Text>
-                          <Text variant="small" color="tertiary" className="text-[11px]">
+                          <Text variant="small" color="tertiary" className="text-mini">
                             {features.length} features
                           </Text>
                         </div>
@@ -1313,7 +1313,7 @@ export function OnboardingFlow() {
                                     <Text
                                       variant="small"
                                       color="secondary"
-                                      className="mt-1 block text-[12px] leading-4"
+                                      className="mt-1 block text-small leading-4"
                                     >
                                       {feature.description}
                                     </Text>

@@ -276,6 +276,9 @@ test.describe("with a workspace", () => {
     const noAccess = accessOptions.getByRole("radio", {
       name: /^Workspace access: No access/u,
     });
+    await expect(permission).toHaveAttribute("aria-expanded", "true");
+    await expect(permission).not.toHaveAttribute("aria-haspopup");
+    await expect(accessOptions).toHaveAttribute("id", await permission.getAttribute("aria-controls") as string);
     await fullAccess.focus();
     await expect(fullAccess).toBeFocused();
 
@@ -302,5 +305,9 @@ test.describe("with a workspace", () => {
     await expect(noAccess).toHaveAttribute("aria-checked", "true");
     await askFirst.press("Enter");
     await expect(askFirst).toHaveAttribute("aria-checked", "true");
+    await askFirst.press("Escape");
+    await expect(page.getByRole("button", { name: /^Workspace access: Ask first/u })).toHaveAttribute("aria-expanded", "false");
+    await expect(accessOptions).toBeHidden();
+    await expect(page.locator(".composer-shell textarea")).toBeFocused();
   });
 });

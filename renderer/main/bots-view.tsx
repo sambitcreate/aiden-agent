@@ -1055,7 +1055,7 @@ function Roster({ bots, onCreate }: { bots: BotDefinition[]; onCreate(): void })
                 <button
                   key={bot.id}
                   type="button"
-                  className="flex min-h-28 items-start gap-3 rounded-card border border-field bg-well p-4 text-left outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control focus-visible:border-focus-ring focus-visible:bg-control-hover"
+                  className="flex min-h-28 items-start gap-3 rounded-card border border-field bg-well p-4 text-left outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control focus-visible:bg-control-hover"
                   onClick={() => navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
                 >
                   <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="visible" size="large" />

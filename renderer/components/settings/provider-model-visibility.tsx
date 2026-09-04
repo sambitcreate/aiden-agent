@@ -178,7 +178,7 @@ export function ProviderModelVisibility({ provider }: { provider: Provider }) {
                           color="tertiary"
                           as="span"
                           truncate
-                          className="mt-0.5 block text-[11px]"
+                          className="mt-0.5 block text-mini"
                           title={entry.model}
                         >
                           {entry.model}

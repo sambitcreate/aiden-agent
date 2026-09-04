@@ -530,7 +530,7 @@ export function TerminalDrawer() {
                 <div
                   key={session.id}
                   className={cn(
-                    "group flex h-7 shrink-0 items-center gap-1 rounded-[9px] border px-1.5 text-small transition-colors",
+                    "group flex h-7 shrink-0 items-center gap-1 rounded-menu border px-1.5 text-small transition-colors",
                     selected
                       ? "border-field bg-control text-primary"
                       : "border-transparent text-secondary hover:border-field/70 hover:bg-list-hover hover:text-primary",
@@ -635,7 +635,7 @@ export function TerminalDrawer() {
                 key={session.id}
                 className={cn(
                   "min-h-0 min-w-0 bg-popover",
-                  activeId === session.id && "ring-1 ring-inset ring-accent/35",
+                  activeId === session.id && "bg-list-selection",
                 )}
               >
                 <TerminalViewport

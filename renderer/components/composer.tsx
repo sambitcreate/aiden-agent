@@ -356,6 +356,7 @@ export function Composer({
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
+  const permissionOptionsId = React.useId();
   const permissionControlRef = React.useRef<HTMLButtonElement>(null);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTitle, setRenameTitle] = React.useState("");
@@ -1386,8 +1387,8 @@ export function Composer({
       gitOperationBusy
     )
       return;
-    setPermissionMenuOpen(false);
     if (nextPermission === "full") {
+      setPermissionMenuOpen(false);
       setConfirmFullAccess(true);
       return;
     }
@@ -1435,7 +1436,7 @@ export function Composer({
           {showComputerUseNotice ? (
             <aside
               aria-label="Computer Use privacy notice"
-              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5 outline outline-1 outline-accent/20"
+              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5"
             >
               <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
               <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
@@ -1544,7 +1545,7 @@ export function Composer({
           </div>
 
           <div
-            className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80"
+            className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
@@ -1556,12 +1557,12 @@ export function Composer({
               <div className="mb-1.5 flex items-center px-1.5">
                 <div
                   className={cn(
-                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-small",
+                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg px-2 py-1 text-small",
                     selectedSkillState?.state === "valid"
-                      ? "border-accent/25 bg-accent/10 text-primary"
+                      ? "bg-status-accent-surface text-primary"
                       : selectedSkillState?.state === "checking"
-                        ? "border-field bg-control text-secondary"
-                        : "border-support-warning/35 bg-support-warning/10 text-primary",
+                        ? "bg-control text-secondary"
+                        : "bg-status-warning-surface text-primary",
                   )}
                   title={
                     selectedSkillState?.state === "valid"
@@ -1737,8 +1738,13 @@ export function Composer({
                 <div
                   className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
                   data-open={permissionMenuOpen || undefined}
-                  onPointerEnter={dismissSlash}
-                  onPointerLeave={() => setPermissionMenuOpen(false)}
+                  onPointerEnter={() => {
+                    dismissSlash();
+                    setPermissionMenuOpen(true);
+                  }}
+                  onPointerLeave={(event) => {
+                    if (!event.currentTarget.contains(document.activeElement)) setPermissionMenuOpen(false);
+                  }}
                   onBlur={(event) => {
                     if (!event.currentTarget.contains(event.relatedTarget)) {
                       setPermissionMenuOpen(false);
@@ -1754,7 +1760,8 @@ export function Composer({
                   <button
                     type="button"
                     aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
-                    aria-haspopup="true"
+                    aria-expanded={permissionMenuOpen}
+                    aria-controls={permissionOptionsId}
                     onFocus={() => setPermissionMenuOpen(true)}
                     onClick={() => setPermissionMenuOpen(true)}
                     onKeyDown={(event) => {
@@ -1763,7 +1770,7 @@ export function Composer({
                       setPermissionMenuOpen(true);
                       requestAnimationFrame(() => permissionControlRef.current?.focus());
                     }}
-                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-hover/access:opacity-0 group-focus-within/access:opacity-0 group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
+                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
                   >
                     <PermissionIcon
                       className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
@@ -1773,6 +1780,7 @@ export function Composer({
                     </span>
                   </button>
                   <div
+                    id={permissionOptionsId}
                     role="radiogroup"
                     aria-label="Workspace access"
                     aria-disabled={
@@ -1784,7 +1792,7 @@ export function Composer({
                       Boolean(workspaceChangeBlockedReason) ||
                       undefined
                     }
-                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-[16px] bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-hover/access:visible group-hover/access:pointer-events-auto group-hover/access:translate-y-0 group-hover/access:opacity-100 group-focus-within/access:visible group-focus-within/access:pointer-events-auto group-focus-within/access:translate-y-0 group-focus-within/access:opacity-100 group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
                   >
                     {PERMISSION_ORDER.map((value, index) => {
                       const meta = PERMISSION_META[value];

@@ -61,7 +61,7 @@ export function AssistantPanel({
           <span className="block size-5 overflow-hidden rounded-full">
             <img src={AIDEN_MARK_URL} alt="" className="size-full scale-[1.32] object-cover" />
           </span>
-          <span className="text-sm font-medium text-primary">Aiden</span>
+          <span className="text-regular font-medium text-primary">Aiden</span>
         </span>
         <span className="flex items-center gap-0.5">
           <button
@@ -90,13 +90,13 @@ export function AssistantPanel({
       {chat.messages.length === 0 ? (
         <div className="flex flex-1 flex-col justify-end gap-4 overflow-y-auto px-3 py-3">
           <div className="flex flex-col gap-1">
-            <p className="px-1 text-xs font-medium text-tertiary">Try asking</p>
+            <p className="px-1 text-mini font-medium text-tertiary">Try asking</p>
             {ASSISTANT_SUGGESTED_PROMPTS.map((prompt) => (
               <button
                 key={prompt}
                 type="button"
                 disabled={!chat.ready}
-                className="rounded-xl px-2 py-1.5 text-left text-sm text-secondary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary disabled:opacity-50"
+                className="rounded-xl px-2 py-1.5 text-left text-regular text-secondary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary disabled:opacity-50"
                 onClick={() => chat.send(prompt)}
               >
                 {prompt}
@@ -109,7 +109,7 @@ export function AssistantPanel({
             onOpen={chat.openThread}
           />
           {chat.error ? (
-            <p role="alert" className="px-1 text-xs text-support-red">
+            <p role="alert" className="px-1 text-mini text-support-red">
               {chat.error}
             </p>
           ) : null}
@@ -138,7 +138,7 @@ export function AssistantPanel({
           </div>
         ) : null}
         {chat.readiness === "ready" ? null : (
-          <p className="px-1 pb-2 text-xs text-tertiary">{READINESS_TEXT[chat.readiness]}</p>
+          <p className="px-1 pb-2 text-mini text-tertiary">{READINESS_TEXT[chat.readiness]}</p>
         )}
         <div className="flex items-end gap-1.5 rounded-2xl bg-background p-2 outline outline-1 outline-field/80">
           <Textarea
@@ -150,7 +150,7 @@ export function AssistantPanel({
             disabled={!chat.ready}
             placeholder="Ask about Aiden"
             aria-label="Message Aiden"
-            className="min-w-0 max-h-32 flex-1 overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-1 py-1 text-sm leading-5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
+            className="min-w-0 max-h-32 flex-1 overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-1 py-1 text-regular leading-5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
             onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {

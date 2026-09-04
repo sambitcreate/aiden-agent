@@ -194,15 +194,15 @@ export function ActivityFeed({
         </div>
         {visible.claimCheck ? (
           <div
-            className="mt-1.5 flex items-start gap-2 rounded-control bg-support-warning/[0.08] px-2.5 py-2"
+            className="mt-1.5 flex items-start gap-2 rounded-control bg-status-warning-surface px-2.5 py-2"
             role={animate ? "alert" : "note"}
           >
             <CircleAlert
-              className="mt-0.5 size-3.5 shrink-0 text-support-warning"
+              className="mt-0.5 size-3.5 shrink-0 text-status-warning"
               aria-hidden="true"
             />
             <span className="min-w-0">
-              <Text as="span" variant="small-strong" className="block text-support-warning">
+              <Text as="span" variant="small-strong" className="block text-status-warning">
                 Success not verified
               </Text>
               <Text as="span" variant="small" color="secondary" className="mt-0.5 block">

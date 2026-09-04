@@ -16,7 +16,7 @@ import {
 } from "radix-ui";
 import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
-import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
+import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search, CircleAlert, Info } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import { cn } from "../lib/ui-utils";
@@ -107,7 +107,7 @@ export const Input = React.forwardRef<
     <input
       ref={ref}
       className={cn(
-        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
         className,
       )}
       {...props}
@@ -127,7 +127,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
     <textarea
       ref={ref}
       className={cn(
-        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
         density === "compact" ? "min-h-7" : "min-h-16",
         className,
       )}
@@ -180,19 +180,24 @@ export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTM
 export function Badge({
   color = "gray",
   className,
+  children,
   ...props
 }: React.HTMLAttributes<HTMLSpanElement> & { color?: string }) {
+  const StatusIcon = color === "green" ? Check : color === "red" ? CircleAlert : color === "blue" ? Info : undefined;
   return (
     <span
       className={cn(
-        "inline-flex h-6 items-center rounded-pill bg-control px-2 text-small-strong",
-        color === "green" && "border-green/30 bg-green/10 text-green",
-        color === "red" && "border-red/30 bg-red/10 text-red",
-        color === "blue" && "border-accent/30 bg-accent/10 text-accent",
+        "inline-flex h-6 items-center gap-1.5 rounded-pill border-0 bg-control px-2 text-small-strong",
+        color === "green" && "bg-status-green-surface text-status-green",
+        color === "red" && "bg-status-red-surface text-status-red",
+        color === "blue" && "bg-status-accent-surface text-status-accent",
         className,
       )}
       {...props}
-    />
+    >
+      {StatusIcon ? <StatusIcon className="size-3.5 shrink-0" aria-hidden="true" /> : null}
+      {children}
+    </span>
   );
 }
 
@@ -205,7 +210,7 @@ export function Callout({
     <div
       className={cn(
         "flex min-w-0 flex-col gap-1 break-words rounded-card bg-well p-3",
-        color === "red" && "border-red/25 bg-red/5",
+        color === "red" && "bg-status-red-surface",
         className,
       )}
       {...props}
@@ -716,7 +721,7 @@ export function Sidebar({
               }}
               placeholder={searchPlaceholder ?? "Search"}
               aria-label={searchPlaceholder ?? "Search"}
-              className="h-full min-w-0 flex-1 bg-transparent text-[14px] text-primary outline-none placeholder:text-tertiary"
+              className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-tertiary"
             />
           </label>
         </div>
@@ -755,7 +760,7 @@ export function SidebarListGroup({
   return (
     <div className={cn("mt-5 first:mt-0", className)}>
       {title ? (
-        <div className="mb-1.5 px-2.5 text-[13px] font-medium text-tertiary">{title}</div>
+        <div className="mb-1.5 px-2.5 text-small-strong font-medium text-tertiary">{title}</div>
       ) : null}
       <div className="flex flex-col gap-0.5">{children}</div>
     </div>
@@ -779,7 +784,7 @@ export function SidebarListItem({
       type="button"
       aria-current={selected ? "page" : undefined}
       className={cn(
-        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-[11px] px-2.5 py-1.5 text-left text-[14px] text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-left text-regular text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
         selected && "bg-list-selection hover:bg-list-selection focus-visible:bg-list-selection",
         className,
       )}
@@ -1352,7 +1357,7 @@ export const SelectTrigger = React.forwardRef<
     <SelectPrimitive.Trigger
       ref={ref}
       className={cn(
-        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45",
+        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45",
         size === "small" ? "h-7 rounded-lg px-2" : "h-8",
         className,
       )}
@@ -1442,12 +1447,12 @@ export const RadioGroupItem = React.forwardRef<
     <RadioGroupPrimitive.Item
       ref={ref}
       className={cn(
-        "grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:border-accent focus-visible:outline-none data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45",
+        "grid size-4 place-items-center rounded-full border-0 bg-control-active outline-none transition-[background-color,box-shadow,opacity] duration-150 hover:bg-control-hover focus-visible:outline-none data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
     >
-      <RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" />
+      <RadioGroupPrimitive.Indicator className="size-1.5 rounded-full bg-accent-foreground" />
     </RadioGroupPrimitive.Item>
   );
 });

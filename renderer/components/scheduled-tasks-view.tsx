@@ -619,7 +619,7 @@ export function ScheduledTasksView() {
                           <button
                             type="button"
                             aria-pressed={selectedTaskId === task.id}
-                            className="min-w-0 flex-1 rounded-control text-left outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                            className="min-w-0 flex-1 rounded-control text-left outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                             onClick={() => setSelectedTaskId(task.id)}
                           >
                             <span className="flex items-center gap-2">
@@ -724,7 +724,7 @@ export function ScheduledTasksView() {
                                 newTask(settings.data, activeId, mcpServers.data ?? [], template),
                               );
                             }}
-                            className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none"
+                            className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus-ring disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none"
                           >
                             <span className="grid size-9 shrink-0 place-items-center rounded-control bg-control text-secondary">
                               <Icon className="size-4" />

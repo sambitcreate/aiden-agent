@@ -19,6 +19,14 @@
   --color-list-selection: var(--surface-list-selection);
   --color-field: var(--border-field);
   --color-separator: var(--border-separator);
+  --color-status-accent: var(--status-accent);
+  --color-status-accent-surface: var(--status-accent-surface);
+  --color-status-red: var(--status-red);
+  --color-status-red-surface: var(--status-red-surface);
+  --color-status-green: var(--status-green);
+  --color-status-green-surface: var(--status-green-surface);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-surface: var(--status-warning-surface);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-hover: var(--accent-hover);
@@ -35,9 +43,11 @@
   --color-support-warning: var(--support-warning);
   --color-support-warning-foreground: var(--support-warning-foreground);
   --radius-control: 12px;
+  --radius-menu: 8px;
   --radius-card: 12px;
   --radius-dialog: 16px;
   --radius-popover: 12px;
+  --radius-sheet: 24px;
   --radius-pill: 9999px;
   --shadow-control: var(--elevation-control);
   --shadow-control-hover: var(--elevation-control-hover);
@@ -97,7 +107,15 @@
   --accent-foreground: #ffffff;
   --accent-hover: #0063c7;
   --accent-active: #005bb8;
-  --focus-ring: #006ad6;
+  --focus-ring: var(--text-primary);
+  --status-accent: #155BA2;
+  --status-accent-surface: rgb(0 106 214 / 0.080);
+  --status-red: #8C3631;
+  --status-red-surface: rgb(182 49 41 / 0.080);
+  --status-green: #266036;
+  --status-green-surface: rgb(26 113 48 / 0.080);
+  --status-warning: #704F1A;
+  --status-warning-surface: rgb(139 87 5 / 0.080);
   --support-red: #c9362e;
   --support-red-foreground: #ffffff;
   --support-green: #1d7d35;
@@ -161,7 +179,15 @@
   --accent-foreground: #000000;
   --accent-hover: #59a6f7;
   --accent-active: #68aef8;
-  --focus-ring: #3e97f6;
+  --focus-ring: var(--text-primary);
+  --status-accent: #71ACEC;
+  --status-accent-surface: rgb(62 151 246 / 0.080);
+  --status-red: #EF9493;
+  --status-red-surface: rgb(255 114 108 / 0.080);
+  --status-green: #6AD29C;
+  --status-green-surface: rgb(50 209 122 / 0.080);
+  --status-warning: #EFBD61;
+  --status-warning-surface: rgb(255 176 32 / 0.080);
   --support-red: #ff5e57;
   --support-red-foreground: #000000;
   --support-green: #32d17a;
@@ -393,10 +419,15 @@ textarea {
   font: inherit;
 }
 
-/* Aiden uses fill, border, caret, and native state changes instead of focus outlines. */
-:root :where(*):focus,
-:root :where(*):focus-visible {
+/* Text entry uses fill and caret feedback without changing its resting edge. */
+:root :where(input, textarea):focus-visible {
   outline: none !important;
+}
+
+/* Non-text controls retain a visible keyboard focus indicator. */
+:root :where(button, [role="button"], [role="radio"], [role="switch"], [role="checkbox"], [role="separator"], [role="listbox"], select, a, summary):focus-visible {
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: 2px !important;
 }
 
 .drag-region {
@@ -1599,7 +1630,7 @@ textarea {
   gap: 12px;
   margin: -12px 4px 18px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--support-warning), transparent 58%);
+  border: 0;
   border-radius: 12px;
   background: color-mix(in srgb, var(--support-warning) 9%, var(--surface-popover));
   color: var(--text-primary);
@@ -1608,7 +1639,6 @@ textarea {
 }
 
 .appearance-page-status[data-kind="error"] {
-  border-color: color-mix(in srgb, var(--support-red), transparent 58%);
   background: color-mix(in srgb, var(--support-red) 9%, var(--surface-popover));
 }
 
@@ -1668,7 +1698,6 @@ textarea {
 }
 
 .appearance-mode-option:focus-visible .appearance-mode-preview {
-  border-color: var(--accent);
   background: var(--surface-list-selection);
 }
 
@@ -1677,10 +1706,8 @@ textarea {
 }
 
 .appearance-mode-option[aria-checked="true"] .appearance-mode-preview {
-  border-color: color-mix(in srgb, var(--accent), var(--text-primary) 12%);
-  box-shadow:
-    0 0 0 1px var(--accent),
-    var(--elevation-control-hover);
+  background: var(--surface-list-selection);
+  box-shadow: var(--elevation-control-hover);
 }
 
 .appearance-mode-preview {
@@ -1690,7 +1717,7 @@ textarea {
   overflow: hidden;
   border: 1px solid var(--border-field);
   border-radius: 12px;
-  background: #f5f6f8;
+  background: var(--surface-popover);
   box-shadow: var(--elevation-control);
   transition:
     border-color 150ms ease-out,
@@ -1705,11 +1732,15 @@ textarea {
 }
 
 .appearance-mode-preview-dark {
-  background: #25282d;
+  background: var(--surface-sidebar);
 }
 
 .appearance-mode-preview-system {
-  background: linear-gradient(to right, #f5f6f8 0 50%, #25282d 50% 100%);
+  background: linear-gradient(
+    to right,
+    var(--surface-popover) 0 50%,
+    var(--surface-sidebar) 50% 100%
+  );
 }
 
 .appearance-mode-preview-toolbar {
@@ -1719,15 +1750,19 @@ textarea {
   width: 38%;
   height: 5px;
   border-radius: 99px;
-  background: #c6c8cc;
+  background: var(--border-separator);
 }
 
 .appearance-mode-preview-dark .appearance-mode-preview-toolbar {
-  background: #72767c;
+  background: var(--text-tertiary);
 }
 
 .appearance-mode-preview-system .appearance-mode-preview-toolbar {
-  background: linear-gradient(to right, #c6c8cc 0 50%, #72767c 50% 100%);
+  background: linear-gradient(
+    to right,
+    var(--border-separator) 0 50%,
+    var(--text-tertiary) 50% 100%
+  );
 }
 
 .appearance-mode-preview-sidebar {
@@ -1735,7 +1770,7 @@ textarea {
   inset: 29% auto 0 8%;
   width: 30%;
   border-radius: 8px 0 0;
-  background: #e8e9eb;
+  background: var(--surface-sidebar);
 }
 
 .appearance-mode-preview-content {
@@ -1746,23 +1781,27 @@ textarea {
   gap: 7px;
   padding: 13% 10%;
   border-radius: 0 8px 0 0;
-  background: #ffffff;
+  background: var(--surface-popover);
 }
 
 .appearance-mode-preview-dark .appearance-mode-preview-sidebar {
-  background: #30343a;
+  background: var(--surface-sidebar);
 }
 
 .appearance-mode-preview-dark .appearance-mode-preview-content {
-  background: #17191d;
+  background: var(--surface-popover);
 }
 
 .appearance-mode-preview-system .appearance-mode-preview-sidebar {
-  background: linear-gradient(to right, #e8e9eb 0 100%);
+  background: var(--surface-sidebar);
 }
 
 .appearance-mode-preview-system .appearance-mode-preview-content {
-  background: linear-gradient(to right, #ffffff 0 22%, #17191d 22% 100%);
+  background: linear-gradient(
+    to right,
+    var(--surface-popover) 0 22%,
+    var(--surface-sidebar) 22% 100%
+  );
 }
 
 .appearance-mode-preview-content i {
@@ -1770,12 +1809,12 @@ textarea {
   width: 62%;
   height: 4px;
   border-radius: 99px;
-  background: #d9dbde;
+  background: var(--border-separator);
 }
 
 .appearance-mode-preview-dark .appearance-mode-preview-content i,
 .appearance-mode-preview-system .appearance-mode-preview-content i {
-  background: #5a5e65;
+  background: var(--text-tertiary);
 }
 
 .appearance-mode-preview-content i:nth-child(2) {
@@ -2169,7 +2208,7 @@ textarea {
   width: 40px;
   height: 40px;
   place-items: center;
-  border: 1px solid var(--border-field);
+  border: 0;
   border-radius: 12px;
   overflow: hidden;
   padding: 3px;
@@ -2178,22 +2217,17 @@ textarea {
 }
 
 .appearance-dock-options button[aria-checked="true"] {
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 1px var(--accent),
-    var(--elevation-control-hover);
+  background: var(--surface-list-selection);
+  box-shadow: var(--elevation-control-hover);
 }
 
 .appearance-dock-options button:focus-visible {
-  border-color: var(--accent);
   background: var(--surface-list-selection);
 }
 
 .appearance-dock-options button[aria-checked="true"]:focus-visible {
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 1px var(--accent),
-    var(--elevation-control-hover);
+  background: var(--surface-list-selection);
+  box-shadow: var(--elevation-control-hover);
 }
 
 .appearance-dock-options img {
@@ -2388,4 +2422,13 @@ textarea {
 :root[data-reduce-motion="true"] .model-pad-marker-visual,
 :root[data-reduce-motion="true"] .model-pad-node {
   transition: none;
+}
+
+/* Direct entry shells share the same fill-only focus as the main composer. */
+.text-entry-shell {
+  transition: background-color 150ms ease-out;
+  caret-color: var(--text-primary);
+}
+.text-entry-shell:focus-within {
+  background: var(--surface-control-active);
 }

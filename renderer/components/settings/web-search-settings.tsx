@@ -507,7 +507,7 @@ function RouteEntryRow({
         event.preventDefault();
         onMove(index, event.key === "ArrowUp" ? -1 : 1);
       }}
-      className="group flex min-w-0 items-center gap-2 rounded-control border border-separator bg-popover px-2.5 py-2 outline-none transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-list-hover focus-visible:border-focus-ring focus-visible:bg-input focus-visible:shadow-control motion-reduce:transition-none"
+      className="group flex min-w-0 items-center gap-2 rounded-control border border-separator bg-popover px-2.5 py-2 outline-none transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-list-hover focus-visible:bg-input focus-visible:shadow-control motion-reduce:transition-none"
     >
       <span
         aria-hidden="true"
@@ -1703,7 +1703,7 @@ export function WebSearchSettings() {
       >
         <div className="p-4">
           <div className="flex items-start gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-control bg-accent/10 text-accent">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-control bg-status-accent-surface text-status-accent">
               <Globe2 aria-hidden="true" className="size-5" />
             </div>
             <div className="min-w-0 flex-1">
