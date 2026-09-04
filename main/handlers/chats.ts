@@ -1,3 +1,4 @@
+import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
@@ -123,12 +124,13 @@ export function registerChatHistoryHandlers(): void {
     chatApplicationService.waitUntilIdle(asString(id, "id")),
   );
 
-  ipcMain.handle("chats:compact", async (event, id: unknown) => {
+  ipcMain.handle("chats:compact", async (event, id: unknown, engine: unknown) => {
+    if (engine !== undefined && !isCompactionEngine(engine)) throw new Error("Invalid compaction engine.");
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Compaction requires the active application document."),
     );
-    return compactDesktopChat(contextLifecycleService, asString(id, "id"), owner.documentId);
+    return compactDesktopChat(contextLifecycleService, asString(id, "id"), owner.documentId, engine);
   });
   ipcMain.handle("chats:cancelCompact", (event, id: unknown) => {
     const owner = rendererDocumentOwner(

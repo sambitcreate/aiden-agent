@@ -1,4 +1,9 @@
 import {
+  isCompactionEngine,
+  compactionEngineLabel,
+  type CompactionEngine,
+} from "../../renderer/shared/compaction.js";
+import {
   GENERATION_TIMELINE_VERSION,
   isTerminalAgentStep,
   isToolStep,
@@ -224,6 +229,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
       return { label: "Use Mac", detail: safeDetail(values.action) };
+    case "vcc_recall":
+      return { label: "Recall chat history" };
     case "compact_context":
       return { label: "Compact context" };
     case "ask_user_question":
@@ -357,7 +364,32 @@ export class GenerationTimelineProjector {
   compactionFinished(
     id: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "cancelled">,
+    metrics?: {
+      engine?: CompactionEngine;
+      durationMs?: number;
+      tokensBefore: number;
+      estimatedTokensAfter: number;
+    },
   ): void {
+    const index = this.stepIndex.get(id);
+    const step = index === undefined ? undefined : this.timeline.steps[index];
+    // Publish only explicitly selected, bounded metrics, never the private result.
+    if (
+      step &&
+      isToolStep(step) &&
+      status === "completed" &&
+      metrics &&
+      isCompactionEngine(metrics.engine) &&
+      [metrics.durationMs, metrics.tokensBefore, metrics.estimatedTokensAfter].every(
+        (value) =>
+          typeof value === "number" &&
+          Number.isSafeInteger(value) &&
+          value >= 0 &&
+          value <= 1_000_000_000,
+      )
+    ) {
+      step.detail = `${compactionEngineLabel(metrics.engine)} · ${(metrics.durationMs! / 1000).toFixed(1)}s · ~${metrics.tokensBefore} → ${metrics.estimatedTokensAfter} tokens`;
+    }
     this.toolFinished(id, status);
   }
 

@@ -1,7 +1,18 @@
 /* global Buffer, process */
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +30,7 @@ async function findApps(root) {
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const candidate = path.join(root, entry.name);
     if (entry.isDirectory() && entry.name.endsWith(".app")) results.push(candidate);
-    else if (entry.isDirectory()) results.push(...await findApps(candidate));
+    else if (entry.isDirectory()) results.push(...(await findApps(candidate)));
   }
   return results;
 }
@@ -31,23 +42,43 @@ async function freePort() {
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Could not reserve a DevTools port.");
-  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  if (!address || typeof address === "string")
+    throw new Error("Could not reserve a DevTools port.");
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
   return address.port;
 }
 
 async function launch(executable, root, userData, config, overrides = {}) {
   const port = await freePort();
   const environment = {};
-  for (const name of ["AIDEN_BUILD_ID", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "SHELL", "TEMP", "TMP", "TMPDIR", "TZ", "USER"]) {
+  for (const name of [
+    "AIDEN_BUILD_ID",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "TZ",
+    "USER",
+  ]) {
     if (process.env[name] !== undefined) environment[name] = process.env[name];
   }
-  Object.assign(environment, {
-    AIDEN_CONFIG_DIR: config,
-    AIDEN_DISABLE_PRODUCTION_DIAGNOSTICS: "1",
-    AIDEN_RUNTIME_PROFILE: "production",
-    HOME: root,
-  }, overrides);
+  Object.assign(
+    environment,
+    {
+      AIDEN_CONFIG_DIR: config,
+      AIDEN_DISABLE_PRODUCTION_DIAGNOSTICS: "1",
+      AIDEN_RUNTIME_PROFILE: "production",
+      HOME: root,
+    },
+    overrides,
+  );
   const child = spawn(
     executable,
     [`--user-data-dir=${userData}`, `--remote-debugging-port=${port}`, "--disable-gpu"],
@@ -90,7 +121,7 @@ async function jsonlFiles(root) {
   const results = [];
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const candidate = path.join(root, entry.name);
-    if (entry.isDirectory()) results.push(...await jsonlFiles(candidate));
+    if (entry.isDirectory()) results.push(...(await jsonlFiles(candidate)));
     else if (entry.name.endsWith(".jsonl")) results.push(candidate);
   }
   return results;
@@ -100,7 +131,8 @@ const supplied = process.argv[2] ? path.resolve(process.argv[2]) : undefined;
 const apps = supplied
   ? [supplied]
   : await findApps(path.join(repositoryRoot, "release", "development"));
-if (apps.length !== 1) throw new Error(`Expected exactly one packaged Aiden app, found ${apps.length}.`);
+if (apps.length !== 1)
+  throw new Error(`Expected exactly one packaged Aiden app, found ${apps.length}.`);
 const app = apps[0];
 const executable = path.join(app, "Contents", "MacOS", path.basename(app, ".app"));
 if (!(await stat(executable)).isFile()) throw new Error("Packaged Aiden executable is missing.");
@@ -108,16 +140,26 @@ if (!(await stat(executable)).isFile()) throw new Error("Packaged Aiden executab
 const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-packaged-restart-"));
 const userData = path.join(root, "user-data");
 const config = path.join(root, "config");
-await Promise.all([userData, config].map((directory) => mkdir(directory, { recursive: true, mode: 0o700 })));
+await Promise.all(
+  [userData, config].map((directory) => mkdir(directory, { recursive: true, mode: 0o700 })),
+);
 try {
   const rolloutRoot = path.join(userData, "pi-upgrade-rollout");
   await mkdir(rolloutRoot, { recursive: true, mode: 0o700 });
-  await writeFile(path.join(rolloutRoot, "pi-upgrade-rollout-v1.json"), `${JSON.stringify({
-    version: 1,
-    stage: "migrated_low_risk_chats",
-    activatedAt: Date.now(),
-    revision: 1,
-  }, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(
+    path.join(rolloutRoot, "pi-upgrade-rollout-v1.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        stage: "migrated_low_risk_chats",
+        activatedAt: Date.now(),
+        revision: 1,
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
   const first = await launch(executable, root, userData, config);
   const chat = await first.page.evaluate(async () => {
     const bridge = globalThis.aidenAPI;
@@ -127,17 +169,42 @@ try {
       title: "Pi migration restart acceptance",
     });
   });
+  const vccChat = await first.page.evaluate(async (workspaceId) => {
+    return globalThis.aidenAPI.ipc.invoke("chats:create", {
+      workspaceId,
+      title: "Local compaction acceptance",
+      providerId: "openai",
+      model: "gpt-4.1",
+    });
+  }, chat.workspaceId);
   await first.stop();
+  const vccChatPath = path.join(userData, "chats", `${vccChat.id}.json`);
+  const seededVccChat = JSON.parse(await readFile(vccChatPath, "utf8"));
+  seededVccChat.messages = Array.from({ length: 18 }, (_, index) => ({
+    id: `vcc-visible-${index}`,
+    role: "user",
+    createdAt: Date.now() + index,
+    content: `Goal ${index}: preserve database schema v2. Always keep compatibility. ${"Background implementation discussion. ".repeat(1400)}`,
+  }));
+  seededVccChat.messages.push({
+    id: "vcc-current",
+    role: "user",
+    createdAt: Date.now() + 100,
+    content: "Continue the documentation work",
+  });
+  await writeFile(vccChatPath, JSON.stringify(seededVccChat), { mode: 0o600 });
   if (!chat?.id) throw new Error("Packaged Aiden did not create the acceptance chat.");
 
   const sessionsRoot = path.join(userData, "pi-compaction-sessions");
   const legacyDirectory = path.join(sessionsRoot, "--packaged-restart--");
   await mkdir(legacyDirectory, { recursive: true, mode: 0o700 });
   const legacyPath = path.join(legacyDirectory, `legacy_${chat.id}.jsonl`);
-  const fixtureLines = (await readFile(
-    path.join(repositoryRoot, "main", "services", "fixtures", "pi-legacy", "uncompacted.jsonl"),
-    "utf8",
-  )).split("\n");
+  const fixtureLines = (
+    await readFile(
+      path.join(repositoryRoot, "main", "services", "fixtures", "pi-legacy", "uncompacted.jsonl"),
+      "utf8",
+    )
+  ).split("\n");
   const header = JSON.parse(fixtureLines[0]);
   header.id = chat.id;
   header.cwd = sessionsRoot;
@@ -173,7 +240,8 @@ try {
   const third = await launch(executable, root, userData, config);
   await third.page.evaluate(async (chatId) => {
     const result = await globalThis.aidenAPI.ipc.invoke("chats:todoSnapshot", chatId);
-    if (!result || result.chatId !== chatId) throw new Error("Migrated chat did not survive restart.");
+    if (!result || result.chatId !== chatId)
+      throw new Error("Migrated chat did not survive restart.");
   }, chat.id);
   await third.stop();
   if (!(await readFile(legacyPath)).equals(promotedBeforeRestart)) {
@@ -191,28 +259,121 @@ try {
   });
   await rollback.page.evaluate(async (chatId) => {
     const result = await globalThis.aidenAPI.ipc.invoke("chats:todoSnapshot", chatId);
-    if (!result || result.chatId !== chatId) throw new Error("Rollback launch could not read the migrated chat.");
+    if (!result || result.chatId !== chatId)
+      throw new Error("Rollback launch could not read the migrated chat.");
   }, chat.id);
   await rollback.stop();
   if (!(await readFile(legacyPath)).equals(beforeRollback)) {
     throw new Error("Exact-zero rollback rewrote the promoted journal.");
   }
 
+  const local = await launch(executable, root, userData, config);
+  try {
+    const result = await local.page.evaluate(async (chatId) => {
+      const ipc = globalThis.aidenAPI.ipc;
+      const before = await ipc.invoke("settings:get");
+      if (before.compactionEngine !== "llm")
+        throw new Error("Missing settings must default to LLM.");
+      const result = await ipc.invoke("chats:compact", chatId, "vcc");
+      if ((await ipc.invoke("settings:get")).compactionEngine !== "llm")
+        throw new Error("One-shot override changed settings.");
+      await ipc.invoke("settings:set", { compactionEngine: "vcc" });
+      await ipc.invoke("profile:setName", "Compaction Test");
+      await ipc.invoke("app:setOnboardingProgress", "profile");
+      await ipc.invoke("app:setOnboardingOutcome", "deferred");
+      return result;
+    }, vccChat.id);
+    if (
+      !result.compacted ||
+      result.engine !== "vcc" ||
+      !(result.estimatedTokensAfter < result.tokensBefore)
+    ) {
+      throw new Error(`Packaged offline VCC compaction failed: ${JSON.stringify(result)}`);
+    }
+  } finally {
+    await local.stop();
+  }
+  const journals = await jsonlFiles(sessionsRoot);
+  let vccJournal;
+  for (const file of journals) {
+    const bytes = await readFile(file, "utf8");
+    if (bytes.includes('"compiler":"pi-vcc"')) vccJournal = { file, bytes };
+  }
+  if (!vccJournal) throw new Error("Packaged VCC checkpoint provenance was not persisted.");
+  const localRestart = await launch(executable, root, userData, config);
+  try {
+    await localRestart.page.evaluate(async (chatId) => {
+      const ipc = globalThis.aidenAPI.ipc;
+      if ((await ipc.invoke("settings:get")).compactionEngine !== "vcc")
+        throw new Error("VCC preference did not survive restart.");
+      const snapshot = await ipc.invoke("chats:todoSnapshot", chatId);
+      if (snapshot.chatId !== chatId) throw new Error("VCC chat did not reopen.");
+    }, vccChat.id);
+    await localRestart.page.getByRole("button", { name: "Settings", exact: true }).click();
+    await localRestart.page.getByRole("button", { name: "Memory", exact: true }).click();
+    const llmRadio = localRestart.page.getByRole("radio", { name: "LLM Compaction", exact: true });
+    const vccRadio = localRestart.page.getByRole("radio", {
+      name: "pi-vcc Compaction — Experimental",
+      exact: true,
+    });
+    await vccRadio.waitFor({ state: "visible" });
+    if ((await vccRadio.getAttribute("aria-checked")) !== "true")
+      throw new Error("Saved engine is not selected in Settings.");
+    await llmRadio.click();
+    await localRestart.page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[role="radio"][aria-label="LLM Compaction"]')
+          ?.getAttribute("aria-checked") === "true",
+    );
+    await localRestart.page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[role="radiogroup"][aria-label="Automatic compaction engine"]')
+          ?.getAttribute("aria-busy") === "false",
+    );
+    await llmRadio.focus();
+    await localRestart.page.keyboard.press("ArrowDown", { delay: 50 });
+    await localRestart.page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[role="radio"][aria-label="pi-vcc Compaction — Experimental"]')
+          ?.getAttribute("aria-checked") === "true",
+    );
+    if (process.env.AIDEN_VCC_SCREENSHOT) {
+      await mkdir(path.dirname(process.env.AIDEN_VCC_SCREENSHOT), { recursive: true });
+      await localRestart.page.screenshot({ path: process.env.AIDEN_VCC_SCREENSHOT });
+    }
+  } finally {
+    await localRestart.stop();
+  }
+  if ((await readFile(vccJournal.file, "utf8")) !== vccJournal.bytes)
+    throw new Error("Restart rewrote the VCC checkpoint.");
+
   const receiptRoot = process.env.AIDEN_PI_UPGRADE_RECEIPT_DIR;
   if (receiptRoot) {
     if (!path.isAbsolute(receiptRoot) || !supplied) {
-      throw new Error("Installed receipt output requires an absolute AIDEN_PI_UPGRADE_RECEIPT_DIR and an explicit installed app path.");
+      throw new Error(
+        "Installed receipt output requires an absolute AIDEN_PI_UPGRADE_RECEIPT_DIR and an explicit installed app path.",
+      );
     }
     const evaluationPath = path.join(receiptRoot, "pi-upgrade-evaluation-v1.json");
     const evaluationBytes = await readFile(evaluationPath);
     const evaluation = JSON.parse(evaluationBytes.toString("utf8"));
-    if (evaluation?.schema !== "aiden.pi-upgrade.evaluation" || evaluation?.report?.passed !== true) {
+    if (
+      evaluation?.schema !== "aiden.pi-upgrade.evaluation" ||
+      evaluation?.report?.passed !== true
+    ) {
       throw new Error("The installed acceptance receipt requires a passing evaluation receipt.");
     }
     await new Promise((resolve, reject) => {
-      const verify = spawn("codesign", ["--verify", "--deep", "--strict", app], { stdio: "ignore" });
+      const verify = spawn("codesign", ["--verify", "--deep", "--strict", app], {
+        stdio: "ignore",
+      });
       verify.once("error", reject);
-      verify.once("exit", (code) => code === 0 ? resolve() : reject(new Error("Installed app signature verification failed.")));
+      verify.once("exit", (code) =>
+        code === 0 ? resolve() : reject(new Error("Installed app signature verification failed.")),
+      );
     });
     const identity = await installedApplicationIdentity(executable, process.env.AIDEN_BUILD_ID);
     const installed = {
@@ -229,10 +390,15 @@ try {
     await mkdir(receiptRoot, { recursive: true, mode: 0o700 });
     await chmod(receiptRoot, 0o700);
     const staging = path.join(receiptRoot, `.pi-upgrade-installed.${randomUUID()}.tmp`);
-    await writeFile(staging, `${JSON.stringify(installed, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    await writeFile(staging, `${JSON.stringify(installed, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
     await rename(staging, path.join(receiptRoot, "pi-upgrade-installed-v1.json"));
   }
-  process.stdout.write("Verified packaged v3 promotion, idempotent v4 restart, and exact-zero rollback.\n");
+  process.stdout.write(
+    "Verified packaged v3 promotion, idempotent v4 restart, exact-zero rollback, and offline VCC compaction/settings restart.\n",
+  );
 } finally {
   await rm(root, { recursive: true, force: true });
 }

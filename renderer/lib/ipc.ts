@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../shared/compaction";
 // Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
 import type {
@@ -149,15 +150,8 @@ import {
   type ChatArtifactV1,
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
-import {
-  parseTodoSnapshotView,
-  type TodoSnapshotViewV1,
-} from "../shared/todo";
-import {
-  parseBtwEvent,
-  type BtwEventV1,
-  type BtwStartReceiptV1,
-} from "../shared/btw";
+import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
+import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -632,8 +626,10 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
-  update: (id: string, patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean }) =>
-    invoke<Workspace>("workspaces:update", id, patch),
+  update: (
+    id: string,
+    patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },
+  ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
@@ -733,9 +729,15 @@ export const chatsApi = {
       : null;
   },
   waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
-  compact: (id: string) =>
+  compact: (id: string, engine?: CompactionEngine) =>
     invoke<
-      | { compacted: true; tokensBefore?: number; estimatedTokensAfter?: number }
+      | {
+          compacted: true;
+          engine?: CompactionEngine;
+          durationMs?: number;
+          tokensBefore?: number;
+          estimatedTokensAfter?: number;
+        }
       | {
           compacted: false;
           reason:
@@ -748,13 +750,14 @@ export const chatsApi = {
             | "cancelled"
             | "compaction_failed";
         }
-    >("chats:compact", id),
+    >("chats:compact", id, engine),
   cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
   todoSnapshot: async (id: string): Promise<TodoSnapshotViewV1 | null> => {
     const value = await invoke<unknown>("chats:todoSnapshot", id);
     if (value === null) return null;
     const snapshot = parseTodoSnapshotView(value);
-    if (!snapshot || snapshot.chatId !== id) throw new Error("The todo snapshot response was invalid.");
+    if (!snapshot || snapshot.chatId !== id)
+      throw new Error("The todo snapshot response was invalid.");
     return snapshot;
   },
   btwStart: (chatId: string, question: string) =>
@@ -767,12 +770,8 @@ export const chatsApi = {
       const event = parseBtwEvent(payload);
       if (event) handler(event);
     }),
-  create: (input: {
-    title?: string;
-    workspaceId: string;
-    providerId?: string;
-    model?: string;
-  }) => invokeChatMutation<Chat>("chats:create", input),
+  create: (input: { title?: string; workspaceId: string; providerId?: string; model?: string }) =>
+    invokeChatMutation<Chat>("chats:create", input),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),

@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../shared/compaction";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
 
@@ -790,6 +791,7 @@ export interface AssistantConfigSnapshot {
 }
 
 export interface AppSettings {
+  compactionEngine?: CompactionEngine;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;

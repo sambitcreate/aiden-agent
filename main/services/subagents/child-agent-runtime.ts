@@ -1,3 +1,5 @@
+import { createVccRecallTool } from "../pi-vcc/recall.js";
+import type { CompactionEngine } from "../../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
 import { convertToLlm } from "@earendil-works/pi-agent-core";
 import type {
@@ -41,6 +43,7 @@ export interface SubagentRuntimeAuthority {
 }
 
 export interface SubagentChildSpec {
+  compactionEngine?: CompactionEngine;
   authority: SubagentRuntimeAuthority;
   runId?: string;
   groupId: string;
@@ -205,7 +208,6 @@ export class SubagentRuntimeRegistry {
       providerId: spec.runtime.model.provider,
       modelId: spec.runtime.model.id,
     };
-    assertGenerationContextCapacity(contextOptions);
     const sessionPromise = createInMemoryPiSession(sessionId);
     const cancellation = new AbortController();
     const childRuntime =
@@ -215,6 +217,7 @@ export class SubagentRuntimeRegistry {
         childId,
       }) ?? spec.runtime;
     const compactionOptions = {
+      engine: spec.compactionEngine,
       models: createPiCompactionModels(childRuntime, (message) =>
         this.recordCompactionUsage?.(message, spec.runtime),
       ),
@@ -223,6 +226,9 @@ export class SubagentRuntimeRegistry {
       signal: cancellation.signal,
       consumeHostFailure: childRuntime.consumeIsolatedHostFailure,
     };
+    const childTools = [...spec.tools, createVccRecallTool(() => sessionPromise)];
+    contextOptions.tools = childTools;
+    assertGenerationContextCapacity(contextOptions);
     const agent = new PiAgentRuntimeHarness({
       models: childRuntime.models,
       identity: {
@@ -264,7 +270,7 @@ export class SubagentRuntimeRegistry {
         systemPrompt: spec.systemPrompt,
         model: spec.runtime.model,
         thinkingLevel: spec.thinkingLevel,
-        tools: spec.tools,
+        tools: childTools,
         messages: spec.initialMessages ?? [],
       },
     });

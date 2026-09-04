@@ -2124,7 +2124,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onCloneChat={() => copyChat()}
             onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
             onExportChat={exportChat}
-            onCompactChat={() => chatsApi.compact(chatId)}
+            onCompactChat={(engine) => chatsApi.compact(chatId, engine)}
             onCancelCompact={() => chatsApi.cancelCompact(chatId)}
             onLogoutProvider={logoutProvider}
             thinkingControl={

@@ -240,3 +240,24 @@ needed to separate this change from that baseline noise.
 - 2026-09-04: Electron CI intermittently retained the scheduled-task query after Playwright selectText + Backspace, then passed on retry. Reset this exploratory filter with fill("") while retaining input-value and result assertions; keyboard focus/navigation regressions remain separate. Completed-job REST logs were available before gh run view exposed whole-run logs.
 
 - 2026-09-04: Substring selector edits can match the tail of a compound focus selector and strand base geometry in focus-only styles. Anchor standalone-selector assertions and measure resting preview boxes in Electron; computed colors alone do not prove that a preview renders.
+
+## 2026-09-04 — pi-vcc integration
+
+- The clone has an MIT declaration in README but no separate license file;
+  retain that attribution and full MIT terms in packaged THIRD_PARTY_NOTICES.
+- pi-vcc assumes numeric references and legacy retained IDs. Adapt its pure
+  compiler; use v4 canonical active lineage and fail on an unprovable tail cut.
+  Unknown/LLM summary-only gaps must bypass its format-specific merge parser.
+- Vendor typing needs Intl.Segmenter typings and optional isWordLike; intentional
+  control-byte regexes need a narrow lint exception, not broad lint suppression.
+- Package verifier tests must realpath macOS temporary directories because /var
+  is a symlink to /private/var and the production verifier rejects symlink paths.
+- Android focused tests require Android Studio's bundled JDK plus ANDROID_HOME.
+  iOS activity tests were run on physical iPhone 13 Pro, not a simulator.
+- React Doctor's deprecated --diff invocation scanned the whole repository and
+  reported existing ref-in-render/cleanup diagnostics outside this feature;
+  TypeScript, ESLint and feature suites are tracked separately.
+- Packaged Settings acceptance must seed profile readiness with profile:setName
+  and app:setOnboardingProgress before deferring onboarding; settings:set ignores
+  profile fields. Wait for and click the Settings button instead of racing the
+  initial keyboard-command listener.

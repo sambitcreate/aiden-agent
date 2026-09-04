@@ -15,3 +15,13 @@ test("Memory settings expose authoritative global and workspace switches", () =>
 test("the chat toolbar no longer exposes the manual memory manager", () => {
   assert.doesNotMatch(chatPane, /MemoryDialog|memoryOpen|Open memory|BrainCircuit/u);
 });
+
+test("automatic compaction is independently persisted and describes one-time commands", () => {
+  assert.match(settings, /settingsApi\.set\(\{ compactionEngine: engine \}\)/u);
+  assert.match(settings, /aria-label="Automatic compaction engine"/u);
+  assert.match(settings, /focus-visible:ring-focus-ring/u);
+  assert.match(settings, /orientation="vertical"/u);
+  assert.match(settings, /pi-vcc Compaction — Experimental/u);
+  assert.match(settings, /\/compact-LLM or \/compact-VCC/u);
+  assert.match(settings, /Current-chat recall works independently of memory/u);
+});

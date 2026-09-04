@@ -1,3 +1,4 @@
+import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in Finder. Git workspaces also show the
 // current branch. The input
@@ -172,8 +173,14 @@ interface ComposerProps {
   onCloneChat?: () => Promise<void>;
   onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
   onExportChat?: () => Promise<"saved" | "cancelled">;
-  onCompactChat?: () => Promise<
-    | { compacted: true; tokensBefore?: number }
+  onCompactChat?: (engine?: CompactionEngine) => Promise<
+    | {
+        compacted: true;
+        engine?: CompactionEngine;
+        durationMs?: number;
+        tokensBefore?: number;
+        estimatedTokensAfter?: number;
+      }
     | {
         compacted: false;
         reason:
@@ -647,37 +654,45 @@ export function Composer({
     }
   }, [inputRef, onExportChat, sessionCommandBusy]);
 
-  const compactChat = React.useCallback(async () => {
-    if (!onCompactChat || sessionCommandBusy) return;
-    sessionCommandBusyRef.current = true;
-    setSessionCommandStatus("Compacting chat…");
-    try {
-      const result = await onCompactChat();
-      if (result.compacted) {
-        toast.success(
-          result.tokensBefore
-            ? `Chat compacted from about ${result.tokensBefore.toLocaleString()} tokens`
-            : "Chat compacted",
-        );
-      } else {
-        const copy = {
-          already_compact: "This chat is already compact enough.",
-          busy: "Finish the current response or approval first.",
-          archived: "This chat is archived or unavailable.",
-          not_canonical: "This legacy Bot conversation is read-only.",
-          provider_unavailable: "The saved provider is unavailable.",
-          context_metadata_invalid: "The saved model context is invalid.",
-          cancelled: "Compaction was cancelled.",
-          compaction_failed: "Compaction failed.",
-        } as const;
-        toast.info(copy[result.reason]);
+  const compactChat = React.useCallback(
+    async (engine?: CompactionEngine) => {
+      if (!onCompactChat || sessionCommandBusy) return;
+      sessionCommandBusyRef.current = true;
+      setSessionCommandStatus(
+        engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
+      );
+      try {
+        const result = await onCompactChat(engine);
+        if (result.compacted) {
+          const label = compactionEngineLabel(result.engine ?? engine ?? "llm");
+          const size =
+            result.tokensBefore !== undefined && result.estimatedTokensAfter !== undefined
+              ? ` · about ${result.tokensBefore.toLocaleString()} → ${result.estimatedTokensAfter.toLocaleString()} tokens`
+              : "";
+          const duration =
+            result.durationMs !== undefined ? ` · ${(result.durationMs / 1000).toFixed(1)}s` : "";
+          toast.success(`${label} compaction complete${duration}${size}`);
+        } else {
+          const copy = {
+            already_compact: "This chat is already compact enough.",
+            busy: "Finish the current response or approval first.",
+            archived: "This chat is archived or unavailable.",
+            not_canonical: "This legacy Bot conversation is read-only.",
+            provider_unavailable: "The saved provider is unavailable.",
+            context_metadata_invalid: "The saved model context is invalid.",
+            cancelled: "Compaction was cancelled.",
+            compaction_failed: "Compaction failed.",
+          } as const;
+          toast.info(copy[result.reason]);
+        }
+      } finally {
+        sessionCommandBusyRef.current = false;
+        setSessionCommandStatus(null);
+        requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
-    } finally {
-      sessionCommandBusyRef.current = false;
-      setSessionCommandStatus(null);
-      requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
-    }
-  }, [inputRef, onCompactChat, sessionCommandBusy]);
+    },
+    [inputRef, onCompactChat, sessionCommandBusy],
+  );
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
@@ -903,11 +918,11 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          const nextPrompt =
-            prompt.trim() || consumeSlashToken(text, slashSession).trim();
-          const missingPromptMessage = instruction === "btw"
-            ? "Add a question after /btw, then send."
-            : "Add what to visualize after /visualize, then send.";
+          const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const missingPromptMessage =
+            instruction === "btw"
+              ? "Add a question after /btw, then send."
+              : "Add what to visualize after /visualize, then send.";
           if (!nextPrompt) {
             toast.info(missingPromptMessage);
             return false;
@@ -962,10 +977,10 @@ export function Composer({
       // A generic late slash-token commit would overwrite the next-turn draft.
       if (result.command.action.kind === "composer-instruction") return;
       const usesDraftOnlyCommit =
-        (result.command.action.kind === "session" &&
-          (result.command.action.action === "clone" ||
-            result.command.action.action === "export" ||
-            result.command.action.action === "worktree"));
+        result.command.action.kind === "session" &&
+        (result.command.action.action === "clone" ||
+          result.command.action.action === "export" ||
+          result.command.action.action === "worktree");
       if (
         asyncAction &&
         !(usesDraftOnlyCommit
@@ -1688,13 +1703,7 @@ export function Composer({
             />
             {sessionCommandStatus ? (
               <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
-                <Text
-                  as="p"
-                  role="status"
-                  aria-live="polite"
-                  variant="small"
-                  color="tertiary"
-                >
+                <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
                   {sessionCommandStatus}
                 </Text>
                 {sessionCommandStatus === "Compacting chat…" && onCancelCompact ? (

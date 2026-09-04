@@ -442,6 +442,7 @@ enum AidenAgentActivityPresentation {
         "schedule_task": ("Scheduling", "Scheduled"),
         "edit_automation": ("Editing automation", "Edited automation"),
         "computer_use": ("Using Mac", "Used Mac"),
+        "vcc_recall": ("Recalling chat history", "Recalled chat history"),
         "compact_context": ("Compacting context", "Compacted context"),
     ]
 

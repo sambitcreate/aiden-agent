@@ -317,7 +317,7 @@ function controlVariants(value: string): {
   };
 }
 
-function sanitizeCredentialText(value: string): string {
+export function sanitizeCredentialText(value: string): string {
   let sanitized = value;
   if ((value.includes("=") || value.includes(":")) && ASSIGNMENT_SECRET_HINT.test(value)) {
     sanitized = sanitized
@@ -876,10 +876,7 @@ function htmlAttributeAssignmentContext(line: string, offset: number): boolean {
   // rule below, but otherwise privacy wins.
   if (quote) return false;
   const attributePrefix = line.slice(attributeStart, offset);
-  return (
-    attributePrefix.length === 0 ||
-    /^[A-Za-z_:][-A-Za-z0-9_:.]*$/u.test(attributePrefix)
-  );
+  return attributePrefix.length === 0 || /^[A-Za-z_:][-A-Za-z0-9_:.]*$/u.test(attributePrefix);
 }
 
 function nonShellAssignmentContext(value: string, offset: number): boolean {
@@ -1006,8 +1003,7 @@ function redactEnvironmentAssignments(value: string): string {
 
 function sanitizeVariant(value: string, includeEnvironment: boolean): string {
   const environmentSafe = includeEnvironment
-    ? redactEnvironmentAssignments(value)
-        .replace(/(\[REDACTED ENVIRONMENT VALUE\])\]+/gu, "$1")
+    ? redactEnvironmentAssignments(value).replace(/(\[REDACTED ENVIRONMENT VALUE\])\]+/gu, "$1")
     : value;
   return sanitizePaths(sanitizePaths(environmentSafe));
 }

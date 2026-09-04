@@ -1,3 +1,5 @@
+import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shared/compaction.js";
+import { compileVccInWorker } from "./pi-vcc/worker-client.js";
 import {
   DEFAULT_COMPACTION_SETTINGS,
   calculateContextTokens,
@@ -9,6 +11,7 @@ import {
   uuidv7,
   type AgentMessage,
   type CompactionSettings,
+  type CompactResult,
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import {
@@ -27,11 +30,15 @@ import type { PiSessionPort } from "./pi-session-port.js";
 export type PiCompactionReason = "threshold" | "overflow" | "manual";
 
 export interface PiCompactionDetails {
+  engine?: CompactionEngine;
+  version?: number;
   readFiles: string[];
   modifiedFiles: string[];
 }
 
 export interface PiCompactionResult {
+  engine?: CompactionEngine;
+  durationMs?: number;
   summary: string;
   retainedTail: AgentMessage[];
   tokensBefore: number;
@@ -71,6 +78,9 @@ export interface PiCompactionCheckResult {
 }
 
 export interface PiCompactionCoordinatorOptions {
+  engine?: CompactionEngine;
+  /** Deterministic seam for worker failure/cancellation tests. */
+  compileVcc?: typeof compileVccInWorker;
   session: PiSessionPort;
   models: Models;
   model: ResolvedModelRuntime["model"];
@@ -116,8 +126,7 @@ function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
 
 function withoutRetryableAssistantTail(messages: readonly AgentMessage[]): AgentMessage[] {
   const tail = messages[messages.length - 1];
-  return tail?.role === "assistant" &&
-    (tail.stopReason === "error" || tail.stopReason === "length")
+  return tail?.role === "assistant" && (tail.stopReason === "error" || tail.stopReason === "length")
     ? messages.slice(0, -1)
     : [...messages];
 }
@@ -138,6 +147,16 @@ export class PiCompactionCoordinator {
       ...DEFAULT_COMPACTION_SETTINGS,
       ...options.settings,
     };
+    if (options.engine === "vcc") {
+      this.settings.reserveTokens = Math.min(
+        this.settings.reserveTokens,
+        Math.floor(options.model.contextWindow / 4),
+      );
+      this.settings.keepRecentTokens = Math.min(
+        this.settings.keepRecentTokens,
+        Math.floor((options.model.contextWindow - this.settings.reserveTokens) / 2),
+      );
+    }
   }
 
   abort(): void {
@@ -202,10 +221,7 @@ export class PiCompactionCoordinator {
       .reverse()
       .find((message): message is AssistantMessage => message.role === "assistant");
     if (projected) {
-      if (
-        projected.compressibleHistoryMessages === 0 ||
-        !projected.shouldCompact
-      ) {
+      if (projected.compressibleHistoryMessages === 0 || !projected.shouldCompact) {
         return { compacted: false, shouldRetry: false, messages: context.messages };
       }
       return this.run("threshold", false, true);
@@ -318,7 +334,8 @@ export class PiCompactionCoordinator {
       let liveMessages = options.liveMessages;
       if (!liveMessages) {
         try {
-          liveMessages = (await sessionOperation(() => this.options.session.buildContext())).messages;
+          liveMessages = (await sessionOperation(() => this.options.session.buildContext()))
+            .messages;
         } catch (error) {
           return {
             compacted: false,
@@ -391,6 +408,8 @@ export class PiCompactionCoordinator {
     willRetry: boolean,
     requireEffectiveInput = false,
   ): Promise<PiCompactionCheckResult> {
+    const startedAt = performance.now();
+    const engine = compactionEngineFrom(this.options.engine);
     let started = false;
     let removeParentAbort = () => {};
     try {
@@ -417,20 +436,33 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
-      const compactResult = await compact(
-        preparation,
-        this.options.models,
-        this.options.model,
-        undefined,
-        abortController.signal,
-        this.options.thinkingLevel,
-        this.options.summaryRetry ?? {
-          enabled: true,
-          maxRetries: 3,
-          baseDelayMs: 2_000,
-        },
-        this.options.summaryRetryCallbacks,
-      );
+      const compactResult =
+        engine === "vcc"
+          ? {
+              ok: true as const,
+              value: await (this.options.compileVcc ?? compileVccInWorker)(
+                {
+                  branch,
+                  preparation,
+                  contextWindow: this.options.model.contextWindow,
+                },
+                abortController.signal,
+              ),
+            }
+          : await compact(
+              preparation,
+              this.options.models,
+              this.options.model,
+              undefined,
+              abortController.signal,
+              this.options.thinkingLevel,
+              this.options.summaryRetry ?? {
+                enabled: true,
+                maxRetries: 3,
+                baseDelayMs: 2_000,
+              },
+              this.options.summaryRetryCallbacks,
+            );
       if (!compactResult.ok) throw compactResult.error;
       if (abortController.signal.aborted) {
         this.options.onEvent?.({
@@ -442,8 +474,12 @@ export class PiCompactionCoordinator {
         return { compacted: false, shouldRetry: false };
       }
 
-      const result = compactResult.value;
+      const result: CompactResult = compactResult.value;
+      result.details = { ...(result.details as Record<string, unknown>), engine, version: 1 };
       const priorLeafId = await sessionOperation(() => this.options.session.getLeafId());
+      if (priorLeafId !== (branch[branch.length - 1]?.id ?? null)) {
+        throw new PiCompactionSessionError();
+      }
       const checkpointId = uuidv7();
       await sessionOperation(() =>
         this.options.session.appendCompaction({
@@ -475,6 +511,8 @@ export class PiCompactionCoordinator {
         ? withoutRetryableAssistantTail(context.messages)
         : context.messages;
       const publicResult: PiCompactionResult = {
+        engine,
+        durationMs: Math.round(performance.now() - startedAt),
         summary: result.summary,
         retainedTail: result.retainedTail,
         tokensBefore: result.tokensBefore,

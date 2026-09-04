@@ -43,9 +43,9 @@ function deps(overrides: Partial<ContextLifecycleServiceDeps> = {}) {
       throw new Error("stop after authority checks");
     },
     resolveRuntime: async () =>
-      ({ provider: { id: "saved-provider" }, model: { id: "saved-model" } } as Awaited<
+      ({ provider: { id: "saved-provider" }, model: { id: "saved-model" } }) as Awaited<
         ReturnType<ContextLifecycleServiceDeps["resolveRuntime"]>
-      >),
+      >,
     resolveThinkingLevel: async () => "off",
     ...overrides,
   };
@@ -136,9 +136,9 @@ test("legacy Bot duplicates are read-only and never resolve provider state", asy
 test("manual compaction rejects a provider alias that changes the saved binding", async () => {
   const { value } = deps({
     resolveRuntime: async () =>
-      ({ provider: { id: "aliased-provider" }, model: { id: "saved-model" } } as Awaited<
+      ({ provider: { id: "aliased-provider" }, model: { id: "saved-model" } }) as Awaited<
         ReturnType<ContextLifecycleServiceDeps["resolveRuntime"]>
-      >),
+      >,
   });
   assert.deepEqual(
     await new ContextLifecycleService(value).compactChat(
@@ -220,4 +220,32 @@ test("the owning surface can cancel an admitted manual compaction", async () => 
   assert.equal(service.cancelChat(baseChat.id, "renderer:1"), true);
   assert.deepEqual(await operation, { compacted: false, reason: "cancelled" });
   assert.equal(service.cancelChat(baseChat.id, "renderer:1"), false);
+});
+
+test("explicit VCC uses offline metadata without invoking provider auth or thinking resolution", async () => {
+  let localRead = false;
+  const { value } = deps({
+    getCompactionEngine: async () => "llm",
+    resolveRuntime: async () => {
+      throw new Error("must not resolve authenticated runtime");
+    },
+    resolveThinkingLevel: async () => {
+      throw new Error("must not resolve provider thinking");
+    },
+    resolveLocalModel: async () => {
+      localRead = true;
+      return { provider: "saved-provider", id: "saved-model" } as Awaited<
+        ReturnType<NonNullable<ContextLifecycleServiceDeps["resolveLocalModel"]>>
+      >;
+    },
+  });
+  const result = await new ContextLifecycleService(value).compactChat(
+    baseChat.id,
+    { kind: "desktop", ownerId: "renderer:1" },
+    "operator",
+    "vcc",
+  );
+  assert.equal(localRead, true);
+  // The fixture intentionally fails on session open, after the offline authority check.
+  assert.deepEqual(result, { compacted: false, reason: "compaction_failed" });
 });

@@ -356,6 +356,7 @@ object AidenAgentActivityPresentation {
         "schedule_task" to Pair("Scheduling", "Scheduled"),
         "edit_automation" to Pair("Editing automation", "Edited automation"),
         "computer_use" to Pair("Using Mac", "Used Mac"),
+        "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
         "compact_context" to Pair("Compacting context", "Compacted context")
     )
 
