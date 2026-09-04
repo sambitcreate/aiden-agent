@@ -64,3 +64,11 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /PUBLISH_TOKEN: \$\{\{ github\.token \}\}/u);
   assert.match(workflow, /git push.*HEAD:main/u);
 });
+
+test("coverage collection is enabled before positional test paths", async () => {
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const command = manifest.scripts["test:coverage"].split(/\s+/u);
+  const flag = command.indexOf("--experimental-test-coverage");
+  const firstTest = command.findIndex((argument) => /\.test\.[cm]?[jt]sx?$/u.test(argument));
+  assert.ok(flag > 0 && firstTest > flag, "Node coverage flags must precede test files");
+});
