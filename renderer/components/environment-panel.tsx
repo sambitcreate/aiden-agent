@@ -1198,7 +1198,7 @@ function EnvironmentPanelSurface({
         "environment-panel absolute z-30 flex min-h-0 flex-col overflow-hidden bg-popover text-primary",
         inline
           ? "inset-y-0 right-0 border-l border-separator"
-          : "bottom-3 right-3 top-3 rounded-[24px] border border-separator shadow-dialog",
+          : "bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog",
         resizing
           ? "transition-none"
           : "transition-[width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",

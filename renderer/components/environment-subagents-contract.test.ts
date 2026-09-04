@@ -147,7 +147,7 @@ test("floating Environment remains non-modal across every app-level interaction 
   assert.match(environment, /data-surface-mode=\{inline \? "tools-pinned" : "tools-floating"\}/u);
   assert.match(
     environment,
-    /bottom-3 right-3 top-3 rounded-\[24px\] border border-separator shadow-dialog/u,
+    /bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog/u,
   );
   assert.match(
     environment,
