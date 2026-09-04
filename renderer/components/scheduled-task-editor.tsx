@@ -484,7 +484,7 @@ export function ScheduledTaskEditor({
           </div>
         </Field>
         <details className="group px-4 py-3">
-          <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+          <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
             <ChevronRight className="size-4 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" />
             Advanced schedule
           </summary>

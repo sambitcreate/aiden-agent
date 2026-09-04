@@ -52,3 +52,13 @@ test("Appearance text fields retain their resting border while focused", () => {
     assert.doesNotMatch(control, /border|outline|box-shadow/u);
   }
 });
+
+
+test("direct question and follow-up textareas visibly tint their containing field", () => {
+  for (const component of ["ask-user-question-composer", "btw-card"]) {
+    assert.match(source(`../components/${component}.tsx`), /text-entry-shell/u);
+  }
+  const focus = between(source("../styles.css"), ".text-entry-shell:focus-within {", "}");
+  assert.match(focus, /background: var\(--surface-control-active\)/u);
+  assert.doesNotMatch(focus, /border|outline|box-shadow/u);
+});

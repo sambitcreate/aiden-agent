@@ -95,7 +95,7 @@ export const ProfileShareCard = React.forwardRef<
       viewBox={`0 0 ${PROFILE_SHARE_WIDTH} ${PROFILE_SHARE_HEIGHT}`}
       role="img"
       aria-labelledby="profile-share-card-title profile-share-card-description"
-      className="block h-auto w-full rounded-[18px] shadow-popover"
+      className="block h-auto w-full rounded-dialog shadow-popover"
       style={{ fontFamily: FONT_FAMILY }}
     >
       <title id="profile-share-card-title">{`${displayName}'s Aiden model usage profile`}</title>

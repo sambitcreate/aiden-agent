@@ -48,6 +48,7 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   iconOnly?: boolean;
   radius?: "full" | "rounded";
   asChild?: boolean;
+  pressFeedback?: boolean;
 };
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -58,6 +59,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     iconOnly,
     radius = "full",
     asChild,
+    pressFeedback = false,
     type = "button",
     ...props
   },
@@ -70,7 +72,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       type={asChild ? undefined : type}
       data-slot="button"
       className={cn(
-        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform] duration-150 ease-out active:scale-[0.985] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
+        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
+        pressFeedback && "button-press-feedback",
         radius === "full" ? "rounded-pill" : "rounded-control",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
@@ -107,7 +110,7 @@ export const Input = React.forwardRef<
     <input
       ref={ref}
       className={cn(
-        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
         className,
       )}
       {...props}
@@ -127,7 +130,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
     <textarea
       ref={ref}
       className={cn(
-        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
         density === "compact" ? "min-h-7" : "min-h-16",
         className,
       )}
@@ -139,7 +142,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
 type TextProps = React.HTMLAttributes<HTMLElement> & {
   as?: keyof React.JSX.IntrinsicElements;
   variant?: "heading1" | "strong" | "regular" | "small" | "small-strong";
-  color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red";
+  color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red" | "status-red";
   truncate?: boolean;
 };
 
@@ -165,6 +168,7 @@ export function Text({
         color === "tertiary" && "text-tertiary",
         color === "quaternary" && "text-quaternary",
         color === "red" && "text-red",
+        color === "status-red" && "text-status-red",
         truncate && "truncate",
         className,
       )}
@@ -179,20 +183,25 @@ export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTM
 
 export function Badge({
   color = "gray",
+  icon,
   className,
+  children,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { color?: string }) {
+}: React.HTMLAttributes<HTMLSpanElement> & { color?: string; icon?: React.ReactNode }) {
   return (
     <span
       className={cn(
-        "inline-flex h-6 items-center rounded-pill bg-control px-2 text-small-strong",
-        color === "green" && "border-green/30 bg-green/10 text-green",
-        color === "red" && "border-red/30 bg-red/10 text-red",
-        color === "blue" && "border-accent/30 bg-accent/10 text-accent",
+        "inline-flex h-6 items-center gap-1.5 rounded-pill border-0 bg-control px-2 text-small-strong",
+        color === "green" && "bg-status-green-surface text-status-green",
+        color === "red" && "bg-status-red-surface text-status-red",
+        color === "blue" && "bg-status-accent-surface text-status-accent",
         className,
       )}
       {...props}
-    />
+    >
+      {icon ? <span className="inline-flex shrink-0 [&_svg]:size-3.5" aria-hidden="true">{icon}</span> : null}
+      {children}
+    </span>
   );
 }
 
@@ -205,7 +214,7 @@ export function Callout({
     <div
       className={cn(
         "flex min-w-0 flex-col gap-1 break-words rounded-card bg-well p-3",
-        color === "red" && "border-red/25 bg-red/5",
+        color === "red" && "bg-status-red-surface text-status-red [&_.text-red]:text-status-red [&_.text-support-red]:text-status-red",
         className,
       )}
       {...props}
@@ -716,7 +725,7 @@ export function Sidebar({
               }}
               placeholder={searchPlaceholder ?? "Search"}
               aria-label={searchPlaceholder ?? "Search"}
-              className="h-full min-w-0 flex-1 bg-transparent text-[14px] text-primary outline-none placeholder:text-tertiary"
+              className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-tertiary"
             />
           </label>
         </div>
@@ -755,7 +764,7 @@ export function SidebarListGroup({
   return (
     <div className={cn("mt-5 first:mt-0", className)}>
       {title ? (
-        <div className="mb-1.5 px-2.5 text-[13px] font-medium text-tertiary">{title}</div>
+        <div className="mb-1.5 px-2.5 text-small-strong font-medium text-tertiary">{title}</div>
       ) : null}
       <div className="flex flex-col gap-0.5">{children}</div>
     </div>
@@ -779,7 +788,7 @@ export function SidebarListItem({
       type="button"
       aria-current={selected ? "page" : undefined}
       className={cn(
-        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-[11px] px-2.5 py-1.5 text-left text-[14px] text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-left text-regular text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
         selected && "bg-list-selection hover:bg-list-selection focus-visible:bg-list-selection",
         className,
       )}
@@ -1206,7 +1215,8 @@ export const DropdownMenuItem = React.forwardRef<
   return (
     <DropdownMenuPrimitive.Item
       ref={ref}
-      className={cn(menuItemClass, color === "red" && "text-red", className)}
+      className={cn(menuItemClass, color === "red" && "text-red",
+        color === "status-red" && "text-status-red", className)}
       {...props}
     />
   );
@@ -1325,7 +1335,8 @@ export const ContextMenuItem = React.forwardRef<
   return (
     <ContextMenuPrimitive.Item
       ref={ref}
-      className={cn(menuItemClass, color === "red" && "text-red", className)}
+      className={cn(menuItemClass, color === "red" && "text-red",
+        color === "status-red" && "text-status-red", className)}
       {...props}
     />
   );
@@ -1352,7 +1363,7 @@ export const SelectTrigger = React.forwardRef<
     <SelectPrimitive.Trigger
       ref={ref}
       className={cn(
-        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45",
+        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45",
         size === "small" ? "h-7 rounded-lg px-2" : "h-8",
         className,
       )}
@@ -1442,12 +1453,12 @@ export const RadioGroupItem = React.forwardRef<
     <RadioGroupPrimitive.Item
       ref={ref}
       className={cn(
-        "grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:border-accent focus-visible:outline-none data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45",
+        "grid size-4 place-items-center rounded-full border-0 bg-tertiary outline-none transition-[background-color,box-shadow,opacity] duration-150 hover:bg-secondary focus-visible:outline-none data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
     >
-      <RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" />
+      <RadioGroupPrimitive.Indicator className="size-1.5 rounded-full bg-accent-foreground" />
     </RadioGroupPrimitive.Item>
   );
 });

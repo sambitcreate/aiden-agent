@@ -35,8 +35,9 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await taskSearch.fill("definitely-not-a-schedule");
   await expect(taskSearch).toHaveValue("definitely-not-a-schedule");
   await expect(page.getByText("No matching tasks", { exact: true })).toBeVisible();
-  await taskSearch.selectText();
-  await taskSearch.press("Backspace");
+  // Reset the filter through the input API; native select+Backspace can lose
+  // selection on hosted macOS. Keyboard navigation is covered independently.
+  await taskSearch.fill("");
   await expect(taskSearch).toHaveValue("");
   await expect(page.getByText("No matching tasks", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "Active", exact: true }).click();

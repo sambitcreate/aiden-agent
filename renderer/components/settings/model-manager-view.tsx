@@ -55,7 +55,12 @@ interface CardProps {
 
 function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDelete, onActivate }: CardProps) {
   return (
-    <div className={cn("flex flex-col gap-2.5 rounded-card border p-3", active ? "border-accent" : "border-field")}>
+    <div
+      className={cn(
+        "flex flex-col gap-2.5 rounded-card border border-field bg-popover p-3 transition-colors",
+        active && "bg-list-selection",
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
