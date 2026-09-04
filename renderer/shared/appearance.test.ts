@@ -505,6 +505,9 @@ test("status primitives keep semantic fills and icons without decorative edges",
     assert.match(badge, new RegExp(`bg-status-${tone}-surface text-status-${tone}`, "u"));
   }
   assert.match(badge, /aria-hidden="true"/u);
+  const callout = ui.slice(ui.indexOf("export function Callout"), ui.indexOf("export function EmptyState"));
+  assert.ok(callout.includes("[&_.text-red]:text-status-red"), "nested red labels use the tinted-surface foreground");
+  assert.ok(callout.includes("[&_.text-support-red]:text-status-red"));
   assert.doesNotMatch(badge, /(?:border|ring|outline)-(?:accent|red|green|support)/u);
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   for (const scheme of ["light", "dark"] as const) {

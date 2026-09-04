@@ -210,7 +210,7 @@ export function Callout({
     <div
       className={cn(
         "flex min-w-0 flex-col gap-1 break-words rounded-card bg-well p-3",
-        color === "red" && "bg-status-red-surface",
+        color === "red" && "bg-status-red-surface text-status-red [&_.text-red]:text-status-red [&_.text-support-red]:text-status-red",
         className,
       )}
       {...props}
