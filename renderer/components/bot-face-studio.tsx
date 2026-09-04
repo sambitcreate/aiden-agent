@@ -78,10 +78,10 @@ function AvatarOption({
       aria-label={label}
       aria-pressed={selected}
       disabled={disabled}
-      className={`relative flex min-h-20 flex-col items-center justify-center gap-1 rounded-card border px-1 py-2 outline-none transition-[background-color,border-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-default disabled:opacity-55 ${
+      className={`relative flex min-h-20 flex-col items-center justify-center gap-1 rounded-card px-1 py-2 outline-none transition-[background-color,border-color,box-shadow] duration-150 disabled:cursor-default disabled:opacity-55 ${
         selected
-          ? "border-focus-ring bg-accent/10 shadow-control"
-          : "border-separator bg-well hover:border-field hover:bg-control-hover"
+          ? "bg-status-accent-surface shadow-control"
+          : "bg-well hover:bg-control-hover"
       }`}
       onClick={onSelect}
     >
@@ -302,7 +302,7 @@ export function BotFaceStudio({
                 aria-selected={state.tab === value}
                 tabIndex={state.tab === value ? 0 : -1}
                 disabled={disabled}
-                className={`min-w-0 rounded-control px-2 py-1.5 text-mini font-medium outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-focus-ring ${
+                className={`min-w-0 rounded-control px-2 py-1.5 text-mini font-medium outline-none transition-[background-color,color,box-shadow] duration-150 ${
                   state.tab === value
                     ? "bg-popover text-primary shadow-control"
                     : "text-secondary hover:bg-control-hover"

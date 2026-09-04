@@ -281,7 +281,7 @@ test("unknown records and symlinked sources fail closed or stay excluded", async
       path.join(logs, "aiden.log"),
       `${JSON.stringify({
         version: 1,
-        at: "2026-08-27T12:00:00.000Z",
+        at: new Date().toISOString(),
         sessionId: "session-forged",
         level: "error",
         area: "app",
@@ -310,7 +310,7 @@ test("subagent export rejects open-string categorical fields", async () => {
     const subagent = path.join(logs, "subagent-runtime.log");
     initSubagentRuntimeDiagnostics(subagent);
     await fs.writeFile(subagent, `${JSON.stringify({
-      at: "2026-08-27T12:00:00.000Z",
+      at: new Date().toISOString(),
       diagnosticId: "SA-forged",
       providerId: "private",
       modelId: "private",

@@ -1,6 +1,6 @@
 import { Brain, KeyRound, Mic2, ShieldCheck } from "lucide-react";
 
-import { Button, Dialog, Text, type DialogLayer } from "../ui";
+import { Button, Dialog, RadioGroup, RadioGroupItem, Text, type DialogLayer } from "../ui";
 import type { GeminiUsageScope } from "../../lib/types";
 
 interface GeminiVoiceSetupDialogProps {
@@ -68,27 +68,27 @@ export function GeminiVoiceSetupDialog({
       onConfirm={onConfirm}
     >
       <div className="grid gap-4">
-        <div className="grid gap-2" role="radiogroup" aria-label="Gemini access">
+        <RadioGroup
+          className="grid gap-2"
+          value={scope}
+          disabled={busy}
+          aria-label="Gemini access"
+          onValueChange={(value) => onScopeChange(value as GeminiUsageScope)}
+        >
           {choices.map((choice) => {
             const selected = choice.scope === scope;
             const Icon = choice.icon;
             return (
               <label
                 key={choice.scope}
-                className={`relative flex min-h-16 cursor-default items-start gap-3 rounded-card border px-3 py-3 text-left outline-none transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/30 ${
-                  selected
-                    ? "border-accent/35 bg-list-selection"
-                    : "border-separator bg-well hover:bg-control"
+                className={`relative flex min-h-16 cursor-default items-start gap-3 rounded-card bg-well px-3 py-3 text-left transition-colors duration-150 hover:bg-list-hover ${
+                  selected ? "bg-list-selection" : ""
                 } ${busy ? "opacity-50" : ""}`}
               >
-                <input
-                  className="sr-only"
-                  type="radio"
-                  name="gemini-usage-scope"
+                <RadioGroupItem
                   value={choice.scope}
-                  checked={selected}
                   disabled={busy}
-                  onChange={() => onScopeChange(choice.scope)}
+                  className="mt-2 shrink-0"
                 />
                 <span className="grid size-8 shrink-0 place-items-center rounded-control bg-popover text-secondary shadow-control">
                   <Icon className="size-4" aria-hidden="true" />
@@ -99,7 +99,7 @@ export function GeminiVoiceSetupDialog({
                       {choice.title}
                     </Text>
                     {choice.recommended ? (
-                      <span className="rounded-full bg-control px-2 py-0.5 text-[10px] font-medium text-secondary">
+                      <span className="rounded-full bg-control px-2 py-0.5 text-mini font-medium text-secondary">
                         Recommended
                       </span>
                     ) : null}
@@ -120,7 +120,7 @@ export function GeminiVoiceSetupDialog({
               </label>
             );
           })}
-        </div>
+        </RadioGroup>
 
         <section className="rounded-card bg-well p-3" aria-labelledby="gemini-privacy-title">
           <Text id="gemini-privacy-title" as="h3" variant="small-strong">

@@ -322,7 +322,7 @@ export function TelegramSettings() {
           </SelectContent>
         </Select>
         {folderWorkspaceCount === 0 && (
-          <p className="text-muted-foreground text-sm">
+          <p className="text-secondary text-regular">
             Add a folder workspace in Settings → Workspaces to enable project automation.
           </p>
         )}
@@ -388,14 +388,14 @@ export function TelegramSettings() {
                 </Select>
               )}
             {selectedProvider && visibleModels.length === 0 && currentHiddenModel ? (
-              <p className="text-muted-foreground text-sm">
+              <p className="text-secondary text-regular">
                 {currentHiddenModel} is hidden. Show a model in Provider Settings before changing
                 this bot's model.
               </p>
             ) : null}
           </div>
         ) : (
-          <p className="text-muted-foreground text-sm">
+          <p className="text-secondary text-regular">
             Configure at least one provider in Settings → Providers, then return here to select it
             for Telegram.
           </p>
@@ -514,7 +514,7 @@ export function TelegramSettings() {
             <Button size="medium" variant="muted" onClick={disconnect} disabled={!polling}>
               Disconnect
             </Button>
-            <span className="text-muted-foreground text-sm">
+            <span className="text-secondary text-regular">
               {polling ? "● Polling" : "○ Idle"}
               {queuedCount > 0 ? ` · ${queuedCount} queued` : ""}
             </span>
@@ -528,7 +528,7 @@ export function TelegramSettings() {
           description="The Telegram account currently authorized to control Aiden."
         >
           <div className="flex items-center gap-3">
-            <span className="text-muted-foreground text-sm">User ID: {allowedUserId}</span>
+            <span className="text-secondary text-regular">User ID: {allowedUserId}</span>
             <Button size="small" variant="muted" onClick={resetPairing}>
               Reset pairing
             </Button>
@@ -538,7 +538,7 @@ export function TelegramSettings() {
 
       {lastError && (
         <Field label="Last error">
-          <p className="text-destructive text-sm">{lastError}</p>
+          <p className="text-red text-regular">{lastError}</p>
         </Field>
       )}
 
@@ -547,7 +547,7 @@ export function TelegramSettings() {
           label="Recent diagnostics"
           description="Redacted, process-local transport and recovery events for this profile."
         >
-          <div className="space-y-1 text-sm text-muted-foreground">
+          <div className="space-y-1 text-regular text-secondary">
             {telegram.data?.recentDiagnostics
               .slice(-5)
               .reverse()
@@ -561,7 +561,7 @@ export function TelegramSettings() {
       )}
 
       <Field label="How to connect">
-        <ol className="text-muted-foreground list-decimal space-y-1 pl-4 text-sm">
+        <ol className="text-secondary list-decimal space-y-1 pl-4 text-regular">
           <li>
             Open Telegram and message <strong>@BotFather</strong>.
           </li>
@@ -584,7 +584,7 @@ export function TelegramSettings() {
         label="⚠ Security notice"
         description="Telegram turns run with full unattended authority — no approval prompts. Only the paired owner can trigger turns. Disconnect or disable to stop immediately."
       >
-        <p className="text-muted-foreground text-sm">
+        <p className="text-secondary text-regular">
           This is the same trust boundary as scheduled tasks: the paired owner can run mutating
           tools silently from their phone. Keep the bot private.
         </p>

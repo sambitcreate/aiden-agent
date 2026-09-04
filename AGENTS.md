@@ -16,6 +16,8 @@ Before adding or materially restyling any UI element or component, always review
 
 Do not put decorative borders or outlines around radio-button choice cards. Communicate selection with the radio control and existing background-state tokens instead. Always preserve visible keyboard `focus-visible` rings or outlines for accessibility.
 
+Keep status colors in soft semantic fills, labels, and icons. Do not add decorative colored borders or outlines to badges, alerts, selection cards, or controls. Non-text keyboard focus uses the neutral focus-ring token.
+
 Text-entry controls must not add an accent border, outline, or ring when focused. Keep their resting border unchanged and communicate focus with the existing input-background and caret states. This rule applies to inputs, textareas, and search-field wrappers, not to non-text keyboard controls that still require a visible `focus-visible` treatment.
 
 ## Release model metadata

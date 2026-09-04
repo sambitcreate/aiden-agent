@@ -96,21 +96,22 @@ function appearanceSafetyIssues(config: AppearanceConfig): string[] {
   ];
 }
 
-function ThemeModePreview({ mode }: { mode: AppearanceMode }) {
+function ThemeModePreview({ mode, config }: { mode: AppearanceMode; config: AppearanceConfig }) {
+  const schemes: AppearanceScheme[] = mode === "system" ? ["light", "dark"] : [mode];
   return (
     <span className={`appearance-mode-preview appearance-mode-preview-${mode}`} aria-hidden="true">
-      <span className="appearance-mode-preview-toolbar" />
-      <span className="appearance-mode-preview-sidebar" />
-      <span className="appearance-mode-preview-content">
-        <i />
-        <i />
-        <i />
-      </span>
+      {schemes.map((scheme) => (
+        <span key={scheme} className="appearance-mode-scene" data-preview-scheme={scheme} style={previewStyle(config[scheme], scheme)}>
+          <span className="appearance-mode-preview-toolbar" />
+          <span className="appearance-mode-preview-sidebar" />
+          <span className="appearance-mode-preview-content"><i /><i /><i /></span>
+        </span>
+      ))}
     </span>
   );
 }
 
-function ThemeModePicker({ value, disabled, onChange }: { value: AppearanceMode; disabled?: boolean; onChange: (mode: AppearanceMode) => void }) {
+function ThemeModePicker({ value, config, disabled, onChange }: { value: AppearanceMode; config: AppearanceConfig; disabled?: boolean; onChange: (mode: AppearanceMode) => void }) {
   const options: Array<{ value: AppearanceMode; label: string; icon: React.ReactNode }> = [
     { value: "system", label: "System", icon: <Monitor /> },
     { value: "light", label: "Light", icon: <Sun /> },
@@ -130,7 +131,7 @@ function ThemeModePicker({ value, disabled, onChange }: { value: AppearanceMode;
           onClick={() => onChange(option.value)}
           onKeyDown={(event) => handleRadioNavigation(event, index, options, onChange)}
         >
-          <ThemeModePreview mode={option.value} />
+          <ThemeModePreview mode={option.value} config={config} />
           <span className="appearance-mode-option-label">
             {option.icon}
             {option.label}
@@ -145,6 +146,7 @@ function previewStyle(variant: ThemeVariantConfig, scheme: AppearanceScheme): Cs
   const tokens = resolveThemeTokens(variant, scheme);
   return {
     "--preview-bg": tokens["--surface-popover"],
+    "--preview-sidebar": tokens["--theme-sidebar"],
     "--preview-fg": tokens["--text-primary"],
     "--preview-muted": tokens["--text-tertiary"],
     "--preview-accent": tokens["--accent"],
@@ -779,7 +781,7 @@ export function AppearanceSettings() {
 
       <section className="appearance-theme-section" aria-labelledby="appearance-theme-title">
         <h2 id="appearance-theme-title">Theme</h2>
-        <ThemeModePicker value={config.mode} disabled={hasSafetyIssues || modePending} onChange={changeMode} />
+        <ThemeModePicker config={config} value={config.mode} disabled={hasSafetyIssues || modePending} onChange={changeMode} />
         <ThemeCodePreview light={config.light} dark={config.dark} />
         <div className="appearance-theme-editors">
           <ThemeEditor scheme="light" variant={config.light} onChange={(light) => update((current) => ({ ...current, light }))} />

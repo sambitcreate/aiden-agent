@@ -1167,7 +1167,7 @@ function EnvironmentPanelSurface({
                   panel.setTab(nextTab);
                 }}
                 className={cn(
-                  "flex h-7 items-center gap-1.5 rounded-[9px] px-2 text-small-strong outline-none transition-[background-color,box-shadow,color] duration-150 ease-out focus-visible:outline-none",
+                  "flex h-7 items-center gap-1.5 rounded-menu px-2 text-small-strong outline-none transition-[background-color,box-shadow,color] duration-150 ease-out focus-visible:outline-none",
                   selected
                     ? "bg-popover text-primary shadow-control focus-visible:bg-popover"
                     : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection",
@@ -1315,7 +1315,7 @@ function EnvironmentSummaryCard() {
       aria-hidden={!open ? true : undefined}
       data-state={open ? "open" : "closed"}
       aria-label="Environment summary"
-      className="environment-summary-card absolute right-3 top-14 z-30 flex max-h-[calc(100%-4.25rem)] w-[380px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-[24px] border border-separator bg-popover text-primary shadow-dialog"
+      className="environment-summary-card absolute right-3 top-14 z-30 flex max-h-[calc(100%-4.25rem)] w-[380px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-sheet border border-separator bg-popover text-primary shadow-dialog"
       style={{ pointerEvents: open ? "auto" : "none" }}
     >
       {present ? (

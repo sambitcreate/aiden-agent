@@ -898,7 +898,7 @@ export function RemoteAccessSettings() {
             <Text variant="small" color="secondary" role="status" aria-live="polite">
               Certificate check {pairingVerificationCode(pairing)} · {pairingPresentation.qrDisabled
                 ? pairingPresentation.badge
-                : `Expires in ${pairingSeconds} seconds`}.
+                : <>Expires in <span className="inline-block min-w-[3ch] text-right tabular-nums">{pairingSeconds}</span> seconds</>}.
             </Text>
             {(effectivePairingLifecycle.state === "expired" || effectivePairingLifecycle.state === "failed") ? (
               <Button
