@@ -341,7 +341,7 @@ test("environment inline handoff uses the same animated spacer pattern", () => {
   assert.match(panel, /inline\s*\? "inset-y-0 right-0 border-l border-separator"/u);
   assert.match(
     panel,
-    /"bottom-3 right-3 top-3 rounded-\[24px\] border border-separator shadow-dialog"/u,
+    /"bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog"/u,
   );
   assert.match(
     panel,
