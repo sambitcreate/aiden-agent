@@ -36,3 +36,13 @@ test('polish contracts preserve focus, targets, numeric stability, and text scal
  assert.doesNotMatch(source('./activity-feed.tsx'),/key=\{newest.id\}/u);
  assert.match(source('./settings/appearance-settings.tsx'),/previewStyle\(config\[scheme\], scheme\)/u);
 });
+
+test('theme preview geometry exists at rest independently of keyboard focus', () => {
+ const css = source('../styles.css');
+ const base = css.match(/^\.appearance-mode-preview \{([^}]+)\}/mu)?.[1];
+ assert.ok(base, 'standalone base preview selector must exist');
+ assert.match(base, /display: flex/u);
+ assert.match(base, /aspect-ratio: 1\.52/u);
+ assert.match(base, /position: relative/u);
+ assert.match(css, /^\.appearance-mode-option\[aria-checked="true"\] \.appearance-mode-option-label \{[^}]*background: var\(--surface-list-selection\)/mu);
+});

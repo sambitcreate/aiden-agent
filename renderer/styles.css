@@ -1676,7 +1676,8 @@ textarea {
   text-align: center;
 }
 
-.appearance-mode-option:focus-visible .appearance-mode-preview {
+.appearance-mode-preview {
+  position: relative;
   display: flex;
   aspect-ratio: 1.52;
   overflow: hidden;
@@ -1698,8 +1699,15 @@ textarea {
   align-items: center;
   gap: 5px;
   margin-top: 8px;
+  padding: 3px 8px;
+  border-radius: var(--radius-control);
   font-size: var(--text-small);
   font-weight: 500;
+}
+
+.appearance-mode-option[aria-checked="true"] .appearance-mode-option-label {
+  background: var(--surface-list-selection);
+  color: var(--text-primary);
 }
 
 .appearance-mode-option-label svg {
@@ -2126,7 +2134,12 @@ textarea {
   .appearance-mode-picker {
     gap: 8px;
   }
-  .appearance-mode-option-label svg {
+  .appearance-mode-option[aria-checked="true"] .appearance-mode-option-label {
+  background: var(--surface-list-selection);
+  color: var(--text-primary);
+}
+
+.appearance-mode-option-label svg {
     display: none;
   }
   .appearance-code-preview {

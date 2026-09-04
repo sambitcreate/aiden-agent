@@ -126,14 +126,32 @@ test("every Settings destination renders and a one-model local inventory stays u
       const light = page.locator('.appearance-mode-preview-light [data-preview-scheme="light"]');
       const dark = page.locator('.appearance-mode-preview-dark [data-preview-scheme="dark"]');
       const colors = async () => [await light.evaluate(el => getComputedStyle(el).backgroundColor), await dark.evaluate(el => getComputedStyle(el).backgroundColor)];
+      const assertRestingPreviews = async () => {
+        await page.getByRole("heading", { level: 1, name: "Appearance", exact: true }).click();
+        for (const preview of await page.locator('.appearance-mode-preview, .appearance-mode-scene').all()) {
+          const bounds = await preview.boundingBox();
+          expect(bounds?.width).toBeGreaterThan(40);
+          expect(bounds?.height).toBeGreaterThan(40);
+        }
+        const selected = page.locator('.appearance-mode-option[aria-checked="true"] .appearance-mode-option-label');
+        await expect(selected).toHaveCount(1);
+        const selectedFill = await selected.evaluate(el => getComputedStyle(el).backgroundColor);
+        expect(selectedFill).not.toBe('rgba(0, 0, 0, 0)');
+        for (const label of await page.locator('.appearance-mode-option[aria-checked="false"] .appearance-mode-option-label').all()) {
+          expect(await label.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(selectedFill);
+        }
+      };
+      await assertRestingPreviews();
       const before = await colors();
       expect(before[0]).not.toBe(before[1]);
       await page.locator('.appearance-mode-option').filter({hasText: 'Dark'}).click();
       await expect(page.locator('html')).toHaveClass(/dark/u);
       expect(await colors()).toEqual(before);
+      await assertRestingPreviews();
       await page.locator('.appearance-mode-option').filter({hasText: 'Light'}).click();
       await expect(page.locator('html')).not.toHaveClass(/dark/u);
       expect(await colors()).toEqual(before);
+      await assertRestingPreviews();
     }
     if (section === "Web Search") {
       await expect(page.getByText("Current search setup", { exact: true })).toBeVisible();

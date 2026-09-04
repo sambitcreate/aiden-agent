@@ -238,3 +238,5 @@ needed to separate this change from that baseline noise.
 - 2026-09-04: Tailwind 4 emits individual `scale` for scale utilities; transitioning/resetting only `transform` does not cover press feedback. Transition and reset the emitted property explicitly, including both reduced-motion sources.
 
 - 2026-09-04: Electron CI intermittently retained the scheduled-task query after Playwright selectText + Backspace, then passed on retry. Reset this exploratory filter with fill("") while retaining input-value and result assertions; keyboard focus/navigation regressions remain separate. Completed-job REST logs were available before gh run view exposed whole-run logs.
+
+- 2026-09-04: Substring selector edits can match the tail of a compound focus selector and strand base geometry in focus-only styles. Anchor standalone-selector assertions and measure resting preview boxes in Electron; computed colors alone do not prove that a preview renders.
