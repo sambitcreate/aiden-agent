@@ -2134,12 +2134,7 @@ textarea {
   .appearance-mode-picker {
     gap: 8px;
   }
-  .appearance-mode-option[aria-checked="true"] .appearance-mode-option-label {
-  background: var(--surface-list-selection);
-  color: var(--text-primary);
-}
-
-.appearance-mode-option-label svg {
+  .appearance-mode-option-label svg {
     display: none;
   }
   .appearance-code-preview {
