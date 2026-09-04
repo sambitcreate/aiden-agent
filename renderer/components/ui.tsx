@@ -1447,7 +1447,7 @@ export const RadioGroupItem = React.forwardRef<
     <RadioGroupPrimitive.Item
       ref={ref}
       className={cn(
-        "grid size-4 place-items-center rounded-full border-0 bg-control-active outline-none transition-[background-color,box-shadow,opacity] duration-150 hover:bg-control-hover focus-visible:outline-none data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-45",
+        "grid size-4 place-items-center rounded-full border-0 bg-tertiary outline-none transition-[background-color,box-shadow,opacity] duration-150 hover:bg-secondary focus-visible:outline-none data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}

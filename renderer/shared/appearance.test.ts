@@ -508,6 +508,10 @@ test("status primitives keep semantic fills and icons without decorative edges",
   const callout = ui.slice(ui.indexOf("export function Callout"), ui.indexOf("export function EmptyState"));
   assert.ok(callout.includes("[&_.text-red]:text-status-red"), "nested red labels use the tinted-surface foreground");
   assert.ok(callout.includes("[&_.text-support-red]:text-status-red"));
+  const radio = ui.slice(ui.indexOf("export const RadioGroupItem"), ui.indexOf("export const Command ="));
+  assert.match(radio, /bg-tertiary[\s\S]*hover:bg-secondary/u);
+  assert.match(radio, /data-\[state=checked\]:bg-accent/u);
+  assert.match(radio, /Indicator className="size-1.5 rounded-full bg-accent-foreground"/u);
   assert.doesNotMatch(badge, /(?:border|ring|outline)-(?:accent|red|green|support)/u);
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   for (const scheme of ["light", "dark"] as const) {
