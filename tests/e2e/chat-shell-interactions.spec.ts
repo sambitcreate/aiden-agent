@@ -290,6 +290,11 @@ test.describe("with a workspace", () => {
     await expect(permission).toHaveAttribute("aria-expanded", "true");
     await expect(permission).not.toHaveAttribute("aria-haspopup");
     await expect(accessOptions).toHaveAttribute("id", await permission.getAttribute("aria-controls") as string);
+    // Clicking the already-selected Full option dismisses without a new grant.
+    await fullAccess.click();
+    await expect(permission).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator(".composer-shell textarea")).toBeFocused();
+    await permission.click();
     await fullAccess.focus();
     await expect(fullAccess).toBeFocused();
 

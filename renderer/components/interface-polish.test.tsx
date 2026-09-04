@@ -27,7 +27,7 @@ test('polish contracts preserve focus, targets, numeric stability, and text scal
  assert.ok(css.includes('[tabindex]:not([tabindex="-1"]):not(input):not(textarea)'), 'all non-text keyboard targets receive neutral focus');
  assert.ok(css.includes('outline-offset: var(--keyboard-focus-offset, 2px) !important;'));
  assert.doesNotMatch(composer,/group-data-\[open=true\]\/access:opacity-0/u);
- assert.match(composer,/event.detail > 0 && value !== "full"/u);
+ assert.match(composer,/event.detail > 0 && \(value !== "full" \|\| value === permission\)/u);
  assert.match(composer,/aria-label=\{`Remove \$\{a.name\}`\}[\s\S]{0,100}size-10/u);
  assert.doesNotMatch(source('./settings/dictation-shortcut-settings.tsx'),/rounded-control border border-field/u);
  for(const p of ['./subagent-detail.tsx','./settings/remote-access-settings.tsx']) assert.match(source(p),/tabular-nums/u);

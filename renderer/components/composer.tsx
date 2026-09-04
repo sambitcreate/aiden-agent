@@ -1824,7 +1824,7 @@ export function Composer({
                           onClick={(event) => {
                             if (disabled) return;
                             requestPermission(value);
-                            if (event.detail > 0 && value !== "full") {
+                            if (event.detail > 0 && (value !== "full" || value === permission)) {
                               setPermissionMenuOpen(false);
                               inputRef?.current?.focus({ preventScroll: true });
                             }
