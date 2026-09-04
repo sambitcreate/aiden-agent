@@ -157,12 +157,11 @@ jobs:
           "emulator"
           "system-images;android-36;google_apis;x86_64"
 
-      - name: Verify Android and assemble debug APK
+      - name: Verify Android
         run: >-
           ./gradlew
           :app:testDebugUnitTest
           :app:lintDebug
-          :app:assembleDebug
           :app:compileDebugAndroidTestKotlin
           --stacktrace
 
@@ -178,10 +177,16 @@ jobs:
           disable-animations: true
           script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
 
+      - name: Assemble installable debug APK
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: ./gradlew :app:assembleDebug --stacktrace
+
       - name: Record APK checksum
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.apk.sha256
 
       - name: Upload installable debug APK
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: aiden-on-the-go-debug-apk
