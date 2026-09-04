@@ -225,10 +225,7 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   assert.match(overflowMenu, /avoidCollisions=\{false\}/u);
   assert.match(overflowMenu, /maxHeight: contentMaxHeight, overflowY: "auto"/u);
   assert.match(sidebar, /ariaLabel="Organize sidebar"/u);
-  assert.match(
-    sidebar,
-    /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u,
-  );
+  assert.match(sidebar, /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u);
   assert.match(
     sidebar,
     /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
@@ -243,10 +240,7 @@ test("sidebar organizer icons retain contrast on the highlighted accent surface"
     "const workspaceCreationMenu",
   );
 
-  assert.equal(
-    organizer.match(/group-data-\[highlighted\]:text-accent-foreground/gu)?.length,
-    2,
-  );
+  assert.equal(organizer.match(/group-data-\[highlighted\]:text-accent-foreground/gu)?.length, 2);
 });
 
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {
@@ -343,7 +337,12 @@ test("allocated composer and settings widths drive their compact layouts", () =>
 
 test("environment inline handoff uses the same animated spacer pattern", () => {
   const panel = source("./environment-panel.tsx");
-  assert.match(panel, /environment-panel absolute inset-y-0 right-0 z-30/u);
+  assert.match(panel, /environment-panel absolute z-30/u);
+  assert.match(panel, /inline\s*\? "inset-y-0 right-0 border-l border-separator"/u);
+  assert.match(
+    panel,
+    /"bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog"/u,
+  );
   assert.match(
     panel,
     /transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,180}fullOpen && inline \? renderedWidth : 0/u,

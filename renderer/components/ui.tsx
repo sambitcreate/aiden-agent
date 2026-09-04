@@ -554,7 +554,10 @@ function SplitViewRoot({
 
   return (
     <SplitContext.Provider value={{ collapsed, toggle, leadingAnchor }}>
-      <div className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary">
+      <div
+        data-compact-sidebar-open={compactOpen ? "true" : "false"}
+        className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary"
+      >
         {compactOpen ? (
           <button
             type="button"
@@ -608,7 +611,7 @@ function SplitViewRoot({
         <main
           inert={compactOpen ? true : undefined}
           aria-hidden={compactOpen ? true : undefined}
-          className="min-w-0 flex-1 bg-background"
+          className="relative z-0 min-w-0 flex-1 bg-background"
         >
           {children}
         </main>

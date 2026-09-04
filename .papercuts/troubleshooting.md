@@ -226,6 +226,39 @@ needed to separate this change from that baseline noise.
 - Backticks in `gh api -f body=...` are evaluated by zsh before submission; use single-quoted plain text or standard input for review replies.
 - A merged feature does not auto-increment releases; bump both package manifests before merging when the current tag already exists.
 
+## Codex-hosted UI reference work
+
+Codex blocks Computer Use from automating its own `com.openai.codex` host. Use
+the supplied screenshot and inspect the installed app bundle for behavior and
+styling evidence instead of treating self-host automation as available.
+
+A fresh linked worktree can lack `node_modules`: `npx` may fetch `tsx`, but
+React-backed renderer tests still fail to load. Run `npm ci` before the focused
+Quick View and Environment verification gates.
+
+In this linked worktree, `npm ci` installed the Electron package without its
+`dist/Electron.app` payload, so `npm run dev` reached Vite but failed in the
+macOS runtime preparation `lipo` step. Run Electron's package installer before
+attempting dev-app visual acceptance.
+
+The project instructions reference a `.memory/` folder, but this linked
+worktree does not contain one. Use the repository plan and UI reference docs as
+the local source of truth, and record the missing folder rather than inventing
+project history.
+
+Adding or changing exports in the Environment or Terminal providers makes Vite
+invalidate Fast Refresh and remount the renderer. An open terminal can then
+briefly reference a main-process session that the remounted provider no longer
+owns; reopen the terminal before judging the final live state.
+- Source-regex coverage made the first Quick View split look independent even though both controls still shared one `open + tab` state. Add reducer transition coverage whenever two UI routes are meant to coexist.
+- Simultaneous right-edge surfaces need measured workbench geometry, not window breakpoints; the app sidebar changes the available allocation without changing the window width.
+- Final dev-window automation was unavailable while macOS was locked; the renderer and Electron process launched, but visual acceptance still requires an unlocked desktop.
+- The deterministic Electron E2E still targeted the retired Environment summary role after the toolbar controls split. Floating surfaces can also cover their toolbar triggers, so smoke tests must use the visible surface-local Show Quick View and Close controls while verifying the toolbar state changes behind them.
+
+- 2026-09-04: A mounted live-region test with only floating/pinned panels missed Quick View covering an open tools panel. Exercise inert/aria-hidden containment and persistent DOM identity in real Electron, plus message updates while the sibling panel is hidden.
+
+- 2026-09-04: The diagnostics forged-record fixture aged past journal retention, so export pruned it before the rejection assertion. Use current timestamps for validation fixtures; keep fixed clocks for explicit retention tests.
+
 ## Design audit evidence (2026-09-04)
 
 - The original standalone report copied palette values and hand-entered ratios, so runtime contrast fixes did not update its matrix. Generate measurements from the current appearance resolver and label compositing assumptions explicitly.
