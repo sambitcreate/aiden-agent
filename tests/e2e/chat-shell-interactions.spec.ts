@@ -374,3 +374,81 @@ test.describe("with a workspace", () => {
     await expect(page.locator(".composer-shell textarea")).toBeFocused();
   });
 });
+
+test("compaction commands keep cancellation available for every engine", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const composer = page.locator("textarea");
+  await composer.fill("Create a chat for compaction command testing.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(2);
+  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+
+  // Hold IPC open so even instant local compaction has a deterministic busy state.
+  await app.evaluate(({ ipcMain }) => {
+    let cancel: (() => void) | undefined;
+    const state = { engines: [] as Array<string | null>, cancellations: 0, finishExport: () => {} };
+    Object.assign(globalThis, { compactionCommandTest: state });
+    ipcMain.removeHandler("chats:compact");
+    ipcMain.removeHandler("chats:cancelCompact");
+    ipcMain.removeHandler("chats:export");
+    ipcMain.handle("chats:compact", (_event, _chatId, engine?: string) => {
+      state.engines.push(engine ?? null);
+      return new Promise((resolve) => {
+        cancel = () => resolve({ compacted: false, reason: "cancelled" });
+      });
+    });
+    ipcMain.handle("chats:cancelCompact", () => {
+      state.cancellations++;
+      cancel?.();
+      return true;
+    });
+    ipcMain.handle(
+      "chats:export",
+      () =>
+        new Promise((resolve) => {
+          state.finishExport = () => resolve({ status: "cancelled" });
+        }),
+    );
+  });
+
+  const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+  for (const [command, status] of [
+    ["compact", "Compacting chat…"],
+    ["compact-LLM", "Compacting with LLM…"],
+    ["compact-VCC", "Compacting with pi-vcc…"],
+  ]) {
+    await composer.fill(`/${command}`);
+    await expect(page.getByRole("listbox", { name: "Slash commands" })).toBeVisible();
+    await composer.press("Enter");
+    await expect(page.getByRole("status").filter({ hasText: status })).toBeVisible();
+    await expect(cancel).toBeVisible();
+    await expect(composer).toHaveAttribute("readonly", "");
+    await cancel.click();
+    await expect(cancel).toBeHidden();
+    await expect(composer).toBeEditable();
+  }
+  expect(
+    await app.evaluate(() => {
+      const state = (
+        globalThis as unknown as {
+          compactionCommandTest: { engines: Array<string | null>; cancellations: number };
+        }
+      ).compactionCommandTest;
+      return { engines: state.engines, cancellations: state.cancellations };
+    }),
+  ).toEqual({ engines: [null, "llm", "vcc"], cancellations: 3 });
+
+  // Another session command must not inherit compaction's cancellation affordance.
+  await composer.fill("/export");
+  await expect(page.getByRole("listbox", { name: "Slash commands" })).toBeVisible();
+  await composer.press("Enter");
+  await expect(page.getByRole("status").filter({ hasText: "Exporting chat…" })).toBeVisible();
+  await expect(cancel).toBeHidden();
+  await app.evaluate(() => {
+    (
+      globalThis as unknown as { compactionCommandTest: { finishExport: () => void } }
+    ).compactionCommandTest.finishExport();
+  });
+  await expect(composer).toBeEditable();
+});

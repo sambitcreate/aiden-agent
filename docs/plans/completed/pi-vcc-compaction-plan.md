@@ -101,3 +101,22 @@ React Doctor was run as prescribed. Its deprecated diff flag performed a full
 repository scan (59/100, 14 existing ref/cleanup errors and 523 warnings); these
 are separate from the passing TypeScript/ESLint/feature gates. The integration
 makes no claim that the repository is free of that pre-existing diagnostic debt.
+
+## PR review follow-up
+
+The composer tracks compaction activity independently of status copy, so all
+three commands retain Cancel while clone/export/worktree do not gain it. An
+Electron regression exercises default, LLM and VCC cancellation and subsequent
+export. Known worker failures cross the boundary as fixed codes, preserving
+boundary, history-limit and reduction errors without forwarding private
+exception text. Recall has its own failure, timeout, cancellation and queue
+messages and never recommends a compaction command.
+
+Merged current main and retained its Quick View command alongside the three
+compaction commands (31 catalog entries).
+
+Review-fix verification: 22 compiler/control tests, 260 lifecycle tests, 354
+slash-command tests, the focused Electron cancellation regression, both
+TypeScript projects, ESLint and build passed. React Doctor's changed-file scan
+reported 82/100 with 19 warnings (existing complexity and iteration patterns);
+no additional diagnostic-driven changes were required for these fixes.

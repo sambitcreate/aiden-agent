@@ -1,3 +1,4 @@
+import { vccErrorMessage, type VccOperation } from "./errors.js";
 import { Worker } from "node:worker_threads";
 import type { VccRecallInput } from "./recall-core.js";
 import type { compileVcc, VccCompileInput } from "./compiler.js";
@@ -8,12 +9,12 @@ let activeWorkers = 0;
 const waiting: Array<() => void> = [];
 
 /** Bound memory across concurrent chats and children; queued work is cancellable. */
-function acquireWorker(signal?: AbortSignal): Promise<() => void> {
+function acquireWorker(operation: VccOperation, signal?: AbortSignal): Promise<() => void> {
   return new Promise((resolve, reject) => {
     const abort = () => {
       const index = waiting.indexOf(start);
       if (index >= 0) waiting.splice(index, 1);
-      reject(new DOMException("Compaction cancelled.", "AbortError"));
+      reject(new DOMException(vccErrorMessage(operation, "cancelled"), "AbortError"));
     };
     const start = () => {
       signal?.removeEventListener("abort", abort);
@@ -25,8 +26,7 @@ function acquireWorker(signal?: AbortSignal): Promise<() => void> {
     };
     if (signal?.aborted) return abort();
     if (activeWorkers < 2) return start();
-    if (waiting.length >= 32)
-      return reject(new Error("Local compaction is busy. Try again shortly."));
+    if (waiting.length >= 32) return reject(new Error(vccErrorMessage(operation, "busy")));
     waiting.push(start);
     signal?.addEventListener("abort", abort, { once: true });
   });
@@ -43,30 +43,42 @@ export async function runVccWorker(
   input: WorkerInput,
   signal?: AbortSignal,
 ): Promise<WorkerOutput> {
-  const release = await acquireWorker(signal);
+  const operation: VccOperation = "kind" in input && input.kind === "recall" ? "recall" : "compile";
+  const release = await acquireWorker(operation, signal);
   try {
-    if (signal?.aborted) throw new DOMException("Compaction cancelled.", "AbortError");
-    return await executeWorker(input, signal);
+    if (signal?.aborted)
+      throw new DOMException(vccErrorMessage(operation, "cancelled"), "AbortError");
+    return await executeWorker(input, operation, signal);
   } finally {
     release();
   }
 }
 
 /** Packaged as a separate module; no synchronous compiler fallback on main. */
-function executeWorker(input: WorkerInput, signal?: AbortSignal): Promise<WorkerOutput> {
+function executeWorker(
+  input: WorkerInput,
+  operation: VccOperation,
+  signal?: AbortSignal,
+): Promise<WorkerOutput> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(
-      new URL(
-        import.meta.url.endsWith(".ts")
-          ? "../../../build/main/pi-vcc-worker.js"
-          : "./pi-vcc-worker.js",
-        import.meta.url,
-      ),
-      {
-        workerData: input,
-        resourceLimits: { maxOldGenerationSizeMb: 128 },
-      },
-    );
+    let worker: Worker;
+    try {
+      worker = new Worker(
+        new URL(
+          import.meta.url.endsWith(".ts")
+            ? "../../../build/main/pi-vcc-worker.js"
+            : "./pi-vcc-worker.js",
+          import.meta.url,
+        ),
+        {
+          workerData: input,
+          resourceLimits: { maxOldGenerationSizeMb: 128 },
+        },
+      );
+    } catch {
+      reject(new Error(vccErrorMessage(operation, "worker_failed")));
+      return;
+    }
     let settled = false;
     const finish = (error?: Error, result?: WorkerOutput) => {
       if (settled) return;
@@ -79,25 +91,25 @@ function executeWorker(input: WorkerInput, signal?: AbortSignal): Promise<Worker
           if (error) reject(error);
           else resolve(result!);
         },
-        () => reject(new Error("VCC worker cleanup failed.")),
+        () => reject(new Error(vccErrorMessage(operation, "cleanup_failed"))),
       );
     };
-    const abort = () => finish(new DOMException("Compaction cancelled.", "AbortError"));
-    const timer = setTimeout(() => finish(new Error("VCC compilation timed out.")), 15_000);
+    const abort = () =>
+      finish(new DOMException(vccErrorMessage(operation, "cancelled"), "AbortError"));
+    const timer = setTimeout(
+      () => finish(new Error(vccErrorMessage(operation, "timeout"))),
+      15_000,
+    );
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
     worker.once("message", (message) =>
       message?.ok && message.result
         ? finish(undefined, message.result)
-        : finish(
-            new Error(
-              "VCC could not reduce context safely. Try /compact-LLM or a larger-context model.",
-            ),
-          ),
+        : finish(new Error(vccErrorMessage(operation, message?.code))),
     );
-    worker.once("error", () => finish(new Error("VCC compilation worker failed.")));
+    worker.once("error", () => finish(new Error(vccErrorMessage(operation, "worker_failed"))));
     worker.once("exit", () => {
-      if (!settled) finish(new Error("VCC compilation worker exited."));
+      if (!settled) finish(new Error(vccErrorMessage(operation, "worker_exited")));
     });
   });
 }

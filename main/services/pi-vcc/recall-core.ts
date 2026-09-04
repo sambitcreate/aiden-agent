@@ -1,3 +1,4 @@
+import { VccError } from "./errors.js";
 import type { PiSessionEntry } from "../pi-session-port.js";
 import { archiveFromBranch, historyText } from "./history.js";
 
@@ -14,7 +15,7 @@ export function recallVcc(input: VccRecallInput): string {
     ...new Set((input.query ?? "").toLocaleLowerCase().split(/\s+/u).filter(Boolean)),
   ].slice(0, 16);
   const reference = input.reference?.replace(/^ref:/u, "");
-  if (!reference && terms.length === 0) throw new Error("Missing recall query.");
+  if (!reference && terms.length === 0) throw new VccError("missing_query");
   const matches = archiveFromBranch(input.branch).messages.flatMap(
     ({ reference: ref, message }, index) => {
       if (reference && ref !== reference) return [];

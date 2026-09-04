@@ -8,7 +8,8 @@ import { compileVcc } from "./compiler.js";
 import { compilerMessage, archiveFromBranch, sourceForPreparation } from "./history.js";
 import { recallVcc } from "./recall-core.js";
 import { createVccRecallTool } from "./recall.js";
-import { compileVccInWorker } from "./worker-client.js";
+import { vccErrorMessage, vccFailureCode, VccError } from "./errors.js";
+import { compileVccInWorker, runVccWorker } from "./worker-client.js";
 
 const settings = { enabled: true, reserveTokens: 1000, keepRecentTokens: 300 };
 async function fixture() {
@@ -497,4 +498,66 @@ test("tool arguments and text omit inline binary payloads while keeping attachme
   assert.doesNotMatch(projected, /private-small-binary|cHJpdmF0ZQ|12,34,56/);
   assert.match(projected, /attachment omitted/);
   assert.match(projected, /Diagram for the architecture/);
+});
+
+test("worker preserves safe compilation failure reasons and gives recall-specific errors", async () => {
+  const { input } = await fixture();
+  await assert.rejects(
+    compileVccInWorker({ ...input, contextWindow: 1 }),
+    /produced no usable summary/,
+  );
+  await assert.rejects(
+    compileVccInWorker({
+      ...input,
+      preparation: {
+        ...input.preparation,
+        retainedTail: [{ role: "user", content: "missing boundary", timestamp: -1 }],
+      },
+    }),
+    /safe history boundary/,
+  );
+  const { session: imported } = await fixture();
+  await imported.moveTo(null);
+  await imported.appendCompaction({
+    id: "opaque-gap",
+    summary: "An imported decision must survive.",
+    retainedTail: [],
+    tokensBefore: 40000,
+  });
+  await assert.rejects(
+    compileVccInWorker({
+      ...input,
+      branch: [...(await imported.getBranch()), ...input.branch],
+      contextWindow: 1,
+    }),
+    /could not reduce context enough/,
+  );
+  // Small entries exercise the bound without allocating a large transcript.
+  const branch = Array.from({ length: 100001 }, () => input.branch[input.branch.length - 1]);
+  await assert.rejects(compileVccInWorker({ ...input, branch }), /bounded processing limit/);
+  await assert.rejects(
+    runVccWorker({ kind: "recall", branch, query: "history" }),
+    /bounded local recall processing limit/,
+  );
+  await assert.rejects(
+    runVccWorker({ kind: "recall", branch: [], query: "" }),
+    /Missing recall query. Provide keywords or a history reference/,
+  );
+});
+
+test("unknown worker errors cannot reflect private content or suggest compaction for recall", () => {
+  const privateText = "PRIVATE_HISTORY_AND_CREDENTIALS";
+  assert.equal(vccFailureCode(new Error(privateText)), "worker_failed");
+  assert.equal(vccFailureCode(new VccError("unsafe_boundary")), "unsafe_boundary");
+  for (const code of [
+    privateText,
+    "__proto__",
+    "insufficient_reduction",
+    "worker_failed",
+    "timeout",
+  ]) {
+    const message = vccErrorMessage("recall", code);
+    assert.doesNotMatch(message, /PRIVATE|compact-LLM|larger-context/);
+    assert.match(message, /recall/);
+  }
 });

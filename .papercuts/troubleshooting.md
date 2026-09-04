@@ -294,3 +294,9 @@ owns; reopen the terminal before judging the final live state.
   and app:setOnboardingProgress before deferring onboarding; settings:set ignores
   profile fields. Wait for and click the Settings button instead of racing the
   initial keyboard-command listener.
+- PR review found cancellation coupled to the legacy status string. Use explicit
+  compaction activity, and exercise engine override commands with IPC held open
+  in Electron so fast local completion cannot hide the regression.
+- Worker errors must preserve bounded, known causes without relaying arbitrary
+  exceptions that could include history. Fixed codes allow operation-specific
+  recall copy; Object.hasOwn is unavailable in this project's TypeScript lib.

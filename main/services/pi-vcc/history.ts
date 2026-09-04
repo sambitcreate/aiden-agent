@@ -1,3 +1,4 @@
+import { VccError } from "./errors.js";
 import { createHash } from "node:crypto";
 import type { AgentMessage, CompactionPreparation } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
@@ -18,7 +19,7 @@ const fingerprint = (message: AgentMessage): string =>
 
 /** Only the caller's active branch is accepted. Never read ambient session files. */
 export function archiveFromBranch(branch: readonly PiSessionEntry[]): HistoryArchive {
-  if (branch.length > 100_000) throw new Error("VCC history exceeds its bounded processing limit.");
+  if (branch.length > 100_000) throw new VccError("history_limit");
   const messages: HistoryMessage[] = [];
   const known = new Set<string>();
   let opaque: string[] = [];
@@ -83,7 +84,7 @@ export function sourceForPreparation(
       (message, i) => fingerprint(message) !== fingerprint(archive.messages[start + i].message),
     )
   ) {
-    throw new Error("VCC could not establish a safe history boundary.");
+    throw new VccError("unsafe_boundary");
   }
   return withOpaqueMessages(archive.messages.slice(0, start));
 }

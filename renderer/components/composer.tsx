@@ -380,6 +380,7 @@ export function Composer({
   }>();
   const [sessionCommandStatus, setSessionCommandStatus] = React.useState<string | null>(null);
   const sessionCommandBusy = sessionCommandStatus !== null;
+  const [compactionBusy, setCompactionBusy] = React.useState(false);
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
   const [composing, setComposing] = React.useState(false);
@@ -658,6 +659,7 @@ export function Composer({
     async (engine?: CompactionEngine) => {
       if (!onCompactChat || sessionCommandBusy) return;
       sessionCommandBusyRef.current = true;
+      setCompactionBusy(true);
       setSessionCommandStatus(
         engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
       );
@@ -687,6 +689,7 @@ export function Composer({
         }
       } finally {
         sessionCommandBusyRef.current = false;
+        setCompactionBusy(false);
         setSessionCommandStatus(null);
         requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
@@ -1706,7 +1709,7 @@ export function Composer({
                 <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
                   {sessionCommandStatus}
                 </Text>
-                {sessionCommandStatus === "Compacting chat…" && onCancelCompact ? (
+                {compactionBusy && onCancelCompact ? (
                   <Button
                     type="button"
                     variant="transparent"

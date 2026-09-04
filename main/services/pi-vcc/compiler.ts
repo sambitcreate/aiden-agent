@@ -1,3 +1,4 @@
+import { VccError } from "./errors.js";
 import { estimateTokens, type CompactionPreparation } from "@earendil-works/pi-agent-core";
 import type { PiSessionEntry } from "../pi-session-port.js";
 import { sanitizeCredentialText } from "../../../renderer/shared/subagent-safe-text.js";
@@ -53,7 +54,7 @@ export function compileVcc(input: VccCompileInput) {
     ]
       .filter(Boolean)
       .join("\n\n");
-    if (!summary.trim()) throw new Error("VCC produced no usable summary.");
+    if (!summary.trim()) throw new VccError("empty_summary");
     const estimatedAfter =
       tailTokens + estimateTokens({ role: "user", content: summary, timestamp: 0 }) + 64;
     if (estimatedAfter >= before || estimatedAfter >= inputBudget) continue;
@@ -74,7 +75,5 @@ export function compileVcc(input: VccCompileInput) {
       },
     };
   }
-  throw new Error(
-    "VCC could not reduce context enough. Try /compact-LLM or a larger-context model.",
-  );
+  throw new VccError("insufficient_reduction");
 }
