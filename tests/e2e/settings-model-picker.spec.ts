@@ -122,6 +122,19 @@ test("every Settings destination renders and a one-model local inventory stays u
     await destination.click();
     await expect(destination).toHaveAttribute("aria-current", "page");
     await assertRenderedSettingsDestination(page, section);
+    if (section === "Appearance") {
+      const light = page.locator('.appearance-mode-preview-light [data-preview-scheme="light"]');
+      const dark = page.locator('.appearance-mode-preview-dark [data-preview-scheme="dark"]');
+      const colors = async () => [await light.evaluate(el => getComputedStyle(el).backgroundColor), await dark.evaluate(el => getComputedStyle(el).backgroundColor)];
+      const before = await colors();
+      expect(before[0]).not.toBe(before[1]);
+      await page.locator('.appearance-mode-option').filter({hasText: 'Dark'}).click();
+      await expect(page.locator('html')).toHaveClass(/dark/u);
+      expect(await colors()).toEqual(before);
+      await page.locator('.appearance-mode-option').filter({hasText: 'Light'}).click();
+      await expect(page.locator('html')).not.toHaveClass(/dark/u);
+      expect(await colors()).toEqual(before);
+    }
     if (section === "Web Search") {
       await expect(page.getByText("Current search setup", { exact: true })).toBeVisible();
       await expect(page.getByRole("radiogroup", { name: "Web Search routing policy" })).toHaveCount(

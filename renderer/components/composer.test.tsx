@@ -24,7 +24,7 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   );
   assert.match(
     styles,
-    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: 2px !important;/u,
+    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
   );
 });
 

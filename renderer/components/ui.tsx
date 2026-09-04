@@ -16,7 +16,7 @@ import {
 } from "radix-ui";
 import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
-import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search, CircleAlert, Info } from "lucide-react";
+import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import { cn } from "../lib/ui-utils";
@@ -48,6 +48,7 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   iconOnly?: boolean;
   radius?: "full" | "rounded";
   asChild?: boolean;
+  pressFeedback?: boolean;
 };
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -58,6 +59,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     iconOnly,
     radius = "full",
     asChild,
+    pressFeedback = false,
     type = "button",
     ...props
   },
@@ -70,7 +72,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       type={asChild ? undefined : type}
       data-slot="button"
       className={cn(
-        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform] duration-150 ease-out active:scale-[0.985] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
+        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
+        pressFeedback && "button-press-feedback",
         radius === "full" ? "rounded-pill" : "rounded-control",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
@@ -139,7 +142,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
 type TextProps = React.HTMLAttributes<HTMLElement> & {
   as?: keyof React.JSX.IntrinsicElements;
   variant?: "heading1" | "strong" | "regular" | "small" | "small-strong";
-  color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red";
+  color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red" | "status-red";
   truncate?: boolean;
 };
 
@@ -165,6 +168,7 @@ export function Text({
         color === "tertiary" && "text-tertiary",
         color === "quaternary" && "text-quaternary",
         color === "red" && "text-red",
+        color === "status-red" && "text-status-red",
         truncate && "truncate",
         className,
       )}
@@ -179,11 +183,11 @@ export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTM
 
 export function Badge({
   color = "gray",
+  icon,
   className,
   children,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { color?: string }) {
-  const StatusIcon = color === "green" ? Check : color === "red" ? CircleAlert : color === "blue" ? Info : undefined;
+}: React.HTMLAttributes<HTMLSpanElement> & { color?: string; icon?: React.ReactNode }) {
   return (
     <span
       className={cn(
@@ -195,7 +199,7 @@ export function Badge({
       )}
       {...props}
     >
-      {StatusIcon ? <StatusIcon className="size-3.5 shrink-0" aria-hidden="true" /> : null}
+      {icon ? <span className="inline-flex shrink-0 [&_svg]:size-3.5" aria-hidden="true">{icon}</span> : null}
       {children}
     </span>
   );
@@ -1211,7 +1215,8 @@ export const DropdownMenuItem = React.forwardRef<
   return (
     <DropdownMenuPrimitive.Item
       ref={ref}
-      className={cn(menuItemClass, color === "red" && "text-red", className)}
+      className={cn(menuItemClass, color === "red" && "text-red",
+        color === "status-red" && "text-status-red", className)}
       {...props}
     />
   );
@@ -1330,7 +1335,8 @@ export const ContextMenuItem = React.forwardRef<
   return (
     <ContextMenuPrimitive.Item
       ref={ref}
-      className={cn(menuItemClass, color === "red" && "text-red", className)}
+      className={cn(menuItemClass, color === "red" && "text-red",
+        color === "status-red" && "text-status-red", className)}
       {...props}
     />
   );

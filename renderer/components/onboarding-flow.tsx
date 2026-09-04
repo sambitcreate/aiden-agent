@@ -877,7 +877,7 @@ export function OnboardingFlow() {
           >
             {onboardingLoadError ? (
               <div role="alert" className="mb-4 rounded-card bg-status-red-surface p-3">
-                <Text variant="small" color="red" className="text-status-red">
+                <Text variant="small" color="status-red">
                   {onboardingLoadError}
                 </Text>
                 <Button
@@ -1344,6 +1344,7 @@ export function OnboardingFlow() {
             </Button>
             <Button
               variant="accent"
+              pressFeedback
               disabled={!stateReady || !canContinue || saving}
               onClick={() => void next()}
             >

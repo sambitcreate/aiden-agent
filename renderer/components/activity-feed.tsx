@@ -1,6 +1,5 @@
 // Live account of what the agent is doing. While a turn runs the feed is a
-// three-row ticker: the newest line rises in from below and older lines drift
-// up under a fade mask. When the turn settles it collapses to one deterministic
+// three-row ticker with stable row identities and quiet, opacity-only arrivals. When the turn settles it collapses to one deterministic
 // summary of the work, expandable to the full trail.
 
 import * as React from "react";
@@ -159,7 +158,7 @@ export function ActivityFeed({
             aria-live="polite"
             aria-label={activityLineText(newest)}
           >
-            <div className="activity-feed-stack flex flex-col" key={newest.id}>
+            <div className="activity-feed-stack flex flex-col">
               {rows.map((step) => (
                 <TickerRow key={step.id} step={step} />
               ))}

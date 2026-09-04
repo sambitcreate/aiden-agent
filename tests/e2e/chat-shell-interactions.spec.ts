@@ -94,14 +94,20 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(askFirst).toHaveAttribute("aria-checked", "true");
   await expect(noAccess).toHaveAttribute("aria-checked", "false");
   await noAccess.click();
-  await expect(noAccess).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
+  const noAccessTrigger = page.getByRole("button", { name: /^Workspace access: No access/u });
+  await expect(noAccessTrigger).toHaveAttribute("aria-expanded", "false");
+  await expect(composer).toBeFocused();
+  await noAccessTrigger.click();
   await askFirst.click();
   await expect(permission).toBeVisible();
 
   await composer.fill("Draft and attachment stay with this chat only.");
   await pasteImage(page);
-  await page.getByRole("button", { name: `Remove ${PASTED_IMAGE_NAME}` }).click();
+  const removeTarget = page.getByRole("button", { name: `Remove ${PASTED_IMAGE_NAME}` });
+  const removeBox = await removeTarget.boundingBox();
+  expect(removeBox?.width).toBeGreaterThanOrEqual(40);
+  expect(removeBox?.height).toBeGreaterThanOrEqual(40);
+  await removeTarget.click();
   await expect(page.getByRole("button", { name: `Remove ${PASTED_IMAGE_NAME}` })).toHaveCount(0);
   await pasteImage(page);
 
@@ -263,6 +269,11 @@ test.describe("with a workspace", () => {
     const permission = page.getByRole("button", {
       name: /^Workspace access: Full access/u,
     });
+    await page.getByRole("button", { name: "Attach files or images" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(permission).toBeFocused();
+    await expect(permission).toHaveCSS("opacity", "1");
+    await expect(permission).toHaveCSS("outline-style", "solid");
     await permission.click();
     const accessOptions = page.getByRole("radiogroup", {
       name: "Workspace access",

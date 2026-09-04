@@ -1595,7 +1595,7 @@ export function Composer({
                       );
                     }}
                     aria-label={`Remove ${selectedSkill.invocation.displayName} skill from message`}
-                    className="-mr-1 rounded-full p-0.5 text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
+                    className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
                   >
                     <X aria-hidden="true" className="size-3.5" />
                   </button>
@@ -1612,7 +1612,7 @@ export function Composer({
                 {attachments.map((a) => (
                   <div
                     key={a.id}
-                    className="group relative flex items-center gap-1.5 rounded-lg border border-field bg-background py-1 pl-1.5 pr-6"
+                    className="group relative flex min-h-10 items-center gap-1.5 rounded-control bg-control pl-1.5 pr-0"
                   >
                     {a.kind === "image" && a.data ? (
                       <img
@@ -1629,7 +1629,7 @@ export function Composer({
                       disabled={sessionCommandBusy}
                       onClick={() => removeAttachment(a.id)}
                       aria-label={`Remove ${a.name}`}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
+                      className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                     >
                       <X className="size-3.5" />
                     </button>
@@ -1770,7 +1770,7 @@ export function Composer({
                       setPermissionMenuOpen(true);
                       requestAnimationFrame(() => permissionControlRef.current?.focus());
                     }}
-                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
+                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out max-[520px]:justify-center max-[520px]:px-0"
                   >
                     <PermissionIcon
                       className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
@@ -1821,8 +1821,13 @@ export function Composer({
                           }
                           tabIndex={selected ? 0 : -1}
                           aria-disabled={disabled || undefined}
-                          onClick={() => {
-                            if (!disabled) requestPermission(value);
+                          onClick={(event) => {
+                            if (disabled) return;
+                            requestPermission(value);
+                            if (event.detail > 0 && value !== "full") {
+                              setPermissionMenuOpen(false);
+                              inputRef?.current?.focus({ preventScroll: true });
+                            }
                           }}
                           onKeyDown={(event) => {
                             if (disabled) return;
@@ -1850,7 +1855,7 @@ export function Composer({
                             radios?.[nextIndex]?.focus();
                           }}
                           className={cn(
-                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
                             selected
                               ? "bg-popover shadow-control"
                               : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",

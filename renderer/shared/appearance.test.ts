@@ -322,7 +322,7 @@ test("the shared focus treatment separates text entry from non-text keyboard foc
   );
   assert.match(
     styles,
-    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: 2px !important;/u,
+    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
   );
   assert.doesNotMatch(styles, /:root :where\(\*\):focus/u);
   assert.match(
@@ -516,8 +516,10 @@ test("status primitives keep semantic fills and icons without decorative edges",
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   for (const scheme of ["light", "dark"] as const) {
     const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
-    for (const [token, value] of Object.entries(tokens).filter(([name]) => name.startsWith("--status-"))) {
-      assert.ok(styles.includes(`${token}: ${value};`), `${scheme} fallback ${token} matches the resolver`);
+    const start = styles.indexOf(scheme === "light" ? ":root {" : ":root.dark {");
+    const fallback = styles.slice(start, styles.indexOf("\n}", start));
+    for (const [token, value] of Object.entries(tokens).filter(([name]) => ["--status-", "--text-", "--syntax-", "--support-"].some(prefix => name.startsWith(prefix)))) {
+      assert.ok(fallback.includes(`${token}: ${value};`), `${scheme} fallback ${token} matches the resolver`);
     }
   }
 });

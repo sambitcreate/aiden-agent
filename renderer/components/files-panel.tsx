@@ -706,7 +706,7 @@ export function FilesPanel({
             {saveError ? (
               <div className="flex shrink-0 items-start gap-2 bg-status-red-surface px-3 py-2">
                 <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-status-red" />
-                <Text variant="small" color="red" as="p" className="min-w-0 flex-1 select-text text-status-red">
+                <Text variant="small" color="status-red" as="p" className="min-w-0 flex-1 select-text">
                   {saveError.message}
                 </Text>
                 <Button

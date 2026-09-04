@@ -234,3 +234,5 @@ needed to separate this change from that baseline noise.
 - Archive untracked audit documents before a substantial rewrite: Git cannot restore their earlier contents. This run replaced the old `docs/DESIGN.md` with a scoped current reference; a complete original was not recoverable, so no purported historical archive was created.
 
 - 2026-09-04: Full verification exposed a diagnostics fixture timestamp fixed to August 27; after journal retention elapsed, export correctly pruned it before the rejection assertion. Forged-record fixtures now use the current timestamp so the tests exercise validation instead of aging out.
+
+- 2026-09-04: Tailwind 4 emits individual `scale` for scale utilities; transitioning/resetting only `transform` does not cover press feedback. Transition and reset the emitted property explicitly, including both reduced-motion sources.

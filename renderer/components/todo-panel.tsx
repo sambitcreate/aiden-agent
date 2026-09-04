@@ -60,7 +60,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
           <HoverCardTrigger asChild>
             <button
               type="button"
-              className="pointer-events-auto flex min-h-9 max-w-full items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small text-secondary shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover focus-visible:ring-2 focus-visible:ring-focus motion-reduce:transition-none"
+              className="pointer-events-auto flex min-h-9 max-w-full items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small text-secondary shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover motion-reduce:transition-none"
               aria-label="Task tracking unavailable. Focus or hover for details."
             >
               <LockKeyhole className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
@@ -112,7 +112,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
         <HoverCardTrigger asChild>
           <button
             type="button"
-            className="pointer-events-auto flex min-h-9 max-w-[min(100%,38rem)] items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover hover:shadow-modal focus-visible:ring-2 focus-visible:ring-focus motion-reduce:transition-none"
+            className="pointer-events-auto flex min-h-9 max-w-[min(100%,38rem)] items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover hover:shadow-modal motion-reduce:transition-none"
             aria-label={`Tasks: step ${currentIndex} of ${tasks.length}. ${chipDetail}. Focus or hover for full details.`}
           >
             {current ? (
