@@ -16,7 +16,7 @@ const source = fs.readFileSync(new URL("./slash-commands.ts", import.meta.url), 
 const invocationId = (character = "a") => `sk1_${character.repeat(43)}`;
 
 test("curated slash catalog freezes unique command names, aliases, and required adapters", () => {
-  assert.equal(SLASH_COMMANDS.length, 30);
+  assert.equal(SLASH_COMMANDS.length, 31);
   const tokens = SLASH_COMMANDS.flatMap((command) => [command.name, ...command.aliases]);
   assert.equal(new Set(tokens).size, tokens.length);
   assert.deepEqual(
@@ -42,6 +42,7 @@ test("curated slash catalog freezes unique command names, aliases, and required 
       "assistant",
       "terminal",
       "environment",
+      "quick-view",
       "review",
       "sidebar",
       "editor",
@@ -97,6 +98,35 @@ test("curated slash catalog freezes unique command names, aliases, and required 
   ]);
   assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "mcp")?.aliases, ["plugins"]);
   assert.equal(SLASH_COMMANDS.find((command) => command.name === "mcp")?.action.kind, "settings");
+  assert.deepEqual(
+    SLASH_COMMANDS.find((command) => command.name === "environment"),
+    {
+      name: "environment",
+      aliases: [],
+      title: "Toggle Environment",
+      description: "Show or hide Review, Subagents, and Files.",
+      keywords: ["review", "subagents", "files", "git"],
+      icon: "environment",
+      action: { kind: "command", commandId: "environment.toggle" },
+      behavior: "immediate",
+      availability: "workspace-environment",
+      argument: "none",
+      draftPolicy: "preserve",
+    },
+  );
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "quick-view"), {
+    name: "quick-view",
+    aliases: [],
+    title: "Toggle Quick View",
+    description: "Show or hide the compact workspace summary.",
+    keywords: ["summary", "preview", "status", "git"],
+    icon: "environment",
+    action: { kind: "command", commandId: "quick-view.toggle" },
+    behavior: "immediate",
+    availability: "workspace-environment",
+    argument: "none",
+    draftPolicy: "preserve",
+  });
 
   assert.equal(SLASH_LIMITS.queryCharacters, 256);
   assert.equal(SLASH_LIMITS.catalogEntries, 500);

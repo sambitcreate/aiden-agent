@@ -57,7 +57,7 @@ test("every application-modal overlay stays transparent and unblurred", () => {
   }
 });
 
-test("strong elevation stays modal-only while Environment keeps the original dialog shadow", () => {
+test("strong modal elevation stays modal-only while floating tools use dialog elevation", () => {
   const styles = source("../styles.css");
   const sharedUi = source("../components/ui.tsx");
   const commandPalette = source("../components/command-palette.tsx");
@@ -85,8 +85,8 @@ test("strong elevation stays modal-only while Environment keeps the original dia
   );
   assert.equal(sharedUi.match(/shadow-modal/gu)?.length, 2);
   assert.equal(commandPalette.match(/shadow-modal/gu)?.length, 1);
-  assert.match(environment, /environment-summary-card[\s\S]{0,300}shadow-dialog/u);
-  assert.doesNotMatch(environment, /environment-summary-card[\s\S]{0,300}shadow-modal/u);
+  assert.match(environment, /quick-view-card[\s\S]{0,300}shadow-dialog/u);
+  assert.doesNotMatch(environment, /quick-view-card[\s\S]{0,300}shadow-modal/u);
   assert.match(
     styles,
     /:root\[data-reduce-motion="false"\] \[data-slot="dialog-content"\]\[data-state="open"\]/u,
