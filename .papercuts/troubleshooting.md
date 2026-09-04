@@ -256,3 +256,5 @@ owns; reopen the terminal before judging the final live state.
 - The deterministic Electron E2E still targeted the retired Environment summary role after the toolbar controls split. Floating surfaces can also cover their toolbar triggers, so smoke tests must use the visible surface-local Show Quick View and Close controls while verifying the toolbar state changes behind them.
 
 - 2026-09-04: A mounted live-region test with only floating/pinned panels missed Quick View covering an open tools panel. Exercise inert/aria-hidden containment and persistent DOM identity in real Electron, plus message updates while the sibling panel is hidden.
+
+- 2026-09-04: The diagnostics forged-record fixture aged past journal retention, so export pruned it before the rejection assertion. Use current timestamps for validation fixtures; keep fixed clocks for explicit retention tests.
