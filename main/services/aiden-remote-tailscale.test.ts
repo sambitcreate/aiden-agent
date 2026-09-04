@@ -95,6 +95,16 @@ test("Linux operator denial maps to an actionable stable code", () => {
     }),
     "tailscale_permission_denied",
   );
+  assert.equal(
+    tailscaleCommandErrorCode(new Error("tailscale_permission_denied")),
+    "tailscale_permission_denied",
+  );
+  assert.equal(
+    tailscaleCommandErrorCode(
+      new Error("Access denied: serve config denied; run tailscale set --operator=$USER"),
+    ),
+    "tailscale_permission_denied",
+  );
   assert.equal(tailscaleCommandErrorCode({ stderr: "permission denied" }), undefined);
 });
 
@@ -174,6 +184,39 @@ test("Tailscale controller connects and verifies only Aiden's route", async () =
   assert.deepEqual(app.calls[app.calls.length - 2], [
     "serve", "--https=443", "--set-path=/api/aiden/v1", "off",
   ]);
+});
+
+test("Linux operator denial leaves the route untouched with a typed permission code", async () => {
+  const calls: string[][] = [];
+  const runner: AidenTailscaleCommandRunner = {
+    run: async (args) => {
+      calls.push([...args]);
+      if (args[0] === "status") {
+        return JSON.stringify({
+          BackendState: "Running",
+          Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
+          CertDomains: ["aiden.tailnet.ts.net"],
+        });
+      }
+      if (args[0] === "serve" && args[1] === "status") return "{}";
+      throw new Error("Access denied: serve config denied; run tailscale set --operator=$USER");
+    },
+  };
+  const outcomes: unknown[] = [];
+  const controller = new AidenRemoteTailscaleController(runner, {
+    outcomeStore: {
+      begin: async (outcome) => { outcomes.push(outcome); },
+      snapshot: async () => undefined,
+      commit: async () => undefined,
+      clear: async () => { outcomes.length = 0; },
+    },
+  });
+  await assert.rejects(
+    controller.connect(target),
+    (error: unknown) => error instanceof Error && error.message === "tailscale_permission_denied",
+  );
+  assert.equal(outcomes.length, 0);
+  assert.equal(calls.some((args) => args.includes("--set-path=/api/aiden/v1") && !args.includes("off")), true);
 });
 
 test("Tailscale controller reports stable URL identity without mutating configuration", async () => {

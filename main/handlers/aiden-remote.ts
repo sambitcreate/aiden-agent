@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
 import type { AidenRemoteSettingsSnapshot } from "../../renderer/shared/aiden-remote.js";
+import { AidenRemoteTlsEndpointError } from "../services/aiden-remote-tls-identity.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
   parseAidenRemoteConnectionMode,
@@ -132,14 +133,21 @@ export function registerAidenRemoteHandlers(): void {
   ipcMain.handle("remote:beginPairing", async (_event, transport: unknown) => {
     const selectedTransport = parseAidenRemoteTransport(transport);
     const service = (await getAidenRemoteRuntime()).service;
-    const pairing = await service.beginPairing(selectedTransport);
-    return {
-      ...pairing.bootstrap,
-      pairingSessionId: pairing.sessionId,
-      qrPayload: pairing.qrPayload
-        ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
-      manualCode: pairing.manualCode,
-    };
+    try {
+      const pairing = await service.beginPairing(selectedTransport);
+      return {
+        ...pairing.bootstrap,
+        pairingSessionId: pairing.sessionId,
+        qrPayload: pairing.qrPayload
+          ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
+        manualCode: pairing.manualCode,
+      };
+    } catch (error) {
+      if (error instanceof AidenRemoteTlsEndpointError) {
+        return { ok: false as const, code: error.code, message: error.message };
+      }
+      throw error;
+    }
   });
 
   ipcMain.handle("remote:closePairing", async (_event, sessionId: unknown) => {

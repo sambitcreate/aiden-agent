@@ -5,12 +5,14 @@ import { initDiagnosticHealth } from "./services/diagnostic-health.js";
 import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { installProcessDiagnostics } from "./services/process-diagnostics.js";
+import { applyLinuxGraphicsFlags } from "./linux-graphics-flags.js";
 import { configureRuntimeProfile } from "./runtime-profile.js";
 import {
   initSubagentRuntimeDiagnostics,
   SUBAGENT_RUNTIME_LOG_FILENAME,
 } from "./services/subagents/subagent-runtime-diagnostics.js";
 
+applyLinuxGraphicsFlags();
 const runtimeProfile = configureRuntimeProfile();
 const productionDiagnosticsDisabled =
   runtimeProfile.id === "production" && process.env.AIDEN_DISABLE_PRODUCTION_DIAGNOSTICS === "1";

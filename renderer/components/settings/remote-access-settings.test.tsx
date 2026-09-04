@@ -62,6 +62,10 @@ test("Tailscale setup failures retain typed actionable remediation", () => {
   assert.match(source, /Open Tailscale and sign in/u);
   assert.match(source, /Enable HTTPS for this Tailscale device name/u);
   assert.match(source, /tailscale_permission_denied[\s\S]*?sudo tailscale set --operator=\$USER/u);
+  assert.match(source, /status\.tailscaleErrorCode === "permission_denied"/u);
+  assert.match(source, /Permission needed/u);
+  assert.match(source, /isAidenRemoteTlsEndpointFailure\(nextPairing\)/u);
+  assert.match(source, /toast\.error\(nextPairing\.message\)/u);
   assert.match(source, /<Badge color=\{status\.tailscaleConnected \? "green"/u);
   assert.match(source, /transportAllowsTailscale[\s\S]*!status\.tailscaleConnected/u);
   assert.match(source, /Local ready · \$\{tailscalePresentation\.badge\}/u);

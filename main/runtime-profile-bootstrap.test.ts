@@ -5,12 +5,21 @@ import test from "node:test";
 test("runtime identity is configured before the main module can take its lock", () => {
   const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
   const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const graphicsFlags = bootstrap.indexOf("applyLinuxGraphicsFlags()");
   const configure = bootstrap.indexOf("configureRuntimeProfile()");
   const loadMain = bootstrap.indexOf('await import("./index.js")');
 
-  assert.ok(configure >= 0 && loadMain > configure);
+  assert.ok(graphicsFlags >= 0 && configure > graphicsFlags && loadMain > configure);
   assert.match(main, /app\.requestSingleInstanceLock\(\)/u);
   assert.doesNotMatch(main, /app\.setName\(/u);
+});
+
+test("Linux Wayland launches disable Chromium Vulkan before the main module loads", () => {
+  const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
+  const flags = readFileSync(new URL("./linux-graphics-flags.ts", import.meta.url), "utf8");
+  assert.match(bootstrap, /applyLinuxGraphicsFlags\(\)/u);
+  assert.match(flags, /appendSwitch\("disable-features", "Vulkan"\)/u);
+  assert.doesNotMatch(flags, /disableHardwareAcceleration/u);
 });
 
 test("the Electron build enters through the profile bootstrap", () => {

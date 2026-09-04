@@ -81,6 +81,8 @@ native subagents use the same contracts as macOS. Linux-specific integrations in
 - native distro window chrome and conventional File/Edit/View/Window/Help menus;
 - Ctrl-based app and global shortcuts, including the Wayland Global Shortcuts
   portal on desktops that implement it;
+- Vulkan disabled on Wayland sessions to avoid Chromium's Ozone incompatibility
+  warning (pass `--ozone-platform=x11` to keep the default feature set);
 - editor discovery through `PATH`, Snap command locations, JetBrains Toolbox
   scripts, and common Flatpak application IDs;
 - opening folders with the default desktop file manager;
