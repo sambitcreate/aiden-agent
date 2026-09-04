@@ -157,10 +157,17 @@ export function tailscaleBinaryCandidates(
 export function tailscaleCommandErrorCode(
   error: unknown,
 ): "tailscale_permission_denied" | undefined {
+  if (error instanceof Error && error.message === "tailscale_permission_denied") {
+    return "tailscale_permission_denied";
+  }
   const value = record(error);
   const stderr = typeof value?.stderr === "string" ? value.stderr : "";
-  return stderr.includes("Access denied: serve config denied") &&
-    stderr.includes("tailscale set --operator=")
+  const message = error instanceof Error
+    ? error.message
+    : typeof value?.message === "string" ? value.message : "";
+  const haystack = `${stderr}\n${message}`;
+  return haystack.includes("Access denied: serve config denied") &&
+    haystack.includes("tailscale set --operator=")
     ? "tailscale_permission_denied"
     : undefined;
 }
@@ -714,12 +721,7 @@ export class AidenRemoteTailscaleController {
       else await this.clearExactRoute();
     } catch (error) {
       commandFailed = true;
-      if (
-        error instanceof Error &&
-        error.message === "tailscale_permission_denied"
-      ) {
-        commandFailureCode = error.message;
-      }
+      commandFailureCode = tailscaleCommandErrorCode(error);
     }
     const observed = await this.serveStatusAfterMutation("tailscale_route_outcome_unknown");
     const observedSnapshot = aidenTailscaleCanonicalRouteSnapshot(observed);

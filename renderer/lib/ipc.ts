@@ -139,7 +139,7 @@ import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-comma
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
 import type {
   AidenRemoteConnectionMode,
-  AidenRemotePairingBootstrapView,
+  AidenRemoteBeginPairingResult,
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import {
@@ -499,7 +499,7 @@ export const aidenRemoteApi = {
   takeOverTailscale: (token: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleTakeOver", token),
   beginPairing: (transport: "lan" | "tailscale") =>
-    invoke<AidenRemotePairingBootstrapView>("remote:beginPairing", transport),
+    invoke<AidenRemoteBeginPairingResult>("remote:beginPairing", transport),
   closePairing: (pairingSessionId: string) =>
     invoke<{ closed: boolean }>("remote:closePairing", pairingSessionId),
   revokeDevice: (deviceId: string) =>

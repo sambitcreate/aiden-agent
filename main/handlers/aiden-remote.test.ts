@@ -52,3 +52,14 @@ test("saved endpoint repair is an explicit IPC action", async () => {
   assert.match(source, /ipcMain\.handle\("remote:moveToAvailablePort"/u);
   assert.match(source, /service\.moveToAvailablePort\(\)/u);
 });
+
+test("pairing TLS probe failures resolve as a structured IPC outcome", async () => {
+  const source = await readFile(new URL("./aiden-remote.ts", import.meta.url), "utf8");
+  const handler = source.slice(
+    source.indexOf('ipcMain.handle("remote:beginPairing"'),
+    source.indexOf('ipcMain.handle("remote:closePairing"'),
+  );
+  assert.match(handler, /AidenRemoteTlsEndpointError/u);
+  assert.match(handler, /ok: false as const/u);
+  assert.match(handler, /code: error\.code/u);
+});

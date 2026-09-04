@@ -23,7 +23,7 @@ import type {
   AidenRemoteStateRegistry,
 } from "./aiden-remote-state.js";
 import type { AidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
-import { fetchTlsServerSpkiSha256 } from "./aiden-remote-tls-identity.js";
+import { fetchTlsServerSpkiSha256, classifyAidenRemoteTlsEndpointFailure } from "./aiden-remote-tls-identity.js";
 import type {
   AidenRemoteTailscaleController,
   AidenTailscaleConnectionStatus,
@@ -471,6 +471,7 @@ export class AidenRemoteService {
   private activeState: AidenRemoteStateDocument | null = null;
   private lastError: string | undefined;
   private lastErrorCode: "remote_port_in_use" | undefined;
+  private tailscalePermissionDenied = false;
   private operationTail: Promise<void> = Promise.resolve();
   private settleRemoteApi: (() => Promise<void>) | undefined;
   private readonly now: () => number;
@@ -808,6 +809,7 @@ export class AidenRemoteService {
       await this.options.state.setEnabled(false);
       this.lastError = undefined;
       this.lastErrorCode = undefined;
+      this.tailscalePermissionDenied = false;
       if (disconnectError) throw disconnectError;
     });
   }
@@ -851,6 +853,7 @@ export class AidenRemoteService {
         await this.disconnectTailscaleInternal(current);
       }
       await this.options.state.setConnectionMode(connectionMode);
+      if (connectionMode === "lan") this.tailscalePermissionDenied = false;
       if (current.enabled) {
         if (!this.activeState || !this.lanServer || !this.tailscaleServer) {
           await this.startConfigured({ ...current, connectionMode });
@@ -933,11 +936,20 @@ export class AidenRemoteService {
         );
         ownership = undefined;
       }
-      await this.options.tailscale.connect(
-        target,
-        ownership,
-        (nextOwnership) => this.options.state.commitTailscaleOutcome(nextOwnership),
-      );
+      try {
+        await this.options.tailscale.connect(
+          target,
+          ownership,
+          (nextOwnership) => this.options.state.commitTailscaleOutcome(nextOwnership),
+        );
+        this.tailscalePermissionDenied = false;
+      } catch (error) {
+        if (error instanceof Error && error.message === "tailscale_permission_denied") {
+          this.tailscalePermissionDenied = true;
+          return;
+        }
+        throw error;
+      }
     });
   }
 
@@ -1065,9 +1077,13 @@ export class AidenRemoteService {
         }
         if (!status.dnsName) throw new Error("Tailscale does not report a stable DNS name.");
         endpoint = `https://${status.dnsName}${AIDEN_REMOTE_BASE_PATH}`;
-        serverSpkiSha256 = await (
-          this.options.resolveTlsEndpointPin ?? fetchTlsServerSpkiSha256
-        )(status.dnsName, 443);
+        try {
+          serverSpkiSha256 = await (
+            this.options.resolveTlsEndpointPin ?? fetchTlsServerSpkiSha256
+          )(status.dnsName, 443);
+        } catch (error) {
+          throw classifyAidenRemoteTlsEndpointFailure(error);
+        }
       }
       const pairing = this.pairing.begin(endpoint, serverSpkiSha256);
       try {
@@ -1175,7 +1191,11 @@ export class AidenRemoteService {
       tailscaleConnected,
       tailscaleInstalled: tailscaleStatus.installed,
       tailscaleRouteState,
-      ...(tailscaleErrorCode ? { tailscaleErrorCode } : {}),
+      ...(this.tailscalePermissionDenied && !tailscaleConnected
+        ? { tailscaleErrorCode: "permission_denied" as const }
+        : tailscaleErrorCode
+          ? { tailscaleErrorCode }
+          : {}),
       pairedDeviceCount: state.devices.length,
       approvedRootCount: state.approvedRoots.length,
       ...(this.lastErrorCode ? { errorCode: this.lastErrorCode } : {}),

@@ -49,6 +49,7 @@ import type {
   AidenRemoteSettingsSnapshot,
   AidenRemoteTailscaleTakeoverReviewView,
 } from "../../shared/aiden-remote";
+import { isAidenRemoteTlsEndpointFailure } from "../../shared/aiden-remote";
 import {
   groupRemoteDevices,
   remoteConnectionSummary,
@@ -96,6 +97,12 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
       return { badge: status.enabled ? "Connected" : "Configured", description: "This Aiden profile owns the mobile route." };
     }
     case "available":
+      if (status.tailscaleErrorCode === "permission_denied") {
+        return {
+          badge: "Permission needed",
+          description: "Run `sudo tailscale set --operator=$USER` in a terminal, then connect again.",
+        };
+      }
       return { badge: "Available", description: "The Aiden mobile route is available on this desktop." };
     case "other_aiden_live":
       return { badge: "In use", description: "Another running Aiden profile owns this desktop’s mobile route. Stop or disconnect it before connecting here." };
@@ -115,14 +122,18 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
             ? "Sign in required"
             : status.tailscaleErrorCode === "https_unavailable"
               ? "HTTPS unavailable"
-              : "Unavailable",
+              : status.tailscaleErrorCode === "permission_denied"
+                ? "Permission needed"
+                : "Unavailable",
         description: status.tailscaleErrorCode === "not_installed" || !status.tailscaleInstalled
           ? "Install Tailscale to use this connection method."
           : status.tailscaleErrorCode === "not_connected"
             ? "Open Tailscale and sign in before connecting Aiden’s mobile route."
             : status.tailscaleErrorCode === "https_unavailable"
               ? "Enable HTTPS for this Tailscale device name, then try again."
-              : "Aiden couldn’t safely inspect the current Tailscale Serve configuration.",
+              : status.tailscaleErrorCode === "permission_denied"
+                ? "Run `sudo tailscale set --operator=$USER` in a terminal, then connect again."
+                : "Aiden couldn’t safely inspect the current Tailscale Serve configuration.",
       };
   }
 }
@@ -387,6 +398,12 @@ export function RemoteAccessSettings() {
       completedPairingDeviceId.current = null;
       observedPairingSession.current = null;
       const nextPairing = await aidenRemoteApi.beginPairing(transport);
+      if (isAidenRemoteTlsEndpointFailure(nextPairing)) {
+        if (mounted.current && pairingRequestGeneration.current === requestGeneration) {
+          toast.error(nextPairing.message);
+        }
+        return;
+      }
       if (!mounted.current || pairingRequestGeneration.current !== requestGeneration) {
         await aidenRemoteApi.closePairing(nextPairing.pairingSessionId).catch(() => undefined);
         return;

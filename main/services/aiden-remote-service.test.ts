@@ -20,7 +20,7 @@ import {
   createDefaultAidenRemoteState,
   type AidenRemoteStateDocument,
 } from "./aiden-remote-state.js";
-import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
+import { loadOrCreateAidenRemoteTlsIdentity, AidenRemoteTlsEndpointError } from "./aiden-remote-tls-identity.js";
 import type { AidenTailscaleStatus } from "./aiden-remote-tailscale-route.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 
@@ -138,6 +138,8 @@ interface FixtureOptions {
     transport: "lan" | "tailscale";
     port: number;
   }) => Promise<void>;
+  connectFailsWith?: string;
+  resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
 }
 
 async function fixture(
@@ -216,6 +218,7 @@ async function fixture(
     ) => {
       tailscale.connects += 1;
       tailscale.targets.push(target);
+      if (options.connectFailsWith) throw new Error(options.connectFailsWith);
       const ownership = { path: "/api/aiden/v1" as const, target };
       await persistOwnership?.(ownership);
       return ownership;
@@ -279,7 +282,8 @@ async function fixture(
     hostname: "Aiden-Test",
     bonjour,
     tailscale,
-    resolveTlsEndpointPin: async () => `sha256/${Buffer.alloc(32, 9).toString("base64")}`,
+    resolveTlsEndpointPin: options.resolveTlsEndpointPin
+      ?? (async () => `sha256/${Buffer.alloc(32, 9).toString("base64")}`),
     loadTlsIdentity: async () => {
       identityLoads += 1;
       return loadOrCreateAidenRemoteTlsIdentity({
@@ -1164,6 +1168,70 @@ test("Tailscale connect ownership persists only after connect and explicit disab
     assert.equal(app.tailscale.disconnects, 1);
     assert.equal(app.persisted().tailscaleOwnership, undefined);
     assert.equal(app.persisted().enabled, false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Tailscale operator denial resolves as a settings latch instead of rejecting connect", async () => {
+  const app = await fixture({ mode: "both", connectFailsWith: "tailscale_permission_denied" });
+  try {
+    await app.service.setEnabled(true);
+    await app.service.connectTailscale();
+    const status = await app.service.status();
+    assert.equal(status.tailscaleErrorCode, "permission_denied");
+    assert.equal(status.tailscaleConnected, false);
+    assert.equal(app.persisted().tailscaleOwnership, undefined);
+    assert.equal(app.tailscale.connects, 1);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Tailscale operator denial latch clears after a successful connect", async () => {
+  const app = await fixture({ mode: "both", connectFailsWith: "tailscale_permission_denied" });
+  try {
+    await app.service.setEnabled(true);
+    await app.service.connectTailscale();
+    assert.equal((await app.service.status()).tailscaleErrorCode, "permission_denied");
+    app.tailscale.connect = async (
+      target: string,
+      _ownership?: { path: "/api/aiden/v1"; target: string },
+      persistOwnership?: (ownership: { path: "/api/aiden/v1"; target: string }) => Promise<void>,
+    ) => {
+      const ownership = { path: "/api/aiden/v1" as const, target };
+      await persistOwnership?.(ownership);
+      return ownership;
+    };
+    await app.service.connectTailscale();
+    assert.equal((await app.service.status()).tailscaleErrorCode, undefined);
+    assert.equal(app.persisted().tailscaleOwnership?.path, "/api/aiden/v1");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Tailscale pairing TLS probe failures stay classified and create no pairing session", async () => {
+  const app = await fixture({
+    mode: "both",
+    tailscaleAssessment: { state: "owned" },
+    resolveTlsEndpointPin: async () => {
+      throw new Error("Aiden Remote TLS endpoint timed out.");
+    },
+    initial: (state) => {
+      state.tailscaleOwnership = {
+        path: "/api/aiden/v1",
+        target: `http://127.0.0.1:${state.lanPort + 1}/api/aiden/v1`,
+      };
+    },
+  });
+  try {
+    await app.service.setEnabled(true);
+    await assert.rejects(
+      app.service.beginPairing("tailscale"),
+      (error: unknown) => error instanceof AidenRemoteTlsEndpointError && error.code === "timed_out",
+    );
+    assert.equal(app.service.pairingStatus(), undefined);
   } finally {
     await app.cleanup();
   }
