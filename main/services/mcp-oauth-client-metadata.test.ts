@@ -25,6 +25,7 @@ test("Figma-style plaintext DCR 403 becomes a readable authorization error", () 
   const explained = explainMcpOAuthFailure(raw);
   assert.match(explained.message, /rejected OAuth client registration/u);
   assert.equal(explained.cause, raw);
+  assert.equal(Object.prototype.propertyIsEnumerable.call(explained, "cause"), false);
   const other = new Error("Authorization denied: access_denied");
   assert.equal(explainMcpOAuthFailure(other), other);
 });

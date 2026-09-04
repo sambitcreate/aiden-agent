@@ -39,17 +39,20 @@ export function mcpApiKeyHeaderValue(key: string, prefix?: string): string {
  * The MCP SDK surfaces Figma's plaintext DCR 403 as a JSON parse failure.
  * Keep the original error as `cause` for logs while giving Settings a readable line.
  */
-export function explainMcpOAuthFailure(error: unknown): Error {
+export function explainMcpOAuthFailure(error: unknown): Error & { cause?: Error } {
   const message = error instanceof Error ? error.message : String(error);
   if (
     /HTTP 403/i.test(message) &&
     /Invalid OAuth error response/i.test(message) &&
     /Forbidden/i.test(message)
   ) {
-    return new Error(
+    const explained = new Error(
       "This MCP server rejected OAuth client registration (HTTP 403). Some hosts only allow listed MCP clients to register. Check Settings → Plugins for this connector's documented setup, then try Authorize again.",
-      { cause: error instanceof Error ? error : undefined },
     );
+    if (error instanceof Error) {
+      Object.defineProperty(explained, "cause", { value: error, configurable: true, writable: true });
+    }
+    return explained;
   }
   return error instanceof Error ? error : new Error(message);
 }
