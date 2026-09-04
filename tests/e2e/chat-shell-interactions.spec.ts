@@ -53,6 +53,15 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(skills).toBeHidden();
   await composer.fill("");
 
+  const announcer = page.locator('[data-subagent-live-announcer="true"]');
+  await expect(announcer).toHaveCount(1);
+  const originalAnnouncer = await announcer.elementHandle();
+  const assertAccessibleAnnouncer = async () => {
+    await expect(announcer).toHaveCount(1);
+    expect(await announcer.evaluate(el => el.closest('[inert], [aria-hidden="true"]') === null)).toBe(true);
+    expect(await announcer.evaluate((el, original) => el === original, originalAnnouncer)).toBe(true);
+  };
+  await assertAccessibleAnnouncer();
   const environment = page.getByRole("button", { name: "Show Environment" });
   const quickViewToggle = page.locator("[data-quick-view-toggle]");
   const environmentSurface = page.getByRole("complementary", {
@@ -89,6 +98,12 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
       { exact: true },
     ),
   ).toBeVisible();
+  await aiden.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].setSize(900, 720);
+  });
+  await expect(page.locator('[data-environment-stacked="true"]')).toHaveCount(1);
+  await expect(page.locator('[data-environment-surface="tools"]')).toHaveAttribute('inert', '');
+  await assertAccessibleAnnouncer();
   await expect(quickViewToggle).toHaveAttribute("aria-label", "Hide Quick View");
   await expect(quickViewToggle).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("Escape");
@@ -101,6 +116,10 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await environmentSurface.getByRole("button", { name: "Close environment panel" }).click();
   await expect(environmentSurface).toBeHidden();
   await expect(environment).toHaveAttribute("aria-pressed", "false");
+  await assertAccessibleAnnouncer();
+  await aiden.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].setSize(1280, 800);
+  });
 
   const terminal = page.getByRole("button", { name: "Show terminal" });
   await expect(terminal).toBeDisabled();

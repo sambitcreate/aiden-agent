@@ -254,3 +254,5 @@ owns; reopen the terminal before judging the final live state.
 - Simultaneous right-edge surfaces need measured workbench geometry, not window breakpoints; the app sidebar changes the available allocation without changing the window width.
 - Final dev-window automation was unavailable while macOS was locked; the renderer and Electron process launched, but visual acceptance still requires an unlocked desktop.
 - The deterministic Electron E2E still targeted the retired Environment summary role after the toolbar controls split. Floating surfaces can also cover their toolbar triggers, so smoke tests must use the visible surface-local Show Quick View and Close controls while verifying the toolbar state changes behind them.
+
+- 2026-09-04: A mounted live-region test with only floating/pinned panels missed Quick View covering an open tools panel. Exercise inert/aria-hidden containment and persistent DOM identity in real Electron, plus message updates while the sibling panel is hidden.

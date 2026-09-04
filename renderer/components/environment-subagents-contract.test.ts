@@ -525,10 +525,9 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.match(announcer, /coordinatorRef\.current\?\.update\(ownerKey, summary, terminal\)/u);
   assert.match(announcer, /window\.setTimeout\(callback, delayMs\)/u);
   assert.match(announcer, /coordinatorRef\.current\?\.announceDetail/u);
-  assert.match(announcer, /portalHost \? createPortal\(region, portalHost\) : region/u);
-  assert.match(environment, /ref=\{setSurfaceRef\}/u);
-  assert.match(environment, /setSubagentAnnouncerHost\(node\)/u);
-  assert.match(environment, /surfaceState\.toolsOpen \? subagentAnnouncerHost : null/u);
+  assert.doesNotMatch(announcer, /createPortal|portalHost/u);
+  assert.doesNotMatch(environment, /subagentAnnouncerHost|setSubagentAnnouncerHost/u);
+  assert.match(environment, /<EnvironmentPanelContext.Provider value=\{value\}>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
   assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);
   assert.equal(
@@ -537,7 +536,7 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
       []
     ).length,
     1,
-    "the portaled node is the composed Subagents UI's only polite live region",
+    "the stable node is the composed Subagents UI's only polite live region",
   );
   assert.equal(
     (`${environment}\n${announcer}\n${panel}\n${chips}`.match(/role="status"/gu) ?? []).length,

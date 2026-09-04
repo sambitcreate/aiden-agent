@@ -422,11 +422,9 @@ function MountedSelectionRepairHarness({
 
 function MountedLiveAnnouncerHarness({
   detailRequest,
-  host,
   runs,
 }: {
   detailRequest: SubagentDetailAnnouncementRequest | null;
-  host: HTMLElement;
   runs: readonly SubagentRunSnapshotV1[];
 }) {
   return (
@@ -434,7 +432,6 @@ function MountedLiveAnnouncerHarness({
       ownerKey={subagentPanelOwnerKey("chat-1", "workspace-1")}
       runs={runs}
       detailRequest={detailRequest}
-      portalHost={host}
     />
   );
 }
@@ -2484,7 +2481,6 @@ test("mounted live announcer stays singular and active in floating and pinned su
       root.render(
         <MountedLiveAnnouncerHarness
           detailRequest={detailRequest}
-          host={host as unknown as HTMLElement}
           runs={[terminalRun]}
         />,
       );
@@ -2510,6 +2506,7 @@ test("mounted live announcer stays singular and active in floating and pinned su
       /0 active subagents; 1 completed successfully\./u.test(message),
     );
     assert.equal(regions.length, 1);
+    const originalRegion = regions[0];
     let ancestor: HTMLElement | null = regions[0];
     while (ancestor) {
       assert.notEqual(ancestor.getAttribute("aria-hidden"), "true");
@@ -2521,6 +2518,8 @@ test("mounted live announcer stays singular and active in floating and pinned su
     assert.equal(host.getAttribute("data-surface-mode"), "tools-floating");
     assert.match(regions[0].textContent ?? "", /0 active subagents; 1 completed successfully\./u);
 
+    host.setAttribute("inert", "");
+    host.setAttribute("aria-hidden", "true");
     renderHarness(true, {
       id: 1,
       ownerKey: subagentPanelOwnerKey("chat-1", "workspace-1"),
@@ -2541,11 +2540,8 @@ test("mounted live announcer stays singular and active in floating and pinned su
       (message) => message === "Loading saved activity for Code scout.",
     );
     assert.equal(regions.length, 1);
-    assert.ok(
-      regions[0].parentNode instanceof HTMLElement &&
-        regions[0].parentNode.getAttribute("data-surface-mode") === "tools-pinned",
-      "the same region moves into the active pinned Environment subtree",
-    );
+    assert.equal(regions[0], originalRegion, "panel changes preserve the live DOM node");
+    assert.equal(regions[0].parentNode, mounted.container, "announcements stay outside the covered panel");
     assert.equal(regions[0].textContent, "Loading saved activity for Code scout.");
   } finally {
     flushSync(() => root.unmount());

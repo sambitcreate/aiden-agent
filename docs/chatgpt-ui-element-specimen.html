@@ -688,12 +688,14 @@ import { ReviewPanel } from "./review-panel";
 import { FilesPanel } from "./files-panel";
 
 export function EnvironmentSurfaces() {
-  const [tab, setTab] = React.useState("overview");
+  const [toolsOpen, setToolsOpen] = React.useState(false);
+  const [quickViewOpen, setQuickViewOpen] = React.useState(false);
+  const [tab, setTab] = React.useState("review");
 
   return (
     &lt;&gt;
-      {tab === "overview" ? &lt;EnvironmentSummaryCard /&gt; : null}
-      &lt;WorkspacePanel hidden={tab === "overview"}&gt;
+      {quickViewOpen ? &lt;QuickViewCard /&gt; : null}
+      &lt;WorkspacePanel hidden={!toolsOpen}&gt;
         {tab === "review" ? &lt;ReviewPanel /&gt; : &lt;FilesPanel /&gt;}
       &lt;/WorkspacePanel&gt;
     &lt;/&gt;

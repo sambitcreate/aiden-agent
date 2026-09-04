@@ -136,7 +136,6 @@ interface EnvironmentPanelContextValue {
   subagentStopPendingRunIds: readonly string[];
   subagentStopErrorsByRunId: Readonly<Record<string, string>>;
   announceSubagentDetail: (ownerKey: string, message: string) => void;
-  setSubagentAnnouncerHost: (host: HTMLElement | null) => void;
   syncSubagents: (
     chatId: string,
     workspaceId: string,
@@ -287,9 +286,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const [subagentDetailRequestVersion, setSubagentDetailRequestVersion] = React.useState(0);
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
-  const [subagentAnnouncerHost, setSubagentAnnouncerHost] = React.useState<HTMLElement | null>(
-    null,
-  );
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
   const [createWorktree, setCreateWorktree] = React.useState<
     ((branchName: string) => Promise<void>) | undefined
@@ -985,7 +981,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           ? subagentStopPending.errors
           : {},
       announceSubagentDetail,
-      setSubagentAnnouncerHost,
       syncSubagents,
       releaseSubagents,
       openSubagent,
@@ -1064,7 +1059,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
           runs={subagents.liveSnapshots}
           detailRequest={subagentDetailAnnouncement}
-          portalHost={surfaceState.toolsOpen ? subagentAnnouncerHost : null}
         />
       ) : null}
       {children}
@@ -1103,14 +1097,6 @@ function EnvironmentPanelSurface({
   const fullOpen = panel.toolsOpen;
   const compactTabs = width < 520;
   const surfaceRef = React.useRef<HTMLElement | null>(null);
-  const setSubagentAnnouncerHost = panel.setSubagentAnnouncerHost;
-  const setSurfaceRef = React.useCallback(
-    (node: HTMLElement | null) => {
-      surfaceRef.current = node;
-      setSubagentAnnouncerHost(node);
-    },
-    [setSubagentAnnouncerHost],
-  );
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
   const handledSubagentFocusRef = React.useRef(0);
   const widthRef = React.useRef(width);
@@ -1198,7 +1184,7 @@ function EnvironmentPanelSurface({
 
   return (
     <aside
-      ref={setSurfaceRef}
+      ref={surfaceRef}
       id="environment-panel"
       data-environment-surface="tools"
       data-surface-mode={inline ? "tools-pinned" : "tools-floating"}
