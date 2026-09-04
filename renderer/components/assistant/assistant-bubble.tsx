@@ -26,7 +26,7 @@ export const AssistantBubble = React.forwardRef<HTMLButtonElement, AssistantBubb
           <button
             type="button"
             onClick={onOpen}
-            className="pointer-events-auto mb-1 max-w-64 rounded-2xl rounded-br-md bg-popover px-3 py-2 text-left text-xs leading-snug text-secondary shadow-composer outline outline-1 outline-field/80 transition-opacity duration-150 ease-out"
+            className="pointer-events-auto mb-1 max-w-64 rounded-2xl rounded-br-md bg-popover px-3 py-2 text-left text-mini leading-snug text-secondary shadow-composer outline outline-1 outline-field/80 transition-opacity duration-150 ease-out"
           >
             {preview}
           </button>
@@ -42,7 +42,7 @@ export const AssistantBubble = React.forwardRef<HTMLButtonElement, AssistantBubb
             <img src={AIDEN_MARK_URL} alt="" className="size-full scale-[1.32] object-cover" />
           </span>
           {badge ? (
-            <span className="absolute -right-0.5 -top-0.5 flex min-w-5 items-center justify-center rounded-full bg-support-red px-1 text-[11px] font-semibold leading-5 text-support-red-foreground">
+            <span className="absolute -right-0.5 -top-0.5 flex min-w-5 items-center justify-center rounded-full bg-support-red px-1 text-mini font-semibold leading-5 text-support-red-foreground">
               {badge}
             </span>
           ) : null}

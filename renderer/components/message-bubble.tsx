@@ -53,7 +53,7 @@ export function MessageBubble({
         <div className="flex max-w-[80%] flex-col items-end gap-2">
           {skill ? (
             <div
-              className="flex max-w-full items-center gap-1.5 rounded-lg border border-accent/20 bg-accent/[0.08] px-2 py-1 text-small text-secondary"
+              className="flex max-w-full items-center gap-1.5 rounded-lg bg-status-accent-surface px-2 py-1 text-small text-secondary"
               aria-label={`${skill.name}, ${skill.source} skill`}
             >
               <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent" />

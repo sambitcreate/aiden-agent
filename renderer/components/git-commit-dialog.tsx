@@ -229,17 +229,17 @@ export function GitCommitDialog({
         ) : null}
 
         {busy ? (
-          <div className="flex items-center gap-2 rounded-control bg-accent/[0.08] px-3 py-2 text-small text-accent" role="status">
+          <div className="flex items-center gap-2 rounded-control bg-status-accent-surface px-3 py-2 text-small text-status-accent" role="status">
             <RefreshCw className="size-4 shrink-0 animate-spin" aria-hidden="true" />
             <span>Creating an immutable local commit…</span>
           </div>
         ) : disabledReason ? (
-          <div className="flex items-start gap-2 rounded-control bg-support-warning/[0.08] px-3 py-2 text-small text-support-warning" role="status">
+          <div className="flex items-start gap-2 rounded-control bg-status-warning-surface px-3 py-2 text-small text-status-warning" role="status">
             <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{disabledReason}</span>
           </div>
         ) : error ? (
-          <div className="rounded-control bg-support-red/[0.08] px-3 py-2 text-small text-support-red" role="alert">
+          <div className="rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red" role="alert">
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <span>{error}</span>

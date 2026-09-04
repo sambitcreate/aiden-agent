@@ -206,7 +206,7 @@ function MessageAttachmentsContent({
                   data-attachment-preview-id={attachment.id}
                   aria-label={`Open ${attachment.name} preview`}
                   className={cn(
-                    "group/image relative block max-w-full overflow-hidden rounded-xl border border-separator bg-control text-left outline-none transition-colors hover:border-tertiary focus-visible:ring-2 focus-visible:ring-accent/60 motion-reduce:transition-none",
+                    "group/image relative block max-w-full overflow-hidden rounded-xl border border-separator bg-control text-left outline-none transition-colors hover:border-tertiary motion-reduce:transition-none",
                     role === "assistant" && "w-full",
                   )}
                   onClick={(event) => {

@@ -311,7 +311,7 @@ function ModelHoverDetails({
 
       <div className="mt-2 border-t border-separator pt-2">
         <div
-          className="truncate font-mono text-[10px] leading-4 text-quaternary"
+          className="truncate font-mono text-mini leading-4 text-quaternary"
           title={model.model}
         >
           {model.model}
@@ -321,7 +321,7 @@ function ModelHoverDetails({
             href={attributionUrl}
             target="_blank"
             rel="noreferrer"
-            className="pointer-events-auto mt-1 inline-block text-[10px] leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
+            className="pointer-events-auto mt-1 inline-block text-mini leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
           >
             {info?.benchmark
               ? `${info.benchmark.sourceLabel} · ${info.benchmark.license}`
@@ -710,7 +710,7 @@ export function ModelPicker({
         {showExternalDetails && (view === "list" || hasPadModels) ? (
           <ModelHoverDetails model={activePosition} metadataLoading={metadataLoading} />
         ) : activeAttribution ? (
-          <div className="border-t border-separator px-3 py-1.5 text-[10px] leading-4">
+          <div className="border-t border-separator px-3 py-1.5 text-mini leading-4">
             <a
               href={activeAttribution.url}
               target="_blank"

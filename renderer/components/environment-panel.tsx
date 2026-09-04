@@ -1278,7 +1278,7 @@ function EnvironmentPanelSurface({
                   panel.setTab(nextTab);
                 }}
                 className={cn(
-                  "flex h-7 items-center gap-1.5 rounded-[9px] px-2 text-small-strong outline-none transition-[background-color,box-shadow,color] duration-150 ease-out focus-visible:outline-none",
+                  "flex h-7 items-center gap-1.5 rounded-menu px-2 text-small-strong outline-none transition-[background-color,box-shadow,color] duration-150 ease-out focus-visible:outline-none",
                   selected
                     ? "bg-popover text-primary shadow-control focus-visible:bg-popover"
                     : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection",
@@ -1441,7 +1441,7 @@ function QuickViewCard({
       onFocusCapture={() => panel.activateSurface("quick-view")}
       onPointerDownCapture={() => panel.activateSurface("quick-view")}
       className={cn(
-        "quick-view-card absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col overflow-hidden rounded-[24px] border border-separator bg-popover text-primary shadow-dialog transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+        "quick-view-card absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col overflow-hidden rounded-sheet border border-separator bg-popover text-primary shadow-dialog transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
         (!open || !presented) && "translate-x-[calc(100%+0.75rem)] opacity-0",
       )}
       style={{

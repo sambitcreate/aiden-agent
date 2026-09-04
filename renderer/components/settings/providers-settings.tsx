@@ -25,7 +25,7 @@ import {
   Text,
   toast,
 } from "../ui";
-import { ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Loader2, ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ProviderIcon } from "../provider-icon";
 import { ProviderEditor } from "./provider-editor";
 import { ProviderEditorFocusTarget } from "./provider-editor-focus";
@@ -53,19 +53,19 @@ import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
-    return p.hasKey ? <Badge color="green">Ready</Badge> : null;
+    return p.hasKey ? <Badge color="green" icon={<Check />}>Ready</Badge> : null;
   }
   if (!p.needsKey) return <Badge color="blue">No auth</Badge>;
-  if (p.hasKey) return <Badge color="green">Key set</Badge>;
+  if (p.hasKey) return <Badge color="green" icon={<Check />}>Key set</Badge>;
   return <Badge color="secondary">No key</Badge>;
 }
 
 function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.ReactNode {
   switch (status.state) {
     case "ready":
-      return <Badge color="green">Ready</Badge>;
+      return <Badge color="green" icon={<Check />}>Ready</Badge>;
     case "model_preparing":
-      return <Badge color="blue">Preparing</Badge>;
+      return <Badge color="blue" icon={<Loader2 className="animate-spin motion-reduce:animate-none" />}>Preparing</Badge>;
     case "apple_intelligence_disabled":
       return <Badge color="secondary">Apple Intelligence off</Badge>;
     case "device_not_eligible":

@@ -258,3 +258,18 @@ owns; reopen the terminal before judging the final live state.
 - 2026-09-04: A mounted live-region test with only floating/pinned panels missed Quick View covering an open tools panel. Exercise inert/aria-hidden containment and persistent DOM identity in real Electron, plus message updates while the sibling panel is hidden.
 
 - 2026-09-04: The diagnostics forged-record fixture aged past journal retention, so export pruned it before the rejection assertion. Use current timestamps for validation fixtures; keep fixed clocks for explicit retention tests.
+
+## Design audit evidence (2026-09-04)
+
+- The original standalone report copied palette values and hand-entered ratios, so runtime contrast fixes did not update its matrix. Generate measurements from the current appearance resolver and label compositing assumptions explicitly.
+- The original report verification scripts logged failed checks without setting a failing process exit code. A successful command exit alone did not establish that their assertions passed; use enforceable assertions rather than console-only checks.
+- Source-contract tests establish selected implementation rules, not rendered accessibility or full workflow coverage. Keep measured contrast, Electron interaction checks, and manual acceptance distinct.
+- Archive untracked audit documents before a substantial rewrite: Git cannot restore their earlier contents. This run replaced the old `docs/DESIGN.md` with a scoped current reference; a complete original was not recoverable, so no purported historical archive was created.
+
+- 2026-09-04: Full verification exposed a diagnostics fixture timestamp fixed to August 27; after journal retention elapsed, export correctly pruned it before the rejection assertion. Forged-record fixtures now use the current timestamp so the tests exercise validation instead of aging out.
+
+- 2026-09-04: Tailwind 4 emits individual `scale` for scale utilities; transitioning/resetting only `transform` does not cover press feedback. Transition and reset the emitted property explicitly, including both reduced-motion sources.
+
+- 2026-09-04: Electron CI intermittently retained the scheduled-task query after Playwright selectText + Backspace, then passed on retry. Reset this exploratory filter with fill("") while retaining input-value and result assertions; keyboard focus/navigation regressions remain separate. Completed-job REST logs were available before gh run view exposed whole-run logs.
+
+- 2026-09-04: Substring selector edits can match the tail of a compound focus selector and strand base geometry in focus-only styles. Anchor standalone-selector assertions and measure resting preview boxes in Electron; computed colors alone do not prove that a preview renders.

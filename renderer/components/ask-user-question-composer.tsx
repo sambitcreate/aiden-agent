@@ -122,7 +122,7 @@ export function AskUserQuestionComposer({
   return (
     <div className="aiden-dock-inset chat-content-column">
       <section
-        className="ask-user-question-shell min-h-76 overflow-hidden rounded-[24px] bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
+        className="ask-user-question-shell min-h-76 overflow-hidden rounded-sheet bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}
         aria-busy={submitting}
         onKeyDown={handleCardKeyDown}
@@ -217,7 +217,7 @@ export function AskUserQuestionComposer({
         <div className="mt-3 flex min-h-12 items-end gap-3">
           <div className="min-w-0 flex-1">
             {customOpen ? (
-              <div className="flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">
+              <div className="text-entry-shell flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">
                 <Pencil className="mb-2 size-4 shrink-0 text-secondary" />
                 <textarea
                   ref={customRef}

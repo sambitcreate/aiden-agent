@@ -1912,7 +1912,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   className="rounded-card bg-popover p-3 shadow-popover"
                 >
                   <div className="flex items-start gap-2.5">
-                    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-support-warning/10 text-support-warning">
+                    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
                       <ShieldQuestion className="size-4" />
                     </span>
                     <div className="min-w-0 flex-1">

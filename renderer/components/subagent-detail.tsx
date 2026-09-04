@@ -234,7 +234,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 </h2>
                 <Text as="p" variant="small" color="secondary" className="mt-0.5">
                   {run.role} · {presentation?.label ?? state} ·{" "}
-                  {formatSubagentElapsed(run.startedAt, endedAt)}
+                  <span className="tabular-nums">{formatSubagentElapsed(run.startedAt, endedAt)}</span>
                 </Text>
                 <Text
                   as="p"
@@ -462,7 +462,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
             ) : null}
 
             {run.warnings.length > 0 ? (
-              <Callout role="note" className="border border-support-warning/25">
+              <Callout role="note" className="bg-status-warning-surface">
                 <Text variant="small-strong" className="text-support-warning">
                   {run.warnings.length === 1 ? "Warning" : "Warnings"}
                 </Text>
