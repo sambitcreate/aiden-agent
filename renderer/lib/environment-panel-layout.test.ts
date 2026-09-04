@@ -9,6 +9,8 @@ import {
   PANEL_EDGE_GUTTER,
   clampEnvironmentPanelWidth,
   resolveEnvironmentPanelLayout,
+  resolveEnvironmentPanelResizeBounds,
+  resolveQuickViewLayout,
 } from "./environment-panel-layout.js";
 
 const COMPACT_TABS_BREAKPOINT = 520;
@@ -29,8 +31,10 @@ test("clamps panel width into the saved range and container gutter", () => {
 test("resolves the exact narrow overlay matrix", () => {
   const cases = [
     { containerWidth: 320, expectedWidth: 276 },
+    { containerWidth: 390, expectedWidth: 346 },
     { containerWidth: 400, expectedWidth: 356 },
     { containerWidth: 500, expectedWidth: 456 },
+    { containerWidth: 520, expectedWidth: 476 },
   ];
 
   for (const { containerWidth, expectedWidth } of cases) {
@@ -103,6 +107,10 @@ test("overlays only when even the minimum panel cannot leave a usable chat colum
     width: MIN_PANEL_WIDTH,
     inline: false,
   });
+  assert.deepEqual(resolveEnvironmentPanelLayout(DEFAULT_PANEL_WIDTH, 1039), {
+    width: DEFAULT_PANEL_WIDTH,
+    inline: false,
+  });
   assert.deepEqual(resolveEnvironmentPanelLayout(MIN_PANEL_WIDTH, INLINE_MIN_CONTAINER_WIDTH), {
     width: MIN_PANEL_WIDTH,
     inline: true,
@@ -114,4 +122,36 @@ test("shrinks exactly to the minimum panel at the inline threshold", () => {
     width: MIN_PANEL_WIDTH,
     inline: true,
   });
+});
+
+test("places Quick View beside Environment when the measured workbench fits both", () => {
+  assert.deepEqual(resolveQuickViewLayout(1200, true, 560, true), {
+    width: 380,
+    right: 572,
+    alongsideTools: true,
+  });
+  assert.deepEqual(resolveQuickViewLayout(1040, true, 480, true), {
+    width: 380,
+    right: 492,
+    alongsideTools: true,
+  });
+});
+
+test("preserves detached Quick View geometry for automatic narrow stacking", () => {
+  assert.deepEqual(resolveQuickViewLayout(700, true, 560, false), {
+    width: 380,
+    right: 12,
+    alongsideTools: false,
+  });
+  assert.deepEqual(resolveQuickViewLayout(390, true, 346, false), {
+    width: 366,
+    right: 12,
+    alongsideTools: false,
+  });
+});
+
+test("reports only achievable keyboard resize bounds", () => {
+  assert.deepEqual(resolveEnvironmentPanelResizeBounds(1040, true), { min: 480, max: 480 });
+  assert.deepEqual(resolveEnvironmentPanelResizeBounds(1200, true), { min: 480, max: 640 });
+  assert.deepEqual(resolveEnvironmentPanelResizeBounds(700, false), { min: 480, max: 656 });
 });

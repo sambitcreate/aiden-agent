@@ -60,7 +60,11 @@ import {
 } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
-import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
+import {
+  EnvironmentPanelToggle,
+  QuickViewToggle,
+  useEnvironmentPanel,
+} from "../components/environment-panel";
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -369,8 +373,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => {
     if (!chat.data || effectiveWorkspace) return;
     if (terminal.open) terminal.toggle();
-    environmentPanel.close();
-  }, [chat.data, effectiveWorkspace, environmentPanel.close, terminal.open, terminal.toggle]);
+    environmentPanel.closeAll();
+  }, [chat.data, effectiveWorkspace, environmentPanel.closeAll, terminal.open, terminal.toggle]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
@@ -1851,6 +1855,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             folderPath={effectiveWorkspace?.folderPath}
           />
           <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+          <QuickViewToggle disabled={!effectiveWorkspace} />
           <Button
             iconOnly
             variant="toolbar"

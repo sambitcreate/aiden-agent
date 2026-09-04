@@ -100,23 +100,24 @@ flowchart TD
 | Toasts | Brief, top-offset status feedback; success and failure copy is action-specific. | Use for completed background actions and recoverable failures, never as the only record of an approval or destructive action. |
 | Loading | Shimmer/skeleton treatments are used for content and generated assets; button actions still use compact progress indicators. | Use skeletons for delayed lists and model catalogs. Avoid shimmer on ordinary static labels. |
 
-## Environment sidebar state model
+## Quick View and Environment tools state model
 
-The shipped ChatGPT/Codex renderer establishes two related but distinct surfaces beside a stable conversation: a compact floating `Environment` summary and larger work surfaces for Review or Files. The summary's `Changes` row opens Review, its execution row distinguishes local/cloud targets, its branch row opens branch/worktree controls, and its later rows lead into commit/push and GitHub comparison workflows. Aiden keeps that separation: Environment is a detached top-right status card, while Review and Files share one persistent, resizable work surface. The tables below separate directly evidenced behavior from the additional production states Aiden needs under loading, empty, error, narrow-window, and concurrent-file-change conditions.
+The shipped ChatGPT/Codex renderer establishes two related but distinct surfaces beside a stable conversation: a compact floating summary and larger work surfaces for Review or Files. Aiden names the compact status card **Quick View** and keeps **Environment** for the persistent, resizable Review, Subagents, and Files work surface. Quick View's `Changes` row opens Review, its execution row distinguishes local/cloud targets, its branch row opens branch/worktree controls, and its later rows lead into commit/push and comparison workflows. The tables below separate directly evidenced behavior from the additional production states Aiden needs under loading, empty, error, narrow-window, and concurrent-file-change conditions.
 
 ### Shell and layout states
 
 | State | User sees | Interaction contract |
 |---|---|---|
-| Closed | Conversation uses the full workbench width; the toolbar toggle remains available. | Both surfaces are hidden from focus and accessibility navigation. `⌘⇧E` or the toolbar button always opens the Environment summary first. |
+| Closed | Conversation uses the full workbench width; separate Environment and Quick View toolbar controls remain available. | Each surface has an independent open bit. `⌘⇧E` and `/environment` toggle the last full Environment destination; `/quick-view` toggles Quick View without changing Environment. |
 | Summary opening / closing | The compact card fades from 4px above and `.98` scale over `180ms`. | It does not resize, dim, or make the conversation inert. Motion is removed under Reduce Motion. |
-| Environment summary open | A rounded top-right card shows working changes, local execution, the active branch, commit/push, and compare. | `Changes` deep-links into Review; the header action can open Files or comparison. Local is static until Aiden has a real second execution target; unsupported Git actions do not appear as dead rows. |
+| Quick View open | A rounded top-right card shows working changes, local execution, the active branch, commit/push, compare, and current-chat subagents. | The dedicated two-row list control toggles this card. The adjacent panel control opens or closes Environment independently. `Changes` deep-links into Review without clearing Quick View. |
+| Quick View + Environment | Both surfaces remain visibly open side by side when the measured workbench has room. | Invoking either surface brings it forward without closing the other. Opening the app sidebar recomputes placement from the remaining workbench width. On smaller layouts, the foreground surface is shown while the background surface is automatically hidden and inert; its open state and mounted tool state are preserved. |
 | Expanded work surface opening / closing | The right edge expands or retracts over the relaxed `300ms` panel timing. | Width, opacity, and geometry move together; the transition is flattened under Reduce Motion. |
-| Review open | Review is selected in the expanded surface and the conversation stays mounted. | Tab, width, and open state persist. Focus enters the selected tab; the Summary control returns to the detached card without losing work. |
+| Review open | Review is selected in the expanded surface and the conversation stays mounted. | Tab, width, and open state persist. Focus enters the selected tab; Quick View remains independent and can stay visible beside it. |
 | Files open | Files is selected; its tree and editor occupy the same shell used by Review. | Switching tabs does not discard an editor draft. Review can deep-link a changed file into Files. |
 | Resizing | A one-pixel boundary gains hover/focus emphasis while the user drags or uses arrow keys. | Easing is disabled during pointer drag. Arrow keys resize by 16px, Shift+Arrow by 40px, Home/End reach bounds. |
 | Inline wide-window | Conversation and the expanded Review/Files surface are sibling columns. | Used only when the content region can preserve a useful conversation measure beside the saved panel width; the summary card always floats. |
-| Overlay narrow-window | Expanded Review/Files becomes a right-side sheet over a dimmed, inert conversation. | Its width is bounded to the window; Escape, backdrop click, or Close dismisses it and restores focus. The compact summary remains non-modal at every width. |
+| Floating narrow-window | Expanded Review/Subagents/Files becomes a rounded right-side surface inset 12px from the workbench edge. | It has no backdrop, blur, dialog role, focus trap, or app-wide inert state. Uncovered chat, composer, toolbar, navigation, command palette, and assistant dock remain interactive and do not dismiss it. Only Close, Escape, or `⌘⇧E` dismisses; focus already moved into chat is preserved. |
 | No workspace | A quiet explanation fills whichever Environment surface is open. | The user is directed to choose a local workspace; no dead tree, diff, or editor controls appear. |
 | No Access | The active Environment surface explains that local file access is disabled. | It does not silently widen permission. The composer remains the place to change workspace access. |
 | Loading | Shape-matched skeleton rows appear in the active view. | Static labels do not shimmer, inactive tabs do not keep polling, and controls expose disabled/loading states. |
@@ -209,7 +210,7 @@ Core easing curves:
 
 | Motion | Shipped treatment | Aiden adaptation |
 |---|---|---|
-| Panel open/close | `flex-grow` and `max-width` over `300ms`; transitions are disabled during drag. | Keep Aiden's `300ms` motion for expanded Review/Files only; the Environment summary uses the compact-popover motion and never changes conversation width. |
+| Panel open/close | `flex-grow` and `max-width` over `300ms`; transitions are disabled during drag. | Keep Aiden's `300ms` motion for expanded Review/Subagents/Files only; Quick View uses the compact-popover motion and never changes conversation width. |
 | Compact popover | Fade plus `translateY(-4px)` and `scale(.98)` to rest over `150ms`. | Use for menus and small contextual surfaces. It is quieter than a large zoom. |
 | Model dropdown | Fade and `scale(.98 → 1)` over `320ms` with a short delay. | Reserve this slightly slower entrance for the model picker only; normal menus should stay near `150–200ms`. |
 | Centered content swap | Enter over `260ms` from 8px lower and `.98` scale; exit over `180ms` with a smaller movement. | A good asymmetric pattern for major mode/content changes, but unnecessary for routine settings navigation. |

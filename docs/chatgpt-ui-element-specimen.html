@@ -240,10 +240,10 @@
 
       .environment-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
       .environment-demo { position: relative; display: grid; grid-template-columns: minmax(250px, .72fr) minmax(430px, 1.28fr); height: 560px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); transition: grid-template-columns var(--duration-relaxed) ease-out; }
-      .environment-demo[data-mode="overview"], .environment-demo[data-open="false"] { grid-template-columns: minmax(0, 1fr) 0; }
-      .environment-demo[data-mode="overview"] .environment-thread, .environment-demo[data-open="false"] .environment-thread { border-right-color: transparent; }
-      .environment-demo[data-mode="overview"] .environment-panel-specimen, .environment-demo[data-open="false"] .environment-panel-specimen { visibility: hidden; opacity: 0; pointer-events: none; }
-      .environment-demo[data-open="false"] .environment-summary-card { visibility: hidden; opacity: 0; pointer-events: none; }
+      .environment-demo[data-tools-open="false"] { grid-template-columns: minmax(0, 1fr) 0; }
+      .environment-demo[data-tools-open="false"] .environment-thread { border-right-color: transparent; }
+      .environment-demo[data-tools-open="false"] .environment-panel-specimen { visibility: hidden; opacity: 0; pointer-events: none; }
+      .environment-demo[data-quick-open="false"] .environment-summary-card { visibility: hidden; opacity: 0; pointer-events: none; }
       .environment-thread { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--line); background: var(--surface); }
       .environment-thread-head, .environment-panel-head { display: flex; height: 44px; flex: 0 0 auto; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); }
       .environment-thread-head strong, .environment-panel-head strong { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
@@ -252,7 +252,7 @@
       .environment-thread-copy p { margin: 0; }
       .environment-panel-specimen { display: flex; min-width: 0; flex-direction: column; background: var(--surface-raised); opacity: 1; transition: opacity var(--duration-basic) ease-out; }
       .environment-summary-card { position: absolute; z-index: 3; top: 56px; right: 12px; display: flex; width: min(360px, calc(100% - 24px)); max-height: calc(100% - 68px); flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 22px; background: var(--surface-raised); box-shadow: var(--shadow-dialog); animation: popover-in var(--duration-basic) var(--ease-enter) both; }
-      .environment-demo:not([data-mode="overview"]) .environment-summary-card { visibility: hidden; opacity: 0; pointer-events: none; }
+      .environment-demo[data-tools-open="true"][data-quick-open="true"] .environment-summary-card { right: calc(64% + 12px); width: min(360px, calc(36% - 24px)); }
       .environment-summary-head { display: flex; height: 48px; flex: 0 0 auto; align-items: center; gap: 8px; padding: 0 12px 0 16px; }
       .environment-summary-head strong { min-width: 0; flex: 1; color: var(--text-tertiary); font-size: 13px; font-weight: 580; }
       .environment-tabs { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 10px; background: var(--surface-subtle); }
@@ -398,8 +398,12 @@
         .state-grid { grid-template-columns: 78px repeat(5, 104px); overflow-x: auto; }
         .workbench { grid-template-columns: 1fr; }
         .sidebar { display: none; }
-        .environment-demo { grid-template-columns: 1fr; }
-        .environment-thread { display: none; }
+        .environment-demo { display: block; }
+        .environment-thread { height: 100%; border-right: 0; }
+        .environment-panel-specimen { position: absolute; z-index: 2; inset: 12px 12px 12px auto; width: min(560px, calc(100% - 24px)); overflow: hidden; border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow-dialog); }
+        .environment-demo[data-tools-open="true"][data-quick-open="true"] .environment-summary-card { right: 12px; width: min(360px, calc(100% - 24px)); }
+        .environment-demo[data-front="tools"] .environment-summary-card,
+        .environment-demo[data-front="quick-view"] .environment-panel-specimen { visibility: hidden; opacity: 0; pointer-events: none; }
         .section, .intro { padding-right: 20px; padding-left: 20px; }
         .canvas { width: min(100% - 16px, 1120px); margin-top: 12px; }
         .brand span { display: none; }
@@ -554,10 +558,11 @@
       <section class="section">
         <div class="section-head">
           <h2>Environment surfaces</h2>
-          <p>A detached Environment card floats over the conversation as a compact status launcher. Review and Files expand into the persistent, resizable work surface only when the task needs a full diff or editor.</p>
+          <p>Quick View and Environment have independent open states. They remain side by side when space permits; narrow layouts automatically present the most recently invoked surface while preserving the other state.</p>
         </div>
         <div class="environment-controls" aria-label="Environment panel state tour">
-          <button class="button small" id="environmentToggleButton" type="button" aria-pressed="true">Close environment</button>
+          <button class="button small" id="environmentToggleButton" type="button" aria-pressed="false">Open Environment</button>
+          <button class="button small" id="quickViewToggleButton" type="button" aria-pressed="true">Close Quick View</button>
           <button class="button small environment-state-button" type="button" data-environment-mode="overview" data-environment-state="summary">Overview · changes</button>
           <button class="button ghost small environment-state-button" type="button" data-environment-mode="overview" data-environment-state="summary-clean">Overview · clean</button>
           <button class="button ghost small environment-state-button" type="button" data-environment-mode="overview" data-environment-state="summary-loading">Overview · loading</button>
@@ -573,13 +578,13 @@
           <button class="button ghost small environment-state-button" type="button" data-environment-mode="files" data-environment-state="dirty">Dirty</button>
           <button class="button ghost small environment-state-button" type="button" data-environment-mode="files" data-environment-state="conflict">Conflict</button>
         </div>
-        <div class="environment-demo" id="environmentDemo" data-mode="overview" data-state="summary" data-open="true">
+        <div class="environment-demo" id="environmentDemo" data-mode="overview" data-state="summary" data-quick-open="true" data-tools-open="false" data-front="quick-view">
           <div class="environment-thread">
-            <div class="environment-thread-head"><strong>Environment sidebar states</strong><button class="button ghost icon" type="button" aria-label="More conversation actions">⋯</button></div>
+            <div class="environment-thread-head"><strong>Quick View and Environment states</strong><button class="button ghost icon" type="button" aria-label="More conversation actions">⋯</button></div>
             <div class="environment-thread-body">
               <div class="environment-thread-copy">
-                <p><strong>Conversation stays mounted.</strong> Review and Files appear as working context instead of replacing the thread.</p>
-                <p>The wide diff and editor content escape the conversation measure, while decisions and explanations remain in the chat.</p>
+                <p><strong>Conversation stays mounted and interactive.</strong> Review, Subagents, and Files appear as working context instead of replacing the thread.</p>
+                <p>At narrow widths Environment floats without a backdrop or blur. This composer remains focusable and does not dismiss it.</p>
               </div>
               <div class="composer">
                 <textarea aria-label="Specimen message" placeholder="Ask Aiden about these changes"></textarea>
@@ -587,10 +592,10 @@
               </div>
             </div>
           </div>
-          <aside class="environment-summary-card" id="environmentSummaryCard" aria-label="Environment summary specimen">
+          <aside class="environment-summary-card" id="environmentSummaryCard" aria-label="Quick View specimen">
             <div class="environment-summary-head">
-              <strong>Environment</strong>
-              <button class="button ghost icon" id="environmentSummaryActions" type="button" aria-label="Browse environment files" title="Browse files">+</button>
+              <strong>Quick View</strong>
+              <button class="button ghost icon" id="environmentSummaryActions" type="button" aria-label="Quick View actions" title="Quick View actions">+</button>
             </div>
             <div class="environment-overview" id="environmentOverviewView" role="region" aria-label="Environment overview">
               <div class="environment-overview-inner">
@@ -611,7 +616,7 @@
           <aside class="environment-panel-specimen" id="environmentPanelSpecimen" aria-label="Environment sidebar specimen">
             <div class="environment-panel-head">
               <strong>Environment</strong>
-              <button class="button ghost icon" id="environmentSummaryButton" type="button" aria-label="Show environment summary" title="Show summary">☷</button>
+              <button class="button ghost icon" id="environmentSummaryButton" type="button" aria-label="Show Quick View" title="Show Quick View">☷</button>
               <div class="environment-tabs" role="tablist" aria-label="Environment views">
                 <button class="environment-tab" id="environmentReviewTab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="environmentReviewView">↔ Review</button>
                 <button class="environment-tab" id="environmentFilesTab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="environmentFilesView">▤ Files</button>
@@ -683,12 +688,14 @@ import { ReviewPanel } from "./review-panel";
 import { FilesPanel } from "./files-panel";
 
 export function EnvironmentSurfaces() {
-  const [tab, setTab] = React.useState("overview");
+  const [toolsOpen, setToolsOpen] = React.useState(false);
+  const [quickViewOpen, setQuickViewOpen] = React.useState(false);
+  const [tab, setTab] = React.useState("review");
 
   return (
     &lt;&gt;
-      {tab === "overview" ? &lt;EnvironmentSummaryCard /&gt; : null}
-      &lt;WorkspacePanel hidden={tab === "overview"}&gt;
+      {quickViewOpen ? &lt;QuickViewCard /&gt; : null}
+      &lt;WorkspacePanel hidden={!toolsOpen}&gt;
         {tab === "review" ? &lt;ReviewPanel /&gt; : &lt;FilesPanel /&gt;}
       &lt;/WorkspacePanel&gt;
     &lt;/&gt;
@@ -714,7 +721,7 @@ export function EnvironmentSurfaces() {
             <tr><td>Control rest</td><td><div class="swatch-shadow shadow-control"></div></td><td><code>0 1px 2px -1px / 8%</code></td><td>Neutral and glass buttons; never enough to look detached.</td></tr>
             <tr><td>Control hover</td><td><div class="swatch-shadow shadow-hover"></div></td><td><code>0 2px 4px -1px / 10%</code></td><td>Paired with a small background increase over 150ms.</td></tr>
             <tr><td>Popover</td><td><div class="swatch-shadow shadow-elevated"></div></td><td><code>0.5px edge + 3px/7.5px + 20px ambient</code></td><td>Menus and approval cards. Low opacity matters more than large blur.</td></tr>
-            <tr><td>Dialog</td><td><div class="swatch-shadow shadow-dialog"></div></td><td><code>0.5px edge + 16px/32px -8px / 30%</code></td><td>Reserved for modal interruption; stronger in dark mode.</td></tr>
+            <tr><td>Dialog / floating tools</td><td><div class="swatch-shadow shadow-dialog"></div></td><td><code>0.5px edge + 16px/32px -8px / 30%</code></td><td>Separates floating work surfaces and modal interruptions; stronger in dark mode.</td></tr>
           </tbody>
         </table>
       </section>
@@ -819,6 +826,7 @@ export function EnvironmentSurfaces() {
       const environmentSummaryActions = document.querySelector("#environmentSummaryActions");
       const environmentSummaryButton = document.querySelector("#environmentSummaryButton");
       const environmentToggleButton = document.querySelector("#environmentToggleButton");
+      const quickViewToggleButton = document.querySelector("#quickViewToggleButton");
       const environmentCloseButton = document.querySelector("#environmentCloseButton");
       const environmentReviewTab = document.querySelector("#environmentReviewTab");
       const environmentFilesTab = document.querySelector("#environmentFilesTab");
@@ -862,7 +870,7 @@ export function EnvironmentSurfaces() {
         { button: environmentChangesMode, state: "changes" },
         { button: environmentCompareMode, state: "compare" },
       ];
-      let environmentReturnFocus = environmentToggleButton;
+      let environmentReturnFocus = quickViewToggleButton;
 
       themeButton.addEventListener("click", () => {
         const dark = root.dataset.theme !== "dark";
@@ -902,35 +910,42 @@ export function EnvironmentSurfaces() {
       document.querySelector("#toastButton").addEventListener("click", () => showToast("Saved", "Interaction tokens are documented."));
 
       const syncEnvironmentSurfaces = () => {
-        const open = environmentDemo.dataset.open !== "false";
-        const summaryOpen = open && environmentDemo.dataset.mode === "overview";
-        const panelOpen = open && !summaryOpen;
+        const summaryOpen = environmentDemo.dataset.quickOpen === "true";
+        const panelOpen = environmentDemo.dataset.toolsOpen === "true";
         environmentSummaryCard.setAttribute("aria-hidden", String(!summaryOpen));
         environmentSummaryCard.inert = !summaryOpen;
         environmentPanelSpecimen.setAttribute("aria-hidden", String(!panelOpen));
         environmentPanelSpecimen.inert = !panelOpen;
+        environmentToggleButton.setAttribute("aria-pressed", String(panelOpen));
+        environmentToggleButton.textContent = panelOpen ? "Close Environment" : "Open Environment";
+        quickViewToggleButton.setAttribute("aria-pressed", String(summaryOpen));
+        quickViewToggleButton.textContent = summaryOpen ? "Close Quick View" : "Open Quick View";
       };
 
-      const setEnvironmentOpen = (open, moveFocus = true) => {
-        const wasOpen = environmentDemo.dataset.open === "true";
-        if (open && !wasOpen && document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+      const setEnvironmentOpen = (surface, open, moveFocus = true) => {
+        const activeElement = document.activeElement;
+        const target = surface === "quick-view" ? environmentSummaryCard : environmentPanelSpecimen;
+        const focusInsideSurface = activeElement instanceof HTMLElement && target.contains(activeElement);
+        if (open && document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
           environmentReturnFocus = document.activeElement;
         }
-        environmentDemo.dataset.open = String(open);
+        environmentDemo.dataset[surface === "quick-view" ? "quickOpen" : "toolsOpen"] = String(open);
+        if (open) environmentDemo.dataset.front = surface;
+        else if (environmentDemo.dataset.front === surface) {
+          environmentDemo.dataset.front = environmentDemo.dataset.toolsOpen === "true" ? "tools" : environmentDemo.dataset.quickOpen === "true" ? "quick-view" : "";
+        }
         syncEnvironmentSurfaces();
-        environmentToggleButton.setAttribute("aria-pressed", String(open));
-        environmentToggleButton.textContent = open ? "Close environment" : "Open environment";
         if (moveFocus) {
           requestAnimationFrame(() => {
-            if (open && environmentDemo.dataset.mode === "overview") environmentSummaryActions.focus();
+            if (open && surface === "quick-view") environmentSummaryActions.focus();
             else if (open) environmentViews.find(({ tab }) => tab.getAttribute("aria-selected") === "true")?.tab.focus();
-            else (environmentReturnFocus.isConnected ? environmentReturnFocus : environmentToggleButton).focus();
+            else if (focusInsideSurface) (environmentReturnFocus.isConnected ? environmentReturnFocus : surface === "quick-view" ? quickViewToggleButton : environmentToggleButton).focus();
           });
         }
       };
 
       const setEnvironmentState = (mode, state) => {
-        setEnvironmentOpen(true, false);
+        setEnvironmentOpen(mode === "overview" ? "quick-view" : "tools", true, false);
         environmentDemo.dataset.mode = mode;
         environmentDemo.dataset.state = state;
         environmentViews.forEach(({ mode: viewMode, tab, view }) => {
@@ -955,12 +970,16 @@ export function EnvironmentSurfaces() {
       };
 
       environmentToggleButton.addEventListener("click", () => {
-        if (environmentDemo.dataset.open !== "false") setEnvironmentOpen(false);
-        else setEnvironmentState("overview", "summary");
+        if (environmentDemo.dataset.toolsOpen === "true") setEnvironmentOpen("tools", false);
+        else setEnvironmentState("review", "changes");
       });
-      environmentCloseButton.addEventListener("click", () => setEnvironmentOpen(false));
+      quickViewToggleButton.addEventListener("click", () => {
+        if (environmentDemo.dataset.quickOpen === "true") setEnvironmentOpen("quick-view", false);
+        else setEnvironmentOpen("quick-view", true);
+      });
+      environmentCloseButton.addEventListener("click", () => setEnvironmentOpen("tools", false));
       environmentSummaryActions.addEventListener("click", () => setEnvironmentState("files", "editor"));
-      environmentSummaryButton.addEventListener("click", () => setEnvironmentState("overview", "summary"));
+      environmentSummaryButton.addEventListener("click", () => setEnvironmentOpen("quick-view", true));
       environmentReviewTab.addEventListener("click", () => setEnvironmentState("review", "changes"));
       environmentFilesTab.addEventListener("click", () => setEnvironmentState("files", "editor"));
       environmentOverviewChanges.addEventListener("click", () => setEnvironmentState("review", "changes"));
@@ -1189,7 +1208,9 @@ export function EnvironmentSurfaces() {
             setPopover(false);
             return;
           }
-          if (environmentDemo.dataset.open !== "false") setEnvironmentOpen(false);
+          const front = environmentDemo.dataset.front;
+          if (front === "tools") setEnvironmentOpen("tools", false);
+          else if (front === "quick-view") setEnvironmentOpen("quick-view", false);
         }
       });
 

@@ -136,7 +136,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
     <div
       role="group"
       aria-label="Open workspace in editor"
-      className="glass-surface flex h-9 shrink-0 overflow-hidden rounded-pill shadow-control transition-shadow duration-150 ease-out hover:shadow-control-hover"
+      className="open-in-editor-picker glass-surface flex h-9 shrink-0 overflow-hidden rounded-pill shadow-control transition-shadow duration-150 ease-out hover:shadow-control-hover"
     >
       <Button
         variant="transparent"

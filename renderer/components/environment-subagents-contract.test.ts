@@ -4,11 +4,11 @@ import test from "node:test";
 import { DISABLED_APP_CAPABILITIES, parseAppCapabilities } from "../lib/app-capabilities.js";
 import {
   availableEnvironmentPanelTabs,
-  focusEnvironmentCompactModalTransition,
   normalizeEnvironmentPanelTab,
+  reduceEnvironmentSurfaceState,
+  shouldRestoreEnvironmentFocus,
   storedEnvironmentPanelTab,
-  type EnvironmentFocusBoundary,
-  type EnvironmentFocusTarget,
+  type EnvironmentSurfaceMode,
 } from "../lib/environment-panel-state.js";
 import {
   compactSidebarAutoFocusIntent,
@@ -52,114 +52,78 @@ test("fresh renderer capabilities fail closed until main explicitly enables suba
   assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files"]);
 });
 
-test("a disabled renderer repairs a stored Subagents destination to Overview", () => {
+test("a disabled renderer presents a stored Subagents destination as Review without erasing it", () => {
   const values = new Map<string, string>([["tab", "subagents"]]);
   const storage = {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
   };
 
-  assert.equal(storedEnvironmentPanelTab(storage, "tab", false), "overview");
-  assert.equal(values.get("tab"), "overview");
-  assert.equal(normalizeEnvironmentPanelTab("subagents", false), "overview");
+  assert.equal(storedEnvironmentPanelTab(storage, "tab", false), "review");
+  assert.equal(values.get("tab"), "subagents");
+  assert.equal(normalizeEnvironmentPanelTab("subagents", false), "review");
   assert.equal(normalizeEnvironmentPanelTab("subagents", true), "subagents");
 });
 
-test("an already-open inline surface moves outside focus into its compact modal before paint", () => {
-  const inside = {} as Node;
-  const outside = {} as Node;
-  let surfaceFocusCount = 0;
-  let tabFocusCount = 0;
-  const surface: EnvironmentFocusBoundary = {
-    isConnected: true,
-    contains: (target) => target === inside,
-    focus: () => {
-      surfaceFocusCount += 1;
-    },
-  };
-  const activeTab: EnvironmentFocusTarget = {
-    isConnected: true,
-    focus: () => {
-      tabFocusCount += 1;
-    },
-  };
-  const inline = { fullOpen: true, compactModal: false };
-  const modal = { fullOpen: true, compactModal: true };
-
-  assert.equal(
-    focusEnvironmentCompactModalTransition(inline, modal, surface, outside, activeTab),
-    true,
-  );
-  assert.equal(tabFocusCount, 1);
-  assert.equal(surfaceFocusCount, 0);
-
-  assert.equal(
-    focusEnvironmentCompactModalTransition(inline, modal, surface, inside, activeTab),
-    false,
-    "focus already inside the surface must not be stolen",
-  );
-  assert.equal(
-    focusEnvironmentCompactModalTransition(
-      { fullOpen: false, compactModal: false },
-      modal,
-      surface,
-      outside,
-      activeTab,
-    ),
-    false,
-    "initial compact open keeps the existing initial-open focus path",
-  );
-  assert.equal(
-    focusEnvironmentCompactModalTransition(modal, modal, surface, outside, activeTab),
-    false,
-    "ordinary compact rerenders must not refocus the modal",
-  );
-
-  activeTab.isConnected = false;
-  assert.equal(
-    focusEnvironmentCompactModalTransition(inline, modal, surface, outside, activeTab),
-    true,
-  );
-  assert.equal(surfaceFocusCount, 1, "the mounted dialog is the safe fallback");
+test("Environment exposes explicit non-modal surface states", () => {
+  const modes: EnvironmentSurfaceMode[] = [
+    "closed",
+    "tools-pinned",
+    "tools-floating",
+  ];
+  assert.deepEqual(modes, ["closed", "tools-pinned", "tools-floating"]);
 });
 
-test("compact sidebar remount defers to Environment's exact multi-frame focus restoration", () => {
-  const sidebarOpen: CompactSidebarFocusState = {
-    compact: true,
-    expanded: true,
-    contentModalOpen: false,
-  };
-  const environmentOpen = { ...sidebarOpen, contentModalOpen: true };
-  const environmentClosed = { ...sidebarOpen };
-  const firstSidebarControl = { id: "new-agent" };
-  const exactReturnTarget = { id: "selected-chat" };
-  let activeElement = { id: "environment-close" };
-  let frames: Array<() => void> = [];
-  const requestFrame = (callback: () => void) => frames.push(callback);
-  const flushFrame = () => {
-    const current = frames;
-    frames = [];
-    current.forEach((callback) => callback());
-  };
+test("Environment restores its trigger only while focus remains in the closing surface", () => {
+  assert.equal(
+    shouldRestoreEnvironmentFocus({ closest: (selector) => selector }, "quick-view"),
+    true,
+  );
+  assert.equal(shouldRestoreEnvironmentFocus({ closest: () => null }, "tools"), false);
+  assert.equal(shouldRestoreEnvironmentFocus(null, "tools"), false);
+});
 
-  assert.equal(compactSidebarAutoFocusIntent(sidebarOpen, environmentOpen), null);
-  requestFrame(() => {
-    activeElement = exactReturnTarget;
+test("Quick View and Environment reduce as independent surfaces", () => {
+  const closed = {
+    quickViewOpen: false,
+    toolsOpen: false,
+    toolsTab: "review" as const,
+    frontSurface: null,
+  };
+  const quick = reduceEnvironmentSurfaceState(closed, { type: "toggle-quick-view" });
+  assert.deepEqual(quick, { ...closed, quickViewOpen: true, frontSurface: "quick-view" });
+
+  const both = reduceEnvironmentSurfaceState(quick, { type: "show-tools", tab: "files" });
+  assert.deepEqual(both, {
+    quickViewOpen: true,
+    toolsOpen: true,
+    toolsTab: "files",
+    frontSurface: "tools",
   });
-  flushFrame();
-  assert.equal(activeElement, exactReturnTarget);
 
-  const resumedIntent = compactSidebarAutoFocusIntent(environmentOpen, environmentClosed);
-  if (resumedIntent === "first-control") {
-    requestFrame(() => {
-      activeElement = firstSidebarControl;
-    });
-  }
-  flushFrame();
+  assert.deepEqual(reduceEnvironmentSurfaceState(both, { type: "close-tools" }), {
+    quickViewOpen: true,
+    toolsOpen: false,
+    toolsTab: "files",
+    frontSurface: "quick-view",
+  });
+  assert.deepEqual(reduceEnvironmentSurfaceState(both, { type: "close-quick-view" }), {
+    quickViewOpen: false,
+    toolsOpen: true,
+    toolsTab: "files",
+    frontSurface: "tools",
+  });
 
-  assert.equal(resumedIntent, "preserve-current");
-  assert.equal(activeElement, exactReturnTarget);
-  assert.equal(frames.length, 0, "the resumed trap must not leave a later focus frame queued");
+  const toolsThenQuick = reduceEnvironmentSurfaceState(
+    reduceEnvironmentSurfaceState(closed, { type: "toggle-tools", tab: "review" }),
+    { type: "toggle-quick-view" },
+  );
+  assert.deepEqual(toolsThenQuick, {
+    quickViewOpen: true,
+    toolsOpen: true,
+    toolsTab: "review",
+    frontSurface: "quick-view",
+  });
 });
 
 test("ordinary compact sidebar opens still auto-focus their first control", () => {
@@ -174,58 +138,63 @@ test("ordinary compact sidebar opens still auto-focus their first control", () =
   assert.equal(compactSidebarAutoFocusIntent(opened, opened), null);
 });
 
-test("compact Environment modality blocks every app-level interaction seam and cleans up", () => {
+test("floating Environment remains non-modal across every app-level interaction seam", () => {
   const environment = source("./environment-panel.tsx");
   const root = source("../main/root-view.tsx");
   const layout = source("../main/chat-layout.tsx");
-  const splitView = source("./ui.tsx");
   const assistant = source("./assistant/assistant-dock.tsx");
-  const commands = source("../lib/command-system.tsx");
 
-  assert.match(environment, /const overlayOpen = fullOpen && !inline/u);
-  assert.match(environment, /setCompactModalOpen\(overlayOpen\)/u);
-  assert.match(environment, /environmentCompactModalFocusableTargets\(surfaceRef\.current\)/u);
+  assert.match(environment, /data-surface-mode=\{inline \? "tools-pinned" : "tools-floating"\}/u);
   assert.match(
     environment,
-    /environmentCompactModalTabWrapTarget\([\s\S]*document\.activeElement,[\s\S]*event\.shiftKey/u,
+    /bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog/u,
   );
   assert.match(
     environment,
-    /return \(\) => \{\s*setCompactModalOpen\(false\);\s*\}/u,
-    "close, responsive-inline transitions, and route unmount must clear shared modal state",
+    /reportSurfaceLayout\(fullOpen \? \{ inline, width: renderedWidth \} : null\)/u,
   );
-  assert.doesNotMatch(environment, /\.closest\("main"\)/u);
-  assert.doesNotMatch(environment, /const snapshots = background\.map/u);
+  assert.match(
+    environment,
+    /const toggleTools = React\.useCallback/u,
+  );
+  assert.match(environment, /<div className="h-full min-h-0 min-w-0 flex-1">\{children\}<\/div>/u);
+  assert.doesNotMatch(environment, /bg-black|backdrop-blur|aria-modal|role=\{.*dialog/u);
+  assert.doesNotMatch(environment, /environmentCompactModal|setCompactModalOpen/u);
 
-  assert.match(root, /<CommandSystemProvider applicationModal=\{compactModalOpen\}>/u);
-  assert.match(
-    root,
-    /<AssistantDock interactionBlocked=\{environmentPanel\.compactModalOpen\} \/>/u,
-  );
-  assert.match(layout, /contentModalOpen=\{environmentPanel\.compactModalOpen\}/u);
-  assert.match(splitView, /inert=\{collapsed \|\| contentModalOpen \? true : undefined\}/u);
-  assert.match(splitView, /tabIndex=\{collapsed \|\| compact \|\| contentModalOpen \? -1 : 0\}/u);
-  assert.match(splitView, /useCommandHandler\("sidebar\.toggle", toggle, !contentModalOpen\)/u);
-  assert.match(
-    splitView,
-    /compactSidebarFocusIntentRef\.current = compactSidebarAutoFocusIntent\(\s*previousCompactSidebarFocusStateRef\.current,\s*next,\s*\)/u,
-  );
-  assert.match(
-    splitView,
-    /compactSidebarFocusIntentRef\.current === "first-control"\s*\?\s*requestAnimationFrame/u,
-  );
+  assert.match(root, /<CommandSystemProvider>/u);
+  assert.doesNotMatch(root, /applicationModal=|compactModalOpen/u);
+  assert.match(root, /<AssistantDock rightInset=\{environmentPanel\.dockRightInset\} \/>/u);
+  assert.doesNotMatch(layout, /contentModalOpen=/u);
 
-  assert.match(assistant, /if \(interactionBlocked\) return/u);
-  assert.match(
-    assistant,
-    /useCommandHandler\("assistant\.open", openPanel, !interactionBlocked\)/u,
-  );
-  assert.match(assistant, /inert=\{interactionBlocked \? true : undefined\}/u);
-  assert.match(assistant, /aria-hidden=\{interactionBlocked \? true : undefined\}/u);
-  assert.match(assistant, /visibility: interactionBlocked \? "hidden" : undefined/u);
+  assert.match(assistant, /useCommandHandler\("assistant\.open", openPanel\)/u);
+  assert.match(assistant, /Math\.max\(0, rightInset\)/u);
+  assert.doesNotMatch(assistant, /interactionBlocked|data-environment-modal-background/u);
+});
 
-  assert.match(commands, /commandExecutionAllowed\(commandId, \{\s*applicationModal/u);
-  assert.match(commands, /if \(applicationModal && paletteOpen\) setPaletteOpen\(false\)/u);
+test("Environment and Quick View have independent toolbar and command routes", () => {
+  const environment = source("./environment-panel.tsx");
+  const pane = source("../main/chat-pane.tsx");
+  const root = source("../main/root-view.tsx");
+
+  assert.match(environment, /export function EnvironmentPanelToggle/u);
+  assert.match(environment, /onClick=\{panel\.toggleTools\}/u);
+  assert.match(environment, /aria-controls="environment-panel"/u);
+  assert.match(environment, /title=\{`Toggle Environment/u);
+  assert.match(environment, /export function QuickViewToggle/u);
+  assert.match(environment, /onClick=\{panel\.toggleQuickView\}/u);
+  assert.match(environment, /data-quick-view-toggle/u);
+  assert.match(environment, /<circle cx="7" cy="7" r="2\.5"/u);
+  assert.match(pane, /<EnvironmentPanelToggle disabled=\{!effectiveWorkspace\} \/>/u);
+  assert.match(pane, /<QuickViewToggle disabled=\{!effectiveWorkspace\} \/>/u);
+  assert.match(root, /"environment\.toggle",[\s\S]*environmentPanel\.toggleTools\(\)/u);
+  assert.match(root, /"quick-view\.toggle",[\s\S]*environmentPanel\.toggleQuickView\(\)/u);
+});
+
+test("the active terminal relies on its selected tab instead of outlining the viewport", () => {
+  const terminal = source("./terminal-drawer.tsx");
+
+  assert.match(terminal, /aria-current=\{selected \? "page" : undefined\}/u);
+  assert.doesNotMatch(terminal, /ring-1 ring-inset ring-accent\/35/u);
 });
 
 test("archived subagent references remain stored but are invisible while disabled", () => {
@@ -268,7 +237,7 @@ test("the Environment work surface owns one mounted Subagents destination", () =
   assert.match(environment, /\{panel\.subagentsEnabled \? \(\s*<div/u);
   assert.match(environment, /id="environment-subagents-panel"/u);
   assert.match(environment, /hidden=\{panel\.tab !== "subagents"\}/u);
-  assert.match(environment, /active=\{panel\.open && panel\.tab === "subagents"\}/u);
+  assert.match(environment, /active=\{presented && panel\.tab === "subagents"\}/u);
   assert.match(environment, /compact=\{width < 620\}/u);
   assert.match(environment, /chatId=\{panel\.subagents\.chatId\}/u);
   assert.match(environment, /workspaceId=\{panel\.subagents\.workspaceId\}/u);
@@ -299,23 +268,18 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const capabilityProvider = source("../lib/app-capabilities.tsx");
   assert.match(capabilityProvider, /setTimeout\(\(\) => void update\(\), 1_000\)/u);
   assert.match(capabilityProvider, /if \(!cancelled\) setCurrent\(next\)/u);
-  assert.match(
-    environment,
-    /storedEnvironmentPanelTab\(localStorage, TAB_STORAGE_KEY, subagentsEnabled\)/u,
-  );
+  assert.match(environment, /const tab = normalizeEnvironmentPanelTab\(/u);
+  assert.match(environment, /surfaceState\.toolsTab, subagentsEnabled/u);
   assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(
-    messages,
-    /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u,
-  );
+  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });
 
-test("the Environment summary exposes conditional current-chat counts and the shared orb", () => {
+test("Quick View exposes conditional current-chat counts and the shared orb", () => {
   const environment = source("./environment-panel.tsx");
 
   assert.match(
@@ -323,7 +287,7 @@ test("the Environment summary exposes conditional current-chat counts and the sh
     /const hasSubagents =\s+panel\.subagentsEnabled && subagentCounts\.active \+ subagentCounts\.done > 0/u,
   );
   assert.match(environment, /\{hasSubagents \? \(/u);
-  assert.match(environment, /panel\.show\("subagents"\)/u);
+  assert.match(environment, /panel\.showTools\("subagents"\)/u);
   assert.match(environment, /<SubagentOrb/u);
   assert.match(environment, /activity=\{representativeSubagent\?\.snapshot\?\.activity\}/u);
   assert.equal(
@@ -561,10 +525,9 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.match(announcer, /coordinatorRef\.current\?\.update\(ownerKey, summary, terminal\)/u);
   assert.match(announcer, /window\.setTimeout\(callback, delayMs\)/u);
   assert.match(announcer, /coordinatorRef\.current\?\.announceDetail/u);
-  assert.match(announcer, /portalHost \? createPortal\(region, portalHost\) : region/u);
-  assert.match(environment, /ref=\{setSurfaceRef\}/u);
-  assert.match(environment, /setSubagentAnnouncerHost\(node\)/u);
-  assert.match(environment, /open && tab !== "overview" \? subagentAnnouncerHost : null/u);
+  assert.doesNotMatch(announcer, /createPortal|portalHost/u);
+  assert.doesNotMatch(environment, /subagentAnnouncerHost|setSubagentAnnouncerHost/u);
+  assert.match(environment, /<EnvironmentPanelContext.Provider value=\{value\}>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
   assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);
   assert.equal(
@@ -573,7 +536,7 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
       []
     ).length,
     1,
-    "the portaled node is the composed Subagents UI's only polite live region",
+    "the stable node is the composed Subagents UI's only polite live region",
   );
   assert.equal(
     (`${environment}\n${announcer}\n${panel}\n${chips}`.match(/role="status"/gu) ?? []).length,
