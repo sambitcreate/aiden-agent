@@ -16,10 +16,10 @@ test("plugin catalog ids are unique kebab-case entries from Codex plus Composio"
   assert.ok(ids.includes("superpowers"));
   assert.ok(ids.includes("crowdstrike-falcon-foundry"));
   assert.equal(PLUGIN_CATALOG.length, 65);
-  assert.equal(PLUGIN_CATALOG.filter(isConnectablePlugin).length, 20);
+  assert.equal(PLUGIN_CATALOG.filter(isConnectablePlugin).length, 21);
   assert.equal(
     PLUGIN_CATALOG.filter((plugin) => plugin.compatibility === "mcp-auth-unsupported").length,
-    7,
+    6,
   );
   assert.equal(PLUGIN_CATALOG_SOURCE_URL, "https://github.com/openai/plugins");
   for (const plugin of PLUGIN_CATALOG) {
@@ -50,6 +50,7 @@ test("search and compatibility filters keep connectable MCP separate from skills
   const connectable = filterPluginCatalog(PLUGIN_CATALOG, "", "all", "connectable");
   assert.ok(connectable.every(isConnectablePlugin));
   assert.ok(connectable.some((plugin) => plugin.id === "notion"));
+  assert.ok(connectable.some((plugin) => plugin.id === "github"));
   assert.ok(!connectable.some((plugin) => plugin.id === "superpowers"));
 
   const skills = filterPluginCatalog(PLUGIN_CATALOG, "", "Developer Tools", "skills");
@@ -61,7 +62,7 @@ test("search and compatibility filters keep connectable MCP separate from skills
   );
 
   const other = filterPluginCatalog(PLUGIN_CATALOG, "", "all", "other");
-  assert.ok(other.some((plugin) => plugin.id === "github"));
+  assert.ok(other.some((plugin) => plugin.id === "slack"));
   assert.ok(other.some((plugin) => plugin.id === "teams"));
   assert.ok(other.some((plugin) => plugin.id === "build-ios-apps"));
   assert.ok(!other.some(isConnectablePlugin));

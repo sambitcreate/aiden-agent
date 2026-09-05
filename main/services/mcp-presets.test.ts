@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assertMcpPresetServer,
   createNoRedirectFetch,
+  mcpOAuthClientNameForServer,
   MCP_PRESETS,
   getMcpPreset,
   getMcpPresetForServerId,
@@ -41,8 +42,15 @@ test("catalog includes composio (apiKey) and hosted Codex OAuth plugins", () => 
   }
   assert.equal(getMcpPreset("notion")?.auth.kind, "oauth");
   assert.equal(getMcpPreset("linear")?.auth.kind, "oauth");
-  assert.equal(getMcpPreset("github"), undefined);
+  assert.equal(getMcpPreset("github")?.auth.kind, "apiKey");
   assert.equal(getMcpPreset("figma")?.url, "https://mcp.figma.com/mcp");
+  const figmaAuth = getMcpPreset("figma")?.auth;
+  assert.equal(figmaAuth?.kind, "oauth");
+  if (figmaAuth?.kind === "oauth") {
+    assert.equal(figmaAuth.clientName, "Codex");
+  }
+  assert.equal(mcpOAuthClientNameForServer({ id: "preset-figma", presetId: "figma" }), "Codex");
+  assert.equal(mcpOAuthClientNameForServer({ id: "preset-notion", presetId: "notion" }), "Aiden Agent");
   assert.equal(getMcpPreset("superpowers"), undefined);
   assert.equal(getMcpPreset("nope"), undefined);
 });
@@ -84,13 +92,30 @@ test("serverFromPreset sets oauth and allows only provider-owned endpoint paths"
   );
 });
 
-test("hosted Codex plugin credentials stay on their official origin", () => {
+test("hosted Figma credentials stay on mcp.figma.com", () => {
   const figma = getMcpPreset("figma");
   assert.ok(figma);
   const server = serverFromPreset(figma, "https://mcp.figma.com/mcp/session/abc");
   assert.equal(server.oauth, true);
   assert.throws(
     () => serverFromPreset(figma, "https://api.figma.com/mcp"),
+    /official secure server/,
+  );
+});
+
+test("GitHub remote MCP stays on api.githubcopilot.com with a Bearer PAT", () => {
+  const github = getMcpPreset("github");
+  assert.ok(github);
+  assert.equal(github.auth.kind, "apiKey");
+  if (github.auth.kind === "apiKey") {
+    assert.equal(github.auth.headerName, "Authorization");
+    assert.equal(github.auth.headerValuePrefix, "Bearer ");
+  }
+  const server = serverFromPreset(github);
+  assert.equal(server.oauth, undefined);
+  assert.equal(server.url, "https://api.githubcopilot.com/mcp/");
+  assert.throws(
+    () => serverFromPreset(github, "https://github.com/mcp"),
     /official secure server/,
   );
 });
