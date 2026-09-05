@@ -125,7 +125,6 @@ const SubagentDetailPending = React.forwardRef<
               <Button
                 variant="muted"
                 size="small"
-                radius="rounded"
                 onClick={onRetry}
                 aria-label={`Retry loading details for ${run.label}`}
                 className="mt-3 motion-reduce:transition-none"
@@ -441,7 +440,6 @@ function OwnedSubagentsPanel({
               <Button
                 variant="transparent"
                 size="small"
-                radius="rounded"
                 onClick={showRoster}
                 data-subagent-back="true"
                 className="motion-reduce:transition-none"

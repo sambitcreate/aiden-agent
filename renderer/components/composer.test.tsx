@@ -6,6 +6,22 @@ function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
+test("workspace context collapses only after a persisted user message and retains portal controls", () => {
+  const composer = source("./composer.tsx");
+  const bar = source("./composer-context-bar.tsx");
+  const styles = source("../styles.css");
+  assert.match(composer, /sessionChat\?\.messages\.some\(\(message\) => message\.role === "user"\)/u);
+  assert.match(bar, /autoHide && hasUserMessages/u);
+  assert.match(bar, /inert=\{hidden \|\| undefined\}/u);
+  assert.match(bar, /aria-hidden=\{hidden \|\| undefined\}/u);
+  assert.match(bar, /APPEARANCE_CHANGE_EVENT/u);
+  assert.match(styles, /\.composer-context-collapse\[data-collapsed="true"\][\s\S]*?grid-template-rows: 0fr/u);
+  assert.match(styles, /transform: translateY\(8px\)/u);
+  assert.match(styles, /:root\[data-reduce-motion="true"\] \.composer-context-content \{\s*transition: none;/u);
+  // A hidden strip must not unmount slash-opened worktree dialogs.
+  assert.match(bar, /className="composer-context-content">\{children\}/u);
+});
+
 test("composer focus tints the whole shell, not only the textarea", () => {
   const composer = source("./composer.tsx");
   const styles = source("../styles.css");
@@ -167,7 +183,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /skillSelectionEnabled/u);
   assert.match(composer, /Remove \$\{selectedSkill\.invocation\.displayName\} skill from message/u);
   const optimisticClear = composer.indexOf('setText("");');
-  const sendAwait = composer.indexOf("await onSend(");
+  const sendAwait = composer.indexOf("await submit(");
   assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
   assert.match(composer, /if \(sendPendingRef\.current\) return false;/u);
   assert.match(composer, /type: "send-started"/u);

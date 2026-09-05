@@ -43,11 +43,13 @@
   --color-support-warning: var(--support-warning);
   --color-support-warning-foreground: var(--support-warning-foreground);
   --radius-control: 12px;
+  --radius-button: 16px;
   --radius-menu: 8px;
   --radius-card: 12px;
   --radius-dialog: 16px;
   --radius-popover: 12px;
   --radius-sheet: 24px;
+  --radius-composer: 40px;
   --radius-pill: 9999px;
   --shadow-control: var(--elevation-control);
   --shadow-control-hover: var(--elevation-control-hover);
@@ -293,7 +295,38 @@ body {
 }
 
 /* Composer focus is the only shell-wide fill: ~2% darker popover, not a translucent wash. */
+.composer-context-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 180ms ease-out;
+}
+
+.composer-context-content {
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition: transform 180ms ease-out, opacity 180ms ease-out;
+}
+
+.composer-context-collapse[data-collapsed="true"] {
+  grid-template-rows: 0fr;
+}
+
+.composer-context-collapse[data-collapsed="true"] > .composer-context-content {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+:root[data-reduce-motion="true"] .composer-context-collapse,
+:root[data-reduce-motion="true"] .composer-context-content {
+  transition: none;
+}
+
 .composer-shell {
+  /* Electron supports native squircles; keep overflow visible for composer menus. */
+  border-radius: var(--radius-composer);
+  corner-shape: squircle;
   transition: background-color 150ms ease-out;
 }
 
@@ -417,6 +450,28 @@ button,
 input,
 textarea {
   font: inherit;
+}
+
+/* One shape for shared actions, legacy buttons, and button-like links in every window.
+   Keep native selection controls recognizable and never clip menus or focus rings. */
+:root :is(button, [role="button"], [data-slot="button"], .squircle-control):where(:not([role="switch"]):not([role="radio"]):not([role="checkbox"])) {
+  border-radius: var(--radius-button);
+  corner-shape: squircle;
+}
+
+/* Joined actions share one outer silhouette; their hover fills meet at square seams. */
+:root .squircle-action-group > [data-slot="button"] {
+  border-radius: 0;
+}
+
+:root .squircle-action-group > [data-slot="button"]:first-child {
+  border-start-start-radius: var(--radius-button);
+  border-end-start-radius: var(--radius-button);
+}
+
+:root .squircle-action-group > [data-slot="button"]:last-child {
+  border-start-end-radius: var(--radius-button);
+  border-end-end-radius: var(--radius-button);
 }
 
 /* Text entry uses fill and caret feedback without changing its resting edge. */

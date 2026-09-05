@@ -257,7 +257,6 @@ export function ScheduledTaskEditor({
               <Button
                 size="small"
                 variant={draft.mode === "llm" ? "filled" : "transparent"}
-                radius="rounded"
                 aria-pressed={draft.mode === "llm"}
                 onClick={() => setMode("llm")}
               >
@@ -266,7 +265,6 @@ export function ScheduledTaskEditor({
               <Button
                 size="small"
                 variant={draft.mode === "script" ? "filled" : "transparent"}
-                radius="rounded"
                 aria-pressed={draft.mode === "script"}
                 onClick={() => setMode("script")}
               >
