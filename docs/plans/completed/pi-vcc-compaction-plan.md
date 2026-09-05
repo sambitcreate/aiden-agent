@@ -120,3 +120,7 @@ slash-command tests, the focused Electron cancellation regression, both
 TypeScript projects, ESLint and build passed. React Doctor's changed-file scan
 reported 82/100 with 19 warnings (existing complexity and iteration patterns);
 no additional diagnostic-driven changes were required for these fixes.
+
+Release integration: the user requested merging PR #91 into main with desktop
+version 0.38.1. Integrated the current 0.38.0 main changes and updated both
+package manifests; the existing macOS release workflow consumes that version.
