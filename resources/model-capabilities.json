@@ -187640,8 +187640,8 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 131072,
-          "output": 8192
+          "context": 40960,
+          "output": 16384
         },
         "cost": {
           "input": 0.2275,
@@ -188118,7 +188118,7 @@
         "open_weights": false,
         "limit": {
           "context": 262144,
-          "output": 235929
+          "output": 16384
         },
         "cost": {
           "input": 0.1495,
@@ -200410,9 +200410,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.0825,
-          "output": 0.33,
-          "cache_read": 0.020625
+          "input": 0.14,
+          "output": 0.58,
+          "cache_read": 0.035
         }
       },
       "tencent/hy4-preview": {
@@ -228855,11 +228855,11 @@
         "open_weights": true,
         "limit": {
           "context": 131072,
-          "output": 8192
+          "output": 16384
         },
         "cost": {
-          "input": 0.2275,
-          "output": 0.91
+          "input": 0.12,
+          "output": 0.24
         }
       },
       "qwen/qwen3.6-plus": {
@@ -229376,12 +229376,11 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 235929
+          "output": 16384
         },
         "cost": {
-          "input": 0.0875,
-          "output": 0.35,
-          "cache_read": 0.0175
+          "input": 0.09,
+          "output": 0.55
         }
       },
       "qwen/qwen3.5-flash-02-23": {
@@ -236782,9 +236781,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.57948,
-          "output": 1.73844,
-          "cache_read": 0.019316
+          "input": 1.12068,
+          "output": 3.36204,
+          "cache_read": 0.037356
         }
       },
       "deepseek/deepseek-v4-flash-0731": {
@@ -237163,9 +237162,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.971442,
-          "output": 1.942884,
-          "cache_read": 0.080954
+          "input": 0.981708,
+          "output": 1.963416,
+          "cache_read": 0.081809
         }
       },
       "deepseek/deepseek-chat-v3-0324": {
@@ -241906,9 +241905,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.0825,
-          "output": 0.33,
-          "cache_read": 0.020625
+          "input": 0.132,
+          "output": 0.528,
+          "cache_read": 0.033
         }
       },
       "tencent/hy4-preview": {
