@@ -300,3 +300,14 @@ owns; reopen the terminal before judging the final live state.
 - Worker errors must preserve bounded, known causes without relaying arbitrary
   exceptions that could include history. Fixed codes allow operation-specific
   recall copy; Object.hasOwn is unavailable in this project's TypeScript lib.
+
+## 2026-09-05 — 0.38.1 release signing
+
+- Main CI passed, but the macOS release failed at security set-key-partition-list.
+  app-builder-lib 26.15.3 incorrectly passes the certificate import password to
+  unlock the temporary keychain. Upstream #10101 fixes this; stable v26 packages
+  inspected through 26.16.0 still carry the old code. Keep the existing lockfile
+  and apply the narrow version/source-guarded postinstall backport, with a
+  platform-independent test that exercises both certificate and keychain paths.
+- A changelog search conflated the stable and prerelease lines. Verify published
+  package code before assuming a release contains the upstream patch.
