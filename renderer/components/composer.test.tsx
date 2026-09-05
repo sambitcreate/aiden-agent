@@ -295,3 +295,14 @@ test("model picker details sit beside the menu without overlapping the pad", () 
     /\.model-pad:focus-visible\s*\{\s*outline: none !important;\s*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\)/u,
   );
 });
+
+test("voice recovery preserves the draft and offers a direct settings action", () => {
+  const composer = source("./composer.tsx");
+  const recorder = source("../lib/use-voice-recorder.ts");
+  assert.match(composer, /voice.lastError/u);
+  assert.match(composer, /Open voice settings/u);
+  assert.match(composer, /Your draft is still here/u);
+  assert.match(composer, /voice.dismissError/u);
+  assert.match(recorder, /setLastError\(message\)/u);
+  assert.match(composer, /onOpenSettings && readinessSettingsSection/u);
+});

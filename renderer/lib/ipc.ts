@@ -475,6 +475,9 @@ export const telegramApi = {
 };
 
 export const aidenRemoteApi = {
+  setupPairing: (transport: "lan" | "tailscale", expected: {
+    instanceId: string; enabled: boolean; connectionMode: AidenRemoteConnectionMode;
+  }) => invoke<AidenRemotePairingBootstrapView>("remote:setupPairing", transport, expected),
   get: () => invoke<AidenRemoteSettingsSnapshot>("remote:get"),
   setEnabled: (enabled: boolean) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),

@@ -37,6 +37,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { ProviderIcon } from "./provider-icon";
+import { ProviderEditor } from "./settings/provider-editor";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { CodexProviderSettings } from "./settings/codex-provider-settings";
 import { Button, Dialog, Field, Input, Switch, Text, toast } from "./ui";
@@ -125,7 +126,7 @@ const providerChoices: Array<{
   },
   {
     id: "openai-signin",
-    title: "ChatGPT sign in",
+    title: "ChatGPT",
     description: "Connect through browser sign-in.",
     iconProviderId: "openai-codex",
   },
@@ -147,6 +148,11 @@ const providerChoices: Array<{
     title: "Ollama",
     description: "Use models running in Ollama.",
     iconProviderId: "ollama",
+  },
+  {
+    id: "custom",
+    title: "Other Custom Provider",
+    description: "Connect your own model server or endpoint.",
   },
   {
     id: "tailscale",
@@ -387,7 +393,7 @@ const featureBentos: FeatureBento[] = [
     id: "aidenOnTheGo",
     group: "control",
     title: "Aiden On The Go",
-    description: "Pair your iPhone or iPad over pinned local HTTPS or a private Tailscale route.",
+    description: "Connect your phone or tablet with a guided setup and one-time code.",
     icon: Smartphone,
     imageUrl: FEATURE_ILLUSTRATIONS.aidenOnTheGo,
     size: "standard",
@@ -486,6 +492,7 @@ export function OnboardingFlow() {
   const [builtinChoiceId, setBuiltinChoiceId] = React.useState<string | null>(null);
   const [showMoreProviders, setShowMoreProviders] = React.useState(false);
   const [settingUpProvider, setSettingUpProvider] = React.useState<Provider | null>(null);
+  const [customProvider, setCustomProvider] = React.useState<Provider | null>(null);
   const [apiKeyDialogChoice, setApiKeyDialogChoice] = React.useState<
     "openai-key" | "anthropic" | null
   >(null);
@@ -663,6 +670,11 @@ export function OnboardingFlow() {
     setIndex(2);
   };
 
+  const openCustomProvider = () => setCustomProvider((current) => current ?? ({
+    id: `custom:${crypto.randomUUID()}`, kind: "openai", label: "Custom Provider", baseUrl: "",
+    models: [], needsKey: true, hasKey: false, deployment: "hosted",
+  }));
+
   const next = async () => {
     if (!canContinue || savingRef.current) return;
     if (step === "profile") {
@@ -708,6 +720,7 @@ export function OnboardingFlow() {
         await completeProviderStep("openai-codex");
         return;
       }
+      if (choice === "custom") { openCustomProvider(); return; }
       if (choice === "tailscale" && !baseUrl.trim()) {
         toast.error("Enter the Tailscale model server URL before continuing.");
         return;
@@ -1038,7 +1051,7 @@ export function OnboardingFlow() {
                       variant="heading1"
                       className="block text-heading2 outline-none"
                     >
-                      Add a model provider
+                      Connect your AI
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
                       Choose one connection to get started.
@@ -1046,17 +1059,18 @@ export function OnboardingFlow() {
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
-                  {providerChoices.map((item) => (
+                  {providerChoices.filter((item) => ["openai-signin", "lmstudio", "ollama", "custom"].includes(item.id)).map((item) => (
                     <button
                       key={item.id}
                       type="button"
                       disabled={saving}
                       aria-pressed={choice === item.id}
-                      className={`flex min-h-[68px] items-start gap-2.5 rounded-control border border-transparent px-3 py-2.5 text-left outline-none transition-colors duration-150 focus-visible:bg-control-active ${choice === item.id ? "bg-list-selection" : "bg-well hover:bg-control"}`}
+                      className={`flex min-h-[68px] items-start gap-2.5 rounded-control px-3 py-2.5 text-left outline-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "bg-list-selection" : "bg-well hover:bg-control"}`}
                       onClick={() => {
                         selectProviderChoice(item.id);
                         setBuiltinChoiceId(null);
                         setProviderSkipped(false);
+                        if (item.id === "custom") openCustomProvider();
                         if (item.id === "openai-key" || item.id === "anthropic") {
                           setApiKeyDialogChoice(item.id);
                         }
@@ -1099,7 +1113,7 @@ export function OnboardingFlow() {
                   disabled={saving}
                   aria-controls="onboarding-more-providers"
                   aria-expanded={showMoreProviders}
-                  className="mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-control border border-transparent bg-well px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-control focus-visible:bg-control-active"
+                  className="mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-control border border-transparent bg-well px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
                   onClick={() => setShowMoreProviders((visible) => !visible)}
                 >
                   <span className="grid size-8 shrink-0 place-items-center text-secondary">
@@ -1107,14 +1121,14 @@ export function OnboardingFlow() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <Text variant="small-strong" className="block">
-                      Choose from more
+                      Other ways
                     </Text>
                     <Text variant="small" color="secondary" className="mt-0.5 block leading-4">
                       {providers.isLoading
                         ? "Loading provider catalog…"
                         : selectedBuiltinProvider
                           ? `${selectedBuiltinProvider.label} selected`
-                          : `${moreProviders.length} additional provider${moreProviders.length === 1 ? "" : "s"}`}
+                          : "API keys and more AI services"}
                     </Text>
                   </span>
                   <ChevronDown
@@ -1130,6 +1144,15 @@ export function OnboardingFlow() {
                     aria-live="polite"
                     className="mt-2 rounded-card bg-well p-2"
                   >
+                    <div className="grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
+                      {providerChoices.filter((item) => ["openai-key", "anthropic", "tailscale"].includes(item.id)).map((item) => (
+                        <Button key={item.id} variant="transparent" disabled={saving}
+                          aria-pressed={choice === item.id} onClick={() => {
+                            selectProviderChoice(item.id); setBuiltinChoiceId(null); setProviderSkipped(false);
+                            if (item.id === "openai-key" || item.id === "anthropic") setApiKeyDialogChoice(item.id);
+                          }}>{item.title}</Button>
+                      ))}
+                    </div>
                     {providers.isLoading && moreProviders.length === 0 ? (
                       <Text variant="small" color="secondary" className="block px-2 py-3">
                         Loading provider catalog…
@@ -1165,7 +1188,7 @@ export function OnboardingFlow() {
                               type="button"
                               disabled={!canChoose || saving}
                               aria-pressed={isSelected}
-                              className={`flex min-h-14 items-center gap-2.5 rounded-control border border-transparent px-2.5 py-2 text-left outline-none transition-colors duration-150 focus-visible:bg-control-active disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "bg-list-selection" : "bg-transparent hover:bg-control"}`}
+                              className={`flex min-h-14 items-center gap-2.5 rounded-control border border-transparent px-2.5 py-2 text-left outline-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "bg-list-selection" : "bg-transparent hover:bg-control"}`}
                               onClick={() => {
                                 selectProviderChoice(null);
                                 setBuiltinChoiceId(provider.id);
@@ -1256,8 +1279,7 @@ export function OnboardingFlow() {
                       focus a tile to learn more.
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
-                      Phone and iPad access starts off. After setup, opt in from Settings → Remote
-                      Access; Aiden must stay running, and Tailscale is optional.
+                      Phone and tablet access starts off. After setup, choose Connect a device in Settings → Aiden On The Go; Aiden must stay running, and Tailscale is optional.
                     </Text>
                   </div>
                 </div>
@@ -1372,6 +1394,19 @@ export function OnboardingFlow() {
           </footer>
         </div>
       </section>
+      {customProvider ? (
+        <ProviderEditor provider={customProvider} open layer="onboarding" requireReady
+          onOpenChange={(open) => { if (!open) setCustomProvider(null); }}
+          onSaved={async () => {
+            const refreshed = await providersApi.list();
+            queryClient.setQueryData(queryKeys.providers, refreshed);
+            const ready = refreshed.find((provider) => provider.id === customProvider.id);
+            const model = ready?.defaultModel;
+            if (!ready || !model || !ready.models.includes(model)) throw new Error("Choose an available default model before continuing.");
+            await completeProviderStep(ready.id);
+            persistModelSelection(ready.id, model);
+          }} />
+      ) : null}
       {settingUpProvider ? (
         <BuiltinProviderEditor
           provider={settingUpProvider}
