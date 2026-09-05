@@ -3,6 +3,7 @@ import test from "node:test";
 import { QueryClient } from "@tanstack/react-query";
 import { isChatCacheDeleted, removeDeletedChatFromCache } from "./chat-deletion-cache.js";
 import { queryKeys } from "./queries.js";
+import { chatMessageQueue } from "./chat-message-queue.js";
 
 test("successful deletion removes the exact transcript and tombstones late terminal delivery", async () => {
   const queryClient = new QueryClient();
@@ -10,8 +11,12 @@ test("successful deletion removes the exact transcript and tombstones late termi
   const retainedKey = queryKeys.chat("retained-chat");
   queryClient.setQueryData(deletedKey, { id: "deleted-chat", messages: ["stale"] });
   queryClient.setQueryData(retainedKey, { id: "retained-chat", messages: ["keep"] });
+  const queue = chatMessageQueue("deleted-chat");
+  queue.add({ id: "queued", text: "unsent", attachments: [] });
 
   await removeDeletedChatFromCache(queryClient, "deleted-chat");
+  assert.deepEqual(queue.getSnapshot().messages, []);
+  assert.equal(queue.getSnapshot().paused, true);
 
   assert.equal(queryClient.getQueryData(deletedKey), undefined);
   assert.deepEqual(queryClient.getQueryData(retainedKey), {

@@ -92,6 +92,8 @@ export type LmStudioEndpoint = {
   baseUrl: string;
   live: boolean;
   requests: CapturedLmStudioRequest[];
+  holdCompletions?: () => void;
+  releaseCompletions?: () => void;
 };
 
 export type AidenE2e = {
@@ -159,7 +161,10 @@ function writeJson(response: import("node:http").ServerResponse, value: unknown)
   response.end(JSON.stringify(value));
 }
 
-function writeCompletion(response: import("node:http").ServerResponse): void {
+function writeCompletion(
+  response: import("node:http").ServerResponse,
+  hold?: (finish: () => void) => void,
+): void {
   const common = {
     id: "chatcmpl-aiden-e2e",
     object: "chat.completion.chunk",
@@ -182,17 +187,23 @@ function writeCompletion(response: import("node:http").ServerResponse): void {
       ],
     })}\n\n`,
   );
-  response.write(
-    `data: ${JSON.stringify({
-      ...common,
-      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-    })}\n\n`,
-  );
-  response.end("data: [DONE]\n\n");
+  const finish = () => {
+    response.write(
+      `data: ${JSON.stringify({
+        ...common,
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      })}\n\n`,
+    );
+    response.end("data: [DONE]\n\n");
+  };
+  if (hold) hold(finish);
+  else finish();
 }
 
 async function startMockLmStudio(): Promise<MockLmStudio> {
   const requests: CapturedLmStudioRequest[] = [];
+  let holding = false;
+  const held = new Set<() => void>();
   const nativeModel = {
     key: E2E_MODEL_ID,
     display_name: E2E_MODEL_DISPLAY_NAME,
@@ -230,7 +241,15 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
       if (method === "POST" && url === "/v1/chat/completions") {
         const body = await readJsonBody(request);
         requests.push({ method, url, headers: { ...request.headers }, body });
-        writeCompletion(response);
+        writeCompletion(
+          response,
+          holding
+            ? (finish) => {
+                held.add(finish);
+                response.once("close", () => held.delete(finish));
+              }
+            : undefined,
+        );
         return;
       }
       response.writeHead(404, { "content-type": "application/json; charset=utf-8" });
@@ -259,6 +278,14 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     live: false,
     requests,
+    holdCompletions: () => {
+      holding = true;
+    },
+    releaseCompletions: () => {
+      holding = false;
+      for (const finish of held) finish();
+      held.clear();
+    },
     server,
   };
 }

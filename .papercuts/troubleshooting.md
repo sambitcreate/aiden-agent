@@ -311,3 +311,8 @@ owns; reopen the terminal before judging the final live state.
   platform-independent test that exercises both certificate and keychain paths.
 - A changelog search conflated the stable and prerelease lines. Verify published
   package code before assuming a release contains the upstream patch.
+
+## 2026-09-04: queued composer controls
+- This detached worktree had no .memory directory. Read the canonical checkout's PROJECT-CONTEXT.md and PLANNED.md before implementation; wrote scoped memory here.
+- Pi harness queueSteer/queueFollowUp are not exposed through the foreground durable transcript path. Use Stop → persistence barrier → normal append for the desktop Steer action and explain its behavior in the control tooltip.
+- E2E TypeScript uses an older lib target; use reverse/find rather than Array.at in new test helpers.

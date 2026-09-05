@@ -25,6 +25,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  ListPlus,
   Loader2,
   Lock,
   Mic,
@@ -122,6 +123,9 @@ interface ComposerProps {
     skillInvocation?: SkillInvocationV1,
     options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
+  onQueue?: ComposerProps["onSend"];
+  queuedMessages?: React.ReactNode;
+  hasQueuedMessages?: boolean;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
@@ -265,6 +269,9 @@ export function Composer({
   chatId,
   onSend,
   onStop,
+  onQueue,
+  queuedMessages,
+  hasQueuedMessages = false,
   isGenerating,
   canStopGeneration = isGenerating,
   configurationBusy = false,
@@ -408,7 +415,7 @@ export function Composer({
   const submissionAllowed =
     composerSubmissionAllowed({
       ready,
-      isGenerating,
+      isGenerating: isGenerating && !onQueue,
       sending,
       permissionSaving,
       computerUseSaving: computerUse?.saving === true,
@@ -792,7 +799,8 @@ export function Composer({
       });
 
       try {
-        await onSend(
+        const submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        await submit(
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
@@ -839,7 +847,7 @@ export function Composer({
         setSending(false);
       }
     },
-    [onSend, setText, updateAttachments],
+    [onSend, onQueue, isGenerating, hasQueuedMessages, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
@@ -1485,6 +1493,7 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
+          {queuedMessages}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
@@ -1735,7 +1744,7 @@ export function Composer({
                   className="rounded-full"
                   onClick={handleAttach}
                   disabled={
-                    attaching || isGenerating || sending || gitOperationBusy || sessionCommandBusy
+                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || sessionCommandBusy
                   }
                   aria-label={
                     attaching ? "Choosing or loading attachments" : "Attach files or images"
@@ -1943,7 +1952,7 @@ export function Composer({
                   variant={voice.recording ? "destructive" : "transparent"}
                   size="small"
                   iconOnly
-                  disabled={voice.transcribing || isGenerating || sending || sessionCommandBusy}
+                  disabled={voice.transcribing || (isGenerating && !onQueue) || sending || sessionCommandBusy}
                   onClick={() => (voice.recording ? voice.stop() : voice.start())}
                   aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
@@ -1953,12 +1962,19 @@ export function Composer({
                     <Mic className={cn(voice.recording && "animate-pulse")} />
                   )}
                 </Button>
-                {isGenerating && canStopGeneration ? (
+                {onQueue && isGenerating ? (
+                  <Button variant="transparent" size="small" iconOnly disabled={!canSend}
+                    onClick={() => void submit()} aria-label="Queue message" title="Queue message (Enter)">
+                    <ListPlus />
+                  </Button>
+                ) : null}
+                {isGenerating ? (
                   <Button
                     variant="filled"
                     size="small"
                     iconOnly
                     onClick={onStop}
+                    disabled={!canStopGeneration}
                     aria-label="Stop generating"
                   >
                     <Square className="fill-current" />
@@ -1970,9 +1986,9 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label="Send message"
+                    aria-label={hasQueuedMessages ? "Queue message" : "Send message"}
                   >
-                    <ArrowUp />
+                    {hasQueuedMessages ? <ListPlus /> : <ArrowUp />}
                   </Button>
                 )}
               </div>

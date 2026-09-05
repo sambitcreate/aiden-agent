@@ -167,7 +167,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /skillSelectionEnabled/u);
   assert.match(composer, /Remove \$\{selectedSkill\.invocation\.displayName\} skill from message/u);
   const optimisticClear = composer.indexOf('setText("");');
-  const sendAwait = composer.indexOf("await onSend(");
+  const sendAwait = composer.indexOf("await submit(");
   assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
   assert.match(composer, /if \(sendPendingRef\.current\) return false;/u);
   assert.match(composer, /type: "send-started"/u);

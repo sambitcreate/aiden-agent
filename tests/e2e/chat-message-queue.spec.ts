@@ -1,0 +1,206 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  expect,
+  finishLmStudioOnboarding,
+  REPOSITORY_ROOT,
+  test,
+  type CapturedLmStudioRequest,
+} from "./fixtures";
+
+function lastUserText(request: CapturedLmStudioRequest): string | undefined {
+  const body = request.body as {
+    messages?: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+  } | null;
+  const user = body?.messages
+    ?.slice()
+    .reverse()
+    .find((message) => message.role === "user");
+  return typeof user?.content === "string"
+    ? user.content
+    : user?.content.map((part) => part.text ?? "").join("");
+}
+
+test("queued messages edit, reorder, delete and steer without changing the composer draft", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("First response held for queue controls.");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  await composer.fill("Queued first");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
+  await composer.press("Enter");
+  await expect(composer).toHaveValue("");
+  await composer.fill("Queued second");
+  await page.getByRole("button", { name: "Queue message", exact: true }).click();
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await expect(queue.getByRole("listitem")).toHaveCount(2);
+  await composer.fill("My separate unsent draft");
+  await page.screenshot({ path: test.info().outputPath("queued-messages.png") });
+
+  await queue.getByRole("button", { name: "Edit queued message 2", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit queued message", exact: true });
+  const editText = editor.getByRole("textbox", { name: "Queued message text" });
+  await expect(editText).toHaveValue("Queued second");
+  await page.screenshot({ path: test.info().outputPath("queued-message-editor.png") });
+  await editText.fill("Discard this edit");
+  await page.keyboard.press("Escape");
+  await expect(editor).toBeHidden();
+  await expect(
+    queue.getByRole("button", { name: "Edit queued message 2", exact: true }),
+  ).toBeFocused();
+  await queue.getByRole("button", { name: "Edit queued message 2", exact: true }).click();
+  await expect(editText).toHaveValue("Queued second");
+  await editText.fill("Edited priority message");
+  await editor.getByRole("button", { name: "Move up", exact: true }).click();
+  await editor.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(queue.getByRole("listitem").first()).toContainText("Edited priority message");
+  await expect(composer).toHaveValue("My separate unsent draft");
+
+  // Keyboard ordering uses the same path as dragging and retains the focused row.
+  const reorder = queue.getByRole("button", { name: "Reorder queued message 1", exact: true });
+  await reorder.focus();
+  await reorder.press("Alt+ArrowDown");
+  await expect(queue.getByRole("listitem").last()).toContainText("Edited priority message");
+  await queue.getByRole("button", { name: "Steer with queued message 2", exact: true }).click();
+  await expect
+    .poll(
+      () =>
+        lmStudio.requests.filter((request) => lastUserText(request) === "Edited priority message")
+          .length,
+    )
+    .toBe(1);
+  await expect(queue.getByRole("listitem")).toHaveCount(1);
+  await expect(queue.getByRole("listitem")).toContainText("Queued first");
+  await expect(composer).toHaveValue("My separate unsent draft");
+  await queue.getByRole("button", { name: "Delete queued message 1", exact: true }).click();
+  await expect(queue).toBeHidden();
+  await expect(composer).toBeFocused();
+  lmStudio.releaseCompletions!();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  expect(
+    lmStudio.requests.filter((request) => lastUserText(request) === "Queued first"),
+  ).toHaveLength(0);
+});
+
+test("a response finishing while the queue editor is open waits for the saved edit", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Hold until the queued editor opens.");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  await composer.fill("Original queued text");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
+  await composer.press("Enter");
+  await page.getByRole("button", { name: "Edit queued message 1", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit queued message", exact: true });
+  await editor.getByRole("textbox", { name: "Queued message text" }).fill("Saved after completion");
+  lmStudio.releaseCompletions!();
+  await expect(
+    page.getByRole("button", { name: "Stop generating", includeHidden: true }),
+  ).toBeHidden();
+  expect(
+    lmStudio.requests.filter((request) => lastUserText(request) === "Original queued text"),
+  ).toHaveLength(0);
+  await editor.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect
+    .poll(
+      () =>
+        lmStudio.requests.filter((request) => lastUserText(request) === "Saved after completion")
+          .length,
+    )
+    .toBe(1);
+  await expect(page.getByRole("region", { name: "Queued messages" })).toBeHidden();
+});
+
+test("switching chats retains the queue without delivering it into another conversation", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Original chat before navigating.");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  await composer.fill("Only send in the original chat");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
+  await composer.press("Enter");
+  await page.getByRole("button", { name: "Pause queue", exact: true }).click();
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Queued messages" })).toBeHidden();
+  await composer.fill("New chat draft");
+  lmStudio.releaseCompletions!();
+  await page.locator("[data-sidebar]").getByRole("button", { name: /^Deterministic E2E response/u }).click();
+  const queue = page.getByRole("region", { name: "Queued messages" });
+  await expect(queue).toContainText("Only send in the original chat");
+  expect(
+    lmStudio.requests.filter(
+      (request) => lastUserText(request) === "Only send in the original chat",
+    ),
+  ).toHaveLength(0);
+  await queue.getByRole("button", { name: "Resume queue", exact: true }).click();
+  await expect(queue).toBeHidden();
+  const request = lmStudio.requests.find(
+    (request) => lastUserText(request) === "Only send in the original chat",
+  );
+  expect(JSON.stringify(request?.body)).toContain("Original chat before navigating.");
+  expect(JSON.stringify(request?.body)).not.toContain("New chat draft");
+});
+
+test("queue keeps image attachments, pauses on Stop, and resumes FIFO exactly once", async ({
+  aiden,
+}) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("First response for stop and resume.");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  const image = (
+    await readFile(path.join(REPOSITORY_ROOT, "renderer/assets/onboarding/aiden-workspace.png"))
+  ).toString("base64");
+  await composer.evaluate((element, base64) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const data = new DataTransfer();
+    data.items.add(new File([bytes], "clipboard.png", { type: "image/png" }));
+    element.dispatchEvent(
+      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }),
+    );
+  }, image);
+  await expect(
+    page.getByRole("button", { name: "Remove Pasted image.png", exact: true }),
+  ).toBeVisible();
+  await composer.fill("Queued image first");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
+  await composer.press("Enter");
+  await composer.fill("Queued text second");
+  await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeEnabled();
+  await composer.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await expect(queue.getByRole("img", { name: "Pasted image.png" })).toBeVisible();
+  await page.getByRole("button", { name: "Stop generating" }).click();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  await expect(queue.getByRole("button", { name: "Resume queue" })).toBeVisible();
+  expect(
+    lmStudio.requests.filter((request) => lastUserText(request)?.startsWith("Queued ")),
+  ).toHaveLength(0);
+  lmStudio.releaseCompletions!();
+  await queue.getByRole("button", { name: "Resume queue" }).click();
+  await expect(queue).toBeHidden();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  const queued = lmStudio.requests.filter((request) =>
+    lastUserText(request)?.startsWith("Queued "),
+  );
+  expect(queued.map(lastUserText)).toEqual(["Queued image first", "Queued text second"]);
+  expect(JSON.stringify(queued[0].body)).toContain(`data:image/png;base64,${image}`);
+});
