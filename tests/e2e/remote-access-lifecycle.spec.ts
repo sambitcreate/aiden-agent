@@ -44,13 +44,28 @@ async function remoteHealth(port: number): Promise<{ status: number; body: unkno
   });
 }
 
-test("guided phone setup asks once, enables access, and survives closing the main window", async ({ aiden }) => {
+test("guided phone setup asks once, enables access, and survives closing the main window", async ({ aiden }, testInfo) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Settings" })
     .getByRole("button", { name: "Aiden On The Go", exact: true })
     .click();
+
+  const choices = page.getByRole("radiogroup", { name: "Where will you use Aiden?" });
+  const connect = page.getByRole("button", { name: "Connect a device", exact: true });
+  // The field's label/content gap does not space children inside its content.
+  // Guard the actual geometry so the CTA cannot touch the last choice card again.
+  await expect(choices).toBeVisible();
+  const choicesBox = await choices.boundingBox();
+  const connectBox = await connect.boundingBox();
+  expect(choicesBox).not.toBeNull();
+  expect(connectBox).not.toBeNull();
+  expect(connectBox!.y - (choicesBox!.y + choicesBox!.height)).toBeGreaterThanOrEqual(12);
+  expect(connectBox!.x).toBe(choicesBox!.x);
+  expect(connectBox!.width).toBeLessThan(choicesBox!.width);
+  await page.getByRole("group", { name: "1. Connect your phone", exact: true })
+    .screenshot({ path: testInfo.outputPath("phone-setup-spacing.png") });
 
   expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
   await page.getByRole("button", { name: "Connect a device", exact: true }).click();

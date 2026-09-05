@@ -540,28 +540,30 @@ export function RemoteAccessSettings() {
       <FieldSet title="Aiden On The Go">
         <Field label="1. Connect your phone" orientation="vertical"
           description="Use your Bots and workspaces from your phone or tablet while Aiden runs on this Mac.">
-          <RadioGroup value={selectedTransport} onValueChange={(value) => {
-            setSetupTransport(value as "lan" | "tailscale"); setSetupError(null);
-          }} className="grid gap-2" aria-label="Where will you use Aiden?" disabled={busy !== null}>
-            {([ ["tailscale", "Away from home", "Uses Tailscale on your Mac and phone."],
-              ["lan", "On the same Wi-Fi", "No Tailscale needed. Use the same local network."] ] as const).map(([value, title, description]) => (
-              <label key={value} className={`flex cursor-pointer items-center gap-3 rounded-control p-3 ${selectedTransport === value ? "bg-list-selection" : "bg-well"}`}>
-                <RadioGroupItem value={value} />
-                <span><Text variant="small-strong" className="block">{title}</Text>
-                  <Text variant="small" color="secondary" className="block">{description}</Text></span>
-              </label>
-            ))}
-          </RadioGroup>
-          <Button variant="accent" disabled={busy !== null} onClick={() => {
-            if (selectedReady) { void beginPairing(selectedTransport); return; }
-            setSetupError(null);
-            setSetupReview({ transport: selectedTransport, instanceId: snapshot.instanceId,
-              enabled: status.enabled, connectionMode: status.connectionMode });
-          }}>
-            {busy === "pairing" ? <Loader2 className="animate-spin" /> : <Smartphone />}
-            {busy === "pairing" ? "Preparing connection…" : hasSavedConnection ? "Add device" : "Connect a device"}
-          </Button>
-          {setupError ? <Callout color="red" role="alert">{setupError}</Callout> : null}
+          <div className="flex flex-col gap-3">
+            <RadioGroup value={selectedTransport} onValueChange={(value) => {
+              setSetupTransport(value as "lan" | "tailscale"); setSetupError(null);
+            }} className="grid gap-2" aria-label="Where will you use Aiden?" disabled={busy !== null}>
+              {([ ["tailscale", "Away from home", "Uses Tailscale on your Mac and phone."],
+                ["lan", "On the same Wi-Fi", "No Tailscale needed. Use the same local network."] ] as const).map(([value, title, description]) => (
+                <label key={value} className={`flex cursor-pointer items-center gap-3 rounded-control p-3 ${selectedTransport === value ? "bg-list-selection" : "bg-well"}`}>
+                  <RadioGroupItem value={value} />
+                  <span><Text variant="small-strong" className="block">{title}</Text>
+                    <Text variant="small" color="secondary" className="block">{description}</Text></span>
+                </label>
+              ))}
+            </RadioGroup>
+            <Button className="self-start" variant="accent" disabled={busy !== null} onClick={() => {
+              if (selectedReady) { void beginPairing(selectedTransport); return; }
+              setSetupError(null);
+              setSetupReview({ transport: selectedTransport, instanceId: snapshot.instanceId,
+                enabled: status.enabled, connectionMode: status.connectionMode });
+            }}>
+              {busy === "pairing" ? <Loader2 className="animate-spin" /> : <Smartphone />}
+              {busy === "pairing" ? "Preparing connection…" : hasSavedConnection ? "Add device" : "Connect a device"}
+            </Button>
+            {setupError ? <Callout color="red" role="alert">{setupError}</Callout> : null}
+          </div>
         </Field>
         <Field label="2. Scan to finish" description="Aiden prepares the connection and shows a one-time code. Scan it in Aiden On The Go, or enter the setup code instead." orientation="vertical">
           <Text variant="small" color="secondary">Keep Aiden running on your Mac. You can remove a device’s access below.</Text>
