@@ -15,6 +15,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+export async function expectSquircleButtons(page: Page): Promise<void> {
+  const actions = page.locator('button, [role="button"], [data-slot="button"]');
+  const failures = await actions.evaluateAll((elements) => elements.filter((element) => {
+    if (["switch", "radio", "checkbox"].includes(element.getAttribute("role") ?? "")) return false;
+    if (!element.getClientRects().length) return false;
+    const style = getComputedStyle(element);
+    return style.getPropertyValue("corner-shape") !== "squircle" || style.borderTopLeftRadius !== "16px";
+  }).map((element) => element.getAttribute("aria-label") ?? element.textContent?.trim()));
+  playwrightTest.expect(failures).toEqual([]);
+}
+
 export const LM_STUDIO_PROVIDER_ID = "custom:lmstudio";
 export const E2E_MODEL_ID = "aiden-e2e-vision";
 export const E2E_MODEL_DISPLAY_NAME = "Aiden E2E Vision";

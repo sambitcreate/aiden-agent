@@ -1,4 +1,4 @@
-import { E2E_MODEL_DISPLAY_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_MODEL_DISPLAY_NAME, expect, expectSquircleButtons, finishLmStudioOnboarding, test } from "./fixtures";
 
 const SETTINGS_SECTIONS = [
   "Providers",
@@ -122,6 +122,7 @@ test("every Settings destination renders and a one-model local inventory stays u
     await destination.click();
     await expect(destination).toHaveAttribute("aria-current", "page");
     await assertRenderedSettingsDestination(page, section);
+    await expectSquircleButtons(page);
     if (section === "Appearance") {
       const light = page.locator('.appearance-mode-preview-light [data-preview-scheme="light"]');
       const dark = page.locator('.appearance-mode-preview-dark [data-preview-scheme="dark"]');
@@ -146,10 +147,12 @@ test("every Settings destination renders and a one-model local inventory stays u
       expect(before[0]).not.toBe(before[1]);
       await page.locator('.appearance-mode-option').filter({hasText: 'Dark'}).click();
       await expect(page.locator('html')).toHaveClass(/dark/u);
+      await expectSquircleButtons(page);
       expect(await colors()).toEqual(before);
       await assertRestingPreviews();
       await page.locator('.appearance-mode-option').filter({hasText: 'Light'}).click();
       await expect(page.locator('html')).not.toHaveClass(/dark/u);
+      await expectSquircleButtons(page);
       expect(await colors()).toEqual(before);
       await assertRestingPreviews();
     }

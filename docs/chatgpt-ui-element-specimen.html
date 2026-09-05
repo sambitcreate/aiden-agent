@@ -30,8 +30,9 @@
         --success: #087c58;
         --warning: #9a6700;
         --radius-control: 10px;
+        --radius-button: 16px;
         --radius-popover: 12px;
-        --radius-composer: 20px;
+        --radius-composer: 40px;
         --radius-dialog: 16px;
         --shadow-hairline: 0 0 0 0.5px rgb(0 0 0 / 0.1);
         --shadow-control: 0 1px 2px -1px rgb(0 0 0 / 0.08);
@@ -45,7 +46,7 @@
         --duration-relaxed: 300ms;
         --ease-enter: cubic-bezier(0.19, 1, 0.22, 1);
         --ease-snappy: cubic-bezier(0.23, 1, 0.32, 1);
-        --focus: 0 0 0 3px rgb(11 125 229 / 0.24);
+        --focus: 0 0 0 2px rgb(24 24 23 / 0.55);
       }
 
       html[data-theme="dark"] {
@@ -78,7 +79,7 @@
         --shadow-composer: var(--shadow-hairline), 0 3px 12px rgb(0 0 0 / 0.46);
         --shadow-toast: var(--shadow-hairline), 0 5px 16px rgb(0 0 0 / 0.5);
         --shadow-dialog: var(--shadow-hairline), 0 24px 48px -12px rgb(0 0 0 / 0.72);
-        --focus: 0 0 0 3px rgb(75 156 242 / 0.3);
+        --focus: 0 0 0 2px rgb(245 245 243 / 0.55);
       }
 
       * { box-sizing: border-box; }
@@ -86,6 +87,14 @@
       body { margin: 0; color: var(--text); background: var(--bg); font-size: 14px; line-height: 1.45; }
       button, input, textarea { font: inherit; }
       button { color: inherit; }
+      :root :is(button, [role="button"], .button):not([role="switch"]):not([role="radio"]):not([role="checkbox"]) {
+        border-radius: var(--radius-button);
+        corner-shape: squircle;
+      }
+      :root :is(button, [role="button"], .button):focus-visible {
+        outline: 2px solid var(--text-secondary);
+        outline-offset: 2px;
+      }
       code { font-family: "SFMono-Regular", "SF Mono", Menlo, monospace; font-size: 12px; }
 
       .topbar {
@@ -232,7 +241,7 @@
       .approval-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
       .composer-wrap { position: absolute; right: 18px; bottom: 16px; left: 18px; }
       .context-strip { display: flex; width: fit-content; max-width: calc(100% - 20px); min-height: 28px; align-items: center; gap: 6px; margin: 0 10px -3px; padding: 4px 9px 7px; border-radius: 11px 11px 0 0; background: var(--control); color: var(--text-secondary); font-size: 11px; }
-      .composer { padding: 10px; border-radius: var(--radius-composer); background: var(--surface-raised); box-shadow: var(--shadow-composer); }
+      .composer { padding: 10px; border-radius: var(--radius-composer); corner-shape: squircle; background: var(--surface-raised); box-shadow: var(--shadow-composer); }
       .composer textarea { width: 100%; min-height: 58px; padding: 4px 5px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); }
       .composer textarea::placeholder { color: var(--text-tertiary); opacity: 1; }
       .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -439,7 +448,7 @@
       <section class="section">
         <div class="section-head">
           <h2>Button vocabulary</h2>
-          <p>Neutral buttons gain only a small surface and shadow change. Primary actions carry the accent. Ghost buttons stay flat. Pressed states move inward through an inset shadow rather than bouncing or shifting layout.</p>
+          <p>All actions reuse the same soft squircle shape, including icon buttons. Use the shared Button and 16px button radius; the composer uses a broader 40px radius. Neutral buttons gain a small surface and shadow change. Primary actions carry the accent, ghost buttons stay flat, and keyboard focus remains visible. See the <a href="design-guide.md">design guide</a> for reuse rules.</p>
         </div>
         <div class="cluster">
           <button class="button primary" type="button">Send message <span aria-hidden="true">↑</span></button>

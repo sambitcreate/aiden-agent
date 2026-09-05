@@ -141,7 +141,6 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
       <Button
         variant="transparent"
         size="large"
-        radius="rounded"
         disabled={disabled}
         onClick={() => void openPreferredEditor()}
         aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
@@ -173,7 +172,6 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
             iconOnly
             variant="transparent"
             size="large"
-            radius="rounded"
             disabled={disabled}
             aria-label="Choose editor"
             className="h-9 w-8 rounded-l-none rounded-r-pill border-0 [&_svg]:size-4"

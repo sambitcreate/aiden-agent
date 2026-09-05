@@ -131,7 +131,6 @@ export function SubagentChips({
             key={runId}
             variant="muted"
             size="small"
-            radius="rounded"
             data-subagent-chip-run-id={runId}
             className="max-w-full gap-1.5 motion-reduce:transition-none"
             aria-label={`Open ${label}. Status: ${status}.`}

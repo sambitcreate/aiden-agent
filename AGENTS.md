@@ -12,6 +12,8 @@ The current plan inventory and status live in [`docs/plans/README.md`](docs/plan
 
 ## UI design references
 
+Follow `docs/design-guide.md` for reusable action shapes, semantic tokens, and accessibility. Reuse the shared squircle button treatment for new and existing actions rather than introducing per-screen button geometry.
+
 Before adding or materially restyling any UI element or component, always review both `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html` for interaction, styling, state, motion, and accessibility inspiration. Adapt the references to Aiden's existing visual language rather than copying them blindly, and use the semantic design tokens in `renderer/styles.css` and `renderer/shared/appearance.ts` instead of introducing one-off colors.
 
 Do not put decorative borders or outlines around radio-button choice cards. Communicate selection with the radio control and existing background-state tokens instead. Always preserve visible keyboard `focus-visible` rings or outlines for accessibility.

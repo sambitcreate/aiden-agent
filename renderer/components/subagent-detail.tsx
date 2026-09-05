@@ -297,7 +297,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   <Button
                     variant="muted"
                     size="small"
-                    radius="rounded"
                     onClick={onRetryRefresh}
                     className="mt-3 motion-reduce:transition-none"
                   >
@@ -315,7 +314,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 <Button
                   variant="muted"
                   size="small"
-                  radius="rounded"
                   disabled={stopPending}
                   aria-label={stopPending ? `Stopping ${run.label}` : `${stopLabel} ${run.label}`}
                   aria-busy={stopPending ? true : undefined}

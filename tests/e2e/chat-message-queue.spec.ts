@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   expect,
+  expectSquircleButtons,
   finishLmStudioOnboarding,
   REPOSITORY_ROOT,
   test,
@@ -25,7 +26,9 @@ test("composer squircle follows resizing and draft growth without clipping acces
   aiden,
 }) => {
   const { page } = aiden;
+  await expectSquircleButtons(page);
   await finishLmStudioOnboarding(page);
+  await expectSquircleButtons(page);
   const shell = page.locator(".composer-shell");
   const composer = page.locator("textarea");
   expect(await page.evaluate(() => CSS.supports("corner-shape", "squircle"))).toBe(true);
@@ -50,6 +53,7 @@ test("composer squircle follows resizing and draft growth without clipping acces
   const noAccess = options.getByRole("radio", { name: /^Workspace access: No access/u });
   // Clicking a choice above the shell also verifies that overflow is hit-testable.
   await expect(options).toBeVisible();
+  await expectSquircleButtons(page);
   expect((await options.boundingBox())!.y).toBeLessThan((await shell.boundingBox())!.y);
   await noAccess.click();
   await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
@@ -176,6 +180,7 @@ test("queued messages edit, reorder, delete and steer without changing the compo
   const editor = page.getByRole("dialog", { name: "Edit queued message", exact: true });
   const editText = editor.getByRole("textbox", { name: "Queued message text" });
   await expect(editText).toHaveValue("Queued second");
+  await expectSquircleButtons(page);
   await page.screenshot({ path: test.info().outputPath("queued-message-editor.png") });
   await editText.fill("Discard this edit");
   await page.keyboard.press("Escape");
