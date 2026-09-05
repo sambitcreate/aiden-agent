@@ -1,3 +1,5 @@
+import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { createVccRecallTool } from "./pi-vcc/recall.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
 // pi-ai). A fresh Agent runs per generation: it owns multi-step tool calling
 // (folder-scoped coding tools, Exa search, Agent Skills, MCP servers) and
@@ -273,10 +275,11 @@ import {
   DISPLAY_IMAGE_TOOL_NAME,
   shouldEnableDisplayImageExtension,
 } from "./display-image-extension.js";
-import { CHAT_ARTIFACT_EVENT_VERSION, type ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import {
-  MAX_HTML_ARTIFACTS_PER_RESPONSE,
-} from "../../renderer/shared/generative-ui.js";
+  CHAT_ARTIFACT_EVENT_VERSION,
+  type ChatHtmlArtifactV1,
+} from "../../renderer/shared/chat-artifacts.js";
+import { MAX_HTML_ARTIFACTS_PER_RESPONSE } from "../../renderer/shared/generative-ui.js";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import {
   createGenerativeUiExtensionRuntime,
@@ -292,16 +295,10 @@ import {
 } from "./ask-user-question-extension.js";
 import { AskUserQuestionCoordinator } from "./ask-user-question-coordinator.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
-import {
-  createTodoExtension,
-  shouldEnableTodoExtension,
-} from "./rpiv-todo/extension.js";
+import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
 import { isTodoSnapshotFailure, replayTodoState } from "./rpiv-todo/replay.js";
-import {
-  todoSnapshotForRenderer,
-  unavailableTodoSnapshot,
-} from "../../renderer/shared/todo.js";
+import { todoSnapshotForRenderer, unavailableTodoSnapshot } from "../../renderer/shared/todo.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -899,6 +896,7 @@ async function prepareGeneration(
   const subagentSupervisor =
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
+          compactionEngine: compactionEngineFrom(settings.compactionEngine),
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
@@ -1285,6 +1283,7 @@ async function prepareGeneration(
     workspaceId: workspace?.id,
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
+    compactionEngine: compactionEngineFrom(settings.compactionEngine),
     sharedImages,
     botContext,
     botApprovedRoots,
@@ -1574,6 +1573,7 @@ export const llmClient = {
       assistantSettingsPermission,
       subagentSupervisor,
       showLocalModelReasoning,
+      compactionEngine,
       sharedImages,
       botContext: preparedBotContext,
       botApprovedRoots,
@@ -1668,8 +1668,7 @@ export const llmClient = {
                 : undefined,
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
-            htmlArtifacts:
-              displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
+            htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
           },
           {
             providerId: params.providerId,
@@ -1701,11 +1700,7 @@ export const llmClient = {
               displayedHtmlArtifacts.map((artifact) => artifact.mediaId),
             );
           } catch (error) {
-            logger.warn(
-              "pi",
-              `Could not commit HTML artifacts for stream ${streamId}.`,
-              error,
-            );
+            logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
           }
         }
         return { chat, error: undefined, messageId };
@@ -1732,30 +1727,24 @@ export const llmClient = {
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
     let piUpgradeCompactionEnabled = false;
-    let memoryApprovalContext:
-      | { scope: MemoryScope; provenance: MemoryProvenance }
-      | undefined;
+    let memoryApprovalContext: { scope: MemoryScope; provenance: MemoryProvenance } | undefined;
     try {
       const piUpgradePolicy = await piUpgradeRolloutStore.load();
-      piUpgradeCompactionEnabled = piUpgradeChatBehaviorEligible(
-        piUpgradePolicy,
-        generationChat,
-        {
-          development: !isPackagedRuntime(),
-          behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
-        },
-      );
+      piUpgradeCompactionEnabled = piUpgradeChatBehaviorEligible(piUpgradePolicy, generationChat, {
+        development: !isPackagedRuntime(),
+        behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+      });
       piSession = await piCompactionSessionStore.openChat(params.chatId, generationChat);
+      const recallExtension: PiAgentRuntimeExtension = {
+        id: "aiden.chat-history-recall",
+        tools: [createVccRecallTool(async () => piSession!)],
+      };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
       try {
-        const memoryEligible = piUpgradeMemoryEligible(
-          piUpgradePolicy,
-          generationChat,
-          {
-            development: !isPackagedRuntime(),
-            behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
-          },
-        );
+        const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
+          development: !isPackagedRuntime(),
+          behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+        });
         if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
         if (!(await memoryEnabledForChat(configStore, generationChat))) {
           throw new Error("Durable memory is disabled by the current memory policy.");
@@ -1824,6 +1813,7 @@ export const llmClient = {
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
         ? [
             ...(memoryExtension ? [memoryExtension] : []),
+            recallExtension,
             {
               id: "aiden.bot-runtime-authority",
               beforeProviderRequest: async ({ model: requestModel }) => {
@@ -1843,6 +1833,7 @@ export const llmClient = {
             ...runtimeExtensionSnapshot.extensions,
             ...generationExtensions,
             ...(memoryExtension ? [memoryExtension] : []),
+            recallExtension,
           ];
       const toolsBeforeAdvisor = resolvePiAgentRuntimeStaticContributions(
         "",
@@ -1866,9 +1857,7 @@ export const llmClient = {
         },
         executorTools: toolsBeforeAdvisor,
         getLiveMessages: (toolCallId) =>
-          candidate
-            ? snapshotAdvisorRuntimeMessages(candidate.state, toolCallId)
-            : [],
+          candidate ? snapshotAdvisorRuntimeMessages(candidate.state, toolCallId) : [],
         ...(shouldEnableAskUserQuestionExtension({
           usageSource: options.usageSource,
           interactionSurface: options.interactionSurface,
@@ -1985,6 +1974,7 @@ export const llmClient = {
           timeline.compactionFinished(
             activeCompactionStepId,
             event.aborted ? "cancelled" : event.result ? "completed" : "failed",
+            event.result,
           );
           activeCompactionStepId = undefined;
         }
@@ -2003,6 +1993,7 @@ export const llmClient = {
         }
       };
       const compactionOptions = {
+        engine: compactionEngine,
         models: createPiCompactionModels(runtime, (message) =>
           usageStore.record(
             assistantUsageRecord({
@@ -2324,33 +2315,42 @@ export const llmClient = {
             }
             if (memoryApproval) {
               timeline.toolAwaitingApproval(context.toolCall.id);
-              const requestMemoryApproval = async (summary: string, approvalSignal?: AbortSignal) => {
-                  const toolCallId = timeline.publicToolCallId(context.toolCall.id);
-                  if (!toolCallId) throw new Error("The tool approval step was not initialized.");
-                  return approvals.request({
+              const requestMemoryApproval = async (
+                summary: string,
+                approvalSignal?: AbortSignal,
+              ) => {
+                const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+                if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+                return approvals.request(
+                  {
                     streamId,
                     toolCallId,
                     toolName: context.toolCall.name,
                     summary,
                     details: approvalDetails,
-                  }, approvalSignal, owner.documentId);
-                };
-              const memoryDecision = context.toolCall.name === FORGET_MEMORY_TOOL_NAME
-                ? await authorizeMemoryRemoval(
-                    context.args,
-                    memoryApprovalContext,
-                    async (scope, factId) => (await memoryStore.list(scope)).find(
-                      (fact) => fact.id === factId && fact.state === "active",
-                    ),
-                    requestMemoryApproval,
-                    signal,
-                  )
-                : await authorizeMemoryProposal(
-                    context.args,
-                    memoryApprovalContext,
-                    requestMemoryApproval,
-                    signal,
-                  );
+                  },
+                  approvalSignal,
+                  owner.documentId,
+                );
+              };
+              const memoryDecision =
+                context.toolCall.name === FORGET_MEMORY_TOOL_NAME
+                  ? await authorizeMemoryRemoval(
+                      context.args,
+                      memoryApprovalContext,
+                      async (scope, factId) =>
+                        (await memoryStore.list(scope)).find(
+                          (fact) => fact.id === factId && fact.state === "active",
+                        ),
+                      requestMemoryApproval,
+                      signal,
+                    )
+                  : await authorizeMemoryProposal(
+                      context.args,
+                      memoryApprovalContext,
+                      requestMemoryApproval,
+                      signal,
+                    );
               if (!memoryDecision.allowed) {
                 deniedToolCalls.add(context.toolCall.id);
                 if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
@@ -2361,13 +2361,14 @@ export const llmClient = {
               }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
-            } else summary = editScheduleApproval
-              ? summarizeEditAutomationToolCall(context.args)
-              : preparedStandardScheduleSummary
-                ? preparedStandardScheduleSummary
-              : scheduleApproval
-                ? summarizeScheduleToolCall(context.args)
-                : summarizeToolCall(context.toolCall.name, context.args);
+            } else
+              summary = editScheduleApproval
+                ? summarizeEditAutomationToolCall(context.args)
+                : preparedStandardScheduleSummary
+                  ? preparedStandardScheduleSummary
+                  : scheduleApproval
+                    ? summarizeScheduleToolCall(context.args)
+                    : summarizeToolCall(context.toolCall.name, context.args);
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
           const approvalOutcome = await approvals.request(
@@ -2413,15 +2414,16 @@ export const llmClient = {
             ? undefined
             : {
                 block: true,
-                reason: attendedScheduleApproval && approvalOutcome === "denied"
-                  ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
-                  : approvalOutcome === "denied"
-                    ? "The user denied this action."
-                    : approvalOutcome === "detached"
-                      ? "Approval is unavailable while this response continues in the background. Return to the chat and retry the action."
-                      : approvalOutcome === "unavailable"
-                        ? "Aiden could not present the approval request. Return to the chat and retry the action."
-                        : "The action was cancelled before approval.",
+                reason:
+                  attendedScheduleApproval && approvalOutcome === "denied"
+                    ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
+                    : approvalOutcome === "denied"
+                      ? "The user denied this action."
+                      : approvalOutcome === "detached"
+                        ? "Approval is unavailable while this response continues in the background. Return to the chat and retry the action."
+                        : approvalOutcome === "unavailable"
+                          ? "Aiden could not present the approval request. Return to the chat and retry the action."
+                          : "The action was cancelled before approval.",
               };
         },
       });

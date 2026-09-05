@@ -46,7 +46,7 @@ function apiFor(provider: StoredProvider): Api {
   return provider.kind === "anthropic" ? "anthropic-messages" : "openai-completions";
 }
 
-function buildModel(
+export function buildModel(
   provider: StoredProvider,
   modelId: string,
   limits: RuntimeModelLimits,
@@ -100,26 +100,25 @@ export function withPinnedBotProviderAuth(
   return {
     ...runtime,
     streams: {
-      streamSimple: (model, context, options) => lazyStream(model, async () => {
-        if (model.provider !== runtime.model.provider || model.id !== runtime.model.id) {
-          throw new Error("Pinned Bot provider auth cannot be reused for another model.");
-        }
-        const requestModel = auth.auth.baseUrl
-          ? { ...model, baseUrl: auth.auth.baseUrl }
-          : model;
-        let headers = auth.auth.headers || options?.headers
-          ? { ...(options?.headers ?? {}), ...(auth.auth.headers ?? {}) }
-          : undefined;
-        const env = auth.env || options?.env
-          ? { ...(options?.env ?? {}), ...(auth.env ?? {}) }
-          : undefined;
-        return providerStream(requestModel, context, {
-          ...options,
-          apiKey: auth.auth.apiKey,
-          headers,
-          env,
-        });
-      }),
+      streamSimple: (model, context, options) =>
+        lazyStream(model, async () => {
+          if (model.provider !== runtime.model.provider || model.id !== runtime.model.id) {
+            throw new Error("Pinned Bot provider auth cannot be reused for another model.");
+          }
+          const requestModel = auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model;
+          let headers =
+            auth.auth.headers || options?.headers
+              ? { ...(options?.headers ?? {}), ...(auth.auth.headers ?? {}) }
+              : undefined;
+          const env =
+            auth.env || options?.env ? { ...(options?.env ?? {}), ...(auth.env ?? {}) } : undefined;
+          return providerStream(requestModel, context, {
+            ...options,
+            apiKey: auth.auth.apiKey,
+            headers,
+            env,
+          });
+        }),
     },
   };
 }

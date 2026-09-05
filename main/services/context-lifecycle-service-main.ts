@@ -1,3 +1,4 @@
+import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { botStore } from "./bot-store.js";
 import { chatStore } from "./chat-store.js";
@@ -7,7 +8,7 @@ import { ContextLifecycleService } from "./context-lifecycle-service.js";
 import { resolveGenerationThinkingLevel } from "./generation-runtime.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import { llmClient } from "./llm-client.js";
-import { resolveModelRuntime } from "./model-runtime.js";
+import { resolveModelRuntime, resolveCompactionModelMetadata } from "./model-runtime.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { piUpgradeBehaviorEnabledAtStartup } from "./pi-upgrade-rollout.js";
 import { piUpgradeChatBehaviorEligible } from "./pi-upgrade-rollout.js";
@@ -18,22 +19,24 @@ import { usageStore } from "./usage-store.js";
 
 export const contextLifecycleService = new ContextLifecycleService({
   compactionEnabled: () => piUpgradeBehaviorEnabledAtStartup,
-  compactionEligible: async (chat) => piUpgradeChatBehaviorEligible(
-    await piUpgradeRolloutStore.load(),
-    chat,
-    { development: !isPackagedRuntime(), behaviorEnabled: piUpgradeBehaviorEnabledAtStartup },
-  ),
+  compactionEligible: async (chat) =>
+    piUpgradeChatBehaviorEligible(await piUpgradeRolloutStore.load(), chat, {
+      development: !isPackagedRuntime(),
+      behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+    }),
   getChat: (chatId) => chatStore.get(chatId),
   listChatsByBot: (botId) => chatStore.listByBot(botId),
   isBotArchived: async (botId) => (await botStore.get(botId))?.archivedAt !== undefined,
-  beginChatTurn: (chatId, turnId, ownerId) =>
-    llmClient.beginChatTurn(chatId, turnId, ownerId),
+  beginChatTurn: (chatId, turnId, ownerId) => llmClient.beginChatTurn(chatId, turnId, ownerId),
   openSession: async (chatId) => {
     const chat = await chatStore.get(chatId);
     if (!chat) throw new Error("Chat is unavailable.");
     return piCompactionSessionStore.openChat(chatId, chat);
   },
   resolveRuntime: resolveModelRuntime,
+  resolveLocalModel: resolveCompactionModelMetadata,
+  getCompactionEngine: async () =>
+    compactionEngineFrom((await configStore.getSettings()).compactionEngine),
   recordUsage: (message, runtime) =>
     usageStore.record(
       assistantUsageRecord({
@@ -47,8 +50,8 @@ export const contextLifecycleService = new ContextLifecycleService({
     const settings = await configStore.getSettings();
     const requested =
       audience.kind === "telegram"
-        ? settings.telegramProfiles?.[audience.profile]?.thinkingLevel ??
-          settings.telegramThinkingLevel
+        ? (settings.telegramProfiles?.[audience.profile]?.thinkingLevel ??
+          settings.telegramThinkingLevel)
         : chat.providerId === GOOGLE_PROVIDER_ID
           ? settings.googleThinkingByModel?.[chat.model!]
           : chat.providerId === OPENAI_CODEX_PROVIDER_ID

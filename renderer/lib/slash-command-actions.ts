@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../shared/compaction";
 import type { CommandId } from "../shared/keybindings";
 import type { SettingsSection } from "../shared/settings-section";
 import type { SlashCommandDefinition } from "../shared/slash-commands";
@@ -45,7 +46,7 @@ export interface SlashCommandActionHandlers {
   openFork?: () => void;
   cloneChat?: () => void | Promise<void>;
   exportChat?: () => void | Promise<void>;
-  compactChat?: () => void | Promise<void>;
+  compactChat?: (engine?: CompactionEngine) => void | Promise<void>;
   openSessionDetails?: () => void;
   openLogout?: () => void;
   openWorktree?: (branchName?: string) => void | Promise<void>;
@@ -107,7 +108,9 @@ export function slashCommandAvailability(
         return unavailable(context.chatCloneBlockedReason);
       }
       if (!context.idle) {
-        return unavailable(context.idleBlockedReason ?? "Finish the current response or approval first.");
+        return unavailable(
+          context.idleBlockedReason ?? "Finish the current response or approval first.",
+        );
       }
       if (context.sessionActionBlockedReason) {
         return unavailable(context.sessionActionBlockedReason);
@@ -287,7 +290,7 @@ export function executeSlashCommandAction(
         }
         case "compact": {
           if (!handlers.compactChat) return false;
-          const result = handlers.compactChat();
+          const result = handlers.compactChat(command.action.engine);
           return result instanceof Promise ? result.then(() => true) : true;
         }
         case "details":

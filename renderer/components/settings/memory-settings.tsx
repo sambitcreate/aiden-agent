@@ -1,6 +1,7 @@
+import { compactionEngineFrom, type CompactionEngine } from "../../shared/compaction";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Field, FieldSet, Switch, Text, toast } from "../ui";
+import { Field, FieldSet, RadioGroup, RadioGroupItem, Switch, Text, toast } from "../ui";
 import { settingsApi, workspacesApi } from "../../lib/ipc";
 import { queryKeys, useSettings, useWorkspaces } from "../../lib/queries";
 import type { AppSettings, Workspace } from "../../lib/types";
@@ -9,9 +10,23 @@ export function MemorySettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();
   const workspaces = useWorkspaces();
+  const [compactionSaving, setCompactionSaving] = React.useState(false);
   const [globalSaving, setGlobalSaving] = React.useState(false);
   const [workspaceSaving, setWorkspaceSaving] = React.useState<Set<string>>(() => new Set());
   const globallyEnabled = settings.data?.memoryEnabled !== false;
+
+  const setCompactionEngine = async (engine: CompactionEngine) => {
+    if (compactionSaving) return;
+    setCompactionSaving(true);
+    try {
+      const saved = await settingsApi.set({ compactionEngine: engine });
+      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
+    } catch {
+      toast.error("Couldn't update automatic compaction.");
+    } finally {
+      setCompactionSaving(false);
+    }
+  };
 
   const setGlobalEnabled = async (enabled: boolean) => {
     if (globalSaving) return;
@@ -47,6 +62,56 @@ export function MemorySettings() {
 
   return (
     <div className="flex flex-col gap-6">
+      <FieldSet title="Automatic compaction">
+        <RadioGroup
+          orientation="vertical"
+          aria-label="Automatic compaction engine"
+          value={compactionEngineFrom(settings.data?.compactionEngine)}
+          onValueChange={(value) => void setCompactionEngine(compactionEngineFrom(value))}
+          disabled={settings.isLoading}
+          aria-busy={compactionSaving}
+          className="gap-1 p-2"
+        >
+          {(
+            [
+              [
+                "llm",
+                "LLM Compaction",
+                "Uses your chat model to summarize older context. Takes time and uses model tokens.",
+              ],
+              [
+                "vcc",
+                "pi-vcc Compaction — Experimental",
+                "Compacts locally without a summarization call. Preserves selected excerpts and retrieves earlier details when needed.",
+              ],
+            ] as const
+          ).map(([value, label, description]) => (
+            <label
+              key={value}
+              className={`flex cursor-pointer items-start gap-3 rounded-lg p-3 transition-colors hover:bg-control-hover ${compactionEngineFrom(settings.data?.compactionEngine) === value ? "bg-control" : ""}`}
+            >
+              <RadioGroupItem
+                value={value}
+                aria-label={label}
+                className="mt-0.5 shrink-0 focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover"
+              />
+              <span className="flex flex-col gap-1">
+                <Text>{label}</Text>
+                <Text as="span" variant="small" color="secondary">
+                  {description}
+                </Text>
+              </span>
+            </label>
+          ))}
+        </RadioGroup>
+        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
+          Applies to new runs. Try /compact-LLM or /compact-VCC in an idle chat for a one-time
+          override; /compact uses this preference. Local compaction can omit details, which Aiden
+          can retrieve from the current chat. That context may be sent to your chat model when the
+          conversation continues. Current-chat recall works independently of memory below.
+        </Text>
+      </FieldSet>
+
       <FieldSet title="Memory">
         <Field
           label="Use memory"

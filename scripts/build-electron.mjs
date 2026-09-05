@@ -11,6 +11,13 @@ const common = {
 await Promise.all([
   build({
     ...common,
+    entryPoints: ["main/services/pi-vcc/worker.ts"],
+    outfile: "build/main/pi-vcc-worker.js",
+    format: "esm",
+    packages: "external",
+  }),
+  build({
+    ...common,
     entryPoints: ["main/bootstrap.ts"],
     outfile: "build/main/index.js",
     format: "esm",

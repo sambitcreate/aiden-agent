@@ -377,14 +377,11 @@ test("Gemini usage scope repairs divergent imported Google policy state", async 
     }),
     "utf-8",
   );
-  assert.deepEqual(
-    (await transcriptionOnly.store.getSettings()).hiddenModelsByProvider?.google,
-    {
-      defaultVisibility: "shown",
-      exceptions: ["gemini-private"],
-      policyHidden: true,
-    },
-  );
+  assert.deepEqual((await transcriptionOnly.store.getSettings()).hiddenModelsByProvider?.google, {
+    defaultVisibility: "shown",
+    exceptions: ["gemini-private"],
+    policyHidden: true,
+  });
 });
 
 test("removing a provider clears its model visibility preferences", async (t) => {
@@ -506,7 +503,7 @@ test("resetUserSetup clears setup and preferences while preserving skills and wo
 
   assert.deepEqual(await h.store.listProviders(), []);
   assert.deepEqual(await h.store.listMcpServers(), []);
-  assert.deepEqual(await h.store.getSettings(), {});
+  assert.deepEqual(await h.store.getSettings(), { compactionEngine: "llm" });
   assert.deepEqual(await h.store.listSkills(), [
     {
       id: "summarize",
@@ -555,6 +552,7 @@ test("reads and writes survive a restart of the whole store", async (t) => {
     isBuiltin: false,
   });
   assert.deepEqual(await next.getSettings(), {
+    compactionEngine: "llm",
     exaEnabled: true,
     assistant: assistantConfig,
     webSearch: expectedWebSearchSettings(true),
@@ -1293,7 +1291,10 @@ test("seeding runs once even under concurrent first reads", async (t) => {
   assert.deepEqual(providers, []);
   assert.deepEqual(skills, []);
   assert.deepEqual(servers, []);
-  assert.deepEqual(settings, { webSearch: expectedWebSearchSettings(false) });
+  assert.deepEqual(settings, {
+    compactionEngine: "llm",
+    webSearch: expectedWebSearchSettings(false),
+  });
   const local = await readJson<{ aidenDirMigratedAt: number }>(h.localFile);
   assert.equal(typeof local.aidenDirMigratedAt, "number");
 });
@@ -1810,6 +1811,7 @@ test("valid-JSON malformed local roots are normalized before startup reads", asy
     assert.deepEqual(await h.store.listProviders(), []);
     assert.equal((await h.store.listWorkspaces()).length, 1);
     assert.deepEqual(await h.store.getSettings(), {
+      compactionEngine: "llm",
       webSearch: expectedWebSearchSettings(false),
     });
   }
@@ -1931,6 +1933,7 @@ test("valid-JSON malformed settings roots are normalized before reads and writes
     await fs.writeFile(h.settingsFile, JSON.stringify(malformed), "utf-8");
 
     assert.deepEqual(await h.store.getSettings(), {
+      compactionEngine: "llm",
       webSearch: expectedWebSearchSettings(false),
     });
     assert.equal(
@@ -1949,7 +1952,7 @@ test("invalid settings JSON boots with defaults but remains read-only", async (t
   const broken = '{ "settings": { "keybindings": [broken] } }';
   await fs.writeFile(h.settingsFile, broken, "utf-8");
 
-  assert.deepEqual(await h.store.getSettings(), {});
+  assert.deepEqual(await h.store.getSettings(), { compactionEngine: "llm" });
   await assert.rejects(h.store.setSettings({ exaEnabled: true }), /does not parse/u);
   assert.equal(await fs.readFile(h.settingsFile, "utf-8"), broken);
 });
@@ -1963,9 +1966,11 @@ test("malformed legacy settings are normalized before same-process consumers run
   });
 
   assert.deepEqual(await h.store.getSettings(), {
+    compactionEngine: "llm",
     webSearch: expectedWebSearchSettings(false),
   });
   assert.deepEqual(await h.store.setGoogleThinkingLevel("gemini-test", "high"), {
+    compactionEngine: "llm",
     googleThinkingByModel: { "gemini-test": "high" },
     webSearch: expectedWebSearchSettings(false),
   });
@@ -2396,6 +2401,7 @@ test("malformed known settings fields are dropped before type-assuming consumers
   );
 
   assert.deepEqual(await h.store.getSettings(), {
+    compactionEngine: "llm",
     futureSetting: { retained: true },
     webSearch: expectedWebSearchSettings(false),
   });
@@ -2844,4 +2850,21 @@ test("a failed secret migration never blocks startup reads and retries later", a
   assert.match(String(reports[0]?.error), /keychain locked/u);
   assert.deepEqual(await store.listSkills(), [], "a retry gets through");
   assert.equal(calls, 2);
+});
+
+test("compaction preference defaults to LLM and survives a restart independently of memory", async (t) => {
+  const h = await harness(t);
+  assert.equal((await h.store.getSettings()).compactionEngine, "llm");
+  await h.store.setSettings({ compactionEngine: "vcc", memoryEnabled: false });
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.equal((await next.getSettings()).compactionEngine, "vcc");
+  assert.equal((await next.getSettings()).memoryEnabled, false);
+  await next.setSettings({ compactionEngine: "llm" });
+  assert.equal((await next.getSettings()).compactionEngine, "llm");
 });

@@ -380,6 +380,28 @@ final class AidenChatTests: XCTestCase {
         }
     }
 
+    func testCurrentChatRecallUsesFixedPrivateActivityLabel() {
+        let step = AidenAgentStep(
+            id: "recall-1", order: 0, kind: .tool, toolName: "vcc_recall",
+            label: "Recall chat history", status: .completed, startedAt: 1_000,
+            updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+            durationMs: 1_000, target: nil, detail: nil, lineChanges: nil
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Recalled chat history")
+    }
+
+    func testCompactionMetricsUseExistingActivityDetail() throws {
+        let step = AidenAgentStep(
+            id: "compact-1", order: 0, kind: .tool, toolName: "compact_context",
+            label: "Compact context", status: .completed, startedAt: 1_000,
+            updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+            durationMs: 1_000, target: nil, detail: "pi-vcc · 0.4s · ~25900 → 6758 tokens", lineChanges: nil
+        )
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Compacted context pi-vcc · 0.4s · ~25900 → 6758 tokens")
+        let decoded = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
+        XCTAssertEqual(decoded.detail, step.detail)
+    }
+
     func testActivitySummaryMatchesMacCategories() throws {
         let timeline = AidenGenerationTimeline(
             version: 3,
