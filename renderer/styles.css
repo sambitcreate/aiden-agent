@@ -454,9 +454,24 @@ textarea {
 
 /* One shape for shared actions, legacy buttons, and button-like links in every window.
    Keep native selection controls recognizable and never clip menus or focus rings. */
-:root :is(button, [role="button"], [data-slot="button"], .squircle-control):not([role="switch"]):not([role="radio"]):not([role="checkbox"]) {
+:root :is(button, [role="button"], [data-slot="button"], .squircle-control):where(:not([role="switch"]):not([role="radio"]):not([role="checkbox"])) {
   border-radius: var(--radius-button);
   corner-shape: squircle;
+}
+
+/* Joined actions share one outer silhouette; their hover fills meet at square seams. */
+:root .squircle-action-group > [data-slot="button"] {
+  border-radius: 0;
+}
+
+:root .squircle-action-group > [data-slot="button"]:first-child {
+  border-start-start-radius: var(--radius-button);
+  border-end-start-radius: var(--radius-button);
+}
+
+:root .squircle-action-group > [data-slot="button"]:last-child {
+  border-start-end-radius: var(--radius-button);
+  border-end-end-radius: var(--radius-button);
 }
 
 /* Text entry uses fill and caret feedback without changing its resting edge. */

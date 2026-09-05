@@ -22,6 +22,15 @@ export async function expectSquircleButtons(page: Page): Promise<void> {
     if (["switch", "radio", "checkbox"].includes(element.getAttribute("role") ?? "")) return false;
     if (!element.getClientRects().length) return false;
     const style = getComputedStyle(element);
+    if (element.parentElement?.classList.contains("squircle-action-group")) {
+      const first = element === element.parentElement.firstElementChild;
+      const last = element === element.parentElement.lastElementChild;
+      return style.getPropertyValue("corner-shape") !== "squircle"
+        || style.borderStartStartRadius !== (first ? "16px" : "0px")
+        || style.borderEndStartRadius !== (first ? "16px" : "0px")
+        || style.borderStartEndRadius !== (last ? "16px" : "0px")
+        || style.borderEndEndRadius !== (last ? "16px" : "0px");
+    }
     return style.getPropertyValue("corner-shape") !== "squircle" || style.borderTopLeftRadius !== "16px";
   }).map((element) => element.getAttribute("aria-label") ?? element.textContent?.trim()));
   playwrightTest.expect(failures).toEqual([]);

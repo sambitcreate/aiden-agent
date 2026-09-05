@@ -11,6 +11,7 @@ for emphasis; do not add a separate pill or circular button variant.
 | --- | --- | --- |
 | Buttons, toolbar actions, navigation actions, and button links | `Button`, or the shared action rule in `renderer/styles.css` for existing native buttons | `--radius-button: 16px` and `corner-shape: squircle` |
 | A custom visual that must follow a button's silhouette, such as its artwork mask | `.squircle-control` | The same button radius and corner shape |
+| Joined actions, such as an action with a separate menu trigger | `.squircle-control.squircle-action-group` around direct `Button` children | 16px outer corners, square internal seams |
 | Chat composer | `.composer-shell` | `--radius-composer: 40px` and `corner-shape: squircle` |
 
 The renderer's action rule also covers existing `button`, `[role="button"]`, and
@@ -23,6 +24,11 @@ Use native CSS geometry in the Electron renderer. Keep shadows on the shaped
 element and preserve visible overflow for menus, badges, and focus rings. Apply
 clipping only to an inner artwork mask that needs it, never to the whole action
 or composer. No JavaScript path generation or new dependency is needed.
+
+Joined actions reuse the group rule instead of per-corner utility overrides.
+Their individual hover and focus fills meet at straight seams, while the group
+and its end buttons share the outer squircle. Leave the group overflow visible
+so each button's keyboard outline and portaled menus remain unobstructed.
 
 ## Color, state, and accessibility
 

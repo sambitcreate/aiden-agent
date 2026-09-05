@@ -87,7 +87,7 @@
       body { margin: 0; color: var(--text); background: var(--bg); font-size: 14px; line-height: 1.45; }
       button, input, textarea { font: inherit; }
       button { color: inherit; }
-      :root :is(button, [role="button"], .button):not([role="switch"]):not([role="radio"]):not([role="checkbox"]) {
+      :root :is(button, [role="button"], .button):where(:not([role="switch"]):not([role="radio"]):not([role="checkbox"])) {
         border-radius: var(--radius-button);
         corner-shape: squircle;
       }
@@ -95,6 +95,10 @@
         outline: 2px solid var(--text-secondary);
         outline-offset: 2px;
       }
+      .squircle-action-group { display: inline-flex; border-radius: var(--radius-button); corner-shape: squircle; background: var(--control); }
+      :root .squircle-action-group > .button { border-radius: 0; }
+      :root .squircle-action-group > .button:first-child { border-start-start-radius: var(--radius-button); border-end-start-radius: var(--radius-button); }
+      :root .squircle-action-group > .button:last-child { border-start-end-radius: var(--radius-button); border-end-end-radius: var(--radius-button); }
       code { font-family: "SFMono-Regular", "SF Mono", Menlo, monospace; font-size: 12px; }
 
       .topbar {
@@ -457,6 +461,10 @@
           <button class="button glass icon" type="button" aria-label="New chat">＋</button>
           <button class="button danger" type="button">Deny</button>
           <button class="button" type="button" disabled>Unavailable</button>
+          <div class="squircle-action-group" role="group" aria-label="Joined action example">
+            <button class="button ghost" type="button">Open</button>
+            <button class="button ghost icon" type="button" aria-label="Choose destination">⌄</button>
+          </div>
         </div>
         <div class="section-spacer"></div>
         <div class="state-grid" role="group" aria-label="Neutral button state comparison">

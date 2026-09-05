@@ -1,4 +1,4 @@
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { expect, expectSquircleButtons, finishLmStudioOnboarding, test } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
 const ONE_PIXEL_PNG_BASE64 =
@@ -198,6 +198,46 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
 
 test.describe("with a workspace", () => {
   test.use({ workspaceSeed: true });
+
+  test("joined editor actions keep square hover seams and visible keyboard focus", async ({ aiden }) => {
+    const { app, page } = aiden;
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler("workspaces:externalEditors");
+      ipcMain.handle("workspaces:externalEditors", () => [{ id: "finder", label: "Finder", iconDataUrl: null }]);
+    });
+    await finishLmStudioOnboarding(page);
+    const group = page.getByRole("group", { name: "Open workspace in editor" });
+    const open = group.getByRole("button", { name: "Open workspace in Finder", exact: true });
+    const choose = group.getByRole("button", { name: "Choose editor", exact: true });
+    await expect(open).toBeEnabled();
+    await expect(group).toHaveCSS("corner-shape", "squircle");
+    await expect(group).toHaveCSS("border-radius", "16px");
+    await expect(group).toHaveCSS("overflow", "visible");
+    await expectSquircleButtons(page);
+    for (const [button, seam] of [[open, "right"], [choose, "left"]] as const) {
+      await button.hover();
+      await expect(button).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+      await expect(button).toHaveCSS(`border-top-${seam}-radius`, "0px");
+      await expect(button).toHaveCSS(`border-bottom-${seam}-radius`, "0px");
+      // Hover fill reaches the top seam corner; a rounded half leaves this point outside.
+      expect(await button.evaluate((element, edge) => {
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(edge === "right" ? rect.right - 1 : rect.left + 1, rect.top + 1);
+        return hit === element || element.contains(hit);
+      }, seam)).toBe(true);
+    }
+    await page.keyboard.press("Tab");
+    await open.focus();
+    await expect(open).toHaveCSS("outline-style", "solid");
+    await open.press("Tab");
+    await expect(choose).toBeFocused();
+    await expect(choose).toHaveCSS("outline-style", "solid");
+    await choose.press("Enter");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(choose).toBeFocused();
+    await group.screenshot({ path: test.info().outputPath("joined-editor-actions.png") });
+  });
 
   test("sidebar overflow menus stay to the right of the sidebar", async ({ aiden }) => {
     const { app, page } = aiden;

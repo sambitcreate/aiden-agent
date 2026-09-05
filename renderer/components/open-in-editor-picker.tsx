@@ -136,7 +136,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
     <div
       role="group"
       aria-label="Open workspace in editor"
-      className="open-in-editor-picker glass-surface flex h-9 shrink-0 overflow-hidden rounded-pill shadow-control transition-shadow duration-150 ease-out hover:shadow-control-hover"
+      className="open-in-editor-picker squircle-control squircle-action-group glass-surface flex h-9 shrink-0 shadow-control transition-shadow duration-150 ease-out hover:shadow-control-hover"
     >
       <Button
         variant="transparent"
@@ -149,7 +149,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
             ? `Open workspace in ${preferredEditor.label}`
             : "Open workspace in preferred editor"
         }
-        className="h-9 rounded-l-pill rounded-r-none border-0 px-2.5"
+        className="h-9 border-0 px-2.5"
       >
         {preferredEditor ? (
           <EditorIcon editor={preferredEditor} className="size-[18px] shrink-0 rounded-[4px]" />
@@ -174,7 +174,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
             size="large"
             disabled={disabled}
             aria-label="Choose editor"
-            className="h-9 w-8 rounded-l-none rounded-r-pill border-0 [&_svg]:size-4"
+            className="h-9 w-8 border-0 [&_svg]:size-4"
           >
             <ChevronDown aria-hidden="true" />
           </Button>
