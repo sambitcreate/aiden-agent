@@ -309,6 +309,20 @@ test("appearance normalization safely clamps user-controlled values", () => {
   assert.equal(normalizeAppearanceConfig({}).diffMarkers, "symbols");
 });
 
+test("composer context auto-hide defaults on and preserves explicit saved preferences", () => {
+  assert.equal(createDefaultAppearanceConfig().autoHideComposerContext, true);
+  assert.equal(normalizeAppearanceConfig({}).autoHideComposerContext, true);
+  assert.equal(normalizeAppearanceConfig({ autoHideComposerContext: "false" }).autoHideComposerContext, true);
+  for (const enabled of [false, true]) {
+    const stored = { ...createDefaultAppearanceConfig(), autoHideComposerContext: enabled };
+    assert.equal(parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).autoHideComposerContext, enabled);
+  }
+  const legacy: Record<string, unknown> = { ...createDefaultAppearanceConfig() };
+  delete legacy.autoHideComposerContext;
+  assert.equal(parseAppearanceConfig(legacy).autoHideComposerContext, true);
+  assert.throws(() => parseAppearanceConfig({ ...legacy, autoHideComposerContext: "yes" }), /boolean/u);
+});
+
 test("the shared focus treatment separates text entry from non-text keyboard focus", () => {
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   const ui = readFileSync(new URL("../components/ui.tsx", import.meta.url), "utf8");

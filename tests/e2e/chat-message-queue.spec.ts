@@ -21,6 +21,99 @@ function lastUserText(request: CapturedLmStudioRequest): string | undefined {
     : user?.content.map((part) => part.text ?? "").join("");
 }
 
+test("workspace bar auto-hides after sending and its appearance setting survives relaunch", async ({
+  aiden,
+}) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  const bar = () => page.locator(".composer-context-collapse");
+  await expect(bar()).toBeVisible();
+  await page.locator("textarea").fill("Hide the bar after this persisted user message.");
+  await expect(bar()).toHaveAttribute("data-collapsed", "false");
+  await page.locator("textarea").press("Enter");
+  await expect(bar()).toHaveAttribute("data-collapsed", "true");
+  await expect(bar()).toHaveAttribute("inert", "");
+  await expect(bar()).toHaveAttribute("aria-hidden", "true");
+  await expect(bar()).toBeHidden();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+
+  const openAppearance = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
+  };
+  const openSentChat = async () => {
+    const back = page.getByRole("button", { name: "Back to app", exact: true });
+    if (await back.isVisible()) await back.click();
+    await page
+      .locator("[data-sidebar]")
+      .getByRole("button", { name: /^Deterministic E2E response/u })
+      .click();
+  };
+  await openAppearance();
+  const toggle = page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await expect
+    .poll(async () => {
+      const stored = JSON.parse(
+        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+      );
+      return stored.settings?.appearance?.autoHideComposerContext;
+    })
+    .toBe(false);
+  await openSentChat();
+  await expect(bar()).toBeVisible();
+  await expect(bar()).toHaveAttribute("data-collapsed", "false");
+
+  page = await aiden.relaunch();
+  await openSentChat();
+  await expect(bar()).toBeVisible();
+  await openAppearance();
+  await expect(
+    page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true }),
+  ).not.toBeChecked();
+  await page
+    .getByRole("radiogroup", { name: "Reduce motion", exact: true })
+    .getByRole("radio", { name: "On", exact: true })
+    .click();
+  await page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-reduce-motion", "true");
+  await openSentChat();
+  await expect(bar()).toBeHidden();
+  expect(
+    await bar().evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).transitionDuration),
+    ),
+  ).toBeLessThan(0.001);
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await expect(bar()).toBeVisible();
+});
+
+test("an unsuccessful first message save keeps the workspace bar and draft visible", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await aiden.app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler("chats:appendMessage");
+    ipcMain.handle("chats:appendMessage", () => {
+      throw new Error("Queue test: message save rejected");
+    });
+  });
+  await page.locator("textarea").fill("Keep this draft after a failed save.");
+  await page.locator("textarea").press("Enter");
+  await expect(page.getByText(/Queue test: message save rejected/u)).toBeVisible();
+  await expect(page.locator("textarea")).toHaveValue("Keep this draft after a failed save.");
+  await expect(page.locator(".composer-context-collapse")).toBeVisible();
+  await expect(page.locator(".composer-context-collapse")).toHaveAttribute(
+    "data-collapsed",
+    "false",
+  );
+});
+
 test("queued messages edit, reorder, delete and steer without changing the composer draft", async ({
   aiden,
 }) => {
@@ -139,7 +232,10 @@ test("switching chats retains the queue without delivering it into another conve
   await expect(page.getByRole("region", { name: "Queued messages" })).toBeHidden();
   await composer.fill("New chat draft");
   lmStudio.releaseCompletions!();
-  await page.locator("[data-sidebar]").getByRole("button", { name: /^Deterministic E2E response/u }).click();
+  await page
+    .locator("[data-sidebar]")
+    .getByRole("button", { name: /^Deterministic E2E response/u })
+    .click();
   const queue = page.getByRole("region", { name: "Queued messages" });
   await expect(queue).toContainText("Only send in the original chat");
   expect(

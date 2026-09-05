@@ -293,6 +293,34 @@ body {
 }
 
 /* Composer focus is the only shell-wide fill: ~2% darker popover, not a translucent wash. */
+.composer-context-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 180ms ease-out;
+}
+
+.composer-context-content {
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition: transform 180ms ease-out, opacity 180ms ease-out;
+}
+
+.composer-context-collapse[data-collapsed="true"] {
+  grid-template-rows: 0fr;
+}
+
+.composer-context-collapse[data-collapsed="true"] > .composer-context-content {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+:root[data-reduce-motion="true"] .composer-context-collapse,
+:root[data-reduce-motion="true"] .composer-context-content {
+  transition: none;
+}
+
 .composer-shell {
   transition: background-color 150ms ease-out;
 }

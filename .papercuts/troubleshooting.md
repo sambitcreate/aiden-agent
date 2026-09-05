@@ -316,3 +316,5 @@ owns; reopen the terminal before judging the final live state.
 - This detached worktree had no .memory directory. Read the canonical checkout's PROJECT-CONTEXT.md and PLANNED.md before implementation; wrote scoped memory here.
 - Pi harness queueSteer/queueFollowUp are not exposed through the foreground durable transcript path. Use Stop → persistence barrier → normal append for the desktop Steer action and explain its behavior in the control tooltip.
 - E2E TypeScript uses an older lib target; use reverse/find rather than Array.at in new test helpers.
+- The selected local Xcode began rejecting compiler/git calls for unaccepted license terms during this task. Used the installed Command Line Tools for git and rebuilt the renderer/Electron bundles with existing native helpers; native sources are unchanged and CI checks the full build.
+- Appearance persistence uses the `settings` envelope in settings.json; E2E disk assertions must read `settings.appearance`, then verify the preference after an app relaunch.

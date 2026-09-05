@@ -38,6 +38,7 @@ import {
   X,
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
+import { ComposerContextBar } from "./composer-context-bar";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -1495,6 +1496,7 @@ export function Composer({
           ) : null}
           {queuedMessages}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
+          <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
@@ -1570,7 +1572,7 @@ export function Composer({
               />
             ) : null}
           </div>
-
+          </ComposerContextBar>
           <div
             className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
