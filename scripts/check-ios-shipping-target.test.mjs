@@ -884,7 +884,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(pairing, /UIDevice\.current\.userInterfaceIdiom/u);
   assert.match(
     pairing,
-    /onboardingActionButton\(action:[\s\S]*?Text\("Choose How to Connect"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
+    /onboardingActionButton\(action:[\s\S]*?Text\("Scan the Code"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
   );
   assert.match(
     pairing,
@@ -896,11 +896,11 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     pairing,
-    /Text\(isOnboardingLastPage \? "Set Up Connection" : "Continue"\)[\s\S]*?Text\("Choose How to Connect"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
+    /Text\(isOnboardingLastPage \? "Set Up Connection" : "Continue"\)[\s\S]*?Text\("Scan the Code"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
   );
   assert.doesNotMatch(
     pairing,
-    /Text\("Choose How to Connect"\)[\s\S]{0,180}?\.background\(\.bar\)/u,
+    /Text\("Scan the Code"\)[\s\S]{0,180}?\.background\(\.bar\)/u,
   );
   assert.doesNotMatch(
     pairing,
