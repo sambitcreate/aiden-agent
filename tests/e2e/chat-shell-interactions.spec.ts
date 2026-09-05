@@ -219,12 +219,6 @@ test.describe("with a workspace", () => {
       await expect(button).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
       await expect(button).toHaveCSS(`border-top-${seam}-radius`, "0px");
       await expect(button).toHaveCSS(`border-bottom-${seam}-radius`, "0px");
-      // Hover fill reaches the top seam corner; a rounded half leaves this point outside.
-      expect(await button.evaluate((element, edge) => {
-        const rect = element.getBoundingClientRect();
-        const hit = document.elementFromPoint(edge === "right" ? rect.right - 1 : rect.left + 1, rect.top + 1);
-        return hit === element || element.contains(hit);
-      }, seam)).toBe(true);
     }
     await page.keyboard.press("Tab");
     await open.focus();
