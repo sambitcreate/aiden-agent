@@ -112,6 +112,7 @@ interface ComposerProps {
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
+  readinessSettingsSection?: SettingsSection;
   /** True once this chat has a persisted message. */
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
@@ -261,6 +262,7 @@ function composerDraftReducer(
 export function Composer({
   ready,
   readinessMessage,
+  readinessSettingsSection,
   hasMessages,
   chatId,
   onSend,
@@ -1721,9 +1723,17 @@ export function Composer({
                 ) : null}
               </div>
             ) : null}
-            {!ready && readinessMessage && text.trim().length > 0 ? (
+            {voice.lastError ? (
+              <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
+                <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
+                {onOpenSettings ? <Button variant="transparent" size="small" onClick={() => onOpenSettings("voice")}>Open voice settings</Button> : null}
+                <Button variant="transparent" size="small" onClick={voice.dismissError}>Dismiss</Button>
+              </div>
+            ) : null}
+            {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">

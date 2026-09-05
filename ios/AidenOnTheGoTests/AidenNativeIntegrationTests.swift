@@ -527,7 +527,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(AidenPairingAlertCopy.title, "Aiden On The Go")
         XCTAssertEqual(
             AidenPairingAlertCopy.fallbackMessage,
-            "Try again from Aiden Agent Remote Access settings."
+            "Try again from Aiden Agent → Settings → Aiden On The Go."
         )
     }
 

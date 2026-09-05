@@ -100,3 +100,15 @@ test("paired endpoint collisions use typed remediation without exposing socket e
   assert.match(source, /Previously paired devices may need to discover this Mac again/u);
   assert.doesNotMatch(source, /EADDRINUSE/u);
 });
+
+
+test("guided setup confirms changed access and calls the main-owned coordinator", () => {
+  assert.match(source, /title="Aiden On The Go"/u);
+  assert.match(source, /1. Connect your phone/u);
+  assert.match(source, /2. Scan to finish/u);
+  assert.match(source, /aidenRemoteApi.setupPairing/u);
+  assert.match(source, /Enable and show code/u);
+  assert.match(source, /instanceId: snapshot.instanceId/u);
+  assert.match(source, /phone access stays on until you turn it off/u);
+  assert.match(source, /setupError.*Callout/u);
+});

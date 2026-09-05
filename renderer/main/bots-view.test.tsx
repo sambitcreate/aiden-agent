@@ -192,26 +192,24 @@ test("bot detail surfaces the current access mode and bound model", () => {
   assert.match(view, /BOT_ACCESS_SUMMARIES\.custom/u);
 });
 
-test("bot editor is a five-page wizard with gated Next, Back, and a review Confirm", () => {
+test("bot editor is a two-page wizard with gated Next, Back, and a review Confirm", () => {
   const view = source("./bots-view.tsx");
   const styles = source("../styles.css");
-  // Page inventory: identity, access, model, capabilities, review.
+  // Identity first; model, access, and final review stay together.
   assert.match(view, /const BOT_EDITOR_STEPS = \[/u);
-  assert.match(view, /title: "Identity"/u);
-  assert.match(view, /title: "Access"/u);
-  assert.match(view, /title: "Model"/u);
-  assert.match(view, /title: "Capabilities"/u);
-  assert.match(view, /title: "Review"/u);
+  assert.match(view, /title: "Create a bot"/u);
+  assert.match(view, /title: "Review model and access"/u);
+  assert.match(view, /usesFullAccess: state \? state.access.accessMode === "full" : false/u);
   // The dialog's primary action advances pages and only confirms on the last.
   assert.match(
     view,
-    /confirmLabel=\{isLastStep \? \(bot \? "Save changes" : "Create bot"\) : "Next"\}/u,
+    /confirmLabel=\{isLastStep \? \(bot \? "Save changes" : "Create a bot"\) : "Review model and access"\}/u,
   );
   assert.match(view, /onConfirm=\{isLastStep \? save : goNext\}/u);
   assert.match(view, /confirmDisabled=\{saving \|\| !stepValid\[step\]\}/u);
   // Per-page gating, including the review page re-checking every prior page.
   assert.match(view, /const stepValid = \[/u);
-  assert.match(view, /identityReady && settingsReady,\s*\];/u);
+  assert.match(view, /identityReady && settingsReady,?\s*\];/u);
   assert.match(view, /if \(!stepValid\[step\]\) return;/u);
   // Back navigation and an announced step counter.
   assert.match(view, /<ArrowLeft \/> Back/u);

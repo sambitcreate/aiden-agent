@@ -196,6 +196,7 @@ async function fixture(
       }
       return {
         installed: true,
+        httpsAvailable: true,
         dnsName: "aiden.tailnet.ts.net",
         ...(options.tailscaleServeStatus
           ? { serveStatus: options.tailscaleServeStatus }
@@ -1605,4 +1606,153 @@ test("two paired devices authenticate independently and revoking one leaves the 
   } finally {
     await app.cleanup();
   }
+});
+
+
+test("guided LAN setup enables access and issues one expiring pairing in one operation", async () => {
+  const f = await fixture();
+  try {
+    const before = await f.state.snapshot();
+    const pairing = await f.service.setupPairing("lan", before);
+    assert.ok(pairing.qrPayload);
+    assert.ok(pairing.manualCode);
+    assert.equal((await f.state.snapshot()).enabled, true);
+    assert.equal((await f.service.status()).running, true);
+    assert.equal(f.tailscale.connects, 0);
+    assert.equal(f.service.pairingStatus()?.state, "awaiting_scan");
+    await assert.rejects(f.service.setupPairing("lan", await f.state.snapshot()), /already open/);
+    assert.equal(f.service.pairingStatus()?.sessionId, pairing.sessionId);
+  } finally { await f.cleanup(); }
+});
+
+test("guided setup rejects a stale review before enabling listeners", async () => {
+  const f = await fixture();
+  try {
+    const before = await f.state.snapshot();
+    await f.service.setConnectionMode("both");
+    await assert.rejects(f.service.setupPairing("lan", before), /changed/);
+    assert.equal((await f.state.snapshot()).enabled, false);
+    assert.equal(f.bonjour.starts, 0);
+  } finally { await f.cleanup(); }
+});
+
+test("guided setup checks Tailscale prerequisites without changing access", async () => {
+  const f = await fixture({ tailscaleInspection: {
+    connectionStatus: { installed: false }, assessment: { state: "unavailable" },
+  } });
+  try {
+    const before = await f.state.snapshot();
+    await assert.rejects(f.service.setupPairing("tailscale", before), /tailscale_not_installed/);
+    assert.deepEqual(await f.state.snapshot(), before);
+    assert.equal(f.tailscale.connects, 0);
+    assert.equal(f.bonjour.starts, 0);
+  } finally { await f.cleanup(); }
+});
+
+test("guided Tailscale setup enables the owned route and returns a sealed code", async () => {
+  const f = await fixture({ tailscaleAssessment: { state: "owned" } });
+  try {
+    const pairing = await f.service.setupPairing("tailscale", await f.state.snapshot());
+    assert.ok(pairing.qrPayload);
+    assert.equal(f.tailscale.connects, 1);
+    assert.equal((await f.state.snapshot()).connectionMode, "tailscale");
+    assert.ok((await f.state.snapshot()).tailscaleOwnership);
+  } finally { await f.cleanup(); }
+});
+
+test("guided setup rolls back newly enabled listeners if its owning window closes", async () => {
+  let current = true;
+  const f = await fixture({ afterListenerBound: async () => { current = false; } });
+  try {
+    await assert.rejects(f.service.setupPairing("lan", await f.state.snapshot(), () => current), /cancelled/);
+    assert.equal((await f.state.snapshot()).enabled, false);
+    assert.equal((await f.service.status()).running, false);
+    assert.equal(f.service.pairingStatus(), undefined);
+  } finally { await f.cleanup(); }
+});
+
+test("a failed fresh Tailscale pairing restores the original connection mode", async () => {
+  const f = await fixture({ tailscaleAssessment: { state: "unrelated_conflict" } });
+  try {
+    const before = await f.state.snapshot();
+    await assert.rejects(f.service.setupPairing("tailscale", before));
+    const after = await f.state.snapshot();
+    assert.equal(after.enabled, false);
+    assert.equal(after.connectionMode, before.connectionMode);
+    assert.equal(after.tailscaleOwnership, undefined);
+    assert.equal((await f.service.status()).running, false);
+  } finally { await f.cleanup(); }
+});
+
+test("simultaneous guided setup cannot issue competing pairing sessions", async () => {
+  let release!: () => void;
+  let bound!: () => void;
+  const reached = new Promise<void>((resolve) => { bound = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const f = await fixture({ afterListenerBound: async () => { bound(); await gate; } });
+  try {
+    const before = await f.state.snapshot();
+    const first = f.service.setupPairing("lan", before);
+    await within(reached);
+    await assert.rejects(f.service.setupPairing("lan", before), /already in progress/);
+    release();
+    assert.ok((await first).qrPayload);
+  } finally { release(); await f.cleanup(); }
+});
+
+
+test("failed guided setup preserves an already enabled local connection", async () => {
+  const f = await fixture({ tailscaleAssessment: { state: "unrelated_conflict" } });
+  try {
+    await f.service.setEnabled(true);
+    const before = await f.state.snapshot();
+    await assert.rejects(f.service.setupPairing("tailscale", before));
+    assert.equal((await f.state.snapshot()).enabled, true);
+    assert.equal((await f.state.snapshot()).connectionMode, "lan");
+    assert.equal((await f.service.status()).running, true);
+    assert.equal((await f.state.snapshot()).tailscaleOwnership, undefined);
+  } finally { await f.cleanup(); }
+});
+
+
+test("guided setup preserves an uncertain external route for explicit reconciliation", async () => {
+  const f = await fixture({ initial: (state) => {
+    state.tailscalePendingOutcome = {
+      operation: "connect", target: `http://127.0.0.1:${state.lanPort + 1}/api/aiden/v1`,
+      beforeFingerprint: "a".repeat(64), preservedFingerprint: "b".repeat(64),
+      normalizeListenerScaffolding: false, createdAt: 1_000,
+    };
+  } });
+  try {
+    const before = await f.state.snapshot();
+    await assert.rejects(f.service.setupPairing("lan", before), /reconciliation_required/);
+    assert.deepEqual(await f.state.snapshot(), before);
+    assert.equal(f.tailscale.disconnects, 0);
+    assert.equal(f.tailscale.reconciles, 0);
+  } finally { await f.cleanup(); }
+});
+
+
+test("failed pairing removes only the new route when existing access stays enabled", async () => {
+  const f = await fixture({ mode: "both", tailscaleAssessment: { state: "unrelated_conflict" } });
+  try {
+    await f.service.setEnabled(true);
+    await assert.rejects(f.service.setupPairing("tailscale", await f.state.snapshot()));
+    assert.equal((await f.state.snapshot()).enabled, true);
+    assert.equal((await f.state.snapshot()).connectionMode, "both");
+    assert.equal((await f.state.snapshot()).tailscaleOwnership, undefined);
+    assert.equal(f.tailscale.disconnects, 1);
+  } finally { await f.cleanup(); }
+});
+
+test("guided setup never changes the mode of a saved private connection", async () => {
+  const f = await fixture({ mode: "tailscale", tailscaleAssessment: { state: "owned" } });
+  try {
+    await f.service.setEnabled(true);
+    await f.service.connectTailscale();
+    const before = await f.state.snapshot();
+    await assert.rejects(f.service.setupPairing("lan", before), /saved connection/);
+    assert.deepEqual(await f.state.snapshot(), before);
+    assert.equal(f.tailscale.disconnects, 0);
+  } finally { await f.cleanup(); }
 });

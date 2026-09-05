@@ -62,3 +62,11 @@ test("Web Search navigation advertises provider routing and privacy controls", (
     "exa",
   ]);
 });
+
+
+test("settings can be found by the user's task without knowing feature names", () => {
+  for (const [query, expected] of [["connect my phone", "remoteAccess"], ["use my voice", "voice"], ["connect my ai", "providers"], ["see my screen", "computerUse"], ["do this every day", "scheduledTasks"]]) {
+    assert.ok(SETTINGS_DESTINATIONS.find((entry) => entry.id === expected)?.keywords.includes(query));
+  }
+  assert.equal(SETTINGS_DESTINATIONS.find((entry) => entry.id === "remoteAccess")?.title, "Aiden On The Go");
+});

@@ -311,3 +311,6 @@ owns; reopen the terminal before judging the final live state.
   platform-independent test that exercises both certificate and keychain paths.
 - A changelog search conflated the stable and prerelease lines. Verify published
   package code before assuming a release contains the upstream patch.
+
+- UX review (2026-09-05): the active Xcode installation rejects tools until its license is accepted. Git and desktop C helpers can use the separately installed Command Line Tools via `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; helper build scripts replace the child environment, so this run compiled their unchanged C sources with the same flags directly. iOS physical-device discovery/test remains blocked; do not claim it passed.
+- Electron E2E failure diagnostics called `app.process()` outside their try/catch; a closed Electron target hid the original launch error. Keep that call within the best-effort diagnostic block. The isolated E2E profile also cannot establish native Bot Keychain authority; the editor test injects a test-owned IPC catalog and captures the submitted access, while storage/authority tests run separately.

@@ -432,7 +432,7 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await next.click();
 
-  await expect(onboarding.getByRole("heading", { name: "Add a model provider" })).toBeVisible();
+  await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
   const lmStudio = onboarding.getByRole("button", {
     name: /LM Studio.*Use models running in LM Studio/u,
   });
@@ -710,8 +710,8 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
     }
 
     if (failed && rootDir) {
-      const child = app?.process();
       try {
+        const child = app?.process();
         await testInfo.attach("electron-process-state", {
           body: Buffer.from(
             `${JSON.stringify({

@@ -83,6 +83,8 @@ export function ScheduledTaskEditor({
   onOpenChange: (open: boolean) => void;
   onSave: (task: ScheduledTaskInput) => Promise<void>;
 }) {
+  const [reviewing, setReviewing] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState(initial);
   const [scheduleDraft, setScheduleDraft] = React.useState(() =>
     scheduleDraftFromCron(initial.cron),
@@ -93,6 +95,8 @@ export function ScheduledTaskEditor({
 
   React.useEffect(() => {
     if (open) {
+      setReviewing(false);
+      setSaveError(null);
       setScheduleDraft(scheduleDraftFromCron(initial.cron));
       setDraft({
         ...initial,
@@ -233,11 +237,29 @@ export function ScheduledTaskEditor({
       description="Aiden runs this task on your Mac while the app is open."
       size="large"
       busy={busy}
-      confirmLabel={draft.id ? "Save" : "Create"}
+      confirmLabel={reviewing ? (draft.id ? "Save task" : "Create task") : "Review task"}
       confirmDisabled={!valid}
-      onConfirm={() => onSave(draft)}
+      onConfirm={async () => {
+        if (!reviewing) { setReviewing(true); return; }
+        try { setSaveError(null); await onSave(draft); }
+        catch (error) { setSaveError(error instanceof Error ? error.message : "Couldn’t save this task. Your choices are still here."); }
+      }}
     >
-      <FieldSet>
+      {reviewing ? (
+        <FieldSet title="Review your task">
+          <Field label={draft.name} description={formatSchedule(draft.cron, draft.timezone ?? localTimezone)}>
+            <Button variant="transparent" size="small" onClick={() => setReviewing(false)}>Edit choices</Button>
+          </Field>
+          <Field label="What Aiden will do" orientation="vertical"><Text as="p">{draft.mode === "script" ? draft.script : draft.prompt}</Text></Field>
+          <Field label="Access" orientation="vertical">
+            <Text as="p">{draft.permission === "full" ? "Full access · Runs without asking you each time." : "Read-only · Can inspect information without making changes."}</Text>
+            <Text as="p" color="secondary">{workspaces.find((workspace) => workspace.id === draft.workspaceId)?.name ?? "No selected workspace"} · {selectedMcpIds.length ? selectedMcpIds.map((id) => visibleMcpServers.find((server) => server.id === id)?.name ?? "Unavailable connection").join(", ") : "No connections"} · Web search {draft.webSearchEnabled ? "on" : "off"}</Text>
+          </Field>
+          <Field label="Keep this Mac awake" orientation="vertical"><Text as="p" color="secondary">Aiden must be open on this Mac for the task to run. Results appear in the task’s chat.</Text></Field>
+          {saveError ? <Callout color="red" role="alert">{saveError}</Callout> : null}
+        </FieldSet>
+      ) : <>
+      <FieldSet title="What should Aiden do?">
         <Field label="Name" description="A short label for the task and its dedicated chat.">
           <Input
             autoFocus
@@ -510,7 +532,7 @@ export function ScheduledTaskEditor({
           </div>
         </details>
       </FieldSet>
-      <FieldSet title="Run context">
+      <FieldSet title="Access and notifications">
         <Field
           label="Workspace"
           description="Paths are always re-resolved by Aiden when the task runs."
@@ -677,6 +699,7 @@ export function ScheduledTaskEditor({
           </div>
         </Field>
       </FieldSet>
+      </>}
     </Dialog>
   );
 }

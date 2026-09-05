@@ -183,14 +183,21 @@ fun AidenPairingScreen(
 
             // Pair New Mac Section
             Text(
-                text = "Pair New Mac",
+                text = "Connect your Mac",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = palette.secondary
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            // M3 Expressive 3-Tab Pill Segmented Group
+            Text(
+                text = "On your Mac, open Settings → Aiden On The Go → Connect a device. Then scan its code here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.secondary
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // QR first, with a camera-free setup code fallback.
             Surface(
                 color = palette.raised,
                 shape = RoundedCornerShape(20.dp),
@@ -241,30 +248,15 @@ fun AidenPairingScreen(
                         }
                     }
 
-                    // Tab 2: Paste JSON
-                    Surface(
-                        color = if (selectedTab == 2) palette.accent else Color.Transparent,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .tactilePress { selectedTab = 2 }
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = "Paste JSON",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = if (selectedTab == 2) Color.White else palette.secondary
-                            )
-                        }
-                    }
+
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            TextButton(onClick = { selectedTab = if (selectedTab == 2) 0 else 2 }) {
+                Text(if (selectedTab == 2) "Back to scanning" else "Advanced: paste connection details")
+            }
 
             errorMessage?.let { msg ->
                 Surface(
@@ -325,7 +317,7 @@ fun AidenPairingScreen(
                         colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = endpointUrl,
                         onValueChange = { endpointUrl = it },
-                        label = { Text("Mac Address (HTTPS Endpoint)") },
+                        label = { Text("Mac address") },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
