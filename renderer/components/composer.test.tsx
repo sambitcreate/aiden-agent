@@ -253,3 +253,29 @@ test("workspace access keyboard navigation moves focus without changing permissi
   assert.match(composer, /radios\?\.\[nextIndex\]\?\.focus\(\)/u);
   assert.doesNotMatch(composer, /requestPermission\(nextPermission\)/u);
 });
+
+test("model picker details sit beside the menu without overlapping the pad", () => {
+  const modelPicker = source("./model-picker.tsx");
+  const pad = source("./model-picker-pad.tsx");
+  const styles = source("../styles.css");
+
+  assert.match(
+    modelPicker,
+    /className="flex w-max max-w-\[calc\(100vw-1\.5rem\)\] items-start gap-2 overflow-visible bg-transparent p-0 shadow-none"/u,
+  );
+  assert.match(
+    modelPicker,
+    /className="relative w-\[min\(19\.75rem,calc\(100vw-1\.5rem\)\)\] overflow-hidden rounded-popover bg-popover shadow-popover"/u,
+  );
+  assert.match(
+    modelPicker,
+    /className="pointer-events-none w-56 shrink-0 rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
+  );
+  assert.doesNotMatch(modelPicker, /left-\[calc\(100%\+0\.5rem\)\]/u);
+  assert.doesNotMatch(modelPicker, /right: showExternalDetails/u);
+  assert.doesNotMatch(pad, /focus-visible:bg-list-selection/u);
+  assert.match(
+    styles,
+    /\.model-pad:focus-visible\s*\{\s*outline: none !important;\s*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\)/u,
+  );
+});
