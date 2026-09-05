@@ -169870,6 +169870,71 @@
           "cache_write": 6.25
         }
       },
+      "gpt-6-astra": {
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra",
+        "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
+        "family": "gpt-astra",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": false,
+        "release_date": "2026-09-04",
+        "last_updated": "2026-09-04",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 10,
+          "output": 50,
+          "cache_read": 1,
+          "cache_write": 12.5,
+          "tiers": [
+            {
+              "input": 20,
+              "output": 75,
+              "cache_read": 2,
+              "cache_write": 25,
+              "tier": {
+                "type": "context",
+                "size": 272000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 20,
+            "output": 75,
+            "cache_read": 2,
+            "cache_write": 25
+          }
+        }
+      },
       "kimi-k2.7-code": {
         "id": "kimi-k2.7-code",
         "name": "Kimi K2.7 Code",
@@ -177536,6 +177601,41 @@
           "cache_read": 0.25
         }
       },
+      "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B": {
+        "id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+        "name": "Nemotron 3 Nano 30B A3B",
+        "description": "Small Nemotron 3 MoE for efficient coding, math, and long-context agents",
+        "family": "nemotron",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2025-12-15",
+        "last_updated": "2025-12-15",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "output": 262144
+        },
+        "cost": {
+          "input": 0.05,
+          "output": 0.2,
+          "cache_read": 0.03
+        }
+      },
       "nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B": {
         "id": "nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B",
         "name": "Nemotron 3 Nano Omni 30B A3B Reasoning",
@@ -177576,6 +177676,41 @@
           "input_audio": 0.5
         }
       },
+      "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B": {
+        "id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
+        "name": "Nemotron 3 Super 120B A12B",
+        "description": "Nemotron middle tier for collaborative agents and high-volume reasoning workloads",
+        "family": "nemotron",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2026-03-11",
+        "last_updated": "2026-03-11",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "output": 262144
+        },
+        "cost": {
+          "input": 0.3,
+          "output": 2.4,
+          "cache_read": 0.15
+        }
+      },
       "google/gemma-4-31b-it": {
         "id": "google/gemma-4-31b-it",
         "name": "Gemma 4 31B IT",
@@ -177611,6 +177746,36 @@
           "input": 0.14,
           "output": 0.4,
           "cache_read": 0.14
+        }
+      },
+      "Qwen/Qwen3-235B-A22B-Instruct-2507": {
+        "id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "name": "Qwen3 235B-A22B Instruct 2507",
+        "description": "Updated large open Qwen3 MoE instruct model for multilingual chat, coding, and tool use",
+        "family": "qwen",
+        "attachment": false,
+        "reasoning": false,
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2025-07-21",
+        "last_updated": "2025-07-21",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "output": 16384
+        },
+        "cost": {
+          "input": 0.22,
+          "output": 0.8,
+          "cache_read": 0.11
         }
       },
       "meta-llama/Llama-3.3-70B-Instruct": {
@@ -243164,6 +243329,53 @@
           "cache_read": 0.3
         }
       },
+      "cline-pass/glm-5.3-flash": {
+        "id": "cline-pass/glm-5.3-flash",
+        "name": "cline-pass/glm-5.3-flash",
+        "description": "Latest natively multimodal model in the GLM-5 series",
+        "family": "glm",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2026-08-26",
+        "last_updated": "2026-08-26",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.15,
+          "output": 0.5,
+          "cache_read": 0.03
+        }
+      },
       "cline-pass/qwen3.8-max": {
         "id": "cline-pass/qwen3.8-max",
         "name": "Qwen3.8 Max",
@@ -281908,7 +282120,7 @@
         "name": "Kimi K3-256K",
         "description": "256K-context version of Kimi K3, reducing token consumption for shorter coding sessions",
         "family": "kimi-k3",
-        "attachment": false,
+        "attachment": true,
         "reasoning": true,
         "reasoning_options": [
           {
@@ -281987,7 +282199,7 @@
         "name": "Kimi K3",
         "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
         "family": "kimi-k3",
-        "attachment": false,
+        "attachment": true,
         "reasoning": true,
         "reasoning_options": [
           {
