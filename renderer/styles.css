@@ -48,6 +48,7 @@
   --radius-dialog: 16px;
   --radius-popover: 12px;
   --radius-sheet: 24px;
+  --radius-composer: 40px;
   --radius-pill: 9999px;
   --shadow-control: var(--elevation-control);
   --shadow-control-hover: var(--elevation-control-hover);
@@ -322,6 +323,9 @@ body {
 }
 
 .composer-shell {
+  /* Electron supports native squircles; keep overflow visible for composer menus. */
+  border-radius: var(--radius-composer);
+  corner-shape: squircle;
   transition: background-color 150ms ease-out;
 }
 

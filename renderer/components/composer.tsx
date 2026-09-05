@@ -1574,7 +1574,7 @@ export function Composer({
           </div>
           </ComposerContextBar>
           <div
-            className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer"
+            className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >

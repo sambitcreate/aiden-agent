@@ -318,3 +318,4 @@ owns; reopen the terminal before judging the final live state.
 - E2E TypeScript uses an older lib target; use reverse/find rather than Array.at in new test helpers.
 - The selected local Xcode began rejecting compiler/git calls for unaccepted license terms during this task. Used the installed Command Line Tools for git and rebuilt the renderer/Electron bundles with existing native helpers; native sources are unchanged and CI checks the full build.
 - Appearance persistence uses the `settings` envelope in settings.json; E2E disk assertions must read `settings.appearance`, then verify the preference after an app relaunch.
+- A CI navigation test raced the provider transport: queue removal confirms durable append, but does not mean the mock HTTP server has received the next generation request. Wait for that specific request before asserting its conversation history.

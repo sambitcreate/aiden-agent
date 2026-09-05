@@ -21,6 +21,43 @@ function lastUserText(request: CapturedLmStudioRequest): string | undefined {
     : user?.content.map((part) => part.text ?? "").join("");
 }
 
+test("composer squircle follows resizing and draft growth without clipping access controls", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const shell = page.locator(".composer-shell");
+  const composer = page.locator("textarea");
+  expect(await page.evaluate(() => CSS.supports("corner-shape", "squircle"))).toBe(true);
+  const assertShape = async () => {
+    await expect(shell).toHaveCSS("corner-shape", "squircle");
+    await expect(shell).toHaveCSS("border-top-left-radius", "40px");
+    await expect(shell).toHaveCSS("overflow", "visible");
+    await expect(shell).toHaveCSS("clip-path", "none");
+    expect(await shell.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe("none");
+  };
+  await assertShape();
+  const initial = await shell.boundingBox();
+  await composer.fill(Array.from({ length: 8 }, (_, index) => `Draft line ${index + 1}`).join("\n"));
+  await expect.poll(async () => (await shell.boundingBox())!.height).toBeGreaterThan(initial!.height);
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 720));
+  await expect.poll(async () => (await shell.boundingBox())!.width).toBeLessThan(initial!.width);
+  await assertShape();
+  await composer.fill("");
+  const access = page.getByRole("button", { name: /^Workspace access: Ask first/u });
+  await access.click();
+  const options = page.getByRole("radiogroup", { name: "Workspace access" });
+  const noAccess = options.getByRole("radio", { name: /^Workspace access: No access/u });
+  // Clicking a choice above the shell also verifies that overflow is hit-testable.
+  await expect(options).toBeVisible();
+  expect((await options.boundingBox())!.y).toBeLessThan((await shell.boundingBox())!.y);
+  await noAccess.click();
+  await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
+  await composer.fill("");
+  await assertShape();
+  await page.screenshot({ path: test.info().outputPath("squircle-composer.png") });
+});
+
 test("workspace bar auto-hides after sending and its appearance setting survives relaunch", async ({
   aiden,
 }) => {
@@ -245,6 +282,10 @@ test("switching chats retains the queue without delivering it into another conve
   ).toHaveLength(0);
   await queue.getByRole("button", { name: "Resume queue", exact: true }).click();
   await expect(queue).toBeHidden();
+  // The queue clears after durable append; the provider request starts asynchronously.
+  await expect.poll(() => lmStudio.requests.some(
+    (request) => lastUserText(request) === "Only send in the original chat",
+  )).toBe(true);
   const request = lmStudio.requests.find(
     (request) => lastUserText(request) === "Only send in the original chat",
   );
