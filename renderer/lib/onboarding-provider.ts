@@ -6,7 +6,8 @@ export type OnboardingProviderChoice =
   | "anthropic"
   | "lmstudio"
   | "ollama"
-  | "tailscale";
+  | "tailscale"
+  | "custom";
 
 export type OnboardingProviderDraft = Omit<Provider, "hasKey" | "legacyIds" | "authMethods">;
 
@@ -45,7 +46,7 @@ export function makeOnboardingProvider(
   baseUrl: string,
   currentProviders: readonly Provider[] = [],
 ): OnboardingProviderDraft | null {
-  if (choice === "openai-signin") return null;
+  if (choice === "openai-signin" || choice === "custom") return null;
   if (choice === "openai-key") {
     return {
       id: "custom:onboarding-openai",

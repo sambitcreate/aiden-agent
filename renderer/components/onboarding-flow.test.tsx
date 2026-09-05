@@ -190,7 +190,7 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
 });
 
 test("provider setup progressively reveals configurable Pi providers and uses the dedicated Codex surface", () => {
-  assert.match(source, />\s*Choose from more\s*</u);
+  assert.match(source, />\s*Other ways\s*</u);
   assert.match(source, /aria-controls="onboarding-more-providers"/u);
   assert.match(source, /aria-expanded=\{showMoreProviders\}/u);
   assert.match(source, /data-onboarding-more-providers/u);
@@ -329,7 +329,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.doesNotMatch(featurePresentation, /choose to connect it/u);
   assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
-  assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings →\s*Remote\s+Access/u);
+  assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Aiden On The Go/u);
   for (const group of [
     "Build in your workspace",
     "Choose and extend",
@@ -410,4 +410,18 @@ test("every advertised feature has its own one-megapixel PNG with alpha", () => 
 test("project guidance keeps the feature bento current as Aiden evolves", () => {
   assert.match(agentsInstructions, /feature-tour bento gallery/u);
   assert.match(agentsInstructions, /1024 × 1024 transparent PNG/u);
+});
+
+
+test("primary AI choices include custom setup without opening advanced providers", () => {
+  assert.match(source, /\["openai-signin", "lmstudio", "ollama", "custom"\]/u);
+  for (const title of ["ChatGPT", "LM Studio", "Ollama", "Other Custom Provider"]) {
+    assert.ok(source.includes(`title: "${title}"`));
+  }
+  assert.match(source, /<ProviderEditor[\s\S]*?layer="onboarding"[\s\S]*?requireReady/u);
+  const editor = readFileSync(new URL("./settings/provider-editor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /requireReady &&/u);
+  assert.match(editor, /models.length === 0/u);
+  assert.match(editor, /defaultModelIsHidden/u);
+  assert.match(editor, /await onSaved\(\)/u);
 });

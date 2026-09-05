@@ -361,8 +361,7 @@ export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLay
               </span>
             </div>
             <Text variant="small" color="secondary" className="mt-1 block">
-              Use your ChatGPT account for Codex models. OAuth credentials stay encrypted on this
-              Mac and are never shown to the renderer.
+              Use your ChatGPT account for Codex models. Your sign-in is saved securely on this Mac.
             </Text>
             <Text variant="small" color="tertiary" className="mt-1 block">
               {signingOut

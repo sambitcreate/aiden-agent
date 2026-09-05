@@ -151,7 +151,7 @@ function accessDraftFromState(
       ? state.visionModelSelection
       : visionFallback;
   return {
-    usesFullAccess: state ? state.access.accessMode === "full" : botFullAccessAccepted(catalog),
+    usesFullAccess: state ? state.access.accessMode === "full" : false,
     providerId: selected?.providerId ?? fallback?.providerId,
     modelId: selected?.modelId ?? fallback?.modelId,
     visionProviderId: visionSelected?.providerId,
@@ -280,11 +280,8 @@ const botChatDateFormatter = new Intl.DateTimeFormat(undefined, {
 
 /** Wizard pages for the New/Edit Bot dialog; the last page is the review/confirm step. */
 const BOT_EDITOR_STEPS = [
-  { title: "Identity", description: "Name this bot and describe how it should work." },
-  { title: "Access", description: "Choose how much of this Mac this bot may use." },
-  { title: "Model", description: "Pick the provider and model this bot uses in every chat." },
-  { title: "Capabilities", description: "Review the files, commands, connections, and skills it may use." },
-  { title: "Review", description: "Check every choice, then confirm to save this bot." },
+  { title: "Create a bot", description: "Name your bot and describe what it should do." },
+  { title: "Review model and access", description: "Review the AI model and what this bot may use, then create it." },
 ] as const;
 
 function BotEditor({
@@ -299,6 +296,7 @@ function BotEditor({
   const [draft, setDraft] = React.useState<BotDraft>(() => draftFromBot(bot));
   const [identityBaseline, setIdentityBaseline] = React.useState<BotDraft>(() => draftFromBot(bot));
   const [committedBot, setCommittedBot] = React.useState<BotDefinition | null>(bot);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
   const [generatingAvatar, setGeneratingAvatar] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [noticing, setNoticing] = React.useState(false);
@@ -346,6 +344,7 @@ function BotEditor({
     if (!catalog || !accessDraft) return;
     savingRef.current = true;
     setSaving(true);
+    setSaveError(null);
     try {
       let saved: BotDefinition;
       if (!committedBot) {
@@ -413,7 +412,9 @@ function BotEditor({
       onOpenChange(false);
       if (!bot) await navigate({ to: "/bots/$botId", params: { botId: saved.id } });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not save this bot.");
+      const message = error instanceof Error ? error.message : "Aiden could not save this bot.";
+      setSaveError(message);
+      toast.error(message);
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -480,13 +481,7 @@ function BotEditor({
   })();
   // Each page gates its own Next button; the review page re-checks everything
   // so Confirm can never run against an incomplete draft.
-  const stepValid = [
-    identityReady,
-    accessModeReady,
-    modelReady,
-    settingsReady,
-    identityReady && settingsReady,
-  ];
+  const stepValid = [identityReady, identityReady && settingsReady];
   const goNext = () => {
     if (!stepValid[step]) return;
     setStep((current) => Math.min(current + 1, BOT_EDITOR_STEPS.length - 1));
@@ -508,7 +503,7 @@ function BotEditor({
       onOpenChange={onOpenChange}
       title={bot ? `Edit ${bot.name}` : "Create a bot"}
       description={BOT_EDITOR_STEPS[step]!.description}
-      confirmLabel={isLastStep ? (bot ? "Save changes" : "Create bot") : "Next"}
+      confirmLabel={isLastStep ? (bot ? "Save changes" : "Create a bot") : "Review model and access"}
       confirmDisabled={saving || !stepValid[step]}
       busy={saving}
       onConfirm={isLastStep ? save : goNext}
@@ -547,6 +542,7 @@ function BotEditor({
             Step {step + 1} of {BOT_EDITOR_STEPS.length}
           </Text>
         </div>
+        {saveError ? <Callout color="red" role="alert">{saveError} Your choices are still here.</Callout> : null}
         {step === 0 ? (
           <>
             <div className="grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
@@ -579,6 +575,8 @@ function BotEditor({
           </label>
         </div>
 
+        <details className="rounded-card bg-well p-3">
+          <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Customize appearance (optional)</summary>
         <BotFaceStudio
           avatar={draft.avatar}
           botName={draft.name}
@@ -586,6 +584,7 @@ function BotEditor({
           onGeneratingChange={setGeneratingAvatar}
           disabled={saving}
         />
+        </details>
 
         <label className="block">
           <Text variant="small-strong">Instructions</Text>
@@ -630,7 +629,7 @@ function BotEditor({
                 <Button
                   size="small"
                   variant={accessDraft.usesFullAccess ? "accent" : "filled"}
-                  disabled={saving || (!fullAccepted && !accessDraft.usesFullAccess)}
+                  disabled={saving}
                   aria-pressed={accessDraft.usesFullAccess}
                   onClick={() =>
                     setAccessDraft((current) =>
@@ -687,7 +686,7 @@ function BotEditor({
           </>
         ) : null}
 
-        {step === 2 ? (
+        {step === 1 ? (
           <>
             {catalogQuery.isLoading || (bot && accessQuery.isLoading) ? (
               <Text as="p" variant="small" color="secondary">
@@ -857,12 +856,12 @@ function BotEditor({
           </>
         ) : null}
 
-        {step === 3 ? (
-          <>
+        {step === 1 ? (
+          <details className="rounded-card bg-well p-3">
+            <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Customize files, commands and connections</summary>
             {accessDraft?.usesFullAccess ? (
               <Text as="p" variant="small" color="secondary">
-                Full Access already allows every capability below. Switch to Custom on the Access
-                step to choose specific ones.
+                Full Access already allows every capability below. Switch to Custom Access above to choose specific ones.
               </Text>
             ) : null}
             {catalog && accessDraft ? (
@@ -968,10 +967,10 @@ function BotEditor({
             })}
               </FieldSet>
             ) : null}
-          </>
+          </details>
         ) : null}
 
-        {step === 4 && catalog && accessDraft ? (
+        {step === 1 && catalog && accessDraft ? (
           <div className="space-y-4">
             <dl className="space-y-3">
               {summaryRow("Name", draft.name.trim())}
@@ -1031,10 +1030,10 @@ function Roster({ bots, onCreate }: { bots: BotDefinition[]; onCreate(): void })
       <div className="space-y-4 text-center">
         <EmptyState
           title="Create your first bot"
-          description="Make a reusable Pi-powered teammate with its own role and instructions."
+          description="Create a bot with its own role, instructions, and ongoing conversation."
         />
         <Button variant="accent" onClick={onCreate}>
-          <Plus /> Create bot
+          <Plus /> Create a bot
         </Button>
       </div>
     );
@@ -1406,11 +1405,11 @@ export function BotsView() {
                   Bots
                 </Text>
                 <Text as="p" color="secondary" className="mt-1 max-w-2xl">
-                  Create reusable teammates that stay on top of Aiden’s existing Pi runtime.
+                  Create a bot for work you return to, with its own instructions and conversations.
                 </Text>
               </div>
               <Button variant="accent" onClick={openCreate}>
-                <Plus /> New bot
+                <Plus /> Create a bot
               </Button>
             </header>
             <div className="mt-8">

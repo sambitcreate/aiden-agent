@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aiden · Now & proposed</title>
+<link rel="icon" href="data:,">
+<style>
+/* Aiden semantic tokens, copied from renderer/styles.css for a portable review file. */
+:root {
+  color-scheme: light;
+  font-family: var(--font-ui-family);
+  --font-ui-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-code-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  --ui-font-size: 14px;
+  --code-font-size: 12px;
+  --text-primary: #3D3F41;
+  --toolbar-icon: #77797a;
+  --text-secondary: #545963;
+  --text-tertiary: #595E69;
+  --text-quaternary: #5D6370;
+  --surface-background: rgb(246 247 249 / 0.94);
+  --surface-sidebar: rgb(238 240 243 / 0.78);
+  --surface-popover: #ffffff;
+  --surface-context-bar: rgb(238 240 243 / 0.8);
+  --surface-control: rgb(61 63 65 / 0.084);
+  --surface-control-hover: rgb(61 63 65 / 0.129);
+  --surface-control-active: rgb(61 63 65 / 0.184);
+  --surface-input: rgb(61 63 65 / 0.051);
+  --surface-well: rgb(61 63 65 / 0.029);
+  --surface-list-hover: rgb(61 63 65 / 0.053);
+  --surface-list-selection: rgb(0 106 214 / 0.12);
+  --border-field: rgb(61 63 65 / 0.144);
+  --border-separator: rgb(61 63 65 / 0.087);
+  --accent: #006ad6;
+  --accent-foreground: #ffffff;
+  --accent-hover: #0063c7;
+  --accent-active: #005bb8;
+  --focus-ring: var(--text-primary);
+  --status-accent: #155BA2;
+  --status-accent-surface: rgb(0 106 214 / 0.080);
+  --status-red: #8C3631;
+  --status-red-surface: rgb(182 49 41 / 0.080);
+  --status-green: #266036;
+  --status-green-surface: rgb(26 113 48 / 0.080);
+  --status-warning: #704F1A;
+  --status-warning-surface: rgb(139 87 5 / 0.080);
+  --support-red: #B63129;
+  --support-red-foreground: #FFFFFF;
+  --support-green: #1A7130;
+  --support-green-foreground: #FFFFFF;
+  --support-warning: #8B5705;
+  --support-warning-foreground: #FFFFFF;
+  --bot-avatar-lilac: #c6a9ff;
+  --bot-avatar-sky: #83d8ff;
+  --bot-avatar-mint: #88e8b1;
+  --bot-avatar-sun: #ffda7b;
+  --bot-avatar-periwinkle: #b2bcff;
+  --bot-avatar-coral: #ff9f9b;
+  --bot-avatar-peach: #ffc294;
+  --bot-avatar-aqua: #78e8df;
+  --bot-avatar-face: #292735;
+  --bot-avatar-eye-highlight: #ffffff;
+  --bot-avatar-sheen: #ffffff;
+  --bot-avatar-marker: #2f7eea;
+  --window-gradient-start: rgb(246 247 249 / 0.98);
+  --window-gradient-end: rgb(242 243 246 / 0.94);
+  --glass-fill: rgb(238 240 243 / 0.68);
+  --syntax-comment: #595E69;
+  --syntax-keyword: #B62E42;
+  --syntax-string: #146B67;
+  --syntax-number: #235EB1;
+  --syntax-title: #674AAE;
+  --syntax-variable: #9E4A14;
+  --elevation-control: 0 1px 2px -1px rgb(0 0 0 / 0.1), 0 4px 10px -8px rgb(0 0 0 / 0.16);
+  --elevation-control-hover: 0 2px 5px -2px rgb(0 0 0 / 0.16), 0 7px 14px -10px rgb(0 0 0 / 0.2);
+  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14);
+  --elevation-popover:
+    0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
+  --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.1);
+  --elevation-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
+  --elevation-modal: 0 0 0 0.5px rgb(0 0 0 / 0.16), 0 20px 44px -10px rgb(0 0 0 / 0.38);
+  --elevation-onboarding: 0 20px 44px -10px rgb(0 0 0 / 0.38);
+  --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.12);
+}
+
+:root.dark {
+  color-scheme: dark;
+  --text-primary: #D1D4DA;
+  --toolbar-icon: #d5d7dd;
+  --text-secondary: #A9B1BA;
+  --text-tertiary: #A2AAB4;
+  --text-quaternary: #9AA3AE;
+  --surface-background: rgb(24 27 33 / 0.94);
+  --surface-sidebar: rgb(32 36 44 / 0.78);
+  --surface-popover: #292e37;
+  --surface-context-bar: rgb(32 36 44 / 0.8);
+  --surface-control: rgb(209 212 218 / 0.094);
+  --surface-control-hover: rgb(209 212 218 / 0.139);
+  --surface-control-active: rgb(209 212 218 / 0.194);
+  --surface-input: rgb(209 212 218 / 0.056);
+  --surface-well: rgb(209 212 218 / 0.032);
+  --surface-list-hover: rgb(209 212 218 / 0.059);
+  --surface-list-selection: rgb(62 151 246 / 0.18);
+  --border-field: rgb(209 212 218 / 0.162);
+  --border-separator: rgb(209 212 218 / 0.097);
+  --accent: #3e97f6;
+  --accent-foreground: #000000;
+  --accent-hover: #59a6f7;
+  --accent-active: #68aef8;
+  --focus-ring: var(--text-primary);
+  --status-accent: #71ACEC;
+  --status-accent-surface: rgb(62 151 246 / 0.080);
+  --status-red: #EF9493;
+  --status-red-surface: rgb(255 114 108 / 0.080);
+  --status-green: #6AD29C;
+  --status-green-surface: rgb(50 209 122 / 0.080);
+  --status-warning: #EFBD61;
+  --status-warning-surface: rgb(255 176 32 / 0.080);
+  --support-red: #FF726C;
+  --support-red-foreground: #000000;
+  --support-green: #32D17A;
+  --support-green-foreground: #000000;
+  --support-warning: #FFB020;
+  --support-warning-foreground: #000000;
+  --bot-avatar-lilac: #c6a9ff;
+  --bot-avatar-sky: #83d8ff;
+  --bot-avatar-mint: #88e8b1;
+  --bot-avatar-sun: #ffda7b;
+  --bot-avatar-periwinkle: #b2bcff;
+  --bot-avatar-coral: #ff9f9b;
+  --bot-avatar-peach: #ffc294;
+  --bot-avatar-aqua: #78e8df;
+  --bot-avatar-face: #292735;
+  --bot-avatar-eye-highlight: #ffffff;
+  --bot-avatar-sheen: #ffffff;
+  --bot-avatar-marker: #2f7eea;
+  --window-gradient-start: rgb(24 27 33 / 0.98);
+  --window-gradient-end: rgb(28 32 39 / 0.94);
+  --glass-fill: rgb(32 36 44 / 0.68);
+  --syntax-comment: #A2AAB4;
+  --syntax-keyword: #FF7F8D;
+  --syntax-string: #83D7CC;
+  --syntax-number: #7EB5FD;
+  --syntax-title: #C2A6FE;
+  --syntax-variable: #FFB06B;
+  --elevation-control: 0 1px 3px -1px rgb(0 0 0 / 0.58), 0 5px 12px -9px rgb(0 0 0 / 0.78);
+  --elevation-control-hover: 0 2px 6px -2px rgb(0 0 0 / 0.7), 0 8px 16px -11px rgb(0 0 0 / 0.88);
+  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.68);
+  --elevation-popover:
+    0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
+  --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.54);
+  --elevation-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
+  --elevation-modal: 0 0 0 0.5px rgb(255 255 255 / 0.16), 0 22px 48px -10px rgb(0 0 0 / 0.78);
+  --elevation-onboarding: 0 22px 48px -10px rgb(0 0 0 / 0.78);
+  --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.45);
+}
+*{box-sizing:border-box}body{margin:0;background:var(--surface-background);color:var(--text-primary);font:14px/1.5 var(--font-ui-family)}button,input,select{font:inherit;color:inherit}button,a,input,select,summary{-webkit-tap-highlight-color:transparent}button{cursor:pointer;border:0}button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--focus-ring);outline-offset:4px}input:focus{outline:none;background:var(--surface-input)}a{color:var(--accent);text-underline-offset:3px}button{transition:background 150ms,transform 150ms}button:active{transform:translateY(1px)}button:disabled{cursor:default;opacity:.5}h1,h2,h3,p{margin:0}h1{font-size:clamp(30px,4vw,46px);letter-spacing:-.045em;line-height:1.1;font-weight:650}h2{font-size:23px;letter-spacing:-.025em;font-weight:620}h3{font-size:17px;font-weight:620;letter-spacing:-.015em}.muted{color:var(--text-secondary)}.small{font-size:12px;color:var(--text-secondary)}.eyebrow{font-size:11px;letter-spacing:.13em;text-transform:uppercase;font-weight:650}.top{display:flex;align-items:center;justify-content:space-between;padding:20px 4vw;border-bottom:1px solid var(--border-separator)}.brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:16px}.mark{background:var(--text-primary);color:var(--surface-popover);width:28px;height:28px;display:grid;place-items:center;border-radius:9px;font-size:19px}.top-actions{display:flex;align-items:center;gap:18px}.ghost{background:transparent;border-radius:9px;padding:8px 11px}.ghost:hover{background:var(--surface-control-hover)}main{max-width:1250px;margin:auto;padding:38px 28px 50px}.intro{display:flex;justify-content:space-between;align-items:end;gap:24px;margin-bottom:27px}.intro p{margin-top:12px;font-size:15px}.intro .small{max-width:195px;text-align:right}.layout{display:grid;grid-template-columns:176px minmax(0,1fr);gap:28px}nav{display:flex;flex-direction:column;gap:4px;padding-top:4px}nav .eyebrow{padding:10px 12px 14px;color:var(--text-secondary)}.journey{display:flex;gap:10px;align-items:center;text-align:left;border-radius:11px;background:transparent;padding:11px 12px}.journey:hover{background:var(--surface-list-hover)}.journey[aria-current=true]{background:var(--surface-list-selection);color:var(--accent);font-weight:600}.nav-icon{width:20px;text-align:center;font-size:17px}.workspace{min-width:0}.review-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:17px}.pill{display:inline-flex;align-items:center;gap:5px;border-radius:99px;background:var(--surface-control);font-size:11px;padding:4px 9px;font-weight:550;white-space:nowrap}.pill.good{background:var(--status-green-surface);color:var(--status-green)}.compare{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.col{min-width:0}.col-head{min-height:25px;display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}.col-head .eyebrow{font-size:12px;letter-spacing:.1em}.window{background:var(--surface-popover);border-radius:17px;box-shadow:0 0 0 1px var(--border-separator),0 12px 32px -22px rgb(0 0 0 / .23);overflow:hidden;min-height:490px}.window-bar{height:40px;display:flex;align-items:center;gap:5px;padding:0 16px;border-bottom:1px solid var(--border-separator);background:var(--surface-well)}.dot{height:7px;width:7px;border-radius:50%;background:var(--surface-control-active)}.window-bar span:last-child{font-size:11px;color:var(--text-tertiary);margin-left:auto}.screen{padding:22px}.screen>h3{margin-bottom:4px}.screen>.small{margin-bottom:19px}.group{margin:17px 0;border-radius:11px;background:var(--surface-well);overflow:hidden}.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 13px;border-bottom:1px solid var(--border-separator);font-size:12px}.row:last-child{border-bottom:0}.row>span:first-child{min-width:0}.value{color:var(--text-secondary);text-align:right;font-size:11px}.fake-select{padding:5px 8px;border-radius:6px;background:var(--surface-control);white-space:nowrap;font-size:11px}.switch{display:inline-block;width:29px;height:17px;border-radius:20px;background:var(--surface-control-active);position:relative;flex:none}.switch:after{content:'';position:absolute;left:2px;top:2px;width:13px;height:13px;border-radius:50%;background:var(--surface-popover)}.switch.on{background:var(--accent)}.switch.on:after{left:14px}.fake-btn{display:inline-block;padding:6px 10px;border-radius:7px;background:var(--surface-control);font-size:11px;white-space:nowrap}.fake-btn.dim{opacity:.45}.code{font:10px/1.6 var(--font-code-family);overflow-wrap:anywhere;padding:12px;background:var(--surface-input);border-radius:8px;color:var(--text-secondary)}.fold{font-size:12px;padding:12px;background:var(--surface-well);margin-top:10px;border-radius:8px}.step-card{background:var(--surface-well);padding:17px;border-radius:13px;margin-top:14px}.step-head{display:flex;gap:10px;align-items:center;margin-bottom:9px}.number{width:23px;height:23px;display:grid;place-items:center;border-radius:50%;background:var(--surface-control);font-size:11px;font-weight:650;flex:none}.number.active{background:var(--status-accent-surface);color:var(--status-accent)}.step-head strong{font-size:14px}.step-card p{font-size:12px;color:var(--text-secondary);line-height:1.55}.primary{display:inline-flex;justify-content:center;align-items:center;gap:6px;background:var(--accent);color:var(--accent-foreground);padding:10px 15px;border-radius:10px;font-weight:550;font-size:12px;min-height:39px}.primary:hover{background:var(--accent-hover)}.secondary{background:var(--surface-control);padding:9px 12px;border-radius:9px;font-size:12px}.secondary:hover{background:var(--surface-control-hover)}.full{width:100%;margin-top:14px}.choices{display:grid;gap:7px;margin:14px 0}.choice{display:flex;align-items:center;gap:9px;padding:10px 11px;border-radius:9px;background:var(--surface-control);font-size:12px;cursor:pointer}.choice:has(input:checked){background:var(--surface-list-selection)}.choice input{accent-color:var(--accent);margin:0}.choice:has(input:focus-visible){outline:2px solid var(--focus-ring);outline-offset:3px}.choice span{display:grid;gap:2px}.choice small{font-size:10px;color:var(--text-secondary)}.caption{padding:15px 2px 0;font-size:13px;line-height:1.55}.caption strong{display:block;margin-bottom:3px;font-size:14px}.caption p{color:var(--text-secondary);font-size:12px}.path{display:flex;gap:5px;flex-wrap:wrap;padding-top:12px;align-items:center;font-size:10px;color:var(--text-secondary)}.path span{background:var(--surface-control);padding:4px 7px;border-radius:6px}.path b{font-weight:400}.controls{display:flex;gap:8px;align-items:center;margin-top:22px;flex-wrap:wrap;padding-top:17px;border-top:1px solid var(--border-separator)}.controls label{font-size:12px;color:var(--text-secondary)}select{border:0;border-radius:8px;background:var(--surface-control);padding:7px 9px;font-size:12px;max-width:100%}.controls .ghost{margin-left:auto;font-size:12px}.note{margin-top:12px;font-size:11px;color:var(--text-secondary)}.preview-field{background:var(--surface-popover);padding:12px;border-radius:9px;font-size:12px;margin:12px 0}.review-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-separator);font-size:12px}.review-row:last-child{border:0}.review-row span{color:var(--text-secondary)}.symbol{display:grid;place-items:center;width:54px;height:54px;margin:3px auto 15px;background:var(--status-accent-surface);color:var(--accent);border-radius:17px;font-size:27px}.done{text-align:center;padding:30px 10px 12px}.done .symbol{background:var(--status-green-surface);color:var(--status-green)}.done h3{margin-bottom:7px}.done p{font-size:12px;color:var(--text-secondary)}.check{color:var(--status-green)}.checklist{list-style:none;padding:0;margin:12px 0;font-size:12px}.checklist li{padding:7px 0;display:flex;gap:8px}.hint{padding:11px;border-radius:9px;background:var(--status-warning-surface);color:var(--status-warning);font-size:12px;margin-top:12px}.qr{width:116px;height:116px;margin:16px auto 9px;background:var(--surface-control);border-radius:14px;display:grid;place-items:center;font-size:65px;color:var(--text-primary)}.qr-label{text-align:center;font-size:10px;color:var(--text-tertiary)}details{font-size:12px;margin-top:15px}summary{cursor:pointer;color:var(--text-secondary);padding:5px 0}details p{margin-top:8px}.footer{display:flex;justify-content:space-between;align-items:center;gap:16px;border-top:1px solid var(--border-separator);margin-top:35px;padding-top:18px;font-size:11px;color:var(--text-secondary)}dialog{border:0;border-radius:18px;padding:27px;width:min(430px,calc(100% - 32px));background:var(--surface-popover);color:var(--text-primary);box-shadow:var(--elevation-dialog)}dialog::backdrop{background:rgb(0 0 0 / .3)}dialog p{font-size:13px;color:var(--text-secondary);margin-top:14px}dialog h2{font-size:21px}dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}#announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.mini-steps{display:flex;flex-wrap:wrap;gap:5px;margin:18px 0}.mini-steps span{background:var(--surface-control);padding:6px 8px;border-radius:7px;font-size:10px}.mini-steps span:first-child{background:var(--surface-list-selection)}.bars{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:15px 0}.bars span{height:52px;background:var(--surface-control);border-radius:7px;display:grid;place-items:center;font-size:10px}.screen-enter{animation:enter 180ms ease-out}@keyframes enter{from{opacity:.2;transform:translateY(4px)}to{opacity:1;transform:none}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}@media(max-width:1000px){.layout{grid-template-columns:1fr;gap:18px}nav{flex-direction:row;overflow-x:auto;padding:3px 2px 10px}nav .eyebrow{display:none}.journey{white-space:nowrap;padding:9px 12px}.intro .small{max-width:210px}}@media(max-width:640px){main{padding:25px 16px}.intro{display:block}.intro .small{text-align:left;max-width:none;margin-top:10px}.compare{grid-template-columns:1fr;gap:26px}.window{min-height:0}.top{padding:15px 17px}.top-actions{gap:5px}.top-actions a{display:none}.screen{padding:20px}.footer{align-items:start}.review-heading h2{font-size:21px}.controls{gap:7px}.controls .ghost{margin-left:0}}@media print{nav,.controls,.top-actions,dialog{display:none}.layout{display:block}.compare{grid-template-columns:1fr 1fr}.window{box-shadow:none;border:1px solid var(--border-separator)}main{padding:15px}.footer{margin-top:15px}}
+</style>
+</head>
+<body>
+<header class="top"><div class="brand"><span class="mark" aria-hidden="true">a</span>Aiden <span class="small">/ UX review</span></div><div class="top-actions"><a href="../plans/nontechnical-user-journey-ux-plan.md">Full audit ↗</a><button class="ghost" id="theme" aria-label="Switch to dark theme">◐ Theme</button></div></header>
+<main>
+<div class="intro"><div><h1>Less setup. More doing.</h1><p class="muted">The same capabilities, with an easier way in.</p></div><p class="small">Visual concepts, based on the source audit. No real settings change.</p></div>
+<div class="layout"><nav aria-label="Review a user journey" id="journeys"><div class="eyebrow">Choose a journey</div></nav><section class="workspace" aria-labelledby="journey-title">
+<div class="review-heading"><h2 id="journey-title"></h2><span class="pill" id="journey-count"></span></div>
+<div class="compare"><article class="col" aria-label="Current flow"><div class="col-head"><span class="eyebrow">Now</span><span class="small">Simplified reconstruction</span></div><div class="window"><div class="window-bar" aria-hidden="true"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span>Aiden</span></div><div class="screen" id="now"></div></div><div class="caption" id="now-caption"></div></article>
+<article class="col" aria-label="Proposed flow"><div class="col-head"><span class="eyebrow">Proposed</span><span class="pill good">Try the buttons ↗</span></div><div class="window"><div class="window-bar" aria-hidden="true"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span>Aiden · concept</span></div><div class="screen" id="proposed"></div></div><div class="caption" id="proposed-caption"></div></article></div>
+<div class="controls"><label for="scenario">Preview state</label><select id="scenario"></select><button class="ghost" id="reset">↺ Restart example</button></div><p class="note" id="footnote"></p>
+</section></div>
+<footer class="footer"><span>10 key journeys · Desktop + mobile concepts</span><a href="../plans/nontechnical-user-journey-ux-plan.md">All 39 journeys & implementation plan ↗</a></footer>
+</main>
+<dialog id="ack" aria-labelledby="ack-title" aria-describedby="ack-copy"><h2 id="ack-title"></h2><div id="ack-copy"></div><div class="actions"><button class="secondary" id="cancel">Cancel</button><button class="primary" id="confirm">Enable and show code</button></div></dialog>
+<div id="announcement" role="status" aria-live="polite"></div>
+<script>
+const $=s=>document.querySelector(s);
+const row=(label,value)=>`<div class="row"><span>${label}</span><span class="value">${value}</span></div>`;
+const select=v=>`<span class="fake-select">${v} ⌄</span>`;
+const toggle=on=>`<i class="switch ${on?'on':''}" aria-hidden="true"></i>`;
+const btn=v=>`<span class="fake-btn">${v}</span>`;
+const group=(...r)=>`<div class="group">${r.join('')}</div>`;
+const card=(n,title,body,active=true)=>`<div class="step-card"><div class="step-head"><span class="number ${active?'active':''}">${n}</span><strong>${title}</strong></div>${body}</div>`;
+const action=(text,act='next')=>`<button class="primary full" data-action="${act}">${text} →</button>`;
+const review=rows=>rows.map(([k,v])=>`<div class="review-row"><span>${k}</span><strong>${v}</strong></div>`).join('');
+const path=items=>`<div class="path">${items.map(s=>`<span>${s}</span>`).join('<b>→</b>')}</div>`;
+const choice=(name,value,title,sub,checked=false)=>`<label class="choice"><input type="radio" name="${name}" value="${value}" ${checked?'checked':''}><span>${title}<small>${sub}</small></span></label>`;
+const flows=[
+{id:'phone',icon:'▯',label:'Phone setup',title:'Take Aiden with you',nowTitle:'Find the switches. Then pair.',nowSub:'The primary action depends on settings elsewhere.',nextTitle:'One decision. Aiden joins the steps.',nextSub:'Review what turns on, then scan the code.',nowPath:['Enable access','Choose method','Connect Serve','Add device'],nextPath:['Connect a device','Enable & show code','Scan'],scenarios:[['ready','Tailscale is ready'],['missing','Tailscale needs setup'],['conflict','Connection already in use']],note:'Two desktop clicks to a code when the suggested Tailscale connection is ready. Phone scanning, permissions and external setup are additional.',now:()=>`<h3>Remote Access</h3><p class="small">Settings / Remote Access</p>${group(row('This Mac',toggle(false)),row('Mac name',select('My Mac')))}${group(row('Mobile devices',''),row('Add a device','<span class="fake-btn dim">+ Add device</span>'))}<div class="fold">⌄ Connection</div>${group(row('Connection method',select('Tailscale')),row('Tailscale Serve',btn('Connect')))}<div class="code">/api/aiden/v1 → loopback service<br>Inspect Serve configuration before connecting.</div><div class="fold">› Workspace access</div>`},
+{id:'start',icon:'✦',label:'First chat',title:'Get to your first useful reply',nowTitle:'Choose infrastructure first.',nowSub:'Different connection types arrive before the first task.',nextTitle:'Choose a familiar starting point.',nextSub:'Connect AI, then land in a useful conversation.',nowPath:['Profile','Provider','Feature tour','App'],nextPath:['Connect AI','Choose a first task'],note:'Sign-in and key validation remain real prerequisites. The preview does not connect an account or send a prompt.',now:()=>`<h3>Connect a provider</h3><div class="mini-steps"><span>Profile</span><span>Provider</span><span>Tour</span></div>${group(...['OpenAI API key','ChatGPT sign in','Anthropic API key','LM Studio','Ollama','Tailscale custom model'].map(x=>row(x,'○')))}<p class="small">Skip provider</p><div class="bars"><span>Models</span><span>Tools</span><span>Workspaces</span></div>`,cards:[['Connect your AI','Use an account you recognize. Other connection types stay one step away.'],['Start with something useful','Ask a question, write something, or work with a folder.']],preview:`${group(row('ChatGPT',btn('Sign in')),row('LM Studio',btn('Connect')),row('Ollama',btn('Connect')),row('Other Custom Provider',btn('Configure')),row('Other ways',select('More AI services')))}<p class="small">Uses your chosen AI service. Its account limits apply.</p>`,cta:'Preview connected state',reviewTitle:'What would you like to do?',reviewHtml:`${group(row('✎ Write something','→'),row('☷ Understand a document','→'),row('▣ Work with a folder','→'))}<div class="preview-field">Help me write a clear project update…</div>`,final:'Your first chat is ready',finalSub:'Your connected model is selected. You can start typing.'},
+{id:'bots',icon:'◉',label:'Create a bot',title:'Create a bot',nowTitle:'Five steps before the first chat.',nowSub:'Identity, access, model and capabilities each get a page.',nextTitle:'Describe the job. Review the essentials.',nextSub:'A model and limited access are explicit; decoration can wait.',nowPath:['Identity','Access','Model','Capabilities','Review'],nextPath:['Describe the job','Review & create'],note:'A proposed shorter editor, not a new permission mode. Existing Bots keep their saved model and access.',now:()=>`<h3>Create a bot</h3><div class="mini-steps">${['Identity','Access','Model','Capabilities','Review'].map(s=>`<span>${s}</span>`).join('')}</div>${group(row('Name','Release reviewer'),row('Description','What this bot is best at'),row('Instructions','Role, priorities, tone…'))}<div class="fold">Next: choose access</div>${group(row('Full Access','○'),row('Custom Access','○'))}<div class="fold">Next: choose a provider and model</div>`,cards:[['What should your bot do?','A short job description is enough to start.'],['Review model and access','Keep the AI choice and allowed work visible.']],preview:'<div class="preview-field">Help me turn rough notes into clear weekly updates.</div>',cta:'Review bot',reviewTitle:'Review your bot',reviewHtml:review([['Model','Your selected chat model'],['Files & commands','No access'],['Connected apps','None']])+`<p class="small">This model stays with the Bot. Customize access when needed.</p>`,final:'Your bot is ready',finalSub:'One ongoing conversation. Change its role or appearance later.'},
+{id:'telegram',icon:'↗',label:'Telegram',title:'Connect Telegram without the puzzle',nowTitle:'Configure a bridge.',nowSub:'Token, owner, polling, model and workspace live separately.',nextTitle:'Connect, review, send a message.',nextSub:'Aiden handles its own enable and connection steps.',nowPath:['Token','Enable','Connect','Pair owner','Set context'],nextPath:['Connect Telegram','Review access','Pair owner'],note:'Creating a Telegram bot and authorizing the owner remain explicit. This example does not contact Telegram.',now:()=>`<h3>Telegram Agent</h3>${group(row('Bot profile',select('Default')),row('Enable Telegram bridge',toggle(false)),row('Bot token','••••••••'),row('Workspace',select('Assistant-only')),row('Provider',select('Choose provider')),row('Thinking level',select('Default')),row('Live answer drafts',toggle(true)),row('Connection',btn('Connect')))}<p class="small">Polling runs in the background.</p>`,cards:[['Connect your Telegram bot','Get a token from BotFather, then paste it here.'],['Choose what it can use','Review the AI model and access before connecting.']],preview:'<div class="preview-field">Bot token · ••••••••••••••••</div><p class="small">No bot yet? Start with BotFather in Telegram.</p>',cta:'Review connection',reviewTitle:'Connect this Telegram bot?',reviewHtml:review([['AI model','Your selected chat model'],['Workspace','Assistant-only'],['Files & tools','No access']])+`<p class="small">Messages go through Telegram and your selected AI service. Keep Aiden running on this Mac.</p>`,final:'Finish in Telegram',finalSub:'Send the one-time pairing message from your own account. Aiden verifies the owner before it is ready.'},
+{id:'voice',icon:'♩',label:'Voice input',title:'Make the microphone feel simple',nowTitle:'Set up an engine.',nowSub:'Provider and model settings come before dictation.',nextTitle:'See where audio goes. Set up once.',nextSub:'Return to the message you were already writing.',nowPath:['Voice settings','Provider','Model','Download','Mic'],nextPath:['Choose audio destination','Set up','Dictate'],note:'This preview records nothing. Real setup must show download size and request microphone permission before recording.',now:()=>`<h3>Voice Input</h3>${group(row('Provider',select('On-device')),row('Model',select('Parakeet')))}<h3>On-Device Engine</h3>${group(row('Engine','Model required'),row('Active model','Not installed'),row('Models',btn('Download')))}<div class="fold">› Dictation shortcut</div>`,cards:[['Dictate on this Mac','Your recording is transcribed locally with a downloaded speech model.'],['Set up your microphone','Download the model and complete the Mac permission prompt.']],preview:review([['Audio processing','On this Mac'],['Speech model','Download required']]),cta:'Preview microphone setup',reviewTitle:'Ready when you are',reviewHtml:`<ul class="checklist"><li><span class="check">✓</span>Speech model installed</li><li><span class="check">✓</span>Microphone permission granted</li></ul><p class="small">Recording starts when you press the microphone. Review the words before sending.</p>`,final:'Back to your draft',finalSub:'Dictation adds editable text. It does not send a message automatically.'},
+{id:'permissions',icon:'⌘',label:'Mac app access',title:'Explain permissions at the right moment',nowTitle:'Understand three permission layers.',nowSub:'Global setup, Mac permissions and chat opt-in are separate.',nextTitle:'One guided setup. The same control.',nextSub:'Explain screenshots first; ask before each control action.',nowPath:['Enable tool','OS permissions','Chat opt-in','Allow once'],nextPath:['Review privacy','Finish Mac setup','Use in this chat'],note:'System permissions and per-action approvals stay in place. A simpler flow does not grant broader access.',now:()=>`<h3>Computer Use</h3>${group(row('Enable Computer Use',toggle(false)),row('Readiness','Permissions needed'))}<p class="small">Makes Aiden’s pinned external cua-driver available as an opt-in tool.</p>${group(row('Accessibility',btn('Open Settings')),row('Screen Recording',btn('Open Settings')))}<div class="fold">Per-chat opt-in</div><div class="fold">Actions ask first</div>`,cards:[['Let Aiden help in Mac apps','Your selected AI service may receive screenshots and on-screen text.'],['Finish Mac permissions','Aiden guides you through only the missing permissions.']],preview:'<p class="small">You choose which chats can use this. Every control action still asks for Allow once.</p>',cta:'Review setup',reviewTitle:'Two permissions on your Mac',reviewHtml:`${group(row('Accessibility','Allows approved control actions'),row('Screen Recording','Allows screen inspection'))}<p class="small">The real flow opens the relevant Mac settings, then checks again when you return.</p>`,final:'Ready for this chat',finalSub:'Inspection uses the disclosed screen data. Control actions still ask for approval.'},
+{id:'schedule',icon:'◷',label:'Schedule a task',title:'Start with what and when',nowTitle:'A task plus a run configuration.',nowSub:'Timing is friendly already; context still takes work.',nextTitle:'A familiar request and one clear review.',nextSub:'Keep the next run, access and Mac requirement visible.',nowPath:['Task','Timing','Run context','Permissions','Save'],nextPath:['What & when','Review','Create'],note:'Natural-language scheduling already exists. The proposal makes it easier to discover while keeping scripts and cron available.',now:()=>`<h3>Create scheduled task</h3>${group(row('Name','Daily repository brief'),row('Mode',select('Ask Aiden')),row('Prompt','Summarize changes…'),row('Repeat',select('Daily')),row('Time','09:00'),row('Time zone',select('New York')),row('Workspace',select('Choose folder')),row('Permission',select('Read-only')),row('MCP tools',select('Select servers')))} `,cards:[['What should Aiden do?','Describe the result you want.'],['When should it happen?','Use an ordinary schedule. Advanced timing stays available.']],preview:'<div class="preview-field">Summarize my project notes every weekday at 9 am.</div>',cta:'Review schedule',reviewTitle:'Weekday project summary',reviewHtml:review([['When','Weekdays · 9:00 am'],['Time zone','America/New_York'],['Folder','Project notes'],['Access','Read-only'],['AI model','Your selected chat model']])+`<p class="small">Runs while Aiden is open on this Mac. Model usage may incur charges.</p>`,final:'Your schedule is ready',finalSub:'The real task shows its exact next run. Pause it at any time.'},
+{id:'plugins',icon:'⌁',label:'Connect an app',title:'Know when a connection is ready',nowTitle:'Save, authorize, test.',nowSub:'The user has to distinguish configured from usable.',nextTitle:'Connect the service. Verify the result.',nextSub:'Show what it can access before tools become available.',nowPath:['Choose plugin','Credentials','Save','Test'],nextPath:['Review access','Sign in','Ready'],note:'Verification must be supported and non-mutating. Account authorization remains in the service’s own sign-in flow.',now:()=>`<h3>Set up a plugin</h3>${group(row('Name','My connection'),row('Server address','https://…/mcp'),row('OAuth sign-in',toggle(true)),row('Authorize',btn('Sign in')),row('Test',btn('Test connection')))}<div class="fold">Save</div><p class="small">Generic setup also supports commands, arguments and headers.</p>`,cards:[['Connect your app','Review the named service and the tools it offers.'],['Sign in and check connection','Aiden distinguishes saved settings from a working connection.']],preview:review([['Service','Your selected plugin'],['Account','Review during sign-in'],['Tools','Review before enabling']]),cta:'Preview authorization',reviewTitle:'Connection checked',reviewHtml:'<ul class="checklist"><li><span class="check">✓</span>Account authorized</li><li><span class="check">✓</span>Supported connection check passed</li><li><span class="check">✓</span>Available tools loaded</li></ul><p class="small">Unattended tasks still need their own explicit tool access.</p>',final:'Ready to use',finalSub:'Return to your task. Manage or disconnect this app from Settings.'},
+{id:'recovery',icon:'↻',label:'Lost connection',title:'Help someone get unstuck',nowTitle:'A network problem, in network terms.',nowSub:'Several connection states require interpretation.',nextTitle:'What happened. What to do next.',nextSub:'Preserve the draft and show the last known state.',nowPath:['Read error','Find settings','Diagnose','Retry'],nextPath:['See next action','Check again'],note:'Aiden should not claim the Mac is asleep unless it knows. Cached content must be marked as older, and revoked access requires pairing again.',now:()=>`<h3>Connection</h3>${group(row('Remote service','Local service ready'),row('Tailscale Serve','Verification needed'))}<div class="code">Tailscale did not confirm the last route update. Verify its exact result before continuing.</div><div class="fold">Verify update</div><div class="fold">Technical details</div>`,cards:[['We can’t reach My Mac','Keep Aiden running on your Mac and check that both devices are connected to Tailscale.'],['Your draft is still here','Recent messages can be viewed offline. New work needs a connection.']],preview:'<div class="preview-field">Draft · Can you check the notes I added?</div><span class="pill">Showing previously loaded messages</span>',cta:'Preview reconnection',reviewTitle:'My Mac is reachable again',reviewHtml:'<ul class="checklist"><li><span class="check">✓</span>Connection verified</li><li><span class="check">✓</span>Latest messages loaded</li></ul><div class="preview-field">Can you check the notes I added?</div><p class="small">Your draft is ready. Nothing was sent automatically.</p>',final:'Continue where you left off',finalSub:'Review your draft, then send it when you are ready.'},
+{id:'settings',icon:'⌕',label:'Find a setting',title:'Search for what you want to do',nowTitle:'Know the name of the setting.',nowSub:'Search filters section titles and configured keywords.',nextTitle:'Find the action in your own words.',nextSub:'Take the user directly to the right setup step.',nowPath:['Search category','Open section','Find control'],nextPath:['Describe goal','Open action'],note:'Intent aliases and exact-action links are proposed. Existing Settings routes and advanced controls remain available.',now:()=>`<h3>All settings</h3><div class="preview-field">⌕ connect my phone</div>${group(row('Providers',''),row('Model Pad',''),row('Plugins',''),row('Telegram',''),row('Remote Access',''),row('Computer Use',''),row('Memory',''))}<p class="small">Search matches section names and keywords.</p>`,cards:[['What would you like to do?','Search with the words you would use to ask for help.'],['Go straight to the action','No need to learn which category owns a setting.']],preview:'<div class="preview-field">⌕ connect my phone</div>'+group(row('▯ Connect a device','Aiden On The Go →')),cta:'Open matching action',reviewTitle:'Connect your phone',reviewHtml:'<div class="symbol" aria-hidden="true">▯</div><p class="small">Use Aiden from your phone while it runs on this Mac.</p>'+review([['Suggested connection','Tailscale'],['Next step','Review and show a code']]),final:'The right setup, already open',finalSub:'Search leads to the action, with advanced settings still available.'}
+];
+let active='phone',stage=0,route='away',returnFocus=null;
+const data=()=>flows.find(f=>f.id===active);
+const nav=$('#journeys');
+flows.forEach((f,i)=>{const b=document.createElement('button');b.className='journey';b.dataset.flow=f.id;b.innerHTML=`<span class="nav-icon" aria-hidden="true">${f.icon}</span>${f.label}`;b.addEventListener('click',()=>{active=f.id;stage=0;route='away';render(true)});nav.append(b)});
+function announce(s){$('#announcement').textContent=s}
+function render(changed=false){const f=data();document.querySelectorAll('.journey').forEach(b=>b.setAttribute('aria-current',String(b.dataset.flow===active)));$('#journey-title').textContent=f.title;$('#journey-count').textContent=`${String(flows.indexOf(f)+1).padStart(2,'0')} / 10`;$('#now').innerHTML=f.now();$('#now-caption').innerHTML=`<strong>${f.nowTitle}</strong><p>${f.nowSub}</p>${path(f.nowPath)}`;$('#proposed-caption').innerHTML=`<strong>${f.nextTitle}</strong><p>${f.nextSub}</p>${path(f.nextPath)}`;$('#footnote').textContent=f.note;if(changed||!$('#scenario').options.length){$('#scenario').innerHTML=(f.scenarios||[['initial','Start'],['review','Review / next step'],['done','Completed preview']]).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}renderProposed();if(changed)announce(f.title)}
+function renderProposed(){const f=data(),p=$('#proposed');if(active!=='phone')$('#scenario').value=['initial','review','done'][stage];p.classList.remove('screen-enter');if(active==='phone')p.innerHTML=phone();else if(stage===0)p.innerHTML=`<h3>${f.title}</h3><p class="small">${f.label}</p>${card(1,f.cards[0][0],`<p>${f.cards[0][1]}</p>${f.preview}${action(f.cta)}`)}${card(2,f.cards[1][0],`<p>${f.cards[1][1]}</p>`,false)}`;else if(stage===1)p.innerHTML=`<h3>${f.reviewTitle}</h3><p class="small">Proposed next step · example data</p>${card('✓','Review',f.reviewHtml)}${action('Continue preview','finish')}<button class="ghost full" data-action="back">Back</button>`;else p.innerHTML=`<div class="done"><div class="symbol" aria-hidden="true">✓</div><h3>${f.final}</h3><p>${f.finalSub}</p></div><div class="hint">Preview only · no account, permission or task was changed.</div>${action('Try again','restart')}`;requestAnimationFrame(()=>p.classList.add('screen-enter'));}
+function phone(){const scenario=$('#scenario').value;if(stage===0)return `<h3>Aiden On The Go</h3><p class="small">My Mac</p>${card(1,'Connect your phone',`<p>Your Bots and workspaces, wherever you need them.</p><div class="choices">${choice('route','away','Away from home','Uses Tailscale on both devices',route==='away')}${choice('route','near','On the same Wi-Fi','No Tailscale needed',route==='near')}</div>${action('Connect a device','connect')}`)}${card(2,'Scan to finish','<p>Aiden prepares the connection and shows a one-time code.</p>',false)}`;
+if(stage===1&&scenario==='missing'&&route==='away')return `<h3>One thing to set up first</h3><p class="small">Your progress is saved</p>${card(1,'Install and sign in to Tailscale','<p>Use the same private network on your Mac and phone. Your network may also need HTTPS approval.</p><div class="hint">This part happens in Tailscale.</div>'+action('Preview prerequisites completed','prerequisite'))}<button class="ghost full" data-action="nearby">Use same Wi-Fi instead</button>`;
+if(stage===1&&scenario==='conflict'&&route==='away')return `<h3>This connection is in use</h3><p class="small">Nothing has been replaced</p>${card('!','Another Aiden profile is connected','<p>Stop or disconnect that profile before using this Mac’s phone connection here.</p>')}<div class="hint">Aiden keeps the existing connection safe.</div>${action('Preview conflict resolved','prerequisite')}<button class="ghost full" data-action="restart">Back to setup</button>`;
+if(stage<3)return `<h3>Scan to finish</h3><p class="small">My Mac · ${route==='away'?'Tailscale':'Same Wi-Fi'}</p><ul class="checklist"><li><span class="check">✓</span>Phone access enabled</li><li><span class="check">✓</span>Private connection checked</li></ul>${card(2,'Open Aiden On The Go on your phone','<p>Scan the one-time code shown here.</p><div class="qr" aria-label="QR placeholder, not a scannable code">▦</div><div class="qr-label">QR placeholder · real codes expire in 5 minutes</div>'+action('Simulate phone scan','scan'))}<details><summary>Can’t use your camera?</summary><p>The real flow offers a one-time setup code and Mac address. This preview contains no pairing secrets.</p></details>`;
+return `<div class="done"><div class="symbol" aria-hidden="true">✓</div><h3>Your phone is connected</h3><p>My Phone ↔ My Mac</p><p style="margin-top:9px">Keep Aiden running on your Mac.</p></div>${group(row('Connection',route==='away'?'Tailscale':'Nearby only'),row('Device access','Approved on this Mac'))}${action('Preview first phone screen','open-phone')}<button class="ghost full" data-action="restart">Restart example</button>`;}
+function focusPrimary(){const b=$('#proposed button');if(b)b.focus()}
+$('#proposed').addEventListener('change',e=>{if(e.target.name==='route')route=e.target.value});
+$('#proposed').addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!b)return;const a=b.dataset.action;if(a==='connect'){returnFocus=b;$('#ack-title').textContent='Connect your phone to this Mac?';$('#ack-copy').innerHTML=`<p>Aiden will turn on phone access, ${route==='away'?'set up its private connection through Tailscale':'use your local network'}, and show a one-time code.</p><p>Paired devices can use the workspaces and capabilities this Mac allows. Your AI keys stay here; requests still go to the AI service you choose.</p><p>Keep Aiden running. Remove a device’s access here at any time.</p>`;$('#ack').showModal();$('#cancel').focus();return}if(a==='next')stage=1;if(a==='finish')stage=2;if(a==='back'||a==='restart')stage=0;if(a==='prerequisite')stage=2;if(a==='scan')stage=3;if(a==='nearby'){route='near';stage=0}if(a==='open-phone'){$('#proposed').innerHTML=`<div class="done"><div class="symbol" aria-hidden="true">▯</div><h3>Welcome back</h3><p>Connected to My Mac</p></div>${group(row('Your Bots','Open a bot →'),row('Your workspaces','Continue a chat →'))}<p class="small">Only permitted content appears. Approve additional browsing folders on your Mac when needed.</p>${action('Restart example','restart')}`;focusPrimary();announce('Preview of permitted phone content');return}renderProposed();focusPrimary();announce(stage===0?'Example restarted':stage===3?'Phone connected in preview':'Preview moved to the next step')});
+$('#confirm').addEventListener('click',()=>{$('#ack').close();stage=1;renderProposed();focusPrimary();announce('Preparing connection preview')});
+$('#cancel').addEventListener('click',()=>$('#ack').close());
+$('#ack').addEventListener('close',()=>{if(returnFocus?.isConnected)returnFocus.focus()});
+$('#scenario').addEventListener('change',()=>{stage=active==='phone'?0:({initial:0,review:1,done:2}[$('#scenario').value]);renderProposed();announce('Preview state changed')});
+$('#reset').addEventListener('click',()=>{stage=0;renderProposed();announce('Example restarted')});
+$('#theme').addEventListener('click',()=>{const dark=document.documentElement.classList.toggle('dark');$('#theme').setAttribute('aria-label',`Switch to ${dark?'light':'dark'} theme`)});
+render(true);
+</script>
+</body>
+</html>

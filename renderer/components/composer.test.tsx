@@ -253,3 +253,15 @@ test("workspace access keyboard navigation moves focus without changing permissi
   assert.match(composer, /radios\?\.\[nextIndex\]\?\.focus\(\)/u);
   assert.doesNotMatch(composer, /requestPermission\(nextPermission\)/u);
 });
+
+
+test("voice recovery preserves the draft and offers a direct settings action", () => {
+  const composer = source("./composer.tsx");
+  const recorder = source("../lib/use-voice-recorder.ts");
+  assert.match(composer, /voice.lastError/u);
+  assert.match(composer, /Open voice settings/u);
+  assert.match(composer, /Your draft is still here/u);
+  assert.match(composer, /voice.dismissError/u);
+  assert.match(recorder, /setLastError\(message\)/u);
+  assert.match(composer, /onOpenSettings && readinessSettingsSection/u);
+});
