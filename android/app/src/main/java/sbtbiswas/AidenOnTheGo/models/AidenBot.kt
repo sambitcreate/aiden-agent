@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
@@ -469,6 +470,22 @@ data class AidenBotProviderOption(
     }
 }
 
+object AidenBotSkillsEnabledSerializer : KSerializer<Boolean> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("AidenBotSkillsEnabled", PrimitiveKind.BOOLEAN)
+
+    override fun deserialize(decoder: Decoder): Boolean {
+        if (decoder !is JsonDecoder) return decoder.decodeBoolean()
+        val value = decoder.decodeJsonElement() as? JsonPrimitive
+        if (value == null || value.isString) {
+            throw AidenBotContractException.InvalidField("skillsEnabled")
+        }
+        return value.booleanOrNull ?: throw AidenBotContractException.InvalidField("skillsEnabled")
+    }
+
+    override fun serialize(encoder: Encoder, value: Boolean) = encoder.encodeBoolean(value)
+}
+
 @Serializable
 data class AidenBotCapabilityCatalog(
     val revision: String,
@@ -478,7 +495,9 @@ data class AidenBotCapabilityCatalog(
     val connections: List<AidenBotCapabilityOption>,
     val skills: List<AidenBotCapabilityOption>,
     val otherCapabilities: List<AidenBotCapabilityOption>,
-    val notice: AidenBotNoticeStatus
+    val notice: AidenBotNoticeStatus,
+    @Serializable(with = AidenBotSkillsEnabledSerializer::class)
+    val skillsEnabled: Boolean = true
 ) {
     init {
         AidenBotWire.validateString(revision, "revision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
@@ -515,7 +534,8 @@ data class AidenBotCapabilityCatalog(
         if (selection.shellEnabled && !shellAvailable) return false
         val availableFileScopes = fileScopes.filter { it.available }.map { it.id }.toSet()
         val availableConnections = connections.filter { it.available }.map { it.id }.toSet()
-        val availableSkills = skills.filter { it.available }.map { it.id }.toSet()
+        // Disabled catalogs expose only authenticated saved skill choices; new choices stay disabled.
+        val availableSkills = skills.filter { it.available || !skillsEnabled }.map { it.id }.toSet()
         val availableOtherCaps = otherCapabilities.filter { it.available }.map { it.id }.toSet()
         return availableFileScopes.containsAll(selection.fileScopeIds) &&
                 availableConnections.containsAll(selection.connectionIds) &&

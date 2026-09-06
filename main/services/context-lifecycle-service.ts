@@ -4,7 +4,10 @@ import { randomUUID } from "node:crypto";
 import { estimateTokens, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 import { createPiCompactionModels, PiCompactionCoordinator } from "./pi-compaction-core.js";
-import { syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
+import {
+  projectVisibleHistoryWithoutSkills,
+  syncChatMessagesToPiSession,
+} from "./pi-compaction-session-store.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Chat, ChatMeta } from "./types.js";
@@ -43,6 +46,7 @@ export interface ContextLifecycleServiceDeps {
   resolveLocalModel?(providerId: string, model: string): Promise<ResolvedModelRuntime["model"]>;
   compactionEnabled?(): boolean;
   compactionEligible?(chat: Chat): boolean | Promise<boolean>;
+  skillsEnabled?(): Promise<boolean>;
   getChat(chatId: string): Promise<Chat | null>;
   listChatsByBot(botId: string): Promise<readonly ChatMeta[]>;
   isBotArchived(botId: string): Promise<boolean>;
@@ -82,6 +86,12 @@ export class ContextLifecycleService {
     if (!operation || (ownerId !== undefined && operation.ownerId !== ownerId)) return false;
     operation.controller.abort(new DOMException("Compaction cancelled.", "AbortError"));
     return true;
+  }
+
+  cancelForSkillsDisabled(): void {
+    for (const operation of this.activeCompactions.values()) {
+      operation.controller.abort(new DOMException("Compaction cancelled.", "AbortError"));
+    }
   }
 
   async compactChat(
@@ -159,13 +169,16 @@ export class ContextLifecycleService {
         return { compacted: false, reason: "context_metadata_invalid" };
       }
 
-      const session = await this.deps.openSession(chat.id);
+      let session = await this.deps.openSession(chat.id);
       await syncChatMessagesToPiSession(
         session,
         chat.messages,
         model,
         model.input.includes("image"),
       );
+      if ((await this.deps.skillsEnabled?.()) === false) {
+        session = await projectVisibleHistoryWithoutSkills(session, chat.messages, model);
+      }
       const coordinator = new PiCompactionCoordinator({
         session,
         engine,
@@ -181,6 +194,9 @@ export class ContextLifecycleService {
         signal: operationAbort.signal,
       });
       const result = await coordinator.compact();
+      if (operationAbort.signal.aborted) {
+        return { compacted: false, reason: "cancelled" };
+      }
       if (result.errorMessage) {
         return { compacted: false, reason: "compaction_failed" };
       }

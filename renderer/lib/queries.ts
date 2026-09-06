@@ -275,10 +275,10 @@ export function useBotChats(botId: string | undefined) {
 }
 
 /** Bot capability catalog for the desktop audience; refreshed after saves. */
-export function useBotCapabilityCatalog(enabled: boolean) {
+export function useBotCapabilityCatalog(enabled: boolean, botId?: string) {
   return useQuery({
-    queryKey: queryKeys.botCapabilityCatalog,
-    queryFn: () => botsApi.getCapabilityCatalog(),
+    queryKey: [...queryKeys.botCapabilityCatalog, botId],
+    queryFn: () => botsApi.getCapabilityCatalog(botId),
     enabled,
   });
 }

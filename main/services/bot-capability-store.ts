@@ -382,7 +382,9 @@ export class BotCapabilityStore {
         throw new BotCapabilityCatalogConflictError(input.catalog.revision);
       }
       if (access.accessMode === "custom") {
-        validateSelectionAgainstCatalog(access.custom, input.catalog);
+        validateSelectionAgainstCatalog(access.custom, input.catalog, {
+          retainedSkillIds: policy.accessMode === "custom" ? policy.custom.skillIds : [],
+        });
         const binding = parseBoundBotCustomSelection(input.binding);
         if (
           binding.catalogRevision !== access.catalogRevision ||
@@ -500,7 +502,10 @@ export class BotCapabilityStore {
         throw new BotCapabilityRevisionConflictError(policy.revision);
       }
       if (access.mode === "custom") {
-        validateSelectionAgainstCatalog(access.custom, input.catalog);
+        validateSelectionAgainstCatalog(access.custom, input.catalog, {
+          retainedSkillIds: chat.mode === "custom" ? chat.custom.skillIds
+            : policy.accessMode === "custom" ? policy.custom.skillIds : [],
+        });
         if (
           policy.accessMode === "custom" &&
           !botCustomSelectionIsSubset(access.custom, policy.custom)

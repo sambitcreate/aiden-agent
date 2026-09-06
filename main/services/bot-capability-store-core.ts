@@ -1181,7 +1181,9 @@ export class BotCapabilityStateEditor {
     const access = parseBotAccessUpdate(input.access);
     this.assertCatalog(input.catalog, access.catalogRevision);
     if (access.accessMode === "custom") {
-      validateSelectionAgainstCatalog(access.custom, input.catalog);
+      validateSelectionAgainstCatalog(access.custom, input.catalog, {
+        retainedSkillIds: policy.accessMode === "custom" ? policy.custom.skillIds : [],
+      });
     }
     validateVisionSelectionAgainstCatalog(access.visionModel, input.catalog);
     const binding = this.bindingForCustomAccess(access, input.binding);
@@ -1336,7 +1338,9 @@ export class BotCapabilityStateEditor {
     }
     const custom = input.custom === undefined ? undefined : parseBotCustomSelection(input.custom);
     if (custom) {
-      validateSelectionAgainstCatalog(custom, input.catalog);
+      validateSelectionAgainstCatalog(custom, input.catalog, {
+        retainedSkillIds: policy.accessMode === "custom" ? policy.custom.skillIds : [],
+      });
       if (
         policy.accessMode === "custom" &&
         !botCustomSelectionIsSubset(custom, policy.custom, input.catalog.fileScopes)
@@ -1376,7 +1380,10 @@ export class BotCapabilityStateEditor {
     this.assertCatalog(input.catalog, access.catalogRevision);
     this.assertPolicyRevision(policy, access.expectedBotPolicyRevision);
     if (access.mode === "custom") {
-      validateSelectionAgainstCatalog(access.custom, input.catalog);
+      validateSelectionAgainstCatalog(access.custom, input.catalog, {
+        retainedSkillIds: chat.mode === "custom" ? chat.custom.skillIds
+          : policy.accessMode === "custom" ? policy.custom.skillIds : [],
+      });
       const model = storedBotModelAuthority(policy);
       if (
         model &&
@@ -1688,7 +1695,7 @@ export class BotCapabilityStateEditor {
     }
     if (policy.accessMode === "custom") {
       assertBoundBotCustomSelectionCurrent(policy.binding, input.snapshot, {
-        skillsEnabled: input.skillsEnabled,
+        skillsEnabled: input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled,
       });
     }
     if (input.chatId) {
@@ -1696,7 +1703,7 @@ export class BotCapabilityStateEditor {
       if (chat.botId !== policy.botId) throw new BotCapabilityUnavailableError();
       if (chat.mode === "custom") {
         validateSelectionAgainstCatalog(
-          input.skillsEnabled === false ? { ...chat.custom, skillIds: [] } : chat.custom,
+          (input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled) === false ? { ...chat.custom, skillIds: [] } : chat.custom,
           input.snapshot.catalog,
         );
       }

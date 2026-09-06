@@ -24,6 +24,7 @@ import {
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { parseAidenRemoteBotCapabilityCatalog } from "./aiden-remote-protocol.js";
 import type { Chat } from "./types.js";
 
 const CATALOG_REVISION = "catalog_revision_1";
@@ -982,4 +983,16 @@ test("favorites storage rejects corrupt, duplicate, and oversized snapshots", ()
     botIds: ["bot_1", "bot_1"],
   }));
   assert.throws(() => normalizeAidenRemoteBotFavoritesSnapshot({ version: 2, botIds: [] }));
+});
+
+
+test("Remote catalog preserves the strict optional global Skills gate", () => {
+  const saved = { ...catalog(), skills: [{ id: "skill:saved", label: "Saved skill", available: false }] };
+  saved.providers[0]!.models[0]!.supportsImages = false;
+  assert.equal(parseAidenRemoteBotCapabilityCatalog(saved).skillsEnabled, undefined);
+  assert.equal(parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: false }).skillsEnabled, false);
+  assert.equal(parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: true }).skillsEnabled, true);
+  for (const invalid of [null, "false", 0, {}, []]) {
+    assert.throws(() => parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: invalid }), /skillsEnabled/u);
+  }
 });

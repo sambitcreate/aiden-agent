@@ -5033,6 +5033,11 @@
             "maxItems": 128,
             "items": { "$ref": "#/components/schemas/BotCapabilityOption" }
           },
+          "skillsEnabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Optional global Skills gate; omission means enabled. When false, skill choices are unavailable and only authenticated retained selections may be preserved or reduced. This flag never grants runtime skill authority."
+          },
           "skills": {
             "type": "array",
             "maxItems": 256,

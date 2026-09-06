@@ -539,6 +539,9 @@ export function registerProviderHandlers(): void {
       if (!next.skillsEnabled) {
         const { llmClient } = await import("../services/llm-client.js");
         llmClient.cancelForSkillsDisabled();
+        const { contextLifecycleService } =
+          await import("../services/context-lifecycle-service-main.js");
+        contextLifecycleService.cancelForSkillsDisabled();
       }
       const { telegramService } = await import("../services/telegram/telegram-service.js");
       void telegramService.refreshCommands();
