@@ -25,7 +25,7 @@ Duplicate workspace names receive a short stable ID suffix in both visible and a
 
 ## Icons and illustrations
 
-Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain glyphs or brain illustrations. Thinking Controls uses a lightbulb; its 1024×1024 transparent PNG lives at `renderer/assets/onboarding/features/thinking-controls.png` and is covered by the onboarding asset contract.
+Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain glyphs or brain illustrations. The existing onboarding artwork is outside this Settings change.
 
 ## Checks
 

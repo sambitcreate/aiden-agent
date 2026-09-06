@@ -46,3 +46,7 @@ PR [#97](https://github.com/sambitcreate/aiden-agent/pull/97) contains the compl
 Automated review found that the HTTP catalog route rejected Android’s Bot query and iOS never supplied it. Reopened delivery and wired the optional validated query through the authenticated router and both native clients, isolate per-Bot cached catalogs on iOS, and added real HTTP/URL request regression tests. Generic new-Bot catalogs must remain free of dormant saved skill choices.
 
 The follow-up now forwards validated targets through the router and all existing-Bot iOS flows, keeps new-Bot catalogs generic, and isolates iOS offline catalogs by Bot. Android 33 focused model/client tests, iOS 13 source-contract tests, app/XCTest compilation, lint, types, release-consumer checks, and production build passed. Independent iOS source/test review found no issues. Full Remote API tests passed (357 plus 7 LAN transport tests); final CI is recorded in the PR checks.
+
+## Artwork scope update
+
+At the user’s request, reverted the replacement Thinking Controls onboarding illustration to the existing base asset. This PR adds or changes no onboarding image assets. Existing onboarding references and the feature asset contract remain intact.
