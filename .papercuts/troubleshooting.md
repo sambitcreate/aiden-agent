@@ -311,3 +311,10 @@ owns; reopen the terminal before judging the final live state.
   platform-independent test that exercises both certificate and keychain paths.
 - A changelog search conflated the stable and prerelease lines. Verify published
   package code before assuming a release contains the upstream patch.
+
+## 2026-09-06 — cloud Node engines
+
+- `package.json` engines require Node `>=22.19`. Some cloud images still expose
+  `/exec-daemon/node` at 22.14.0. Put `~/.nvm/versions/node/v22.22.2/bin` first
+  on `PATH` before `npm install` or `npm test`.
+

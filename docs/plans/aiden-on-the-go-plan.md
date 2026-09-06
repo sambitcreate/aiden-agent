@@ -1,6 +1,6 @@
 # Aiden On The Go Plan
 
-Status: Active foundation — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 21 is `VALID` and `IN_BETA_TESTING` for Internal Testers with final-only Bot replies and expandable intermediate activity; physical-iPad and external/public-release acceptance remain open. The approved bot-first extension is now governed by `bot-first-aiden-on-the-go-plan.md`.
+Status: Active foundation — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 22 is `VALID` and `IN_BETA_TESTING` for Internal Testers with final-only Bot replies and expandable intermediate activity. Physical-iPad acceptance remains open. **macOS 1.0 and Android public availability are planned for October 2026**; iPhone/iPad stays TestFlight-only until a separate App Review decision. The approved bot-first extension is now governed by `bot-first-aiden-on-the-go-plan.md`.
 Date: 2026-08-18
 Owners: Aiden Electron main process, the SwiftUI app under `ios/`, and the Jetpack Compose app under `android/`
 

@@ -1,9 +1,6 @@
 /**
- * Handler Registration
- *
- * Register all your IPC handlers here
+ * Register every desktop IPC handler used by the renderer.
  */
-
 import { appHandlers } from "./app.js";
 import { registerProviderHandlers } from "./providers.js";
 import { registerChatHistoryHandlers } from "./chats.js";
@@ -35,7 +32,6 @@ import { ipcMain, logger } from "../platform.js";
 export function registerHandlers(): void {
   logger.info("handlers", "Registering IPC handlers...");
 
-  // Register app handlers using ipcMain API
   ipcMain.handle("app:getInfo", async (_event) => {
     return await appHandlers.getInfo();
   });
@@ -43,7 +39,6 @@ export function registerHandlers(): void {
   registerDiagnosticHandlers();
   initializeAdvisorRuntime();
 
-  // AI chat client handlers
   registerProviderHandlers();
   registerChatHistoryHandlers();
   registerChatGenerationHandlers();
@@ -67,12 +62,5 @@ export function registerHandlers(): void {
   registerBotHandlers();
   registerBtwHandlers();
 
-  logger.info("handlers", "✓ IPC handlers registered");
-
-  // TODO: Add more handlers here using ipcMain.handle()
-  // Example:
-  // ipcMain.handle('file:read', async (event, path) => {
-  //   const fs = await import('fs/promises');
-  //   return await fs.readFile(path, 'utf-8');
-  // });
+  logger.info("handlers", "IPC handlers registered");
 }

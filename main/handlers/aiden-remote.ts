@@ -1,6 +1,8 @@
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
 import type { AidenRemoteSettingsSnapshot } from "../../renderer/shared/aiden-remote.js";
+import { remoteDesktopResult } from "../services/aiden-remote-desktop-errors.js";
+import { AidenRemoteHomeDirectoryConfirmationRequiredError } from "../services/aiden-remote-approved-roots.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
   parseAidenRemoteConnectionMode,
@@ -104,42 +106,53 @@ export function registerAidenRemoteHandlers(): void {
   });
 
   ipcMain.handle("remote:tailscaleConnect", async () => {
-    await (await getAidenRemoteRuntime()).service.connectTailscale();
-    return settingsSnapshot();
+    return remoteDesktopResult(async () => {
+      await (await getAidenRemoteRuntime()).service.connectTailscale();
+      return settingsSnapshot();
+    });
   });
 
   ipcMain.handle("remote:tailscaleDisconnect", async () => {
-    await (await getAidenRemoteRuntime()).service.disconnectTailscale();
-    return settingsSnapshot();
+    return remoteDesktopResult(async () => {
+      await (await getAidenRemoteRuntime()).service.disconnectTailscale();
+      return settingsSnapshot();
+    });
   });
 
   ipcMain.handle("remote:tailscaleReconcile", async () => {
-    await (await getAidenRemoteRuntime()).service.reconcileTailscale();
-    return settingsSnapshot();
+    return remoteDesktopResult(async () => {
+      await (await getAidenRemoteRuntime()).service.reconcileTailscale();
+      return settingsSnapshot();
+    });
   });
 
   ipcMain.handle("remote:tailscaleReviewTakeover", async () => {
-    return (await getAidenRemoteRuntime()).service.reviewTailscaleTakeover();
+    return remoteDesktopResult(async () => {
+      return (await getAidenRemoteRuntime()).service.reviewTailscaleTakeover();
+    });
   });
 
   ipcMain.handle("remote:tailscaleTakeOver", async (_event, token: unknown) => {
-    await (await getAidenRemoteRuntime()).service.takeOverTailscale(
-      parseAidenRemoteTakeoverToken(token),
-    );
-    return settingsSnapshot();
+    const takeoverToken = parseAidenRemoteTakeoverToken(token);
+    return remoteDesktopResult(async () => {
+      await (await getAidenRemoteRuntime()).service.takeOverTailscale(takeoverToken);
+      return settingsSnapshot();
+    });
   });
 
   ipcMain.handle("remote:beginPairing", async (_event, transport: unknown) => {
     const selectedTransport = parseAidenRemoteTransport(transport);
-    const service = (await getAidenRemoteRuntime()).service;
-    const pairing = await service.beginPairing(selectedTransport);
-    return {
-      ...pairing.bootstrap,
-      pairingSessionId: pairing.sessionId,
-      qrPayload: pairing.qrPayload
-        ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
-      manualCode: pairing.manualCode,
-    };
+    return remoteDesktopResult(async () => {
+      const service = (await getAidenRemoteRuntime()).service;
+      const pairing = await service.beginPairing(selectedTransport);
+      return {
+        ...pairing.bootstrap,
+        pairingSessionId: pairing.sessionId,
+        qrPayload: pairing.qrPayload
+          ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
+        manualCode: pairing.manualCode,
+      };
+    });
   });
 
   ipcMain.handle("remote:closePairing", async (_event, sessionId: unknown) => {
@@ -175,7 +188,7 @@ export function registerAidenRemoteHandlers(): void {
     try {
       await runtime.approvedRoots.addLocalFolder(selectedPath);
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes("entire home directory")) throw error;
+      if (!(error instanceof AidenRemoteHomeDirectoryConfirmationRequiredError)) throw error;
       const warning = parent
         ? await dialog.showMessageBox(parent, {
             type: "warning",

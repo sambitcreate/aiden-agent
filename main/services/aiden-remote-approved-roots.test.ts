@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
+import { AidenRemoteApprovedRootService, AidenRemoteHomeDirectoryConfirmationRequiredError } from "./aiden-remote-approved-roots.js";
 import { AidenRemoteStateRegistry, createDefaultAidenRemoteState } from "./aiden-remote-state.js";
 
 async function fixture() {
@@ -62,7 +62,7 @@ test("approving an entire home folder requires a separate local confirmation", a
   try {
     await assert.rejects(
       app.service.addLocalFolder(app.directory),
-      /requires local confirmation/u,
+      (error: unknown) => error instanceof AidenRemoteHomeDirectoryConfirmationRequiredError,
     );
     const root = await app.service.addLocalFolder(app.directory, { confirmHomeDirectory: true });
     assert.equal(root.folderPath, await fs.realpath(app.directory));

@@ -9,6 +9,13 @@ import type {
 
 export const AIDEN_REMOTE_ROOT_POLICY_REVISION = "remote-browser-v1:no-hidden-system";
 
+export class AidenRemoteHomeDirectoryConfirmationRequiredError extends Error {
+  constructor() {
+    super("Approving the entire home directory requires local confirmation.");
+    this.name = "AidenRemoteHomeDirectoryConfirmationRequiredError";
+  }
+}
+
 export interface AidenRemoteApprovedRootDependencies {
   now(): number;
   randomBytes(size: number): Buffer;
@@ -49,7 +56,7 @@ export class AidenRemoteApprovedRootService {
     }
     const canonicalHome = await fs.realpath(this.dependencies.homeDirectory());
     if (canonicalPath === canonicalHome && options.confirmHomeDirectory !== true) {
-      throw new Error("Approving the entire home directory requires local confirmation.");
+      throw new AidenRemoteHomeDirectoryConfirmationRequiredError();
     }
 
     const existing = (await this.state.snapshot()).approvedRoots;

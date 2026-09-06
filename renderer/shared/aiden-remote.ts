@@ -77,3 +77,29 @@ export interface AidenRemotePairingBootstrapView {
   /** IPC-only 100-bit setup code. It is never exposed through remote status. */
   manualCode: string;
 }
+
+export type AidenRemoteDesktopErrorCode =
+  | "tls_endpoint_timeout"
+  | "tls_endpoint_unreachable"
+  | "tls_invalid_certificate"
+  | "pairing_failed"
+  | `tailscale_${string}`;
+
+export type AidenRemoteDesktopResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; code: AidenRemoteDesktopErrorCode; message: string };
+
+export class AidenRemoteDesktopError extends Error {
+  readonly code: AidenRemoteDesktopErrorCode;
+
+  constructor(code: AidenRemoteDesktopErrorCode, message: string) {
+    super(message);
+    this.name = "AidenRemoteDesktopError";
+    this.code = code;
+  }
+}
+
+export function unwrapAidenRemoteDesktopResult<T>(result: AidenRemoteDesktopResult<T>): T {
+  if (result.ok) return result.value;
+  throw new AidenRemoteDesktopError(result.code, result.message);
+}

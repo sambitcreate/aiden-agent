@@ -49,6 +49,7 @@ import type {
   AidenRemoteSettingsSnapshot,
   AidenRemoteTailscaleTakeoverReviewView,
 } from "../../shared/aiden-remote";
+import { AidenRemoteDesktopError } from "../../shared/aiden-remote";
 import {
   groupRemoteDevices,
   remoteConnectionSummary,
@@ -127,22 +128,51 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
   }
 }
 
+function remoteErrorCode(error: unknown): string {
+  if (error instanceof AidenRemoteDesktopError) return error.code;
+  return error instanceof Error ? error.message : "";
+}
+
 function friendlyTailscaleError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  if (message.includes("tailscale_route_live")) return "Another Aiden profile is active on this route. Nothing was changed.";
-  if (message.includes("tailscale_takeover_changed") || message.includes("tailscale_takeover_expired")) return "The route changed or this review expired. Review it again before taking over.";
-  if (message.includes("tailscale_funnel_conflict")) return "Tailscale Funnel is using this listener. Aiden did not change it.";
-  if (message.includes("tailscale_route_conflict")) return "This Serve path is already in use. Aiden did not change it.";
-  if (message.includes("tailscale_ownership_commit_failed")) return "Aiden restored the previous route because it couldn’t save ownership.";
-  if (message.includes("tailscale_route_recovery_failed")) return "Aiden couldn’t verify route recovery. Check Tailscale Serve before trying again.";
-  if (message.includes("tailscale_route_outcome_unknown")) return "Tailscale reported an uncertain route update. Aiden did not save ownership; inspect Serve before retrying.";
-  if (message.includes("tailscale_reconciliation_conflict")) return "The route changed after the uncertain update. Aiden left it untouched; inspect Tailscale Serve.";
-  if (message.includes("tailscale_reconciliation_unhealthy")) return "The route exists but this Aiden service did not answer its health check. Nothing was claimed.";
-  if (message.includes("tailscale_reconciliation_required")) return "Verify the previous Tailscale update before starting another route change.";
-  if (message.includes("tailscale_not_connected")) return "Open Tailscale and sign in before connecting Aiden.";
-  if (message.includes("tailscale_https_unavailable")) return "Enable HTTPS for this Tailscale device name before connecting Aiden.";
-  if (message.includes("tailscale_route_busy")) return "Another Aiden profile is updating this Mac’s mobile route. Wait a moment and try again.";
+  const code = remoteErrorCode(error);
+  if (code === "tailscale_permission_denied" || code.includes("tailscale_permission_denied")) {
+    return "Aiden needs Tailscale operator permission. Run sudo tailscale set --operator=$USER, then try again.";
+  }
+  if (code.includes("tailscale_route_live")) return "Another Aiden profile is active on this route. Nothing was changed.";
+  if (code.includes("tailscale_takeover_changed") || code.includes("tailscale_takeover_expired")) return "The route changed or this review expired. Review it again before taking over.";
+  if (code.includes("tailscale_funnel_conflict")) return "Tailscale Funnel is using this listener. Aiden did not change it.";
+  if (code.includes("tailscale_route_conflict")) return "This Serve path is already in use. Aiden did not change it.";
+  if (code.includes("tailscale_ownership_commit_failed")) return "Aiden restored the previous route because it couldn’t save ownership.";
+  if (code.includes("tailscale_route_recovery_failed")) return "Aiden couldn’t verify route recovery. Check Tailscale Serve before trying again.";
+  if (code.includes("tailscale_route_outcome_unknown")) return "Tailscale reported an uncertain route update. Aiden did not save ownership; inspect Serve before retrying.";
+  if (code.includes("tailscale_reconciliation_conflict")) return "The route changed after the uncertain update. Aiden left it untouched; inspect Tailscale Serve.";
+  if (code.includes("tailscale_reconciliation_unhealthy")) return "The route exists but this Aiden service did not answer its health check. Nothing was claimed.";
+  if (code.includes("tailscale_reconciliation_required")) return "Verify the previous Tailscale update before starting another route change.";
+  if (code.includes("tailscale_not_connected")) return "Open Tailscale and sign in before connecting Aiden.";
+  if (code.includes("tailscale_not_installed")) return "Tailscale isn't installed. Install Tailscale, then try again.";
+  if (code.includes("tailscale_https_unavailable")) return "Enable HTTPS for this Tailscale device name before connecting Aiden.";
+  if (code.includes("tailscale_status_unavailable")) return "Aiden couldn't read Tailscale status. Open Tailscale, then try again.";
+  if (
+    code.includes("tailscale_takeover_unavailable")
+    || code.includes("tailscale_takeover_token_failed")
+  ) {
+    return "Aiden couldn't take over the Tailscale route. Check Tailscale Serve, then try again.";
+  }
+  if (code.includes("tailscale_reconciliation_unavailable")) {
+    return "Aiden couldn't refresh the Tailscale route. Check Tailscale Serve, then try again.";
+  }
+  if (code.includes("tailscale_target_invalid")) {
+    return "The Tailscale route target is invalid. Check Tailscale Serve, then try again.";
+  }
+  if (code.includes("tailscale_route_busy")) return "Another Aiden profile is updating this Mac’s mobile route. Wait a moment and try again.";
+  if (code.includes("tailscale_")) return "Aiden couldn’t safely update the Tailscale route.";
+  if (error instanceof AidenRemoteDesktopError) return error.message;
   return "Aiden couldn’t safely update the Tailscale route.";
+}
+
+function friendlyPairingError(error: unknown): string {
+  if (error instanceof AidenRemoteDesktopError) return error.message;
+  return error instanceof Error ? error.message : "Aiden couldn't open pairing.";
 }
 
 function Disclosure({
@@ -407,7 +437,7 @@ export function RemoteAccessSettings() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
     } catch (error) {
       if (mounted.current && pairingRequestGeneration.current === requestGeneration) {
-        toast.error(error instanceof Error ? error.message : "Aiden couldn't open pairing.");
+        toast.error(friendlyPairingError(error));
       }
     } finally {
       if (mounted.current && pairingRequestGeneration.current === requestGeneration) {

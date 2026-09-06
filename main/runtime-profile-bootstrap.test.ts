@@ -11,6 +11,9 @@ test("runtime identity is configured before the main module can take its lock", 
   assert.ok(configure >= 0 && loadMain > configure);
   assert.match(main, /app\.requestSingleInstanceLock\(\)/u);
   assert.doesNotMatch(main, /app\.setName\(/u);
+  const waylandFlags = main.indexOf("applyLinuxWaylandChromiumFlags(app.commandLine)");
+  const lock = main.indexOf("app.requestSingleInstanceLock()");
+  assert.ok(waylandFlags >= 0 && lock > waylandFlags);
 });
 
 test("the Electron build enters through the profile bootstrap", () => {

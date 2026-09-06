@@ -1,6 +1,8 @@
 # Aiden On The Go remote access
 
-Aiden Agent can expose a small authenticated API to Aiden On The Go on iPhone and iPad. Remote Access is off by default. Aiden must remain running on the Mac, although its window may be closed.
+Aiden Agent can expose a small authenticated API to Aiden On The Go on iPhone, iPad, and Android. Remote Access is off by default. Aiden must remain running on the Mac, although its window may be closed.
+
+iPhone and iPad remain Internal TestFlight-only. Android is a debug-APK validation client; public Android availability is planned for October 2026.
 
 ## Local Network setup
 

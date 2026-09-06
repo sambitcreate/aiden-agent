@@ -85,6 +85,7 @@ function spkiDigest(value: string | Buffer): string {
 export async function fetchTlsServerSpkiSha256(
   hostname: string,
   port = 443,
+  options: { timeoutMs?: number } = {},
 ): Promise<string> {
   if (
     !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(hostname) ||
@@ -95,6 +96,12 @@ export async function fetchTlsServerSpkiSha256(
     throw new Error("Aiden Remote TLS endpoint is invalid.");
   }
   return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const settle = (finish: () => void): void => {
+      if (settled) return;
+      settled = true;
+      finish();
+    };
     const socket = tls.connect({
       host: hostname,
       port,
@@ -102,23 +109,26 @@ export async function fetchTlsServerSpkiSha256(
       rejectUnauthorized: true,
     });
     const timeout = setTimeout(() => {
-      socket.destroy(new Error("Aiden Remote TLS endpoint timed out."));
-    }, 5_000);
+      const timeoutError = new Error("Aiden Remote TLS endpoint timed out.");
+      timeoutError.name = "AidenRemoteTlsTimeoutError";
+      settle(() => reject(timeoutError));
+      socket.destroy();
+    }, options.timeoutMs ?? 5_000);
     socket.once("secureConnect", () => {
+      clearTimeout(timeout);
       try {
         const certificate = socket.getPeerCertificate(true);
         if (!certificate.raw?.length) throw new Error("Aiden Remote TLS endpoint has no certificate.");
-        resolve(spkiDigest(certificate.raw));
+        settle(() => resolve(spkiDigest(certificate.raw)));
       } catch (error) {
-        reject(error);
+        settle(() => reject(error));
       } finally {
-        clearTimeout(timeout);
         socket.end();
       }
     });
     socket.once("error", (error) => {
       clearTimeout(timeout);
-      reject(error);
+      settle(() => reject(error));
     });
   });
 }
