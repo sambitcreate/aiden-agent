@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 
 const gradlePath = fileURLToPath(new URL("../android/app/build.gradle.kts", import.meta.url));
 const versionPath = fileURLToPath(
