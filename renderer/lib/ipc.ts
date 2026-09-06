@@ -140,9 +140,12 @@ import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-comma
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
 import type {
   AidenRemoteConnectionMode,
+  AidenRemoteDesktopResult,
   AidenRemotePairingBootstrapView,
   AidenRemoteSettingsSnapshot,
+  AidenRemoteTailscaleTakeoverReviewView,
 } from "../shared/aiden-remote";
+import { unwrapAidenRemoteDesktopResult } from "../shared/aiden-remote";
 import {
   chatArtifactIdentity,
   parseChatArtifactEventV1,
@@ -483,17 +486,25 @@ export const aidenRemoteApi = {
   setDisplayName: (displayName: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setDisplayName", displayName),
   moveToAvailablePort: () => invoke<AidenRemoteSettingsSnapshot>("remote:moveToAvailablePort"),
-  connectTailscale: () => invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleConnect"),
-  disconnectTailscale: () => invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleDisconnect"),
-  reconcileTailscale: () => invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleReconcile"),
+  connectTailscale: () =>
+    invoke<AidenRemoteDesktopResult<AidenRemoteSettingsSnapshot>>("remote:tailscaleConnect")
+      .then(unwrapAidenRemoteDesktopResult),
+  disconnectTailscale: () =>
+    invoke<AidenRemoteDesktopResult<AidenRemoteSettingsSnapshot>>("remote:tailscaleDisconnect")
+      .then(unwrapAidenRemoteDesktopResult),
+  reconcileTailscale: () =>
+    invoke<AidenRemoteDesktopResult<AidenRemoteSettingsSnapshot>>("remote:tailscaleReconcile")
+      .then(unwrapAidenRemoteDesktopResult),
   reviewTailscaleTakeover: () =>
-    invoke<import("../shared/aiden-remote").AidenRemoteTailscaleTakeoverReviewView>(
+    invoke<AidenRemoteDesktopResult<AidenRemoteTailscaleTakeoverReviewView>>(
       "remote:tailscaleReviewTakeover",
-    ),
+    ).then(unwrapAidenRemoteDesktopResult),
   takeOverTailscale: (token: string) =>
-    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleTakeOver", token),
+    invoke<AidenRemoteDesktopResult<AidenRemoteSettingsSnapshot>>("remote:tailscaleTakeOver", token)
+      .then(unwrapAidenRemoteDesktopResult),
   beginPairing: (transport: "lan" | "tailscale") =>
-    invoke<AidenRemotePairingBootstrapView>("remote:beginPairing", transport),
+    invoke<AidenRemoteDesktopResult<AidenRemotePairingBootstrapView>>("remote:beginPairing", transport)
+      .then(unwrapAidenRemoteDesktopResult),
   closePairing: (pairingSessionId: string) =>
     invoke<{ closed: boolean }>("remote:closePairing", pairingSessionId),
   revokeDevice: (deviceId: string) =>

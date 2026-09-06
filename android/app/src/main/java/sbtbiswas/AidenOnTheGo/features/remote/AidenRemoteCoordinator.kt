@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.AidenAppVersion
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentCatalogStore
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentInstallationRecord
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord
@@ -303,7 +304,8 @@ class AidenRemoteCoordinator(
         val exchange = AidenRemoteClient.pair(
             payload = payload,
             deviceName = deviceName,
-            deviceType = AidenDeviceType.ANDROID_PHONE
+            deviceType = AidenDeviceType.ANDROID_PHONE,
+            clientVersion = AidenAppVersion.NAME
         )
         val installation = installationStore.addInstallation(exchange, payload.trust)
         refreshClient()
@@ -315,7 +317,8 @@ class AidenRemoteCoordinator(
             manualCode = code,
             endpoint = endpoint,
             deviceName = deviceName,
-            deviceType = AidenDeviceType.ANDROID_PHONE
+            deviceType = AidenDeviceType.ANDROID_PHONE,
+            clientVersion = AidenAppVersion.NAME
         )
         val installation = installationStore.addInstallation(result.exchange, result.payload.trust)
         refreshClient()

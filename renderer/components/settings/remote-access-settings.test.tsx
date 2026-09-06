@@ -65,6 +65,9 @@ test("Tailscale setup failures retain typed actionable remediation", () => {
   assert.match(source, /transportAllowsTailscale[\s\S]*!status\.tailscaleConnected/u);
   assert.match(source, /Local ready · \$\{tailscalePresentation\.badge\}/u);
   assert.match(source, /Local service ready/u);
+  assert.match(source, /AidenRemoteDesktopError/u);
+  assert.match(source, /sudo tailscale set --operator=\$USER/u);
+  assert.match(source, /function friendlyPairingError/u);
 });
 
 test("uncertain Tailscale mutations require an explicit verification action", () => {

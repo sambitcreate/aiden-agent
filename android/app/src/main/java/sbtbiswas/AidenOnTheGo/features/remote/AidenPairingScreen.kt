@@ -46,7 +46,7 @@ fun AidenPairingScreen(
     val activeId by installationStore.activeInstallationId.collectAsState()
 
     var manualCode by remember { mutableStateOf("") }
-    var endpointUrl by remember { mutableStateOf("https://127.0.0.1:8765/api/aiden/v1") }
+    var endpointUrl by remember { mutableStateOf("") }
     var qrJsonInput by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) } // 0: Scan QR, 1: Setup Code, 2: Paste JSON
     var isPairing by remember { mutableStateOf(false) }
@@ -326,6 +326,7 @@ fun AidenPairingScreen(
                         value = endpointUrl,
                         onValueChange = { endpointUrl = it },
                         label = { Text("Mac Address (HTTPS Endpoint)") },
+                        placeholder = { Text("https://your-mac/api/aiden/v1") },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -348,25 +349,12 @@ fun AidenPairingScreen(
                                 }
                             }
                         },
-                        enabled = manualCode.replace("-", "").length == 20 && !isPairing,
+                        enabled = manualCode.replace("-", "").length == 20 && endpointUrl.isNotBlank() && !isPairing,
                         colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .tactilePress {
-                                scope.launch {
-                                    isPairing = true
-                                    errorMessage = null
-                                    try {
-                                        coordinator.pairWithManualCode(manualCode, endpointUrl)
-                                        onDismiss()
-                                    } catch (e: Exception) {
-                                        errorMessage = e.message ?: "Failed to pair with setup code"
-                                    } finally {
-                                        isPairing = false
-                                    }
-                                }
-                            }
+                            .tactilePress()
                     ) {
                         if (isPairing) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
@@ -399,7 +387,7 @@ fun AidenPairingScreen(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .tactilePress { handleScannedQRCode(qrJsonInput) }
+                            .tactilePress()
                     ) {
                         if (isPairing) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))

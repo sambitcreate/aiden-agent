@@ -129,8 +129,10 @@ import { initializeBotApplicationService } from "./services/bot-application-serv
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
+import { applyLinuxWaylandChromiumFlags } from "./linux-chromium-flags.js";
 
 registerGenerativeUiScheme();
+applyLinuxWaylandChromiumFlags(app.commandLine);
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 

@@ -348,7 +348,7 @@ function takeoverFixture(options: {
   incumbent?: string;
   healthy?: boolean;
   now?: number;
-  failMutation?: boolean;
+  failMutation?: boolean | "permission";
 } = {}) {
   const incumbent = options.incumbent ?? "http://127.0.0.1:43179/api/aiden/v1";
   const calls: string[][] = [];
@@ -397,7 +397,14 @@ function takeoverFixture(options: {
         }
         return serialized;
       }
-      if (failMutation) throw new Error("command failed");
+      if (failMutation) {
+        if (failMutation === "permission") {
+          throw Object.assign(new Error("permission denied"), {
+            stderr: "Access denied: failed to connect to local tailscaled; try running `sudo tailscale set --operator=$USER`",
+          });
+        }
+        throw new Error("command failed");
+      }
       const nextTarget = args[args.length - 1];
       if (nextTarget === "off") {
         delete (serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>)["/api/aiden/v1"];
@@ -531,6 +538,19 @@ test("expired takeover reviews and failed commands never persist ownership", asy
     /tailscale_route_outcome_unknown/u,
   );
   assert.equal(persistCalls, 0);
+});
+
+test("an unchanged Serve route with operator denial is permission denied", async () => {
+  const app = takeoverFixture({ failMutation: "permission" });
+  const review = await app.controller.reviewTakeover(target);
+  await assert.rejects(
+    app.controller.takeOver(target, review.token, async () => undefined),
+    /tailscale_permission_denied/u,
+  );
+  assert.equal(
+    app.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy,
+    "http://127.0.0.1:43179/api/aiden/v1",
+  );
 });
 
 test("ownership persistence failure restores the exact stale incumbent route", async () => {

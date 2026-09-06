@@ -20,6 +20,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody
+import sbtbiswas.AidenOnTheGo.AidenAppVersion
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.*
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticArea
@@ -141,7 +142,7 @@ class AidenRemoteClient(
             payload: AidenPairingPayload,
             deviceName: String,
             deviceType: AidenDeviceType,
-            clientVersion: String = "0.1.0",
+            clientVersion: String = AidenAppVersion.NAME,
             acceptsBotCapabilities: Boolean = true,
             customOkHttpClient: OkHttpClient? = null
         ): AidenPairingExchange = withContext(Dispatchers.IO) {
@@ -222,7 +223,7 @@ class AidenRemoteClient(
             endpoint: String,
             deviceName: String,
             deviceType: AidenDeviceType,
-            clientVersion: String = "0.1.0",
+            clientVersion: String = AidenAppVersion.NAME,
             acceptsBotCapabilities: Boolean = true,
             customOkHttpClient: OkHttpClient? = null
         ): PairResult = withContext(Dispatchers.IO) {

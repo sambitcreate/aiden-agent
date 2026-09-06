@@ -17,7 +17,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -102,7 +107,7 @@ fun AidenQRCodeScanner(
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .tactilePress { permissionLauncher.launch(Manifest.permission.CAMERA) }
+                    .tactilePress()
             ) {
                 Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
@@ -142,6 +147,19 @@ private fun CameraPreview(
     }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    DisposableEffect(lifecycleOwner) {
+        onDispose {
+            cameraExecutor.shutdown()
+            scanner.close()
+            try {
+                if (cameraProviderFuture.isDone) {
+                    cameraProviderFuture.get().unbindAll()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     AndroidView(
         factory = { ctx ->

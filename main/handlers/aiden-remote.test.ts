@@ -52,3 +52,29 @@ test("saved endpoint repair is an explicit IPC action", async () => {
   assert.match(source, /ipcMain\.handle\("remote:moveToAvailablePort"/u);
   assert.match(source, /service\.moveToAvailablePort\(\)/u);
 });
+
+test("pairing and Tailscale mutations return structured results instead of rejecting IPC", async () => {
+  const source = await readFile(new URL("./aiden-remote.ts", import.meta.url), "utf8");
+  const ipc = await readFile(new URL("../../renderer/lib/ipc.ts", import.meta.url), "utf8");
+  for (const channel of [
+    "remote:beginPairing",
+    "remote:tailscaleConnect",
+    "remote:tailscaleDisconnect",
+    "remote:tailscaleReconcile",
+    "remote:tailscaleReviewTakeover",
+    "remote:tailscaleTakeOver",
+  ]) {
+    const start = source.indexOf(`ipcMain.handle("${channel}"`);
+    assert.ok(start >= 0, channel);
+    const slice = source.slice(start, start + 420);
+    assert.match(slice, /remoteDesktopResult\(/u);
+    assert.match(ipc, new RegExp(String.raw`"${channel}"[\s\S]{0,180}?unwrapAidenRemoteDesktopResult`, "u"));
+  }
+  assert.doesNotMatch(source, /add your handlers/u);
+});
+
+test("home-folder approval uses a typed confirmation error", async () => {
+  const source = await readFile(new URL("./aiden-remote.ts", import.meta.url), "utf8");
+  assert.match(source, /AidenRemoteHomeDirectoryConfirmationRequiredError/u);
+  assert.doesNotMatch(source, /error\.message\.includes\("entire home directory"\)/u);
+});

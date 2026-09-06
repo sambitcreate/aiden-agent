@@ -3,8 +3,9 @@ import { X509Certificate } from "node:crypto";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createServer } from "node:net";
 import test from "node:test";
-import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
+import { fetchTlsServerSpkiSha256, loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
 
 async function temporaryDirectory(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-tls-"));
@@ -65,5 +66,25 @@ test("TLS identity fails closed instead of silently rotating an incomplete ident
     );
   } finally {
     await fs.rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("a hanging TCP endpoint fails as a named TLS timeout", async () => {
+  const server = createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    await assert.rejects(
+      fetchTlsServerSpkiSha256("127.0.0.1", address.port, { timeoutMs: 150 }),
+      (error: unknown) =>
+        error instanceof Error
+        && error.name === "AidenRemoteTlsTimeoutError"
+        && error.message === "Aiden Remote TLS endpoint timed out.",
+    );
+  } finally {
+    server.close();
   }
 });

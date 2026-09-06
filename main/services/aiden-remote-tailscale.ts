@@ -15,6 +15,7 @@ import {
   type AidenTailscaleOwnership,
   type AidenTailscaleStatus,
 } from "./aiden-remote-tailscale-route.js";
+import { isTailscalePermissionDeniedError } from "./aiden-remote-desktop-errors.js";
 
 const execFileAsync = promisify(execFile);
 const TAILSCALE_CANDIDATES = [
@@ -669,12 +670,12 @@ export class AidenRemoteTailscaleController {
       normalizeListenerScaffolding: permitsScaffoldingChange,
       createdAt: this.now(),
     });
-    let commandFailed = false;
+    let commandError: unknown;
     try {
       if (nextTarget) await this.setExactRoute(nextTarget);
       else await this.clearExactRoute();
-    } catch {
-      commandFailed = true;
+    } catch (error) {
+      commandError = error;
     }
     const observed = await this.serveStatusAfterMutation("tailscale_route_outcome_unknown");
     const observedSnapshot = aidenTailscaleCanonicalRouteSnapshot(observed);
@@ -700,8 +701,11 @@ export class AidenRemoteTailscaleController {
         await this.outcomeStore?.clear();
       } else if (observedFingerprint === serveFingerprint(before)) {
         await this.outcomeStore?.clear();
+        if (commandError && isTailscalePermissionDeniedError(commandError)) {
+          throw new Error("tailscale_permission_denied");
+        }
       }
-      throw new Error(commandFailed
+      throw new Error(commandError
         ? "tailscale_route_outcome_unknown"
         : "tailscale_route_verification_failed");
     }
