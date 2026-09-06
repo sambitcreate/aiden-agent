@@ -372,6 +372,20 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     return record(record(content["application/json"], "application/json").schema, "request schema").$ref;
   };
 
+  const botIdQuery = record(parameters.BotIdQuery, "BotIdQuery");
+  assert.equal(botIdQuery.name, "botId");
+  assert.equal(botIdQuery.in, "query");
+  assert.equal(botIdQuery.required, false);
+  assert.deepEqual(record(botIdQuery.schema, "BotIdQuery schema"), {
+    type: "string",
+    minLength: 1,
+    maxLength: 160,
+    pattern: "^[A-Za-z0-9._:-]+$",
+  });
+  assert.deepEqual(operation("/bot-capabilities", "get").parameters, [
+    { $ref: "#/components/parameters/BotIdQuery" },
+  ]);
+
   assert.deepEqual(
     record(document["x-aiden-json-response-emission"], "JSON response emission"),
     {

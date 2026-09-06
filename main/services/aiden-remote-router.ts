@@ -795,6 +795,33 @@ function includeArchivedBotsQuery(query: string): boolean {
   );
 }
 
+function botCapabilityCatalogQuery(query: string): string | undefined {
+  if (!query) return undefined;
+  const components = query.split("&");
+  if (components.length !== 1) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The Bot capability catalog query is invalid.",
+      400,
+    );
+  }
+  const component = components[0]!;
+  const separator = component.indexOf("=");
+  const botId = separator < 0 ? "" : component.slice(separator + 1);
+  if (
+    component.slice(0, separator) !== "botId" ||
+    botId.includes("=") ||
+    !/^[A-Za-z0-9._:-]{1,160}$/u.test(botId)
+  ) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The Bot capability catalog query is invalid.",
+      400,
+    );
+  }
+  return botId;
+}
+
 function botConversationsQuery(query: string): AidenRemoteBotConversationQuery {
   if (!query) return {};
   const params = new URLSearchParams(query);
@@ -1029,14 +1056,14 @@ export function createAidenRemoteRequestHandler(
         return;
       }
       if (path === "/bot-capabilities" && request.method === "GET") {
-        requireNoQuery(query);
+        const botId = botCapabilityCatalogQuery(query);
         route = "botCapabilities";
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(response, 200, await dependencies.bots.capabilityCatalog(device.id));
+        writeJson(response, 200, await dependencies.bots.capabilityCatalog(device.id, botId));
         return;
       }
       if (path === "/bot-favorites" && request.method === "GET") {

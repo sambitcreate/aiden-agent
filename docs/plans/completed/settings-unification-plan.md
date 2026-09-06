@@ -1,6 +1,6 @@
 # Unified settings and workspace presentation
 
-Status: Complete — implemented, reviewed, and delivered in PR #97 (2026-09-06).
+Status: Complete — implementation and review complete in PR #97; final CI tracked by the PR (2026-09-06).
 
 ## Scope
 
@@ -34,9 +34,15 @@ Status: Complete — implemented, reviewed, and delivered in PR #97 (2026-09-06)
 - The corrected UI revision `6278ff4de` passed all CI checks, confirmed by the GPT-5.6 Luna max watcher.
 - Repository automated review then identified operator-compaction and additional Bot-catalog paths. Manual LLM/VCC compaction now uses visible-only history while Skills is disabled, and disabling cancels active operator compactions. Real journal/provider tests verify no hidden skill payload or cancelled checkpoint.
 - Bot catalogs pause discovery and incarnation reconciliation. Saved exact skill bindings survive disabled reads, unrelated edits, restart, and re-enable; real content changes still fail closed. Targeted editor catalogs and authenticated dormant chat-selection entries preserve saved choices without granting new skills.
-- The additive optional catalog `skillsEnabled` field is documented in the normative API/OpenAPI and shared fixtures. Desktop, iOS, and Android preserve saved choices while still preventing unavailable additions and rejecting malformed flags. Android14 focused tests passed, iOS generic app/test compilation passed, and an independent source review found no actionable concerns. Physical iPhone13 execution remains blocked by the lock screen.
+- The additive optional catalog `skillsEnabled` field is documented in the normative API/OpenAPI and shared fixtures. Desktop, iOS, and Android preserve saved choices while still preventing unavailable additions and rejecting malformed flags. Android 14 focused tests passed, iOS generic app/test compilation passed, and an independent source review found no actionable concerns. Physical iPhone13 execution remains blocked by the lock screen.
 - Focused remediation suites, full local tests/build/E2E, lint, type checks, and implementation CI passed after all fixes; see Delivery below.
 
 ## Delivery
 
 PR [#97](https://github.com/sambitcreate/aiden-agent/pull/97) contains the completed implementation. Full local tests, production build, lint, type checks, and Electron E2E passed after all fixes. The CI workflow and Release consumer contract passed for implementation revision `4ad6e5ec1`, confirmed by the requested GPT-5.6 Luna max watcher. The final archive-only revision is tracked by the PR’s live checks. iOS physical execution remains the explicitly recorded device-lock limitation.
+
+## Mobile transport follow-up
+
+Automated review found that the HTTP catalog route rejected Android’s Bot query and iOS never supplied it. Reopened delivery and wired the optional validated query through the authenticated router and both native clients, isolate per-Bot cached catalogs on iOS, and added real HTTP/URL request regression tests. Generic new-Bot catalogs must remain free of dormant saved skill choices.
+
+The follow-up now forwards validated targets through the router and all existing-Bot iOS flows, keeps new-Bot catalogs generic, and isolates iOS offline catalogs by Bot. Android 33 focused model/client tests, iOS 13 source-contract tests, app/XCTest compilation, lint, types, release-consumer checks, and production build passed. Independent iOS source/test review found no issues. Full Remote API tests passed (357 plus 7 LAN transport tests); final CI is recorded in the PR checks.

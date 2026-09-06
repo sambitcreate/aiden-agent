@@ -101,6 +101,10 @@ function fixture(
     ) => Promise<void>;
     onArchiveBot?: (botId: string) => Promise<void>;
     updateBotAccessError?: unknown;
+    capabilityCatalog?: (
+      audienceId: string,
+      botId?: string,
+    ) => ReturnType<typeof catalog> | Promise<ReturnType<typeof catalog>>;
   } = {},
 ) {
   let bots = initial.map((entry) => structuredClone(entry));
@@ -235,7 +239,9 @@ function fixture(
       )[0];
       return selected ? structuredClone(selected) : null;
     },
-    async capabilityCatalog() { return catalog(); },
+    async capabilityCatalog(audienceId: string, botId?: string) {
+      return options.capabilityCatalog?.(audienceId, botId) ?? catalog();
+    },
     async getBotAccess(botId: string) {
       const policy = policies.get(botId);
       if (!policy) throw new Error("missing");
@@ -995,4 +1001,27 @@ test("Remote catalog preserves the strict optional global Skills gate", () => {
   for (const invalid of [null, "false", 0, {}, []]) {
     assert.throws(() => parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: invalid }), /skillsEnabled/u);
   }
+});
+
+test("Remote targeted catalogs validate Bot ownership before forwarding the audience and target", async () => {
+  const calls: Array<[string, string | undefined]> = [];
+  const app = fixture([bot("bot_owned")], {
+    capabilityCatalog: (audienceId, botId) => {
+      calls.push([audienceId, botId]);
+      const result = catalog();
+      result.providers[0]!.models[0]!.supportsImages = false;
+      return result;
+    },
+  });
+
+  await app.service.capabilityCatalog("device_authorized", "bot_owned");
+  assert.deepEqual(calls, [["device_authorized", "bot_owned"]]);
+
+  await assert.rejects(
+    app.service.capabilityCatalog("device_authorized", "bot_missing"),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "not_found" &&
+      (error as { status?: number }).status === 404,
+  );
+  assert.deepEqual(calls, [["device_authorized", "bot_owned"]]);
 });

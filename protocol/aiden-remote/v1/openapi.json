@@ -1253,6 +1253,9 @@
         "operationId": "getBotCapabilityCatalog",
         "x-aiden-capability": "bot:read",
         "x-aiden-capabilities": ["bot:read"],
+        "parameters": [
+          { "$ref": "#/components/parameters/BotIdQuery" }
+        ],
         "responses": {
           "200": {
             "description": "Safe opaque Bot capability catalog; no paths, credentials, headers, or fingerprints",
@@ -3292,6 +3295,18 @@
         "name": "botId",
         "in": "path",
         "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        }
+      },
+      "BotIdQuery": {
+        "name": "botId",
+        "in": "query",
+        "required": false,
+        "description": "Existing authenticated Bot whose saved unavailable catalog choices should be retained; omit for the generic Bot-creation catalog.",
         "schema": {
           "type": "string",
           "minLength": 1,

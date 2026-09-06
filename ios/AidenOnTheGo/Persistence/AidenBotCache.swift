@@ -10,6 +10,7 @@ struct AidenBotCacheSnapshot: Codable, Equatable, Sendable {
     var details: [AidenBotDetail]
     var conversations: AidenBotConversationPage?
     var catalog: AidenBotCapabilityCatalog?
+    var catalogsByBotID: [String: AidenBotCapabilityCatalog]?
     var notice: AidenBotNoticeStatus?
     var savedAt: Date
 
@@ -18,6 +19,7 @@ struct AidenBotCacheSnapshot: Codable, Equatable, Sendable {
         details: [AidenBotDetail] = [],
         conversations: AidenBotConversationPage? = nil,
         catalog: AidenBotCapabilityCatalog? = nil,
+        catalogsByBotID: [String: AidenBotCapabilityCatalog]? = nil,
         notice: AidenBotNoticeStatus? = nil,
         savedAt: Date = Date()
     ) {
@@ -25,8 +27,16 @@ struct AidenBotCacheSnapshot: Codable, Equatable, Sendable {
         self.details = details
         self.conversations = conversations
         self.catalog = catalog
+        self.catalogsByBotID = catalogsByBotID
         self.notice = notice
         self.savedAt = savedAt
+    }
+
+    /// A generic catalog cannot represent a Bot's retained or private skills.
+    /// Missing scoped data stays missing rather than borrowing another catalog.
+    func catalog(forBotID botID: String?) -> AidenBotCapabilityCatalog? {
+        if let botID { return catalogsByBotID?[botID] }
+        return catalog
     }
 }
 
@@ -38,6 +48,7 @@ struct AidenBotCacheSegments: Sendable {
     var details: [AidenBotDetail]?
     var conversations: AidenBotConversationPage?
     var catalog: AidenBotCapabilityCatalog?
+    var catalogsByBotID: [String: AidenBotCapabilityCatalog]?
     var notice: AidenBotNoticeStatus?
 
     init(
@@ -45,12 +56,14 @@ struct AidenBotCacheSegments: Sendable {
         details: [AidenBotDetail]? = nil,
         conversations: AidenBotConversationPage? = nil,
         catalog: AidenBotCapabilityCatalog? = nil,
+        catalogsByBotID: [String: AidenBotCapabilityCatalog]? = nil,
         notice: AidenBotNoticeStatus? = nil
     ) {
         self.list = list
         self.details = details
         self.conversations = conversations
         self.catalog = catalog
+        self.catalogsByBotID = catalogsByBotID
         self.notice = notice
     }
 
@@ -72,11 +85,17 @@ struct AidenBotCacheSegments: Sendable {
                 )
             }
         } ?? mergedConversations
+        var scopedCatalogs = existing?.catalogsByBotID ?? [:]
+        scopedCatalogs.merge(catalogsByBotID ?? [:]) { _, fresh in fresh }
+        if let retainedBotIDs {
+            scopedCatalogs = scopedCatalogs.filter { retainedBotIDs.contains($0.key) }
+        }
         return AidenBotCacheSnapshot(
             list: list ?? existing?.list,
             details: prunedDetails,
             conversations: prunedConversations,
             catalog: catalog ?? existing?.catalog,
+            catalogsByBotID: scopedCatalogs.isEmpty ? nil : scopedCatalogs,
             notice: notice ?? existing?.notice,
             savedAt: savedAt
         )
@@ -373,8 +392,14 @@ actor AidenBotCache {
               snapshot.savedAt.timeIntervalSince1970.isFinite else {
             return false
         }
+        let scopedIDs = Array((snapshot.catalogsByBotID ?? [:]).keys)
+        guard scopedIDs.count <= 256, scopedIDs.allSatisfy({
+            !$0.isEmpty && $0.unicodeScalars.count <= AidenRemoteProtocol.maxBotIdentifierLength
+                && $0.range(of: "^[A-Za-z0-9._:-]+$", options: .regularExpression) == ($0.startIndex..<$0.endIndex)
+        }) else { return false }
         if let list = snapshot.list {
             let listed = Set(list.bots.map(\.id))
+            guard scopedIDs.allSatisfy(listed.contains) else { return false }
             guard details.allSatisfy({ listed.contains($0.id) }) else { return false }
         }
         if let conversations = snapshot.conversations {

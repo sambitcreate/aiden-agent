@@ -1031,6 +1031,7 @@ class AidenRemoteClient(
     }
 
     suspend fun botCapabilityCatalog(botId: String? = null): AidenBotCapabilityCatalog {
+        botId?.let { AidenBotWire.validateIdentifier(it, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH) }
         val query = if (botId != null) "?botId=$botId" else ""
         return executeRequest(
             "/bot-capabilities$query",

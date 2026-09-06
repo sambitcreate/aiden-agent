@@ -1074,8 +1074,13 @@ final class AidenRemoteClient: @unchecked Sendable {
         return response.chat
     }
 
-    func botCapabilityCatalog() async throws -> AidenBotCapabilityCatalog {
-        try await send(method: "GET", path: ["bot-capabilities"])
+    func botCapabilityCatalog(botId: String? = nil) async throws -> AidenBotCapabilityCatalog {
+        if let botId { try validateBotIdentifier(botId) }
+        return try await send(
+            method: "GET",
+            path: ["bot-capabilities"],
+            query: botId.map { [URLQueryItem(name: "botId", value: $0)] } ?? []
+        )
     }
 
     func updateBotAccess(
